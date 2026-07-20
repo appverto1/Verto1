@@ -65,9 +65,14 @@ test('ambientes de deploy exigem a verificacao de schema', () => {
   assert.equal(isDeployEnvironment({ NODE_ENV: 'development' } as any), false);
 
   assert.match(serverCode, /const isDeploy = isDeployEnvironment\(process\.env\)/);
-  assert.match(serverCode, /if \(isDeploy\) await validateCriticalTissAuthorizationReservationSchema\(\)/);
+  assert.match(
+    serverCode,
+    /if \(isDeploy\) \{\s*await validateCriticalTissAuthorizationReservationSchema\(\);\s*await validateCriticalAppointmentActionResolutionSchema\(\);\s*\}/
+  );
   assert.match(serverCode, /const result = await checkCriticalSchema\(supabase\)/);
+  assert.match(serverCode, /const result = await checkAppointmentActionResolutionSchema\(supabase\)/);
   assert.match(serverCode, /TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION/);
+  assert.match(serverCode, /APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION/);
 });
 
 test('migration e idempotente, aditiva e publica a assinatura esperada', () => {

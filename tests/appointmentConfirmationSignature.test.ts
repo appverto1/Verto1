@@ -133,7 +133,7 @@ test('frontend exposes portal actions and clinic agenda request decisions withou
   assert.match(calendarCode, /actionRequests/);
   assert.match(calendarCode, /approveAppointmentActionRequest/);
   assert.match(calendarCode, /rejectAppointmentActionRequest/);
-  assert.match(calendarCode, /Cancelar consulta/);
+  assert.match(calendarCode, /Cancelar sessão/);
   assert.match(calendarCode, /Remarcar consulta/);
   assert.match(calendarCode, /Recusar/);
   assert.match(calendarCode, /Sugerir outro horário/);

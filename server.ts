@@ -33,7 +33,9 @@ import {
 } from './services/stripeService';
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import {
+  APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
   classifyReservationSchemaProbe,
+  checkAppointmentActionResolutionSchema,
   checkCriticalSchema,
   isDeployEnvironment,
   TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION
@@ -117,6 +119,12 @@ import {
   type PortalProfessionalWorkingSchedule,
   type PortalRescheduleOption
 } from './src/services/portalRescheduleAvailability';
+import {
+  buildRescheduleAssignmentId,
+  parseRescheduleAssignmentId,
+  parseSelectedRescheduleOptionIndex,
+  rankRescheduleOptions
+} from './src/utils/rescheduleApproval';
 import {
   dedupePatientTissAuthorizationSelectionOptions,
   findSuggestedTissAuthorizationForAppointment,
@@ -12716,9 +12724,21 @@ async function startServer() {
     );
   };
 
+  const validateCriticalAppointmentActionResolutionSchema = async () => {
+    const result = await checkAppointmentActionResolutionSchema(supabase);
+    if (result.compatible) return;
+    throw new Error(
+      `Schema crítico de solicitações da agenda incompatível (${result.reason}; esperado ${APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION}). ` +
+      'Aplique as migrations antes do deploy.'
+    );
+  };
+
   // Trust proxy is required for rate limiting and secure cookies behind Railway's load balancer
   app.set('trust proxy', true);
-  if (isDeploy) await validateCriticalTissAuthorizationReservationSchema();
+  if (isDeploy) {
+    await validateCriticalTissAuthorizationReservationSchema();
+    await validateCriticalAppointmentActionResolutionSchema();
+  }
   void validateCoreDataTables();
   app.disable('x-powered-by');
   
@@ -33843,11 +33863,11 @@ async function startServer() {
     return `${title} ${name}`;
   };
 
-  const buildRescheduleApprovalPreview = async (params: { appointment: any; request: any; user: any }) => {
+  const buildRescheduleApprovalPreview = async (params: { appointment: any; request: any; user: any; maxOptions?: number }) => {
     const appointment = params.appointment || {};
     const assignment = resolveAppointmentRescheduleAssignment(appointment);
     const parsed = parseRescheduleRequestPayload(params.request?.note, params.request?.metadata);
-    const options = parsed.options.slice(0, 3);
+    const options = parsed.options.slice(0, Math.min(24, Math.max(1, params.maxOptions || 3)));
     if (!isUuid(assignment.clinicId) || !isUuid(assignment.organizationId) || !isUuid(assignment.patientId)) {
       return {
         requestId: sanitizeString(params.request?.id, 120),
@@ -33910,27 +33930,171 @@ async function startServer() {
       left.id === assignment.professionalId ? -1 : right.id === assignment.professionalId ? 1 : left.name.localeCompare(right.name, 'pt-BR')
     );
 
-    const rooms = (await fetchConflictRooms(assignment.clinicId, assignment.organizationId))
-      .filter((room: any) => room?.is_active !== false && room?.isActive !== false)
-      .slice(0, 80);
     const dates = Array.from(new Set(options.map((option) => formatDateInAppointmentTimezone(new Date(option.scheduledStart))).filter(Boolean)));
     const conflictInput = { recurrenceDates: dates };
-    const [tableAppointments, stateAppointments] = await Promise.all([
+    const [roomRows, tableAppointments, stateAppointments, billingContext, competingRequestsResult] = await Promise.all([
+      fetchConflictRooms(assignment.clinicId, assignment.organizationId),
       fetchConflictAppointmentsFromTable({
         clinicId: assignment.clinicId,
         organizationId: assignment.organizationId,
         input: conflictInput
       }),
-      fetchConflictAppointmentsFromState(assignment.clinicId, conflictInput).catch(() => [])
+      fetchConflictAppointmentsFromState(assignment.clinicId, conflictInput).catch(() => []),
+      fetchAppointmentBillingContextRow(assignment.organizationId, sanitizeString(appointment?.id, 120)).catch(() => null),
+      supabase
+        .from('appointment_action_requests')
+        .select('id,appointment_id,note,metadata,requested_start,requested_end,created_at')
+        .eq('organization_id', assignment.organizationId)
+        .eq('request_type', 'RESCHEDULE')
+        .eq('status', 'PENDING')
+        .neq('id', sanitizeString(params.request?.id, 120))
+        .limit(300)
     ]);
+    if (competingRequestsResult.error && !isMissingRelationError(competingRequestsResult.error)) throw competingRequestsResult.error;
+    const rooms = (Array.isArray(roomRows) ? roomRows : [])
+      .filter((room: any) => room?.is_active !== false && room?.isActive !== false)
+      .slice(0, 80);
     const appointmentsById = new Map<string, any>();
     [...tableAppointments, ...stateAppointments].forEach((item: any, index: number) => {
       appointmentsById.set(sanitizeString(item?.id, 180) || `idx-${index}`, item);
     });
     const existingAppointments = Array.from(appointmentsById.values());
+    const competingRequests = Array.isArray(competingRequestsResult.data) ? competingRequestsResult.data : [];
+    const competingAppointmentIds = Array.from(new Set(
+      competingRequests.map((row: any) => sanitizeString(row?.appointment_id, 120)).filter((id: string) => isUuid(id))
+    ));
+    const competingAppointmentResult = competingAppointmentIds.length > 0
+      ? await supabase
+          .from('appointments')
+          .select('id,therapist_id,room_id,location_type')
+          .or(`organization_id.eq.${assignment.organizationId},clinic_id.eq.${assignment.clinicId}`)
+          .in('id', competingAppointmentIds)
+          .limit(competingAppointmentIds.length)
+      : { data: [], error: null } as any;
+    if (competingAppointmentResult.error) throw competingAppointmentResult.error;
+    const competingAppointmentsById = new Map<string, any>(
+      (Array.isArray(competingAppointmentResult.data) ? competingAppointmentResult.data : []).map((row: any) => [
+        sanitizeString(row?.id, 120),
+        row
+      ])
+    );
+    const competingCandidates = competingRequests.flatMap((row: any) => {
+      const parsedRequest = parseRescheduleRequestPayload(row?.note, row?.metadata);
+      const linkedAppointment = competingAppointmentsById.get(sanitizeString(row?.appointment_id, 120)) || {};
+      const candidateOptions = parsedRequest.options.length > 0
+        ? parsedRequest.options
+        : normalizeRescheduleOptions([{
+            scheduledStart: row?.requested_start,
+            scheduledEnd: row?.requested_end
+          }]);
+      return candidateOptions.slice(0, 3).map((option: PortalRescheduleOption) => ({
+        requestId: sanitizeString(row?.id, 120),
+        scheduledStart: sanitizeIsoDateTime(option?.scheduledStart, ''),
+        scheduledEnd: sanitizeIsoDateTime(option?.scheduledEnd, ''),
+        professionalId: sanitizeString(linkedAppointment?.therapist_id, 120),
+        roomId: sanitizeString(linkedAppointment?.room_id, 180)
+      })).filter((candidate: any) => candidate.scheduledStart && candidate.scheduledEnd);
+    });
     const durationMinutes = getCalendarAppointmentDuration(appointment);
     const originalProfessional = professionalCandidates.find((professional: any) => professional.id === assignment.professionalId) || null;
     const originalRoom = rooms.find((room: any) => sanitizeString(room?.id, 180) === assignment.roomId) || null;
+    const effectiveBillingContext = billingContext || mergeAppointmentBillingPayload(appointment);
+    const financialContextType = normalizeAppointmentFinancialContextType(
+      effectiveBillingContext?.payer_type || effectiveBillingContext?.financial_context_type || effectiveBillingContext?.financialContextType
+    ) || (isUuid(sanitizeString(effectiveBillingContext?.payer_id || appointment?.payer_id, 120)) ? 'INSURANCE' : null);
+    const linkedAuthorizationId = readTissAuthorizationIdFromBillingMetadata(effectiveBillingContext?.metadata || effectiveBillingContext);
+    let linkedAuthorization: any = null;
+    let linkedAuthorizationBalance: ConfirmedTissAuthorizationBalance | null = null;
+    if (isUuid(linkedAuthorizationId)) {
+      const authorizationResult = await supabase
+        .from('patient_payer_authorizations')
+        .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+        .eq('id', linkedAuthorizationId)
+        .eq('organization_id', assignment.organizationId)
+        .eq('patient_id', assignment.patientId)
+        .limit(1)
+        .maybeSingle();
+      if (authorizationResult.error && !hasMissingFinancialSchema(authorizationResult.error) && !isMissingRelationError(authorizationResult.error)) {
+        throw authorizationResult.error;
+      }
+      linkedAuthorization = authorizationResult.data || null;
+      if (linkedAuthorization) {
+        const balances = await fetchPatientTissAuthorizationBalances({
+          organizationId: assignment.organizationId,
+          authorizations: [linkedAuthorization],
+          currentAppointmentId: appointment?.id
+        });
+        linkedAuthorizationBalance = balances.get(linkedAuthorizationId) || null;
+      }
+    }
+
+    const evaluateFinancialContext = (option: PortalRescheduleOption) => {
+      const reasons: string[] = [];
+      if (!financialContextType || financialContextSkipsInsuranceBilling(financialContextType)) {
+        return {
+          compatible: true,
+          reviewRequired: false,
+          contextType: financialContextType || 'UNSPECIFIED',
+          reasons: ['O contexto financeiro atual pode ser mantido.']
+        };
+      }
+      const payerId = sanitizeString(effectiveBillingContext?.payer_id || appointment?.payer_id, 120);
+      if (!isUuid(payerId)) reasons.push('O pagador precisa ser revisado antes da confirmação financeira.');
+      const optionDate = formatDateInAppointmentTimezone(new Date(option.scheduledStart));
+      const hasAuthorizationSnapshot = Boolean(
+        sanitizeString(effectiveBillingContext?.authorization_code, 120) ||
+        sanitizeString(effectiveBillingContext?.guide_number, 120) ||
+        linkedAuthorizationId
+      );
+      if (hasAuthorizationSnapshot && !linkedAuthorization) {
+        reasons.push('A autorização vinculada não pôde ser confirmada para a nova data.');
+      }
+      if (linkedAuthorization) {
+        const status = sanitizeString(linkedAuthorization?.status, 40).toLowerCase();
+        if (linkedAuthorization?.active === false || ['expired', 'cancelled', 'canceled', 'inactive', 'exhausted'].includes(status)) {
+          reasons.push('A autorização vinculada não está ativa.');
+        }
+        const validFrom = sanitizeDate(linkedAuthorization?.valid_from);
+        const validUntil = sanitizeDate(linkedAuthorization?.valid_until);
+        const formatDateKeyPtBr = (value: string) => {
+          const [year, month, day] = value.split('-');
+          return year && month && day ? `${day}/${month}/${year}` : value;
+        };
+        if (validFrom && optionDate < validFrom) reasons.push(`A autorização passa a valer em ${formatDateKeyPtBr(validFrom)}.`);
+        if (validUntil && optionDate > validUntil) reasons.push(`A autorização vence em ${formatDateKeyPtBr(validUntil)}.`);
+        if (!linkedAuthorizationBalance?.confirmed) {
+          reasons.push('O saldo da autorização precisa ser confirmado antes da remarcação.');
+        } else if (!linkedAuthorizationBalance.currentAppointmentReserved && Number(linkedAuthorizationBalance.available || 0) <= 0) {
+          reasons.push('A autorização não possui saldo disponível para esta sessão.');
+        }
+      }
+      const reviewRequired = reasons.length > 0;
+      return {
+        compatible: !reviewRequired,
+        reviewRequired,
+        contextType: financialContextType,
+        reasons: reviewRequired ? reasons : ['Pagador, guia e autorização permanecem compatíveis com a nova data.']
+      };
+    };
+
+    const countCompetingRequests = (option: PortalRescheduleOption, professionalId: string, roomId: string | null) => {
+      const optionStart = new Date(option.scheduledStart).getTime();
+      const optionEnd = new Date(option.scheduledEnd).getTime();
+      const counts = { total: 0, sameTime: 0, sameProfessional: 0, sameRoom: 0, exact: 0 };
+      for (const candidate of competingCandidates) {
+        const candidateStart = new Date(candidate.scheduledStart).getTime();
+        const candidateEnd = new Date(candidate.scheduledEnd).getTime();
+        if (!Number.isFinite(candidateStart) || !Number.isFinite(candidateEnd) || candidateStart >= optionEnd || candidateEnd <= optionStart) continue;
+        counts.total += 1;
+        counts.sameTime += 1;
+        const sameProfessional = Boolean(professionalId && candidate.professionalId === professionalId);
+        const sameRoom = Boolean(roomId && candidate.roomId === roomId);
+        if (sameProfessional) counts.sameProfessional += 1;
+        if (sameRoom) counts.sameRoom += 1;
+        if (sameProfessional && (assignment.locationType !== 'clinica' || sameRoom)) counts.exact += 1;
+      }
+      return counts;
+    };
 
     const evaluateCandidate = (option: PortalRescheduleOption, professional: any, room: any) => {
       if (!professional?.id) {
@@ -33999,7 +34163,7 @@ async function startServer() {
     };
 
     const serializeAssignment = (optionIndex: number, professional: any, room: any, kind: 'current' | 'alternative') => ({
-      id: `${optionIndex}:${professional?.id || 'none'}:${room?.id || 'none'}`,
+      id: buildRescheduleAssignmentId(optionIndex, professional?.id || '', assignment.locationType === 'clinica' ? room?.id || null : null),
       kind,
       professionalId: professional?.id || null,
       professionalName: professional?.name || 'Profissional',
@@ -34009,7 +34173,11 @@ async function startServer() {
       locationType: assignment.locationType
     });
 
-    const previewOptions = options.map((option, optionIndex) => {
+    const originalStartTime = Date.parse(sanitizeString(
+      appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduledAt,
+      100
+    ));
+    const rawPreviewOptions = options.map((option, optionIndex) => {
       const directResult = evaluateCandidate(option, originalProfessional, originalRoom);
       const directAssignment = serializeAssignment(optionIndex, originalProfessional, originalRoom, 'current');
       const alternatives: any[] = [];
@@ -34046,14 +34214,66 @@ async function startServer() {
           }
         }
       }
+      const availableAssignments = [
+        ...(directResult.available && directAssignment.id ? [{ ...directAssignment, available: true, message: directResult.message }] : []),
+        ...alternatives
+      ];
+      const recommendedAssignment = availableAssignments[0] || null;
+      const financialAssessment = evaluateFinancialContext(option);
+      const competing = recommendedAssignment
+        ? countCompetingRequests(option, recommendedAssignment.professionalId, recommendedAssignment.roomId)
+        : { total: 0, sameTime: 0, sameProfessional: 0, sameRoom: 0, exact: 0 };
+      const optionStartTime = new Date(option.scheduledStart).getTime();
+      const distanceMinutes = Number.isFinite(originalStartTime) && Number.isFinite(optionStartTime)
+        ? Math.abs(optionStartTime - originalStartTime) / 60_000
+        : 0;
       return {
         index: optionIndex,
         ...option,
-        available: directResult.available,
-        message: directResult.message,
+        available: availableAssignments.length > 0,
+        message: availableAssignments.length > 0
+          ? recommendedAssignment?.message || 'Existe uma configuração disponível para este horário.'
+          : directResult.message,
         conflictTypes: directResult.conflictTypes || [],
-        assignment: directAssignment,
-        alternatives
+        assignment: recommendedAssignment || directAssignment,
+        originalAssignment: directAssignment,
+        alternatives: availableAssignments.filter((candidate: any) => candidate.id !== recommendedAssignment?.id),
+        assignments: availableAssignments,
+        competition: competing,
+        financialContext: {
+          type: financialAssessment.contextType,
+          compatible: financialAssessment.compatible,
+          reviewRequired: financialAssessment.reviewRequired,
+          reasons: financialAssessment.reasons,
+          preservedByDefault: true
+        },
+        rankingInput: {
+          index: optionIndex,
+          availableAssignmentCount: availableAssignments.length,
+          directAssignmentAvailable: directResult.available,
+          keepsOriginalProfessional: recommendedAssignment?.professionalId === assignment.professionalId,
+          keepsOriginalRoom: assignment.locationType !== 'clinica' || recommendedAssignment?.roomId === assignment.roomId,
+          financialContextCompatible: financialAssessment.compatible,
+          financialReviewRequired: financialAssessment.reviewRequired,
+          competingRequestCount: competing.total,
+          exactCompetitionCount: competing.exact,
+          distanceMinutes,
+          reasons: !directResult.available && directResult.message ? [directResult.message] : []
+        }
+      };
+    });
+    const rankingsByIndex = new Map(
+      rankRescheduleOptions(rawPreviewOptions.map((option: any) => option.rankingInput))
+        .map((ranking) => [ranking.index, ranking])
+    );
+    const previewOptions = rawPreviewOptions.map(({ rankingInput, ...option }: any) => {
+      const ranking: any = rankingsByIndex.get(option.index);
+      return {
+        ...option,
+        score: ranking?.score || 0,
+        recommendation: ranking?.recommendation || 'unavailable',
+        recommendationLabel: ranking?.recommendationLabel || 'Indisponível',
+        reasons: ranking?.reasons || [option.message]
       };
     });
 
@@ -34061,6 +34281,11 @@ async function startServer() {
       requestId: sanitizeString(params.request?.id, 120),
       appointmentId: sanitizeString(appointment?.id, 120),
       checkedAt: new Date().toISOString(),
+      source: {
+        originalProfessionalId: assignment.professionalId || null,
+        originalRoomId: assignment.roomId || null,
+        financialContextType: financialContextType || null
+      },
       options: previewOptions
     };
   };
@@ -34344,6 +34569,7 @@ async function startServer() {
   };
 
   const mapAuditLogToHumanHistory = (row: any) => ({
+    id: sanitizeString(row?.id, 120) || null,
     action: sanitizeString(row?.action, 80),
     label: (() => {
       const action = sanitizeString(row?.action, 80);
@@ -34352,9 +34578,9 @@ async function startServer() {
         RESCHEDULE_REQUESTED: 'Responsável solicitou remarcação',
         RESCHEDULE_APPROVED: 'Remarcação aprovada pela clínica',
         RESCHEDULE_REJECTED: 'Remarcação recusada pela clínica',
-        CANCEL_REQUESTED: 'Responsável solicitou cancelamento da consulta',
-        CANCEL_APPROVED: 'Clínica aprovou o cancelamento solicitado pelo responsável',
-        CANCEL_REJECTED: 'Clínica manteve o horário solicitado',
+        CANCEL_REQUESTED: 'Responsável solicitou cancelamento da sessão',
+        CANCEL_APPROVED: 'Cancelamento de sessão aprovado pela clínica',
+        CANCEL_REJECTED: 'Cancelamento de sessão recusado pela clínica',
         CANCELLED: 'Consulta cancelada pela clínica',
         SIGNATURE_CREATED: 'Sessão assinada',
         SIGNATURE_REVOKED: 'Assinatura revogada'
@@ -35112,11 +35338,41 @@ async function startServer() {
       if (requestRow.request_type !== 'RESCHEDULE') {
         return res.status(400).json({ success: false, error: 'Esta solicitação não é uma remarcação.' });
       }
-      const data = await buildRescheduleApprovalPreview({
-        appointment: (context as any).appointment,
+      const appointment = (context as any).appointment;
+      const data: any = await buildRescheduleApprovalPreview({
+        appointment,
         request: requestRow,
         user: req.session.user
       });
+      if (sanitizeString(req.query?.mode, 40).toLowerCase() === 'suggestions') {
+        const professionalAvailability = await buildPortalRescheduleAvailabilityForAppointment({
+          ...appointment,
+          room_id: null,
+          roomId: null,
+          location_type: 'outro',
+          locationType: 'outro'
+        }, req.session.user, {
+          dateFrom: req.query?.dateFrom || req.query?.date_from,
+          maxDays: 7
+        });
+        const suggestedSlots = flattenRescheduleSlotGroups(professionalAvailability?.data?.days || []).slice(0, 18);
+        const suggestions = suggestedSlots.length > 0
+          ? await buildRescheduleApprovalPreview({
+              appointment,
+              request: {
+                ...requestRow,
+                metadata: {
+                  ...(requestRow?.metadata && typeof requestRow.metadata === 'object' ? requestRow.metadata : {}),
+                  rescheduleOptions: suggestedSlots
+                }
+              },
+              user: req.session.user,
+              maxOptions: 18
+            })
+          : { options: [] };
+        data.suggestions = Array.isArray(suggestions?.options) ? suggestions.options : [];
+        data.suggestionMessage = professionalAvailability?.data?.message || null;
+      }
       return res.json({ success: true, data });
     } catch (error: any) {
       console.warn('[AppointmentActions] availability failed:', error?.message || String(error));
@@ -35125,6 +35381,8 @@ async function startServer() {
   });
 
   app.post('/api/appointments/action-requests/:requestId/approve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    const approvalTraceId = crypto.randomUUID();
+    let approvalPhase = 'load_context';
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de aprovação de solicitação')) return;
       const context = await fetchAppointmentActionRequestForAdmin(req.params.requestId, req.session.user);
@@ -35132,6 +35390,7 @@ async function startServer() {
       const requestRow = (context as any).request;
       const appointment = (context as any).appointment;
       let recoveringApprovedReschedule = false;
+      let recoveringApprovedCancellation = false;
       if (requestRow.status !== 'PENDING') {
         if (requestRow.status === 'APPROVED' && requestRow.request_type === 'RESCHEDULE') {
           const persistedRows = await readPersistedAppointmentRows([appointment.id], sanitizeString(appointment.clinic_id, 120));
@@ -35143,20 +35402,15 @@ async function startServer() {
             end: approvedEnd || calculateAppointmentEnd(new Date(approvedStart), getCalendarAppointmentDuration(persistedAppointment))?.toISOString() || '',
             status: 'SCHEDULED'
           })) {
-            return res.json({
-              success: true,
-              idempotent: true,
-              appointment: serializePortalAppointment(persistedAppointment, {
-                hasPendingReschedule: false,
-                has_pending_reschedule: false,
-                rescheduleStatus: 'APPROVED',
-                reschedule_status: 'APPROVED'
-              })
-            });
+            recoveringApprovedReschedule = true;
           }
-          recoveringApprovedReschedule = Boolean(approvedStart);
+          recoveringApprovedReschedule = recoveringApprovedReschedule || Boolean(approvedStart);
         }
-        if (!recoveringApprovedReschedule) return res.status(409).json(portalSafeError(409));
+        if (requestRow.status === 'APPROVED' && requestRow.request_type === 'CANCEL') {
+          const persistedStatus = normalizeOperationalAppointmentStatus(appointment.status);
+          recoveringApprovedCancellation = persistedStatus === 'CANCELLED';
+        }
+        if (!recoveringApprovedReschedule && !recoveringApprovedCancellation) return res.status(409).json(portalSafeError(409));
       }
       const organizationId = sanitizeString(appointment.organization_id || appointment.clinic_id, 120);
       const clinicId = sanitizeString(appointment.clinic_id || appointment.organization_id, 120);
@@ -35170,14 +35424,22 @@ async function startServer() {
       let approvedRescheduleStart = '';
       let atomicActionRequest: any = null;
       let atomicAuditEntry: any = null;
+      let atomicActionRequests: any[] = [];
+      let atomicAuditEntries: any[] = [];
+      let actionResolutionIdempotent = false;
       let rescheduleResolvedAtomically = false;
       if (requestRow.request_type === 'RESCHEDULE') {
+        approvalPhase = 'validate_payload';
         const parsedRequestNote = parseRescheduleRequestPayload(requestRow.note, requestRow.metadata);
         const requestedOptions = parsedRequestNote.options;
         const requestedOptionIndex = recoveringApprovedReschedule
           ? requestRow?.metadata?.approvedOptionIndex
           : req.body?.selectedOptionIndex ?? req.body?.selected_option_index;
-        const selectedOptionIndex = Math.max(0, Math.min(requestedOptions.length - 1, Math.round(Number(requestedOptionIndex ?? 0) || 0)));
+        const parsedOptionIndex = parseSelectedRescheduleOptionIndex(requestedOptionIndex, requestedOptions.length);
+        if (!parsedOptionIndex.ok) {
+          return res.status(400).json({ success: false, code: 'RESCHEDULE_OPTION_INVALID', error: parsedOptionIndex.error });
+        }
+        const selectedOptionIndex = parsedOptionIndex.index;
         const selectedOption = requestedOptions[selectedOptionIndex] || null;
         // A clinica so pode aprovar uma opcao que o responsavel realmente enviou.
         // Nunca aceite data/hora arbitraria do corpo da requisicao.
@@ -35187,6 +35449,7 @@ async function startServer() {
           return res.status(400).json({ success: false, error: 'Escolha uma opção válida da solicitação de remarcação.' });
         }
         approvedRescheduleStart = requestedStart;
+        approvalPhase = 'revalidate_availability';
         const approvalPreview = await buildRescheduleApprovalPreview({
           appointment,
           request: requestRow,
@@ -35194,8 +35457,36 @@ async function startServer() {
         });
         const optionPreview = approvalPreview.options.find((option: any) => option.index === selectedOptionIndex) || null;
         const requestedAssignmentId = sanitizeString(req.body?.assignmentId || req.body?.assignment_id, 260);
-        const requestedProfessionalId = sanitizeString(req.body?.professionalId || req.body?.professional_id, 120);
-        const requestedRoomId = sanitizeString(req.body?.roomId || req.body?.room_id, 180);
+        const parsedAssignmentId = requestedAssignmentId
+          ? parseRescheduleAssignmentId(requestedAssignmentId, selectedOptionIndex)
+          : null;
+        if (parsedAssignmentId && !parsedAssignmentId.ok) {
+          return res.status(400).json({ success: false, code: 'RESCHEDULE_ASSIGNMENT_INVALID', error: parsedAssignmentId.error });
+        }
+        const requestedProfessionalId = sanitizeString(
+          req.body?.professionalId || req.body?.professional_id ||
+            (parsedAssignmentId?.ok ? parsedAssignmentId.assignment.professionalId : '') ||
+            (recoveringApprovedReschedule ? requestRow?.metadata?.approvedProfessionalId : ''),
+          120
+        );
+        const requestedRoomId = sanitizeString(
+          req.body?.roomId || req.body?.room_id ||
+            (parsedAssignmentId?.ok ? parsedAssignmentId.assignment.roomId : '') ||
+            (recoveringApprovedReschedule ? requestRow?.metadata?.approvedRoomId : ''),
+          180
+        );
+        if (requestedProfessionalId && !isUuid(requestedProfessionalId)) {
+          return res.status(400).json({ success: false, code: 'RESCHEDULE_PROFESSIONAL_INVALID', error: 'O profissional escolhido é inválido.' });
+        }
+        if (requestedRoomId && !isUuid(requestedRoomId)) {
+          return res.status(400).json({ success: false, code: 'RESCHEDULE_ROOM_INVALID', error: 'A sala escolhida é inválida.' });
+        }
+        if (parsedAssignmentId?.ok && (
+          (requestedProfessionalId && requestedProfessionalId !== parsedAssignmentId.assignment.professionalId) ||
+          (requestedRoomId && requestedRoomId !== parsedAssignmentId.assignment.roomId)
+        )) {
+          return res.status(400).json({ success: false, code: 'RESCHEDULE_ASSIGNMENT_MISMATCH', error: 'A sala ou o profissional não corresponde à opção selecionada.' });
+        }
         const allowedAssignments = [
           ...(optionPreview?.available && optionPreview?.assignment ? [optionPreview.assignment] : []),
           ...(Array.isArray(optionPreview?.alternatives) ? optionPreview.alternatives : [])
@@ -35218,6 +35509,20 @@ async function startServer() {
             data: approvalPreview
           });
         }
+        const keepOriginalFinancialContext = req.body?.keepOriginalFinancialContext !== false && req.body?.keep_original_financial_context !== false;
+        if (optionPreview?.financialContext?.reviewRequired && keepOriginalFinancialContext) {
+          return res.status(422).json({
+            success: false,
+            code: 'RESCHEDULE_FINANCIAL_REVIEW_REQUIRED',
+            error: 'Revise o contexto financeiro indicado antes de confirmar este horário.',
+            data: approvalPreview
+          });
+        }
+        const idempotencyKey = sanitizeString(
+          req.body?.idempotencyKey || req.body?.idempotency_key || requestRow?.metadata?.approvalIdempotencyKey,
+          220
+        ) ||
+          `reschedule:${requestRow.id}:${selectedOptionIndex}:${approvedAssignment.professionalId}:${approvedAssignment.roomId || 'none'}`;
         const durationMinutes = getCalendarAppointmentDuration(appointment);
         const startDate = new Date(requestedStart);
         const resolvedEndDate = calculateAppointmentEnd(startDate, durationMinutes);
@@ -35234,10 +35539,15 @@ async function startServer() {
           approvedProfessionalName: approvedAssignment.professionalName || null,
           approvedRoomId: approvedAssignment.roomId || null,
           approvedRoomName: approvedAssignment.roomName || null,
+          approvalIdempotencyKey: idempotencyKey,
+          keepOriginalFinancialContext,
+          financialReviewRequired: optionPreview?.financialContext?.reviewRequired === true,
+          financialContextType: optionPreview?.financialContext?.type || null,
           approvedAt: now,
           approvedBy: actorId || null
         };
-        const atomicResult = await supabase.rpc('approve_appointment_reschedule', {
+        approvalPhase = 'atomic_commit';
+        const atomicResult = await supabase.rpc('approve_appointment_reschedule_v2', {
           p_organization_id: organizationId,
           p_clinic_id: clinicId,
           p_request_id: requestRow.id,
@@ -35261,7 +35571,7 @@ async function startServer() {
         if (atomicResult.error) {
           const errorCode = sanitizeString(atomicResult.error?.code, 40).toUpperCase();
           const errorMessage = sanitizeString(atomicResult.error?.message, 500).toUpperCase();
-          if (errorCode === 'PGRST202' || errorCode === '42883' || errorMessage.includes('APPROVE_APPOINTMENT_RESCHEDULE')) {
+          if (errorCode === 'PGRST202' || errorCode === '42883' || errorMessage.includes('APPROVE_APPOINTMENT_RESCHEDULE_V2')) {
             return res.status(503).json({
               success: false,
               code: 'RESCHEDULE_APPROVAL_SCHEMA_UNAVAILABLE',
@@ -35293,45 +35603,89 @@ async function startServer() {
               error: 'O profissional ou a sala escolhida não está mais disponível. Selecione uma alternativa livre.'
             });
           }
+          if (errorCode === '22023' || errorMessage.includes('OPTION_INVALID') || errorMessage.includes('SCOPE_INVALID') || errorMessage.includes('TIME_INVALID')) {
+            return res.status(400).json({ success: false, code: 'RESCHEDULE_REQUEST_INVALID', error: 'Os dados escolhidos para esta remarcação não são válidos.' });
+          }
+          if (errorCode === 'P0002' || errorMessage.includes('NOT_FOUND')) {
+            return res.status(404).json({ success: false, code: 'RESCHEDULE_REQUEST_NOT_FOUND', error: 'A solicitação ou a consulta não está mais disponível.' });
+          }
+          if (errorMessage.includes('ACTION_REQUEST_SUPERSEDED')) {
+            return res.status(409).json({ success: false, code: 'ACTION_REQUEST_SUPERSEDED', error: 'Existe uma solicitação mais recente para esta sessão. Resolva a ação mais recente primeiro.' });
+          }
           if (errorCode === '40001' || errorMessage.includes('ALREADY_RESOLVED')) {
             return res.status(409).json({ success: false, error: 'Esta solicitação já foi resolvida por outro usuário.' });
           }
           throw atomicResult.error;
         }
+        approvalPhase = 'confirm_commit';
         const atomicPayload: any = atomicResult.data && typeof atomicResult.data === 'object' ? atomicResult.data : {};
-        if (!atomicPayload.appointment || !appointmentScheduleMatches(atomicPayload.appointment, {
+        let confirmedAppointment = atomicPayload.appointment || null;
+        if (!confirmedAppointment || !appointmentScheduleMatches(confirmedAppointment, {
           start: requestedStart,
           end: resolvedEnd,
           status: 'SCHEDULED'
         })) {
-          throw new Error('A transação de remarcação não retornou o horário confirmado.');
+          const persistedRows = await readPersistedAppointmentRows([appointment.id], clinicId);
+          const persistedAppointment = persistedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120)) || null;
+          if (!persistedAppointment || !appointmentScheduleMatches(persistedAppointment, {
+            start: requestedStart,
+            end: resolvedEnd,
+            status: 'SCHEDULED'
+          })) {
+            throw new Error('RESCHEDULE_COMMIT_NOT_CONFIRMED');
+          }
+          confirmedAppointment = persistedAppointment;
         }
-        nextAppointment = atomicPayload.appointment;
+        nextAppointment = confirmedAppointment;
         atomicActionRequest = atomicPayload.request || null;
         atomicAuditEntry = atomicPayload.audit || null;
+        atomicActionRequests = Array.isArray(atomicPayload.action_requests) ? atomicPayload.action_requests : [];
+        atomicAuditEntries = Array.isArray(atomicPayload.audit_entries) ? atomicPayload.audit_entries : [];
+        actionResolutionIdempotent = atomicPayload.idempotent === true;
         rescheduleResolvedAtomically = true;
       } else {
         auditAction = 'CANCEL_APPROVED';
         newStatus = 'CANCELLED';
-        const update = await updateAppointmentOperationalPatch(appointment.id, {
-          status: 'CANCELLED',
-          patient_response: 'cancelled',
-          patient_confirmation_status: 'CANCEL_REQUESTED',
-          patient_confirmation_source: 'patient_request_approved_by_clinic',
-          patient_responded_at: appointment.patient_responded_at || appointment.patientRespondedAt || now,
-          patient_confirmation_at: appointment.patient_confirmation_at || appointment.patientConfirmationAt || now,
-          updated_at: now
+        const cancellationIdempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 220) ||
+          `cancel:${requestRow.id}:${appointment.id}`;
+        approvalPhase = 'atomic_cancel_commit';
+        const cancellationResult = await supabase.rpc('approve_appointment_cancellation', {
+          p_organization_id: organizationId,
+          p_clinic_id: clinicId,
+          p_request_id: requestRow.id,
+          p_appointment_id: appointment.id,
+          p_patient_id: appointment.patient_id,
+          p_actor_id: actorId,
+          p_actor_role: actorRole,
+          p_resolution_note: resolutionNote,
+          p_idempotency_key: cancellationIdempotencyKey
         });
-        if (update.error) throw update.error;
-        nextAppointment = {
-          ...appointment,
-          status: 'CANCELLED',
-          patient_response: 'cancelled',
-          patient_confirmation_status: 'CANCEL_REQUESTED',
-          patient_confirmation_source: 'patient_request_approved_by_clinic',
-          patient_responded_at: appointment.patient_responded_at || appointment.patientRespondedAt || now,
-          patient_confirmation_at: appointment.patient_confirmation_at || appointment.patientConfirmationAt || now
-        };
+        if (cancellationResult.error) {
+          const errorCode = sanitizeString(cancellationResult.error?.code, 40).toUpperCase();
+          const errorMessage = sanitizeString(cancellationResult.error?.message, 500).toUpperCase();
+          if (errorCode === 'PGRST202' || errorCode === '42883' || errorMessage.includes('APPROVE_APPOINTMENT_CANCELLATION')) {
+            return res.status(503).json({
+              success: false,
+              code: 'CANCELLATION_APPROVAL_SCHEMA_UNAVAILABLE',
+              error: 'A atualização segura do cancelamento ainda não está disponível. Nenhum dado da sessão foi alterado.'
+            });
+          }
+          if (errorCode === '42501') return res.status(403).json({ success: false, error: 'Você não tem permissão para cancelar esta sessão.' });
+          if (errorCode === 'P0002') return res.status(404).json({ success: false, error: 'A solicitação ou a sessão não foi encontrada.' });
+          if (errorMessage.includes('ACTION_REQUEST_SUPERSEDED')) {
+            return res.status(409).json({ success: false, code: 'ACTION_REQUEST_SUPERSEDED', error: 'Existe uma solicitação mais recente para esta sessão. Resolva a ação mais recente primeiro.' });
+          }
+          if (errorCode === '40001') return res.status(409).json({ success: false, error: 'Esta solicitação já foi resolvida por outro usuário.' });
+          throw cancellationResult.error;
+        }
+        const cancellationPayload: any = cancellationResult.data && typeof cancellationResult.data === 'object' ? cancellationResult.data : {};
+        nextAppointment = cancellationPayload.appointment || { ...appointment, status: 'CANCELLED' };
+        atomicActionRequest = cancellationPayload.request || null;
+        atomicAuditEntry = cancellationPayload.audit || null;
+        atomicActionRequests = Array.isArray(cancellationPayload.action_requests) ? cancellationPayload.action_requests : [];
+        atomicAuditEntries = Array.isArray(cancellationPayload.audit_entries) ? cancellationPayload.audit_entries : [];
+        actionResolutionIdempotent = cancellationPayload.idempotent === true;
+        rescheduleResolvedAtomically = true;
       }
       if (!rescheduleResolvedAtomically) {
         const requestResolution = await supabase
@@ -35378,8 +35732,10 @@ async function startServer() {
         triggerAppointmentReminderScan('appointment_reschedule_approved');
       }
       void regenerateClosureForAppointments([appointment.id], req.session.user, requestRow.request_type === 'CANCEL' ? 'appointment_cancel_approved' : 'appointment_reschedule_approved');
+      approvalPhase = 'respond';
       return res.json(cleanObject({
         success: true,
+        idempotent: actionResolutionIdempotent,
         appointment: serializePortalAppointment(nextAppointment, {
           hasPendingReschedule: false,
           has_pending_reschedule: false,
@@ -35387,16 +35743,30 @@ async function startServer() {
           reschedule_status: atomicActionRequest?.status || (requestRow.request_type === 'RESCHEDULE' ? 'APPROVED' : null)
         }),
         actionRequest: atomicActionRequest ? serializeAppointmentActionRequestForResponse(atomicActionRequest) : undefined,
+        actionRequests: atomicActionRequests.map(serializeAppointmentActionRequestForResponse),
+        statusHistory: atomicAuditEntries.map(mapAuditLogToHumanHistory),
         statusHistoryEntry: atomicAuditEntry ? {
           id: atomicAuditEntry.id,
-          label: 'Remarcação aprovada pela clínica',
+          label: requestRow.request_type === 'CANCEL'
+            ? 'Cancelamento de sessão aprovado pela clínica'
+            : 'Remarcação aprovada pela clínica',
           performedAt: atomicAuditEntry.performed_at,
           metadata: atomicAuditEntry.metadata || {}
         } : undefined
       }));
     } catch (error: any) {
-      console.warn('[AppointmentActions] approve failed:', error?.message || String(error));
-      return res.status(500).json(portalSafeError(500));
+      console.warn('[AppointmentActions] approve failed:', {
+        traceId: approvalTraceId,
+        phase: approvalPhase,
+        requestId: sanitizeString(req.params?.requestId, 120),
+        code: sanitizeString(error?.code, 80) || null,
+        message: sanitizeString(error?.message || String(error), 400)
+      });
+      return res.status(500).json({
+        ...portalSafeError(500),
+        code: 'APPOINTMENT_ACTION_APPROVAL_FAILED',
+        traceId: approvalTraceId
+      });
     }
   });
 
@@ -35407,60 +35777,67 @@ async function startServer() {
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
       const requestRow = (context as any).request;
       const appointment = (context as any).appointment;
-      if (requestRow.status !== 'PENDING') return res.status(409).json(portalSafeError(409));
+      if (requestRow.status !== 'PENDING' && requestRow.status !== 'REJECTED') {
+        return res.status(409).json(portalSafeError(409));
+      }
       const organizationId = sanitizeString(appointment.organization_id || appointment.clinic_id, 120);
+      const clinicId = sanitizeString(appointment.clinic_id || appointment.organization_id, 120);
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorRole = sanitizeString(req.session.user?.role, 40);
-      const now = new Date().toISOString();
-      const currentStatus = normalizeOperationalAppointmentStatus(appointment.status);
-      const fallbackStatus =
-        currentStatus === 'CONFIRMED'
-          ? 'CONFIRMED'
-          : ['CANCEL_REQUESTED', 'RESCHEDULE_REQUESTED'].includes(currentStatus)
-            ? 'SCHEDULED'
-            : currentStatus === 'CANCELLED'
-              ? 'SCHEDULED'
-              : currentStatus || 'SCHEDULED';
-      const restoredPatientConfirmation = fallbackStatus === 'CONFIRMED' ? 'confirmed' : null;
-      const update = await updateAppointmentOperationalPatch(appointment.id, {
-        status: fallbackStatus,
-        patient_response: restoredPatientConfirmation,
-        patient_confirmation_status: restoredPatientConfirmation,
-        patient_confirmation_source: restoredPatientConfirmation ? 'appointments' : null,
-        updated_at: now
-      });
-      if (update.error) throw update.error;
       const resolutionNote = sanitizeTextField(req.body?.resolutionNote || req.body?.resolution_note || req.body?.note, 800) || null;
-      await supabase
-        .from('appointment_action_requests')
-        .update({
-          status: 'REJECTED',
-          resolved_by: actorId || null,
-          resolved_at: now,
-          resolution_note: resolutionNote,
-          updated_at: now
-        })
-        .eq('id', requestRow.id);
-      const auditAction = requestRow.request_type === 'CANCEL' ? 'CANCEL_REJECTED' : 'RESCHEDULE_REJECTED';
-      await writeAppointmentStatusAuditLog({
-        organizationId,
-        appointmentId: appointment.id,
-        patientId: appointment.patient_id,
-        action: auditAction,
-        previousStatus: appointment.status,
-        newStatus: fallbackStatus,
-        performedBy: actorId,
-        performedByRole: actorRole,
-        metadata: { actionRequestId: requestRow.id, resolutionNote }
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 220) ||
+        `reject:${requestRow.id}:${appointment.id}`;
+      const rejectionResult = await supabase.rpc('reject_appointment_action_request', {
+        p_organization_id: organizationId,
+        p_clinic_id: clinicId,
+        p_request_id: requestRow.id,
+        p_appointment_id: appointment.id,
+        p_patient_id: appointment.patient_id,
+        p_actor_id: actorId,
+        p_actor_role: actorRole,
+        p_resolution_note: resolutionNote,
+        p_idempotency_key: idempotencyKey
       });
+      if (rejectionResult.error) {
+        const errorCode = sanitizeString(rejectionResult.error?.code, 40).toUpperCase();
+        const errorMessage = sanitizeString(rejectionResult.error?.message, 500).toUpperCase();
+        if (errorCode === 'PGRST202' || errorCode === '42883' || errorMessage.includes('REJECT_APPOINTMENT_ACTION_REQUEST')) {
+          return res.status(503).json({
+            success: false,
+            code: 'ACTION_REQUEST_RESOLUTION_SCHEMA_UNAVAILABLE',
+            error: 'A resolução segura desta solicitação ainda não está disponível. Nenhum dado da sessão foi alterado.'
+          });
+        }
+        if (errorCode === '42501') return res.status(403).json({ success: false, error: 'Você não tem permissão para recusar esta solicitação.' });
+        if (errorCode === 'P0002') return res.status(404).json({ success: false, error: 'A solicitação ou a sessão não foi encontrada.' });
+        if (errorCode === '40001') return res.status(409).json({ success: false, error: 'Esta solicitação já foi resolvida por outro usuário.' });
+        throw rejectionResult.error;
+      }
+      const rejectionPayload: any = rejectionResult.data && typeof rejectionResult.data === 'object' ? rejectionResult.data : {};
+      const nextAppointment = rejectionPayload.appointment || appointment;
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_action_request_rejected');
-      return res.json({ success: true, appointment: serializePortalAppointment({
-        ...appointment,
-        status: fallbackStatus,
-        patient_response: restoredPatientConfirmation,
-        patient_confirmation_status: restoredPatientConfirmation,
-        patient_confirmation_source: restoredPatientConfirmation ? 'appointments' : null
-      }) });
+      return res.json(cleanObject({
+        success: true,
+        idempotent: rejectionPayload.idempotent === true,
+        appointment: serializePortalAppointment(nextAppointment),
+        actionRequests: Array.isArray(rejectionPayload.action_requests)
+          ? rejectionPayload.action_requests.map(serializeAppointmentActionRequestForResponse)
+          : [],
+        statusHistory: Array.isArray(rejectionPayload.audit_entries)
+          ? rejectionPayload.audit_entries.map(mapAuditLogToHumanHistory)
+          : [],
+        actionRequest: rejectionPayload.request
+          ? serializeAppointmentActionRequestForResponse(rejectionPayload.request)
+          : undefined,
+        statusHistoryEntry: rejectionPayload.audit ? {
+          id: rejectionPayload.audit.id,
+          label: requestRow.request_type === 'CANCEL'
+            ? 'Cancelamento de sessão recusado pela clínica'
+            : 'Remarcação recusada pela clínica',
+          performedAt: rejectionPayload.audit.performed_at,
+          metadata: rejectionPayload.audit.metadata || {}
+        } : undefined
+      }));
     } catch (error: any) {
       console.warn('[AppointmentActions] reject failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));

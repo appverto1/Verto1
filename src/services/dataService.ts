@@ -2290,8 +2290,12 @@ export const dataService = {
     }
   },
 
-  async getAppointmentActionRequestAvailability(requestId: string) {
-    const endpoint = `/api/appointments/action-requests/${encodeURIComponent(String(requestId))}/availability`;
+  async getAppointmentActionRequestAvailability(requestId: string, options: { includeSuggestions?: boolean; dateFrom?: string } = {}) {
+    const search = new URLSearchParams();
+    if (options.includeSuggestions) search.set('mode', 'suggestions');
+    if (options.dateFrom) search.set('dateFrom', options.dateFrom);
+    const query = search.toString();
+    const endpoint = `/api/appointments/action-requests/${encodeURIComponent(String(requestId))}/availability${query ? `?${query}` : ''}`;
     try {
       const response = await fetchClinical(endpoint, {
         headers: await getAuthHeaders(),

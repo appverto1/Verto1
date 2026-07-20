@@ -18,6 +18,10 @@ const atomicRescheduleMigration = fs.readFileSync(
   path.join(root, 'supabase/migrations/20260719153000_atomic_appointment_reschedule_approval.sql'),
   'utf8'
 );
+const atomicActionResolutionMigration = fs.readFileSync(
+  path.join(root, 'supabase/migrations/20260720143000_atomic_appointment_action_request_resolution.sql'),
+  'utf8'
+);
 
 test('appointment merge updates only matching persisted ids', () => {
   const current = [
@@ -300,7 +304,7 @@ test('reschedule approval preflights all submitted options and only accepts serv
   const routeEnd = serverCode.indexOf("app.post('/api/appointments/action-requests/:requestId/reject'", routeStart);
   const route = serverCode.slice(routeStart, routeEnd);
 
-  assert.match(preview, /parsed\.options\.slice\(0, 3\)/);
+  assert.match(preview, /parsed\.options\.slice\(0, Math\.min\(24/);
   assert.match(preview, /\.from\('clinic_memberships'\)[\s\S]*?\.eq\('clinic_id', assignment\.clinicId\)/);
   assert.match(preview, /\.from\('professional_profiles'\)[\s\S]*?\.in\('user_id', activeMemberIds\)/);
   assert.match(preview, /fetchConflictRooms\(assignment\.clinicId, assignment\.organizationId\)/);
@@ -316,7 +320,7 @@ test('reschedule approval preflights all submitted options and only accepts serv
   assert.match(route, /const allowedAssignments = \[/);
   assert.match(route, /allowedAssignments\.find/);
   assert.match(route, /code: 'RESCHEDULE_CONFLICT'/);
-  assert.match(route, /supabase\.rpc\('approve_appointment_reschedule'/);
+  assert.match(route, /supabase\.rpc\('approve_appointment_reschedule_v2'/);
   assert.match(route, /p_professional_id: approvedAssignment\.professionalId/);
   assert.match(route, /p_room_id: approvedAssignment\.locationType === 'clinica'/);
   assert.match(route, /const durationMinutes = getCalendarAppointmentDuration\(appointment\)/);
@@ -328,10 +332,10 @@ test('reschedule approval is idempotent and does not record a false approval bef
   const routeEnd = serverCode.indexOf("app.post('/api/appointments/action-requests/:requestId/reject'", routeStart);
   const route = serverCode.slice(routeStart, routeEnd);
   assert.match(route, /requestRow\.status === 'APPROVED'/);
-  assert.match(route, /idempotent: true/);
+  assert.match(route, /recoveringApprovedReschedule = true/);
   assert.match(route, /appointmentScheduleMatches\(persistedAppointment/);
-  assert.match(route, /supabase\.rpc\('approve_appointment_reschedule'/);
-  assert.match(route, /appointmentScheduleMatches\(atomicPayload\.appointment/);
+  assert.match(route, /supabase\.rpc\('approve_appointment_reschedule_v2'/);
+  assert.match(route, /appointmentScheduleMatches\(confirmedAppointment/);
   assert.match(route, /RESCHEDULE_APPROVAL_SCHEMA_UNAVAILABLE/);
   assert.match(route, /RESCHEDULE_APPOINTMENT_CHANGED/);
   assert.match(route, /RESCHEDULE_ASSIGNMENT_UNAVAILABLE/);
@@ -348,14 +352,22 @@ test('reschedule approval is idempotent and does not record a false approval bef
   assert.match(atomicRescheduleMigration, /insert into public\.appointment_status_audit_logs/);
   assert.match(atomicRescheduleMigration, /notification_24h_sent_at = null/);
   assert.doesNotMatch(atomicRescheduleMigration, /insert into public\.appointments/);
+  assert.match(atomicActionResolutionMigration, /perform 1[\s\S]*?appointment_action_requests[\s\S]*?order by r\.id[\s\S]*?for update/);
+  assert.match(atomicActionResolutionMigration, /ACTION_REQUEST_SUPERSEDED/);
+  assert.match(atomicActionResolutionMigration, /r\.request_type in \('CANCEL', 'RESCHEDULE'\)/);
+  assert.match(atomicActionResolutionMigration, /approve_appointment_cancellation/);
+  assert.match(atomicActionResolutionMigration, /reject_appointment_action_request/);
+  assert.doesNotMatch(atomicActionResolutionMigration, /insert into public\.appointments/);
 });
 
 test('calendar exposes conflict-aware options and propagates approved appointment immediately', () => {
   assert.match(dataServiceCode, /getAppointmentActionRequestAvailability/);
-  assert.match(calendarCode, /Escolha uma opção livre\. Conflitos e alternativas são verificados automaticamente\./);
-  assert.match(calendarCode, /Aprovar este horário/);
-  assert.match(calendarCode, /Alternativas livres para o mesmo horário/);
-  assert.match(calendarCode, /assignmentId: alternative\.id/);
+  assert.match(calendarCode, /As opções foram comparadas por profissional, sala, financeiro e concorrência\./);
+  assert.match(calendarCode, /Revisar e aprovar/);
+  assert.match(calendarCode, /Confirmar novo horário/);
+  assert.match(calendarCode, /Manter o contexto atual/);
+  assert.match(calendarCode, /Sugerir outro horário/);
+  assert.match(calendarCode, /Disponibilidade completa/);
   assert.match(calendarCode, /onAppointmentActionResolved\?\.\(result\.appointment\)/);
   const decisionStart = calendarCode.indexOf('const handleActionRequestDecision');
   const decisionEnd = calendarCode.indexOf('const handleMaintenanceLinkDecision', decisionStart);

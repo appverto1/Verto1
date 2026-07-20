@@ -37,6 +37,7 @@ import { formatRescheduleOptionLabel, parseRescheduleRequestPayload } from '../s
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { mergeAppointmentIdentity } from '../utils/appointmentActionUpdates';
+import { createRescheduleIdempotencyKey } from '../utils/rescheduleApproval';
 import {
   APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS,
   APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE,
@@ -1455,6 +1456,13 @@ export const ClinicalAgendaBoard = ({
     data: any | null;
   }>({ requestId: '', loading: false, error: '', data: null });
   const [rescheduleAvailabilityNonce, setRescheduleAvailabilityNonce] = useState(0);
+  const [rescheduleApprovalDraft, setRescheduleApprovalDraft] = useState<any | null>(null);
+  const [rescheduleSuggestionState, setRescheduleSuggestionState] = useState<{
+    request: any | null;
+    loading: boolean;
+    error: string;
+    options: any[];
+  }>({ request: null, loading: false, error: '', options: [] });
   const [billingEditorOpen, setBillingEditorOpen] = useState(false);
   const [financialValidationOpen, setFinancialValidationOpen] = useState(false);
   const [billingEditorState, setBillingEditorState] = useState<{ loading: boolean; saving: boolean; error: string; success: string }>({
@@ -1517,10 +1525,12 @@ export const ClinicalAgendaBoard = ({
 
   const pendingRescheduleRequestId = useMemo(() => {
     const requests = Array.isArray(eventDetail?.actionRequests) ? eventDetail.actionRequests : [];
-    const pendingRequest = requests.find((request: any) =>
-      String(request?.status || '').toUpperCase() === 'PENDING' &&
-      String(request?.request_type || request?.requestType || '').toUpperCase() === 'RESCHEDULE'
-    );
+    const pendingRequest = requests
+      .filter((request: any) =>
+        String(request?.status || '').toUpperCase() === 'PENDING' &&
+        String(request?.request_type || request?.requestType || '').toUpperCase() === 'RESCHEDULE'
+      )
+      .sort((left: any, right: any) => new Date(right?.created_at || right?.createdAt || 0).getTime() - new Date(left?.created_at || left?.createdAt || 0).getTime())[0];
     return String(pendingRequest?.id || '').trim();
   }, [eventDetail?.actionRequests]);
 
@@ -2417,9 +2427,92 @@ export const ClinicalAgendaBoard = ({
     });
   };
 
-  const handleActionRequestDecision = async (request: any, decision: 'approve' | 'reject', payload: any = {}) => {
+  const openRescheduleApprovalReview = (request: any, option: any, optionIndex: number, availability: any) => {
+    const assignments = Array.isArray(availability?.assignments) && availability.assignments.length > 0
+      ? availability.assignments
+      : [availability?.assignment, ...(Array.isArray(availability?.alternatives) ? availability.alternatives : [])].filter(Boolean);
+    const initialAssignment = assignments[0] || null;
+    if (!initialAssignment || availability?.available !== true) return;
+    setRescheduleApprovalDraft({
+      request,
+      option,
+      optionIndex,
+      availability,
+      assignments,
+      assignmentId: initialAssignment.id,
+      keepOriginalFinancialContext: true,
+      idempotencyKey: createRescheduleIdempotencyKey(String(request?.id || ''), optionIndex)
+    });
+  };
+
+  const submitRescheduleApproval = async () => {
+    const draft = rescheduleApprovalDraft;
+    if (!draft) return;
+    const assignment = draft.assignments.find((candidate: any) => candidate.id === draft.assignmentId) || null;
+    if (!assignment) return;
+    const saved = await handleActionRequestDecision(draft.request, 'approve', {
+      selectedOptionIndex: draft.optionIndex,
+      assignmentId: assignment.id,
+      professionalId: assignment.professionalId,
+      roomId: assignment.roomId,
+      keepOriginalFinancialContext: draft.keepOriginalFinancialContext,
+      idempotencyKey: draft.idempotencyKey
+    });
+    if (saved) setRescheduleApprovalDraft(null);
+  };
+
+  const openRescheduleSuggestions = async (request: any) => {
     const requestId = String(request?.id || '').trim();
     if (!requestId) return;
+    setRescheduleSuggestionState({ request, loading: true, error: '', options: [] });
+    const result = await dataService.getAppointmentActionRequestAvailability(requestId, { includeSuggestions: true });
+    if (!result?.success) {
+      setRescheduleSuggestionState({ request, loading: false, error: result?.error || 'Não foi possível sugerir novos horários agora.', options: [] });
+      return;
+    }
+    setRescheduleSuggestionState({
+      request,
+      loading: false,
+      error: '',
+      options: Array.isArray(result?.data?.suggestions) ? result.data.suggestions : []
+    });
+  };
+
+  const useRescheduleSuggestion = (option: any) => {
+    if (!option?.available) return;
+    const assignment = Array.isArray(option?.assignments) ? option.assignments[0] : option?.assignment;
+    if (!assignment?.professionalId) return;
+    const scheduledStart = String(option?.scheduledStart || '').trim();
+    const scheduledEnd = String(option?.scheduledEnd || '').trim();
+    if (!scheduledStart || !scheduledEnd) return;
+    const request = rescheduleSuggestionState.request || {};
+    setRescheduleSuggestionState({ request: null, loading: false, error: '', options: [] });
+    openAppointmentEditor({
+      ...detailEvent,
+      scheduled_at: scheduledStart,
+      scheduled_start_at: scheduledStart,
+      scheduled_end_at: scheduledEnd,
+      start_time: scheduledStart,
+      end_time: scheduledEnd,
+      therapist_id: assignment.professionalId,
+      therapistId: assignment.professionalId,
+      therapist_name: assignment.professionalName,
+      therapistName: assignment.professionalName,
+      room_id: assignment.roomId || null,
+      roomId: assignment.roomId || null,
+      room_name: assignment.roomName || null,
+      roomName: assignment.roomName || null,
+      location_type: assignment.locationType || detailEvent.location_type,
+      locationType: assignment.locationType || detailEvent.locationType,
+      pendingActionRequestId: request.id,
+      pendingActionRequestType: request.request_type,
+      rescheduleSuggestion: true
+    });
+  };
+
+  const handleActionRequestDecision = async (request: any, decision: 'approve' | 'reject', payload: any = {}) => {
+    const requestId = String(request?.id || '').trim();
+    if (!requestId) return false;
     setActionRequestState({ loadingId: requestId, error: '' });
     const isApprove = decision === 'approve';
     const result = isApprove
@@ -2435,7 +2528,7 @@ export const ClinicalAgendaBoard = ({
         });
       }
       setActionRequestState({ loadingId: '', error: result?.error || 'Não foi possível atualizar a solicitação.' });
-      return;
+      return false;
     }
     applyUpdatedAppointmentToAgenda(result.appointment);
     try {
@@ -2445,14 +2538,18 @@ export const ClinicalAgendaBoard = ({
     }
     setEventDetail((previous: any) => {
       if (!previous) return previous;
-      const requests = Array.isArray(previous.actionRequests)
-        ? previous.actionRequests.map((item: any) => String(item?.id || '') === requestId
-            ? { ...item, ...(result.actionRequest || {}), status: decision === 'approve' ? 'APPROVED' : 'REJECTED' }
-            : item)
-        : previous.actionRequests;
-      const statusHistory = result.statusHistoryEntry
-        ? [result.statusHistoryEntry, ...(Array.isArray(previous.statusHistory) ? previous.statusHistory : [])]
-        : previous.statusHistory;
+      const requests = Array.isArray(result.actionRequests) && result.actionRequests.length > 0
+        ? result.actionRequests
+        : Array.isArray(previous.actionRequests)
+          ? previous.actionRequests.map((item: any) => String(item?.id || '') === requestId
+              ? { ...item, ...(result.actionRequest || {}), status: decision === 'approve' ? 'APPROVED' : 'REJECTED' }
+              : item)
+          : previous.actionRequests;
+      const statusHistory = Array.isArray(result.statusHistory) && result.statusHistory.length > 0
+        ? result.statusHistory
+        : result.statusHistoryEntry
+          ? [result.statusHistoryEntry, ...(Array.isArray(previous.statusHistory) ? previous.statusHistory : [])]
+          : previous.statusHistory;
       return {
         ...previous,
         event: mergeAppointmentIdentity(previous.event || {}, result.appointment || {}),
@@ -2467,6 +2564,7 @@ export const ClinicalAgendaBoard = ({
       message: decision === 'approve' ? 'Solicitação aprovada e agenda atualizada.' : 'Solicitação recusada. O horário atual foi mantido.'
     });
     setActionRequestResolution({ requestId: '', note: '' });
+    return true;
   };
 
   const handleMaintenanceLinkDecision = async (probe: any, decision: 'confirm' | 'skip') => {
@@ -3075,7 +3173,18 @@ export const ClinicalAgendaBoard = ({
   ];
   const recommendations = Array.isArray(detail.acceptedRecommendations) ? detail.acceptedRecommendations : [];
   const actionRequests = Array.isArray(detail.actionRequests) ? detail.actionRequests : [];
+  const latestPendingActionRequestId = actionRequests
+    .filter((request: any) => String(request?.status || '').toUpperCase() === 'PENDING')
+    .sort((left: any, right: any) => new Date(right?.created_at || right?.createdAt || 0).getTime() - new Date(left?.created_at || left?.createdAt || 0).getTime())[0]?.id || '';
   const statusHistory = Array.isArray(detail.statusHistory) ? detail.statusHistory : [];
+  const latestResponsibleRequestHistoryId = statusHistory.find((entry: any) =>
+    ['RESCHEDULE_REQUESTED', 'CANCEL_REQUESTED'].includes(String(entry?.action || '').toUpperCase())
+  )?.id || '';
+  const selectedRescheduleAssignment = rescheduleApprovalDraft
+    ? rescheduleApprovalDraft.assignments.find((candidate: any) => candidate.id === rescheduleApprovalDraft.assignmentId) || null
+    : null;
+  const selectedRescheduleFinancialContext = rescheduleApprovalDraft?.availability?.financialContext || null;
+  const rescheduleApprovalNeedsFinancialReview = selectedRescheduleFinancialContext?.reviewRequired === true;
   const signatures = Array.isArray(detail.signatures) ? detail.signatures : [];
   const billingContext = detail.billingContext || {};
   const patientFinance = detail.patientFinance || null;
@@ -3807,6 +3916,167 @@ export const ClinicalAgendaBoard = ({
         </div>
       )}
 
+      {rescheduleApprovalDraft && (
+        <div className="fixed inset-0 z-[190] flex items-end justify-center bg-black/45 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => !actionRequestState.loadingId && setRescheduleApprovalDraft(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reschedule-approval-title"
+            className={`max-h-[92dvh] w-full max-w-xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-[#7a32fc]">Revisão da remarcação</p>
+                <h3 id="reschedule-approval-title" className="mt-1 text-lg font-semibold">Confirmar novo horário</h3>
+                <p className={`mt-1 text-sm ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{formatRescheduleOptionLabel(rescheduleApprovalDraft.option)}</p>
+              </div>
+              <button type="button" disabled={Boolean(actionRequestState.loadingId)} onClick={() => setRescheduleApprovalDraft(null)} className={`rounded-2xl border p-2 disabled:opacity-50 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar revisão da remarcação">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={`mt-5 rounded-2xl border p-4 ${rescheduleApprovalDraft.availability?.recommendation === 'attention' ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-950'}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm font-semibold">{rescheduleApprovalDraft.availability?.recommendationLabel || 'Horário disponível'}</span>
+                {Number(rescheduleApprovalDraft.availability?.competition?.total || 0) > 0 && (
+                  <span className="rounded-full bg-amber-200 px-2 py-1 text-[11px] font-medium text-amber-900">
+                    {rescheduleApprovalDraft.availability.competition.total} solicitação(ões) concorrente(s)
+                  </span>
+                )}
+              </div>
+              {Array.isArray(rescheduleApprovalDraft.availability?.reasons) && (
+                <ul className="mt-2 space-y-1 text-xs">
+                  {rescheduleApprovalDraft.availability.reasons.slice(0, 4).map((reason: string) => <li key={reason}>• {reason}</li>)}
+                </ul>
+              )}
+            </div>
+
+            <label className={`mt-5 block text-sm font-medium ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
+              Profissional e sala
+              <select
+                value={rescheduleApprovalDraft.assignmentId}
+                onChange={(event) => setRescheduleApprovalDraft((current: any) => current ? { ...current, assignmentId: event.target.value } : current)}
+                className={`mt-2 min-h-12 w-full rounded-xl border px-3 text-sm outline-none focus:border-[#7a32fc] ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}
+              >
+                {rescheduleApprovalDraft.assignments.map((assignment: any) => (
+                  <option key={assignment.id} value={assignment.id}>
+                    {[assignment.professionalName, assignment.roomName || (assignment.locationType === 'clinica' ? 'Sala a definir' : 'Sem sala física')].filter(Boolean).join(' · ')}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <fieldset className="mt-5">
+              <legend className={`text-sm font-medium ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>Contexto financeiro</legend>
+              <div className="mt-2 grid gap-2">
+                <label className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+                  <input
+                    type="radio"
+                    name="reschedule-financial-context"
+                    checked={rescheduleApprovalDraft.keepOriginalFinancialContext === true}
+                    onChange={() => setRescheduleApprovalDraft((current: any) => current ? { ...current, keepOriginalFinancialContext: true } : current)}
+                    className="mt-1 accent-[#7a32fc]"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium">Manter o contexto atual</span>
+                    <span className={`mt-1 block text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Preserva pagador, plano, cobrança, guia, autorização, valor, desconto e repasse.</span>
+                  </span>
+                </label>
+                <label className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+                  <input
+                    type="radio"
+                    name="reschedule-financial-context"
+                    checked={rescheduleApprovalDraft.keepOriginalFinancialContext === false}
+                    onChange={() => setRescheduleApprovalDraft((current: any) => current ? { ...current, keepOriginalFinancialContext: false } : current)}
+                    className="mt-1 accent-[#7a32fc]"
+                  />
+                  <span>
+                    <span className="block text-sm font-medium">Preservar os dados e sinalizar revisão</span>
+                    <span className={`mt-1 block text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>A sessão é movida sem apagar os dados atuais; a conferência financeira fica indicada para revisão.</span>
+                  </span>
+                </label>
+              </div>
+              {Array.isArray(selectedRescheduleFinancialContext?.reasons) && (
+                <div className={`mt-3 rounded-xl border px-3 py-2 text-xs ${rescheduleApprovalNeedsFinancialReview ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
+                  {selectedRescheduleFinancialContext.reasons.join(' ')}
+                </div>
+              )}
+            </fieldset>
+
+            {actionRequestState.error && (
+              <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="alert">{actionRequestState.error}</div>
+            )}
+
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" disabled={Boolean(actionRequestState.loadingId)} onClick={() => setRescheduleApprovalDraft(null)} className={`min-h-11 rounded-xl border px-4 text-sm font-medium disabled:opacity-50 ${isDark ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>Continuar analisando</button>
+              <button
+                type="button"
+                disabled={Boolean(actionRequestState.loadingId) || !selectedRescheduleAssignment || (rescheduleApprovalNeedsFinancialReview && rescheduleApprovalDraft.keepOriginalFinancialContext)}
+                onClick={() => void submitRescheduleApproval()}
+                className="inline-flex min-h-11 items-center justify-center rounded-xl bg-[#7a32fc] px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+              >
+                {actionRequestState.loadingId ? <><Loader2 size={15} className="mr-2 animate-spin" />Aprovando...</> : 'Aprovar remarcação'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {rescheduleSuggestionState.request && (
+        <div className="fixed inset-0 z-[188] flex items-end justify-center bg-black/45 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setRescheduleSuggestionState({ request: null, loading: false, error: '', options: [] })}>
+          <div role="dialog" aria-modal="true" aria-labelledby="reschedule-suggestions-title" className={`max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-[#7a32fc]">Disponibilidade completa</p>
+                <h3 id="reschedule-suggestions-title" className="mt-1 text-lg font-semibold">Sugerir outro horário</h3>
+                <p className={`mt-1 text-sm ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Verificamos profissional, sala, contexto financeiro e conflitos antes de listar cada opção.</p>
+              </div>
+              <button type="button" onClick={() => setRescheduleSuggestionState({ request: null, loading: false, error: '', options: [] })} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar sugestões de horário"><X size={18} /></button>
+            </div>
+
+            {rescheduleSuggestionState.loading && (
+              <div className={`mt-5 flex items-center gap-2 rounded-2xl border px-4 py-4 text-sm ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}><Loader2 size={16} className="animate-spin" />Analisando horários e recursos...</div>
+            )}
+            {rescheduleSuggestionState.error && (
+              <div className="mt-5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900" role="alert">
+                {rescheduleSuggestionState.error}
+                <button type="button" onClick={() => void openRescheduleSuggestions(rescheduleSuggestionState.request)} className="ml-3 font-semibold underline">Tentar novamente</button>
+              </div>
+            )}
+            {!rescheduleSuggestionState.loading && !rescheduleSuggestionState.error && rescheduleSuggestionState.options.length === 0 && (
+              <div className={`mt-5 rounded-2xl border border-dashed px-4 py-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhum horário compatível foi encontrado nesta janela.</div>
+            )}
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              {rescheduleSuggestionState.options.map((option: any, index: number) => {
+                const recommendation = String(option?.recommendation || 'unavailable');
+                const isAvailable = option?.available === true;
+                const isAttention = recommendation === 'attention';
+                const tone = !isAvailable
+                  ? isDark ? 'border-slate-700 bg-slate-900 opacity-70' : 'border-slate-200 bg-slate-50 opacity-75'
+                  : isAttention
+                    ? isDark ? 'border-amber-500/50 bg-amber-500/10' : 'border-amber-300 bg-amber-50'
+                    : isDark ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50/70';
+                const assignment = Array.isArray(option?.assignments) ? option.assignments[0] : option?.assignment;
+                return (
+                  <div key={`${option?.scheduledStart || index}`} className={`rounded-2xl border p-4 ${tone}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold">{formatRescheduleOptionLabel(option)}</p>
+                      <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${!isAvailable ? 'bg-slate-200 text-slate-700' : isAttention ? 'bg-amber-200 text-amber-900' : 'bg-emerald-100 text-emerald-800'}`}>{option?.recommendationLabel || (isAvailable ? 'Disponível' : 'Indisponível')}</span>
+                    </div>
+                    {assignment && <p className={`mt-2 text-xs ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{[assignment.professionalName, assignment.roomName].filter(Boolean).join(' · ')}</p>}
+                    {Array.isArray(option?.reasons) && <ul className={`mt-2 space-y-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{option.reasons.slice(0, 3).map((reason: string) => <li key={reason}>• {reason}</li>)}</ul>}
+                    <button type="button" disabled={!isAvailable || !onEditAppointment} onClick={() => useRescheduleSuggestion(option)} className={`mt-4 min-h-10 w-full rounded-xl px-3 text-xs font-semibold disabled:cursor-not-allowed ${!isAvailable ? 'bg-slate-200 text-slate-500' : isAttention ? 'bg-amber-600 text-white' : 'bg-emerald-600 text-white'}`}>
+                      {!isAvailable ? 'Indisponível' : isAttention ? 'Revisar ajustes' : 'Usar este horário'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedEvent && (
         <div className="fixed inset-0 z-[140] flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setSelectedEvent(null)}>
           <div className={`max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
@@ -4028,6 +4298,7 @@ export const ClinicalAgendaBoard = ({
                     const loading = actionRequestState.loadingId === String(request.id || '');
                     const isRejecting = actionRequestResolution.requestId === String(request.id || '');
                     const requestId = String(request.id || '');
+                    const isLatestPendingRequest = requestId === String(latestPendingActionRequestId || '');
                     const availabilityMatchesRequest = rescheduleAvailabilityState.requestId === requestId;
                     const availabilityLoading = !isCancel && availabilityMatchesRequest && rescheduleAvailabilityState.loading;
                     const availabilityError = !isCancel && availabilityMatchesRequest ? rescheduleAvailabilityState.error : '';
@@ -4042,18 +4313,26 @@ export const ClinicalAgendaBoard = ({
                       requestedEnd: request.requested_end
                     };
                     return (
-                      <div key={request.id} className={`rounded-2xl border px-3 py-3 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-white bg-white'}`}>
+                      <div key={request.id} className={`rounded-2xl border px-3 py-3 ${String(request.id || '') === String(latestPendingActionRequestId || '') ? 'ring-2 ring-violet-300/60' : ''} ${isDark ? 'border-slate-700 bg-slate-950' : 'border-white bg-white'}`}>
                         <div className="flex flex-col gap-3">
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                             <div>
-                            <p className="text-sm font-semibold">{isCancel ? 'Cancelamento solicitado' : 'Remarcação solicitada'}</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="text-sm font-semibold">{isCancel ? 'Cancelamento de sessão solicitado' : 'Remarcação solicitada'}</p>
+                              {String(request.id || '') === String(latestPendingActionRequestId || '') && (
+                                <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-medium text-violet-700">Solicitação mais recente</span>
+                              )}
+                            </div>
                             <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>
                               {isCancel
-                                ? 'O responsável solicitou o cancelamento desta consulta.'
-                                : 'Escolha uma opção livre. Conflitos e alternativas são verificados automaticamente.'}
+                                ? 'O responsável solicitou o cancelamento desta sessão.'
+                                : 'As opções foram comparadas por profissional, sala, financeiro e concorrência.'}
                             </p>
                             {request.reason && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>Motivo: {request.reason}</p>}
                             {requestNote && <p className={`mt-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{requestNote}</p>}
+                            {!isLatestPendingRequest && (
+                              <p className={`mt-2 rounded-lg px-2 py-1.5 text-xs ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>Há uma solicitação mais recente. Esta ação pode ser recusada, mas não aprovada antes dela.</p>
+                            )}
                             {!isCancel && rescheduleOptions.length === 0 && requestedStart && !Number.isNaN(requestedStart.getTime()) && (
                               <p className={`mt-1 text-xs font-semibold ${isDark ? 'text-slate-200' : 'text-slate-600'}`}>
                                 Sugestão: {formatDisplayDateTime(requestedStart)}
@@ -4066,8 +4345,8 @@ export const ClinicalAgendaBoard = ({
                             )}
                             </div>
                             {isCancel && (
-                              <button type="button" disabled={loading} onClick={() => void handleActionRequestDecision(request, 'approve')} className="inline-flex min-h-10 items-center justify-center rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">
-                                {loading ? <><Loader2 size={14} className="mr-2 animate-spin" />Atualizando...</> : 'Cancelar consulta'}
+                              <button type="button" disabled={loading || !isLatestPendingRequest} onClick={() => void handleActionRequestDecision(request, 'approve')} className="inline-flex min-h-10 items-center justify-center rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">
+                                {loading ? <><Loader2 size={14} className="mr-2 animate-spin" />Atualizando...</> : 'Cancelar sessão'}
                               </button>
                             )}
                           </div>
@@ -4085,21 +4364,35 @@ export const ClinicalAgendaBoard = ({
                                 const optionAvailability = availabilityOptions.find((item: any) => Number(item?.index) === index) || null;
                                 const assignment = optionAvailability?.assignment || null;
                                 const alternatives = Array.isArray(optionAvailability?.alternatives) ? optionAvailability.alternatives : [];
+                                const assignments = Array.isArray(optionAvailability?.assignments) ? optionAvailability.assignments : [assignment, ...alternatives].filter(Boolean);
                                 const assignmentLabel = [assignment?.professionalName, assignment?.roomName].filter(Boolean).join(' · ');
                                 const optionReady = optionAvailability?.available === true;
                                 const optionUnavailable = optionAvailability?.available === false;
+                                const recommendation = String(optionAvailability?.recommendation || (optionReady ? 'good' : 'unavailable'));
+                                const recommendationLabel = optionAvailability?.recommendationLabel || (optionReady ? 'Disponível' : 'Indisponível');
+                                const optionTone = recommendation === 'best' || recommendation === 'good'
+                                  ? isDark ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50/70'
+                                  : recommendation === 'attention'
+                                    ? isDark ? 'border-amber-500/50 bg-amber-500/10' : 'border-amber-300 bg-amber-50'
+                                    : isDark ? 'border-slate-700 bg-slate-900 opacity-75' : 'border-slate-200 bg-slate-50 opacity-80';
+                                const recommendationBadge = recommendation === 'best' || recommendation === 'good'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : recommendation === 'attention'
+                                    ? 'bg-amber-200 text-amber-900'
+                                    : 'bg-slate-200 text-slate-700';
                                 return (
-                                  <div key={`${request.id}-${option.scheduledStart || index}`} className={`rounded-xl border p-3 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+                                  <div key={`${request.id}-${option.scheduledStart || index}`} className={`rounded-xl border p-3 ${optionTone}`}>
                                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                       <div className="min-w-0">
                                         <div className="flex flex-wrap items-center gap-2">
                                           <span className={`text-sm font-semibold ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{formatRescheduleOptionLabel(option)}</span>
                                           {availabilityLoading && !optionAvailability ? (
                                             <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-500'}`}><Loader2 size={12} className="animate-spin" />Verificando</span>
-                                          ) : optionReady ? (
-                                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700"><CheckCircle2 size={12} />Livre</span>
-                                          ) : optionUnavailable ? (
-                                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700"><AlertCircle size={12} />Conflito</span>
+                                          ) : optionAvailability ? (
+                                            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium ${recommendationBadge}`}>
+                                              {optionReady ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+                                              {recommendationLabel}
+                                            </span>
                                           ) : null}
                                         </div>
                                         {assignmentLabel && <p className={`mt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{assignmentLabel}</p>}
@@ -4108,42 +4401,24 @@ export const ClinicalAgendaBoard = ({
                                             {optionAvailability.message}
                                           </p>
                                         )}
+                                        {Array.isArray(optionAvailability?.reasons) && optionAvailability.reasons.length > 0 && (
+                                          <ul className={`mt-2 space-y-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                                            {optionAvailability.reasons.slice(0, 3).map((reason: string) => <li key={reason}>• {reason}</li>)}
+                                          </ul>
+                                        )}
+                                        {assignments.length > 1 && (
+                                          <p className={`mt-2 text-xs ${isDark ? 'text-violet-200' : 'text-violet-700'}`}>{assignments.length} configurações compatíveis disponíveis.</p>
+                                        )}
                                       </div>
                                       <button
                                         type="button"
-                                        disabled={loading || availabilityLoading || !optionReady}
-                                        onClick={() => void handleActionRequestDecision(request, 'approve', {
-                                          selectedOptionIndex: index,
-                                          assignmentId: assignment?.id
-                                        })}
+                                        disabled={loading || availabilityLoading || !optionReady || !isLatestPendingRequest}
+                                        onClick={() => openRescheduleApprovalReview(request, option, index, optionAvailability)}
                                         className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#6926e8] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
                                       >
-                                        {loading ? <><Loader2 size={14} className="mr-2 animate-spin" />Aprovando...</> : 'Aprovar este horário'}
+                                        {loading ? <><Loader2 size={14} className="mr-2 animate-spin" />Aprovando...</> : 'Revisar e aprovar'}
                                       </button>
                                     </div>
-                                    {!optionReady && alternatives.length > 0 && (
-                                      <div className={`mt-3 border-t pt-3 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
-                                        <p className={`text-xs ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>Alternativas livres para o mesmo horário:</p>
-                                        <div className="mt-2 flex flex-wrap gap-2">
-                                          {alternatives.map((alternative: any) => (
-                                            <button
-                                              key={alternative.id}
-                                              type="button"
-                                              disabled={loading}
-                                              onClick={() => void handleActionRequestDecision(request, 'approve', {
-                                                selectedOptionIndex: index,
-                                                assignmentId: alternative.id,
-                                                professionalId: alternative.professionalId,
-                                                roomId: alternative.roomId
-                                              })}
-                                              className={`min-h-10 rounded-xl border px-3 py-2 text-left text-xs font-medium transition-colors disabled:opacity-60 ${isDark ? 'border-violet-400/50 text-violet-200 hover:bg-violet-500/10' : 'border-violet-200 text-[#6d28d9] hover:bg-violet-50'}`}
-                                            >
-                                              {[alternative.professionalName, alternative.roomName].filter(Boolean).join(' · ')}
-                                            </button>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
                                   </div>
                                 );
                               })}
@@ -4156,12 +4431,12 @@ export const ClinicalAgendaBoard = ({
                               </button>
                             )}
                             {!isCancel && (
-                              <button type="button" disabled={loading || !onEditAppointment} onClick={() => openAppointmentEditor(requestAppointment)} className="min-h-10 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-medium text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
+                              <button type="button" disabled={loading || !onEditAppointment || !isLatestPendingRequest} onClick={() => void openRescheduleSuggestions(request)} className="min-h-10 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-medium text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
                                 Sugerir outro horário
                               </button>
                             )}
                             <button type="button" disabled={loading} onClick={() => setActionRequestResolution({ requestId: String(request.id || ''), note: '' })} className="min-h-10 rounded-xl border border-violet-200 bg-white px-3 py-2 text-xs font-medium text-[#7a32fc] hover:bg-violet-50 disabled:opacity-60">
-                              Recusar
+                              {isCancel ? 'Recusar cancelamento' : 'Recusar remarcação'}
                             </button>
                           </div>
                         </div>
@@ -4206,9 +4481,14 @@ export const ClinicalAgendaBoard = ({
                       {signature.signedAt && <p className="mt-0.5 text-xs text-slate-500">{formatDisplayDateTime(signature.signedAt)}</p>}
                     </div>
                   ))}
-                  {statusHistory.slice(0, 4).map((entry: any, index: number) => (
-                    <div key={`history-${index}`} className="rounded-2xl bg-white/80 px-3 py-2 text-sm">
-                      <p className="font-semibold text-slate-800">{entry.label || 'Ação registrada'}</p>
+                  {statusHistory.slice(0, 8).map((entry: any, index: number) => (
+                    <div key={entry.id || `history-${index}`} className={`rounded-2xl border px-3 py-2 text-sm ${String(entry.id || '') === String(latestResponsibleRequestHistoryId || '') ? 'border-violet-200 bg-violet-50' : 'border-transparent bg-white/80'}`}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-slate-800">{entry.label || 'Ação registrada'}</p>
+                        {String(entry.id || '') === String(latestResponsibleRequestHistoryId || '') && (
+                          <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-medium text-violet-700">Última ação do responsável</span>
+                        )}
+                      </div>
                       {entry.performedAt && <p className="mt-0.5 text-xs text-slate-500">{formatDisplayDateTime(entry.performedAt)}</p>}
                     </div>
                   ))}

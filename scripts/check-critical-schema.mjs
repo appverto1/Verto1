@@ -4,6 +4,12 @@ import { createClient } from '@supabase/supabase-js';
 
 export const TISS_AUTHORIZATION_RESERVATION_RPC = 'reserve_tiss_authorization_billing_context';
 export const TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION = '20260715120000';
+export const APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION = '20260720143000';
+export const APPOINTMENT_ACTION_RESOLUTION_RPCS = [
+  'approve_appointment_reschedule_v2',
+  'approve_appointment_cancellation',
+  'reject_appointment_action_request',
+];
 
 const probeId = '00000000-0000-4000-8000-000000000001';
 
@@ -59,6 +65,57 @@ export async function checkCriticalSchema(client) {
   };
 }
 
+export async function checkAppointmentActionResolutionSchema(client) {
+  const common = {
+    p_organization_id: probeId,
+    p_clinic_id: probeId,
+    p_request_id: probeId,
+    p_appointment_id: probeId,
+    p_patient_id: probeId,
+    p_actor_id: probeId,
+    p_actor_role: 'schema_probe',
+    p_resolution_note: null,
+  };
+  const probes = await Promise.all([
+    client.rpc('approve_appointment_reschedule_v2', {
+      ...common,
+      p_selected_option_index: 0,
+      p_scheduled_start: '2099-01-01T12:00:00.000Z',
+      p_scheduled_end: '2099-01-01T12:50:00.000Z',
+      p_duration_minutes: 50,
+      p_professional_id: probeId,
+      p_professional_name: 'Schema probe',
+      p_room_id: null,
+      p_room_name: null,
+      p_location_type: 'outro',
+      p_session_buffer_minutes: 0,
+      p_metadata: { schema_probe: true },
+    }),
+    client.rpc('approve_appointment_cancellation', {
+      ...common,
+      p_idempotency_key: 'schema-probe',
+    }),
+    client.rpc('reject_appointment_action_request', {
+      ...common,
+      p_idempotency_key: 'schema-probe',
+    }),
+  ]);
+  const incompatible = probes.map((result, index) => {
+    const error = result?.error;
+    if (!error) return null;
+    const code = String(error?.code || '').trim().toUpperCase();
+    const message = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ').toUpperCase();
+    if (code === '42501' || message.includes('FORBIDDEN')) return null;
+    return {
+      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[index],
+      reason: code === 'PGRST202' || code === '42883' ? 'rpc_missing_or_signature_mismatch' : 'rpc_probe_failed',
+    };
+  }).find(Boolean);
+  return incompatible
+    ? { compatible: false, schemaVersion: null, ...incompatible }
+    : { compatible: true, schemaVersion: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION, reason: 'compatible' };
+}
+
 async function main() {
   const forceCheck = String(process.env.VERTO_CHECK_CRITICAL_SCHEMA || '').trim() === '1';
   const explicitScriptRun = process.env.npm_lifecycle_event === 'check:critical-schema';
@@ -80,7 +137,12 @@ async function main() {
   if (!result.compatible) {
     throw new Error(`Schema TISS incompativel (${result.reason}). Aplique as migrations antes de publicar o backend.`);
   }
+  const appointmentActions = await checkAppointmentActionResolutionSchema(client);
+  if (!appointmentActions.compatible) {
+    throw new Error(`Schema de solicitacoes de agenda incompativel (${appointmentActions.reason}; RPC ${appointmentActions.rpc}). Aplique as migrations antes de publicar o backend.`);
+  }
   console.log('[Schema] RPC de reserva TISS compativel com o backend.');
+  console.log('[Schema] RPCs atomicas de solicitacoes de agenda compativeis com o backend.');
 }
 
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;

@@ -79,7 +79,7 @@ const approveRescheduleRoute = server.slice(
   server.indexOf("app.post('/api/appointments/action-requests/:requestId/approve'"),
   server.indexOf("app.post('/api/appointments/action-requests/:requestId/reject'")
 );
-assert.match(approveRescheduleRoute, /supabase\.rpc\('approve_appointment_reschedule'/);
+assert.match(approveRescheduleRoute, /supabase\.rpc\('approve_appointment_reschedule_v2'/);
 assert.match(approveRescheduleRoute, /status:\s*'SCHEDULED'/);
 assert.match(atomicRescheduleMigration, /set status = 'scheduled'/);
 assert.match(atomicRescheduleMigration, /notification_24h_sent_at = null/);
