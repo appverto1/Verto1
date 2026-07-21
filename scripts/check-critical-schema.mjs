@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export const TISS_AUTHORIZATION_RESERVATION_RPC = 'reserve_tiss_authorization_billing_context';
 export const TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION = '20260715120000';
-export const APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION = '20260720160000';
+export const APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION = '20260721123000';
 export const APPOINTMENT_ACTION_RESOLUTION_RPCS = [
   'approve_appointment_reschedule_v2',
   'approve_appointment_cancellation',
@@ -68,7 +68,14 @@ export async function checkCriticalSchema(client) {
 export async function checkAppointmentActionResolutionSchema(client) {
   const requiredAppointmentColumns = [
     'id',
+    'scheduled_at',
+    'scheduled_start_at',
+    'scheduled_end_at',
+    'scheduled_duration_minutes',
+    'therapist_id',
     'therapist_name',
+    'room_id',
+    'room_name',
     'patient_confirmation_status',
     'patient_confirmation_at',
     'patient_confirmation_by',
@@ -125,20 +132,42 @@ export async function checkAppointmentActionResolutionSchema(client) {
       p_idempotency_key: 'schema-probe',
     }),
   ]);
-  const incompatible = probes.map((result, index) => {
+  const rescheduleProbe = probes[0];
+  if (rescheduleProbe?.error) {
+    const code = String(rescheduleProbe.error?.code || '').trim().toUpperCase();
+    return {
+      compatible: false,
+      schemaVersion: null,
+      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
+      reason: code === 'PGRST202' || code === '42883'
+        ? 'rpc_missing_or_signature_mismatch'
+        : 'rpc_version_probe_failed',
+    };
+  }
+  const rescheduleSchemaVersion = String(rescheduleProbe?.data?.schema_version || '').trim();
+  if (rescheduleProbe?.data?.compatible !== true || rescheduleSchemaVersion !== APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION) {
+    return {
+      compatible: false,
+      schemaVersion: rescheduleSchemaVersion || null,
+      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
+      reason: 'rpc_version_mismatch',
+    };
+  }
+
+  const incompatible = probes.slice(1).map((result, offset) => {
     const error = result?.error;
     if (!error) return null;
     const code = String(error?.code || '').trim().toUpperCase();
     const message = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ').toUpperCase();
     if (code === '42501' || message.includes('FORBIDDEN')) return null;
     return {
-      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[index],
+      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[offset + 1],
       reason: code === 'PGRST202' || code === '42883' ? 'rpc_missing_or_signature_mismatch' : 'rpc_probe_failed',
     };
   }).find(Boolean);
   return incompatible
-    ? { compatible: false, schemaVersion: null, ...incompatible }
-    : { compatible: true, schemaVersion: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION, reason: 'compatible' };
+    ? { compatible: false, schemaVersion: rescheduleSchemaVersion, ...incompatible }
+    : { compatible: true, schemaVersion: rescheduleSchemaVersion, reason: 'compatible' };
 }
 
 async function main() {

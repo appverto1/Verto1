@@ -74,7 +74,7 @@ test('approval flow batches conflicts and resolves competing requests atomically
   const server = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
   const calendar = fs.readFileSync(path.join(root, 'src/components/Calendar.tsx'), 'utf8');
   const migration = fs.readFileSync(
-    path.join(root, 'supabase/migrations/20260720143000_atomic_appointment_action_request_resolution.sql'),
+    path.join(root, 'supabase/migrations/20260721123000_reschedule_approval_schema_alignment.sql'),
     'utf8',
   );
   const preview = server.slice(
@@ -90,10 +90,11 @@ test('approval flow batches conflicts and resolves competing requests atomically
   assert.match(migration, /r\.id <> p_request_id[\s\S]*?r\.request_type in \('CANCEL', 'RESCHEDULE'\)/);
   assert.match(migration, /action_requests/);
   assert.match(migration, /audit_entries/);
-  assert.match(server, /recoveringApprovedCancellation/);
-  assert.match(server, /requestRow\.status !== 'PENDING' && requestRow\.status !== 'REJECTED'/);
+  assert.match(server, /recoveringApprovedReschedule/);
+  assert.match(server, /approve_appointment_reschedule_v2/);
+  assert.match(server, /RESCHEDULE_APPROVAL_SCHEMA_INCOMPATIBLE/);
+  assert.match(server, /appointmentScheduleMatches\(confirmedAppointment/);
   assert.doesNotMatch(migration, /set status = case when lower\(coalesce\(status/);
-  assert.match(migration, /set patient_response = case when v_remaining_type = 'CANCEL' then 'cancel_requested'/);
   assert.match(calendar, /Solicitação mais recente/);
   assert.match(calendar, /Cancelar sessão/);
   assert.match(calendar, /Recusar cancelamento/);

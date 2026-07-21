@@ -277,7 +277,7 @@ test('equipe aprova opcao escolhida sem expor agenda privada', () => {
   assert.match(approvalRoute, /selectedOptionIndex/);
   assert.match(approvalRoute, /buildRescheduleApprovalPreview/);
   assert.match(approvalRoute, /appointmentScheduleMatches/);
-  assert.match(approvalRoute, /idempotent: actionResolutionIdempotent/);
+  assert.match(approvalRoute, /idempotent: requestRow\.request_type === 'RESCHEDULE' \? atomicPayload\?\.idempotent === true/);
   assert.match(approvalRoute, /\.eq\('status', 'PENDING'\)/);
   assert.doesNotMatch(approvalRoute, /req\.body\?\.scheduledStart/);
   assert.match(serverCode, /notifyPortalRescheduleApproval/);

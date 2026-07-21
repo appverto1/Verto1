@@ -2431,7 +2431,9 @@ export const ClinicalAgendaBoard = ({
     const assignments = Array.isArray(availability?.assignments) && availability.assignments.length > 0
       ? availability.assignments
       : [availability?.assignment, ...(Array.isArray(availability?.alternatives) ? availability.alternatives : [])].filter(Boolean);
-    const initialAssignment = assignments[0] || null;
+    const initialAssignment = assignments.find((candidate: any) => candidate?.approvalAllowed === true)
+      || assignments.find((candidate: any) => candidate?.available === true)
+      || null;
     if (!initialAssignment || availability?.available !== true) return;
     setRescheduleApprovalDraft({
       request,
@@ -2502,6 +2504,8 @@ export const ClinicalAgendaBoard = ({
       roomId: assignment.roomId || null,
       room_name: assignment.roomName || null,
       roomName: assignment.roomName || null,
+      roomDisplayName: assignment.roomDisplayName || assignment.roomName || null,
+      room_specialty_name: assignment.roomSpecialtyName || null,
       location_type: assignment.locationType || detailEvent.location_type,
       locationType: assignment.locationType || detailEvent.locationType,
       pendingActionRequestId: request.id,
@@ -3183,8 +3187,9 @@ export const ClinicalAgendaBoard = ({
   const selectedRescheduleAssignment = rescheduleApprovalDraft
     ? rescheduleApprovalDraft.assignments.find((candidate: any) => candidate.id === rescheduleApprovalDraft.assignmentId) || null
     : null;
-  const selectedRescheduleFinancialContext = rescheduleApprovalDraft?.availability?.financialContext || null;
+  const selectedRescheduleFinancialContext = selectedRescheduleAssignment?.financialContext || rescheduleApprovalDraft?.availability?.financialContext || null;
   const rescheduleApprovalNeedsFinancialReview = selectedRescheduleFinancialContext?.reviewRequired === true;
+  const selectedRescheduleAssignmentIsApprovable = selectedRescheduleAssignment?.approvalAllowed === true;
   const signatures = Array.isArray(detail.signatures) ? detail.signatures : [];
   const billingContext = detail.billingContext || {};
   const patientFinance = detail.patientFinance || null;
@@ -3936,7 +3941,13 @@ export const ClinicalAgendaBoard = ({
               </button>
             </div>
 
-            <div className={`mt-5 rounded-2xl border p-4 ${rescheduleApprovalDraft.availability?.recommendation === 'attention' ? 'border-amber-300 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-950'}`}>
+            <div className={`mt-5 rounded-2xl border p-4 ${
+              rescheduleApprovalDraft.availability?.recommendation === 'attention'
+                ? 'border-amber-300 bg-amber-50 text-amber-950'
+                : rescheduleApprovalDraft.availability?.recommendation === 'unavailable'
+                  ? 'border-slate-300 bg-slate-50 text-slate-800'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-950'
+            }`}>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-semibold">{rescheduleApprovalDraft.availability?.recommendationLabel || 'Horário disponível'}</span>
                 {Number(rescheduleApprovalDraft.availability?.competition?.total || 0) > 0 && (
@@ -3960,8 +3971,8 @@ export const ClinicalAgendaBoard = ({
                 className={`mt-2 min-h-12 w-full rounded-xl border px-3 text-sm outline-none focus:border-[#7a32fc] ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}
               >
                 {rescheduleApprovalDraft.assignments.map((assignment: any) => (
-                  <option key={assignment.id} value={assignment.id}>
-                    {[assignment.professionalName, assignment.roomName || (assignment.locationType === 'clinica' ? 'Sala a definir' : 'Sem sala física')].filter(Boolean).join(' · ')}
+                  <option key={assignment.id} value={assignment.id} disabled={assignment.available !== true}>
+                    {[assignment.professionalName, assignment.roomDisplayName || assignment.roomName || (assignment.locationType === 'clinica' ? 'Sala não definida' : 'Sem sala física')].filter(Boolean).join(' · ')}{assignment.approvalAllowed === true ? '' : ' — requer revisão'}
                   </option>
                 ))}
               </select>
@@ -3997,9 +4008,14 @@ export const ClinicalAgendaBoard = ({
                   </span>
                 </label>
               </div>
-              {Array.isArray(selectedRescheduleFinancialContext?.reasons) && (
-                <div className={`mt-3 rounded-xl border px-3 py-2 text-xs ${rescheduleApprovalNeedsFinancialReview ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>
-                  {selectedRescheduleFinancialContext.reasons.join(' ')}
+              {Array.isArray(selectedRescheduleFinancialContext?.warnings) && selectedRescheduleFinancialContext.warnings.length > 0 && (
+                <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="alert">
+                  {selectedRescheduleFinancialContext.warnings.join(' ')}
+                </div>
+              )}
+              {!rescheduleApprovalNeedsFinancialReview && selectedRescheduleAssignmentIsApprovable && (
+                <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                  Profissional, sala, guia, autorização e saldo foram revalidados para o novo horário.
                 </div>
               )}
             </fieldset>
@@ -4012,7 +4028,7 @@ export const ClinicalAgendaBoard = ({
               <button type="button" disabled={Boolean(actionRequestState.loadingId)} onClick={() => setRescheduleApprovalDraft(null)} className={`min-h-11 rounded-xl border px-4 text-sm font-medium disabled:opacity-50 ${isDark ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>Continuar analisando</button>
               <button
                 type="button"
-                disabled={Boolean(actionRequestState.loadingId) || !selectedRescheduleAssignment || (rescheduleApprovalNeedsFinancialReview && rescheduleApprovalDraft.keepOriginalFinancialContext)}
+                disabled={Boolean(actionRequestState.loadingId) || !selectedRescheduleAssignment || !selectedRescheduleAssignmentIsApprovable || rescheduleApprovalNeedsFinancialReview}
                 onClick={() => void submitRescheduleApproval()}
                 className="inline-flex min-h-11 items-center justify-center rounded-xl bg-[#7a32fc] px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
               >
@@ -4064,7 +4080,7 @@ export const ClinicalAgendaBoard = ({
                       <p className="text-sm font-semibold">{formatRescheduleOptionLabel(option)}</p>
                       <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${!isAvailable ? 'bg-slate-200 text-slate-700' : isAttention ? 'bg-amber-200 text-amber-900' : 'bg-emerald-100 text-emerald-800'}`}>{option?.recommendationLabel || (isAvailable ? 'Disponível' : 'Indisponível')}</span>
                     </div>
-                    {assignment && <p className={`mt-2 text-xs ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{[assignment.professionalName, assignment.roomName].filter(Boolean).join(' · ')}</p>}
+                    {assignment && <p className={`mt-2 text-xs ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{[assignment.professionalName, assignment.roomDisplayName || assignment.roomName].filter(Boolean).join(' · ')}</p>}
                     {Array.isArray(option?.reasons) && <ul className={`mt-2 space-y-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>{option.reasons.slice(0, 3).map((reason: string) => <li key={reason}>• {reason}</li>)}</ul>}
                     <button type="button" disabled={!isAvailable || !onEditAppointment} onClick={() => useRescheduleSuggestion(option)} className={`mt-4 min-h-10 w-full rounded-xl px-3 text-xs font-semibold disabled:cursor-not-allowed ${!isAvailable ? 'bg-slate-200 text-slate-500' : isAttention ? 'bg-amber-600 text-white' : 'bg-emerald-600 text-white'}`}>
                       {!isAvailable ? 'Indisponível' : isAttention ? 'Revisar ajustes' : 'Usar este horário'}
@@ -4365,8 +4381,9 @@ export const ClinicalAgendaBoard = ({
                                 const assignment = optionAvailability?.assignment || null;
                                 const alternatives = Array.isArray(optionAvailability?.alternatives) ? optionAvailability.alternatives : [];
                                 const assignments = Array.isArray(optionAvailability?.assignments) ? optionAvailability.assignments : [assignment, ...alternatives].filter(Boolean);
-                                const assignmentLabel = [assignment?.professionalName, assignment?.roomName].filter(Boolean).join(' · ');
-                                const optionReady = optionAvailability?.available === true;
+                                const assignmentLabel = [assignment?.professionalName, assignment?.roomDisplayName || assignment?.roomName].filter(Boolean).join(' · ');
+                                const optionReady = optionAvailability?.approvalAllowed === true;
+                                const optionViewable = optionAvailability?.available === true;
                                 const optionUnavailable = optionAvailability?.available === false;
                                 const recommendation = String(optionAvailability?.recommendation || (optionReady ? 'good' : 'unavailable'));
                                 const recommendationLabel = optionAvailability?.recommendationLabel || (optionReady ? 'Disponível' : 'Indisponível');
@@ -4412,7 +4429,7 @@ export const ClinicalAgendaBoard = ({
                                       </div>
                                       <button
                                         type="button"
-                                        disabled={loading || availabilityLoading || !optionReady || !isLatestPendingRequest}
+                                        disabled={loading || availabilityLoading || !optionViewable || !isLatestPendingRequest}
                                         onClick={() => openRescheduleApprovalReview(request, option, index, optionAvailability)}
                                         className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#6926e8] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
                                       >

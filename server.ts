@@ -34,8 +34,10 @@ import {
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import {
   classifyReservationSchemaProbe,
+  checkAppointmentActionResolutionSchema,
   checkCriticalSchema,
   isDeployEnvironment,
+  APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
   TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION
 } from './scripts/check-critical-schema.mjs';
 import { invalidateReminderClinicBranding, runAppointmentReminderScan, startAppointmentReminderCron, triggerAppointmentReminderScan } from './services/cronService';
@@ -129,6 +131,12 @@ import {
   type PortalProfessionalWorkingSchedule,
   type PortalRescheduleOption
 } from './src/services/portalRescheduleAvailability';
+import {
+  buildRescheduleAssignmentId,
+  parseRescheduleAssignmentId,
+  parseSelectedRescheduleOptionIndex,
+  rankRescheduleOptions
+} from './src/utils/rescheduleApproval';
 import {
   dedupePatientTissAuthorizationSelectionOptions,
   findSuggestedTissAuthorizationForAppointment,
@@ -8858,30 +8866,61 @@ async function syncAppointmentProfessionalsMirrorRows(params: {
   if (!isUuid(appointmentId)) return;
   const professionalIds = Array.from(new Set((params.professionalIds || []).filter((id) => isUuid(id)))).slice(0, 20);
   if (professionalIds.length === 0) return;
-  const deleteResult = await supabase
+
+  const existingResult = await supabase
     .from('appointment_professionals')
-    .delete()
-    .eq('appointment_id', appointmentId);
-  if (deleteResult.error) {
-    if (hasMissingFinancialSchema(deleteResult.error)) return;
-    console.warn('[Appointments] Falha ao atualizar equipe do agendamento.', deleteResult.error.message);
+    .select('id,professional_id,professional_name,role,created_at')
+    .eq('appointment_id', appointmentId)
+    .limit(100);
+  if (existingResult.error) {
+    if (hasMissingFinancialSchema(existingResult.error)) return;
+    console.warn('[Appointments] Falha ao carregar equipe antes do espelhamento.', existingResult.error.message);
     return;
   }
+
+  const existingRows = Array.isArray(existingResult.data) ? existingResult.data : [];
+  const existingByProfessionalId = new Map<string, any>();
+  for (const row of existingRows) {
+    const professionalId = sanitizeString(row?.professional_id, 120);
+    if (professionalId && !existingByProfessionalId.has(professionalId)) existingByProfessionalId.set(professionalId, row);
+  }
   const now = new Date().toISOString();
-  const rows = professionalIds.map((professionalId, index) => ({
-    organization_id: isUuid(params.organizationId) ? params.organizationId : params.clinicId,
-    clinic_id: isUuid(params.clinicId) ? params.clinicId : null,
-    appointment_id: appointmentId,
-    professional_id: professionalId,
-    professional_name: index === 0 ? sanitizeString(params.professionalName, 180) || null : null,
-    role: index === 0 ? 'responsavel' : 'equipe',
-    created_at: now
-  }));
+  const rows = professionalIds.map((professionalId, index) => {
+    const existing = existingByProfessionalId.get(professionalId);
+    return {
+      id: existing?.id || crypto.randomUUID(),
+      organization_id: isUuid(params.organizationId) ? params.organizationId : params.clinicId,
+      clinic_id: isUuid(params.clinicId) ? params.clinicId : null,
+      appointment_id: appointmentId,
+      professional_id: professionalId,
+      professional_name: index === 0 ? sanitizeString(params.professionalName, 180) || existing?.professional_name || null : existing?.professional_name || null,
+      role: index === 0 ? 'responsavel' : existing?.role || 'equipe',
+      created_at: existing?.created_at || now
+    };
+  });
   const upsertResult = await supabase
     .from('appointment_professionals')
-    .upsert(rows, { onConflict: 'appointment_id,professional_id' });
-  if (upsertResult.error && !hasMissingFinancialSchema(upsertResult.error)) {
-    console.warn('[Appointments] Falha ao espelhar equipe do agendamento.', upsertResult.error.message);
+    .upsert(rows, { onConflict: 'id' });
+  if (upsertResult.error) {
+    if (!hasMissingFinancialSchema(upsertResult.error)) {
+      console.warn('[Appointments] Falha ao espelhar equipe do agendamento.', upsertResult.error.message);
+    }
+    return;
+  }
+
+  const retainedIds = new Set(rows.map((row) => sanitizeString(row.id, 120)));
+  const staleIds = existingRows
+    .map((row: any) => sanitizeString(row?.id, 120))
+    .filter((id: string) => isUuid(id) && !retainedIds.has(id));
+  if (staleIds.length > 0) {
+    const deleteResult = await supabase
+      .from('appointment_professionals')
+      .delete()
+      .eq('appointment_id', appointmentId)
+      .in('id', staleIds);
+    if (deleteResult.error && !hasMissingFinancialSchema(deleteResult.error)) {
+      console.warn('[Appointments] Falha ao remover vínculos antigos da equipe após espelhamento seguro.', deleteResult.error.message);
+    }
   }
 }
 
@@ -9525,7 +9564,7 @@ async function fetchPatientTissAuthorizationBalances(params: {
     const appointmentResult = appointmentIds.length > 0
       ? await supabase
           .from('appointments')
-          .select('id,status,scheduled_at,scheduled_start_at,date,is_active,deleted_at')
+          .select('id,status,scheduled_at,scheduled_start_at,scheduled_end_at,is_active,deleted_at')
           .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
           .in('id', appointmentIds)
           .limit(appointmentIds.length)
@@ -9554,7 +9593,7 @@ async function fetchPatientTissAuthorizationBalances(params: {
     const officialPreGuideCountByAuthorizationId = new Map<string, number>();
     for (const candidate of candidates.values()) {
       const appointment = appointmentsById.get(candidate.appointmentId);
-      const scheduledStart = candidate.scheduledStart || appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.date;
+      const scheduledStart = candidate.scheduledStart || appointment?.scheduled_start_at || appointment?.scheduled_at;
       const appointmentDate = appointmentDateKeyForAuthorization(scheduledStart);
       if (!appointmentDate || (!appointment && candidate.hasBillingContext && !candidate.scheduledStart)) {
         unconfirmedAuthorizationIds.add(candidate.authorizationId);
@@ -12905,9 +12944,21 @@ async function startServer() {
     );
   };
 
+  const validateCriticalAppointmentActionResolutionSchema = async () => {
+    const result = await checkAppointmentActionResolutionSchema(supabase);
+    if (result.compatible) return;
+    throw new Error(
+      `Schema crítico de remarcações incompatível (${result.reason}; esperado ${APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION}). ` +
+      'Aplique as migrations antes do deploy.'
+    );
+  };
+
   // Trust proxy is required for rate limiting and secure cookies behind Railway's load balancer
   app.set('trust proxy', true);
-  if (isDeploy) await validateCriticalTissAuthorizationReservationSchema();
+  if (isDeploy) {
+    await validateCriticalTissAuthorizationReservationSchema();
+    await validateCriticalAppointmentActionResolutionSchema();
+  }
   void validateCoreDataTables();
   app.disable('x-powered-by');
   
@@ -36061,7 +36112,7 @@ async function startServer() {
           source?.professionalName ||
           source?.professional,
         180
-      ) || 'Profissional',
+      ) || 'Profissional não identificado',
       roomId,
       roomName: sanitizePortalRoomName(
         appointment?.room_name || appointment?.roomName || source?.room_name || source?.roomName || source?.roomDisplayName
@@ -36074,7 +36125,7 @@ async function startServer() {
 
   const formatRescheduleProfessionalName = (profile: any, fallbackName = '') => {
     const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
-    const name = sanitizeString(profile?.full_name || fallbackName, 180) || 'Profissional';
+    const name = sanitizeString(profile?.full_name || profile?.name || fallbackName, 180) || 'Profissional não identificado';
     const title = readProfessionalTitleFromSource(
       { metadata, professionalTitle: metadata?.professionalTitle || metadata?.professional_title },
       'Profissional'
@@ -36083,11 +36134,24 @@ async function startServer() {
     return `${title} ${name}`;
   };
 
+  const formatRescheduleRoom = (room: any, fallbackName = '') => {
+    const name = sanitizePortalRoomName(room?.name || room?.room_name || room?.roomName || fallbackName) || null;
+    const specialties = normalizeClinicRoomSpecialties(room?.specialties || room?.specialty);
+    const specialtyName = sanitizeString(String(specialties || '').split(',')[0], 120) || null;
+    return {
+      id: sanitizeString(room?.id || room?.room_id || room?.roomId, 180) || null,
+      name,
+      specialtyName,
+      displayName: name ? `${name}${specialtyName ? ` - ${specialtyName}` : ''}` : 'Sala não definida'
+    };
+  };
+
   const buildRescheduleApprovalPreview = async (params: { appointment: any; request: any; user: any }) => {
     const appointment = params.appointment || {};
     const assignment = resolveAppointmentRescheduleAssignment(appointment);
     const parsed = parseRescheduleRequestPayload(params.request?.note, params.request?.metadata);
-    const options = parsed.options.slice(0, 3);
+    const options = parsed.options.slice(0, Math.min(24, parsed.options.length));
+    const clinicTimeZone = currentClinicTimeZone(params.user);
     if (!isUuid(assignment.clinicId) || !isUuid(assignment.organizationId) || !isUuid(assignment.patientId)) {
       return {
         requestId: sanitizeString(params.request?.id, 120),
@@ -36096,10 +36160,20 @@ async function startServer() {
           index,
           ...option,
           available: false,
-          message: 'Não foi possível confirmar clínica e paciente desta consulta.'
+          approvalAllowed: false,
+          recommendation: 'unavailable',
+          recommendationLabel: 'Indisponível',
+          message: 'Não foi possível confirmar clínica e paciente desta sessão.'
         }))
       };
     }
+
+    const requestMetadata = params.request?.metadata && typeof params.request.metadata === 'object' && !Array.isArray(params.request.metadata)
+      ? params.request.metadata
+      : {};
+    const allowProfessionalSubstitution = requestMetadata?.allowProfessionalSubstitution === true || requestMetadata?.allow_professional_substitution === true;
+    const dates = Array.from(new Set(options.map((option) => formatDateInAppointmentTimezone(new Date(option.scheduledStart), clinicTimeZone)).filter(Boolean)));
+    const conflictInput = { recurrenceDates: dates };
 
     const membershipResult = await supabase
       .from('clinic_memberships')
@@ -36112,19 +36186,62 @@ async function startServer() {
     const activeMemberIds = Array.from(new Set(
       memberships.map((row: any) => sanitizeString(row?.user_id, 120)).filter((id: string) => isUuid(id))
     ));
-    const profileResult = activeMemberIds.length > 0
-      ? await supabase
-          .from('professional_profiles')
-          .select('user_id,full_name,metadata')
-          .in('user_id', activeMemberIds)
-          .limit(activeMemberIds.length)
-      : { data: [], error: null } as any;
+
+    const [profileResult, userResult, rooms, tableAppointments, stateAppointments, billingContextRow, competingRequestsResult] = await Promise.all([
+      activeMemberIds.length > 0
+        ? supabase.from('professional_profiles').select('user_id,full_name,metadata').in('user_id', activeMemberIds).limit(activeMemberIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      activeMemberIds.length > 0
+        ? supabase.from('users').select('id,name').in('id', activeMemberIds).limit(activeMemberIds.length)
+        : Promise.resolve({ data: [], error: null } as any),
+      fetchConflictRooms(assignment.clinicId, assignment.organizationId),
+      fetchConflictAppointmentsFromTable({
+        clinicId: assignment.clinicId,
+        organizationId: assignment.organizationId,
+        input: conflictInput
+      }),
+      fetchConflictAppointmentsFromState(assignment.clinicId, conflictInput).catch(() => []),
+      fetchAppointmentBillingContextRow(assignment.organizationId, sanitizeString(appointment?.id, 120)),
+      supabase
+        .from('appointment_action_requests')
+        .select('id,appointment_id,note,metadata,requested_start,requested_end,status,request_type,created_at')
+        .eq('organization_id', assignment.organizationId)
+        .eq('request_type', 'RESCHEDULE')
+        .eq('status', 'PENDING')
+        .neq('id', sanitizeString(params.request?.id, 120))
+        .limit(200)
+    ]);
     if (profileResult.error && !isMissingRelationError(profileResult.error)) throw profileResult.error;
+    if (userResult.error && !isMissingRelationError(userResult.error)) throw userResult.error;
+    if (competingRequestsResult.error && !hasMissingFinancialSchema(competingRequestsResult.error) && !isMissingRelationError(competingRequestsResult.error)) {
+      throw competingRequestsResult.error;
+    }
+
     const profilesById = new Map<string, any>();
     for (const profile of Array.isArray(profileResult.data) ? profileResult.data : []) {
       const userId = sanitizeString(profile?.user_id, 120);
       if (userId) profilesById.set(userId, profile);
     }
+    const usersById = new Map<string, any>();
+    for (const user of Array.isArray(userResult.data) ? userResult.data : []) {
+      const userId = sanitizeString(user?.id, 120);
+      if (userId) usersById.set(userId, user);
+    }
+
+    const normalizeCompatibilityTokens = (value: any) => {
+      const rawValues = Array.isArray(value) ? value : String(value || '').split(/[;,|]/g);
+      return Array.from(new Set(rawValues
+        .map((item: any) => sanitizeString(item, 160)
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, ' ')
+          .trim())
+        .filter(Boolean)));
+    };
+    const normalizeMetadataIdList = (value: any) => (Array.isArray(value) ? value : [])
+      .map((item: any) => sanitizeString(item, 120))
+      .filter((item: string) => isUuid(item));
 
     const professionalCandidates = memberships
       .filter((membership: any) => {
@@ -36134,15 +36251,18 @@ async function startServer() {
       .map((membership: any) => {
         const id = sanitizeString(membership?.user_id, 120);
         const profile = profilesById.get(id) || {};
+        const user = usersById.get(id) || {};
         const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
         const fallbackDuration = asSafeNumber(metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes, 15, 360) || getCalendarAppointmentDuration(appointment);
         return {
           id,
-          name: id === assignment.professionalId
-            ? assignment.professionalName
-            : formatRescheduleProfessionalName(profile),
+          name: formatRescheduleProfessionalName(profile, user?.name || (id === assignment.professionalId ? assignment.professionalName : '')),
           workSchedule: readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration) || buildDefaultProfessionalWorkingSchedule(fallbackDuration),
-          role: sanitizeString(membership?.role, 40)
+          role: sanitizeString(membership?.role, 40),
+          specialties: normalizeCompatibilityTokens(metadata?.specialties || metadata?.specialty),
+          serviceCatalogIds: normalizeMetadataIdList(
+            metadata?.service_catalog_ids || metadata?.serviceCatalogIds || metadata?.allowed_service_catalog_ids || metadata?.allowedServiceCatalogIds
+          )
         };
       })
       .filter((professional: any) => isUuid(professional.id));
@@ -36150,38 +36270,173 @@ async function startServer() {
       left.id === assignment.professionalId ? -1 : right.id === assignment.professionalId ? 1 : left.name.localeCompare(right.name, 'pt-BR')
     );
 
-    const rooms = (await fetchConflictRooms(assignment.clinicId, assignment.organizationId))
-      .filter((room: any) => room?.is_active !== false && room?.isActive !== false)
-      .slice(0, 80);
-    const dates = Array.from(new Set(options.map((option) => formatDateInAppointmentTimezone(new Date(option.scheduledStart))).filter(Boolean)));
-    const conflictInput = { recurrenceDates: dates };
-    const [tableAppointments, stateAppointments] = await Promise.all([
-      fetchConflictAppointmentsFromTable({
-        clinicId: assignment.clinicId,
-        organizationId: assignment.organizationId,
-        input: conflictInput
-      }),
-      fetchConflictAppointmentsFromState(assignment.clinicId, conflictInput).catch(() => [])
-    ]);
+    const activeRooms = rooms.filter((room: any) => room?.is_active !== false && room?.isActive !== false).slice(0, 80);
     const appointmentsById = new Map<string, any>();
     [...tableAppointments, ...stateAppointments].forEach((item: any, index: number) => {
       appointmentsById.set(sanitizeString(item?.id, 180) || `idx-${index}`, item);
     });
     const existingAppointments = Array.from(appointmentsById.values());
+
+    const competingRequests = Array.isArray(competingRequestsResult.data) ? competingRequestsResult.data : [];
+    const competingAppointmentIds = Array.from(new Set(
+      competingRequests.map((row: any) => sanitizeString(row?.appointment_id, 120)).filter((id: string) => isUuid(id))
+    ));
+    const competingAppointmentsResult = competingAppointmentIds.length > 0
+      ? await supabase
+          .from('appointments')
+          .select('id,therapist_id,room_id,scheduled_at,scheduled_start_at,scheduled_end_at,duration_minutes,scheduled_duration_minutes,status')
+          .eq('organization_id', assignment.organizationId)
+          .in('id', competingAppointmentIds)
+          .limit(competingAppointmentIds.length)
+      : { data: [], error: null } as any;
+    if (competingAppointmentsResult.error && !hasMissingFinancialSchema(competingAppointmentsResult.error)) throw competingAppointmentsResult.error;
+    const competingAppointmentsById = new Map<string, any>(
+      (Array.isArray(competingAppointmentsResult.data) ? competingAppointmentsResult.data : []).map((row: any) => [sanitizeString(row?.id, 120), row])
+    );
+    const competingOptionRows = competingRequests.flatMap((row: any) => {
+      const requestOptions = parseRescheduleRequestPayload(row?.note, row?.metadata).options;
+      return requestOptions.flatMap((option: any) => normalizeRescheduleOptions([{
+        scheduledStart: option?.scheduledStart,
+        scheduledEnd: option?.scheduledEnd
+      }]).map((normalized: any) => ({
+        requestId: sanitizeString(row?.id, 120),
+        appointmentId: sanitizeString(row?.appointment_id, 120),
+        appointment: competingAppointmentsById.get(sanitizeString(row?.appointment_id, 120)) || null,
+        ...normalized
+      })));
+    });
+
+    const mergedBillingContext = mergeAppointmentBillingPayload({ ...appointment, ...(billingContextRow || {}) });
+    const financialContextType = readAppointmentFinancialContextType(mergedBillingContext);
+    const billingMetadata = parseStoredJsonObject(billingContextRow?.metadata);
+    const allowedProfessionalIds = Array.isArray(billingMetadata?.allowed_professional_ids)
+      ? billingMetadata.allowed_professional_ids.map((value: any) => sanitizeString(value, 120)).filter((value: string) => isUuid(value))
+      : [];
+    const billingServiceCatalogId = sanitizeString(billingContextRow?.service_catalog_id || billingMetadata?.service_catalog_id || billingMetadata?.serviceCatalogId, 120);
+    const authorizationId = sanitizeString(
+      readTissAuthorizationIdFromBillingMetadata(billingContextRow?.metadata) ||
+        mergedBillingContext?.patient_tiss_authorization_id ||
+        mergedBillingContext?.patientTissAuthorizationId,
+      120
+    );
+    let authorization: any = null;
+    let authorizationBalance: ConfirmedTissAuthorizationBalance | null = null;
+    if (financialContextType === 'INSURANCE' && isUuid(authorizationId)) {
+      const authorizationResult = await supabase
+        .from('patient_payer_authorizations')
+        .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+        .eq('organization_id', assignment.organizationId)
+        .eq('patient_id', assignment.patientId)
+        .eq('id', authorizationId)
+        .limit(1)
+        .maybeSingle();
+      if (authorizationResult.error && !hasMissingFinancialSchema(authorizationResult.error) && !isMissingRelationError(authorizationResult.error)) {
+        throw authorizationResult.error;
+      }
+      authorization = authorizationResult.data || null;
+      if (authorization) {
+        const balances = await fetchPatientTissAuthorizationBalances({
+          organizationId: assignment.organizationId,
+          authorizations: [authorization],
+          currentAppointmentId: appointment?.id
+        });
+        authorizationBalance = balances.get(authorizationId) || null;
+      }
+    }
+
+    const evaluateFinancialContext = (option: PortalRescheduleOption, professionalId: string) => {
+      const warnings: string[] = [];
+      if (!appointmentRequiresFinancialContext(mergedBillingContext)) {
+        return { reusable: true, valid: true, reviewRequired: false, warnings, reasonCode: null };
+      }
+      if (!financialContextType) {
+        return {
+          reusable: false,
+          valid: false,
+          reviewRequired: true,
+          warnings: ['O contexto financeiro desta sessão não pôde ser confirmado.'],
+          reasonCode: 'FINANCIAL_CONTEXT_UNAVAILABLE'
+        };
+      }
+      if (financialContextType !== 'INSURANCE') {
+        return { reusable: true, valid: true, reviewRequired: false, warnings, reasonCode: null };
+      }
+      if (!authorization || !isUuid(authorizationId)) {
+        return {
+          reusable: false,
+          valid: false,
+          reviewRequired: true,
+          warnings: ['A autorização vinculada à sessão não foi localizada.'],
+          reasonCode: 'AUTHORIZATION_NOT_FOUND'
+        };
+      }
+      const optionDate = formatDateInAppointmentTimezone(new Date(option.scheduledStart), clinicTimeZone);
+      const validFrom = sanitizeString(authorization?.valid_from, 40).slice(0, 10);
+      const validUntil = sanitizeString(authorization?.valid_until, 40).slice(0, 10);
+      const status = sanitizeString(authorization?.status, 40).toLowerCase();
+      if (authorization?.active === false || ['cancelled', 'canceled', 'expired', 'inactive', 'revoked'].includes(status)) {
+        warnings.push('A autorização vinculada está inativa.');
+      }
+      if (validFrom && optionDate && optionDate < validFrom) warnings.push('A autorização ainda não estará vigente na data selecionada.');
+      if (validUntil && optionDate && optionDate > validUntil) warnings.push('A guia estará vencida na data selecionada.');
+      if (!authorizationBalance?.confirmed) warnings.push('Não foi possível confirmar o saldo da autorização.');
+      if (
+        authorizationBalance?.confirmed &&
+        authorizationBalance.available !== null &&
+        Number(authorizationBalance.available) <= 0 &&
+        authorizationBalance.currentAppointmentReserved !== true
+      ) warnings.push('A autorização não possui saldo disponível para esta sessão.');
+
+      if (professionalId !== assignment.professionalId && !allowedProfessionalIds.includes(professionalId)) {
+        warnings.push('A autorização não confirma atendimento por um profissional substituto.');
+      }
+      return {
+        reusable: warnings.length === 0,
+        valid: warnings.length === 0,
+        reviewRequired: warnings.length > 0,
+        warnings,
+        reasonCode: warnings.length > 0 ? 'FINANCIAL_REVIEW_REQUIRED' : null
+      };
+    };
+
     const durationMinutes = getCalendarAppointmentDuration(appointment);
     const originalProfessional = professionalCandidates.find((professional: any) => professional.id === assignment.professionalId) || null;
-    const originalRoom = rooms.find((room: any) => sanitizeString(room?.id, 180) === assignment.roomId) || null;
+    const originalRoom = activeRooms.find((room: any) => sanitizeString(room?.id, 180) === assignment.roomId) || null;
+    const requiredProfessionalSpecialties = new Set<string>(originalProfessional?.specialties || []);
+    const requiredRoomSpecialties = new Set<string>(normalizeCompatibilityTokens(originalRoom?.specialties || originalRoom?.specialty));
+    const professionalAlternativeEligible = (professional: any) => {
+      if (!professional?.id || professional.id === assignment.professionalId) return true;
+      if (!allowProfessionalSubstitution) return false;
+      if (financialContextType === 'INSURANCE' && !allowedProfessionalIds.includes(professional.id)) return false;
+      if (requiredProfessionalSpecialties.size > 0) {
+        const candidateSpecialties = new Set<string>(professional?.specialties || []);
+        if (![...requiredProfessionalSpecialties].some((item) => candidateSpecialties.has(item))) return false;
+      }
+      if (isUuid(billingServiceCatalogId) && Array.isArray(professional?.serviceCatalogIds) && professional.serviceCatalogIds.length > 0
+        && !professional.serviceCatalogIds.includes(billingServiceCatalogId)) return false;
+      return true;
+    };
+    const roomAlternativeEligible = (room: any) => {
+      if (!room?.id || sanitizeString(room.id, 180) === assignment.roomId) return true;
+      if (requiredRoomSpecialties.size === 0) return true;
+      const candidateSpecialties = new Set<string>(normalizeCompatibilityTokens(room?.specialties || room?.specialty));
+      return [...requiredRoomSpecialties].some((item) => candidateSpecialties.has(item));
+    };
 
     const evaluateCandidate = (option: PortalRescheduleOption, professional: any, room: any) => {
+      const issues: any[] = [];
       if (!professional?.id) {
-        return { available: false, message: 'O profissional responsável não está ativo na equipe desta clínica.', conflictTypes: ['professional'] };
+        issues.push({ type: 'professional_unavailable', professionalId: assignment.professionalId, professionalName: assignment.professionalName });
+        return { operationalAvailable: false, approvalAllowed: false, message: 'O profissional responsável não está ativo na equipe desta clínica.', conflictTypes: ['professional'], issues, financialContext: evaluateFinancialContext(option, assignment.professionalId) };
       }
       if (assignment.locationType === 'clinica' && !room?.id) {
-        return { available: false, message: 'A sala anterior não está disponível. Escolha uma das salas sugeridas.', conflictTypes: ['room'] };
+        issues.push({ type: 'room_conflict', roomId: assignment.roomId || null, roomName: assignment.roomName || 'Sala não definida', roomSpecialtyName: null });
+        return { operationalAvailable: false, approvalAllowed: false, message: 'A sala anterior não está disponível. Escolha uma das salas sugeridas.', conflictTypes: ['room'], issues, financialContext: evaluateFinancialContext(option, professional.id) };
       }
+      const roomInfo = formatRescheduleRoom(room, assignment.roomName);
       const startDate = new Date(option.scheduledStart);
-      const dateKey = formatDateInAppointmentTimezone(startDate);
-      const startTime = formatTimeInAppointmentTimezone(startDate);
+      const dateKey = formatDateInAppointmentTimezone(startDate, clinicTimeZone);
+      const startTime = formatTimeInAppointmentTimezone(startDate, clinicTimeZone);
       const sessionBufferMinutes = Math.round(asSafeNumber(
         professional?.workSchedule?.sessionBufferMinutes ?? professional?.workSchedule?.session_buffer_minutes,
         0,
@@ -36193,8 +36448,8 @@ async function startServer() {
         professional_ids: [professional.id],
         professional_names: [professional.name],
         room_id: assignment.locationType === 'clinica' ? room?.id : null,
-        room_name: room?.name || assignment.roomName,
-        rooms,
+        room_name: roomInfo.displayName,
+        rooms: activeRooms,
         location_type: assignment.locationType,
         date: dateKey,
         start_time: startTime,
@@ -36202,82 +36457,134 @@ async function startServer() {
         session_buffer_minutes: sessionBufferMinutes,
         exclude_event_id: appointment.id
       });
-      if (conflict.blocking) {
-        return {
-          available: false,
-          message: conflict.humanMessage || 'Há um conflito para este horário.',
-          conflictTypes: Array.from(new Set(conflict.conflicts.map((item: any) => item.conflictType).filter(Boolean))),
-          conflicts: conflict.conflicts
-        };
+      for (const item of conflict.conflicts || []) {
+        if (item.conflictType === 'professional' || item.conflictType === 'team') {
+          issues.push({
+            type: 'professional_conflict',
+            professionalId: professional.id,
+            professionalName: professional.name,
+            conflictingStartAt: item.startTime,
+            conflictingEndAt: item.endTime
+          });
+        } else if (item.conflictType === 'room') {
+          issues.push({
+            type: 'room_conflict',
+            roomId: roomInfo.id,
+            roomName: roomInfo.name,
+            roomSpecialtyName: roomInfo.specialtyName,
+            conflictingStartAt: item.startTime,
+            conflictingEndAt: item.endTime
+          });
+        } else if (item.conflictType === 'patient') {
+          issues.push({ type: 'patient_conflict', conflictingStartAt: item.startTime, conflictingEndAt: item.endTime });
+        }
       }
-      const availability = buildAvailableRescheduleSlots({
-        appointmentId: appointment.id,
-        patientId: assignment.patientId,
-        professionalId: professional.id,
-        roomId: assignment.locationType === 'clinica' ? room?.id : null,
-        locationType: assignment.locationType,
-        currentScheduledStart: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduledAt,
-        durationMinutes,
-        existingAppointments,
-        dateFrom: dateKey,
-        maxDays: 1,
-        maxSlotsPerDay: 24,
-        workingSchedule: professional.workSchedule,
-        now: new Date()
-      });
-      const exactSlot = flattenRescheduleSlotGroups(availability.days).find((slot) =>
-        Math.abs(new Date(slot.scheduledStart).getTime() - startDate.getTime()) < 60_000
-      );
-      if (!exactSlot) {
-        return {
-          available: false,
-          message: `${professional.name} não atende neste horário ou a jornada configurada não comporta a sessão completa.`,
-          conflictTypes: ['professional']
-        };
+      if (!conflict.blocking) {
+        const availability = buildAvailableRescheduleSlots({
+          appointmentId: appointment.id,
+          patientId: assignment.patientId,
+          professionalId: professional.id,
+          roomId: assignment.locationType === 'clinica' ? room?.id : null,
+          locationType: assignment.locationType,
+          currentScheduledStart: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduledAt,
+          durationMinutes,
+          existingAppointments,
+          dateFrom: dateKey,
+          maxDays: 1,
+          maxSlotsPerDay: 24,
+          workingSchedule: professional.workSchedule,
+          now: new Date()
+        });
+        const exactSlot = flattenRescheduleSlotGroups(availability.days).find((slot) =>
+          Math.abs(new Date(slot.scheduledStart).getTime() - startDate.getTime()) < 60_000
+        );
+        if (!exactSlot) {
+          issues.push({ type: 'professional_schedule_unavailable', professionalId: professional.id, professionalName: professional.name });
+        }
       }
-      return { available: true, message: 'Horário livre e pronto para aprovação.', conflictTypes: [] as string[] };
+      const financialContext = evaluateFinancialContext(option, professional.id);
+      if (financialContext.reviewRequired) {
+        issues.push({ type: 'financial_context_invalid', reasonCode: financialContext.reasonCode, message: financialContext.warnings[0] || 'Revise o contexto financeiro.' });
+      }
+      const conflictTypes = Array.from(new Set((conflict.conflicts || []).map((item: any) => item.conflictType).filter(Boolean)));
+      const operationalAvailable = !conflict.blocking && !issues.some((issue) => issue.type === 'professional_schedule_unavailable');
+      const approvalAllowed = operationalAvailable && financialContext.valid === true && financialContext.reviewRequired !== true;
+      const messages: string[] = [];
+      const professionalConflict = issues.find((issue) => issue.type === 'professional_conflict');
+      const roomConflict = issues.find((issue) => issue.type === 'room_conflict');
+      if (professionalConflict) messages.push(`${professional.name} já possui outra sessão das ${professionalConflict.conflictingStartAt} às ${professionalConflict.conflictingEndAt}.`);
+      else messages.push(`${professional.name} está disponível.`);
+      if (assignment.locationType === 'clinica') {
+        if (roomConflict) messages.push(`A ${roomInfo.displayName} já está ocupada nesse horário.`);
+        else messages.push(`A ${roomInfo.displayName} está disponível.`);
+      }
+      if (financialContext.warnings.length > 0) messages.push(financialContext.warnings[0]);
+      return {
+        operationalAvailable,
+        approvalAllowed,
+        message: messages.join(' '),
+        conflictTypes,
+        conflicts: conflict.conflicts,
+        issues,
+        financialContext
+      };
     };
 
-    const serializeAssignment = (optionIndex: number, professional: any, room: any, kind: 'current' | 'alternative') => ({
-      id: `${optionIndex}:${professional?.id || 'none'}:${room?.id || 'none'}`,
-      kind,
-      professionalId: professional?.id || null,
-      professionalName: professional?.name || 'Profissional',
-      sessionBufferMinutes: Math.max(0, Math.round(Number(professional?.workSchedule?.sessionBufferMinutes ?? professional?.workSchedule?.session_buffer_minutes ?? 0) || 0)),
-      roomId: assignment.locationType === 'clinica' ? room?.id || null : null,
-      roomName: assignment.locationType === 'clinica' ? room?.name || null : null,
-      locationType: assignment.locationType
-    });
+    const serializeAssignment = (optionIndex: number, professional: any, room: any, kind: 'current' | 'alternative', result: any) => {
+      const roomInfo = formatRescheduleRoom(room, assignment.roomName);
+      return {
+        id: buildRescheduleAssignmentId(optionIndex, professional?.id || '', assignment.locationType === 'clinica' ? roomInfo.id : null),
+        kind,
+        professionalId: professional?.id || null,
+        professionalName: professional?.name || 'Profissional não identificado',
+        professional: { id: professional?.id || null, name: professional?.name || 'Profissional não identificado', available: result?.operationalAvailable === true },
+        sessionBufferMinutes: Math.max(0, Math.round(Number(professional?.workSchedule?.sessionBufferMinutes ?? professional?.workSchedule?.session_buffer_minutes ?? 0) || 0)),
+        roomId: assignment.locationType === 'clinica' ? roomInfo.id : null,
+        roomName: assignment.locationType === 'clinica' ? roomInfo.name : null,
+        roomSpecialtyName: assignment.locationType === 'clinica' ? roomInfo.specialtyName : null,
+        roomDisplayName: assignment.locationType === 'clinica' ? roomInfo.displayName : null,
+        room: assignment.locationType === 'clinica' ? { ...roomInfo, available: result?.operationalAvailable === true } : { id: null, name: null, specialtyName: null, displayName: null, available: true },
+        locationType: assignment.locationType,
+        available: result?.operationalAvailable === true,
+        approvalAllowed: result?.approvalAllowed === true,
+        financialContext: result?.financialContext || null,
+        issues: result?.issues || [],
+        message: result?.message || null
+      };
+    };
 
-    const previewOptions = options.map((option, optionIndex) => {
+    const rawPreviewOptions = options.map((option, optionIndex) => {
       const directResult = evaluateCandidate(option, originalProfessional, originalRoom);
-      const directAssignment = serializeAssignment(optionIndex, originalProfessional, originalRoom, 'current');
+      const directAssignment = serializeAssignment(optionIndex, originalProfessional, originalRoom, 'current', directResult);
       const alternatives: any[] = [];
       const seen = new Set([directAssignment.id]);
       const tryAlternative = (professional: any, room: any) => {
-        if (alternatives.length >= 3) return;
-        const serialized = serializeAssignment(optionIndex, professional, room, 'alternative');
-        if (seen.has(serialized.id)) return;
-        seen.add(serialized.id);
+        if (alternatives.length >= 3 || !professional?.id) return;
+        if (!professionalAlternativeEligible(professional) || !roomAlternativeEligible(room)) return;
         const result = evaluateCandidate(option, professional, room);
-        if (result.available) alternatives.push({ ...serialized, available: true, message: result.message });
+        const serialized = serializeAssignment(optionIndex, professional, room, 'alternative', result);
+        if (!serialized.id || seen.has(serialized.id)) return;
+        seen.add(serialized.id);
+        if (result.operationalAvailable) alternatives.push(serialized);
       };
       const conflictTypes = new Set(directResult.conflictTypes || []);
-      if (!directResult.available && !conflictTypes.has('patient')) {
-        if (assignment.locationType === 'clinica' && originalProfessional) {
-          for (const room of rooms) {
+      if (!directResult.operationalAvailable && !conflictTypes.has('patient')) {
+        if (assignment.locationType === 'clinica' && originalProfessional && conflictTypes.has('room')) {
+          for (const room of activeRooms) {
             if (sanitizeString(room?.id, 180) !== assignment.roomId) tryAlternative(originalProfessional, room);
             if (alternatives.length >= 3) break;
           }
         }
-        if (alternatives.length < 3) {
+        if (allowProfessionalSubstitution && alternatives.length < 3 && conflictTypes.has('professional')) {
           for (const professional of professionalCandidates) {
             if (professional.id === assignment.professionalId) continue;
             if (assignment.locationType === 'clinica') {
               if (originalRoom) tryAlternative(professional, originalRoom);
-              for (const room of rooms) {
-                tryAlternative(professional, room);
-                if (alternatives.length >= 3) break;
+              if (conflictTypes.has('room')) {
+                for (const room of activeRooms) {
+                  tryAlternative(professional, room);
+                  if (alternatives.length >= 3) break;
+                }
               }
             } else {
               tryAlternative(professional, null);
@@ -36286,14 +36593,62 @@ async function startServer() {
           }
         }
       }
+      const substitutionRestricted = conflictTypes.has('professional') && (
+        !allowProfessionalSubstitution || (financialContextType === 'INSURANCE' && allowedProfessionalIds.length === 0)
+      );
+      const directMessage = substitutionRestricted
+        ? `${directResult.message} Esta sessão deve permanecer com o profissional responsável.`
+        : directResult.message;
+      const assignments = [directAssignment, ...alternatives];
+      const availableAssignments = assignments.filter((candidate) => candidate.available);
+      const approvableAssignments = assignments.filter((candidate) => candidate.approvalAllowed);
+      const competitionRows = competingOptionRows.filter((candidate: any) => {
+        const delta = Math.abs(new Date(candidate?.scheduledStart).getTime() - new Date(option.scheduledStart).getTime());
+        return Number.isFinite(delta) && delta < 60_000;
+      });
       return {
         index: optionIndex,
         ...option,
-        available: directResult.available,
-        message: directResult.message,
+        available: availableAssignments.length > 0,
+        approvalAllowed: approvableAssignments.length > 0,
+        message: directMessage,
         conflictTypes: directResult.conflictTypes || [],
+        issues: directResult.issues || [],
+        financialContext: directResult.financialContext,
         assignment: directAssignment,
-        alternatives
+        alternatives,
+        assignments,
+        alternativeRooms: alternatives.filter((candidate) => candidate.professionalId === assignment.professionalId).map((candidate) => candidate.room),
+        alternativeProfessionals: alternatives.filter((candidate) => candidate.professionalId !== assignment.professionalId).map((candidate) => ({
+          id: candidate.professionalId,
+          name: candidate.professionalName,
+          roomOptions: candidate.room?.id ? [candidate.room] : []
+        })),
+        competition: { total: competitionRows.length, exact: competitionRows.length },
+        evaluationInput: {
+          index: optionIndex,
+          availableAssignmentCount: availableAssignments.length,
+          directAssignmentAvailable: directAssignment.approvalAllowed === true,
+          keepsOriginalProfessional: approvableAssignments.some((candidate) => candidate.professionalId === assignment.professionalId),
+          keepsOriginalRoom: assignment.locationType !== 'clinica' || approvableAssignments.some((candidate) => candidate.roomId === assignment.roomId),
+          financialContextCompatible: directResult.financialContext?.valid === true,
+          financialReviewRequired: directResult.financialContext?.reviewRequired === true,
+          competingRequestCount: competitionRows.length,
+          exactCompetitionCount: competitionRows.length,
+          reasons: [directMessage, ...(directResult.financialContext?.warnings || [])]
+        }
+      };
+    });
+    const ranked = rankRescheduleOptions(rawPreviewOptions.map((option) => option.evaluationInput));
+    const rankingByIndex = new Map(ranked.map((option) => [option.index, option]));
+    const previewOptions = rawPreviewOptions.map(({ evaluationInput, ...option }) => {
+      const ranking = rankingByIndex.get(option.index);
+      return {
+        ...option,
+        recommendation: option.approvalAllowed ? ranking?.recommendation || 'good' : option.available ? 'attention' : 'unavailable',
+        recommendationLabel: option.approvalAllowed ? ranking?.recommendationLabel || 'Boa opção' : option.available ? 'Disponível com atenção' : 'Indisponível',
+        score: ranking?.score || 0,
+        reasons: ranking?.reasons || [option.message]
       };
     });
 
@@ -36301,6 +36656,7 @@ async function startServer() {
       requestId: sanitizeString(params.request?.id, 120),
       appointmentId: sanitizeString(appointment?.id, 120),
       checkedAt: new Date().toISOString(),
+      allowProfessionalSubstitution,
       options: previewOptions
     };
   };
@@ -37394,7 +37750,7 @@ async function startServer() {
               })
             });
           }
-          recoveringApprovedReschedule = Boolean(approvedStart);
+          if (approvedStart) recoveringApprovedReschedule = true;
         }
         if (!recoveringApprovedReschedule) return res.status(409).json(portalSafeError(409));
       }
@@ -37417,7 +37773,11 @@ async function startServer() {
         const requestedOptionIndex = recoveringApprovedReschedule
           ? requestRow?.metadata?.approvedOptionIndex
           : req.body?.selectedOptionIndex ?? req.body?.selected_option_index;
-        const selectedOptionIndex = Math.max(0, Math.min(requestedOptions.length - 1, Math.round(Number(requestedOptionIndex ?? 0) || 0)));
+        const parsedOptionIndex = parseSelectedRescheduleOptionIndex(requestedOptionIndex, requestedOptions.length);
+        if (!parsedOptionIndex.ok) {
+          return res.status(400).json({ success: false, code: 'INVALID_RESCHEDULE_OPTION', error: parsedOptionIndex.error });
+        }
+        const selectedOptionIndex = parsedOptionIndex.index;
         const selectedOption = requestedOptions[selectedOptionIndex] || null;
         // A clinica so pode aprovar uma opcao que o responsavel realmente enviou.
         // Nunca aceite data/hora arbitraria do corpo da requisicao.
@@ -37436,9 +37796,16 @@ async function startServer() {
         const requestedAssignmentId = sanitizeString(req.body?.assignmentId || req.body?.assignment_id, 260);
         const requestedProfessionalId = sanitizeString(req.body?.professionalId || req.body?.professional_id, 120);
         const requestedRoomId = sanitizeString(req.body?.roomId || req.body?.room_id, 180);
+        if (requestedAssignmentId) {
+          const parsedAssignment = parseRescheduleAssignmentId(requestedAssignmentId, selectedOptionIndex);
+          if (!parsedAssignment.ok) {
+            return res.status(400).json({ success: false, code: 'INVALID_RESCHEDULE_ASSIGNMENT', error: parsedAssignment.error });
+          }
+        }
         const allowedAssignments = [
-          ...(optionPreview?.available && optionPreview?.assignment ? [optionPreview.assignment] : []),
-          ...(Array.isArray(optionPreview?.alternatives) ? optionPreview.alternatives : [])
+          ...(Array.isArray(optionPreview?.assignments)
+            ? optionPreview.assignments
+            : [optionPreview?.assignment, ...(Array.isArray(optionPreview?.alternatives) ? optionPreview.alternatives : [])].filter(Boolean))
         ];
         const approvedAssignment = requestedAssignmentId
           ? allowedAssignments.find((candidate: any) => candidate.id === requestedAssignmentId)
@@ -37447,14 +37814,30 @@ async function startServer() {
                 (!requestedProfessionalId || candidate.professionalId === requestedProfessionalId) &&
                 (!requestedRoomId || candidate.roomId === requestedRoomId)
               )
-            : optionPreview?.available
-              ? optionPreview.assignment
-              : null;
-        if (!optionPreview || !approvedAssignment) {
+            : optionPreview?.assignment || null;
+        if (!optionPreview) {
           return res.status(409).json({
             success: false,
             code: 'RESCHEDULE_CONFLICT',
+            error: 'A opção selecionada não pôde ser revalidada. Escolha outra opção.',
+            data: approvalPreview
+          });
+        }
+        if (!approvedAssignment || approvedAssignment.available !== true) {
+          const professionalConflict = optionPreview?.issues?.find((issue: any) => issue?.type === 'professional_conflict');
+          const roomConflict = optionPreview?.issues?.find((issue: any) => issue?.type === 'room_conflict');
+          return res.status(409).json({
+            success: false,
+            code: professionalConflict ? 'PROFESSIONAL_CONFLICT' : roomConflict ? 'ROOM_CONFLICT' : 'RESCHEDULE_CONFLICT',
             error: optionPreview?.message || 'Este horário não está mais disponível. Escolha outra opção ou use uma alternativa sugerida.',
+            data: approvalPreview
+          });
+        }
+        if (approvedAssignment.approvalAllowed !== true || approvedAssignment.financialContext?.reviewRequired === true) {
+          return res.status(422).json({
+            success: false,
+            code: 'FINANCIAL_REVIEW_REQUIRED',
+            error: approvedAssignment.financialContext?.warnings?.[0] || 'O contexto financeiro precisa ser revisado antes da aprovação.',
             data: approvalPreview
           });
         }
@@ -37465,8 +37848,13 @@ async function startServer() {
           return res.status(400).json({ success: false, error: 'Não foi possível calcular o término desta consulta.' });
         }
         const resolvedEnd = resolvedEndDate.toISOString();
+        const approvalIdempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 260);
+        if (!recoveringApprovedReschedule && (!approvalIdempotencyKey || !approvalIdempotencyKey.startsWith(`reschedule:${requestRow.id}:${selectedOptionIndex}:`))) {
+          return res.status(400).json({ success: false, code: 'INVALID_IDEMPOTENCY_KEY', error: 'A chave de idempotência desta aprovação é inválida.' });
+        }
         const resolutionMetadata = {
           ...(requestRow.metadata && typeof requestRow.metadata === 'object' ? requestRow.metadata : {}),
+          approvalIdempotencyKey: approvalIdempotencyKey || requestRow?.metadata?.approvalIdempotencyKey || null,
           approvedOptionIndex: selectedOptionIndex,
           approvedStart: requestedStart,
           approvedEnd: resolvedEnd,
@@ -37474,10 +37862,12 @@ async function startServer() {
           approvedProfessionalName: approvedAssignment.professionalName || null,
           approvedRoomId: approvedAssignment.roomId || null,
           approvedRoomName: approvedAssignment.roomName || null,
+          approvedRoomSpecialtyName: approvedAssignment.roomSpecialtyName || null,
+          approvedRoomDisplayName: approvedAssignment.roomDisplayName || approvedAssignment.roomName || null,
           approvedAt: now,
           approvedBy: actorId || null
         };
-        const atomicResult = await supabase.rpc('approve_appointment_reschedule', {
+        const atomicResult = await supabase.rpc('approve_appointment_reschedule_v2', {
           p_organization_id: organizationId,
           p_clinic_id: clinicId,
           p_request_id: requestRow.id,
@@ -37501,21 +37891,60 @@ async function startServer() {
         if (atomicResult.error) {
           const errorCode = sanitizeString(atomicResult.error?.code, 40).toUpperCase();
           const errorMessage = sanitizeString(atomicResult.error?.message, 500).toUpperCase();
+          if (
+            errorMessage.includes('HAS NO FIELD') ||
+            errorMessage.includes('COLUMN') && errorMessage.includes('DOES NOT EXIST') ||
+            errorMessage.includes('NO UNIQUE OR EXCLUSION CONSTRAINT')
+          ) {
+            return res.status(503).json({
+              success: false,
+              code: 'RESCHEDULE_APPROVAL_SCHEMA_INCOMPATIBLE',
+              error: 'O banco ainda não possui o contrato atualizado da remarcação. Nenhum dado da sessão foi alterado.'
+            });
+          }
           if (errorCode === 'PGRST202' || errorCode === '42883' || errorMessage.includes('APPROVE_APPOINTMENT_RESCHEDULE')) {
             return res.status(503).json({
               success: false,
               code: 'RESCHEDULE_APPROVAL_SCHEMA_UNAVAILABLE',
-              error: 'A atualização segura da remarcação ainda não está disponível. Nenhum dado da consulta foi alterado.'
+              error: 'A atualização segura da remarcação ainda não está disponível. Nenhum dado da sessão foi alterado.'
             });
           }
           if (errorCode === '42501' || errorMessage.includes('FORBIDDEN')) {
             return res.status(403).json({ success: false, error: 'Você não tem permissão para aprovar esta remarcação.' });
           }
+          if (errorCode === '22023' && errorMessage.includes('FINANCIAL_')) {
+            const financialMessages: Record<string, string> = {
+              FINANCIAL_AUTHORIZATION_EXPIRED: 'A guia não é válida na nova data. Revise o contexto financeiro.',
+              FINANCIAL_AUTHORIZATION_NO_BALANCE: 'A autorização não possui saldo para aprovar esta remarcação.',
+              FINANCIAL_PROFESSIONAL_REVIEW_REQUIRED: 'A autorização não confirma o profissional substituto selecionado.',
+              FINANCIAL_PROCEDURE_MISMATCH: 'O procedimento da autorização não corresponde ao serviço desta sessão.'
+            };
+            return res.status(422).json({
+              success: false,
+              code: errorMessage.includes('EXPIRED') ? 'FINANCIAL_AUTHORIZATION_EXPIRED' : errorMessage.includes('NO_BALANCE') ? 'FINANCIAL_AUTHORIZATION_NO_BALANCE' : 'FINANCIAL_REVIEW_REQUIRED',
+              error: Object.entries(financialMessages).find(([code]) => errorMessage.includes(code))?.[1] || 'O contexto financeiro precisa ser revisado antes da aprovação.',
+              data: approvalPreview
+            });
+          }
           if (errorCode === '23P01' || errorMessage.includes('CONFLICT')) {
+            const conflictCode = errorMessage.includes('PROFESSIONAL')
+              ? 'PROFESSIONAL_CONFLICT'
+              : errorMessage.includes('ROOM')
+                ? 'ROOM_CONFLICT'
+                : errorMessage.includes('PATIENT')
+                  ? 'PATIENT_CONFLICT'
+                  : 'RESCHEDULE_CONFLICT';
+            const conflictError = conflictCode === 'PROFESSIONAL_CONFLICT'
+              ? `${approvedAssignment.professionalName} não está mais disponível nesse horário.`
+              : conflictCode === 'ROOM_CONFLICT'
+                ? `A ${approvedAssignment.roomDisplayName || approvedAssignment.roomName || 'sala selecionada'} não está mais disponível. Escolha outra sala.`
+                : conflictCode === 'PATIENT_CONFLICT'
+                  ? 'O paciente já possui outra sessão nesse horário.'
+                  : 'Este horário não está mais disponível. Escolha outra opção ou use uma alternativa sugerida.';
             return res.status(409).json({
               success: false,
-              code: 'RESCHEDULE_CONFLICT',
-              error: 'Este horário não está mais disponível. Escolha outra opção ou use uma alternativa sugerida.',
+              code: conflictCode,
+              error: conflictError,
               data: approvalPreview
             });
           }
@@ -37539,14 +37968,16 @@ async function startServer() {
           throw atomicResult.error;
         }
         const atomicPayload: any = atomicResult.data && typeof atomicResult.data === 'object' ? atomicResult.data : {};
-        if (!atomicPayload.appointment || !appointmentScheduleMatches(atomicPayload.appointment, {
+        const confirmedRows = await readPersistedAppointmentRows([appointment.id], clinicId);
+        const confirmedAppointment = confirmedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120)) || atomicPayload.appointment;
+        if (!confirmedAppointment || !appointmentScheduleMatches(confirmedAppointment, {
           start: requestedStart,
           end: resolvedEnd,
           status: 'SCHEDULED'
         })) {
           throw new Error('A transação de remarcação não retornou o horário confirmado.');
         }
-        nextAppointment = atomicPayload.appointment;
+        nextAppointment = confirmedAppointment;
         atomicActionRequest = atomicPayload.request || null;
         atomicAuditEntry = atomicPayload.audit || null;
         rescheduleResolvedAtomically = true;
@@ -37620,11 +38051,15 @@ async function startServer() {
       void regenerateClosureForAppointments([appointment.id], req.session.user, requestRow.request_type === 'CANCEL' ? 'appointment_cancel_approved' : 'appointment_reschedule_approved');
       return res.json(cleanObject({
         success: true,
+        idempotent: requestRow.request_type === 'RESCHEDULE' ? atomicPayload?.idempotent === true : undefined,
         appointment: serializePortalAppointment(nextAppointment, {
           hasPendingReschedule: false,
           has_pending_reschedule: false,
           rescheduleStatus: atomicActionRequest?.status || (requestRow.request_type === 'RESCHEDULE' ? 'APPROVED' : null),
-          reschedule_status: atomicActionRequest?.status || (requestRow.request_type === 'RESCHEDULE' ? 'APPROVED' : null)
+          reschedule_status: atomicActionRequest?.status || (requestRow.request_type === 'RESCHEDULE' ? 'APPROVED' : null),
+          therapistName: requestRow.request_type === 'RESCHEDULE' ? atomicActionRequest?.metadata?.approvedProfessionalName || nextAppointment?.therapist_name : undefined,
+          roomDisplayName: requestRow.request_type === 'RESCHEDULE' ? atomicActionRequest?.metadata?.approvedRoomDisplayName || nextAppointment?.source_payload?.roomDisplayName || nextAppointment?.room_name : undefined,
+          roomSpecialtyName: requestRow.request_type === 'RESCHEDULE' ? atomicActionRequest?.metadata?.approvedRoomSpecialtyName || nextAppointment?.source_payload?.roomSpecialtyName || null : undefined
         }),
         actionRequest: atomicActionRequest ? serializeAppointmentActionRequestForResponse(atomicActionRequest) : undefined,
         statusHistoryEntry: atomicAuditEntry ? {
