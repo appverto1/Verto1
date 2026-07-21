@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export const TISS_AUTHORIZATION_RESERVATION_RPC = 'reserve_tiss_authorization_billing_context';
 export const TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION = '20260715120000';
-export const APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION = '20260720143000';
+export const APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION = '20260720160000';
 export const APPOINTMENT_ACTION_RESOLUTION_RPCS = [
   'approve_appointment_reschedule_v2',
   'approve_appointment_cancellation',
@@ -66,6 +66,31 @@ export async function checkCriticalSchema(client) {
 }
 
 export async function checkAppointmentActionResolutionSchema(client) {
+  const requiredAppointmentColumns = [
+    'id',
+    'therapist_name',
+    'patient_confirmation_status',
+    'patient_confirmation_at',
+    'patient_confirmation_by',
+    'patient_confirmation_source',
+    'source_payload',
+    'notification_sent',
+    'notification_sent_at',
+    'notification_12h_sent',
+    'notification_12h_sent_at'
+  ];
+  const appointmentColumnProbe = await client
+    .from('appointments')
+    .select(requiredAppointmentColumns.join(','))
+    .limit(1);
+  if (appointmentColumnProbe.error) {
+    return {
+      compatible: false,
+      schemaVersion: null,
+      reason: 'appointment_columns_missing',
+      details: String(appointmentColumnProbe.error?.message || '')
+    };
+  }
   const common = {
     p_organization_id: probeId,
     p_clinic_id: probeId,

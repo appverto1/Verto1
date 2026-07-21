@@ -20,21 +20,20 @@ import {
   X,
   Check,
   ChevronDown,
-  MessageCircle,
   User,
   Building,
   Stethoscope,
   ArrowLeft,
   Shield,
-  Copy,
-  ExternalLink
+  Copy
 } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { SecureImage } from './SecureMedia';
 import { GoogleIcon } from './GoogleIcon';
+import { SalesInterestForm } from './SalesInterestForm';
 import { getSupabase } from '../lib/supabase';
 import { dataService } from '../services/dataService';
-import { formatProfessionalRegistry } from '../utils/professionalRegistry';
+import { PUBLIC_ACTIVE_PATIENT_PRICE_LABEL } from '../constants/salesCommercial';
 
 const heroStories = [
   {
@@ -73,17 +72,14 @@ const centralAbaShowcase = [
 const CENTRAL_ABA_SHOWCASE_ASPECT_RATIO = '1142 / 576';
 
 export const LandingPage = ({ onLogin, setUser }: any) => {
-  const registerPasswordInputRef = React.useRef<HTMLInputElement | null>(null);
   const [showLogin, setShowLogin] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
   const [loginType, setLoginType] = useState<'professional' | 'patient' | 'coordinator' | null>(null);
   const [registerType, setRegisterType] = useState<'professional' | 'patient' | 'coordinator' | null>(null);
-  const [registerStep, setRegisterStep] = useState(1); // 1: Type, 2: Form, 3: Plan (for prof)
+  const [registerStep, setRegisterStep] = useState(1); // 1: Type, 2: Form
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [crp, setCrp] = useState('');
-  const [whatsappPhone, setWhatsappPhone] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loginError, setLoginError] = useState('');
@@ -110,6 +106,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [recoveryError, setRecoveryError] = useState('');
   const [activeHeroStory, setActiveHeroStory] = useState(0);
   const [activeCentralAbaShot, setActiveCentralAbaShot] = useState(0);
+  const [salesGooglePrefill, setSalesGooglePrefill] = useState<{ name: string; email: string; googleVerified: boolean } | null>(null);
   const activeHeroStoryData = heroStories[activeHeroStory] || heroStories[0];
 
   const parseApiResponse = async (response: Response) => {
@@ -322,16 +319,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
   const handleGoogleLogin = async () => {
     try {
-      // Store intended role in localStorage to retrieve after redirect
-      // Use registerType if in register modal, otherwise loginType
+      // The role hint remains only for known login flows; it is never authorization.
       const rawRole = showRegister ? registerType : loginType;
-      const roleToStore =
-        rawRole === 'patient'
-          ? 'patient'
-          : rawRole === 'coordinator'
-            ? 'coordinator'
-            : 'coordinator';
+      const isPublicProfessionalInterest = showRegister && rawRole === 'professional';
+      const roleToStore = rawRole === 'patient' ? 'patient' : 'coordinator';
       localStorage.setItem('verto_intended_role', roleToStore);
+      if (isPublicProfessionalInterest) {
+        sessionStorage.setItem('verto_sales_google_interest', '1');
+      } else {
+        sessionStorage.removeItem('verto_sales_google_interest');
+      }
       
       const supabase = await getSupabase();
       const { error } = await supabase.auth.signInWithOAuth({
@@ -354,6 +351,26 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     const utmSource = urlParams.get('utm_source');
     if (utmSource) {
       setAcquisitionChannel(utmSource);
+    }
+  }, []);
+
+  useEffect(() => {
+    const rawPrefill = sessionStorage.getItem('verto_sales_google_prefill');
+    if (!rawPrefill) return;
+    sessionStorage.removeItem('verto_sales_google_prefill');
+    try {
+      const parsed = JSON.parse(rawPrefill);
+      setSalesGooglePrefill({
+        name: String(parsed?.name || '').slice(0, 180),
+        email: String(parsed?.email || '').trim().toLowerCase().slice(0, 254),
+        googleVerified: Boolean(parsed?.googleVerified),
+      });
+      setRegisterType('professional');
+      setRegisterStep(2);
+      setShowLogin(false);
+      setShowRegister(true);
+    } catch {
+      sessionStorage.removeItem('verto_sales_google_interest');
     }
   }, []);
 
@@ -533,34 +550,13 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     return null;
   };
 
-  const normalizeWhatsappPhone = (value: string) => {
-    const digits = String(value || '').replace(/\D/g, '');
-    if (!digits) return '';
-    if (digits.length === 13 && digits.startsWith('55')) return `+${digits}`;
-    if (digits.length >= 10 && digits.length <= 11) return `+55${digits}`;
-    return '';
-  };
-
-  const buildEnterpriseWhatsappUrl = () => {
-    const message = 'Olá, tenho interesse em uma proposta personalizada da Verto.';
-    const configuredUrl = String(import.meta.env.VITE_SALES_CONTACT_URL || import.meta.env.VITE_WHATSAPP_SALES_URL || '').trim();
-    if (configuredUrl) {
-      return configuredUrl.startsWith('mailto:')
-        ? `${configuredUrl}${configuredUrl.includes('?') ? '&' : '?'}subject=${encodeURIComponent('Proposta personalizada Verto')}&body=${encodeURIComponent(message)}`
-        : `${configuredUrl}${configuredUrl.includes('?') ? '&' : '?'}text=${encodeURIComponent(message)}`;
-    }
-    return `mailto:comercial@appverto.com.br?subject=${encodeURIComponent('Proposta personalizada Verto')}&body=${encodeURIComponent(message)}`;
-  };
-
-  const buildDemoWhatsappUrl = () => {
-    const message = 'Olá, quero saber mais sobre a Verto.';
-    const configuredUrl = String(import.meta.env.VITE_SALES_CONTACT_URL || import.meta.env.VITE_WHATSAPP_SALES_URL || '').trim();
-    if (configuredUrl) {
-      return configuredUrl.startsWith('mailto:')
-        ? `${configuredUrl}${configuredUrl.includes('?') ? '&' : '?'}subject=${encodeURIComponent('Conhecer a Verto')}&body=${encodeURIComponent(message)}`
-        : `${configuredUrl}${configuredUrl.includes('?') ? '&' : '?'}text=${encodeURIComponent(message)}`;
-    }
-    return `mailto:comercial@appverto.com.br?subject=${encodeURIComponent('Conhecer a Verto')}&body=${encodeURIComponent(message)}`;
+  const openSalesInterest = () => {
+    setSalesGooglePrefill(null);
+    setRegisterError('');
+    setRegisterType('professional');
+    setRegisterStep(2);
+    setShowLogin(false);
+    setShowRegister(true);
   };
 
   const audienceCards = [
@@ -748,33 +744,24 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     'Clínicas de desenvolvimento infantil'
   ];
 
-  const handleRegister = async (e: React.FormEvent, planOverride?: string) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setRegisterError('');
-    void planOverride;
+
+    if (registerType !== 'patient') {
+      setRegisterError('O cadastro profissional é concluído após uma apresentação da Verto.');
+      return;
+    }
 
     try {
-      if ((registerType === 'professional' || registerType === 'coordinator') && !crp.trim()) {
-        setRegisterError('CRP é obrigatório para profissionais.');
-        return;
-      }
-      if ((registerType === 'professional' || registerType === 'coordinator') && !normalizeWhatsappPhone(whatsappPhone)) {
-        setRegisterError('WhatsApp é obrigatório para profissionais (com DDD).');
-        return;
-      }
-
       const passwordValidationError = validateStrongPassword(password);
       if (passwordValidationError) {
         setRegisterError(passwordValidationError);
-        requestAnimationFrame(() => registerPasswordInputRef.current?.focus());
         return;
       }
 
       setLoading(true);
-      const endpoint = registerType === 'professional'
-        ? '/api/stripe/create-checkout-registration'
-        : '/api/auth/signup';
-      const response = await fetch(endpoint, {
+      const response = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -782,39 +769,14 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           email,
           password,
           name,
-          role: registerType === 'professional' ? 'coordinator' : 'patient',
-          crp: registerType === 'professional' ? crp : undefined,
-          billingModel: registerType === 'professional' ? 'active_patients' : undefined,
-          phone: registerType === 'professional' ? normalizeWhatsappPhone(whatsappPhone) : undefined,
+          role: 'patient',
           acquisitionChannel
         })
       });
 
-      let data: any = null;
-      try {
-        data = await response.json();
-      } catch {
-        data = null;
-      }
-
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(data?.error || `Erro ao criar conta (HTTP ${response.status})`);
-      }
-
-      if (registerType === 'professional') {
-        if (data?.url) {
-          try {
-            const safeEmail = String(email || '').trim().toLowerCase();
-            if (safeEmail) {
-              sessionStorage.setItem('verto_pending_professional_signup_email', safeEmail);
-            }
-          } catch {
-            // no-op
-          }
-          window.location.href = data.url;
-          return;
-        }
-        throw new Error('Checkout não retornou URL de pagamento.');
       }
 
       alert(data.message || 'Conta criada. Verifique seu e-mail para confirmar o cadastro.');
@@ -831,16 +793,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       }
     } finally {
       setLoading(false);
-    }
-	  };
-
-	  const handleSelectPlan = async (planName: string) => {
-    try {
-      const syntheticSubmitEvent = { preventDefault: () => {} } as React.FormEvent;
-      await handleRegister(syntheticSubmitEvent, planName);
-    } catch (err: any) {
-      console.error('Select plan error:', err);
-      setRegisterError('Erro ao processar checkout: ' + err.message);
     }
   };
 
@@ -903,13 +855,16 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                 </p>
                 <div className="mt-10 flex flex-col gap-3 sm:flex-row">
                   <button
-                    onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
+                    onClick={openSalesInterest}
                     className="inline-flex items-center justify-center gap-3 rounded-2xl bg-[#7a32fc] px-7 py-4 text-sm font-semibold text-white shadow-2xl shadow-purple-500/20 transition-all hover:opacity-90"
                   >
                     Quero saber mais
                     <ArrowRight size={18} />
                   </button>
                 </div>
+                <p className="mt-4 text-sm font-normal leading-6 text-slate-500">
+                  {PUBLIC_ACTIVE_PATIENT_PRICE_LABEL}. Condições especiais podem ser disponibilizadas após uma apresentação da Verto.
+                </p>
               </div>
 
               <div className="mt-10 hidden gap-3 lg:grid lg:grid-cols-3">
@@ -1358,7 +1313,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button
-                onClick={() => window.open(buildDemoWhatsappUrl(), '_blank', 'noopener,noreferrer')}
+                onClick={openSalesInterest}
                 className="inline-flex items-center justify-center gap-3 rounded-2xl bg-white px-7 py-4 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-100"
               >
                 Quero saber mais
@@ -1829,141 +1784,157 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   </div>
                 )}
 
-                {registerStep === 2 && !isVerifyingEmail && (
-                  <div className="animate-slide-up">
-                    <button 
-                      onClick={() => setRegisterStep(1)}
-                      className="flex items-center gap-2 text-gray-400 hover:text-gray-600 font-medium text-[9px] md:text-[10px] uppercase tracking-wider mb-4"
+              {registerStep === 2 && !isVerifyingEmail && (
+                <div className="animate-slide-up">
+                  <button
+                    onClick={() => setRegisterStep(1)}
+                    className="mb-4 flex items-center gap-2 text-[9px] font-medium uppercase tracking-wider text-gray-400 transition hover:text-gray-600 md:text-[10px]"
+                  >
+                    <ArrowLeft size={12} /> Voltar
+                  </button>
+
+                  <div className="mb-6 flex items-center gap-3">
+                    <div
+                      className={`rounded-xl p-2 ${registerType === "professional" ? "bg-purple-100 text-[#7a32fc]" : "bg-pink-100 text-pink-500"}`}
                     >
-                      <ArrowLeft size={12} /> Voltar
-                    </button>
-
-                    <div className="flex items-center gap-3 mb-6">
-                      <div className={`p-2 rounded-xl ${registerType === 'professional' ? 'bg-purple-100 text-[#7a32fc]' : 'bg-pink-100 text-pink-500'}`}>
-                        {registerType === 'professional' ? <Stethoscope size={16} /> : <User size={16} />}
-                      </div>
-                      <div>
-                        <h2 className="text-base md:text-lg font-semibold tracking-tight">Cadastro</h2>
-                        <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider">
-                          {registerType === 'professional' ? 'Coordenador / Clínica' : 'Paciente'}
-                        </p>
-                      </div>
+                      {registerType === "professional" ? (
+                        <Stethoscope size={16} />
+                      ) : (
+                        <User size={16} />
+                      )}
                     </div>
+                    <div>
+                      <h2 className="text-base font-semibold tracking-tight md:text-lg">
+                        {registerType === "professional"
+                          ? "Conhecer a Verto"
+                          : "Cadastro"}
+                      </h2>
+                      <p className="text-[9px] font-normal uppercase tracking-wider text-gray-400 md:text-[10px]">
+                        {registerType === "professional"
+                          ? "Interesse comercial"
+                          : "Paciente"}
+                      </p>
+                    </div>
+                  </div>
 
-                    {registerType === 'patient' && (
-                      <div className="bg-pink-50 border border-pink-100 p-4 rounded-2xl mb-6">
-                        <div className="flex items-center justify-between mb-2">
-                          <h3 className="text-sm font-bold text-pink-600">Plano Paciente</h3>
-                          <span className="text-[10px] text-pink-600 font-bold uppercase tracking-widest bg-white px-3 py-1 rounded-full">
+                  {registerType === "professional" ? (
+                    <SalesInterestForm
+                      initialName={salesGooglePrefill?.name || ""}
+                      initialEmail={salesGooglePrefill?.email || ""}
+                      initialAcquisitionChannel={acquisitionChannel}
+                      googleVerified={Boolean(
+                        salesGooglePrefill?.googleVerified,
+                      )}
+                      onStartGoogle={handleGoogleLogin}
+                    />
+                  ) : (
+                    <>
+                      <div className="mb-6 rounded-2xl border border-pink-100 bg-pink-50 p-4">
+                        <div className="mb-2 flex items-center justify-between">
+                          <h3 className="text-sm font-semibold text-pink-600">
+                            Plano Paciente
+                          </h3>
+                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-pink-600">
                             Acesso acompanhado
                           </span>
                         </div>
-                        <p className="text-[10px] text-gray-500 font-medium leading-relaxed">
-                          Acompanhe sua evolução, visualize metas e receba feedbacks em tempo real.
+                        <p className="text-[10px] font-normal leading-relaxed text-gray-500">
+                          Acompanhe sua evolução, visualize metas e receba
+                          feedbacks em tempo real.
                         </p>
                       </div>
-                    )}
 
-                    <form onSubmit={handleRegister} className="space-y-3 md:space-y-3.5">
-                      <div>
-                        <label className="block text-[9px] md:text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1 ml-1">Nome Completo</label>
-                        <input 
-                          type="text" 
-                          required
-                          className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
-                          placeholder="Seu nome"
-                          value={name}
-                          onChange={(e) => { setName(e.target.value); if (registerError) setRegisterError(''); }}
-                        />
-                      </div>
-
-                      {registerType === 'professional' && (
+                      <form
+                        onSubmit={handleRegister}
+                        className="space-y-3 md:space-y-3.5"
+                      >
                         <div>
-                          <label className="block text-[9px] md:text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1 ml-1">CRP (Conselho Regional)</label>
-                          <input 
-                            type="text" 
-                            required
-                            className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
-                            placeholder="Ex: 06/123456"
-                            value={crp}
-                            onChange={(e) => { setCrp(formatProfessionalRegistry(e.target.value)); if (registerError) setRegisterError(''); }}
-                          />
-                        </div>
-                      )}
-
-                      {registerType === 'professional' && (
-                        <div>
-                          <label className="block text-[9px] md:text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1 ml-1">
-                            WhatsApp (Obrigatório)
+                          <label className="mb-1 ml-1 block text-[9px] font-medium uppercase tracking-wider text-gray-400 md:text-[10px]">
+                            Nome completo
                           </label>
                           <input
-                            type="tel"
+                            type="text"
                             required
-                            className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
-                            placeholder="(11) 99999-9999"
-                            value={whatsappPhone}
-                            onChange={(e) => { setWhatsappPhone(e.target.value); if (registerError) setRegisterError(''); }}
+                            maxLength={180}
+                            className="w-full rounded-2xl border border-gray-100 bg-gray-50 px-4 py-2.5 text-sm font-normal outline-none transition-all focus:border-pink-400 md:px-5 md:py-3"
+                            placeholder="Seu nome"
+                            value={name}
+                            onChange={(event) => {
+                              setName(event.target.value);
+                              if (registerError) setRegisterError("");
+                            }}
                           />
                         </div>
-                      )}
-
-                      <div>
-                        <label className="block text-[9px] md:text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1 ml-1">E-mail</label>
-                        <input 
-                          type="email" 
-                          required
-                          className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
-                          placeholder="seu@email.com"
-                          value={email}
-                          onChange={(e) => { setEmail(e.target.value); if (registerError) setRegisterError(''); }}
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-[9px] md:text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1 ml-1">Senha</label>
-                        <input 
-                          ref={registerPasswordInputRef}
-                          type="password" 
-                          required
-                          className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-2.5 md:py-3 px-4 md:px-5 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
-                          placeholder="••••••••"
-                          value={password}
-                          onChange={(e) => { setPassword(e.target.value); if (registerError) setRegisterError(''); }}
-                        />
-                      </div>
-
-                      {registerError && (
-                        <p className="text-red-500 text-[9px] md:text-[10px] font-normal text-center">{registerError}</p>
-                      )}
-
-                      <button 
-                        type="submit"
-                        disabled={loading}
-                        className={`w-full py-3 md:py-3.5 rounded-2xl font-semibold text-sm shadow-lg transition-all active:scale-[0.98] mt-2 ${registerType === 'professional' ? 'bg-[#7a32fc] text-white shadow-purple-500/10' : 'bg-pink-500 text-white shadow-pink-500/10'} ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        {loading ? 'Processando...' : (registerType === 'professional' ? 'Iniciar assinatura' : 'Criar minha conta')}
-                      </button>
-
-                      <div className="relative my-3 md:my-4">
-                        <div className="absolute inset-0 flex items-center">
-                          <div className="w-full border-t border-gray-100"></div>
+                        <div>
+                          <label className="mb-1 ml-1 block text-[9px] font-medium uppercase tracking-wider text-gray-400 md:text-[10px]">
+                            E-mail
+                          </label>
+                          <input
+                            type="email"
+                            required
+                            maxLength={254}
+                            className="w-full rounded-2xl border border-gray-100 bg-gray-50 px-4 py-2.5 text-sm font-normal outline-none transition-all focus:border-pink-400 md:px-5 md:py-3"
+                            placeholder="seu@email.com"
+                            value={email}
+                            onChange={(event) => {
+                              setEmail(event.target.value);
+                              if (registerError) setRegisterError("");
+                            }}
+                          />
                         </div>
-                        <div className="relative flex justify-center text-[9px] md:text-[10px] uppercase">
-                          <span className="bg-white px-4 text-gray-400 font-medium tracking-widest">ou</span>
+                        <div>
+                          <label className="mb-1 ml-1 block text-[9px] font-medium uppercase tracking-wider text-gray-400 md:text-[10px]">
+                            Senha
+                          </label>
+                          <input
+                            type="password"
+                            required
+                            className="w-full rounded-2xl border border-gray-100 bg-gray-50 px-4 py-2.5 text-sm font-normal outline-none transition-all focus:border-pink-400 md:px-5 md:py-3"
+                            placeholder="••••••••••••"
+                            value={password}
+                            onChange={(event) => {
+                              setPassword(event.target.value);
+                              if (registerError) setRegisterError("");
+                            }}
+                          />
                         </div>
-                      </div>
 
-                      <button 
-                        type="button"
-                        onClick={handleGoogleLogin}
-                        className="w-full bg-white border border-gray-100 text-gray-600 py-2.5 md:py-3 rounded-2xl font-semibold text-[11px] md:text-xs shadow-sm hover:bg-gray-50 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
-                      >
-                        <GoogleIcon size={16} />
-                        Cadastrar com Google
-                      </button>
-                    </form>
-                  </div>
-                )}
+                        {registerError ? (
+                          <p className="text-center text-[10px] font-normal text-red-500">
+                            {registerError}
+                          </p>
+                        ) : null}
+
+                        <button
+                          type="submit"
+                          disabled={loading}
+                          className="w-full rounded-2xl bg-pink-500 py-3 text-sm font-semibold text-white shadow-lg shadow-pink-500/10 transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 md:py-3.5"
+                        >
+                          {loading ? "Processando..." : "Criar minha conta"}
+                        </button>
+
+                        <div className="relative my-4">
+                          <div className="absolute inset-0 flex items-center">
+                            <div className="w-full border-t border-gray-100" />
+                          </div>
+                          <div className="relative flex justify-center text-[10px] uppercase">
+                            <span className="bg-white px-4 font-medium tracking-widest text-gray-400">
+                              ou
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleGoogleLogin}
+                          className="flex w-full items-center justify-center gap-3 rounded-2xl border border-gray-100 bg-white py-3 text-xs font-semibold text-gray-600 shadow-sm transition-all hover:bg-gray-50 active:scale-[0.98]"
+                        >
+                          <GoogleIcon size={16} /> Cadastrar com Google
+                        </button>
+                      </form>
+                    </>
+                  )}
+                </div>
+              )}
 
                 {isVerifyingEmail && (
                   <div className="animate-slide-up text-center py-4">
@@ -1987,62 +1958,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   </div>
                 )}
 
-                {registerStep === 3 && registerType === 'professional' && (
-                  <div className="animate-slide-up">
-                    <div className="text-center mb-6">
-                      <div className="w-10 h-10 md:w-12 md:h-12 bg-purple-100 text-[#7a32fc] rounded-xl flex items-center justify-center mx-auto mb-3">
-                        <Rocket size={20} />
-                      </div>
-                      <h2 className="text-base md:text-lg font-semibold tracking-tight">Quase la, {name.split(' ')[0]}!</h2>
-                      <p className="text-gray-400 font-normal text-[9px] md:text-[10px] uppercase tracking-wider mt-1">Assinatura por paciente ativo com pagamento pela Stripe</p>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-4">
-                      <div className="bg-violet-50 border border-violet-100 rounded-xl px-3 py-2">
-                        <p className="text-[9px] uppercase tracking-wider text-violet-500 font-semibold">Modelo</p>
-                        <p className="text-[11px] text-slate-700 font-medium">Pacientes ativos</p>
-                      </div>
-                      <div className="bg-sky-50 border border-sky-100 rounded-xl px-3 py-2">
-                        <p className="text-[9px] uppercase tracking-wider text-sky-500 font-semibold">Ajuste</p>
-                        <p className="text-[11px] text-slate-700 font-medium">Quantidade sincronizada</p>
-                      </div>
-                      <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
-                        <p className="text-[9px] uppercase tracking-wider text-emerald-500 font-semibold">Stripe</p>
-                        <p className="text-[11px] text-slate-700 font-medium">Faixas progressivas</p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 md:space-y-2.5">
-                      <button
-                        type="button"
-                        onClick={() => void handleSelectPlan('active_patients')}
-                        disabled={loading}
-                        className="w-full p-3 md:p-4 bg-gray-50 border border-transparent hover:border-[#7a32fc] hover:bg-purple-50/50 rounded-2xl transition-all flex items-center justify-between group text-left"
-                      >
-                        <div>
-                          <h3 className="font-semibold text-gray-800 text-[11px] md:text-xs">Cobrança por paciente ativo</h3>
-                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Valor final calculado pela Stripe conforme a quantidade ativa</p>
-                        </div>
-                        <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider text-[#7a32fc] flex items-center gap-1">
-                          <ExternalLink size={12} /> {loading ? 'Abrindo Stripe...' : 'Iniciar assinatura'}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => window.open(buildEnterpriseWhatsappUrl(), '_blank', 'noopener,noreferrer')}
-                        className="w-full p-3 md:p-4 bg-gray-900 text-white rounded-2xl hover:bg-black transition-all flex items-center justify-between group text-left"
-                      >
-                        <div>
-                          <h3 className="font-semibold text-[11px] md:text-xs">Implantação assistida</h3>
-                          <p className="text-[8px] md:text-[9px] text-gray-400 font-normal uppercase tracking-wider">Solicite apoio comercial para onboarding e importação inicial</p>
-                        </div>
-                        <span className="text-[8px] md:text-[9px] font-semibold uppercase tracking-wider flex items-center gap-1">
-                          <MessageCircle size={12} /> Falar com especialista
-                        </span>
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           </div>

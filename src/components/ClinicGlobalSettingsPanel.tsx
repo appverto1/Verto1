@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2, Plus, X } from "lucide-react";
 import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
+import { SubscriptionDiscountSummary } from "./SubscriptionDiscountSummary";
 import { SecureImage } from "./SecureMedia";
 import { dataService } from "../services/dataService";
 import { normalizeAbaPromptTypeConfig, type AbaPromptTypeConfig } from "../utils/abaPromptLevels";
@@ -992,7 +993,9 @@ export function ClinicGlobalSettingsPanel({
 
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {canManageBilling && (
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-6">
+              <div className="space-y-4">
+                <SubscriptionDiscountSummary />
+                <div className="rounded-2xl border border-blue-100 bg-blue-50 p-6">
                 <div className="mb-4 flex items-center justify-between">
                   <p className="text-sm font-bold text-blue-900">Plano {normalizedPlanName}</p>
                   <span className="rounded-lg bg-blue-100 px-3 py-1 text-[10px] font-bold uppercase text-[#7a32fc]">Ativo</span>
@@ -1001,6 +1004,7 @@ export function ClinicGlobalSettingsPanel({
                 <button onClick={() => navigateToTab("billing")} className="w-full rounded-2xl bg-[#7a32fc] py-3 text-xs font-bold text-white shadow-sm transition-all hover:opacity-90">
                   Gerenciar Assinatura
                 </button>
+                </div>
               </div>
             )}
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">

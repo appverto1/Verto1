@@ -321,6 +321,7 @@ test('reschedule approval preflights all submitted options and only accepts serv
   assert.match(route, /allowedAssignments\.find/);
   assert.match(route, /code: 'RESCHEDULE_CONFLICT'/);
   assert.match(route, /supabase\.rpc\('approve_appointment_reschedule_v2'/);
+  assert.match(route, /RESCHEDULE_APPROVAL_SCHEMA_INCOMPATIBLE/);
   assert.match(route, /p_professional_id: approvedAssignment\.professionalId/);
   assert.match(route, /p_room_id: approvedAssignment\.locationType === 'clinica'/);
   assert.match(route, /const durationMinutes = getCalendarAppointmentDuration\(appointment\)/);

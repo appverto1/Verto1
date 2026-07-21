@@ -109,6 +109,8 @@ test('todos os fluxos leem compromissos pelo resolvedor central em lote', () => 
   assert.match(resolver, /resolveTissAuthorizationBalance/);
   assert.match(resolver, /currentAppointmentReserved/);
   assert.match(resolver, /TISS_AUTHORIZATION_BALANCE_SOURCE_UNAVAILABLE/);
+  assert.doesNotMatch(resolver, /scheduled_start_at,date/);
+  assert.doesNotMatch(resolver, /appointment\?\.date/);
   assert.doesNotMatch(resolver, /revenue_cycle_state/);
   assert.match(serverCode, /const resolvedAuthorizationBalance = authorizationBalances\.get\(authorizationId\)/);
   assert.match(serverCode, /balance: resolvedAuthorizationBalance/);

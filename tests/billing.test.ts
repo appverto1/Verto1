@@ -171,13 +171,12 @@ test('sync de rotina nao faz upgrade silencioso no Stripe e persiste referencias
   assert.doesNotMatch(stripeServiceCode, /meterEvents\.create/);
 });
 
-test('checkout de cadastro profissional nao aceita plano/preco vindo do front', () => {
-  const route = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout-registration'", 5200);
-  assert.match(route, /loadBillingPlansFromSnapshots\(\{ allowSync: true[^}]*\}\)/);
-  assert.match(route, /activePatientSignupPlan\.priceId/);
-  assert.match(route, /line_items: \[\{ price: activePatientSignupPlan\.priceId, quantity: 1 \}\]/);
-  assert.match(route, /billingModel: ACTIVE_PATIENT_BILLING_MODEL/);
-  assert.doesNotMatch(route, /planPrices|requestedPlan|price_data|planName/);
+test('checkout publico de cadastro profissional exige fluxo comercial assistido', () => {
+  const route = sliceFrom(serverCode, "app.post('/api/stripe/create-checkout-registration'", 1200);
+  assert.match(route, /authSignupLimiter/);
+  assert.match(route, /status\(410\)/);
+  assert.match(route, /SALES_ASSISTED_SIGNUP_ERROR/);
+  assert.doesNotMatch(route, /checkout\.sessions\.create|auth\.admin\.createUser|registerUserWithEmailConfirmation/);
 });
 
 test('checkout autenticado preserva paciente separado e usa active patient price para clinica', () => {
@@ -391,7 +390,8 @@ test('landing e tela de assinatura nao exibem planos fixos antigos', () => {
     'business_plan_id',
     'enterprise_plan_id'
   ]);
-  assert.match(landingCode, /billingModel:[\s\S]*?'active_patients'/);
+  assert.match(landingCode, /PUBLIC_ACTIVE_PATIENT_PRICE_LABEL/);
+  assert.doesNotMatch(landingCode, /create-checkout-registration/);
   assert.match(appCode, /paciente ativo/i);
   assert.match(appCode, /\/api\/billing\/plans/);
   assert.match(appCode, /\/api\/billing\/estimate/);

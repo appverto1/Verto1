@@ -50,6 +50,7 @@ import {
   resolveBrandingContext,
 } from './services/notificationBranding';
 import { VERTO_BRAND_ASSETS } from './constants/vertoBranding';
+import { SALES_CONTACT_REQUIRED_ERROR } from './constants/salesCommercial';
 import { decodeClinicalTextEntities } from './utils/clinicalText';
 
 type BeforeInstallPromptEvent = Event & {
@@ -65,6 +66,12 @@ const ActivationAccess = React.lazy(() =>
 );
 const PortalRelationshipConfirmation = React.lazy(() =>
   import('./components/PortalRelationshipConfirmation').then((m) => ({ default: m.PortalRelationshipConfirmation }))
+);
+const PublicSalesOffer = React.lazy(() =>
+  import('./components/PublicSalesOffer').then((m) => ({ default: m.PublicSalesOffer }))
+);
+const SalesActivationAccess = React.lazy(() =>
+  import('./components/SalesActivationAccess').then((m) => ({ default: m.SalesActivationAccess }))
 );
 const PatientDashboard = React.lazy(() =>
   import('./components/PatientDashboard').then((m) => ({ default: m.PatientDashboard }))
@@ -232,9 +239,41 @@ export default function App() {
   const isPortalRelationshipRoute =
     typeof window !== 'undefined' &&
     /^\/portal\/confirmar-vinculo\/?$/i.test(window.location.pathname);
+  const salesOfferRouteMatch =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/^\/oferta\/([^/]+)\/?$/i)
+      : null;
+  const isSalesOfferRoute = Boolean(salesOfferRouteMatch);
+  const salesOfferToken = (() => {
+    if (!salesOfferRouteMatch) return '';
+    try {
+      return decodeURIComponent(salesOfferRouteMatch[1]);
+    } catch {
+      return '';
+    }
+  })();
+  const salesActivationRouteMatch =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/^\/ativacao-comercial\/([^/]+)\/?$/i)
+      : null;
+  const isSalesActivationRoute = Boolean(salesActivationRouteMatch);
+  const salesActivationToken = (() => {
+    if (!salesActivationRouteMatch) return '';
+    try {
+      return decodeURIComponent(salesActivationRouteMatch[1]);
+    } catch {
+      return '';
+    }
+  })();
   const isAuthActionRoute = isActivationRoute || isResetPasswordRoute;
   const [user, setUser] = useState<any>(null); 
   const userResolutionRef = useRef<{ key: string; promise: Promise<any>; settledAt: number } | null>(null);
+
+  useEffect(() => {
+    if (user && isSalesActivationRoute && typeof window !== 'undefined') {
+      window.history.replaceState({}, document.title, '/');
+    }
+  }, [user, isSalesActivationRoute]);
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -1522,7 +1561,35 @@ export default function App() {
         console.error('Login request failed:', response.status, text);
         try {
           const errData = JSON.parse(text);
-          return { success: false, error: errData.error || 'Erro no login' };
+          if (errData?.error === SALES_CONTACT_REQUIRED_ERROR) {
+            try {
+              sessionStorage.setItem('verto_sales_google_prefill', JSON.stringify({
+                name: errData?.lead?.name || supabaseSession?.user?.user_metadata?.full_name || '',
+                email: errData?.lead?.email || supabaseSession?.user?.email || '',
+                googleVerified: true,
+              }));
+              localStorage.removeItem('verto_intended_role');
+              sessionStorage.removeItem('verto_sales_google_interest');
+            } catch {
+              // Storage is optional; the backend block still prevents partial access.
+            }
+            const supabase = await getSupabase();
+            await supabase.auth.signOut();
+            setUser(null);
+            setProfilePicture(null);
+            setShowWorkspacePicker(false);
+            return {
+              success: false,
+              code: SALES_CONTACT_REQUIRED_ERROR,
+              error: errData?.message || 'Antes de criar sua clínica, precisamos conhecer sua operação.',
+              lead: errData?.lead || null,
+            };
+          }
+          return {
+            success: false,
+            code: errData?.error,
+            error: errData?.message || errData?.error || 'Erro no login',
+          };
         } catch (e) {
           return { success: false, error: 'Erro na comunicaÃ§Ã£o com o servidor' };
         }
@@ -6936,7 +7003,11 @@ export default function App() {
       )}
       <LazyImportBoundary fallback={lazyFallback}>
         <Suspense fallback={lazyFallback}>
-        {isPortalRelationshipRoute ? (
+        {isSalesOfferRoute ? (
+          <PublicSalesOffer token={salesOfferToken} />
+        ) : isSalesActivationRoute && !user ? (
+          <SalesActivationAccess token={salesActivationToken} onLogin={handleLoginSuccess} />
+        ) : isPortalRelationshipRoute ? (
           <PortalRelationshipConfirmation onLogin={handleLoginSuccess} />
         ) : !user || userNeedsPatientActivation ? (
           isAuthActionRoute || userNeedsPatientActivation ? (

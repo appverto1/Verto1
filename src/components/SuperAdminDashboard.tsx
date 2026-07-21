@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useState } from 'react';
+﻿import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   BarChart3,
@@ -39,6 +39,7 @@ import { AFLS_ADULT_SOCIAL_PARTICIPATION_PROTOCOL } from '../constants/aflsProto
 import { VBMAPP_LEVEL_1_CANONICAL_PROTOCOL } from '../constants/vbmappLevel1Protocol';
 import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Protocol';
 import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
+import { SALES_LEAD_STATUSES, SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
 const COLORS = ['#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#6366F1', '#EC4899'];
 
@@ -131,6 +132,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   });
   const [allCustomers, setAllCustomers] = useState<any[]>([]);
   const [leadRecoveryItems, setLeadRecoveryItems] = useState<any[]>([]);
+  const [leadSearch, setLeadSearch] = useState('');
+  const [leadStatusFilter, setLeadStatusFilter] = useState<'all' | SalesLeadStatus>('all');
+  const [leadAction, setLeadAction] = useState<string | null>(null);
+  const leadStatusRequestKeysRef = useRef<Record<string, string>>({});
+  const salesOfferRequestKeysRef = useRef<Record<string, string>>({});
+  const [offerDurationByLead, setOfferDurationByLead] = useState<Record<string, number>>({});
+  const [offerQuantityByLead, setOfferQuantityByLead] = useState<Record<string, number>>({});
   const [protocolRequests, setProtocolRequests] = useState<any[]>([]);
   const [protocolRequestsError, setProtocolRequestsError] = useState<string | null>(null);
   const [approvingProtocolId, setApprovingProtocolId] = useState<string | null>(null);
@@ -294,7 +302,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           fetchJsonSoft('/api/owner/financial-overview', headers, 'Financeiro'),
           fetchJsonSoft('/api/owner/clients', headers, 'Clientes'),
           fetchJsonSoft('/api/owner/financial-feature-surveys', headers, 'Pesquisa financeira'),
-          fetchJsonSoft('/api/owner/leads/recovery', headers, 'Recuperacao de leads')
+          fetchJsonSoft('/api/owner/sales/leads?page=1&pageSize=100', headers, 'Leads comerciais')
         ]);
 
         if (statsData?.success) setStats(statsData.stats);
@@ -328,7 +336,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       fetchJsonSoft('/api/owner/financial-overview', headers, 'Financeiro'),
       fetchJsonSoft('/api/owner/clients', headers, 'Clientes'),
       fetchJsonSoft('/api/owner/financial-feature-surveys', headers, 'Pesquisa financeira'),
-      fetchJsonSoft('/api/owner/leads/recovery', headers, 'Recuperacao de leads')
+      fetchJsonSoft('/api/owner/sales/leads?page=1&pageSize=100', headers, 'Leads comerciais')
     ]);
 
     if (statsData?.success) setStats(statsData.stats);
@@ -597,6 +605,133 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     );
   }
 
+  const updateSalesLeadStatus = async (lead: any, status: SalesLeadStatus) => {
+    if (
+      lead?.legacyReadOnly ||
+      !lead?.id ||
+      String(lead.id).startsWith("legacy:")
+    )
+      return;
+    const requestKeyName = `${lead.id}:${status}`;
+    const requestKey =
+      leadStatusRequestKeysRef.current[requestKeyName] || crypto.randomUUID();
+    leadStatusRequestKeysRef.current[requestKeyName] = requestKey;
+    setLeadAction(`status:${lead.id}`);
+    try {
+      const supabase = await getSupabase();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const response = await fetch(
+        `/api/owner/sales/leads/${encodeURIComponent(lead.id)}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: session?.access_token
+              ? `Bearer ${session.access_token}`
+              : "",
+            "X-Idempotency-Key": requestKey,
+          },
+          body: JSON.stringify({ status, idempotencyKey: requestKey }),
+        },
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.success === false)
+        throw new Error(data?.error || "Não foi possível atualizar o lead.");
+      delete leadStatusRequestKeysRef.current[requestKeyName];
+      setLeadRecoveryItems((current) =>
+        current.map((item) =>
+          item.id === lead.id
+            ? {
+                ...item,
+                status,
+                updatedAt: data.lead?.updated_at || item.updatedAt,
+              }
+            : item,
+        ),
+      );
+    } catch (error: any) {
+      alert(error?.message || "Não foi possível atualizar o lead.");
+    } finally {
+      setLeadAction(null);
+    }
+  };
+
+  const createSalesOffer = async (lead: any) => {
+    if (
+      lead?.legacyReadOnly ||
+      !lead?.id ||
+      String(lead.id).startsWith("legacy:")
+    )
+      return;
+    const duration = Number(offerDurationByLead[lead.id] || 0);
+    const quantity = Math.max(
+      1,
+      Number(offerQuantityByLead[lead.id] || lead.estimatedActivePatients || 1),
+    );
+    const requestKeyName = `${lead.id}:${quantity}:${duration || 0}`;
+    const requestKey =
+      salesOfferRequestKeysRef.current[requestKeyName] || crypto.randomUUID();
+    salesOfferRequestKeysRef.current[requestKeyName] = requestKey;
+    setLeadAction(`offer:${lead.id}`);
+    try {
+      const supabase = await getSupabase();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const response = await fetch("/api/owner/sales/offers", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: session?.access_token
+            ? `Bearer ${session.access_token}`
+            : "",
+          "X-Idempotency-Key": requestKey,
+        },
+        body: JSON.stringify({
+          leadId: lead.id,
+          initialActivePatientQuantity: quantity,
+          discountDurationMonths: duration || null,
+          expiresInDays: 14,
+          idempotencyKey: requestKey,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.success === false)
+        throw new Error(data?.error || "Não foi possível criar a oferta.");
+      delete salesOfferRequestKeysRef.current[requestKeyName];
+      if (data.publicUrl) {
+        await navigator.clipboard.writeText(data.publicUrl);
+        alert("Oferta criada e link individual copiado.");
+      } else {
+        alert(
+          data.message ||
+            "Oferta salva como rascunho. Configuração Stripe pendente.",
+        );
+      }
+      await refreshAll();
+    } catch (error: any) {
+      alert(error?.message || "Não foi possível criar a oferta.");
+    } finally {
+      setLeadAction(null);
+    }
+  };
+
+  const visibleSalesLeads = leadRecoveryItems.filter((lead) => {
+    const query = leadSearch.trim().toLowerCase();
+    const matchesSearch =
+      !query ||
+      [lead.name, lead.email, lead.clinicName].some((value) =>
+        String(value || "")
+          .toLowerCase()
+          .includes(query),
+      );
+    const matchesStatus =
+      leadStatusFilter === "all" || lead.status === leadStatusFilter;
+    return matchesSearch && matchesStatus;
+  });
+
   const monthlyData = financial.monthly || [];
   const summary = financial.summary || {};
   const byPlanData = financial.byPlan || [];
@@ -618,7 +753,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <SidebarItem icon={<LayoutDashboard size={18} />} label="Resumo" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
           <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} />
           <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />
-          <SidebarItem icon={<MessageCircle size={18} />} label="Recuperação de Leads" active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} />
+          <SidebarItem icon={<MessageCircle size={18} />} label="Comercial" active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} />
           <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => setActiveTab('demos')} />
           <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => setActiveTab('protocols')} />
         </nav>
@@ -645,7 +780,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   : activeTab === 'customers'
                     ? 'Clientes e Performance'
                     : activeTab === 'leads'
-                      ? 'Recuperacao de Leads'
+                      ? 'Leads e propostas'
                       : activeTab === 'demos'
                         ? 'Ambientes Demo'
                         : 'Governanca de Protocolos'}
@@ -953,83 +1088,272 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         )}
 
-        {activeTab === 'leads' && (
+        {activeTab === "leads" && (
           <div className="space-y-6">
-            <div className="bg-white rounded-[24px] border border-slate-100 p-5 flex flex-wrap gap-4 items-center justify-between">
-              <div className="flex items-center gap-2">
-                <MessageCircle size={17} className="text-slate-500" />
-                <span className="text-sm font-bold text-slate-600">
-                  Leads de checkout cancelado para recuperação comercial
-                </span>
+            <div className="rounded-[24px] border border-slate-100 bg-white p-5">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <MessageCircle size={17} className="text-violet-600" />
+                    <span className="text-sm font-semibold text-slate-700">
+                      Funil comercial assistido
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs font-normal text-slate-500">
+                    Novos interesses, propostas individuais e checkouts
+                    cancelados antigos no mesmo contexto.
+                  </p>
+                </div>
+                <button
+                  onClick={refreshAll}
+                  className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  Atualizar lista
+                </button>
               </div>
-              <button
-                onClick={refreshAll}
-                className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-black uppercase tracking-[0.12em] text-slate-700 hover:bg-slate-50"
-              >
-                Atualizar lista
-              </button>
+              <div className="mt-4 grid gap-3 md:grid-cols-[1fr_240px]">
+                <input
+                  value={leadSearch}
+                  onChange={(event) => setLeadSearch(event.target.value)}
+                  placeholder="Buscar por nome, e-mail ou clínica"
+                  className="min-h-11 rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-normal outline-none focus:border-violet-400 focus:bg-white"
+                />
+                <select
+                  value={leadStatusFilter}
+                  onChange={(event) =>
+                    setLeadStatusFilter(
+                      event.target.value as "all" | SalesLeadStatus,
+                    )
+                  }
+                  className="min-h-11 rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-normal outline-none focus:border-violet-400"
+                >
+                  <option value="all">Todas as etapas</option>
+                  {SALES_LEAD_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {SALES_LEAD_STATUS_LABELS[status]}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
-              <h3 className="text-lg font-black mb-4">Fila de Recuperação</h3>
-              {leadRecoveryItems.length === 0 ? (
-                <p className="text-sm text-slate-500">Nenhum lead pendente no momento.</p>
+            <div className="rounded-[28px] border border-slate-100 bg-white p-6 shadow-sm">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h3 className="text-lg font-semibold">Leads e propostas</h3>
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                  {visibleSalesLeads.length} itens
+                </span>
+              </div>
+              {visibleSalesLeads.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center">
+                  <p className="text-sm font-medium text-slate-700">
+                    Nenhum lead encontrado.
+                  </p>
+                  <p className="mt-1 text-xs font-normal text-slate-500">
+                    Ajuste os filtros ou aguarde novos interesses comerciais.
+                  </p>
+                </div>
               ) : (
-                <div className="space-y-3 max-h-[560px] overflow-y-auto pr-1">
-                  {leadRecoveryItems.map((lead) => {
-                    const whatsappDigits = String(lead.phone || '').replace(/\D/g, '');
+                <div className="space-y-3">
+                  {visibleSalesLeads.map((lead) => {
+                    const whatsappDigits = String(lead.phone || "").replace(
+                      /\D/g,
+                      "",
+                    );
                     const waLink = whatsappDigits
-                      ? `https://wa.me/${whatsappDigits}?text=${encodeURIComponent('Olá, vi seu cadastro na Verto e posso te ajudar a concluir a ativação.')}`
+                      ? `https://wa.me/${whatsappDigits}?text=${encodeURIComponent("Olá, recebemos seu interesse na Verto e gostaríamos de conhecer melhor sua operação.")}`
                       : null;
-
+                    const isLegacy = Boolean(
+                      lead.legacyReadOnly ||
+                      String(lead.id || "").startsWith("legacy:"),
+                    );
+                    const actionBusy = Boolean(
+                      leadAction && leadAction.endsWith(String(lead.id)),
+                    );
                     return (
-                      <div
-                        key={lead.userId}
-                        className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 flex flex-col gap-3 md:flex-row md:items-center md:justify-between"
+                      <article
+                        key={lead.id || lead.userId}
+                        className="rounded-2xl border border-slate-100 bg-slate-50 p-4"
                       >
-                        <div>
-                          <p className="font-black text-sm text-slate-800">{lead.name || 'Lead sem nome'}</p>
-                          <p className="text-xs text-slate-500">{lead.email || 'Sem e-mail'}</p>
-                          <div className="flex flex-wrap items-center gap-2 mt-2">
-                            <span className="px-2 py-1 rounded-full bg-indigo-50 text-indigo-600 text-[10px] font-black uppercase tracking-[0.1em]">
-                              {lead.planName || 'Plano não informado'}
-                            </span>
-                            <span className="px-2 py-1 rounded-full bg-amber-50 text-amber-700 text-[10px] font-black uppercase tracking-[0.1em]">
-                              {lead.subscriptionStatus || 'pending'}
-                            </span>
-                            <span className="px-2 py-1 rounded-full bg-slate-200 text-slate-700 text-[10px] font-black uppercase tracking-[0.1em]">
-                              Cancelamentos: {Number(lead.cancelCount || 0)}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-500 mt-2">
-                            Último cancelamento:{' '}
-                            {lead.lastCheckoutCancelAt
-                              ? new Date(lead.lastCheckoutCancelAt).toLocaleString('pt-BR')
-                              : 'Não registrado'}
-                          </p>
-                        </div>
-
-                        <div className="flex flex-col gap-2 min-w-[220px]">
-                          <div className="text-xs font-semibold text-slate-600 flex items-center gap-2">
-                            <Phone size={14} />
-                            {lead.phone || 'Sem WhatsApp informado'}
-                          </div>
-                          {waLink ? (
-                            <a
-                              href={waLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 text-white text-xs font-black uppercase tracking-[0.1em] px-3 py-2 hover:bg-emerald-600 transition-colors"
-                            >
-                              <MessageCircle size={14} /> Contatar no WhatsApp
-                            </a>
-                          ) : (
-                            <div className="text-[11px] text-rose-600 font-semibold">
-                              Lead sem telefone. Solicite atualização do cadastro.
+                        <div className="grid gap-4 xl:grid-cols-[1.25fr_0.9fr_1.1fr]">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="text-sm font-semibold text-slate-900">
+                                {lead.name || "Lead sem nome"}
+                              </h4>
+                              <span className="rounded-full bg-violet-100 px-2.5 py-1 text-[10px] font-semibold text-violet-700">
+                                {isLegacy
+                                  ? "Checkout legado"
+                                  : SALES_LEAD_STATUS_LABELS[
+                                      lead.status as SalesLeadStatus
+                                    ] ||
+                                    lead.status ||
+                                    "Novo"}
+                              </span>
                             </div>
-                          )}
+                            <p className="mt-1 text-xs font-normal text-slate-600">
+                              {lead.clinicName || "Clínica não informada"}
+                            </p>
+                            <div className="mt-3 space-y-1 text-xs font-normal text-slate-500">
+                              <p>{lead.email || "Sem e-mail"}</p>
+                              <p>{lead.phone || "Sem WhatsApp informado"}</p>
+                              <p>
+                                {lead.estimatedActivePatients == null
+                                  ? "Pacientes não informados"
+                                  : `${lead.estimatedActivePatients} pacientes ativos estimados`}
+                              </p>
+                              <p>
+                                Origem:{" "}
+                                {lead.acquisitionChannel || "não informada"}
+                              </p>
+                              <p>
+                                Entrada:{" "}
+                                {lead.createdAt
+                                  ? new Date(lead.createdAt).toLocaleString(
+                                      "pt-BR",
+                                    )
+                                  : "não informada"}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            {isLegacy ? (
+                              <div className="rounded-xl border border-amber-100 bg-amber-50 p-3 text-xs font-normal text-amber-800">
+                                Histórico preservado. Cancelamentos registrados:{" "}
+                                {Number(lead.cancelCount || 0)}.
+                              </div>
+                            ) : (
+                              <>
+                                <label className="block text-[11px] font-medium text-slate-600">
+                                  Etapa do funil
+                                </label>
+                                <select
+                                  value={lead.status || "new"}
+                                  disabled={actionBusy}
+                                  onChange={(event) =>
+                                    void updateSalesLeadStatus(
+                                      lead,
+                                      event.target.value as SalesLeadStatus,
+                                    )
+                                  }
+                                  className="min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-xs font-normal outline-none focus:border-violet-400 disabled:opacity-60"
+                                >
+                                  {SALES_LEAD_STATUSES.map((status) => (
+                                    <option key={status} value={status}>
+                                      {SALES_LEAD_STATUS_LABELS[status]}
+                                    </option>
+                                  ))}
+                                </select>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      navigator.clipboard.writeText(
+                                        String(lead.email || ""),
+                                      )
+                                    }
+                                    disabled={!lead.email}
+                                    className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 disabled:opacity-40"
+                                  >
+                                    <Copy size={13} /> E-mail
+                                  </button>
+                                  {waLink ? (
+                                    <a
+                                      href={waLink}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-3 text-xs font-semibold text-white"
+                                    >
+                                      <MessageCircle size={13} /> WhatsApp
+                                    </a>
+                                  ) : (
+                                    <button
+                                      disabled
+                                      className="min-h-10 rounded-xl bg-slate-200 text-xs text-slate-500"
+                                    >
+                                      Sem WhatsApp
+                                    </button>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </div>
+
+                          <div>
+                            {isLegacy ? (
+                              <p className="text-xs font-normal text-slate-500">
+                                Ações comerciais novas ficam disponíveis para
+                                leads captados pelo formulário assistido.
+                              </p>
+                            ) : (
+                              <div className="rounded-xl border border-slate-200 bg-white p-3">
+                                <p className="text-xs font-semibold text-slate-800">
+                                  Criar oferta individual
+                                </p>
+                                <div className="mt-2 grid grid-cols-2 gap-2">
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={100000}
+                                    aria-label="Quantidade inicial de pacientes"
+                                    value={
+                                      offerQuantityByLead[lead.id] ??
+                                      Math.max(
+                                        1,
+                                        Number(
+                                          lead.estimatedActivePatients || 1,
+                                        ),
+                                      )
+                                    }
+                                    onChange={(event) =>
+                                      setOfferQuantityByLead((current) => ({
+                                        ...current,
+                                        [lead.id]: Number(event.target.value),
+                                      }))
+                                    }
+                                    className="min-h-10 rounded-xl border border-slate-200 px-3 text-xs outline-none focus:border-violet-400"
+                                  />
+                                  <select
+                                    aria-label="Duração do cupom"
+                                    value={offerDurationByLead[lead.id] || 0}
+                                    onChange={(event) =>
+                                      setOfferDurationByLead((current) => ({
+                                        ...current,
+                                        [lead.id]: Number(event.target.value),
+                                      }))
+                                    }
+                                    className="min-h-10 rounded-xl border border-slate-200 px-3 text-xs outline-none focus:border-violet-400"
+                                  >
+                                    <option value={0}>Sem desconto</option>
+                                    <option value={6}>Cupom 6 meses</option>
+                                    <option value={12}>Cupom 12 meses</option>
+                                    <option value={24}>Cupom 24 meses</option>
+                                  </select>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => void createSalesOffer(lead)}
+                                  disabled={actionBusy}
+                                  className="mt-2 min-h-10 w-full rounded-xl bg-[#7a32fc] px-3 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
+                                >
+                                  {leadAction === `offer:${lead.id}`
+                                    ? "Salvando..."
+                                    : "Preparar oferta"}
+                                </button>
+                                {lead.latestOffer ? (
+                                  <p className="mt-2 text-[11px] font-normal text-slate-500">
+                                    Última oferta: {lead.latestOffer.status} ·{" "}
+                                    {lead.latestOffer.discount_duration_months
+                                      ? `${lead.latestOffer.discount_duration_months} meses`
+                                      : "sem desconto"}
+                                  </p>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
+                      </article>
                     );
                   })}
                 </div>

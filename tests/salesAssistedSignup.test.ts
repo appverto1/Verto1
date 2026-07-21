@@ -1,0 +1,196 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import {
+  DISCOUNT_EXPIRY_NOTIFICATION_DAYS,
+  PUBLIC_ACTIVE_PATIENT_PRICE,
+  PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
+  SALES_COUPON_DURATION_MONTHS,
+  SALES_CONTACT_REQUIRED_ERROR,
+} from "../src/constants/salesCommercial";
+
+const read = (path: string) => readFileSync(path, "utf8");
+const server = read("server.ts");
+const landing = read("src/components/LandingPage.tsx");
+const salesForm = read("src/components/SalesInterestForm.tsx");
+const app = read("src/App.tsx");
+const superAdmin = read("src/components/SuperAdminDashboard.tsx");
+const subscriptionSummary = read("src/components/SubscriptionDiscountSummary.tsx");
+const salesActivation = read("src/components/SalesActivationAccess.tsx");
+const clinicSettings = read("src/components/ClinicGlobalSettingsPanel.tsx");
+const migration = read(
+  "supabase/migrations/20260720190000_sales_assisted_signup.sql",
+);
+const envExample = read(".env.example");
+
+test("preço público oficial está centralizado e não expõe o preço antigo", () => {
+  assert.equal(PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents, 7990);
+  assert.equal(PUBLIC_ACTIVE_PATIENT_PRICE.currency, "BRL");
+  assert.equal(
+    PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
+    "R$ 79,90 por paciente ativo/mês",
+  );
+  assert.deepEqual(SALES_COUPON_DURATION_MONTHS, [6, 12, 24]);
+  assert.deepEqual(DISCOUNT_EXPIRY_NOTIFICATION_DAYS, [30, 7, 1]);
+  assert.doesNotMatch(`${landing}\n${salesForm}`, /R\$\s*39[,.]90|\b3990\b/);
+});
+
+test("cadastro profissional público virou lead e cadastro de paciente continua separado", () => {
+  assert.match(landing, /<SalesInterestForm/);
+  assert.match(salesForm, /fetch\([\"']\/api\/public\/sales-leads[\"']/);
+  assert.match(salesForm, /WhatsApp com DDD/);
+  assert.match(salesForm, /contactConsent: consent/);
+  assert.match(salesForm, /website,/);
+  assert.match(landing, /fetch\([\"']\/api\/auth\/signup[\"']/);
+  assert.match(landing, /role: [\"']patient[\"']/);
+  assert.doesNotMatch(landing, /create-checkout-registration/);
+  assert.doesNotMatch(salesForm, /type="password"|password/);
+});
+
+test("endpoint legado de checkout profissional está bloqueado sem efeitos", () => {
+  const routeStart = Math.max(
+    server.indexOf('"/api/stripe/create-checkout-registration"'),
+    server.indexOf("'/api/stripe/create-checkout-registration'"),
+  );
+  assert.ok(routeStart >= 0);
+  const route = server.slice(routeStart, routeStart + 700);
+  assert.match(route, /status\(410\)/);
+  assert.match(route, /SALES_ASSISTED_SIGNUP_ERROR/);
+  assert.doesNotMatch(
+    route,
+    /auth\.admin\.createUser|checkout\.sessions\.create|ensureClinicAndMembershipForCoordinator/,
+  );
+});
+
+test("Google desconhecido exige contato comercial e não provisiona clínica antes da ativação", () => {
+  assert.equal(SALES_CONTACT_REQUIRED_ERROR, "SALES_CONTACT_REQUIRED");
+  assert.match(server, /if \(!validPaidActivation\)/);
+  assert.match(server, /error: SALES_CONTACT_REQUIRED_ERROR/);
+  assert.match(
+    server,
+    /A clínica somente pode ser criada após uma ativação paga persistida pelo webhook assinado/,
+  );
+  assert.match(app, /verto_sales_google_prefill/);
+  assert.match(app, /await supabase\.auth\.signOut\(\)/);
+  assert.match(app, /setUser\(null\)/);
+});
+
+test("leads e ofertas usam RLS, token hash e idempotência", () => {
+  assert.match(
+    migration,
+    /alter table public\.sales_leads enable row level security/,
+  );
+  assert.match(
+    migration,
+    /alter table public\.sales_offers enable row level security/,
+  );
+  assert.match(migration, /public_token_hash text not null/);
+  assert.match(migration, /sales_offers_public_token_hash_uidx/);
+  assert.match(migration, /sales_offers_creator_idempotency_uidx/);
+  assert.match(migration, /sales_lead_events_idempotency_uidx/);
+  assert.match(migration, /on conflict \(idempotency_key\) do nothing/);
+  assert.match(migration, /discount_duration_months in \(6, 12, 24\)/);
+  assert.match(server, /hashSalesOfferToken\(token\)/);
+  assert.match(server, /deriveSalesOfferPublicToken/);
+  assert.match(server, /createHmac\("sha256", secret\)/);
+  assert.match(server, /IDs Stripe não são aceitos pelo cliente/);
+});
+
+test("ausência de Stripe real mantém oferta em rascunho e checkout retorna 503 controlado", () => {
+  assert.match(server, /status: ready \? [\"']ready[\"'] : [\"']draft[\"']/);
+  assert.match(server, /STRIPE_SALES_CONFIGURATION_PENDING/);
+  assert.match(server, /status\(503\)/);
+  assert.match(server, /Configuração Stripe pendente/);
+  assert.match(envExample, /STRIPE_BASE_ACTIVE_PATIENT_PRICE_ID=/);
+  assert.match(envExample, /STRIPE_COUPON_6_MONTHS_ID=/);
+  assert.match(envExample, /STRIPE_COUPON_12_MONTHS_ID=/);
+  assert.match(envExample, /STRIPE_COUPON_24_MONTHS_ID=/);
+  assert.doesNotMatch(envExample, /STRIPE_COUPON_(?:6|12|24)_MONTHS_ID=\S+/);
+});
+
+test("webhook e avisos de desconto estão preparados de forma idempotente", () => {
+  assert.match(server, /flowType.*sales_assisted_signup/s);
+  assert.match(server, /processSalesAssistedCheckoutCompleted/);
+  assert.match(server, /syncSalesSubscriptionDiscount/);
+  assert.match(server, /discountEndsAt =\s*Number\(discount\?\.end/);
+  assert.match(server, /payment-completed:\$\{session\.id\}/);
+  assert.match(server, /activation-sent:\$\{session\.id\}/);
+  assert.match(server, /run-discount-expiry/);
+  assert.match(server, /DISCOUNT_EXPIRY_NOTIFICATION_DAYS\.includes/);
+  assert.match(
+    server,
+    /stripe_subscription_id.*endAt\.toISOString\(\).*window/s,
+  );
+  assert.match(migration, /sales_discount_notifications_idempotency_uidx/);
+});
+
+test("painel comercial preserva legado, filtra leads e cria oferta lógica", () => {
+  assert.match(superAdmin, /label="Comercial"/);
+  assert.match(superAdmin, /Leads e propostas/);
+  assert.match(superAdmin, /checkout legado/i);
+  assert.match(superAdmin, /api\/owner\/sales\/leads/);
+  assert.match(superAdmin, /api\/owner\/sales\/offers/);
+  assert.match(superAdmin, /Cupom 6 meses/);
+  assert.match(superAdmin, /Cupom 12 meses/);
+  assert.match(superAdmin, /Cupom 24 meses/);
+  assert.match(superAdmin, /"X-Idempotency-Key": requestKey/);
+  assert.match(server, /idempotency_key: requestIdempotencyKey/);
+});
+
+test("ativação paga conclui o vínculo comercial uma única vez", () => {
+  assert.match(server, /finalizeSalesActivationForUser/);
+  assert.match(server, /activation-completed:\$\{leadId\}:\$\{params\.userId\}/);
+  assert.match(server, /converted_user_id: params\.userId/);
+  assert.match(server, /converted_clinic_id: params\.clinicId/);
+  assert.match(server, /subscription_status: commercialPaidActivation \? "active" : "pending"/);
+  assert.match(server, /onConflict: "idempotency_key", ignoreDuplicates: true/);
+});
+
+
+
+test("lead público protege identidade, origem e retries concorrentes", () => {
+  assert.match(server, /\["public_landing", "google_interest"\]\.includes/);
+  assert.match(server, /SALES_LEAD_IDENTITY_CONFLICT/);
+  assert.match(server, /status\(missingSchema \? 503 : identityConflict \? 409 : 500\)/);
+  assert.match(migration, /v_email_lead_id uuid/);
+  assert.match(migration, /v_phone_lead_id uuid/);
+  assert.match(migration, /v_email_lead_id <> v_phone_lead_id/);
+  assert.match(migration, /exception when unique_violation/);
+});
+
+test("ativação comercial pública exige oferta paga e vínculo exato da sessão", () => {
+  assert.match(app, /SalesActivationAccess/);
+  assert.match(app, /ativacao-comercial/);
+  assert.match(salesActivation, /\/api\/public\/sales-activations\//);
+  assert.match(salesActivation, /Vincular e entrar com Google/);
+  assert.match(server, /loadPublicSalesActivation/);
+  assert.match(server, /\.eq\("source", "sales_assisted_signup"\)/);
+  assert.match(server, /\.eq\("status", "paid"\)/);
+  assert.match(server, /\.eq\("stripe_checkout_session_id", checkoutSessionId\)/);
+  assert.match(server, /crypto\.randomBytes\(36\)\.toString\("base64url"\)/);
+  assert.match(server, /const tokenHash = hashSalesOfferToken\(activationToken\)/);
+  assert.match(server, /error: "WEAK_PASSWORD"/);
+  assert.doesNotMatch(salesActivation, /clinicId|offerId|leadId|stripe_/i);
+});
+
+test("webhook só libera ativação após pagamento confirmado", () => {
+  assert.match(server, /const paymentConfirmed =/);
+  assert.match(server, /paymentStatus === "paid"/);
+  assert.match(server, /paymentStatus === "no_payment_required"/);
+  assert.match(server, /return \{ paymentConfirmed: false, activationPrepared: false \}/);
+  assert.match(server, /buildSalesPostPaymentActivationEmail/);
+  assert.match(server, /activation_email_sent_at/);
+  assert.match(migration, /pending_activations_sales_checkout_uidx/);
+  assert.match(migration, /pending_activations_sales_token_uidx/);
+});
+
+test("área de assinatura lê snapshot persistido sem consultar Stripe a cada render", () => {
+  assert.match(server, /\/api\/billing\/discount-summary/);
+  assert.match(server, /source: "persisted_stripe_snapshot"/);
+  assert.match(server, /\.eq\("clinic_id", clinicId\)/);
+  assert.match(subscriptionSummary, /fetch\("\/api\/billing\/discount-summary"/);
+  assert.match(subscriptionSummary, /Após essa data:/);
+  assert.match(subscriptionSummary, /Histórico de avisos/);
+  assert.match(clinicSettings, /<SubscriptionDiscountSummary \/>/);
+  assert.doesNotMatch(subscriptionSummary, /stripe\.subscriptions|api\.stripe/);
+});

@@ -68,6 +68,7 @@ import { MonthlyConferenceCenter } from "./MonthlyConferenceCenter";
 import { PayerRequirementsPanel } from "./PayerRequirementsPanel";
 import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { ClinicGlobalSettingsPanel } from "./ClinicGlobalSettingsPanel";
+import { SubscriptionDiscountSummary } from "./SubscriptionDiscountSummary";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
 import { VERTO_BRAND_ASSETS } from "../constants/vertoBranding";
@@ -12525,6 +12526,7 @@ export function CoordinatorDashboard({
                         <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
                           Plano e Assinatura
                         </h4>
+                        <SubscriptionDiscountSummary />
                         <div className="p-6 bg-blue-50 rounded-3xl border border-blue-100">
                           <div className="flex items-center justify-between mb-4">
                             <p className="text-sm font-bold text-blue-900">
