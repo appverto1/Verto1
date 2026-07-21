@@ -67,13 +67,13 @@ test('ambientes de deploy exigem a verificacao de schema', () => {
   assert.match(serverCode, /const isDeploy = isDeployEnvironment\(process\.env\)/);
   assert.match(
     serverCode,
-    /if \(isDeploy\) \{\s*await validateCriticalTissAuthorizationReservationSchema\(\);\s*await validateCriticalAppointmentActionResolutionSchema\(\);\s*\}/
+    /if \(isDeploy\) \{\s*validateSupabaseDeploymentTarget\(\);\s*await validateCriticalTissAuthorizationReservationSchema\(\);\s*await validateCriticalAppointmentActionResolutionSchema\(\);\s*\}/
   );
   assert.match(serverCode, /Remarcações em modo degradado/);
   assert.match(serverCode, /O servidor continuará disponível/);
   assert.doesNotMatch(serverCode, /Schema crítico de remarcações incompatível[\s\S]*?throw new Error/);
   assert.match(serverCode, /const result = await checkCriticalSchema\(supabase\)/);
-  assert.match(serverCode, /const result = await checkAppointmentActionResolutionSchema\(supabase\)/);
+  assert.match(serverCode, /const result = await checkAppointmentActionResolutionSchema\(supabase, \{ timeoutMs: 6_000 \}\)/);
   assert.match(serverCode, /TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION/);
   assert.match(serverCode, /APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION/);
 });

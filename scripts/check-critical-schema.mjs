@@ -5,13 +5,36 @@ import { createClient } from '@supabase/supabase-js';
 export const TISS_AUTHORIZATION_RESERVATION_RPC = 'reserve_tiss_authorization_billing_context';
 export const TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION = '20260715120000';
 export const APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION = '20260721123000';
+export const APPOINTMENT_ACTION_RESOLUTION_SCHEMA_PROBE = 'get_reschedule_schema_version';
+export const VERTO_CRITICAL_SCHEMA_STATUS_RPC = 'get_verto_critical_schema_status';
 export const APPOINTMENT_ACTION_RESOLUTION_RPCS = [
   'approve_appointment_reschedule_v2',
   'approve_appointment_cancellation',
   'reject_appointment_action_request',
 ];
+export const APPOINTMENT_ACTION_REQUIRED_COLUMNS = [
+  'id',
+  'scheduled_at',
+  'scheduled_start_at',
+  'scheduled_end_at',
+  'scheduled_duration_minutes',
+  'therapist_id',
+  'therapist_name',
+  'room_id',
+  'room_name',
+  'patient_confirmation_status',
+  'patient_confirmation_at',
+  'patient_confirmation_by',
+  'patient_confirmation_source',
+  'source_payload',
+  'notification_sent',
+  'notification_sent_at',
+  'notification_12h_sent',
+  'notification_12h_sent_at',
+];
 
 const probeId = '00000000-0000-4000-8000-000000000001';
+const DEFAULT_SCHEMA_PROBE_TIMEOUT_MS = 6_000;
 
 export function isDeployEnvironment(env = process.env) {
   return (
@@ -22,6 +45,96 @@ export function isDeployEnvironment(env = process.env) {
   );
 }
 
+function decodeJwtPayload(token) {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length < 2) return null;
+    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+    return JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+export function getSupabaseProjectRef(url) {
+  try {
+    const host = new URL(String(url || '')).hostname.toLowerCase();
+    if (!host.endsWith('.supabase.co')) return null;
+    return host.split('.')[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+export function getSupabaseProjectRefFromJwt(token) {
+  const payload = decodeJwtPayload(token);
+  const issuer = String(payload?.iss || '');
+  const match = issuer.match(/https:\/\/([a-z0-9-]+)\.supabase\.co\/auth\/v1/i);
+  return match?.[1]?.toLowerCase() || null;
+}
+
+function maskValue(value, visibleStart = 4, visibleEnd = 3) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return 'unknown';
+  if (normalized.length <= visibleStart + visibleEnd) return `${normalized.slice(0, 1)}***`;
+  return `${normalized.slice(0, visibleStart)}***${normalized.slice(-visibleEnd)}`;
+}
+
+export function describeSupabaseTarget(url, environment = process.env.NODE_ENV || process.env.RAILWAY_ENVIRONMENT || 'unknown') {
+  let host = 'unknown';
+  try {
+    host = new URL(String(url || '')).hostname.toLowerCase();
+  } catch {
+    host = 'invalid';
+  }
+  const projectRef = getSupabaseProjectRef(url);
+  const maskedHost = projectRef && host.endsWith('.supabase.co')
+    ? `${maskValue(projectRef)}.supabase.co`
+    : maskValue(host, 8, 6);
+  return {
+    environment: String(environment || 'unknown').slice(0, 80),
+    host: maskedHost,
+    projectRef: maskValue(projectRef),
+  };
+}
+
+export function validateSupabaseTargetConfiguration({ url, serviceRoleKey, expectedProjectRef }) {
+  const urlRef = getSupabaseProjectRef(url);
+  const tokenRef = getSupabaseProjectRefFromJwt(serviceRoleKey);
+  const expectedRef = String(expectedProjectRef || '').trim().toLowerCase() || null;
+  if (urlRef && tokenRef && urlRef !== tokenRef) {
+    return { ok: false, reason: 'service_role_project_mismatch', urlRef, tokenRef, expectedRef };
+  }
+  if (expectedRef && urlRef && expectedRef !== urlRef) {
+    return { ok: false, reason: 'expected_project_mismatch', urlRef, tokenRef, expectedRef };
+  }
+  if (expectedRef && tokenRef && expectedRef !== tokenRef) {
+    return { ok: false, reason: 'expected_service_role_mismatch', urlRef, tokenRef, expectedRef };
+  }
+  return { ok: true, reason: 'target_confirmed', urlRef, tokenRef, expectedRef };
+}
+
+function schemaProbeTimeout(timeoutMs = DEFAULT_SCHEMA_PROBE_TIMEOUT_MS) {
+  const error = new Error(`schema probe timeout after ${timeoutMs}ms`);
+  error.code = 'SCHEMA_PROBE_TIMEOUT';
+  return error;
+}
+
+async function withSchemaProbeTimeout(promise, timeoutMs = DEFAULT_SCHEMA_PROBE_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(schemaProbeTimeout(timeoutMs)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export function classifyReservationSchemaProbe(error) {
   const code = String(error?.code || '').trim().toUpperCase();
   const message = [error?.message, error?.details, error?.hint]
@@ -30,15 +143,39 @@ export function classifyReservationSchemaProbe(error) {
     .toUpperCase();
 
   if (message.includes('TISS_AUTHORIZATION_SCOPE_INVALID')) {
-    return { compatible: false, reason: 'rpc_legacy_version' };
+    return { compatible: false, reason: 'rpc_legacy_version', retryable: false };
   }
   if (code === '42501' || message.includes('PERMISSION DENIED')) {
-    return { compatible: false, reason: 'rpc_permission_mismatch' };
+    return { compatible: false, reason: 'rpc_permission_mismatch', retryable: false };
   }
   if (code === 'PGRST202' || code === '42883' || message.includes(TISS_AUTHORIZATION_RESERVATION_RPC.toUpperCase())) {
-    return { compatible: false, reason: 'rpc_missing_or_signature_mismatch' };
+    return { compatible: false, reason: 'rpc_missing_or_signature_mismatch', retryable: true };
   }
-  return { compatible: false, reason: 'rpc_probe_failed' };
+  return { compatible: false, reason: 'rpc_probe_failed', retryable: true };
+}
+
+export function classifyAppointmentActionSchemaProbe(error, stage = 'version_probe') {
+  const code = String(error?.code || '').trim().toUpperCase();
+  const message = [error?.message, error?.details, error?.hint]
+    .filter(Boolean)
+    .join(' ')
+    .toUpperCase();
+  if (code === 'SCHEMA_PROBE_TIMEOUT') {
+    return { compatible: false, reason: 'probe_timeout', retryable: true, failureKind: 'transient' };
+  }
+  if (code === '42501' || message.includes('PERMISSION DENIED')) {
+    return { compatible: false, reason: `${stage}_permission_denied`, retryable: false, failureKind: 'permission' };
+  }
+  if (code === 'PGRST202' || code === '42883' || message.includes('COULD NOT FIND THE FUNCTION')) {
+    return { compatible: false, reason: `${stage}_missing_or_schema_cache_stale`, retryable: true, failureKind: 'schema' };
+  }
+  if (
+    code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ENOTFOUND' ||
+    message.includes('FETCH FAILED') || message.includes('NETWORK') || message.includes('TIMEOUT')
+  ) {
+    return { compatible: false, reason: `${stage}_network_error`, retryable: true, failureKind: 'transient' };
+  }
+  return { compatible: false, reason: `${stage}_failed`, retryable: true, failureKind: 'unknown' };
 }
 
 export async function checkCriticalSchema(client) {
@@ -62,112 +199,197 @@ export async function checkCriticalSchema(client) {
     compatible,
     reason: compatible ? 'compatible' : 'rpc_version_mismatch',
     schemaVersion: schemaVersion || null,
+    retryable: !compatible,
   };
 }
 
-export async function checkAppointmentActionResolutionSchema(client) {
-  const requiredAppointmentColumns = [
-    'id',
-    'scheduled_at',
-    'scheduled_start_at',
-    'scheduled_end_at',
-    'scheduled_duration_minutes',
-    'therapist_id',
-    'therapist_name',
-    'room_id',
-    'room_name',
-    'patient_confirmation_status',
-    'patient_confirmation_at',
-    'patient_confirmation_by',
-    'patient_confirmation_source',
-    'source_payload',
-    'notification_sent',
-    'notification_sent_at',
-    'notification_12h_sent',
-    'notification_12h_sent_at'
-  ];
-  const appointmentColumnProbe = await client
-    .from('appointments')
-    .select(requiredAppointmentColumns.join(','))
-    .limit(1);
-  if (appointmentColumnProbe.error) {
+export async function checkAppointmentActionResolutionSchema(client, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || DEFAULT_SCHEMA_PROBE_TIMEOUT_MS);
+  let versionProbe;
+  try {
+    versionProbe = await withSchemaProbeTimeout(
+      client.rpc(APPOINTMENT_ACTION_RESOLUTION_SCHEMA_PROBE),
+      timeoutMs,
+    );
+  } catch (error) {
     return {
-      compatible: false,
+      ...classifyAppointmentActionSchemaProbe(error, 'version_probe'),
       schemaVersion: null,
-      reason: 'appointment_columns_missing',
-      details: String(appointmentColumnProbe.error?.message || '')
+      rpc: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_PROBE,
+      stage: 'version_probe',
+      details: String(error?.message || error || '').slice(0, 500),
     };
   }
-  const common = {
-    p_organization_id: probeId,
-    p_clinic_id: probeId,
-    p_request_id: probeId,
-    p_appointment_id: probeId,
-    p_patient_id: probeId,
-    p_actor_id: probeId,
-    p_actor_role: 'schema_probe',
-    p_resolution_note: null,
-  };
-  const probes = await Promise.all([
-    client.rpc('approve_appointment_reschedule_v2', {
-      ...common,
-      p_selected_option_index: 0,
-      p_scheduled_start: '2099-01-01T12:00:00.000Z',
-      p_scheduled_end: '2099-01-01T12:50:00.000Z',
-      p_duration_minutes: 50,
-      p_professional_id: probeId,
-      p_professional_name: 'Schema probe',
-      p_room_id: null,
-      p_room_name: null,
-      p_location_type: 'outro',
-      p_session_buffer_minutes: 0,
-      p_metadata: { schema_probe: true },
-    }),
-    client.rpc('approve_appointment_cancellation', {
-      ...common,
-      p_idempotency_key: 'schema-probe',
-    }),
-    client.rpc('reject_appointment_action_request', {
-      ...common,
-      p_idempotency_key: 'schema-probe',
-    }),
-  ]);
-  const rescheduleProbe = probes[0];
-  if (rescheduleProbe?.error) {
-    const code = String(rescheduleProbe.error?.code || '').trim().toUpperCase();
+  if (versionProbe?.error) {
     return {
-      compatible: false,
+      ...classifyAppointmentActionSchemaProbe(versionProbe.error, 'version_probe'),
       schemaVersion: null,
-      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
-      reason: code === 'PGRST202' || code === '42883'
-        ? 'rpc_missing_or_signature_mismatch'
-        : 'rpc_version_probe_failed',
-    };
-  }
-  const rescheduleSchemaVersion = String(rescheduleProbe?.data?.schema_version || '').trim();
-  if (rescheduleProbe?.data?.compatible !== true || rescheduleSchemaVersion !== APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION) {
-    return {
-      compatible: false,
-      schemaVersion: rescheduleSchemaVersion || null,
-      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
-      reason: 'rpc_version_mismatch',
+      rpc: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_PROBE,
+      stage: 'version_probe',
+      details: String(versionProbe.error?.message || '').slice(0, 500),
     };
   }
 
-  const incompatible = probes.slice(1).map((result, offset) => {
-    const error = result?.error;
-    if (!error) return null;
-    const code = String(error?.code || '').trim().toUpperCase();
-    const message = [error?.message, error?.details, error?.hint].filter(Boolean).join(' ').toUpperCase();
-    if (code === '42501' || message.includes('FORBIDDEN')) return null;
+  const schemaVersion = String(
+    typeof versionProbe?.data === 'string'
+      ? versionProbe.data
+      : versionProbe?.data?.schema_version || versionProbe?.data?.version || '',
+  ).trim();
+  if (schemaVersion !== APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION) {
     return {
-      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[offset + 1],
-      reason: code === 'PGRST202' || code === '42883' ? 'rpc_missing_or_signature_mismatch' : 'rpc_probe_failed',
+      compatible: false,
+      schemaVersion: schemaVersion || null,
+      rpc: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_PROBE,
+      stage: 'version_probe',
+      reason: 'version_probe_mismatch',
+      retryable: true,
+      failureKind: 'schema',
     };
-  }).find(Boolean);
-  return incompatible
-    ? { compatible: false, schemaVersion: rescheduleSchemaVersion, ...incompatible }
-    : { compatible: true, schemaVersion: rescheduleSchemaVersion, reason: 'compatible' };
+  }
+
+  // The catalog status probe is intentionally read-only. It validates columns,
+  // the exact approval signature and grants without selecting clinical rows or
+  // invoking mutation RPCs with synthetic identifiers.
+  const statusResult = await readCriticalSchemaStatus(client, { timeoutMs });
+  if (!statusResult.ok) {
+    return {
+      compatible: false,
+      schemaVersion,
+      rpc: VERTO_CRITICAL_SCHEMA_STATUS_RPC,
+      stage: 'schema_status',
+      reason: statusResult.reason || 'schema_status_failed',
+      retryable: statusResult.retryable !== false,
+      failureKind: statusResult.failureKind || 'unknown',
+      details: statusResult.details || null,
+    };
+  }
+
+  const reschedule = statusResult.data?.reschedule || {};
+  const statusVersion = String(reschedule.version || '').trim();
+  if (statusVersion !== APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION) {
+    return {
+      compatible: false,
+      schemaVersion: statusVersion || schemaVersion,
+      rpc: VERTO_CRITICAL_SCHEMA_STATUS_RPC,
+      stage: 'schema_status',
+      reason: 'schema_status_version_mismatch',
+      retryable: true,
+      failureKind: 'schema',
+    };
+  }
+  if (reschedule.approve_rpc !== true) {
+    return {
+      compatible: false,
+      schemaVersion: statusVersion,
+      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
+      stage: 'approval_signature',
+      reason: 'approval_rpc_missing_or_signature_mismatch',
+      retryable: true,
+      failureKind: 'schema',
+    };
+  }
+  if (reschedule.service_role_execute !== true) {
+    return {
+      compatible: false,
+      schemaVersion: statusVersion,
+      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
+      stage: 'approval_permissions',
+      reason: 'approval_rpc_service_role_permission_missing',
+      retryable: false,
+      failureKind: 'permission',
+    };
+  }
+  if (reschedule.anon_execute === true || reschedule.authenticated_execute === true) {
+    return {
+      compatible: false,
+      schemaVersion: statusVersion,
+      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
+      stage: 'approval_permissions',
+      reason: 'approval_rpc_excessive_permissions',
+      retryable: false,
+      failureKind: 'permission',
+    };
+  }
+
+  const appointmentColumns = reschedule.appointment_columns || {};
+  const missingColumns = APPOINTMENT_ACTION_REQUIRED_COLUMNS.filter(
+    (column) => appointmentColumns[column] !== true,
+  );
+  if (missingColumns.length > 0) {
+    return {
+      compatible: false,
+      schemaVersion: statusVersion,
+      rpc: VERTO_CRITICAL_SCHEMA_STATUS_RPC,
+      stage: 'appointment_columns',
+      reason: 'appointment_columns_missing',
+      retryable: true,
+      failureKind: 'schema',
+      details: `missing:${missingColumns.join(',')}`,
+    };
+  }
+
+  return {
+    compatible: true,
+    schemaVersion: statusVersion,
+    reason: 'compatible',
+    retryable: false,
+    failureKind: null,
+    stage: 'complete',
+  };
+}
+
+export async function readCriticalSchemaStatus(client, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || DEFAULT_SCHEMA_PROBE_TIMEOUT_MS);
+  try {
+    const result = await withSchemaProbeTimeout(client.rpc(VERTO_CRITICAL_SCHEMA_STATUS_RPC), timeoutMs);
+    if (result?.error) {
+      return {
+        ok: false,
+        ...classifyAppointmentActionSchemaProbe(result.error, 'schema_status'),
+        details: String(result.error?.message || '').slice(0, 500),
+      };
+    }
+    return { ok: true, data: result?.data || null };
+  } catch (error) {
+    return {
+      ok: false,
+      ...classifyAppointmentActionSchemaProbe(error, 'schema_status'),
+      details: String(error?.message || error || '').slice(0, 500),
+    };
+  }
+}
+
+function logSchemaAudit(status) {
+  const reschedule = status?.reschedule || {};
+  const tasks = status?.tasks || {};
+  const invitations = status?.invitations || {};
+  const pass = (message) => console.log(`PASS ${message}`);
+  const warn = (message) => console.warn(`WARN ${message}`);
+  const fail = (message) => console.error(`FAIL ${message}`);
+
+  if (reschedule.version === APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION) {
+    pass(`reschedule schema version: ${reschedule.version}`);
+  } else {
+    fail(`reschedule schema version: ${reschedule.version || 'missing'}`);
+  }
+  if (reschedule.approve_rpc === true) pass('approve_appointment_reschedule_v2');
+  else fail('approve_appointment_reschedule_v2 missing or signature mismatch');
+  if (reschedule.service_role_execute === true) pass('service_role can execute reschedule RPC');
+  else fail('service_role cannot execute reschedule RPC');
+  if (reschedule.anon_execute === false && reschedule.authenticated_execute === false) {
+    pass('anon/authenticated direct execution revoked');
+  } else {
+    fail('reschedule RPC has excessive execute grants');
+  }
+
+  for (const [column, present] of Object.entries(tasks.columns || {})) {
+    if (present) pass(`tasks.${column}`);
+    else warn(`tasks.${column} absent; apply the audited tasks alignment migration`);
+  }
+  for (const [column, present] of Object.entries(invitations.columns || {})) {
+    if (present) pass(`invitations.${column}`);
+    else warn(`invitations.${column} absent; apply the audited invitations alignment migration`);
+  }
 }
 
 async function main() {
@@ -184,6 +406,17 @@ async function main() {
     throw new Error('SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY sao obrigatorios para validar o schema critico.');
   }
 
+  const target = describeSupabaseTarget(supabaseUrl, process.env.RAILWAY_ENVIRONMENT || process.env.DEPLOY_ENV || process.env.NODE_ENV);
+  const targetValidation = validateSupabaseTargetConfiguration({
+    url: supabaseUrl,
+    serviceRoleKey,
+    expectedProjectRef: process.env.SUPABASE_EXPECTED_PROJECT_REF,
+  });
+  console.log(`[Schema] Target Supabase: environment=${target.environment}; host=${target.host}; ref=${target.projectRef}`);
+  if (!targetValidation.ok) {
+    throw new Error(`Projeto Supabase divergente (${targetValidation.reason}). Revise as variaveis do ambiente antes de aplicar migrations.`);
+  }
+
   const client = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
@@ -193,8 +426,14 @@ async function main() {
   }
   const appointmentActions = await checkAppointmentActionResolutionSchema(client);
   if (!appointmentActions.compatible) {
-    throw new Error(`Schema de solicitacoes de agenda incompativel (${appointmentActions.reason}; RPC ${appointmentActions.rpc}). Aplique as migrations antes de publicar o backend.`);
+    throw new Error(
+      `Schema de solicitacoes de agenda incompativel (${appointmentActions.reason}; etapa ${appointmentActions.stage || 'unknown'}; RPC ${appointmentActions.rpc || 'n/a'}). ` +
+      'Aplique a migration corretiva no mesmo projeto Supabase e aguarde o reload do PostgREST.',
+    );
   }
+  const audit = await readCriticalSchemaStatus(client);
+  if (audit.ok) logSchemaAudit(audit.data);
+  else console.warn(`WARN auditor detalhado indisponivel (${audit.reason})`);
   console.log('[Schema] RPC de reserva TISS compativel com o backend.');
   console.log('[Schema] RPCs atomicas de solicitacoes de agenda compativeis com o backend.');
 }

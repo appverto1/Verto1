@@ -4,6 +4,7 @@ import {
   INVITATION_SELECT,
   PATIENT_LIST_LEGACY_SELECT,
   PATIENT_LIST_SELECT,
+  clearRouteSchemaCapabilityCache,
   extractMissingColumnNameFromSupabaseError,
   fetchClinicInvitationsWithSchemaFallback,
   fetchClinicMembershipHistoryWithSchemaFallback,
@@ -216,6 +217,41 @@ test('/api/clinic/invitations returns 200-equivalent fallback when optional invi
   assert.equal(result.error, null);
   assert.deepEqual(result.data, []);
   assert.ok(!supabase.calls[1].selectColumns.includes('required_onboarding_fields'));
+});
+
+
+
+test('/api/clinic/invitations reutiliza colunas ausentes sem repetir fallback a cada request', async () => {
+  const supabase = new FakeSupabase({
+    invitations: [
+      {
+        data: null,
+        error: {
+          code: '42703',
+          message: 'column invitations.accepted_at does not exist'
+        }
+      },
+      { data: [{ id: 'invite-legacy-1' }], error: null },
+      { data: [{ id: 'invite-legacy-2' }], error: null }
+    ]
+  });
+  clearRouteSchemaCapabilityCache(supabase);
+
+  const first = await fetchClinicInvitationsWithSchemaFallback({
+    supabase,
+    clinicId: 'clinic-1',
+    logger: silentLogger
+  });
+  const second = await fetchClinicInvitationsWithSchemaFallback({
+    supabase,
+    clinicId: 'clinic-1',
+    logger: silentLogger
+  });
+
+  assert.equal(first.data?.[0]?.id, 'invite-legacy-1');
+  assert.equal(second.data?.[0]?.id, 'invite-legacy-2');
+  assert.equal(supabase.calls.length, 3);
+  assert.ok(!supabase.calls[2].selectColumns.includes('accepted_at'));
 });
 
 test('/api/clinic/invitations membership history degrades to empty list without 500', async () => {

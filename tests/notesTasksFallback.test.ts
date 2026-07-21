@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   NOTE_SELECT,
   TASK_SELECT,
+  clearRouteSchemaCapabilityCache,
   fetchNotesWithSchemaFallback,
   fetchTasksWithSchemaFallback
 } from '../src/utils/routeSchemaFallbacks.ts';
@@ -205,6 +206,38 @@ test('/api/tasks nao quebra quando filtro opcional is_active nao existe', async 
   assert.equal(result.data?.[0]?.id, 'task-legacy');
   assert.equal(supabase.calls[1].filters.some((item) => item.op === 'eq' && item.column === 'is_active'), false);
   assert.equal(supabase.calls[1].filters.some((item) => item.op === 'is' && item.column === 'deleted_at'), true);
+});
+
+
+
+test('/api/tasks reutiliza capacidade de schema e não repete tentativas por coluna em cada request', async () => {
+  const supabase = new FakeSupabase({
+    tasks: [
+      { data: null, error: { code: '42703', message: 'column tasks.is_active does not exist' } },
+      { data: [{ id: 'task-legacy-1', patient_id: 'patient-1' }], error: null },
+      { data: [{ id: 'task-legacy-2', patient_id: 'patient-1' }], error: null }
+    ]
+  });
+  clearRouteSchemaCapabilityCache(supabase);
+
+  const first = await fetchTasksWithSchemaFallback({
+    supabase,
+    patientId: 'patient-1',
+    limit: 20,
+    logger
+  });
+  const second = await fetchTasksWithSchemaFallback({
+    supabase,
+    patientId: 'patient-1',
+    limit: 20,
+    logger
+  });
+
+  assert.equal(first.data?.[0]?.id, 'task-legacy-1');
+  assert.equal(second.data?.[0]?.id, 'task-legacy-2');
+  assert.equal(supabase.calls.length, 3);
+  assert.ok(!supabase.calls[2].selectColumns.includes('is_active'));
+  assert.equal(supabase.calls[2].filters.some((item) => item.op === 'eq' && item.column === 'is_active'), false);
 });
 
 test('/api/notes retorna 200-equivalente com schema atual e respeita limit', async () => {
