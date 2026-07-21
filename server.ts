@@ -53,12 +53,14 @@ import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from './sr
 import {
   DISCOUNT_EXPIRY_NOTIFICATION_DAYS,
   PUBLIC_ACTIVE_PATIENT_PRICE,
+  PUBLIC_SALES_WHATSAPP_NUMBER,
   SALES_ACTIVATION_TTL_DAYS,
   SALES_ASSISTED_SIGNUP_ERROR,
   SALES_CONTACT_CONSENT_VERSION,
   SALES_CONTACT_REQUIRED_ERROR,
   isCouponDurationMonths,
-  isSalesLeadStatus
+  isSalesLeadStatus,
+  normalizePublicSalesWhatsappNumber
 } from './src/constants/salesCommercial';
 import {
   buildAbaPromptSnapshot,
@@ -458,11 +460,19 @@ function resolveBillingPlanPriceIds(): string[] {
 }
 
 function resolveSalesContactUrl(): string {
-  return (
-    sanitizeString(process.env.SALES_CONTACT_URL || '', 1000) ||
-    sanitizeString(process.env.WHATSAPP_SALES_URL || '', 1000) ||
-    (sanitizeEmail(process.env.SALES_EMAIL) ? `mailto:${sanitizeEmail(process.env.SALES_EMAIL)}` : '')
+  const configuredNumber = normalizePublicSalesWhatsappNumber(
+    process.env.VITE_SALES_WHATSAPP_NUMBER
   );
+  const whatsappNumber = configuredNumber.length >= 10
+    ? configuredNumber
+    : PUBLIC_SALES_WHATSAPP_NUMBER;
+  return `https://wa.me/${whatsappNumber}`;
+}
+
+const DEFAULT_SALES_NOTIFICATION_EMAIL = 'appverto1@gmail.com';
+
+function resolveSalesNotificationEmail(): string {
+  return sanitizeEmail(process.env.SALES_NOTIFICATION_EMAIL) || DEFAULT_SALES_NOTIFICATION_EMAIL;
 }
 
 function resolveActivePatientEnterpriseThreshold(): number {
@@ -15422,9 +15432,7 @@ async function startServer() {
       });
     }
 
-    const notificationEmail = sanitizeEmail(
-      process.env.SALES_NOTIFICATION_EMAIL || process.env.SALES_EMAIL,
-    );
+    const notificationEmail = resolveSalesNotificationEmail();
     if (!notificationEmail) return;
     const safeName = escapeHtml(params.name);
     const safeEmail = escapeHtml(params.email);

@@ -1,11 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { CheckCircle2, Loader2, MessageCircle } from "lucide-react";
 import { GoogleIcon } from "./GoogleIcon";
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
+  SALES_INTEREST_SUCCESS_MESSAGE,
+  SALES_INTEREST_SUCCESS_TITLE,
+  SALES_SPECIAL_CONDITIONS_TEXT,
+  SALES_WHATSAPP_CTA_LABEL,
   SALES_CONTACT_CONSENT_VERSION,
   SALES_OPERATION_TYPE_LABELS,
   SALES_OPERATION_TYPES,
+  buildSalesWhatsappUrl,
   type SalesOperationType,
 } from "../constants/salesCommercial";
 import { formatProfessionalRegistry } from "../utils/professionalRegistry";
@@ -54,7 +59,7 @@ type SalesInterestFormProps = {
   initialAcquisitionChannel?: string;
   googleVerified?: boolean;
   onStartGoogle?: () => void;
-  onSubmitted?: () => void;
+  onSubmitted?: (lead: { name: string }) => void;
 };
 
 export const SalesInterestForm = ({
@@ -67,6 +72,7 @@ export const SalesInterestForm = ({
 }: SalesInterestFormProps) => {
   const startedAtRef = useRef(Date.now());
   const idempotencyKeyRef = useRef(createIdempotencyKey());
+  const submissionInFlightRef = useRef(false);
   const [name, setName] = useState(initialName);
   const [email, setEmail] = useState(initialEmail);
   const [phone, setPhone] = useState("");
@@ -90,6 +96,7 @@ export const SalesInterestForm = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [submittedLeadName, setSubmittedLeadName] = useState("");
 
   useEffect(() => {
     if (initialName) setName(initialName);
@@ -113,12 +120,15 @@ export const SalesInterestForm = ({
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (submissionInFlightRef.current || submitted) return;
     setError("");
     if (!consent) {
       setError("Autorize o contato comercial para enviar seu interesse.");
       return;
     }
+    submissionInFlightRef.current = true;
     setLoading(true);
+    let persisted = false;
     try {
       const response = await fetch("/api/public/sales-leads", {
         method: "POST",
@@ -165,33 +175,46 @@ export const SalesInterestForm = ({
             "Não foi possível registrar seu interesse.",
         );
       }
+      const persistedLeadName = name.trim();
+      persisted = true;
+      setSubmittedLeadName(persistedLeadName);
       setSubmitted(true);
-      onSubmitted?.();
+      onSubmitted?.({ name: persistedLeadName });
     } catch (submitError: any) {
       setError(
         submitError?.message ||
           "Não foi possível registrar seu interesse. Tente novamente.",
       );
     } finally {
+      if (!persisted) submissionInFlightRef.current = false;
       setLoading(false);
     }
   };
 
   if (submitted) {
+    const whatsappUrl = buildSalesWhatsappUrl(submittedLeadName);
     return (
       <div
-        className="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-6 text-center"
+        className="rounded-3xl border border-emerald-100 bg-emerald-50/70 p-6 text-center sm:p-8"
         role="status"
         aria-live="polite"
       >
         <CheckCircle2 className="mx-auto mb-3 text-emerald-600" size={34} />
         <h3 className="text-base font-semibold text-slate-900">
-          Interesse recebido
+          {SALES_INTEREST_SUCCESS_TITLE}
         </h3>
-        <p className="mt-2 text-sm font-normal leading-6 text-slate-600">
-          Recebemos seu interesse na Verto. Entraremos em contato para conhecer
-          sua operação e apresentar a plataforma.
+        <p className="mx-auto mt-2 max-w-lg text-sm font-normal leading-6 text-slate-600">
+          {SALES_INTEREST_SUCCESS_MESSAGE}
         </p>
+        <a
+          href={whatsappUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mx-auto mt-5 flex min-h-12 w-full max-w-sm items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-emerald-500/15 transition hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2"
+        >
+          <MessageCircle aria-hidden="true" size={18} />
+          {SALES_WHATSAPP_CTA_LABEL}
+        </a>
       </div>
     );
   }
@@ -203,8 +226,7 @@ export const SalesInterestForm = ({
           {PUBLIC_ACTIVE_PATIENT_PRICE_LABEL}
         </p>
         <p className="mt-1 text-xs font-normal leading-5 text-violet-700">
-          Condições especiais podem ser disponibilizadas após uma apresentação
-          da Verto.
+          {SALES_SPECIAL_CONDITIONS_TEXT}
         </p>
       </div>
 

@@ -1550,7 +1550,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                               autoComplete="current-password"
                               required
                               className="w-full bg-gray-50 border border-gray-100 rounded-2xl py-3 pl-11 pr-11 text-sm font-normal outline-none focus:border-[#7a32fc] transition-all"
-                              placeholder={email === 'appverto1@gmail.com' ? "Cadastre uma senha forte" : "••••••••"}
+                              placeholder="••••••••"
                               value={password}
                               onChange={(e) => setPassword(e.target.value)}
                             />

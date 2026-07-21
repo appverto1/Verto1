@@ -51,7 +51,7 @@ test('env usa apenas o Price modular por paciente ativo no fluxo profissional', 
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_PRICE_ID=/);
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_LOOKUP_KEY=verto_active_patients_monthly/);
   assert.match(envExample, /STRIPE_BILLING_PLAN_PRICE_IDS=/);
-  assert.match(envExample, /SALES_CONTACT_URL=/);
+  assert.match(envExample, /VITE_SALES_WHATSAPP_NUMBER=5511959348563/);
   assert.match(envExample, /STRIPE_ACTIVE_PATIENT_BILLING_MODE=quantity/);
   assert.match(envExample, /ACTIVE_PATIENT_ENTERPRISE_THRESHOLD=50/);
   assert.match(envExample, /PATIENT_BASED_BILLING_ENABLED=true/);

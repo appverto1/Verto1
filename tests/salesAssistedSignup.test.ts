@@ -5,14 +5,23 @@ import {
   DISCOUNT_EXPIRY_NOTIFICATION_DAYS,
   PUBLIC_ACTIVE_PATIENT_PRICE,
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
+  PUBLIC_SALES_WHATSAPP_NUMBER,
+  PUBLIC_SALES_WHATSAPP_URL,
   SALES_COUPON_DURATION_MONTHS,
   SALES_CONTACT_REQUIRED_ERROR,
+  SALES_INTEREST_SUCCESS_MESSAGE,
+  SALES_INTEREST_SUCCESS_TITLE,
+  SALES_WHATSAPP_CTA_LABEL,
+  buildSalesWhatsappMessage,
+  buildSalesWhatsappUrl,
 } from "../src/constants/salesCommercial";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const server = read("server.ts");
 const landing = read("src/components/LandingPage.tsx");
 const salesForm = read("src/components/SalesInterestForm.tsx");
+const legacySalesForm = read("src/components/SalesLeadForm.tsx");
+const legacyCommercialConfig = read("src/config/commercial.ts");
 const app = read("src/App.tsx");
 const superAdmin = read("src/components/SuperAdminDashboard.tsx");
 const subscriptionSummary = read("src/components/SubscriptionDiscountSummary.tsx");
@@ -26,6 +35,7 @@ const envExample = read(".env.example");
 test("preço público oficial está centralizado e não expõe o preço antigo", () => {
   assert.equal(PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents, 7990);
   assert.equal(PUBLIC_ACTIVE_PATIENT_PRICE.currency, "BRL");
+  assert.equal(PUBLIC_ACTIVE_PATIENT_PRICE.formattedUnitAmount, "R$ 79,90");
   assert.equal(
     PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
     "R$ 79,90 por paciente ativo/mês",
@@ -33,6 +43,58 @@ test("preço público oficial está centralizado e não expõe o preço antigo",
   assert.deepEqual(SALES_COUPON_DURATION_MONTHS, [6, 12, 24]);
   assert.deepEqual(DISCOUNT_EXPIRY_NOTIFICATION_DAYS, [30, 7, 1]);
   assert.doesNotMatch(`${landing}\n${salesForm}`, /R\$\s*39[,.]90|\b3990\b/);
+  assert.doesNotMatch(legacyCommercialConfig, /unitAmountCents\s*:\s*7990/);
+  assert.match(legacyCommercialConfig, /export \* from ['"]\.\.\/constants\/salesCommercial['"]/);
+});
+
+test("WhatsApp comercial usa número canônico e mensagem codificada somente com o nome", () => {
+  assert.equal(PUBLIC_SALES_WHATSAPP_NUMBER, "5511959348563");
+  assert.equal(PUBLIC_SALES_WHATSAPP_URL, "https://wa.me/5511959348563");
+  assert.equal(
+    buildSalesWhatsappMessage("  João   da Silva  "),
+    "Olá! Acabei de enviar meu interesse na Verto. Meu nome é João da Silva e gostaria de agendar uma apresentação.",
+  );
+  const url = buildSalesWhatsappUrl("João da Silva");
+  assert.match(url, /^https:\/\/wa\.me\/5511959348563\?text=/);
+  assert.match(url, /Jo%C3%A3o%20da%20Silva/);
+  assert.doesNotMatch(url, /@|leadId|token|stripe/i);
+});
+
+test("formulário ativo só mostra WhatsApp após persistência confirmada", () => {
+  const successStart = salesForm.indexOf("if (submitted)");
+  const formStart = salesForm.indexOf("\n  return (\n    <form", successStart);
+  assert.ok(successStart >= 0);
+  assert.ok(formStart > successStart);
+  const successBlock = salesForm.slice(successStart, formStart);
+  assert.match(successBlock, /buildSalesWhatsappUrl\(submittedLeadName\)/);
+  assert.match(successBlock, /target="_blank"/);
+  assert.match(successBlock, /rel="noopener noreferrer"/);
+  assert.match(successBlock, /SALES_WHATSAPP_CTA_LABEL/);
+  assert.equal(SALES_INTEREST_SUCCESS_TITLE, "Recebemos seu interesse na Verto");
+  assert.equal(
+    SALES_INTEREST_SUCCESS_MESSAGE,
+    "Entraremos em contato para conhecer sua operação e agendar uma apresentação da plataforma.",
+  );
+  assert.equal(SALES_WHATSAPP_CTA_LABEL, "Conversar agora pelo WhatsApp");
+  assert.match(salesForm, /submissionInFlightRef\.current/);
+  assert.match(salesForm, /if \(submissionInFlightRef\.current \|\| submitted\) return/);
+  assert.doesNotMatch(salesForm.slice(formStart), /buildSalesWhatsappUrl|wa\.me/);
+});
+
+test("formulário legado é apenas wrapper do formulário canônico", () => {
+  assert.match(legacySalesForm, /import \{ SalesInterestForm \}/);
+  assert.match(legacySalesForm, /<SalesInterestForm/);
+  assert.doesNotMatch(legacySalesForm, /fetch\(|<form|submitted|wa\.me/);
+});
+
+test("configuração de destinatário permanece server-side e canônica", () => {
+  assert.match(envExample, /SALES_NOTIFICATION_EMAIL=appverto1@gmail\.com/);
+  assert.match(envExample, /VITE_SALES_WHATSAPP_NUMBER=5511959348563/);
+  assert.doesNotMatch(envExample, /(?:SALES_EMAIL|SALES_CONTACT_URL|WHATSAPP_SALES_URL|VITE_SALES_CONTACT_URL|VITE_WHATSAPP_SALES_URL)=/);
+  assert.match(server, /function resolveSalesNotificationEmail\(\)/);
+  assert.match(server, /process\.env\.SALES_NOTIFICATION_EMAIL/);
+  assert.match(server, /const notificationEmail = resolveSalesNotificationEmail\(\)/);
+  assert.doesNotMatch(`${landing}\n${salesForm}\n${legacySalesForm}`, /appverto1@gmail\.com/);
 });
 
 test("cadastro profissional público virou lead e cadastro de paciente continua separado", () => {

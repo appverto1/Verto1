@@ -1,4 +1,4 @@
-import { SALES_OPERATION_TYPES, type SalesOperationType } from '../config/commercial';
+import { SALES_OPERATION_TYPES, type SalesOperationType } from '../constants/salesCommercial';
 
 export const BRAZILIAN_STATE_CODES = [
   'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS',
