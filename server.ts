@@ -1,4 +1,4 @@
-﻿import express from 'express';
+import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -36,7 +36,9 @@ import {
   classifyReservationSchemaProbe,
   checkAppointmentActionResolutionSchema,
   checkCriticalSchema,
+  describeSupabaseTarget,
   isDeployEnvironment,
+  validateSupabaseTargetConfiguration,
   APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
   TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION
 } from './scripts/check-critical-schema.mjs';
@@ -12911,63 +12913,130 @@ async function startServer() {
   const PORT = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 8080;
   const isProd = process.env.NODE_ENV === 'production';
   const isDeploy = isDeployEnvironment(process.env);
-  const APPOINTMENT_ACTION_SCHEMA_RECHECK_MS = 60_000;
+  const APPOINTMENT_ACTION_SCHEMA_READY_TTL_MS = 5 * 60_000;
+  const APPOINTMENT_ACTION_SCHEMA_MISMATCH_TTL_MS = 15_000;
+  const APPOINTMENT_ACTION_SCHEMA_TRANSIENT_TTL_MS = 5_000;
   let appointmentActionSchemaState: {
     compatible: boolean;
     reason: string;
     schemaVersion: string | null;
     rpc?: string | null;
+    stage?: string | null;
     details?: string | null;
+    retryable: boolean;
+    failureKind?: string | null;
     checkedAt: number;
+    ttlMs: number;
   } = {
     compatible: false,
     reason: 'not_checked',
     schemaVersion: null,
+    retryable: true,
     checkedAt: 0,
+    ttlMs: 0,
   };
   let appointmentActionSchemaRefresh: Promise<typeof appointmentActionSchemaState> | null = null;
+  let lastAppointmentActionSchemaLogKey = '';
 
   const refreshAppointmentActionResolutionSchema = async (force = false) => {
     const now = Date.now();
-    if (!force && appointmentActionSchemaState.checkedAt > 0 && now - appointmentActionSchemaState.checkedAt < APPOINTMENT_ACTION_SCHEMA_RECHECK_MS) {
+    if (
+      !force &&
+      appointmentActionSchemaState.checkedAt > 0 &&
+      now - appointmentActionSchemaState.checkedAt < appointmentActionSchemaState.ttlMs
+    ) {
       return appointmentActionSchemaState;
     }
     if (appointmentActionSchemaRefresh) return appointmentActionSchemaRefresh;
     appointmentActionSchemaRefresh = (async () => {
       try {
-        const result = await checkAppointmentActionResolutionSchema(supabase);
+        const result = await checkAppointmentActionResolutionSchema(supabase, { timeoutMs: 6_000 });
+        const failureKind = sanitizeString((result as any).failureKind || '', 80) || null;
+        const ttlMs = result.compatible === true
+          ? APPOINTMENT_ACTION_SCHEMA_READY_TTL_MS
+          : failureKind === 'transient'
+            ? APPOINTMENT_ACTION_SCHEMA_TRANSIENT_TTL_MS
+            : APPOINTMENT_ACTION_SCHEMA_MISMATCH_TTL_MS;
         appointmentActionSchemaState = {
           compatible: result.compatible === true,
           reason: sanitizeString(result.reason || 'schema_probe_failed', 120),
           schemaVersion: sanitizeString(result.schemaVersion || '', 80) || null,
           rpc: sanitizeString((result as any).rpc || '', 160) || null,
+          stage: sanitizeString((result as any).stage || '', 120) || null,
           details: sanitizeString((result as any).details || '', 500) || null,
+          retryable: (result as any).retryable !== false,
+          failureKind,
           checkedAt: Date.now(),
+          ttlMs,
         };
       } catch (error: any) {
         appointmentActionSchemaState = {
           compatible: false,
           reason: 'schema_probe_failed',
           schemaVersion: null,
+          stage: 'exception',
           details: sanitizeString(error?.message || String(error), 500) || null,
+          retryable: true,
+          failureKind: 'transient',
           checkedAt: Date.now(),
+          ttlMs: APPOINTMENT_ACTION_SCHEMA_TRANSIENT_TTL_MS,
         };
       } finally {
         appointmentActionSchemaRefresh = null;
+      }
+
+      const logKey = [
+        appointmentActionSchemaState.compatible,
+        appointmentActionSchemaState.reason,
+        appointmentActionSchemaState.schemaVersion,
+        appointmentActionSchemaState.rpc,
+        appointmentActionSchemaState.stage,
+      ].join('|');
+      if (logKey !== lastAppointmentActionSchemaLogKey) {
+        lastAppointmentActionSchemaLogKey = logKey;
+        const target = describeSupabaseTarget(
+          supabaseUrl,
+          process.env.RAILWAY_ENVIRONMENT || process.env.DEPLOY_ENV || process.env.NODE_ENV,
+        );
+        const payload = {
+          expectedVersion: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
+          actualVersion: appointmentActionSchemaState.schemaVersion,
+          reason: appointmentActionSchemaState.reason,
+          stage: appointmentActionSchemaState.stage,
+          rpc: appointmentActionSchemaState.rpc,
+          retryable: appointmentActionSchemaState.retryable,
+          environment: target.environment,
+          supabaseHost: target.host,
+          supabaseProjectRef: target.projectRef,
+        };
+        if (appointmentActionSchemaState.compatible) {
+          console.log('[Schema] Remarcações prontas.', payload);
+        } else {
+          console.warn('[Schema] Remarcações indisponíveis.', payload);
+        }
       }
       return appointmentActionSchemaState;
     })();
     return appointmentActionSchemaRefresh;
   };
 
-  const requireAppointmentActionResolutionSchema = async (res: express.Response) => {
+  const requireAppointmentActionResolutionSchema = async (req: express.Request, res: express.Response) => {
     const state = await refreshAppointmentActionResolutionSchema(false);
     if (state.compatible) return true;
+    console.warn('[AppointmentActions] schema guard blocked request', {
+      requestId: requestIdForLogs(req),
+      path: sanitizeString(req.path, 240),
+      expectedVersion: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
+      actualVersion: state.schemaVersion,
+      reason: state.reason,
+      stage: state.stage,
+      retryable: state.retryable,
+    });
     res.status(503).json({
       success: false,
       code: 'RESCHEDULE_SCHEMA_MIGRATION_REQUIRED',
-      error: 'A análise e a aprovação de remarcações estão temporariamente indisponíveis enquanto o banco é atualizado. Os demais módulos da Verto continuam disponíveis.',
-      retryable: true,
+      error: 'O módulo de remarcação está temporariamente indisponível durante uma atualização técnica.',
+      retryable: state.retryable,
     });
     return false;
   };
@@ -12995,6 +13064,26 @@ async function startServer() {
     }
   };
 
+  const validateSupabaseDeploymentTarget = () => {
+    const target = describeSupabaseTarget(
+      supabaseUrl,
+      process.env.RAILWAY_ENVIRONMENT || process.env.DEPLOY_ENV || process.env.NODE_ENV,
+    );
+    const validation = validateSupabaseTargetConfiguration({
+      url: supabaseUrl,
+      serviceRoleKey: supabaseServiceKey,
+      expectedProjectRef: process.env.SUPABASE_EXPECTED_PROJECT_REF,
+    });
+    console.log('[Schema] Supabase target confirmado.', target);
+    if (!validation.ok) {
+      throw new Error(
+        `Credenciais do Supabase apontam para projetos divergentes (${validation.reason}). ` +
+        'Revise SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY e SUPABASE_EXPECTED_PROJECT_REF.',
+      );
+    }
+    return target;
+  };
+
   const validateCriticalTissAuthorizationReservationSchema = async () => {
     const result = await checkCriticalSchema(supabase);
     if (result.compatible) return;
@@ -13020,6 +13109,7 @@ async function startServer() {
   // Trust proxy is required for rate limiting and secure cookies behind Railway's load balancer
   app.set('trust proxy', true);
   if (isDeploy) {
+    validateSupabaseDeploymentTarget();
     await validateCriticalTissAuthorizationReservationSchema();
     await validateCriticalAppointmentActionResolutionSchema();
   }
@@ -16855,6 +16945,25 @@ async function startServer() {
     }
 
     return res.json(status);
+  });
+
+  app.get('/api/internal/schema-status', checkAuth, requireRoles('owner', 'admin'), async (req: any, res) => {
+    const state = await refreshAppointmentActionResolutionSchema(Boolean(req.query?.refresh));
+    return res.json({
+      success: true,
+      data: {
+        reschedule: {
+          ready: state.compatible,
+          expectedVersion: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
+          actualVersion: state.schemaVersion,
+          reason: state.reason,
+          stage: state.stage,
+          retryable: state.retryable,
+          checkedAt: state.checkedAt ? new Date(state.checkedAt).toISOString() : null,
+          nextCheckAt: state.checkedAt ? new Date(state.checkedAt + state.ttlMs).toISOString() : null,
+        }
+      }
+    });
   });
 
   // --- API ROUTES ---
@@ -37761,7 +37870,7 @@ async function startServer() {
 
   app.get('/api/appointments/action-requests/:requestId/availability', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
-      if (!(await requireAppointmentActionResolutionSchema(res))) return;
+      if (!(await requireAppointmentActionResolutionSchema(req, res))) return;
       const context = await fetchAppointmentActionRequestForAdmin(req.params.requestId, req.session.user);
       if (!context.ok) {
         return res.status((context as any).status || 404).json({
@@ -37787,7 +37896,7 @@ async function startServer() {
 
   app.post('/api/appointments/action-requests/:requestId/approve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
-      if (!(await requireAppointmentActionResolutionSchema(res))) return;
+      if (!(await requireAppointmentActionResolutionSchema(req, res))) return;
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de aprovação de solicitação')) return;
       const context = await fetchAppointmentActionRequestForAdmin(req.params.requestId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));

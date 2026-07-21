@@ -4,6 +4,41 @@ type SupabaseLike = {
 
 type LoggerLike = Pick<Console, 'warn'>;
 
+const SCHEMA_CAPABILITY_CACHE_TTL_MS = 5 * 60_000;
+type SchemaCapabilityEntry = { missingColumns: Set<string>; expiresAt: number };
+const schemaCapabilitiesByClient = new WeakMap<object, Map<string, SchemaCapabilityEntry>>();
+
+function schemaCapabilityMap(client: SupabaseLike) {
+  const key = client as unknown as object;
+  let map = schemaCapabilitiesByClient.get(key);
+  if (!map) {
+    map = new Map();
+    schemaCapabilitiesByClient.set(key, map);
+  }
+  return map;
+}
+
+function readCachedMissingColumns(client: SupabaseLike, table: string): Set<string> {
+  const map = schemaCapabilityMap(client);
+  const cached = map.get(table);
+  if (!cached || cached.expiresAt <= Date.now()) {
+    if (cached) map.delete(table);
+    return new Set();
+  }
+  return new Set(cached.missingColumns);
+}
+
+function rememberMissingColumn(client: SupabaseLike, table: string, column: string) {
+  const map = schemaCapabilityMap(client);
+  const current = readCachedMissingColumns(client, table);
+  current.add(column);
+  map.set(table, { missingColumns: current, expiresAt: Date.now() + SCHEMA_CAPABILITY_CACHE_TTL_MS });
+}
+
+export function clearRouteSchemaCapabilityCache(client?: SupabaseLike) {
+  if (client) schemaCapabilitiesByClient.delete(client as unknown as object);
+}
+
 // Centraliza selects tolerantes a schemas legados usados por rotas do portal.
 export type PatientListRole = 'coordinator' | 'receptionist' | 'therapist' | 'admin' | 'owner' | string;
 
@@ -1023,8 +1058,9 @@ async function fetchListWithColumnFallback(params: {
   buildQuery: (selectColumns: string, removedColumns: Set<string>) => any;
 }) {
   const runStage = async (stage: 'primary_select' | 'legacy_select', baseColumns: string[]) => {
-    let columns = [...baseColumns];
-    const removedColumns = new Set<string>();
+    const cachedMissingColumns = readCachedMissingColumns(params.supabase, params.table);
+    let columns = baseColumns.filter((column) => !cachedMissingColumns.has(column));
+    const removedColumns = new Set<string>(cachedMissingColumns);
     let lastError: any = null;
 
     for (let attempt = 0; attempt < (params.maxAttempts || 12); attempt += 1) {
@@ -1050,6 +1086,7 @@ async function fetchListWithColumnFallback(params: {
       }
 
       removedColumns.add(missingColumn);
+      rememberMissingColumn(params.supabase, params.table, missingColumn);
       if (columns.includes(missingColumn)) {
         columns = columns.filter((column) => column !== missingColumn);
       }
@@ -2048,7 +2085,8 @@ export async function fetchClinicInvitationsWithSchemaFallback(params: {
   limit?: number;
   logger?: LoggerLike;
 }) {
-  let columns = [...INVITATION_SELECT_COLUMNS];
+  const cachedMissingColumns = readCachedMissingColumns(params.supabase, 'invitations');
+  let columns = INVITATION_SELECT_COLUMNS.filter((column) => !cachedMissingColumns.has(column));
   let lastError: any = null;
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -2075,6 +2113,7 @@ export async function fetchClinicInvitationsWithSchemaFallback(params: {
       break;
     }
 
+    rememberMissingColumn(params.supabase, 'invitations', missingColumn);
     columns = columns.filter((column) => column !== missingColumn);
     warnSchemaFallback(params.logger, {
       route: '/api/clinic/invitations',

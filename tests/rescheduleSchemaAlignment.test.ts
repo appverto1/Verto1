@@ -10,6 +10,18 @@ const migration = fs.readFileSync(
   path.join(root, 'supabase/migrations/20260721123000_reschedule_approval_schema_alignment.sql'),
   'utf8',
 );
+const repairMigration = fs.readFileSync(
+  path.join(root, 'supabase/migrations/20260721203000_reschedule_schema_probe_repair.sql'),
+  'utf8',
+);
+const tasksMigration = fs.readFileSync(
+  path.join(root, 'supabase/migrations/20260721204000_tasks_contract_alignment.sql'),
+  'utf8',
+);
+const invitationsMigration = fs.readFileSync(
+  path.join(root, 'supabase/migrations/20260721205000_invitations_contract_alignment.sql'),
+  'utf8',
+);
 
 const preview = server.slice(
   server.indexOf('const buildRescheduleApprovalPreview'),
@@ -85,7 +97,7 @@ test('schema mismatch degrades only reschedule routes and no longer crashes Rail
   assert.match(server, /const refreshAppointmentActionResolutionSchema/);
   assert.match(server, /const requireAppointmentActionResolutionSchema/);
   assert.match(server, /RESCHEDULE_SCHEMA_MIGRATION_REQUIRED/);
-  assert.match(server, /temporariamente indisponíveis enquanto o banco é atualizado/);
+  assert.match(server, /temporariamente indisponível durante uma atualização técnica/);
   assert.match(server, /await validateCriticalAppointmentActionResolutionSchema\(\)/);
   assert.match(server, /Remarcações em modo degradado/);
   assert.doesNotMatch(server, /Schema crítico de remarcações incompatível[\s\S]*?throw new Error/);
@@ -110,4 +122,37 @@ test('calendar presents real assignment labels and keeps invalid combinations di
   assert.match(calendar, /Profissional, sala, guia, autorização e saldo foram revalidados/);
   assert.match(calendar, /!selectedRescheduleAssignmentIsApprovable \|\| rescheduleApprovalNeedsFinancialReview/);
   assert.doesNotMatch(calendar, /window\.location\.reload/);
+});
+
+
+test('repair migration is self-contained and exposes server-only probes', () => {
+  assert.match(repairMigration, /add column if not exists scheduled_start_at timestamptz/);
+  assert.match(repairMigration, /create or replace function public\.approve_appointment_reschedule_v2/);
+  assert.match(repairMigration, /create or replace function public\.get_reschedule_schema_version\(\)/);
+  assert.match(repairMigration, /select '20260721123000'::text/);
+  assert.match(repairMigration, /revoke all on function public\.get_reschedule_schema_version\(\) from public, anon, authenticated/);
+  assert.match(repairMigration, /grant execute on function public\.get_reschedule_schema_version\(\) to service_role/);
+  assert.match(repairMigration, /create or replace function public\.get_verto_critical_schema_status\(\)/);
+  assert.match(repairMigration, /notify pgrst, 'reload schema'/);
+});
+
+test('tasks and invitations alignment migrations only add confirmed current fields', () => {
+  assert.match(tasksMigration, /add column if not exists max_score integer/);
+  assert.match(tasksMigration, /add column if not exists is_active boolean/);
+  assert.match(tasksMigration, /add column if not exists deleted_at timestamptz/);
+  assert.match(tasksMigration, /tasks_max_score_range/);
+  assert.doesNotMatch(tasksMigration, /drop column|delete from|truncate/i);
+
+  assert.match(invitationsMigration, /add column if not exists clinic_name text/);
+  assert.match(invitationsMigration, /add column if not exists invited_by text/);
+  assert.match(invitationsMigration, /add column if not exists accepted_at timestamptz/);
+  assert.match(invitationsMigration, /add column if not exists canceled_at timestamptz/);
+  assert.match(invitationsMigration, /add column if not exists canceled_by text/);
+  assert.doesNotMatch(invitationsMigration, /drop column|delete from|truncate/i);
+});
+
+test('frontend explains known schema maintenance without exposing database details', () => {
+  assert.match(calendar, /Remarcação temporariamente indisponível/);
+  assert.match(calendar, /Nenhuma solicitação foi perdida/);
+  assert.doesNotMatch(calendar, /Supabase|migration|schema|service_role/);
 });

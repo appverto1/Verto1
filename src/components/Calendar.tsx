@@ -1453,6 +1453,8 @@ export const ClinicalAgendaBoard = ({
     requestId: string;
     loading: boolean;
     error: string;
+    code?: string;
+    retryable?: boolean;
     data: any | null;
   }>({ requestId: '', loading: false, error: '', data: null });
   const [rescheduleAvailabilityNonce, setRescheduleAvailabilityNonce] = useState(0);
@@ -1562,6 +1564,8 @@ export const ClinicalAgendaBoard = ({
           requestId: pendingRescheduleRequestId,
           loading: false,
           error: result?.error || 'Não foi possível verificar os horários agora.',
+          code: String(result?.code || '').trim() || undefined,
+          retryable: result?.retryable === true,
           data: result?.data || null
         });
       })
@@ -4318,6 +4322,8 @@ export const ClinicalAgendaBoard = ({
                     const availabilityMatchesRequest = rescheduleAvailabilityState.requestId === requestId;
                     const availabilityLoading = !isCancel && availabilityMatchesRequest && rescheduleAvailabilityState.loading;
                     const availabilityError = !isCancel && availabilityMatchesRequest ? rescheduleAvailabilityState.error : '';
+                    const availabilityCode = !isCancel && availabilityMatchesRequest ? String(rescheduleAvailabilityState.code || '') : '';
+                    const rescheduleModuleUpdating = availabilityCode === 'RESCHEDULE_SCHEMA_MIGRATION_REQUIRED';
                     const availabilityOptions = availabilityMatchesRequest && Array.isArray(rescheduleAvailabilityState.data?.options)
                       ? rescheduleAvailabilityState.data.options
                       : [];
@@ -4369,9 +4375,16 @@ export const ClinicalAgendaBoard = ({
                           {!isCancel && rescheduleOptions.length > 0 && (
                             <div className="space-y-2">
                               {availabilityError && (
-                                <div className={`flex flex-col gap-2 rounded-xl border px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between ${isDark ? 'border-amber-500/40 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-800'}`} role="alert">
-                                  <span>{availabilityError}</span>
-                                  <button type="button" onClick={() => setRescheduleAvailabilityNonce((value) => value + 1)} className="min-h-9 rounded-lg border border-current px-3 font-medium">
+                                <div className={`flex flex-col gap-3 rounded-xl border px-3 py-3 text-xs sm:flex-row sm:items-center sm:justify-between ${isDark ? 'border-amber-500/40 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-800'}`} role="alert">
+                                  <div className="min-w-0">
+                                    {rescheduleModuleUpdating && <p className="font-semibold">Remarcação temporariamente indisponível</p>}
+                                    <p className={rescheduleModuleUpdating ? 'mt-1' : ''}>
+                                      {rescheduleModuleUpdating
+                                        ? 'Estamos concluindo uma atualização deste módulo. Tente novamente em alguns minutos. Nenhuma solicitação foi perdida.'
+                                        : availabilityError}
+                                    </p>
+                                  </div>
+                                  <button type="button" onClick={() => setRescheduleAvailabilityNonce((value) => value + 1)} className="min-h-9 shrink-0 rounded-lg border border-current px-3 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-offset-2">
                                     Verificar novamente
                                   </button>
                                 </div>
