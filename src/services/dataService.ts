@@ -2290,10 +2290,11 @@ export const dataService = {
     }
   },
 
-  async getAppointmentActionRequestAvailability(requestId: string, options: { includeSuggestions?: boolean; dateFrom?: string } = {}) {
+  async getAppointmentActionRequestAvailability(requestId: string, options: { includeSuggestions?: boolean; dateFrom?: string; forceSchemaCheck?: boolean } = {}) {
     const search = new URLSearchParams();
     if (options.includeSuggestions) search.set('mode', 'suggestions');
     if (options.dateFrom) search.set('dateFrom', options.dateFrom);
+    if (options.forceSchemaCheck) search.set('refresh', '1');
     const query = search.toString();
     const endpoint = `/api/appointments/action-requests/${encodeURIComponent(String(requestId))}/availability${query ? `?${query}` : ''}`;
     try {

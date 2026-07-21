@@ -12918,17 +12918,26 @@ async function startServer() {
   const APPOINTMENT_ACTION_SCHEMA_TRANSIENT_TTL_MS = 5_000;
   let appointmentActionSchemaState: {
     compatible: boolean;
+    availabilityReady: boolean;
+    approvalReady: boolean;
     reason: string;
+    approvalReason?: string | null;
     schemaVersion: string | null;
     rpc?: string | null;
     stage?: string | null;
     details?: string | null;
+    missingCriticalColumns?: string[];
+    missingApprovalColumns?: string[];
+    missingOptionalColumns?: string[];
+    legacyColumnsDetected?: string[];
     retryable: boolean;
     failureKind?: string | null;
     checkedAt: number;
     ttlMs: number;
   } = {
     compatible: false,
+    availabilityReady: false,
+    approvalReady: false,
     reason: 'not_checked',
     schemaVersion: null,
     retryable: true,
@@ -12959,11 +12968,26 @@ async function startServer() {
             : APPOINTMENT_ACTION_SCHEMA_MISMATCH_TTL_MS;
         appointmentActionSchemaState = {
           compatible: result.compatible === true,
+          availabilityReady: (result as any).availabilityReady === true,
+          approvalReady: (result as any).approvalReady === true,
           reason: sanitizeString(result.reason || 'schema_probe_failed', 120),
+          approvalReason: sanitizeString((result as any).approvalReason || '', 120) || null,
           schemaVersion: sanitizeString(result.schemaVersion || '', 80) || null,
           rpc: sanitizeString((result as any).rpc || '', 160) || null,
           stage: sanitizeString((result as any).stage || '', 120) || null,
           details: sanitizeString((result as any).details || '', 500) || null,
+          missingCriticalColumns: Array.isArray((result as any).missingCriticalColumns)
+            ? (result as any).missingCriticalColumns.map((column: unknown) => sanitizeString(column, 80)).filter(Boolean)
+            : [],
+          missingApprovalColumns: Array.isArray((result as any).missingApprovalColumns)
+            ? (result as any).missingApprovalColumns.map((column: unknown) => sanitizeString(column, 80)).filter(Boolean)
+            : [],
+          missingOptionalColumns: Array.isArray((result as any).missingOptionalColumns)
+            ? (result as any).missingOptionalColumns.map((column: unknown) => sanitizeString(column, 80)).filter(Boolean)
+            : [],
+          legacyColumnsDetected: Array.isArray((result as any).legacyColumnsDetected)
+            ? (result as any).legacyColumnsDetected.map((column: unknown) => sanitizeString(column, 80)).filter(Boolean)
+            : [],
           retryable: (result as any).retryable !== false,
           failureKind,
           checkedAt: Date.now(),
@@ -12972,10 +12996,16 @@ async function startServer() {
       } catch (error: any) {
         appointmentActionSchemaState = {
           compatible: false,
+          availabilityReady: false,
+          approvalReady: false,
           reason: 'schema_probe_failed',
           schemaVersion: null,
           stage: 'exception',
           details: sanitizeString(error?.message || String(error), 500) || null,
+          missingCriticalColumns: [],
+          missingApprovalColumns: [],
+          missingOptionalColumns: [],
+          legacyColumnsDetected: [],
           retryable: true,
           failureKind: 'transient',
           checkedAt: Date.now(),
@@ -13004,6 +13034,13 @@ async function startServer() {
           reason: appointmentActionSchemaState.reason,
           stage: appointmentActionSchemaState.stage,
           rpc: appointmentActionSchemaState.rpc,
+          availabilityReady: appointmentActionSchemaState.availabilityReady,
+          approvalReady: appointmentActionSchemaState.approvalReady,
+          approvalReason: appointmentActionSchemaState.approvalReason,
+          missingCriticalColumns: appointmentActionSchemaState.missingCriticalColumns,
+          missingApprovalColumns: appointmentActionSchemaState.missingApprovalColumns,
+          missingOptionalColumns: appointmentActionSchemaState.missingOptionalColumns,
+          legacyColumnsDetected: appointmentActionSchemaState.legacyColumnsDetected,
           retryable: appointmentActionSchemaState.retryable,
           environment: target.environment,
           supabaseHost: target.host,
@@ -13020,16 +13057,28 @@ async function startServer() {
     return appointmentActionSchemaRefresh;
   };
 
-  const requireAppointmentActionResolutionSchema = async (req: express.Request, res: express.Response) => {
-    const state = await refreshAppointmentActionResolutionSchema(false);
-    if (state.compatible) return true;
+  const requireAppointmentActionResolutionSchema = async (
+    req: express.Request,
+    res: express.Response,
+    scope: 'availability' | 'approval' = 'approval',
+    forceRefresh = false,
+  ) => {
+    const state = await refreshAppointmentActionResolutionSchema(forceRefresh);
+    const ready = scope === 'availability' ? state.availabilityReady : state.approvalReady;
+    if (ready) return state;
     console.warn('[AppointmentActions] schema guard blocked request', {
       requestId: requestIdForLogs(req),
       path: sanitizeString(req.path, 240),
+      scope,
       expectedVersion: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
       actualVersion: state.schemaVersion,
       reason: state.reason,
+      approvalReason: state.approvalReason,
       stage: state.stage,
+      missingCriticalColumns: state.missingCriticalColumns,
+      missingApprovalColumns: state.missingApprovalColumns,
+      missingOptionalColumns: state.missingOptionalColumns,
+      legacyColumnsDetected: state.legacyColumnsDetected,
       retryable: state.retryable,
     });
     res.status(503).json({
@@ -13038,7 +13087,7 @@ async function startServer() {
       error: 'O módulo de remarcação está temporariamente indisponível durante uma atualização técnica.',
       retryable: state.retryable,
     });
-    return false;
+    return null;
   };
 
   const validateCoreDataTables = async () => {
@@ -13095,8 +13144,15 @@ async function startServer() {
 
   const validateCriticalAppointmentActionResolutionSchema = async () => {
     const result = await refreshAppointmentActionResolutionSchema(true);
-    if (result.compatible) {
+    if (result.approvalReady) {
       console.log(`[Schema] Remarcações compatíveis com ${APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION}.`);
+      return result;
+    }
+    if (result.availabilityReady) {
+      console.warn(
+        `[Schema] Remarcações com análise disponível, mas aprovação protegida (${result.approvalReason || result.reason}; esperado ${APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION}). ` +
+        'Aplique a reconciliação do contrato antes de aprovar horários.',
+      );
       return result;
     }
     console.error(
@@ -16953,10 +17009,13 @@ async function startServer() {
       success: true,
       data: {
         reschedule: {
-          ready: state.compatible,
+          ready: state.approvalReady,
+          availabilityReady: state.availabilityReady,
+          approvalReady: state.approvalReady,
           expectedVersion: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
           actualVersion: state.schemaVersion,
           reason: state.reason,
+          approvalReason: state.approvalReason,
           stage: state.stage,
           retryable: state.retryable,
           checkedAt: state.checkedAt ? new Date(state.checkedAt).toISOString() : null,
@@ -22576,7 +22635,7 @@ async function startServer() {
           date: foundAppointment.date || null,
           time: foundAppointment.time || null,
           scheduledAt: foundAppointment.scheduledAt || foundAppointment.scheduled_at || null,
-          patientName: foundAppointment.name || foundAppointment.patientName || foundAppointment.patient_name || null,
+          patientName: displayContext.patientName || null,
           status: normalizeAppointmentStatusForUi(foundAppointment.status || 'pending'),
           patientConfirmationStatus:
             foundAppointment.patientResponse ||
@@ -37870,7 +37929,13 @@ async function startServer() {
 
   app.get('/api/appointments/action-requests/:requestId/availability', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
-      if (!(await requireAppointmentActionResolutionSchema(req, res))) return;
+      const schemaState = await requireAppointmentActionResolutionSchema(
+        req,
+        res,
+        'availability',
+        String(req.query?.refresh || '').toLowerCase() === '1' || String(req.query?.refresh || '').toLowerCase() === 'true',
+      );
+      if (!schemaState) return;
       const context = await fetchAppointmentActionRequestForAdmin(req.params.requestId, req.session.user);
       if (!context.ok) {
         return res.status((context as any).status || 404).json({
@@ -37887,7 +37952,17 @@ async function startServer() {
         request: requestRow,
         user: req.session.user
       });
-      return res.json({ success: true, data });
+      return res.json({
+        success: true,
+        data: {
+          ...data,
+          schema: {
+            availabilityReady: true,
+            approvalReady: schemaState.approvalReady,
+            retryable: schemaState.retryable,
+          },
+        },
+      });
     } catch (error: any) {
       console.warn('[AppointmentActions] availability failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível verificar os horários agora.' });
@@ -37896,7 +37971,7 @@ async function startServer() {
 
   app.post('/api/appointments/action-requests/:requestId/approve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
-      if (!(await requireAppointmentActionResolutionSchema(req, res))) return;
+      if (!(await requireAppointmentActionResolutionSchema(req, res, 'approval'))) return;
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de aprovação de solicitação')) return;
       const context = await fetchAppointmentActionRequestForAdmin(req.params.requestId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));

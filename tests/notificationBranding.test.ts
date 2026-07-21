@@ -87,8 +87,9 @@ assert.equal(clinicModal.brandName, 'Clínica ABC');
 assert.equal(clinicModal.brandLogoUrl, 'https://cdn.example.com/clinic-logo.png');
 assert.match(
   clinicModal.appointmentSummaryText,
-  /Consulta de Pedro Henrique dia \d{2}\/\d{2} \(amanhã\) às 12:00\./,
+  /Olá, Pedro Henrique! Sua sessão está marcada para \d{2}\/\d{2} \(amanhã\) às 12:00\./,
 );
+assert.doesNotMatch(clinicModal.appointmentSummaryText, /Consulta de Paciente/);
 assert.equal(clinicModal.confirmLabel, 'Confirmar presença');
 assert.equal(clinicModal.rescheduleLabel, 'Remarcar consulta');
 assert.equal(clinicModal.cancelLabel, 'Cancelar agendamento');
@@ -102,7 +103,20 @@ const unidentifiedPatientModal = buildPatientReminderModalViewModel({
   status: 'pending',
   branding: clinicBranding,
 });
-assert.match(unidentifiedPatientModal.appointmentSummaryText, /Paciente não identificado/);
+assert.match(unidentifiedPatientModal.appointmentSummaryText, /Sua sessão está marcada/);
+assert.doesNotMatch(unidentifiedPatientModal.appointmentSummaryText, /Paciente/);
+
+const legacyGenericPatientModal = buildPatientReminderModalViewModel({
+  appointmentId: 'legacy-appointment',
+  scheduledAt,
+  dateLabel,
+  timeLabel: '12:00',
+  patientName: 'Paciente',
+  status: 'pending',
+  branding: clinicBranding,
+});
+assert.doesNotMatch(legacyGenericPatientModal.appointmentSummaryText, /Consulta de Paciente|Ol[aá], Paciente/);
+assert.match(legacyGenericPatientModal.appointmentSummaryText, /Sua sessão está marcada/);
 
 const professionalBranding = resolveBrandingContext({
   professional: {

@@ -12,26 +12,79 @@ export const APPOINTMENT_ACTION_RESOLUTION_RPCS = [
   'approve_appointment_cancellation',
   'reject_appointment_action_request',
 ];
-export const APPOINTMENT_ACTION_REQUIRED_COLUMNS = [
+// Availability only reads the appointment's operational identity and its time
+// window. Keep this deliberately smaller than the write contract so an
+// optional audit/notification column cannot hide viable alternatives.
+export const APPOINTMENT_ACTION_AVAILABILITY_REQUIRED_COLUMNS = [
   'id',
+  'organization_id',
+  'clinic_id',
+  'patient_id',
+  'status',
   'scheduled_at',
   'scheduled_start_at',
   'scheduled_end_at',
   'scheduled_duration_minutes',
   'therapist_id',
+];
+
+// The approval RPC updates these fields in the same transaction. A missing
+// field must keep approval blocked, but must not block the availability view.
+export const APPOINTMENT_ACTION_APPROVAL_REQUIRED_COLUMNS = [
+  ...APPOINTMENT_ACTION_AVAILABILITY_REQUIRED_COLUMNS,
   'therapist_name',
   'room_id',
   'room_name',
+  'location_type',
+  'patient_response',
+  'patient_responded_at',
   'patient_confirmation_status',
   'patient_confirmation_at',
   'patient_confirmation_by',
   'patient_confirmation_source',
   'source_payload',
+  'reschedule_requested_at',
+  'reschedule_requested_by',
+  'notification_24h_sent_at',
+  'notification_12h_sent_at',
   'notification_sent',
   'notification_sent_at',
   'notification_12h_sent',
   'notification_12h_sent_at',
 ];
+
+export const APPOINTMENT_ACTION_OPTIONAL_COLUMNS = [
+  'patient_email',
+  'date',
+  'time',
+  'duration_minutes',
+  'approach',
+  'service_type',
+  'location_notes',
+  'call_link',
+  'confirmed_at',
+  'confirmed_by',
+  'confirmed_by_role',
+  'cancel_requested_at',
+  'cancel_requested_by',
+  'recurrence_group_id',
+  'recurrence_index',
+  'notes',
+  'created_at',
+  'updated_at',
+];
+
+// These remain readable compatibility fields. Their absence must never make
+// the reschedule module unavailable.
+export const APPOINTMENT_ACTION_LEGACY_COLUMNS = [
+  'date',
+  'time',
+  'duration_minutes',
+];
+
+// Backwards-compatible export used by deployment and source tests. It now
+// denotes the full write contract, not the smaller availability contract.
+export const APPOINTMENT_ACTION_REQUIRED_COLUMNS = APPOINTMENT_ACTION_APPROVAL_REQUIRED_COLUMNS;
 
 const probeId = '00000000-0000-4000-8000-000000000001';
 const DEFAULT_SCHEMA_PROBE_TIMEOUT_MS = 6_000;
@@ -277,64 +330,80 @@ export async function checkAppointmentActionResolutionSchema(client, options = {
       failureKind: 'schema',
     };
   }
-  if (reschedule.approve_rpc !== true) {
-    return {
-      compatible: false,
-      schemaVersion: statusVersion,
-      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
-      stage: 'approval_signature',
-      reason: 'approval_rpc_missing_or_signature_mismatch',
-      retryable: true,
-      failureKind: 'schema',
-    };
-  }
-  if (reschedule.service_role_execute !== true) {
-    return {
-      compatible: false,
-      schemaVersion: statusVersion,
-      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
-      stage: 'approval_permissions',
-      reason: 'approval_rpc_service_role_permission_missing',
-      retryable: false,
-      failureKind: 'permission',
-    };
-  }
-  if (reschedule.anon_execute === true || reschedule.authenticated_execute === true) {
-    return {
-      compatible: false,
-      schemaVersion: statusVersion,
-      rpc: APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
-      stage: 'approval_permissions',
-      reason: 'approval_rpc_excessive_permissions',
-      retryable: false,
-      failureKind: 'permission',
-    };
-  }
-
   const appointmentColumns = reschedule.appointment_columns || {};
-  const missingColumns = APPOINTMENT_ACTION_REQUIRED_COLUMNS.filter(
-    (column) => appointmentColumns[column] !== true,
+  const availabilityColumns = reschedule.availability_columns || appointmentColumns;
+  const approvalColumns = reschedule.approval_columns || appointmentColumns;
+  const optionalColumns = reschedule.optional_columns || {};
+  const legacyColumns = reschedule.legacy_columns || {};
+  const missingCriticalColumns = APPOINTMENT_ACTION_AVAILABILITY_REQUIRED_COLUMNS.filter(
+    (column) => availabilityColumns[column] !== true,
   );
-  if (missingColumns.length > 0) {
+  const missingApprovalColumns = APPOINTMENT_ACTION_APPROVAL_REQUIRED_COLUMNS.filter(
+    (column) => approvalColumns[column] !== true,
+  );
+  const missingOptionalColumns = APPOINTMENT_ACTION_OPTIONAL_COLUMNS.filter(
+    (column) => optionalColumns[column] === false,
+  );
+  const legacyColumnsDetected = APPOINTMENT_ACTION_LEGACY_COLUMNS.filter(
+    (column) => legacyColumns[column] === true,
+  );
+  if (missingCriticalColumns.length > 0) {
     return {
       compatible: false,
+      availabilityReady: false,
+      approvalReady: false,
       schemaVersion: statusVersion,
       rpc: VERTO_CRITICAL_SCHEMA_STATUS_RPC,
       stage: 'appointment_columns',
       reason: 'appointment_columns_missing',
       retryable: true,
       failureKind: 'schema',
-      details: `missing:${missingColumns.join(',')}`,
+      missingCriticalColumns,
+      missingApprovalColumns,
+      missingOptionalColumns,
+      legacyColumnsDetected,
+      details: `missing:${missingCriticalColumns.join(',')}`,
     };
   }
 
+  const rpcAvailable = reschedule.approve_rpc === true;
+  const rpcSignatureValid = rpcAvailable;
+  const serviceRoleExecute = reschedule.service_role_execute === true;
+  const excessiveApprovalPermissions = reschedule.anon_execute === true || reschedule.authenticated_execute === true;
+  const approvalReady =
+    rpcAvailable &&
+    rpcSignatureValid &&
+    serviceRoleExecute &&
+    !excessiveApprovalPermissions &&
+    missingApprovalColumns.length === 0;
+  const approvalReason = !rpcAvailable
+    ? 'approval_rpc_missing_or_signature_mismatch'
+    : !serviceRoleExecute
+      ? 'approval_rpc_service_role_permission_missing'
+      : excessiveApprovalPermissions
+        ? 'approval_rpc_excessive_permissions'
+        : missingApprovalColumns.length > 0
+          ? 'approval_columns_missing'
+          : 'ready';
+
   return {
-    compatible: true,
+    compatible: approvalReady,
+    availabilityReady: true,
+    approvalReady,
     schemaVersion: statusVersion,
-    reason: 'compatible',
-    retryable: false,
-    failureKind: null,
-    stage: 'complete',
+    rpc: approvalReady ? null : APPOINTMENT_ACTION_RESOLUTION_RPCS[0],
+    rpcAvailable,
+    rpcSignatureValid,
+    serviceRoleExecute,
+    missingCriticalColumns,
+    missingApprovalColumns,
+    missingOptionalColumns,
+    legacyColumnsDetected,
+    reason: approvalReady ? 'compatible' : 'availability_ready_approval_schema_incomplete',
+    approvalReason,
+    retryable: approvalReason !== 'approval_rpc_service_role_permission_missing' && approvalReason !== 'approval_rpc_excessive_permissions',
+    failureKind: approvalReady ? null : approvalReason.includes('permission') ? 'permission' : 'schema',
+    stage: approvalReady ? 'complete' : 'approval_schema',
   };
 }
 
@@ -426,6 +495,18 @@ async function main() {
   }
   const appointmentActions = await checkAppointmentActionResolutionSchema(client);
   if (!appointmentActions.compatible) {
+    const diagnostic = {
+      expectedVersion: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
+      actualVersion: appointmentActions.schemaVersion || null,
+      stage: appointmentActions.stage || null,
+      reason: appointmentActions.reason || null,
+      approvalReason: appointmentActions.approvalReason || null,
+      missingCriticalColumns: appointmentActions.missingCriticalColumns || [],
+      missingApprovalColumns: appointmentActions.missingApprovalColumns || [],
+      missingOptionalColumns: appointmentActions.missingOptionalColumns || [],
+      legacyColumnsDetected: appointmentActions.legacyColumnsDetected || [],
+    };
+    console.error('[Schema] Diagnóstico técnico de remarcação:', diagnostic);
     throw new Error(
       `Schema de solicitacoes de agenda incompativel (${appointmentActions.reason}; etapa ${appointmentActions.stage || 'unknown'}; RPC ${appointmentActions.rpc || 'n/a'}). ` +
       'Aplique a migration corretiva no mesmo projeto Supabase e aguarde o reload do PostgREST.',

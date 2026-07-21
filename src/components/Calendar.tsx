@@ -1548,7 +1548,9 @@ export const ClinicalAgendaBoard = ({
       error: '',
       data: current.requestId === pendingRescheduleRequestId ? current.data : null
     }));
-    dataService.getAppointmentActionRequestAvailability(pendingRescheduleRequestId)
+    dataService.getAppointmentActionRequestAvailability(pendingRescheduleRequestId, {
+      forceSchemaCheck: rescheduleAvailabilityNonce > 0,
+    })
       .then((result: any) => {
         if (!active) return;
         if (result?.success && result?.data) {
@@ -4327,6 +4329,7 @@ export const ClinicalAgendaBoard = ({
                     const availabilityOptions = availabilityMatchesRequest && Array.isArray(rescheduleAvailabilityState.data?.options)
                       ? rescheduleAvailabilityState.data.options
                       : [];
+                    const approvalSchemaReady = rescheduleAvailabilityState.data?.schema?.approvalReady !== false;
                     const requestAppointment = {
                       ...detailEvent,
                       pendingActionRequestId: request.id,
@@ -4389,6 +4392,14 @@ export const ClinicalAgendaBoard = ({
                                   </button>
                                 </div>
                               )}
+                              {!availabilityError && !approvalSchemaReady && (
+                                <div className={`flex flex-col gap-3 rounded-xl border px-3 py-3 text-xs sm:flex-row sm:items-center sm:justify-between ${isDark ? 'border-amber-500/40 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-800'}`} role="status">
+                                  <p>Os horários foram analisados, mas a aprovação está temporariamente indisponível durante uma atualização técnica. Nenhuma solicitação foi alterada.</p>
+                                  <button type="button" onClick={() => setRescheduleAvailabilityNonce((value) => value + 1)} className="min-h-9 shrink-0 rounded-lg border border-current px-3 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current focus-visible:ring-offset-2">
+                                    Verificar novamente
+                                  </button>
+                                </div>
+                              )}
                               {rescheduleOptions.slice(0, 3).map((option: any, index: number) => {
                                 const optionAvailability = availabilityOptions.find((item: any) => Number(item?.index) === index) || null;
                                 const assignment = optionAvailability?.assignment || null;
@@ -4442,7 +4453,7 @@ export const ClinicalAgendaBoard = ({
                                       </div>
                                       <button
                                         type="button"
-                                        disabled={loading || availabilityLoading || !optionViewable || !isLatestPendingRequest}
+                                        disabled={loading || availabilityLoading || !approvalSchemaReady || !optionViewable || !isLatestPendingRequest}
                                         onClick={() => openRescheduleApprovalReview(request, option, index, optionAvailability)}
                                         className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#6926e8] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
                                       >

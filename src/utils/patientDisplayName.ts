@@ -21,20 +21,35 @@ const firstDisplayName = (...values: unknown[]) => {
   return '';
 };
 
+const isGenericPatientDisplayName = (value: unknown) => {
+  const normalized = normalizeDisplayName(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return !normalized || ['paciente', 'patient', 'paciente nao identificado', 'patient not identified'].includes(normalized);
+};
+
+const firstMeaningfulPatientDisplayName = (...values: unknown[]) => {
+  for (const value of values) {
+    const normalized = normalizeDisplayName(value);
+    if (normalized && !isGenericPatientDisplayName(normalized)) return normalized;
+  }
+  return '';
+};
+
 export const resolveClinicalPatientDisplayName = (patient: any, fallback?: unknown) =>
   firstDisplayName(patient?.name, patient?.patient_name, patient?.patientName, fallback, 'Paciente');
 
 export const resolvePortalPatientDisplayName = (patient: any, fallback?: unknown) => {
   const metadata = readMetadata(patient?.metadata || patient?.patient_metadata || patient?.patientMetadata);
-  return firstDisplayName(
+  return firstMeaningfulPatientDisplayName(
     metadata.portalDisplayName,
     metadata.portal_display_name,
     metadata.preferredName,
     metadata.preferred_name,
-    fallback,
     patient?.name,
     patient?.patient_name,
     patient?.patientName,
-    'Paciente',
+    fallback,
   );
 };

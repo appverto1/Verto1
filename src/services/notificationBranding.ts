@@ -216,6 +216,22 @@ function buildWhenText(input: { dateLabel?: string | null; timeLabel?: string | 
   return "";
 }
 
+function buildReminderModalWhenText(input: { dateLabel?: string | null; timeLabel?: string | null; scheduledAt?: string | null }) {
+  const dateLabel = decorateDateLabel(input.dateLabel, input.scheduledAt);
+  const timeLabel = sanitizeText(input.timeLabel, 20);
+  if (dateLabel && timeLabel) return `${dateLabel} às ${timeLabel}`;
+  if (timeLabel) return `às ${timeLabel}`;
+  return dateLabel;
+}
+
+function isGenericReminderPatientName(value: unknown) {
+  const normalized = sanitizeText(value, 160)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return !normalized || ["paciente", "patient", "paciente nao identificado", "patient not identified"].includes(normalized);
+}
+
 export function buildPatientReminderNotificationPayload(input: ReminderPayloadInput) {
   const appointmentId = sanitizeText(input.appointmentId, 120);
   const reminderKind = sanitizeText(input.reminderKind, 40) || "appointment";
@@ -252,8 +268,9 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
 }
 
 export function buildPatientReminderModalViewModel(input: ReminderModalInput) {
-  const patientName = sanitizeText(input.patientName, 160) || "Paciente não identificado";
-  const whenText = buildWhenText(input);
+  const patientName = sanitizeText(input.patientName, 160);
+  const hasPatientName = !isGenericReminderPatientName(patientName);
+  const whenText = buildReminderModalWhenText(input);
   return {
     brandName: input.branding.displayName,
     brandLogoUrl: input.branding.logoUrl,
@@ -261,9 +278,13 @@ export function buildPatientReminderModalViewModel(input: ReminderModalInput) {
     accentColor: input.branding.accentColor,
     sourceType: input.branding.sourceType,
     headerText: input.branding.displayName,
-    appointmentSummaryText: whenText
-      ? `Consulta de ${patientName} ${whenText}.`
-      : `Consulta de ${patientName}.`,
+    appointmentSummaryText: hasPatientName
+      ? whenText
+        ? `Olá, ${patientName}! Sua sessão está marcada para ${whenText}.`
+        : `Olá, ${patientName}! Sua sessão está marcada.`
+      : whenText
+        ? `Sua sessão está marcada para ${whenText}.`
+        : 'Sua sessão está marcada.',
     statusLabel: sanitizeText(input.status, 80),
     confirmLabel: "Confirmar presença",
     rescheduleLabel: "Remarcar consulta",

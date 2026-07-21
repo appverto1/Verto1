@@ -29,6 +29,8 @@ test('nome clinico canonico e nome preferido do portal permanecem independentes'
     resolvePortalPatientDisplayName({ name: patient.name, metadata: JSON.stringify({ preferred_name: 'Pedro Henrique' }) }),
     'Pedro Henrique',
   );
+  assert.equal(resolvePortalPatientDisplayName({ name: patient.name }, 'Paciente'), patient.name);
+  assert.equal(resolvePortalPatientDisplayName(null, 'Paciente'), '');
 });
 
 test('cada edicao de consulta recebe uma nova intencao idempotente', () => {

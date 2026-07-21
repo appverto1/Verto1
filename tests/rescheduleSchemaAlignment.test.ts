@@ -22,6 +22,14 @@ const invitationsMigration = fs.readFileSync(
   path.join(root, 'supabase/migrations/20260721205000_invitations_contract_alignment.sql'),
   'utf8',
 );
+const capabilitiesMigration = fs.readFileSync(
+  path.join(root, 'supabase/migrations/20260721210000_reschedule_schema_capabilities.sql'),
+  'utf8',
+);
+const reconciliationMigration = fs.readFileSync(
+  path.join(root, 'supabase/migrations/20260721211000_reschedule_appointment_contract_reconciliation.sql'),
+  'utf8',
+);
 
 const preview = server.slice(
   server.indexOf('const buildRescheduleApprovalPreview'),
@@ -136,6 +144,23 @@ test('repair migration is self-contained and exposes server-only probes', () => 
   assert.match(repairMigration, /notify pgrst, 'reload schema'/);
 });
 
+test('schema capability probe separates availability, approval, optional and legacy fields', () => {
+  assert.match(capabilitiesMigration, /'availability_columns'/);
+  assert.match(capabilitiesMigration, /'approval_columns'/);
+  assert.match(capabilitiesMigration, /'optional_columns'/);
+  assert.match(capabilitiesMigration, /'legacy_columns'/);
+  assert.match(capabilitiesMigration, /revoke all on function public\.get_verto_critical_schema_status\(\) from public, anon, authenticated/);
+  assert.match(capabilitiesMigration, /grant execute on function public\.get_verto_critical_schema_status\(\) to service_role/);
+  assert.match(reconciliationMigration, /add column if not exists patient_confirmation_status text/);
+  assert.match(reconciliationMigration, /add column if not exists source_payload jsonb not null default '\{\}'::jsonb/);
+  assert.match(reconciliationMigration, /add column if not exists clinic_id uuid references public\.clinics/);
+  assert.match(reconciliationMigration, /add column if not exists patient_id uuid references public\.patients/);
+  assert.match(reconciliationMigration, /from public\.appointment_action_requests as request/);
+  assert.match(reconciliationMigration, /having count\(distinct request\.organization_id\) = 1/);
+  assert.match(reconciliationMigration, /to_jsonb\(appointment\) ->> 'duration_minutes'/);
+  assert.doesNotMatch(reconciliationMigration, /\bdelete from\b|\btruncate\b|\bdrop column\b/i);
+});
+
 test('tasks and invitations alignment migrations only add confirmed current fields', () => {
   assert.match(tasksMigration, /add column if not exists max_score integer/);
   assert.match(tasksMigration, /add column if not exists is_active boolean/);
@@ -154,5 +179,7 @@ test('tasks and invitations alignment migrations only add confirmed current fiel
 test('frontend explains known schema maintenance without exposing database details', () => {
   assert.match(calendar, /Remarcação temporariamente indisponível/);
   assert.match(calendar, /Nenhuma solicitação foi perdida/);
-  assert.doesNotMatch(calendar, /Supabase|migration|schema|service_role/);
+  assert.doesNotMatch(calendar, /Supabase|migration|service_role/);
+  assert.match(calendar, /forceSchemaCheck: rescheduleAvailabilityNonce > 0/);
+  assert.match(calendar, /approvalSchemaReady/);
 });

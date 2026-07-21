@@ -1217,8 +1217,11 @@ export async function fetchProfileWithSchemaFallback(params: {
   logger?: LoggerLike;
   includeTwoFactorSecret?: boolean;
 }) {
-  let columns = params.includeTwoFactorSecret ? [...PROFILE_AUTH_SELECT_COLUMNS] : [...PROFILE_SELECT_COLUMNS];
+  const cachedMissingColumns = readCachedMissingColumns(params.supabase, 'users');
+  let columns = (params.includeTwoFactorSecret ? [...PROFILE_AUTH_SELECT_COLUMNS] : [...PROFILE_SELECT_COLUMNS])
+    .filter((column) => !cachedMissingColumns.has(column));
   let lastError: any = null;
+  const discoveredMissingColumns: string[] = [];
 
   for (let attempt = 0; attempt < PROFILE_SCHEMA_FALLBACK_MAX_ATTEMPTS; attempt += 1) {
     const result = await params.supabase
@@ -1228,6 +1231,14 @@ export async function fetchProfileWithSchemaFallback(params: {
       .maybeSingle();
 
     if (!result.error) {
+      if (discoveredMissingColumns.length > 0) {
+        warnSchemaFallback(params.logger, {
+          route: '/api/profile/:userId',
+          table: 'users',
+          missingColumn: discoveredMissingColumns.join(','),
+          nextSelect: joinColumns(columns)
+        });
+      }
       return {
         data: result.data || null,
         error: null,
@@ -1242,12 +1253,8 @@ export async function fetchProfileWithSchemaFallback(params: {
     if (!missingColumn || !PROFILE_OPTIONAL_COLUMNS.has(missingColumn) || !columns.includes(missingColumn)) break;
 
     columns = columns.filter((column) => column !== missingColumn);
-    warnSchemaFallback(params.logger, {
-      route: '/api/profile/:userId',
-      table: 'users',
-      missingColumn,
-      nextSelect: joinColumns(columns)
-    });
+    rememberMissingColumn(params.supabase, 'users', missingColumn);
+    discoveredMissingColumns.push(missingColumn);
   }
 
   return { data: null, error: lastError, select: joinColumns(columns) };
@@ -1258,10 +1265,12 @@ export async function fetchProfileByEmailWithSchemaFallback(params: {
   email: string | null;
   logger?: LoggerLike;
 }) {
-  let columns = [...PROFILE_SELECT_COLUMNS];
+  const cachedMissingColumns = readCachedMissingColumns(params.supabase, 'users');
+  let columns = [...PROFILE_SELECT_COLUMNS].filter((column) => !cachedMissingColumns.has(column));
   let lastError: any = null;
-  let shouldOrderByCreatedAt = true;
+  let shouldOrderByCreatedAt = columns.includes('created_at');
   const email = cleanString(params.email, 320).toLowerCase();
+  const discoveredMissingColumns: string[] = [];
 
   for (let attempt = 0; attempt < PROFILE_SCHEMA_FALLBACK_MAX_ATTEMPTS; attempt += 1) {
     let query = params.supabase
@@ -1276,6 +1285,14 @@ export async function fetchProfileByEmailWithSchemaFallback(params: {
     const result = await query.limit(1).maybeSingle();
 
     if (!result.error) {
+      if (discoveredMissingColumns.length > 0) {
+        warnSchemaFallback(params.logger, {
+          route: '/api/auth/login',
+          table: 'users',
+          missingColumn: discoveredMissingColumns.join(','),
+          nextSelect: joinColumns(columns)
+        });
+      }
       return {
         data: result.data || null,
         error: null,
@@ -1296,13 +1313,8 @@ export async function fetchProfileByEmailWithSchemaFallback(params: {
     if (columns.includes(missingColumn)) {
       columns = columns.filter((column) => column !== missingColumn);
     }
-
-    warnSchemaFallback(params.logger, {
-      route: '/api/auth/login',
-      table: 'users',
-      missingColumn,
-      nextSelect: joinColumns(columns)
-    });
+    rememberMissingColumn(params.supabase, 'users', missingColumn);
+    discoveredMissingColumns.push(missingColumn);
   }
 
   return { data: null, error: lastError, select: joinColumns(columns) };

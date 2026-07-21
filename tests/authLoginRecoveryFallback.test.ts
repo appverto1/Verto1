@@ -183,6 +183,16 @@ test('/api/auth/login profile lookup keeps removing many optional legacy-missing
   for (const column of missingColumns) {
     assert.ok(!finalSelect.split(',').includes(column));
   }
+
+  const callsBeforeCachedLookup = supabase.calls.length;
+  const cachedResult = await fetchProfileWithSchemaFallback({
+    supabase,
+    userId: 'user-1',
+    logger: silentLogger
+  });
+  assert.equal(cachedResult.error, null);
+  assert.equal(supabase.calls.length, callsBeforeCachedLookup + 1);
+  assert.equal(supabase.calls.at(-1)?.selectColumns, finalSelect);
 });
 
 test('profile selects do not expose 2FA secret outside explicit auth verification', () => {
