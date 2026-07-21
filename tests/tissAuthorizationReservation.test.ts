@@ -69,6 +69,9 @@ test('ambientes de deploy exigem a verificacao de schema', () => {
     serverCode,
     /if \(isDeploy\) \{\s*await validateCriticalTissAuthorizationReservationSchema\(\);\s*await validateCriticalAppointmentActionResolutionSchema\(\);\s*\}/
   );
+  assert.match(serverCode, /Remarcações em modo degradado/);
+  assert.match(serverCode, /O servidor continuará disponível/);
+  assert.doesNotMatch(serverCode, /Schema crítico de remarcações incompatível[\s\S]*?throw new Error/);
   assert.match(serverCode, /const result = await checkCriticalSchema\(supabase\)/);
   assert.match(serverCode, /const result = await checkAppointmentActionResolutionSchema\(supabase\)/);
   assert.match(serverCode, /TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION/);

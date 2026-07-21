@@ -81,6 +81,18 @@ test('authorization balance query uses canonical schedule columns only', () => {
   assert.doesNotMatch(balanceReader, /appointment\?\.date/);
 });
 
+test('schema mismatch degrades only reschedule routes and no longer crashes Railway startup', () => {
+  assert.match(server, /const refreshAppointmentActionResolutionSchema/);
+  assert.match(server, /const requireAppointmentActionResolutionSchema/);
+  assert.match(server, /RESCHEDULE_SCHEMA_MIGRATION_REQUIRED/);
+  assert.match(server, /temporariamente indisponíveis enquanto o banco é atualizado/);
+  assert.match(server, /await validateCriticalAppointmentActionResolutionSchema\(\)/);
+  assert.match(server, /Remarcações em modo degradado/);
+  assert.doesNotMatch(server, /Schema crítico de remarcações incompatível[\s\S]*?throw new Error/);
+  assert.match(server, /action-requests\/:requestId\/availability[\s\S]*?requireAppointmentActionResolutionSchema/);
+  assert.match(server, /action-requests\/:requestId\/approve[\s\S]*?requireAppointmentActionResolutionSchema/);
+});
+
 test('approval route uses v2 RPC, typed conflicts and persisted readback', () => {
   assert.match(approvalRoute, /approve_appointment_reschedule_v2/);
   assert.match(migration, /approvedOptionIndex[\s\S]*?approvedStart[\s\S]*?approvedEnd/);
