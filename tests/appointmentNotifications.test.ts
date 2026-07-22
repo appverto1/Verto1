@@ -55,6 +55,7 @@ assert.match(pushService, /\.in\(column, values\)/);
 assert.doesNotMatch(pushService, /\.limit\(5000\)/);
 assert.match(pushService, /allowCrossClinicEmailFallback:\s*false/);
 assert.match(cron, /createSignedUrl\(storagePath, CLINIC_LOGO_SIGNED_URL_TTL_SECONDS\)/);
+assert.match(cron, /export async function resolvePushSafeClinicLogoUrl/);
 assert.match(cron, /extractReminderMissingColumnName\(profileBranding\.error\) === 'clinic_id'/);
 assert.doesNotMatch(read('src/services/notificationBranding.ts'), /actions:\s*\[/);
 assert.match(read('src/services/notificationBranding.ts'), /const clinicLogoUrl = firstUrl\(input\.branding\.logoUrl\) \|\| null/);
@@ -94,11 +95,20 @@ const portalNotificationsRoute = server.slice(
 );
 assert.match(portalNotificationsRoute, /readPortalPatientContexts\(notificationPatientIds\)/);
 assert.match(portalNotificationsRoute, /patientNamesById\.get\(patientId\)/);
+assert.match(portalNotificationsRoute, /clinicLogoUrl: normalizedMetadata\.clinicLogoUrl/);
 assert.match(portalNotificationsRoute, /Paciente não identificado/);
 assert.doesNotMatch(portalNotificationsRoute, /\|\|\s*'Paciente';/);
 assert.match(server, /\.from\('patients'\)[\s\S]*?\.in\('id', patientIds\)[\s\S]*?\.limit\(patientIds\.length\)/);
 assert.doesNotMatch(cron, /\.select\(\s*['"`]\*['"`]\s*\)/);
 assert.doesNotMatch(server, /\.select\(\s*['"`]\*['"`]\s*\)/);
+
+const rescheduleApprovalNotification = server.slice(
+  server.indexOf('const notifyPortalRescheduleApproval = async'),
+  server.indexOf('const fetchAppointmentActionRequestForAdmin', server.indexOf('const notifyPortalRescheduleApproval = async')),
+);
+assert.match(rescheduleApprovalNotification, /resolvePushSafeClinicLogoUrl\([\s\S]*?\[clinicBranding\.logoUrl\]/);
+assert.match(rescheduleApprovalNotification, /clinicLogoUrl: pushClinicLogoUrl/);
+assert.match(rescheduleApprovalNotification, /clinicLogoUrl: clinicBranding\.logoUrl \|\| null/);
 
 assert.equal(isActiveAppointmentStatus('confirmed'), true);
 assert.equal(isActiveAppointmentStatus('RESCHEDULED'), false);

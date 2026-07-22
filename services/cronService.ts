@@ -804,8 +804,10 @@ export const invalidateReminderClinicBranding = (clinicId?: string | null) => {
   if (safeClinicId) clinicBrandingCache.delete(safeClinicId);
 };
 
-async function resolvePushSafeClinicLogoUrl(
-  options: ActiveCronServiceOptions,
+type ClinicBrandingResolverOptions = Pick<ActiveCronServiceOptions, 'supabase' | 'logger'>;
+
+export async function resolvePushSafeClinicLogoUrl(
+  options: ClinicBrandingResolverOptions,
   candidates: unknown[],
 ) {
   for (const candidate of candidates) {
@@ -832,7 +834,7 @@ async function resolvePushSafeClinicLogoUrl(
 }
 
 async function resolveReminderClinicBranding(
-  options: ActiveCronServiceOptions,
+  options: ClinicBrandingResolverOptions,
   clinicId?: string | null,
 ) {
   const safeClinicId = sanitizeText(clinicId, 120);

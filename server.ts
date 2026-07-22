@@ -42,7 +42,13 @@ import {
   APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
   TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION
 } from './scripts/check-critical-schema.mjs';
-import { invalidateReminderClinicBranding, runAppointmentReminderScan, startAppointmentReminderCron, triggerAppointmentReminderScan } from './services/cronService';
+import {
+  invalidateReminderClinicBranding,
+  resolvePushSafeClinicLogoUrl,
+  runAppointmentReminderScan,
+  startAppointmentReminderCron,
+  triggerAppointmentReminderScan
+} from './services/cronService';
 import {
   removePatientPushSubscription,
   resolvePatientIdsForPush,
@@ -54,6 +60,9 @@ import {
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
 import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from './src/constants/vertoBranding';
+import {
+  resolveAppointmentConfirmationSnapshot
+} from './src/utils/appointmentConfirmationState';
 import {
   DISCOUNT_EXPIRY_NOTIFICATION_DAYS,
   PUBLIC_ACTIVE_PATIENT_PRICE,
@@ -8339,27 +8348,12 @@ function serializePersistedAppointmentForAgenda(row: any) {
           'outro'
       );
   const uiStatus = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
+  const confirmationSnapshot = resolveAppointmentConfirmationSnapshot(row, source);
   const patientConfirmationStatus = normalizePatientConfirmationStatusForAgenda(
-    row?.patient_confirmation_status ||
-      row?.patientConfirmationStatus ||
-      row?.patient_response ||
-      row?.patientResponse ||
-      source?.patient_confirmation_status ||
-      source?.patientConfirmationStatus ||
-      source?.patient_response ||
-      source?.patientResponse,
+    confirmationSnapshot.confirmationStatus ?? confirmationSnapshot.response,
     row?.status || source?.status
   );
-  const patientRespondedAt =
-    row?.patient_responded_at ||
-    row?.patientRespondedAt ||
-    row?.patient_confirmation_at ||
-    row?.patientConfirmationAt ||
-    source?.patient_responded_at ||
-    source?.patientRespondedAt ||
-    source?.patient_confirmation_at ||
-    source?.patientConfirmationAt ||
-    null;
+  const patientRespondedAt = confirmationSnapshot.respondedAt ?? confirmationSnapshot.confirmationAt;
   const appointment = {
     ...source,
     id: sanitizeString(row?.id || source?.id, 120),
@@ -8421,8 +8415,8 @@ function serializePersistedAppointmentForAgenda(row: any) {
     recurrence_total: Number(row?.recurrence_total ?? source?.recurrence_total ?? source?.recurrenceTotal) || null,
     recurrenceFrequency: sanitizeString(row?.recurrence_frequency || source?.recurrenceFrequency || source?.recurrence_frequency, 60) || null,
     recurrence_frequency: sanitizeString(row?.recurrence_frequency || source?.recurrence_frequency || source?.recurrenceFrequency, 60) || null,
-    patientResponse: row?.patient_response || source?.patientResponse || source?.patient_response || null,
-    patient_response: row?.patient_response || source?.patient_response || source?.patientResponse || null,
+    patientResponse: confirmationSnapshot.response,
+    patient_response: confirmationSnapshot.response,
     patientRespondedAt: patientRespondedAt,
     patient_responded_at: patientRespondedAt,
     patientConfirmationStatus,
@@ -8431,10 +8425,10 @@ function serializePersistedAppointmentForAgenda(row: any) {
     patient_confirmation_label: getPatientConfirmationLabelForAgenda(patientConfirmationStatus),
     patientConfirmationColor: getPatientConfirmationColorForAgenda(patientConfirmationStatus),
     patient_confirmation_color: getPatientConfirmationColorForAgenda(patientConfirmationStatus),
-    patientConfirmationAt: row?.patient_confirmation_at || source?.patientConfirmationAt || source?.patient_confirmation_at || null,
-    patient_confirmation_at: row?.patient_confirmation_at || source?.patient_confirmation_at || source?.patientConfirmationAt || null,
-    patientConfirmationSource: sanitizeString(row?.patient_confirmation_source || source?.patientConfirmationSource || source?.patient_confirmation_source, 80) || null,
-    patient_confirmation_source: sanitizeString(row?.patient_confirmation_source || source?.patient_confirmation_source || source?.patientConfirmationSource, 80) || null,
+    patientConfirmationAt: confirmationSnapshot.confirmationAt,
+    patient_confirmation_at: confirmationSnapshot.confirmationAt,
+    patientConfirmationSource: sanitizeString(confirmationSnapshot.source, 80) || null,
+    patient_confirmation_source: sanitizeString(confirmationSnapshot.source, 80) || null,
     notification_sent: row?.notification_sent ?? source?.notification_sent ?? false,
     notification_sent_at: row?.notification_sent_at || source?.notification_sent_at || null,
     notification_12h_sent: row?.notification_12h_sent ?? source?.notification_12h_sent ?? false,
@@ -22584,39 +22578,36 @@ async function startServer() {
 
       const actor = req.session.user;
       const clinicId = currentClinicId(actor);
-      const clinicStateQuery = supabase
-        .from('clinic_state')
-        .select('clinic_id, appointments');
-      const { data, error } = clinicId
-        ? await clinicStateQuery.eq('clinic_id', clinicId).maybeSingle()
-        : await clinicStateQuery.limit(200);
-      if (error) throw error;
-
-      const states = clinicId ? [data].filter(Boolean) : (Array.isArray(data) ? data : []);
       let foundAppointment: any = null;
       let foundClinicId = '';
-      for (const state of states) {
-        const appointments = Array.isArray(state?.appointments) ? state.appointments : [];
-        foundAppointment = appointments.find((appointment: any) => String(appointment?.id) === appointmentId);
+      let foundInAppointmentsTable = false;
+      try {
+        const persistedRows = await readPersistedAppointmentRows([appointmentId], clinicId);
+        foundAppointment = persistedRows.find((appointment: any) => String(appointment?.id) === appointmentId) || null;
         if (foundAppointment) {
-          foundClinicId = sanitizeString(state?.clinic_id || clinicId, 120);
-          break;
+          foundClinicId = sanitizeString(foundAppointment?.clinic_id || clinicId, 120);
+          foundInAppointmentsTable = true;
         }
+      } catch (tableError: any) {
+        console.warn('[Appointments] canonical confirmation read deferred:', tableError?.message || String(tableError));
       }
 
-      let foundInAppointmentsTable = false;
       if (!foundAppointment) {
-        const { data: tableAppointment, error: tableError } = await supabase
-          .from('appointments')
-          .select(APPOINTMENT_SELECT)
-          .eq('id', appointmentId)
-          .maybeSingle();
-        if (tableError) {
-          console.warn('[Appointments] fallback read from appointments table failed:', tableError.message);
-        }
-        if (tableAppointment) {
-          foundAppointment = tableAppointment;
-          foundInAppointmentsTable = true;
+        const clinicStateQuery = supabase
+          .from('clinic_state')
+          .select('clinic_id, appointments');
+        const { data, error } = clinicId
+          ? await clinicStateQuery.eq('clinic_id', clinicId).maybeSingle()
+          : await clinicStateQuery.limit(200);
+        if (error) throw error;
+        const states = clinicId ? [data].filter(Boolean) : (Array.isArray(data) ? data : []);
+        for (const state of states) {
+          const appointments = Array.isArray(state?.appointments) ? state.appointments : [];
+          foundAppointment = appointments.find((appointment: any) => String(appointment?.id) === appointmentId);
+          if (foundAppointment) {
+            foundClinicId = sanitizeString(state?.clinic_id || clinicId, 120);
+            break;
+          }
         }
       }
 
@@ -22637,6 +22628,10 @@ async function startServer() {
         ...foundAppointment,
         clinic_id: foundAppointment?.clinic_id || foundAppointment?.clinicId || appointmentClinicId || null
       });
+      const confirmationSnapshot = resolveAppointmentConfirmationSnapshot(
+        foundAppointment,
+        parseCalendarSourcePayload(foundAppointment?.source_payload || foundAppointment?.sourcePayload)
+      );
 
       if (sanitizeString(actor?.role, 40) === 'patient') {
         const actorId = sanitizeString(actor?.id, 120);
@@ -22667,18 +22662,8 @@ async function startServer() {
           scheduledAt: foundAppointment.scheduledAt || foundAppointment.scheduled_at || null,
           patientName: displayContext.patientName || null,
           status: normalizeAppointmentStatusForUi(foundAppointment.status || 'pending'),
-          patientConfirmationStatus:
-            foundAppointment.patientResponse ||
-            foundAppointment.patient_response ||
-            foundAppointment.patientConfirmationStatus ||
-            foundAppointment.patient_confirmation_status ||
-            null,
-          patientConfirmationAt:
-            foundAppointment.patientRespondedAt ||
-            foundAppointment.patient_responded_at ||
-            foundAppointment.patientConfirmationAt ||
-            foundAppointment.patient_confirmation_at ||
-            null,
+          patientConfirmationStatus: confirmationSnapshot.confirmationStatus ?? confirmationSnapshot.response,
+          patientConfirmationAt: confirmationSnapshot.respondedAt ?? confirmationSnapshot.confirmationAt,
           clinicName: displayContext.clinicName,
           clinicLogoUrl: displayContext.clinicLogoUrl,
           clinic: displayContext.clinic,
@@ -34560,27 +34545,12 @@ async function startServer() {
     const appointmentId = sanitizeString(row?.id || source?.id, 180);
     const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
     const status = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
+    const confirmationSnapshot = resolveAppointmentConfirmationSnapshot(row, source);
     const patientConfirmationStatus = normalizePatientConfirmationStatusForAgenda(
-      row?.patient_confirmation_status ||
-        row?.patientConfirmationStatus ||
-        row?.patient_response ||
-        row?.patientResponse ||
-        source?.patient_confirmation_status ||
-        source?.patientConfirmationStatus ||
-        source?.patient_response ||
-        source?.patientResponse,
+      confirmationSnapshot.confirmationStatus ?? confirmationSnapshot.response,
       row?.status || source?.status
     );
-    const patientRespondedAt =
-      row?.patient_responded_at ||
-      row?.patientRespondedAt ||
-      row?.patient_confirmation_at ||
-      row?.patientConfirmationAt ||
-      source?.patient_responded_at ||
-      source?.patientRespondedAt ||
-      source?.patient_confirmation_at ||
-      source?.patientConfirmationAt ||
-      null;
+    const patientRespondedAt = confirmationSnapshot.respondedAt ?? confirmationSnapshot.confirmationAt;
     const statusText = sanitizeString(row?.status || source?.status, 80).toLowerCase();
     const hasSessionRecord =
       readCalendarBooleanFlag(source, ['has_session_record', 'hasSessionRecord', 'session_registered', 'sessionRegistered', 'registeredSession']) ||
@@ -34730,8 +34700,8 @@ async function startServer() {
       abaSessionId: sanitizeString(row?.abaSessionId || row?.aba_session_id || source?.abaSessionId || source?.aba_session_id, 180) || null,
       type: sanitizeString(row?.service_type || row?.approach || row?.type || source?.service_type || source?.serviceType || source?.approach || source?.type, 120) || 'Sessão',
       status,
-      patientResponse: row?.patient_response || row?.patientResponse || source?.patientResponse || source?.patient_response || null,
-      patient_response: row?.patient_response || row?.patientResponse || source?.patient_response || source?.patientResponse || null,
+      patientResponse: confirmationSnapshot.response,
+      patient_response: confirmationSnapshot.response,
       patientRespondedAt,
       patient_responded_at: patientRespondedAt,
       patientConfirmationStatus,
@@ -34740,9 +34710,9 @@ async function startServer() {
       patient_confirmation_label: getPatientConfirmationLabelForAgenda(patientConfirmationStatus),
       patientConfirmationColor: getPatientConfirmationColorForAgenda(patientConfirmationStatus),
       patient_confirmation_color: getPatientConfirmationColorForAgenda(patientConfirmationStatus),
-      patientConfirmationSource: sanitizeString(row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source, 80) || null,
-      patient_confirmation_source: sanitizeString(row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source, 80) || null,
-      patient_response_source: sanitizeString(row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source, 80) || null,
+      patientConfirmationSource: sanitizeString(confirmationSnapshot.source, 80) || null,
+      patient_confirmation_source: sanitizeString(confirmationSnapshot.source, 80) || null,
+      patient_response_source: sanitizeString(confirmationSnapshot.source, 80) || null,
       location: location || (room ? 'sala' : 'clinica'),
       location_type: normalizeScheduleLocationType(location || (room ? 'clinica' : 'outro')),
       location_label: locationLabel,
@@ -35320,15 +35290,9 @@ async function startServer() {
     if (!appointment?.id) return false;
     const source = parseCalendarSourcePayload(appointment?.source_payload || appointment?.sourcePayload);
     const appointmentStatus = normalizeOperationalAppointmentStatus(appointment?.status || appointment?.appointment_status || source?.status);
+    const confirmationSnapshot = resolveAppointmentConfirmationSnapshot(appointment, source);
     const responseStatus = normalizeOperationalAppointmentStatus(
-      appointment?.patient_confirmation_status ||
-        appointment?.patientConfirmationStatus ||
-        appointment?.patient_response ||
-        appointment?.patientResponse ||
-        source?.patient_confirmation_status ||
-        source?.patientConfirmationStatus ||
-        source?.patient_response ||
-        source?.patientResponse
+      confirmationSnapshot.confirmationStatus ?? confirmationSnapshot.response
     );
     const nonActionableStatuses = new Set([
       'CONFIRMED',
@@ -35735,6 +35699,15 @@ async function startServer() {
           patientName,
           patient_name: patientName,
           clinic_id: isUuid(clinicId) ? clinicId : row?.clinic_id,
+          clinicName: branding.displayName,
+          clinic_name: branding.displayName,
+          clinicLogoUrl: normalizedMetadata.clinicLogoUrl,
+          clinic_logo_url: normalizedMetadata.clinicLogoUrl,
+          clinic: {
+            id: isUuid(clinicId) ? clinicId : null,
+            displayName: branding.displayName,
+            logoUrl: normalizedMetadata.clinicLogoUrl
+          },
           scheduled_for: scheduledAt || row?.scheduled_for,
           title: branding.displayName,
           message: normalizePortalNotificationType(row?.type) === 'appointment_reminder'
@@ -35926,19 +35899,14 @@ async function startServer() {
     const professionalName = sanitizeString(row?.therapist_name || source?.therapistName || source?.professionalName || source?.professional, 180) || 'Profissional a definir';
     const clinicName = sanitizeString(row?.clinic_display_name || row?.clinicDisplayName || row?.clinic_name || row?.clinicName || source?.clinic_display_name || source?.clinicDisplayName || source?.clinic_name || source?.clinicName, 160) || null;
     const clinicLogoUrl = sanitizeClinicBrandImageUrl(row?.clinic_logo_url || row?.clinicLogoUrl || source?.clinic_logo_url || source?.clinicLogoUrl) || null;
+    const confirmationSnapshot = resolveAppointmentConfirmationSnapshot(row, source);
+    const explicitPatientConfirmation = confirmationSnapshot.confirmationStatus ?? confirmationSnapshot.response;
+    const appointmentStatus = normalizeOperationalAppointmentStatus(row?.status || source?.status);
     const patientConfirmationState = buildPatientConfirmationStateForAgenda({
-      status:
-        row?.patient_confirmation_status ||
-        row?.patientConfirmationStatus ||
-        row?.patient_response ||
-        row?.patientResponse ||
-        source?.patient_confirmation_status ||
-        source?.patientConfirmationStatus ||
-        source?.patient_response ||
-        source?.patientResponse,
-      response: row?.patient_response || row?.patientResponse || source?.patientResponse || source?.patient_response || null,
-      respondedAt: row?.patient_responded_at || row?.patientRespondedAt || row?.patient_confirmation_at || row?.patientConfirmationAt || source?.patient_responded_at || source?.patientRespondedAt || source?.patient_confirmation_at || source?.patientConfirmationAt || null,
-      source: row?.patient_confirmation_source || row?.patientConfirmationSource || source?.patientConfirmationSource || source?.patient_confirmation_source || null
+      status: explicitPatientConfirmation ?? (appointmentStatus === 'CONFIRMED' ? appointmentStatus : null),
+      response: confirmationSnapshot.response,
+      respondedAt: confirmationSnapshot.respondedAt ?? confirmationSnapshot.confirmationAt,
+      source: confirmationSnapshot.source
     });
     const terminalPatientConfirmationState = resolveCalendarCancellationState(row, patientConfirmationState);
     const resolvedPatientConfirmationState = terminalPatientConfirmationState || patientConfirmationState;
@@ -35978,7 +35946,7 @@ async function startServer() {
         ? sanitizeString(row?.room_id || source?.room_id || source?.roomId, 180)
         : null,
       roomName: locationType === 'clinica' ? roomName || 'Sala não informada' : null,
-      status: normalizeOperationalAppointmentStatus(row?.status || source?.status),
+      status: appointmentStatus,
       patientConfirmationStatus: resolvedPatientConfirmationState.status,
       patientConfirmationLabel: resolvedPatientConfirmationState.label,
       patientConfirmationColor: resolvedPatientConfirmationState.color,
@@ -37153,6 +37121,10 @@ async function startServer() {
       const patient = (Array.isArray(patientResult.data) ? patientResult.data[0] : null) || {};
       const clinicId = sanitizeString(appointment?.clinic_id || appointment?.clinicId || patient?.clinic_id || params.organizationId, 120);
       const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
+      const pushClinicLogoUrl = await resolvePushSafeClinicLogoUrl(
+        { supabase, logger: console },
+        [clinicBranding.logoUrl]
+      ) || clinicBranding.logoUrl || null;
       const scheduledAt = sanitizeIsoDateTime(params.scheduledStart) || sanitizeString(appointment?.scheduled_at || appointment?.scheduledAt, 80);
       const date = scheduledAt ? new Date(scheduledAt) : new Date();
       const dateLabel = formatDateInAppointmentTimezone(date).split('-').reverse().join('/');
@@ -37208,12 +37180,12 @@ async function startServer() {
           timeLabel,
           reminderKind: 'reschedule_approved',
           clinicName,
-          clinicLogoUrl: clinicBranding.logoUrl || null,
+          clinicLogoUrl: pushClinicLogoUrl,
           patientName
         },
         clinicId: clinicBranding.id || clinicId || null,
         clinicName,
-        clinicLogoUrl: clinicBranding.logoUrl || null,
+        clinicLogoUrl: pushClinicLogoUrl,
         patientName,
         title: clinicName,
         body: message,

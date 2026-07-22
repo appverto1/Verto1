@@ -53,6 +53,9 @@ import {
 import { resolveAppointmentCancellationState } from '../utils/appointmentCancellationState';
 import { getAppointmentPrimaryAction } from '../utils/appointmentPrimaryAction';
 import {
+  resolveAppointmentConfirmationSnapshot,
+} from '../utils/appointmentConfirmationState';
+import {
   getPatientTissAuthorizationQuantitySummary,
   hasConfirmedPatientTissAuthorizationBalance
 } from '../utils/patientTissAuthorizationView';
@@ -1121,11 +1124,19 @@ const hydrateCalendarEventsByKnownPatientNames = (events: any[]) => {
 const mergeAppointmentStatusForRender = (serverEvent: any, localEvent: any) => {
   const serverStatus = serverEvent?.status || serverEvent?.appointment_status;
   const localStatus = localEvent?.status || localEvent?.appointment_status;
+  const serverConfirmation = resolveAppointmentConfirmationSnapshot(serverEvent);
+  const serverConfirmationStatus = serverConfirmation.confirmationStatus ?? serverConfirmation.response;
+  const serverConfirmationWasReset =
+    serverConfirmation.hasCanonicalState &&
+    ['SCHEDULED', 'PENDING_CONFIRMATION'].includes(canonicalAppointmentStatus(serverConfirmationStatus));
   const isResolvedStatus = (status: any) => {
     const canonical = canonicalAppointmentStatus(status);
     return canonical !== 'SCHEDULED' && canonical !== 'PENDING_CONFIRMATION';
   };
   if (isResolvedStatus(serverStatus)) return serverStatus;
+  if (serverConfirmationWasReset && ['CONFIRMED', 'RESCHEDULE_REQUESTED'].includes(canonicalAppointmentStatus(localStatus))) {
+    return serverStatus || 'scheduled';
+  }
   if (isResolvedStatus(localStatus)) return localStatus;
   return localStatus || serverStatus || 'scheduled';
 };
@@ -1142,24 +1153,25 @@ const mergeCalendarEventForRender = (serverEvent: any, localEvent: any) => {
     serverEvent?.patient_name,
     serverEvent?.name,
   ]);
+  const confirmationSnapshot = resolveAppointmentConfirmationSnapshot(serverEvent, localEvent);
   return {
     ...mergedEvent,
     status: mergeAppointmentStatusForRender(serverEvent, localEvent),
     appointment_status: mergeAppointmentStatusForRender(serverEvent, localEvent),
-    patient_response: serverEvent?.patient_response || localEvent?.patient_response || null,
-    patientResponse: serverEvent?.patientResponse || localEvent?.patientResponse || null,
-    patient_confirmation_status: serverEvent?.patient_confirmation_status || localEvent?.patient_confirmation_status || null,
-    patientConfirmationStatus: serverEvent?.patientConfirmationStatus || localEvent?.patientConfirmationStatus || null,
-    patient_confirmation_at: serverEvent?.patient_confirmation_at || localEvent?.patient_confirmation_at || null,
-    patientConfirmationAt: serverEvent?.patientConfirmationAt || localEvent?.patientConfirmationAt || null,
-    patient_responded_at: serverEvent?.patient_responded_at || localEvent?.patient_responded_at || null,
-    patientRespondedAt: serverEvent?.patientRespondedAt || localEvent?.patientRespondedAt || null,
-    patient_confirmation_label: serverEvent?.patient_confirmation_label || localEvent?.patient_confirmation_label || null,
-    patientConfirmationLabel: serverEvent?.patientConfirmationLabel || localEvent?.patientConfirmationLabel || null,
-    patient_confirmation_color: serverEvent?.patient_confirmation_color || localEvent?.patient_confirmation_color || null,
-    patientConfirmationColor: serverEvent?.patientConfirmationColor || localEvent?.patientConfirmationColor || null,
-    patient_confirmation_source: serverEvent?.patient_confirmation_source || localEvent?.patient_confirmation_source || null,
-    patientConfirmationSource: serverEvent?.patientConfirmationSource || localEvent?.patientConfirmationSource || null,
+    patient_response: confirmationSnapshot.response,
+    patientResponse: confirmationSnapshot.response,
+    patient_confirmation_status: confirmationSnapshot.confirmationStatus,
+    patientConfirmationStatus: confirmationSnapshot.confirmationStatus,
+    patient_confirmation_at: confirmationSnapshot.confirmationAt,
+    patientConfirmationAt: confirmationSnapshot.confirmationAt,
+    patient_responded_at: confirmationSnapshot.respondedAt,
+    patientRespondedAt: confirmationSnapshot.respondedAt,
+    patient_confirmation_label: confirmationSnapshot.label,
+    patientConfirmationLabel: confirmationSnapshot.label,
+    patient_confirmation_color: confirmationSnapshot.color,
+    patientConfirmationColor: confirmationSnapshot.color,
+    patient_confirmation_source: confirmationSnapshot.source,
+    patientConfirmationSource: confirmationSnapshot.source,
     patientName,
     patient_name: patientName,
     name: patientName,
@@ -1280,6 +1292,7 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     closureSource?.closure_readiness_status ||
     closureSource?.readiness_status
   );
+  const confirmationSnapshot = resolveAppointmentConfirmationSnapshot(event, source);
   const normalized = {
     ...event,
     id: String(event?.id || `${patientName}-${start.toISOString()}`),
@@ -1301,18 +1314,18 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     responsibleProfessionalName: therapistName || null,
     type,
     status: event?.status || 'scheduled',
-    patient_response: event?.patient_response || event?.patientResponse || source?.patient_response || source?.patientResponse || null,
-    patientResponse: event?.patientResponse || event?.patient_response || source?.patientResponse || source?.patient_response || null,
-    patient_responded_at: event?.patient_responded_at || event?.patientRespondedAt || source?.patient_responded_at || source?.patientRespondedAt || null,
-    patientRespondedAt: event?.patientRespondedAt || event?.patient_responded_at || source?.patientRespondedAt || source?.patient_responded_at || null,
-    patient_confirmation_status: event?.patient_confirmation_status || event?.patientConfirmationStatus || source?.patient_confirmation_status || source?.patientConfirmationStatus || null,
-    patientConfirmationStatus: event?.patientConfirmationStatus || event?.patient_confirmation_status || source?.patientConfirmationStatus || source?.patient_confirmation_status || null,
-    patient_confirmation_label: event?.patient_confirmation_label || event?.patientConfirmationLabel || source?.patient_confirmation_label || source?.patientConfirmationLabel || null,
-    patientConfirmationLabel: event?.patientConfirmationLabel || event?.patient_confirmation_label || source?.patientConfirmationLabel || source?.patient_confirmation_label || null,
-    patient_confirmation_color: event?.patient_confirmation_color || event?.patientConfirmationColor || source?.patient_confirmation_color || source?.patientConfirmationColor || null,
-    patientConfirmationColor: event?.patientConfirmationColor || event?.patient_confirmation_color || source?.patientConfirmationColor || source?.patient_confirmation_color || null,
-    patient_confirmation_source: event?.patient_confirmation_source || event?.patientConfirmationSource || source?.patient_confirmation_source || source?.patientConfirmationSource || null,
-    patientConfirmationSource: event?.patientConfirmationSource || event?.patient_confirmation_source || source?.patientConfirmationSource || source?.patient_confirmation_source || null,
+    patient_response: confirmationSnapshot.response,
+    patientResponse: confirmationSnapshot.response,
+    patient_responded_at: confirmationSnapshot.respondedAt,
+    patientRespondedAt: confirmationSnapshot.respondedAt,
+    patient_confirmation_status: confirmationSnapshot.confirmationStatus,
+    patientConfirmationStatus: confirmationSnapshot.confirmationStatus,
+    patient_confirmation_label: confirmationSnapshot.label,
+    patientConfirmationLabel: confirmationSnapshot.label,
+    patient_confirmation_color: confirmationSnapshot.color,
+    patientConfirmationColor: confirmationSnapshot.color,
+    patient_confirmation_source: confirmationSnapshot.source,
+    patientConfirmationSource: confirmationSnapshot.source,
     has_pending_reschedule: Boolean(event?.has_pending_reschedule ?? event?.hasPendingReschedule ?? source?.has_pending_reschedule ?? source?.hasPendingReschedule),
     hasPendingReschedule: Boolean(event?.hasPendingReschedule ?? event?.has_pending_reschedule ?? source?.hasPendingReschedule ?? source?.has_pending_reschedule),
     reschedule_status: event?.reschedule_status || event?.rescheduleStatus || source?.reschedule_status || source?.rescheduleStatus || null,

@@ -12,6 +12,9 @@ import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
 import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
+import {
+  resolveAppointmentPatientDisplayStatus,
+} from '../utils/appointmentConfirmationState';
 
 type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
 
@@ -2997,10 +3000,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     });
     setSelectedPortalCalendarDateKey('');
   };
-  const activePortalAppointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
+  const detailedPortalAppointment = portalAppointmentDetail?.appointment;
+  const activePortalAppointment = detailedPortalAppointment
+    ? {
+        ...(selectedPortalAppointment || {}),
+        ...detailedPortalAppointment,
+        clinicName: firstPortalText(detailedPortalAppointment?.clinicName, selectedPortalAppointment?.clinicName),
+        clinicLogoUrl: firstPortalLogoUrl(
+          detailedPortalAppointment?.clinicLogoUrl,
+          detailedPortalAppointment?.clinic_logo_url,
+          selectedPortalAppointment?.clinicLogoUrl,
+          selectedPortalAppointment?.clinic_logo_url,
+        ),
+      }
+    : selectedPortalAppointment;
   const activePortalStatus = String(activePortalAppointment?.status || '').toUpperCase();
-  const activePortalConfirmationStatus = String(activePortalAppointment?.patientConfirmationStatus || activePortalAppointment?.patient_confirmation_status || '').toUpperCase();
-  const activePortalConfirmed = activePortalStatus.includes('CONFIRM') || activePortalConfirmationStatus.includes('CONFIRM');
+  const activePortalDisplayStatus = String(resolveAppointmentPatientDisplayStatus(activePortalAppointment)).toUpperCase();
+  const activePortalConfirmed = activePortalDisplayStatus.includes('CONFIRM');
   const activePortalProfessionalName = firstPortalText(
     activePortalAppointment?.professionalName,
     activePortalAppointment?.professional_name,
@@ -3116,8 +3132,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       <span className="block text-sm font-semibold text-slate-900">{formatPortalTime(appointment.scheduledAt)}</span>
                       <span className="block truncate text-xs font-semibold text-slate-500">{appointment.serviceType || 'Consulta'}</span>
                     </span>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${getPortalStatusPillClass(appointment.status)}`}>
-                      {getPortalStatusShortLabel(appointment.status)}
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${getPortalStatusPillClass(resolveAppointmentPatientDisplayStatus(appointment))}`}>
+                      {getPortalStatusShortLabel(resolveAppointmentPatientDisplayStatus(appointment))}
                     </span>
                   </button>
                 ))}
