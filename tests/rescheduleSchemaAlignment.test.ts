@@ -30,6 +30,14 @@ const reconciliationMigration = fs.readFileSync(
   path.join(root, 'supabase/migrations/20260721211000_reschedule_appointment_contract_reconciliation.sql'),
   'utf8',
 );
+const statusReconciliationMigration = fs.readFileSync(
+  path.join(root, 'supabase/migrations/20260722131500_reschedule_schema_status_reconciliation.sql'),
+  'utf8',
+);
+const routeCapabilitiesMigration = fs.readFileSync(
+  path.join(root, 'supabase/migrations/20260722143000_route_schema_capabilities_reconciliation.sql'),
+  'utf8',
+);
 
 const preview = server.slice(
   server.indexOf('const buildRescheduleApprovalPreview'),
@@ -95,6 +103,19 @@ test('availability resolves names and rooms in batches and blocks unconfirmed fi
   assert.doesNotMatch(preview, /for \(const option[\s\S]*?await supabase/);
 });
 
+test('availability reuses persisted action-request scope when legacy appointments lack duplicated scope columns', () => {
+  assert.match(server, /fetchPortalAppointmentForUser\(data\.appointment_id, user, \{[\s\S]*?patientId: data\.patient_id,[\s\S]*?organizationId: requestOrganizationId/);
+  assert.match(server, /appointmentPatientId && trustedPatientId && appointmentPatientId !== trustedPatientId/);
+  assert.match(server, /appointmentOrganizationId && trustedOrganizationId && appointmentOrganizationId !== trustedOrganizationId/);
+  assert.match(server, /patient_id: patientId \|\| data\.patient_id/);
+});
+
+test('availability rejects an action-request scope from another tenant before resolving resources', () => {
+  assert.match(server, /const requestOrganizationId = sanitizeString\(data\.organization_id, 120\)/);
+  assert.match(server, /!hasGlobalClinicAccess\(user\)[\s\S]*?requestOrganizationId !== activeClinicId/);
+  assert.match(server, /organizationId: requestOrganizationId/);
+});
+
 test('authorization balance query uses canonical schedule columns only', () => {
   assert.match(balanceReader, /scheduled_at,scheduled_start_at,scheduled_end_at/);
   assert.doesNotMatch(balanceReader, /scheduled_start_at,date/);
@@ -156,9 +177,33 @@ test('schema capability probe separates availability, approval, optional and leg
   assert.match(reconciliationMigration, /add column if not exists clinic_id uuid references public\.clinics/);
   assert.match(reconciliationMigration, /add column if not exists patient_id uuid references public\.patients/);
   assert.match(reconciliationMigration, /from public\.appointment_action_requests as request/);
+  assert.match(reconciliationMigration, /min\(request\.organization_id::text\)::uuid as organization_id/);
+  assert.match(reconciliationMigration, /min\(request\.patient_id::text\)::uuid as patient_id/);
   assert.match(reconciliationMigration, /having count\(distinct request\.organization_id\) = 1/);
   assert.match(reconciliationMigration, /to_jsonb\(appointment\) ->> 'duration_minutes'/);
   assert.doesNotMatch(reconciliationMigration, /\bdelete from\b|\btruncate\b|\bdrop column\b/i);
+});
+
+test('schema status reconciliation upgrades the legacy probe without touching appointments', () => {
+  assert.match(statusReconciliationMigration, /create or replace function public\.get_verto_critical_schema_status\(\)/);
+  assert.match(statusReconciliationMigration, /'availability_columns'/);
+  assert.match(statusReconciliationMigration, /'approval_columns'/);
+  assert.match(statusReconciliationMigration, /'organization_id', 'clinic_id', 'patient_id', 'status'/);
+  assert.match(statusReconciliationMigration, /revoke all on function public\.get_verto_critical_schema_status\(\) from public, anon, authenticated/);
+  assert.match(statusReconciliationMigration, /grant execute on function public\.get_verto_critical_schema_status\(\) to service_role/);
+  assert.match(statusReconciliationMigration, /notify pgrst, 'reload schema'/);
+  assert.doesNotMatch(statusReconciliationMigration, /\b(insert|update|delete|truncate|alter table|drop table)\b/i);
+});
+
+test('patient route capabilities avoid retry chains without exposing the catalog to user roles', () => {
+  assert.match(routeCapabilitiesMigration, /create or replace function public\.get_verto_route_schema_capabilities\(\)/);
+  assert.match(routeCapabilitiesMigration, /c\.table_name = 'patients'/);
+  assert.match(routeCapabilitiesMigration, /'profile_picture', 'profile_picture_path'/);
+  assert.match(routeCapabilitiesMigration, /'professional_id', 'is_active', 'deleted_at'/);
+  assert.match(routeCapabilitiesMigration, /revoke all on function public\.get_verto_route_schema_capabilities\(\) from public, anon, authenticated/);
+  assert.match(routeCapabilitiesMigration, /grant execute on function public\.get_verto_route_schema_capabilities\(\) to service_role/);
+  assert.match(routeCapabilitiesMigration, /notify pgrst, 'reload schema'/);
+  assert.doesNotMatch(routeCapabilitiesMigration, /\b(insert|update|delete|truncate|alter table|drop table)\b/i);
 });
 
 test('tasks and invitations alignment migrations only add confirmed current fields', () => {

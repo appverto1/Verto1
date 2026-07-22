@@ -1,5 +1,6 @@
 type SupabaseLike = {
   from: (table: string) => any;
+  rpc?: (name: string, payload?: Record<string, unknown>) => PromiseLike<any>;
 };
 
 type LoggerLike = Pick<Console, 'warn'>;
@@ -7,6 +8,7 @@ type LoggerLike = Pick<Console, 'warn'>;
 const SCHEMA_CAPABILITY_CACHE_TTL_MS = 5 * 60_000;
 type SchemaCapabilityEntry = { missingColumns: Set<string>; expiresAt: number };
 const schemaCapabilitiesByClient = new WeakMap<object, Map<string, SchemaCapabilityEntry>>();
+const schemaCapabilityHydrationByClient = new WeakMap<object, Map<string, Promise<void>>>();
 
 function schemaCapabilityMap(client: SupabaseLike) {
   const key = client as unknown as object;
@@ -35,8 +37,54 @@ function rememberMissingColumn(client: SupabaseLike, table: string, column: stri
   map.set(table, { missingColumns: current, expiresAt: Date.now() + SCHEMA_CAPABILITY_CACHE_TTL_MS });
 }
 
+async function hydrateMissingColumnsFromCriticalStatus(
+  client: SupabaseLike,
+  table: string,
+  candidateColumns: Set<string>
+) {
+  const map = schemaCapabilityMap(client);
+  const cached = map.get(table);
+  if (cached && cached.expiresAt > Date.now()) return;
+  if (typeof client.rpc !== 'function') return;
+
+  const key = client as unknown as object;
+  let hydrationMap = schemaCapabilityHydrationByClient.get(key);
+  if (!hydrationMap) {
+    hydrationMap = new Map();
+    schemaCapabilityHydrationByClient.set(key, hydrationMap);
+  }
+  const existing = hydrationMap.get(table);
+  if (existing) return existing;
+
+  const hydration = (async () => {
+    try {
+      const result = await client.rpc?.('get_verto_route_schema_capabilities');
+      const columns = result?.data?.[table]?.columns;
+      if (!columns || typeof columns !== 'object' || Array.isArray(columns)) return;
+      const missingColumns = new Set(
+        Array.from(candidateColumns).filter((column) => columns[column] === false)
+      );
+      map.set(table, {
+        missingColumns,
+        expiresAt: Date.now() + SCHEMA_CAPABILITY_CACHE_TTL_MS
+      });
+    } catch {
+      // The error-driven fallback below remains available when the catalog
+      // probe is unavailable during a rolling deploy.
+    }
+  })().finally(() => {
+    hydrationMap?.delete(table);
+  });
+  hydrationMap.set(table, hydration);
+  return hydration;
+}
+
 export function clearRouteSchemaCapabilityCache(client?: SupabaseLike) {
-  if (client) schemaCapabilitiesByClient.delete(client as unknown as object);
+  if (client) {
+    const key = client as unknown as object;
+    schemaCapabilitiesByClient.delete(key);
+    schemaCapabilityHydrationByClient.delete(key);
+  }
 }
 
 // Centraliza selects tolerantes a schemas legados usados por rotas do portal.
@@ -2009,11 +2057,30 @@ export async function fetchPatientsWithSchemaFallback(params: {
   limit: number;
   logger?: LoggerLike;
 }) {
-  let columns = [...PATIENT_LIST_SELECT_COLUMNS];
-  let filterIsActive = true;
-  let filterDeletedAt = true;
-  let includeProfessionalScope = cleanString(params.role, 40).toLowerCase() === 'therapist';
+  await hydrateMissingColumnsFromCriticalStatus(
+    params.supabase,
+    'patients',
+    PATIENT_LIST_OPTIONAL_COLUMNS
+  );
+  const cachedMissingColumns = readCachedMissingColumns(params.supabase, 'patients');
+  const discoveredMissingColumns = new Set<string>();
+  let columns = PATIENT_LIST_SELECT_COLUMNS.filter((column) => !cachedMissingColumns.has(column));
+  let filterIsActive = columns.includes('is_active');
+  let filterDeletedAt = columns.includes('deleted_at');
+  let includeProfessionalScope =
+    cleanString(params.role, 40).toLowerCase() === 'therapist' && columns.includes('professional_id');
   let lastError: any = null;
+
+  const warnDiscoveredCapabilities = () => {
+    if (discoveredMissingColumns.size === 0) return;
+    params.logger?.warn?.('[Schema fallback:/api/patients]', {
+      route: '/api/patients',
+      stage: 'capability_detection',
+      table: 'patients',
+      missingColumns: Array.from(discoveredMissingColumns).sort(),
+      nextSelect: joinColumns(columns)
+    });
+  };
 
   for (let attempt = 0; attempt < PATIENT_LIST_OPTIONAL_COLUMNS.size + 4; attempt += 1) {
     let query = params.supabase
@@ -2047,6 +2114,7 @@ export async function fetchPatientsWithSchemaFallback(params: {
 
     const result = await query;
     if (!result.error) {
+      warnDiscoveredCapabilities();
       return {
         data: Array.isArray(result.data) ? result.data : [],
         error: null,
@@ -2079,15 +2147,11 @@ export async function fetchPatientsWithSchemaFallback(params: {
     }
 
     if (!handled) break;
-
-    warnSchemaFallback(params.logger, {
-      route: '/api/patients',
-      table: 'patients',
-      missingColumn,
-      nextSelect: joinColumns(columns)
-    });
+    discoveredMissingColumns.add(missingColumn);
+    rememberMissingColumn(params.supabase, 'patients', missingColumn);
   }
 
+  warnDiscoveredCapabilities();
   return { data: null, error: lastError, select: joinColumns(columns) };
 }
 

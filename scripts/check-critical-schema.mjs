@@ -17,10 +17,6 @@ export const APPOINTMENT_ACTION_RESOLUTION_RPCS = [
 // optional audit/notification column cannot hide viable alternatives.
 export const APPOINTMENT_ACTION_AVAILABILITY_REQUIRED_COLUMNS = [
   'id',
-  'organization_id',
-  'clinic_id',
-  'patient_id',
-  'status',
   'scheduled_at',
   'scheduled_start_at',
   'scheduled_end_at',
@@ -32,6 +28,10 @@ export const APPOINTMENT_ACTION_AVAILABILITY_REQUIRED_COLUMNS = [
 // field must keep approval blocked, but must not block the availability view.
 export const APPOINTMENT_ACTION_APPROVAL_REQUIRED_COLUMNS = [
   ...APPOINTMENT_ACTION_AVAILABILITY_REQUIRED_COLUMNS,
+  'organization_id',
+  'clinic_id',
+  'patient_id',
+  'status',
   'therapist_name',
   'room_id',
   'room_name',
@@ -50,7 +50,6 @@ export const APPOINTMENT_ACTION_APPROVAL_REQUIRED_COLUMNS = [
   'notification_sent',
   'notification_sent_at',
   'notification_12h_sent',
-  'notification_12h_sent_at',
 ];
 
 export const APPOINTMENT_ACTION_OPTIONAL_COLUMNS = [

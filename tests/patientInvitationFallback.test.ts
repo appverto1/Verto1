@@ -86,6 +86,26 @@ class FakeSupabase {
   }
 }
 
+class CapabilityAwareFakeSupabase extends FakeSupabase {
+  rpcCalls: string[] = [];
+
+  async rpc(name: string) {
+    this.rpcCalls.push(name);
+    return {
+      data: {
+        patients: {
+          columns: {
+            profile_picture: false,
+            profile_picture_path: false,
+            professional_id: false
+          }
+        }
+      },
+      error: null
+    };
+  }
+}
+
 const tests: Array<{ name: string; fn: () => void | Promise<void> }> = [];
 const test = (name: string, fn: () => void | Promise<void>) => tests.push({ name, fn });
 const silentLogger = { warn() {} };
@@ -151,6 +171,87 @@ test('/api/patients returns 200-equivalent fallback when professional_id is abse
   assert.match(supabase.calls[0].filters.find((item) => item.op === 'or')?.value || '', /professional_id/);
   assert.ok(!supabase.calls[1].selectColumns.includes('professional_id'));
   assert.equal(supabase.calls[1].filters.some((item) => item.op === 'eq' && item.column === 'therapist_id'), true);
+});
+
+test('/api/patients caches missing optional columns and avoids repeating the fallback chain', async () => {
+  const warnings: any[] = [];
+  const logger = { warn: (...args: any[]) => warnings.push(args) };
+  const supabase = new FakeSupabase({
+    patients: [
+      { data: null, error: { code: '42703', message: 'column patients.profile_picture does not exist' } },
+      { data: null, error: { code: '42703', message: 'column patients.profile_picture_path does not exist' } },
+      { data: null, error: { code: '42703', message: 'column patients.professional_id does not exist' } },
+      { data: [{ id: 'patient-legacy-1' }], error: null },
+      { data: [{ id: 'patient-legacy-2' }], error: null }
+    ]
+  });
+  clearRouteSchemaCapabilityCache(supabase);
+
+  const first = await fetchPatientsWithSchemaFallback({
+    supabase,
+    role: 'therapist',
+    userId: 'therapist-1',
+    clinicId: 'clinic-1',
+    limit: 200,
+    logger
+  });
+  const second = await fetchPatientsWithSchemaFallback({
+    supabase,
+    role: 'therapist',
+    userId: 'therapist-1',
+    clinicId: 'clinic-1',
+    limit: 200,
+    logger
+  });
+
+  assert.equal(first.data?.[0]?.id, 'patient-legacy-1');
+  assert.equal(second.data?.[0]?.id, 'patient-legacy-2');
+  assert.equal(supabase.calls.length, 5);
+  assert.ok(!supabase.calls[4].selectColumns.includes('profile_picture'));
+  assert.ok(!supabase.calls[4].selectColumns.includes('profile_picture_path'));
+  assert.ok(!supabase.calls[4].selectColumns.includes('professional_id'));
+  assert.equal(supabase.calls[4].filters.some((item) => item.op === 'eq' && item.column === 'therapist_id'), true);
+  assert.equal(warnings.length, 1);
+  assert.deepEqual(warnings[0][1].missingColumns, ['professional_id', 'profile_picture', 'profile_picture_path']);
+});
+
+test('/api/patients uses catalog capabilities before its first SELECT', async () => {
+  const supabase = new CapabilityAwareFakeSupabase({
+    patients: [
+      { data: [{ id: 'patient-legacy-1' }], error: null },
+      { data: [{ id: 'patient-legacy-2' }], error: null }
+    ]
+  });
+  clearRouteSchemaCapabilityCache(supabase);
+
+  const first = await fetchPatientsWithSchemaFallback({
+    supabase,
+    role: 'therapist',
+    userId: 'therapist-1',
+    clinicId: 'clinic-1',
+    limit: 200,
+    logger: silentLogger
+  });
+  const second = await fetchPatientsWithSchemaFallback({
+    supabase,
+    role: 'therapist',
+    userId: 'therapist-1',
+    clinicId: 'clinic-1',
+    limit: 200,
+    logger: silentLogger
+  });
+
+  assert.equal(first.data?.[0]?.id, 'patient-legacy-1');
+  assert.equal(second.data?.[0]?.id, 'patient-legacy-2');
+  assert.deepEqual(supabase.rpcCalls, ['get_verto_route_schema_capabilities']);
+  assert.equal(supabase.calls.length, 2);
+  assert.ok(!supabase.calls[0].selectColumns.includes('profile_picture'));
+  assert.ok(!supabase.calls[0].selectColumns.includes('profile_picture_path'));
+  assert.ok(!supabase.calls[0].selectColumns.includes('professional_id'));
+  assert.equal(
+    supabase.calls[0].filters.some((item) => item.op === 'eq' && item.column === 'therapist_id'),
+    true
+  );
 });
 
 test('/api/patients returns an empty list without breaking', async () => {

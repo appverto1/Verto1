@@ -39,8 +39,8 @@ alter table if exists public.appointments
 with request_scope as (
   select
     request.appointment_id,
-    min(request.organization_id) as organization_id,
-    min(request.patient_id) as patient_id
+    min(request.organization_id::text)::uuid as organization_id,
+    min(request.patient_id::text)::uuid as patient_id
   from public.appointment_action_requests as request
   where request.appointment_id is not null
     and request.organization_id is not null

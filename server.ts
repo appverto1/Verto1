@@ -35379,7 +35379,14 @@ async function startServer() {
     buildQuery: (selectColumns: string) => PromiseLike<any>,
     stage: string
   ) => {
-    let columns = PORTAL_APPOINTMENT_SELECT.split(',').map((column) => column.trim()).filter(Boolean);
+    const knownMissingColumns = new Set([
+      ...(appointmentActionSchemaState.missingCriticalColumns || []),
+      ...(appointmentActionSchemaState.missingApprovalColumns || [])
+    ]);
+    let columns = PORTAL_APPOINTMENT_SELECT
+      .split(',')
+      .map((column) => column.trim())
+      .filter((column) => Boolean(column) && !knownMissingColumns.has(column));
     const removedColumns = new Set<string>();
     for (let attempt = 0; attempt < 24 && columns.length > 1; attempt += 1) {
       const result = await buildQuery(columns.join(','));
@@ -35449,7 +35456,11 @@ async function startServer() {
     return patientIds.includes(scopedPatientId);
   };
 
-  const fetchPortalAppointmentForUser = async (appointmentId: string, user: any) => {
+  const fetchPortalAppointmentForUser = async (
+    appointmentId: string,
+    user: any,
+    persistedScope?: { patientId?: unknown; organizationId?: unknown }
+  ) => {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
     if (!isUuid(safeAppointmentId)) return { ok: false, status: 400, error: 'Consulta inválida.' };
     const { data, error } = await queryPortalAppointmentsWithSchemaFallback(
@@ -35467,11 +35478,36 @@ async function startServer() {
       throw error;
     }
     if (!data?.id) return { ok: false, status: 404, error: 'Consulta não encontrada.' };
-    const patientId = sanitizeString(data.patient_id, 120);
-    if (!(await canPortalUserAccessPatient(patientId, data, user))) {
+    const source = parseAppointmentSourcePayloadForFamilyView(data?.source_payload || data?.sourcePayload);
+    const appointmentPatientId = sanitizeString(data.patient_id || source?.patient_id || source?.patientId, 120);
+    const trustedPatientId = sanitizeString(persistedScope?.patientId, 120);
+    const appointmentOrganizationId = sanitizeString(
+      data.organization_id || data.clinic_id || source?.organization_id || source?.organizationId || source?.clinic_id || source?.clinicId,
+      120
+    );
+    const trustedOrganizationId = sanitizeString(persistedScope?.organizationId, 120);
+    if (
+      (appointmentPatientId && trustedPatientId && appointmentPatientId !== trustedPatientId) ||
+      (appointmentOrganizationId && trustedOrganizationId && appointmentOrganizationId !== trustedOrganizationId)
+    ) {
       return { ok: false, status: 404, error: 'Consulta não encontrada.' };
     }
-    return { ok: true, appointment: data };
+    const patientId = appointmentPatientId || trustedPatientId;
+    const organizationId = appointmentOrganizationId || trustedOrganizationId;
+    const clinicId = sanitizeString(
+      data.clinic_id || source?.clinic_id || source?.clinicId || currentClinicId(user) || organizationId,
+      120
+    );
+    const scopedAppointment = {
+      ...data,
+      patient_id: patientId || data.patient_id,
+      organization_id: organizationId || data.organization_id,
+      clinic_id: clinicId || data.clinic_id
+    };
+    if (!(await canPortalUserAccessPatient(patientId, scopedAppointment, user))) {
+      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+    }
+    return { ok: true, appointment: scopedAppointment };
   };
 
   app.get('/api/portal/notifications', checkAuth, async (req: any, res) => {
@@ -37166,7 +37202,18 @@ async function startServer() {
       throw error;
     }
     if (!data?.id) return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
-    const appointmentContext = await fetchPortalAppointmentForUser(data.appointment_id, user);
+    const requestOrganizationId = sanitizeString(data.organization_id, 120);
+    const activeClinicId = currentClinicId(user);
+    if (
+      !hasGlobalClinicAccess(user) &&
+      (!isUuid(requestOrganizationId) || !isUuid(activeClinicId) || requestOrganizationId !== activeClinicId)
+    ) {
+      return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
+    }
+    const appointmentContext = await fetchPortalAppointmentForUser(data.appointment_id, user, {
+      patientId: data.patient_id,
+      organizationId: requestOrganizationId
+    });
     if (!appointmentContext.ok) return appointmentContext;
     return { ok: true, request: data, appointment: (appointmentContext as any).appointment };
   };

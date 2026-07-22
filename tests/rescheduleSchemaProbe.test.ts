@@ -149,6 +149,37 @@ test('approval-only fields do not block availability, but keep approval protecte
   assert.equal(client.calls.some((call) => call.name === 'approve_appointment_reschedule_v2'), false);
 });
 
+test('persisted request scope can support read-only availability while physical scope columns keep approval blocked', async () => {
+  const missingScopeColumns = ['organization_id', 'clinic_id', 'patient_id', 'status'];
+  const result = await checkAppointmentActionResolutionSchema(makeClient({
+    status: Promise.resolve({
+      data: {
+        reschedule: {
+          version: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
+          approve_rpc: true,
+          service_role_execute: true,
+          anon_execute: false,
+          authenticated_execute: false,
+          availability_columns: completeAvailabilityColumns,
+          approval_columns: {
+            ...completeApprovalColumns,
+            ...Object.fromEntries(missingScopeColumns.map((column) => [column, false])),
+          },
+          optional_columns: completeOptionalColumns,
+          legacy_columns: {},
+        },
+      },
+      error: null,
+    }),
+  }));
+
+  assert.equal(result.availabilityReady, true);
+  assert.equal(result.approvalReady, false);
+  assert.deepEqual(result.missingCriticalColumns, []);
+  assert.deepEqual(result.missingApprovalColumns, missingScopeColumns);
+  assert.equal(result.approvalReason, 'approval_columns_missing');
+});
+
 test('availability remains blocked only when an operational appointment field is missing', async () => {
   const result = await checkAppointmentActionResolutionSchema(makeClient({
     status: Promise.resolve({
