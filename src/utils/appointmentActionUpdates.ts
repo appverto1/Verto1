@@ -202,6 +202,18 @@ const synchronizeAppointmentScheduleAliases = (incoming: any = {}, merged: any =
     incoming?.endTime,
     incoming?.end,
   ]);
+  const hasStartDateAlias = Object.prototype.hasOwnProperty.call(merged, "start");
+  const hasEndDateAlias = Object.prototype.hasOwnProperty.call(merged, "end");
+  const synchronizedStartAlias = hasStartDateAlias && scheduledStart
+    ? merged.start instanceof Date
+      ? new Date(scheduledStart)
+      : scheduledStart
+    : undefined;
+  const synchronizedEndAlias = hasEndDateAlias && scheduledEnd
+    ? merged.end instanceof Date
+      ? new Date(scheduledEnd)
+      : scheduledEnd
+    : undefined;
 
   return {
     ...merged,
@@ -212,7 +224,7 @@ const synchronizeAppointmentScheduleAliases = (incoming: any = {}, merged: any =
       scheduledAt: scheduledStart,
       start_time: scheduledStart,
       startTime: scheduledStart,
-      start: scheduledStart,
+      ...(hasStartDateAlias ? { start: synchronizedStartAlias } : {}),
     } : {}),
     ...(scheduledEnd ? {
       scheduled_end_at: scheduledEnd,
@@ -220,7 +232,7 @@ const synchronizeAppointmentScheduleAliases = (incoming: any = {}, merged: any =
       scheduledEnd,
       end_time: scheduledEnd,
       endTime: scheduledEnd,
-      end: scheduledEnd,
+      ...(hasEndDateAlias ? { end: synchronizedEndAlias } : {}),
     } : {}),
   };
 };

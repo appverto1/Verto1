@@ -828,6 +828,11 @@ const parseEventEnd = (event: any, start: Date) => {
   return new Date(start.getTime() + (Number.isFinite(duration) && duration > 0 ? duration : 50) * 60 * 1000);
 };
 
+const getCalendarEventStartTimestamp = (event: any) => {
+  const start = event?.start instanceof Date ? event.start : parseEventStart(event);
+  return start.getTime();
+};
+
 const normalizeRoomSpecialties = (value: any): string[] => {
   if (Array.isArray(value)) {
     return value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6);
@@ -1886,7 +1891,8 @@ export const ClinicalAgendaBoard = ({
     return baseEvents
       .filter((event: any) => {
         if (isDeletedAppointmentEvent(event)) return false;
-        const startTime = event.start.getTime();
+        const startTime = getCalendarEventStartTimestamp(event);
+        if (!Number.isFinite(startTime)) return false;
         if (startTime < fromTime || startTime > toTime) return false;
         if (selectedTherapistIds.length > 0 && !selectedTherapistIds.includes(String(event.therapist_id || ''))) return false;
         if (selectedPatientIds.length > 0 && !selectedPatientIds.includes(String(event.patient_id || ''))) return false;
@@ -1914,7 +1920,7 @@ export const ClinicalAgendaBoard = ({
         }
         return matchesQuickFilters(event);
       })
-      .sort((a: any, b: any) => a.start.getTime() - b.start.getTime());
+      .sort((a: any, b: any) => getCalendarEventStartTimestamp(a) - getCalendarEventStartTimestamp(b));
   }, [
     baseEvents,
     visibleRange,

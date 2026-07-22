@@ -91,6 +91,8 @@ test('appointment reschedule synchronizes every schedule alias from the persiste
       scheduled_at: previousStart,
       start_time: previousStart,
       end_time: previousEnd,
+      start: new Date(previousStart),
+      end: new Date(previousEnd),
     },
     {
       id: 'appointment-1',
@@ -100,12 +102,16 @@ test('appointment reschedule synchronizes every schedule alias from the persiste
     },
   );
 
-  for (const key of ['scheduled_start_at', 'scheduledStartAt', 'scheduled_at', 'scheduledAt', 'start_time', 'startTime', 'start']) {
+  for (const key of ['scheduled_start_at', 'scheduledStartAt', 'scheduled_at', 'scheduledAt', 'start_time', 'startTime']) {
     assert.equal(merged[key], nextStart, `${key} deve apontar para o novo inÃ­cio.`);
   }
-  for (const key of ['scheduled_end_at', 'scheduledEndAt', 'scheduledEnd', 'end_time', 'endTime', 'end']) {
+  for (const key of ['scheduled_end_at', 'scheduledEndAt', 'scheduledEnd', 'end_time', 'endTime']) {
     assert.equal(merged[key], nextEnd, `${key} deve apontar para o novo fim.`);
   }
+  assert.ok(merged.start instanceof Date);
+  assert.ok(merged.end instanceof Date);
+  assert.equal(merged.start.toISOString(), nextStart);
+  assert.equal(merged.end.toISOString(), nextEnd);
 });
 
 test('appointment action result is enriched with local confirmed identity before rendering', () => {
@@ -136,6 +142,8 @@ test('calendar keeps the persisted server schedule when a local snapshot is stal
   const mergeForRender = calendarCode.slice(mergeStart, mergeEnd);
   assert.match(mergeForRender, /mergeAppointmentIdentity\(localEvent, serverEvent\)/);
   assert.doesNotMatch(mergeForRender, /mergeAppointmentIdentity\(serverEvent, localEvent\)/);
+  assert.match(calendarCode, /const startTime = getCalendarEventStartTimestamp\(event\)/);
+  assert.match(calendarCode, /if \(!Number\.isFinite\(startTime\)\) return false/);
 });
 
 test('appointment reschedule replaces every schedule alias and closes stale detail without reload', () => {
