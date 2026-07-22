@@ -175,8 +175,62 @@ const preserveAppointmentClinicalAssignment = (current: any = {}, incoming: any 
   };
 };
 
+const firstValidScheduleInstant = (values: any[]) => {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const parsed = value instanceof Date ? value : new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return "";
+};
+
+const synchronizeAppointmentScheduleAliases = (incoming: any = {}, merged: any = {}) => {
+  const scheduledStart = firstValidScheduleInstant([
+    incoming?.scheduled_start_at,
+    incoming?.scheduledStartAt,
+    incoming?.scheduled_at,
+    incoming?.scheduledAt,
+    incoming?.start_time,
+    incoming?.startTime,
+    incoming?.start,
+  ]);
+  const scheduledEnd = firstValidScheduleInstant([
+    incoming?.scheduled_end_at,
+    incoming?.scheduledEndAt,
+    incoming?.scheduledEnd,
+    incoming?.end_time,
+    incoming?.endTime,
+    incoming?.end,
+  ]);
+
+  return {
+    ...merged,
+    ...(scheduledStart ? {
+      scheduled_start_at: scheduledStart,
+      scheduledStartAt: scheduledStart,
+      scheduled_at: scheduledStart,
+      scheduledAt: scheduledStart,
+      start_time: scheduledStart,
+      startTime: scheduledStart,
+      start: scheduledStart,
+    } : {}),
+    ...(scheduledEnd ? {
+      scheduled_end_at: scheduledEnd,
+      scheduledEndAt: scheduledEnd,
+      scheduledEnd,
+      end_time: scheduledEnd,
+      endTime: scheduledEnd,
+      end: scheduledEnd,
+    } : {}),
+  };
+};
+
 export const mergeAppointmentIdentity = (current: any = {}, incoming: any = {}) => {
-  const merged = preserveAppointmentClinicalAssignment(current, incoming, { ...(current || {}), ...(incoming || {}) });
+  const merged = preserveAppointmentClinicalAssignment(
+    current,
+    incoming,
+    synchronizeAppointmentScheduleAliases(incoming, { ...(current || {}), ...(incoming || {}) }),
+  );
   const patientName = pickPatientLabel([
     ...appointmentPatientNameCandidates(incoming),
     ...appointmentPatientNameCandidates(current),

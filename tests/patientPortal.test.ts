@@ -236,7 +236,10 @@ test('remarcacao do portal usa slots disponiveis em vez de seletor livre', () =>
   const modal = between(patientDashboardCode, 'const portalActionModal =', 'const closeMoodModal');
   assert.match(dataServiceCode, /async getPortalAppointmentRescheduleSlots/);
   assert.match(dataServiceCode, /\/reschedule-slots/);
+  const availabilityClient = between(dataServiceCode, 'async getPortalAppointmentRescheduleSlots', 'async requestPortalAppointmentCancel');
+  assert.match(availabilityClient, /cache: 'no-store'/);
   assert.match(serverCode, /app\.get\('\/api\/portal\/appointments\/:appointmentId\/reschedule-slots'/);
+  assert.match(serverCode, /app\.get\('\/api\/portal\/appointments\/:appointmentId\/reschedule-slots', portalActionLimiter, noStoreDynamicResponse, checkAuth/);
   assert.match(serverCode, /buildPortalRescheduleAvailabilityForAppointment/);
   assert.match(serverCode, /resolveValidPortalRescheduleOptions/);
   assert.match(patientDashboardCode, /maxDays: 5/);
@@ -247,7 +250,24 @@ test('remarcacao do portal usa slots disponiveis em vez de seletor livre', () =>
   assert.match(modal, /portalSelectedRescheduleSlots\.length\}\//);
   assert.match(patientDashboardCode, /rescheduleOptions: selectedRescheduleOptions/);
   assert.match(patientDashboardCode, /portalModal === 'reschedule' && portalSelectedRescheduleSlots\.length === 0/);
+  assert.match(patientDashboardCode, /availableSlotIds\.has/);
+  assert.match(patientDashboardCode, /portalRescheduleAvailabilityLastRequestedAtRef/);
+  assert.match(patientDashboardCode, /window\.addEventListener\('verto:appointment-domain-event', refreshAvailableSlotsAfterDomainEvent/);
   assert.doesNotMatch(modal, /datetime-local/);
+});
+
+test('disponibilidade usa appointments persistidos antes do snapshot legado', () => {
+  const canonicalPrecedence = serverCode.match(/\[\.\.\.stateAppointments, \.\.\.tableAppointments\]/g) || [];
+  assert.ok(canonicalPrecedence.length >= 3, 'Agenda, aprovaÃ§Ã£o e portal devem priorizar a tabela canÃ´nica.');
+  assert.match(serverCode, /stateResult\.data\.rooms\.forEach\(\(room: any\) => addRoom\(room, false\)\)/);
+  assert.match(serverCode, /app\.get\('\/api\/appointments\/action-requests\/:requestId\/availability', noStoreDynamicResponse, checkAuth/);
+  const staffAvailabilityClient = between(dataServiceCode, 'async getAppointmentActionRequestAvailability', 'async rejectAppointmentActionRequest');
+  assert.match(staffAvailabilityClient, /cache: 'no-store'/);
+  assert.match(calendarCode, /window\.addEventListener\('verto:appointment-domain-event', refreshAvailabilityAfterDomainEvent/);
+  const portalAppointmentsClient = between(dataServiceCode, 'async getPortalAppointments', 'async getPortalContext');
+  assert.match(portalAppointmentsClient, /cache: 'no-store'/);
+  assert.match(serverCode, /app\.get\('\/api\/portal\/appointments', noStoreDynamicResponse, checkAuth/);
+  assert.match(patientDashboardCode, /window\.addEventListener\('verto:appointment-domain-event', refreshAppointmentsAfterDomainEvent/);
 });
 
 test('horarios de trabalho do profissional alimentam remarcacao sem listar mes inteiro', () => {

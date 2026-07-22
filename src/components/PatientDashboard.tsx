@@ -126,6 +126,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [expandedAnamnesisSections, setExpandedAnamnesisSections] = useState<Record<string, boolean>>({});
   const portalAppointmentsRequestRef = useRef(0);
   const portalAppointmentsLastLoadedAtRef = useRef(0);
+  const portalRescheduleAvailabilityRequestRef = useRef(0);
+  const portalRescheduleAvailabilityLastRequestedAtRef = useRef(0);
   const portalAnamnesisRequestRef = useRef(0);
   const portalAnamnesisLastLoadedAtRef = useRef(0);
   const portalNotificationsRequestRef = useRef(0);
@@ -517,21 +519,25 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [portalSection, portalCalendarMonth, portalAppointmentsLoaded, portalAppointmentsRangeKey, portalAppointmentsState.loading, user?.id, user?.email, portalPatientId, portalDefaultAppointmentsRange]);
 
   useEffect(() => {
-    const refreshAppointmentsWhenVisible = () => {
+    const refreshAppointments = (force = false) => {
       if (document.visibilityState !== 'visible') return;
       if (portalSection !== 'appointments' && portalSection !== 'reports') return;
-      if (portalAppointmentsState.loading) return;
-      if (Date.now() - portalAppointmentsLastLoadedAtRef.current < 30_000) return;
+      if (portalAppointmentsState.loading && !force) return;
+      if (!force && Date.now() - portalAppointmentsLastLoadedAtRef.current < 30_000) return;
       const range = portalSection === 'appointments'
         ? getPortalCalendarMonthRange(portalCalendarMonth)
         : portalDefaultAppointmentsRange;
       void loadPortalAppointments(range);
     };
+    const refreshAppointmentsWhenVisible = () => refreshAppointments(false);
+    const refreshAppointmentsAfterDomainEvent = () => refreshAppointments(true);
     window.addEventListener('focus', refreshAppointmentsWhenVisible);
     document.addEventListener('visibilitychange', refreshAppointmentsWhenVisible);
+    window.addEventListener('verto:appointment-domain-event', refreshAppointmentsAfterDomainEvent as EventListener);
     return () => {
       window.removeEventListener('focus', refreshAppointmentsWhenVisible);
       document.removeEventListener('visibilitychange', refreshAppointmentsWhenVisible);
+      window.removeEventListener('verto:appointment-domain-event', refreshAppointmentsAfterDomainEvent as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portalSection, portalCalendarMonth, portalAppointmentsState.loading, user?.id, user?.email, portalPatientId, portalDefaultAppointmentsRange]);
@@ -727,17 +733,29 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setPortalRescheduleAvailability({ loading: false, error: 'Consulta não encontrada.', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
       return;
     }
+    const requestId = ++portalRescheduleAvailabilityRequestRef.current;
+    portalRescheduleAvailabilityLastRequestedAtRef.current = Date.now();
     setPortalRescheduleAvailability((prev: any) => ({ ...prev, loading: true, error: '', days: [], totalSlots: 0, maxSelectable: 3, message: '' }));
     const result = await dataService.getPortalAppointmentRescheduleSlots(appointmentId, { maxDays: 5, dateFrom });
+    if (requestId !== portalRescheduleAvailabilityRequestRef.current) return;
     if (!result?.success) {
       setPortalRescheduleAvailability({ loading: false, error: result?.error || 'Não foi possível carregar horários disponíveis.', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
       return;
     }
     const data = result.data || {};
+    const days = Array.isArray(data.days) ? data.days : [];
+    const availableSlotIds = new Set(
+      days.flatMap((day: any) => (Array.isArray(day?.slots) ? day.slots : []))
+        .map((slot: any) => String(slot?.id || slot?.scheduledStart || '').trim())
+        .filter(Boolean)
+    );
+    setPortalSelectedRescheduleSlots((prev) => prev.filter((slot) =>
+      availableSlotIds.has(String(slot?.id || slot?.scheduledStart || '').trim())
+    ));
     setPortalRescheduleAvailability({
       loading: false,
       error: '',
-      days: Array.isArray(data.days) ? data.days : [],
+      days,
       totalSlots: Number(data.totalSlots || 0),
       maxSelectable: Number(data.maxSelectable || 3) || 3,
       message: data.message || '',
@@ -757,10 +775,34 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const closePortalActionModal = () => {
+    portalRescheduleAvailabilityRequestRef.current += 1;
     setPortalModal('');
     setPortalSelectedRescheduleSlots([]);
     setPortalRescheduleAvailability((prev: any) => ({ ...prev, loading: false, error: '' }));
   };
+
+  useEffect(() => {
+    if (portalModal !== 'reschedule') return;
+    const refreshAvailableSlots = (force = false) => {
+      if (document.visibilityState !== 'visible' || portalActionSaving) return;
+      if (portalRescheduleAvailability.loading && !force) return;
+      if (!force && Date.now() - portalRescheduleAvailabilityLastRequestedAtRef.current < 1_500) return;
+      const appointmentId = String((portalAppointmentDetail?.appointment || selectedPortalAppointment)?.id || '').trim();
+      if (!appointmentId) return;
+      void loadPortalRescheduleSlots(appointmentId, portalRescheduleAvailability.weekStart || undefined);
+    };
+    const refreshAvailableSlotsWhenVisible = () => refreshAvailableSlots(false);
+    const refreshAvailableSlotsAfterDomainEvent = () => refreshAvailableSlots(true);
+    window.addEventListener('focus', refreshAvailableSlotsWhenVisible);
+    document.addEventListener('visibilitychange', refreshAvailableSlotsWhenVisible);
+    window.addEventListener('verto:appointment-domain-event', refreshAvailableSlotsAfterDomainEvent as EventListener);
+    return () => {
+      window.removeEventListener('focus', refreshAvailableSlotsWhenVisible);
+      document.removeEventListener('visibilitychange', refreshAvailableSlotsWhenVisible);
+      window.removeEventListener('verto:appointment-domain-event', refreshAvailableSlotsAfterDomainEvent as EventListener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portalModal, portalActionSaving, portalRescheduleAvailability.loading, portalRescheduleAvailability.weekStart, portalAppointmentDetail?.appointment?.id, selectedPortalAppointment?.id]);
 
   const togglePortalRescheduleSlot = (slot: any) => {
     const slotId = String(slot?.id || slot?.scheduledStart || '').trim();
@@ -3213,8 +3255,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   <span className="text-[#7a32fc]">{portalSelectedRescheduleSlots.length}/{Math.max(1, Math.min(3, Number(portalRescheduleAvailability.maxSelectable || 3) || 3))}</span>
                 </div>
                 {portalRescheduleAvailability.rangeLabel && (
-                  <div className="rounded-2xl border border-slate-100 bg-white px-4 py-2 text-xs font-medium text-slate-600">
-                    Semana exibida: <span className="font-semibold text-slate-800">{portalRescheduleAvailability.rangeLabel}</span>
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-2 text-xs font-medium text-slate-600">
+                    <span>Semana exibida: <span className="font-semibold text-slate-800">{portalRescheduleAvailability.rangeLabel}</span></span>
+                    <button
+                      type="button"
+                      disabled={portalRescheduleAvailability.loading}
+                      onClick={() => {
+                        const appointmentId = String((portalAppointmentDetail?.appointment || selectedPortalAppointment)?.id || '').trim();
+                        void loadPortalRescheduleSlots(appointmentId, portalRescheduleAvailability.weekStart || undefined);
+                      }}
+                      className="inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold text-[#7a32fc] transition hover:bg-purple-50 disabled:opacity-50"
+                      title="Atualizar horários disponíveis"
+                    >
+                      <RefreshCcw size={14} className={portalRescheduleAvailability.loading ? 'animate-spin' : ''} />
+                      Atualizar
+                    </button>
                   </div>
                 )}
                 {portalRescheduleAvailability.loading && (

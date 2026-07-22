@@ -807,7 +807,7 @@ const addDays = (date: Date, amount: number) => {
 const formatTime = (date: Date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 
 const parseEventStart = (event: any) => {
-  const value = event?.start_time || event?.startTime || event?.scheduled_at || event?.scheduledAt || event?.start;
+  const value = event?.scheduled_start_at || event?.scheduledStartAt || event?.scheduled_at || event?.scheduledAt || event?.start_time || event?.startTime || event?.start;
   if (value) {
     const parsed = new Date(value);
     if (!Number.isNaN(parsed.getTime())) return parsed;
@@ -819,7 +819,7 @@ const parseEventStart = (event: any) => {
 };
 
 const parseEventEnd = (event: any, start: Date) => {
-  const value = event?.end_time || event?.endTime || event?.end;
+  const value = event?.scheduled_end_at || event?.scheduledEndAt || event?.scheduledEnd || event?.end_time || event?.endTime || event?.end;
   if (value) {
     const parsed = new Date(value);
     if (!Number.isNaN(parsed.getTime())) return parsed;
@@ -1128,7 +1128,7 @@ const mergeAppointmentStatusForRender = (serverEvent: any, localEvent: any) => {
 const mergeCalendarEventForRender = (serverEvent: any, localEvent: any) => {
   if (!serverEvent) return localEvent;
   if (!localEvent) return serverEvent;
-  const mergedEvent = mergeAppointmentIdentity(serverEvent, localEvent);
+  const mergedEvent = mergeAppointmentIdentity(localEvent, serverEvent);
   const patientName = pickPatientLabel([
     localEvent?.patientName,
     localEvent?.patient_name,
@@ -1512,6 +1512,7 @@ export const ClinicalAgendaBoard = ({
   const lastSuccessfulFetchAtRef = useRef(0);
   const refreshDebounceTimerRef = useRef<number | null>(null);
   const pendingVisibilityRefreshRef = useRef(false);
+  const rescheduleAvailabilityLastRequestedAtRef = useRef(0);
   const localAgendaIdsRef = useRef(new Set<string>());
   const canEditBillingContext = ['coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
   const roomLookup = useMemo(() => {
@@ -1548,6 +1549,7 @@ export const ClinicalAgendaBoard = ({
       error: '',
       data: current.requestId === pendingRescheduleRequestId ? current.data : null
     }));
+    rescheduleAvailabilityLastRequestedAtRef.current = Date.now();
     dataService.getAppointmentActionRequestAvailability(pendingRescheduleRequestId, {
       forceSchemaCheck: rescheduleAvailabilityNonce > 0,
     })
@@ -1584,6 +1586,27 @@ export const ClinicalAgendaBoard = ({
       active = false;
     };
   }, [pendingRescheduleRequestId, rescheduleAvailabilityNonce]);
+
+  useEffect(() => {
+    if (!pendingRescheduleRequestId || typeof window === 'undefined') return undefined;
+    const refreshAvailability = (force = false) => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (rescheduleAvailabilityState.loading && !force) return;
+      if (!force && Date.now() - rescheduleAvailabilityLastRequestedAtRef.current < 1_500) return;
+      rescheduleAvailabilityLastRequestedAtRef.current = Date.now();
+      setRescheduleAvailabilityNonce((value) => value + 1);
+    };
+    const refreshAvailabilityWhenVisible = () => refreshAvailability(false);
+    const refreshAvailabilityAfterDomainEvent = () => refreshAvailability(true);
+    window.addEventListener('focus', refreshAvailabilityWhenVisible);
+    document.addEventListener('visibilitychange', refreshAvailabilityWhenVisible);
+    window.addEventListener('verto:appointment-domain-event', refreshAvailabilityAfterDomainEvent as EventListener);
+    return () => {
+      window.removeEventListener('focus', refreshAvailabilityWhenVisible);
+      document.removeEventListener('visibilitychange', refreshAvailabilityWhenVisible);
+      window.removeEventListener('verto:appointment-domain-event', refreshAvailabilityAfterDomainEvent as EventListener);
+    };
+  }, [pendingRescheduleRequestId, rescheduleAvailabilityState.loading]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2044,6 +2067,11 @@ export const ClinicalAgendaBoard = ({
   const applyUpdatedAppointmentToAgenda = (appointment: any) => {
     if (!appointment?.id) return;
     const normalized = normalizeClinicalEvent(appointment, roomLookup);
+    if (inFlightRequestRef.current) {
+      inFlightRequestRef.current.controller?.abort();
+      inFlightRequestRef.current = null;
+      setRemoteState((prev) => ({ ...prev, loading: false, refreshing: false, error: '', loaded: true }));
+    }
     for (const [key, cached] of cacheRef.current.entries()) {
       const cachedIndex = cached.data.findIndex((event: any) => String(event?.id || event?.appointment_id || '') === String(normalized.id));
       let range: { from?: string; to?: string } = {};
@@ -2065,14 +2093,18 @@ export const ClinicalAgendaBoard = ({
       cacheRef.current.set(key, { ...cached, data: nextData });
     }
     setRemoteEvents((prev) => {
-      let matched = false;
-      const next = prev.map((event: any) => {
-        if (String(event?.id) !== String(normalized.id)) return event;
-        matched = true;
-        const mergedEvent = mergeAppointmentIdentity(event, appointment);
-        return normalizeClinicalEvent({ ...mergedEvent, status: appointment.status || event.status }, roomLookup);
-      });
-      return matched ? next : [...next, normalized];
+      const current = prev.find((event: any) => String(event?.id || event?.appointment_id || '') === String(normalized.id));
+      const next = prev.filter((event: any) => String(event?.id || event?.appointment_id || '') !== String(normalized.id));
+      const belongsToVisibleRange = normalized.start.getTime() >= visibleRange.start.getTime()
+        && normalized.start.getTime() <= visibleRange.end.getTime();
+      if (!belongsToVisibleRange) return next;
+      const mergedEvent = current
+        ? mergeAppointmentIdentity(current, appointment)
+        : appointment;
+      return [
+        ...next,
+        normalizeClinicalEvent({ ...mergedEvent, status: appointment.status || current?.status }, roomLookup),
+      ];
     });
     setSelectedEvent((prev: any) => prev && String(prev?.id) === String(normalized.id)
       ? mergeAppointmentIdentity(prev, normalized)

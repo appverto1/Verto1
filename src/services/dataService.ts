@@ -2064,7 +2064,8 @@ export const dataService = {
     try {
       const response = await fetchClinical(endpoint, {
         headers: await getAuthHeaders(),
-        credentials: 'include'
+        credentials: 'include',
+        cache: 'no-store'
       }, {
         helperName: 'getPortalAppointments',
         operation: 'list',
@@ -2194,7 +2195,8 @@ export const dataService = {
     try {
       const response = await fetchClinical(endpoint, {
         headers: await getAuthHeaders(),
-        credentials: 'include'
+        credentials: 'include',
+        cache: 'no-store'
       }, {
         helperName: 'getPortalAppointmentRescheduleSlots',
         operation: 'list',
@@ -2300,7 +2302,8 @@ export const dataService = {
     try {
       const response = await fetchClinical(endpoint, {
         headers: await getAuthHeaders(),
-        credentials: 'include'
+        credentials: 'include',
+        cache: 'no-store'
       }, {
         helperName: 'getAppointmentActionRequestAvailability',
         operation: 'detail',

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  mergeAppointmentIdentity,
   mergeAppointmentIdentityFallbacks,
   mergePersistedAppointments,
   removePersistedAppointments
@@ -79,6 +80,34 @@ test('appointment merge preserves professional and room on partial patches', () 
   assert.equal(next[0].location, 'clinica');
 });
 
+test('appointment reschedule synchronizes every schedule alias from the persisted response', () => {
+  const previousStart = '2026-07-19T16:00:00.000Z';
+  const previousEnd = '2026-07-19T16:50:00.000Z';
+  const nextStart = '2026-07-22T16:00:00.000Z';
+  const nextEnd = '2026-07-22T16:50:00.000Z';
+  const merged = mergeAppointmentIdentity(
+    {
+      id: 'appointment-1',
+      scheduled_at: previousStart,
+      start_time: previousStart,
+      end_time: previousEnd,
+    },
+    {
+      id: 'appointment-1',
+      scheduledAt: nextStart,
+      scheduledEnd: nextEnd,
+      status: 'scheduled',
+    },
+  );
+
+  for (const key of ['scheduled_start_at', 'scheduledStartAt', 'scheduled_at', 'scheduledAt', 'start_time', 'startTime', 'start']) {
+    assert.equal(merged[key], nextStart, `${key} deve apontar para o novo inÃ­cio.`);
+  }
+  for (const key of ['scheduled_end_at', 'scheduledEndAt', 'scheduledEnd', 'end_time', 'endTime', 'end']) {
+    assert.equal(merged[key], nextEnd, `${key} deve apontar para o novo fim.`);
+  }
+});
+
 test('appointment action result is enriched with local confirmed identity before rendering', () => {
   const enriched = mergeAppointmentIdentityFallbacks(
     [{ id: 'new-1', patientName: 'Paciente', patient_name: 'Paciente', date: '2026-06-26' }],
@@ -99,6 +128,14 @@ test('appointment edit preserves the known patient name in agenda and open detai
   assert.match(calendarCode, /const mergedIdentity = mergeAppointmentIdentity\(event, local\)/);
   assert.match(calendarCode, /setSelectedEvent[\s\S]*?mergeAppointmentIdentity\(prev, normalized\)/);
   assert.match(calendarCode, /const detailMergedEvent = mergeAppointmentIdentity\([\s\S]*?detail\.event[\s\S]*?detail\.closure/);
+});
+
+test('calendar keeps the persisted server schedule when a local snapshot is stale', () => {
+  const mergeStart = calendarCode.indexOf('const mergeCalendarEventForRender');
+  const mergeEnd = calendarCode.indexOf('const mergeCalendarEventsForRender', mergeStart);
+  const mergeForRender = calendarCode.slice(mergeStart, mergeEnd);
+  assert.match(mergeForRender, /mergeAppointmentIdentity\(localEvent, serverEvent\)/);
+  assert.doesNotMatch(mergeForRender, /mergeAppointmentIdentity\(serverEvent, localEvent\)/);
 });
 
 test('appointment reschedule replaces every schedule alias and closes stale detail without reload', () => {
@@ -339,6 +376,8 @@ test('reschedule approval is idempotent and does not record a false approval bef
   assert.match(route, /appointmentScheduleMatches\(persistedAppointment/);
   assert.match(route, /supabase\.rpc\('approve_appointment_reschedule_v2'/);
   assert.match(route, /appointmentScheduleMatches\(confirmedAppointment/);
+  assert.match(route, /readClinicStateForAppointmentMutation\(clinicId\)/);
+  assert.match(route, /writeClinicStateAppointmentsAfterPersistence\([\s\S]*?\[confirmedAppointment\]/);
   assert.match(route, /RESCHEDULE_APPROVAL_SCHEMA_UNAVAILABLE/);
   assert.match(route, /RESCHEDULE_APPOINTMENT_CHANGED/);
   assert.match(route, /RESCHEDULE_ASSIGNMENT_UNAVAILABLE/);
@@ -384,6 +423,10 @@ test('calendar exposes conflict-aware options and propagates approved appointmen
   const cacheUpdate = calendarCode.slice(cacheUpdateStart, cacheUpdateEnd);
   assert.match(cacheUpdate, /cachedIndex < 0 && !belongsToRange/);
   assert.match(cacheUpdate, /nextData\.push\(normalizeClinicalEvent/);
+  assert.match(cacheUpdate, /prev\.filter\([\s\S]*?normalized\.id/);
+  assert.match(cacheUpdate, /belongsToVisibleRange/);
+  assert.match(cacheUpdate, /if \(!belongsToVisibleRange\) return next/);
+  assert.match(cacheUpdate, /inFlightRequestRef\.current\.controller\?\.abort\(\)/);
   assert.match(coordinatorCode, /onAppointmentActionResolved=\{onAppointmentActionResolved\}/);
   assert.match(appCode, /onAppointmentActionResolved=\{\(appointment: any\) => \{[\s\S]*?applyAppointmentResultToAgenda/);
 });

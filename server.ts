@@ -20705,6 +20705,35 @@ async function startServer() {
         merged.locationType = 'clinica';
         merged.location = 'clinica';
       }
+      const scheduledAt = buildAppointmentScheduledAt(incoming);
+      if (scheduledAt) {
+        const start = new Date(scheduledAt);
+        const durationMinutes = getClinicStateAppointmentDurationMinutes(incoming, {});
+        const explicitEnd = sanitizeString(
+          incoming?.scheduled_end_at || incoming?.scheduledEndAt || incoming?.scheduledEnd || incoming?.end_time,
+          80
+        );
+        const parsedExplicitEnd = explicitEnd ? new Date(explicitEnd) : null;
+        const end = parsedExplicitEnd && !Number.isNaN(parsedExplicitEnd.getTime())
+          ? parsedExplicitEnd
+          : calculateAppointmentEnd(start, durationMinutes);
+        merged.scheduled_at = scheduledAt;
+        merged.scheduledAt = scheduledAt;
+        merged.scheduled_start_at = scheduledAt;
+        merged.scheduledStartAt = scheduledAt;
+        merged.start_time = scheduledAt;
+        merged.startTime = scheduledAt;
+        merged.date = formatDateInAppointmentTimezone(start);
+        merged.time = formatTimeInAppointmentTimezone(start);
+        if (end) {
+          const scheduledEndAt = end.toISOString();
+          merged.scheduled_end_at = scheduledEndAt;
+          merged.scheduledEndAt = scheduledEndAt;
+          merged.scheduledEnd = scheduledEndAt;
+          merged.end_time = scheduledEndAt;
+          merged.endTime = formatTimeInAppointmentTimezone(end);
+        }
+      }
       return merged;
     };
     const byId = new Map<string, any>();
@@ -34968,9 +34997,10 @@ async function startServer() {
 
   const fetchConflictRooms = async (clinicId: string, organizationId: string) => {
     const roomsById = new Map<string, any>();
-    const addRoom = (room: any) => {
+    const addRoom = (room: any, overwrite = true) => {
       const id = sanitizeString(room?.id || room?.room_id || room?.roomId, 180);
       if (!id) return;
+      if (!overwrite && roomsById.has(id)) return;
       roomsById.set(id, {
         ...room,
         id,
@@ -35006,7 +35036,7 @@ async function startServer() {
 
     const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
     if (!stateResult.error && Array.isArray(stateResult.data?.rooms)) {
-      stateResult.data.rooms.forEach(addRoom);
+      stateResult.data.rooms.forEach((room: any) => addRoom(room, false));
     }
     return Array.from(roomsById.values());
   };
@@ -35077,7 +35107,7 @@ async function startServer() {
       roomId
     }).catch(() => []);
     const appointmentsById = new Map<string, any>();
-    [...tableAppointments, ...stateAppointments].forEach((appointment: any, index: number) => {
+    [...stateAppointments, ...tableAppointments].forEach((appointment: any, index: number) => {
       appointmentsById.set(sanitizeString(appointment?.id, 180) || `idx-${index}`, appointment);
     });
     const appointments = Array.from(appointmentsById.values());
@@ -36545,7 +36575,7 @@ async function startServer() {
 
     const activeRooms = rooms.filter((room: any) => room?.is_active !== false && room?.isActive !== false).slice(0, 80);
     const appointmentsById = new Map<string, any>();
-    [...tableAppointments, ...stateAppointments].forEach((item: any, index: number) => {
+    [...stateAppointments, ...tableAppointments].forEach((item: any, index: number) => {
       appointmentsById.set(sanitizeString(item?.id, 180) || `idx-${index}`, item);
     });
     const existingAppointments = Array.from(appointmentsById.values());
@@ -37027,7 +37057,7 @@ async function startServer() {
         fetchConflictAppointmentsFromState(clinicId, input).catch(() => [])
       ]);
       const appointmentsById = new Map<string, any>();
-      [...tableAppointments, ...stateAppointments].forEach((item: any, index: number) => {
+      [...stateAppointments, ...tableAppointments].forEach((item: any, index: number) => {
         appointmentsById.set(sanitizeString(item?.id, 180) || `idx-${index}`, item);
       });
       return buildAvailableRescheduleSlots({
@@ -37271,7 +37301,7 @@ async function startServer() {
       .map(mapAuditLogToHumanHistory);
   };
 
-  app.get('/api/portal/appointments', checkAuth, async (req: any, res) => {
+  app.get('/api/portal/appointments', noStoreDynamicResponse, checkAuth, async (req: any, res) => {
     try {
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const patientIds = await getPortalPatientIdsForUser(req.session.user);
@@ -37674,7 +37704,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/portal/appointments/:appointmentId/reschedule-slots', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.get('/api/portal/appointments/:appointmentId/reschedule-slots', portalActionLimiter, noStoreDynamicResponse, checkAuth, async (req: any, res) => {
     try {
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
@@ -37988,7 +38018,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/appointments/action-requests/:requestId/availability', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/appointments/action-requests/:requestId/availability', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const schemaState = await requireAppointmentActionResolutionSchema(
         req,
@@ -38317,6 +38347,21 @@ async function startServer() {
         atomicActionRequest = atomicPayload.request || null;
         atomicAuditEntry = atomicPayload.audit || null;
         rescheduleResolvedAtomically = true;
+        try {
+          const clinicState = await readClinicStateForAppointmentMutation(clinicId);
+          await writeClinicStateAppointmentsAfterPersistence(
+            clinicId,
+            actorId,
+            clinicState.appointments,
+            [confirmedAppointment]
+          );
+        } catch (mirrorError: any) {
+          console.warn('[AppointmentActions] clinic_state reschedule mirror deferred:', {
+            appointmentId: sanitizeString(appointment.id, 120),
+            clinicId,
+            message: mirrorError?.message || String(mirrorError)
+          });
+        }
       } else {
         auditAction = 'CANCEL_APPROVED';
         newStatus = 'CANCELLED';
