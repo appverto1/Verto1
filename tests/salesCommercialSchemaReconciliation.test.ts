@@ -35,6 +35,11 @@ function canonicalPayload() {
       tables: Object.fromEntries(SALES_COMMERCIAL_TABLES.map((name) => [name, true])),
       columns: Object.fromEntries(SALES_COMMERCIAL_TABLES.map((name) => [name, true])),
       critical_types: true,
+      minimal_capture: {
+        email_optional: true,
+        estimated_active_patients_optional: true,
+        whatsapp_identity: true,
+      },
       enums: Object.fromEntries(SALES_COMMERCIAL_ENUMS.map((name) => [name, true])),
       rpc: {
         upsert_public_sales_lead: true,

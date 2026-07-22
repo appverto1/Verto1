@@ -15,6 +15,10 @@ import {
   buildSalesWhatsappMessage,
   buildSalesWhatsappUrl,
 } from "../src/constants/salesCommercial";
+import {
+  normalizeSalesLeadPhone,
+  validateSalesLeadPayload,
+} from "../src/utils/salesLead";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const server = read("server.ts");
@@ -30,6 +34,9 @@ const clinicSettings = read("src/components/ClinicGlobalSettingsPanel.tsx");
 const migration = read(
   "supabase/migrations/20260720190000_sales_assisted_signup.sql",
 );
+const minimalCaptureMigration = read(
+  "supabase/migrations/20260722170000_sales_lead_minimal_capture.sql",
+);
 const envExample = read(".env.example");
 
 test("preço público oficial está centralizado e não expõe o preço antigo", () => {
@@ -43,6 +50,10 @@ test("preço público oficial está centralizado e não expõe o preço antigo",
   assert.deepEqual(SALES_COUPON_DURATION_MONTHS, [6, 12, 24]);
   assert.deepEqual(DISCOUNT_EXPIRY_NOTIFICATION_DAYS, [30, 7, 1]);
   assert.doesNotMatch(`${landing}\n${salesForm}`, /R\$\s*39[,.]90|\b3990\b/);
+  assert.doesNotMatch(
+    salesForm,
+    /PUBLIC_ACTIVE_PATIENT_PRICE_LABEL|SALES_SPECIAL_CONDITIONS_TEXT|R\$\s*79[,.]90/,
+  );
   assert.doesNotMatch(legacyCommercialConfig, /unitAmountCents\s*:\s*7990/);
   assert.match(legacyCommercialConfig, /export \* from ['"]\.\.\/constants\/salesCommercial['"]/);
 });
@@ -60,16 +71,16 @@ test("WhatsApp comercial usa número canônico e mensagem codificada somente com
   assert.doesNotMatch(url, /@|leadId|token|stripe/i);
 });
 
-test("formulário ativo só mostra WhatsApp após persistência confirmada", () => {
+test("formulário mínimo confirma a persistência sem criar uma segunda chamada para ação", () => {
   const successStart = salesForm.indexOf("if (submitted)");
   const formStart = salesForm.indexOf("\n  return (\n    <form", successStart);
   assert.ok(successStart >= 0);
   assert.ok(formStart > successStart);
   const successBlock = salesForm.slice(successStart, formStart);
-  assert.match(successBlock, /buildSalesWhatsappUrl\(submittedLeadName\)/);
-  assert.match(successBlock, /target="_blank"/);
-  assert.match(successBlock, /rel="noopener noreferrer"/);
-  assert.match(successBlock, /SALES_WHATSAPP_CTA_LABEL/);
+  assert.doesNotMatch(
+    successBlock,
+    /buildSalesWhatsappUrl|target="_blank"|MessageCircle|SALES_WHATSAPP_CTA_LABEL/,
+  );
   assert.equal(SALES_INTEREST_SUCCESS_TITLE, "Recebemos seu interesse na Verto");
   assert.equal(
     SALES_INTEREST_SUCCESS_MESSAGE,
@@ -100,13 +111,62 @@ test("configuração de destinatário permanece server-side e canônica", () => 
 test("cadastro profissional público virou lead e cadastro de paciente continua separado", () => {
   assert.match(landing, /<SalesInterestForm/);
   assert.match(salesForm, /fetch\([\"']\/api\/public\/sales-leads[\"']/);
-  assert.match(salesForm, /WhatsApp com DDD/);
-  assert.match(salesForm, /contactConsent: consent/);
+  assert.match(salesForm, />\s*Nome\s*</);
+  assert.match(salesForm, />\s*WhatsApp\s*</);
+  assert.match(salesForm, /Nome da clínica/);
+  assert.match(salesForm, /\(opcional\)/);
   assert.match(salesForm, /website,/);
+  assert.match(salesForm, /loading \? "Enviando\.\.\." : "Enviar"/);
+  assert.doesNotMatch(
+    salesForm,
+    /sales-email|sales-registry|sales-city|sales-state|sales-patients|sales-operation|sales-channel|sales-title|sales-professionals|sales-period|sales-notes/,
+  );
+  assert.doesNotMatch(
+    salesForm,
+    /type="checkbox"|GoogleIcon|onStartGoogle|contactConsent|consentVersion|Solicitar apresentação/,
+  );
   assert.match(landing, /fetch\([\"']\/api\/auth\/signup[\"']/);
   assert.match(landing, /role: [\"']patient[\"']/);
   assert.doesNotMatch(landing, /create-checkout-registration/);
   assert.doesNotMatch(salesForm, /type="password"|password/);
+});
+
+test("validação mínima exige somente nome e WhatsApp e aceita clínica opcional", () => {
+  const withoutClinic = validateSalesLeadPayload({
+    name: "Ana",
+    phone: "(55) 99999-9999",
+  });
+  assert.deepEqual(withoutClinic.errors, {});
+  assert.equal(withoutClinic.value.clinicName, "");
+  assert.equal(withoutClinic.value.operationType, "independent_professional");
+  assert.equal(normalizeSalesLeadPhone("(55) 99999-9999"), "+5555999999999");
+
+  const withClinic = validateSalesLeadPayload({
+    name: "Mateus",
+    phone: "(11) 95934-8563",
+    clinicName: "Espaço Guiar",
+  });
+  assert.deepEqual(withClinic.errors, {});
+  assert.equal(withClinic.value.operationType, "clinic");
+  assert.equal(withClinic.value.email, "");
+  assert.equal(withClinic.value.estimatedActivePatients, null);
+});
+
+test("migration de captura mínima é aditiva, idempotente e preserva enriquecimento", () => {
+  assert.match(minimalCaptureMigration, /alter column email drop not null/i);
+  assert.match(minimalCaptureMigration, /alter column normalized_email drop not null/i);
+  assert.match(
+    minimalCaptureMigration,
+    /alter column estimated_active_patients drop not null/i,
+  );
+  assert.match(minimalCaptureMigration, /create or replace function public\.upsert_public_sales_lead/i);
+  assert.match(minimalCaptureMigration, /email = coalesce\(v_email, email\)/i);
+  assert.match(minimalCaptureMigration, /clinic_name = coalesce/i);
+  assert.match(minimalCaptureMigration, /on conflict \(idempotency_key\) do nothing/i);
+  assert.doesNotMatch(
+    minimalCaptureMigration,
+    /^\s*(?:delete\s+from|truncate|drop\s+table)\s+public\.sales_/im,
+  );
 });
 
 test("endpoint legado de checkout profissional está bloqueado sem efeitos", () => {

@@ -1396,7 +1396,8 @@ const SALES_ESTIMATED_PROFESSIONALS_MAX = 10000;
 function normalizeSalesPhone(value: unknown): string | null {
   const digits = sanitizeString(value, 40).replace(/\D/g, "");
   if (!digits) return null;
-  const withCountry = digits.startsWith("55") ? digits : `55${digits}`;
+  const withCountry =
+    digits.length <= 11 ? `55${digits}` : digits.startsWith("55") ? digits : "";
   if (!/^55\d{10,11}$/.test(withCountry)) return null;
   return withCountry.slice(0, 20);
 }
@@ -15655,28 +15656,33 @@ async function startServer() {
   const notifySalesOwnerForLead = async (params: {
     leadId: string;
     name: string;
-    email: string;
+    email: string | null;
     phone: string;
     clinicName: string;
-    estimatedActivePatients: number;
+    estimatedActivePatients: number | null;
     acquisitionChannel: string;
     createdAt: string;
     idempotencyKey: string;
   }) => {
     const ownerUserId = await resolveSalesOwnerUserId();
     if (ownerUserId) {
+      const operationSummary = params.clinicName || "operação não informada";
+      const patientSummary =
+        params.estimatedActivePatients == null
+          ? "volume de pacientes não informado"
+          : `${params.estimatedActivePatients} pacientes ativos`;
       await persistActivityLog({
         userId: ownerUserId,
         clinicId: null,
         actorName: "Verto Comercial",
         title: "Novo interesse comercial",
-        content: `${params.name} demonstrou interesse na Verto (${params.clinicName || "operação não informada"}, ${params.estimatedActivePatients} pacientes ativos).`,
+        content: `${params.name} demonstrou interesse na Verto (${operationSummary}, ${patientSummary}).`,
         type: "sales_lead",
         actionType: "sales_lead_created",
         payloadDetails: JSON.stringify({
           leadId: params.leadId,
           name: params.name,
-          email: params.email,
+          email: params.email || null,
           phone: params.phone,
           clinicName: params.clinicName,
           estimatedActivePatients: params.estimatedActivePatients,
@@ -15691,7 +15697,7 @@ async function startServer() {
     const notificationEmail = resolveSalesNotificationEmail();
     if (!notificationEmail) return;
     const safeName = escapeHtml(params.name);
-    const safeEmail = escapeHtml(params.email);
+    const safeEmail = params.email ? escapeHtml(params.email) : "";
     const safePhone = escapeHtml(params.phone);
     const safeClinic = escapeHtml(params.clinicName || "Não informada");
     const safeSource = escapeHtml(params.acquisitionChannel || "Não informada");
@@ -15703,9 +15709,9 @@ async function startServer() {
           <h2 style="margin:0 0 16px">Novo interesse comercial</h2>
           <p><strong>Nome:</strong> ${safeName}</p>
           <p><strong>WhatsApp:</strong> ${safePhone}</p>
-          <p><strong>E-mail:</strong> ${safeEmail}</p>
+          ${safeEmail ? `<p><strong>E-mail:</strong> ${safeEmail}</p>` : ""}
           <p><strong>Clínica:</strong> ${safeClinic}</p>
-          <p><strong>Pacientes ativos estimados:</strong> ${params.estimatedActivePatients}</p>
+          ${params.estimatedActivePatients == null ? "" : `<p><strong>Pacientes ativos estimados:</strong> ${params.estimatedActivePatients}</p>`}
           <p><strong>Origem:</strong> ${safeSource}</p>
           <p><strong>Recebido em:</strong> ${escapeHtml(new Date(params.createdAt).toLocaleString("pt-BR"))}</p>
         </div>`,
@@ -15715,7 +15721,7 @@ async function startServer() {
       metadata: {
         leadId: params.leadId,
         idempotencyKey: params.idempotencyKey,
-        email: maskEmail(params.email),
+        ...(params.email ? { email: maskEmail(params.email) } : {}),
       },
     });
     if (!sent) {
@@ -15783,12 +15789,11 @@ async function startServer() {
       if (
         rawName.length < 2 ||
         rawName.length > 180 ||
-        rawEmail.length < 3 ||
         rawEmail.length > 254 ||
         rawRegistry.length > 80 ||
-        rawClinicName.length < 2 ||
+        (rawClinicName.length > 0 && rawClinicName.length < 2) ||
         rawClinicName.length > 180 ||
-        rawCity.length < 2 ||
+        (rawCity.length > 0 && rawCity.length < 2) ||
         rawCity.length > 120 ||
         rawNotes.length > 1500
       ) {
@@ -15808,11 +15813,17 @@ async function startServer() {
       const clinicName = sanitizeString(rawClinicName, 180);
       const city = sanitizeString(rawCity, 120);
       const state = sanitizeString(req.body?.state, 2).toUpperCase();
-      const operationType = sanitizeString(req.body?.operationType, 60);
-      const acquisitionChannel = sanitizeString(
-        req.body?.acquisitionChannel,
-        120,
+      const requestedOperationType = sanitizeString(
+        req.body?.operationType,
+        60,
       );
+      const operationType = SALES_OPERATION_TYPES.has(requestedOperationType)
+        ? requestedOperationType
+        : clinicName
+          ? "clinic"
+          : "independent_professional";
+      const acquisitionChannel =
+        sanitizeString(req.body?.acquisitionChannel, 120) || "public_landing";
       const jobTitle = sanitizeString(req.body?.jobTitle, 120);
       const preferredContactPeriod = sanitizeString(
         req.body?.preferredContactPeriod,
@@ -15822,16 +15833,15 @@ async function startServer() {
       const estimatedActivePatients = normalizeSalesInteger(
         req.body?.estimatedActivePatients,
         SALES_ESTIMATED_ACTIVE_PATIENTS_MAX,
-        true,
+        false,
       );
       const estimatedProfessionals = normalizeSalesInteger(
         req.body?.estimatedProfessionals,
         SALES_ESTIMATED_PROFESSIONALS_MAX,
         false,
       );
-      const consent = req.body?.contactConsent === true;
-      const consentVersion = sanitizeString(req.body?.consentVersion, 80);
-      const consentPurpose = sanitizeString(req.body?.consentPurpose, 80);
+      const consentVersion = SALES_CONTACT_CONSENT_VERSION;
+      const consentPurpose = "sales_contact";
       const requestedSource = sanitizeString(req.body?.source, 80);
       const source = ["public_landing", "google_interest"].includes(
         requestedSource,
@@ -15841,28 +15851,20 @@ async function startServer() {
 
       if (
         !name ||
-        !email ||
         !normalizedPhone ||
-        (operationType === "independent_professional" &&
-          !professionalRegistry) ||
-        !clinicName ||
-        !city ||
-        !BRAZIL_STATE_CODES.has(state) ||
-        !SALES_OPERATION_TYPES.has(operationType) ||
-        !acquisitionChannel ||
+        (rawEmail && !email) ||
+        (state && !BRAZIL_STATE_CODES.has(state)) ||
         !SALES_PREFERRED_CONTACT_PERIODS.has(preferredContactPeriod) ||
-        estimatedActivePatients === null ||
+        (req.body?.estimatedActivePatients !== "" &&
+          req.body?.estimatedActivePatients != null &&
+          estimatedActivePatients === null) ||
         (req.body?.estimatedProfessionals !== "" &&
           req.body?.estimatedProfessionals != null &&
-          estimatedProfessionals === null) ||
-        !consent ||
-        consentVersion !== SALES_CONTACT_CONSENT_VERSION ||
-        consentPurpose !== "sales_contact"
+          estimatedProfessionals === null)
       ) {
         return res.status(400).json({
           success: false,
-          error:
-            "Preencha corretamente os dados obrigatórios e o consentimento comercial.",
+          error: "Informe um nome e um WhatsApp válidos.",
         });
       }
 
@@ -15891,8 +15893,8 @@ async function startServer() {
       try {
         const { data, error } = await supabase.rpc("upsert_public_sales_lead", {
           p_name: name,
-          p_email: email,
-          p_normalized_email: email,
+          p_email: email || null,
+          p_normalized_email: email || null,
           p_phone: phone,
           p_normalized_phone: normalizedPhone,
           p_professional_registry: professionalRegistry,
@@ -65678,7 +65680,10 @@ async function startServer() {
           clinicName: sanitizeString(lead.clinic_name, 180) || null,
           city: sanitizeString(lead.city, 120) || null,
           state: sanitizeString(lead.state, 2) || null,
-          estimatedActivePatients: Number(lead.estimated_active_patients || 0),
+          estimatedActivePatients:
+            lead.estimated_active_patients == null
+              ? null
+              : Number(lead.estimated_active_patients),
           estimatedProfessionals:
             lead.estimated_professionals == null
               ? null

@@ -14,13 +14,11 @@ type SalesLeadFormProps = {
  */
 export const SalesLeadForm = ({
   initialName = '',
-  initialEmail = '',
   acquisitionChannel = '',
   onSubmitted,
 }: SalesLeadFormProps) => (
   <SalesInterestForm
     initialName={initialName}
-    initialEmail={initialEmail}
     initialAcquisitionChannel={acquisitionChannel}
     onSubmitted={onSubmitted}
   />

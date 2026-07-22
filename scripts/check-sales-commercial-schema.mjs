@@ -6,10 +6,10 @@ import {
   validateSupabaseTargetConfiguration,
 } from './check-critical-schema.mjs';
 
-export const SALES_COMMERCIAL_SCHEMA_VERSION = '20260722153000';
-export const SALES_COMMERCIAL_SCHEMA_CONTRACT = 'sales_assisted_signup_v1';
+export const SALES_COMMERCIAL_SCHEMA_VERSION = '20260722170000';
+export const SALES_COMMERCIAL_SCHEMA_CONTRACT = 'sales_assisted_signup_v2_minimal_capture';
 export const SALES_COMMERCIAL_SCHEMA_FINGERPRINT =
-  'sha256:8dd425a4045e9c10d81039e3d2962590ae2496b1c0e6e6e4d2ab8dd69c1cda5b';
+  'sha256:a978f0d9079d3585d92d22e143c57c8236bb2256b2ddb0d86564c759480f198e';
 export const SALES_COMMERCIAL_SCHEMA_RPC =
   'get_sales_commercial_schema_fingerprint';
 
@@ -88,6 +88,18 @@ export function evaluateSalesCommercialSchemaAudit(payload) {
   }
 
   add(readPath(payload, 'checks.critical_types') === true, 'critical column types');
+  add(
+    readPath(payload, 'checks.minimal_capture.email_optional') === true,
+    'minimal capture optional email',
+  );
+  add(
+    readPath(payload, 'checks.minimal_capture.estimated_active_patients_optional') === true,
+    'minimal capture optional patient estimate',
+  );
+  add(
+    readPath(payload, 'checks.minimal_capture.whatsapp_identity') === true,
+    'minimal capture WhatsApp identity',
+  );
   for (const enumName of SALES_COMMERCIAL_ENUMS) {
     add(readPath(payload, `checks.enums.${enumName}`) === true, `enum ${enumName}`);
   }

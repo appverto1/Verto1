@@ -1820,12 +1820,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                   {registerType === "professional" ? (
                     <SalesInterestForm
                       initialName={salesGooglePrefill?.name || ""}
-                      initialEmail={salesGooglePrefill?.email || ""}
                       initialAcquisitionChannel={acquisitionChannel}
-                      googleVerified={Boolean(
-                        salesGooglePrefill?.googleVerified,
-                      )}
-                      onStartGoogle={handleGoogleLogin}
                     />
                   ) : (
                     <>
