@@ -127,6 +127,7 @@ import {
 import {
   buildAvailableRescheduleSlots,
   buildRescheduleRequestMessage,
+  evaluateRequestedRescheduleSlot,
   flattenRescheduleSlotGroups,
   normalizeRescheduleOptions,
   parseRescheduleRequestPayload,
@@ -35381,7 +35382,8 @@ async function startServer() {
   ) => {
     const knownMissingColumns = new Set([
       ...(appointmentActionSchemaState.missingCriticalColumns || []),
-      ...(appointmentActionSchemaState.missingApprovalColumns || [])
+      ...(appointmentActionSchemaState.missingApprovalColumns || []),
+      ...(appointmentActionSchemaState.missingOptionalColumns || [])
     ]);
     let columns = PORTAL_APPOINTMENT_SELECT
       .split(',')
@@ -36396,10 +36398,13 @@ async function startServer() {
     const name = sanitizeString(profile?.full_name || profile?.name || fallbackName, 180) || 'Profissional não identificado';
     const title = readProfessionalTitleFromSource(
       { metadata, professionalTitle: metadata?.professionalTitle || metadata?.professional_title },
-      'Profissional'
+      DEFAULT_PROFESSIONAL_TITLE
     );
-    if (!title || title === 'Profissional' || name.toLocaleLowerCase('pt-BR').startsWith(title.toLocaleLowerCase('pt-BR'))) return name;
-    return `${title} ${name}`;
+    if (name === 'Profissional não identificado') return name;
+    const personalName = name
+      .replace(/^(psicólogo|psicóloga|terapeuta ocupacional|acompanhante terapêutico|acompanhante terapêutica|aplicador aba|aplicadora aba|terapeuta|profissional)\s+/i, '')
+      .trim() || name;
+    return `${title || 'Profissional'} ${personalName}`;
   };
 
   const formatRescheduleRoom = (room: any, fallbackName = '') => {
@@ -36747,44 +36752,46 @@ async function startServer() {
           issues.push({ type: 'patient_conflict', conflictingStartAt: item.startTime, conflictingEndAt: item.endTime });
         }
       }
-      if (!conflict.blocking) {
-        const availability = buildAvailableRescheduleSlots({
-          appointmentId: appointment.id,
-          patientId: assignment.patientId,
+      const scheduleEvaluation = !conflict.blocking
+        ? evaluateRequestedRescheduleSlot({
+            scheduledStart: option.scheduledStart,
+            durationMinutes,
+            roomId: assignment.locationType === 'clinica' ? room?.id : null,
+            locationType: assignment.locationType,
+            workingSchedule: professional.workSchedule,
+            now: new Date()
+          })
+        : null;
+      if (scheduleEvaluation && !scheduleEvaluation.available) {
+        issues.push({
+          type: 'professional_schedule_unavailable',
           professionalId: professional.id,
-          roomId: assignment.locationType === 'clinica' ? room?.id : null,
-          locationType: assignment.locationType,
-          currentScheduledStart: appointment?.scheduled_start_at || appointment?.scheduled_at || appointment?.scheduledAt,
-          durationMinutes,
-          existingAppointments,
-          dateFrom: dateKey,
-          maxDays: 1,
-          maxSlotsPerDay: 24,
-          workingSchedule: professional.workSchedule,
-          now: new Date()
+          professionalName: professional.name,
+          reasonCode: scheduleEvaluation.reasonCode,
+          constraint: scheduleEvaluation.constraint,
+          message: scheduleEvaluation.message
         });
-        const exactSlot = flattenRescheduleSlotGroups(availability.days).find((slot) =>
-          Math.abs(new Date(slot.scheduledStart).getTime() - startDate.getTime()) < 60_000
-        );
-        if (!exactSlot) {
-          issues.push({ type: 'professional_schedule_unavailable', professionalId: professional.id, professionalName: professional.name });
-        }
       }
       const financialContext = evaluateFinancialContext(option, professional.id);
       if (financialContext.reviewRequired) {
         issues.push({ type: 'financial_context_invalid', reasonCode: financialContext.reasonCode, message: financialContext.warnings[0] || 'Revise o contexto financeiro.' });
       }
-      const conflictTypes = Array.from(new Set((conflict.conflicts || []).map((item: any) => item.conflictType).filter(Boolean)));
+      const conflictTypes = Array.from(new Set([
+        ...(conflict.conflicts || []).map((item: any) => item.conflictType).filter(Boolean),
+        ...(scheduleEvaluation?.available === false && scheduleEvaluation.constraint ? [scheduleEvaluation.constraint] : [])
+      ]));
       const operationalAvailable = !conflict.blocking && !issues.some((issue) => issue.type === 'professional_schedule_unavailable');
       const approvalAllowed = operationalAvailable && financialContext.valid === true && financialContext.reviewRequired !== true;
       const messages: string[] = [];
       const professionalConflict = issues.find((issue) => issue.type === 'professional_conflict');
       const roomConflict = issues.find((issue) => issue.type === 'room_conflict');
+      const scheduleIssue = issues.find((issue) => issue.type === 'professional_schedule_unavailable');
       if (professionalConflict) messages.push(`${professional.name} já possui outra sessão das ${professionalConflict.conflictingStartAt} às ${professionalConflict.conflictingEndAt}.`);
+      else if (scheduleIssue?.message) messages.push(scheduleIssue.message);
       else messages.push(`${professional.name} está disponível.`);
       if (assignment.locationType === 'clinica') {
         if (roomConflict) messages.push(`A ${roomInfo.displayName} já está ocupada nesse horário.`);
-        else messages.push(`A ${roomInfo.displayName} está disponível.`);
+        else if (!scheduleIssue) messages.push(`A ${roomInfo.displayName} está disponível.`);
       }
       if (financialContext.warnings.length > 0) messages.push(financialContext.warnings[0]);
       return {
@@ -37219,9 +37226,16 @@ async function startServer() {
   };
 
   const mapAuditLogToHumanHistory = (row: any) => ({
+    id: sanitizeString(row?.id, 120) || null,
     action: sanitizeString(row?.action, 80),
     label: (() => {
       const action = sanitizeString(row?.action, 80);
+      const metadata = row?.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+        ? row.metadata
+        : {};
+      if (action === 'CANCEL_REJECTED' && sanitizeString(metadata?.resolutionReason, 80) === 'reschedule_approved') {
+        return 'Solicitação de cancelamento encerrada após a remarcação';
+      }
       const labels: Record<string, string> = {
         CONFIRMED_BY_RESPONSIBLE: 'Responsável confirmou a consulta',
         RESCHEDULE_REQUESTED: 'Responsável solicitou remarcação',
@@ -37229,7 +37243,7 @@ async function startServer() {
         RESCHEDULE_REJECTED: 'Remarcação recusada pela clínica',
         CANCEL_REQUESTED: 'Responsável solicitou cancelamento da consulta',
         CANCEL_APPROVED: 'Clínica aprovou o cancelamento solicitado pelo responsável',
-        CANCEL_REJECTED: 'Clínica manteve o horário solicitado',
+        CANCEL_REJECTED: 'Cancelamento de sessão recusado pela clínica',
         CANCELLED: 'Consulta cancelada pela clínica',
         SIGNATURE_CREATED: 'Sessão assinada',
         SIGNATURE_REVOKED: 'Assinatura revogada'
@@ -38036,6 +38050,23 @@ async function startServer() {
             end: approvedEnd || calculateAppointmentEnd(new Date(approvedStart), getCalendarAppointmentDuration(persistedAppointment))?.toISOString() || '',
             status: 'SCHEDULED'
           })) {
+            const snapshotOrganizationId = sanitizeString(requestRow.organization_id || appointment.organization_id || appointment.clinic_id, 120);
+            const [requestsSnapshot, auditSnapshot] = await Promise.all([
+              supabase
+                .from('appointment_action_requests')
+                .select(APPOINTMENT_ACTION_REQUEST_SELECT)
+                .eq('organization_id', snapshotOrganizationId)
+                .eq('appointment_id', appointment.id)
+                .order('created_at', { ascending: false })
+                .limit(20),
+              supabase
+                .from('appointment_status_audit_logs')
+                .select(APPOINTMENT_STATUS_AUDIT_SELECT)
+                .eq('organization_id', snapshotOrganizationId)
+                .eq('appointment_id', appointment.id)
+                .order('performed_at', { ascending: false })
+                .limit(20)
+            ]);
             return res.json({
               success: true,
               idempotent: true,
@@ -38044,7 +38075,14 @@ async function startServer() {
                 has_pending_reschedule: false,
                 rescheduleStatus: 'APPROVED',
                 reschedule_status: 'APPROVED'
-              })
+              }),
+              actionRequest: serializeAppointmentActionRequestForResponse(requestRow),
+              actionRequests: !requestsSnapshot.error
+                ? (requestsSnapshot.data || []).map(serializeAppointmentActionRequestForResponse)
+                : undefined,
+              statusHistory: !auditSnapshot.error
+                ? (auditSnapshot.data || []).map(mapAuditLogToHumanHistory)
+                : undefined
             });
           }
           if (approvedStart) recoveringApprovedReschedule = true;
@@ -38063,6 +38101,7 @@ async function startServer() {
       let approvedRescheduleStart = '';
       let atomicActionRequest: any = null;
       let atomicAuditEntry: any = null;
+      let atomicPayload: any = {};
       let rescheduleResolvedAtomically = false;
       if (requestRow.request_type === 'RESCHEDULE') {
         const parsedRequestNote = parseRescheduleRequestPayload(requestRow.note, requestRow.metadata);
@@ -38264,7 +38303,7 @@ async function startServer() {
           }
           throw atomicResult.error;
         }
-        const atomicPayload: any = atomicResult.data && typeof atomicResult.data === 'object' ? atomicResult.data : {};
+        atomicPayload = atomicResult.data && typeof atomicResult.data === 'object' ? atomicResult.data : {};
         const confirmedRows = await readPersistedAppointmentRows([appointment.id], clinicId);
         const confirmedAppointment = confirmedRows.find((row: any) => sanitizeString(row?.id, 120) === sanitizeString(appointment.id, 120)) || atomicPayload.appointment;
         if (!confirmedAppointment || !appointmentScheduleMatches(confirmedAppointment, {
@@ -38359,12 +38398,18 @@ async function startServer() {
           roomSpecialtyName: requestRow.request_type === 'RESCHEDULE' ? atomicActionRequest?.metadata?.approvedRoomSpecialtyName || nextAppointment?.source_payload?.roomSpecialtyName || null : undefined
         }),
         actionRequest: atomicActionRequest ? serializeAppointmentActionRequestForResponse(atomicActionRequest) : undefined,
+        actionRequests: Array.isArray(atomicPayload?.action_requests)
+          ? atomicPayload.action_requests.map(serializeAppointmentActionRequestForResponse)
+          : undefined,
         statusHistoryEntry: atomicAuditEntry ? {
           id: atomicAuditEntry.id,
           label: 'Remarcação aprovada pela clínica',
           performedAt: atomicAuditEntry.performed_at,
           metadata: atomicAuditEntry.metadata || {}
-        } : undefined
+        } : undefined,
+        statusHistory: Array.isArray(atomicPayload?.audit_entries)
+          ? atomicPayload.audit_entries.map(mapAuditLogToHumanHistory)
+          : undefined
       }));
     } catch (error: any) {
       console.warn('[AppointmentActions] approve failed:', error?.message || String(error));

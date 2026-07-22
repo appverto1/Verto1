@@ -69,6 +69,22 @@ test('ranking promotes only a fully compatible option to best', () => {
   assert.equal(ranked[2].recommendation, 'unavailable');
 });
 
+test('ranking preserves a specific unavailability reason without generic contradiction', () => {
+  const [ranked] = rankRescheduleOptions([{
+    index: 0,
+    availableAssignmentCount: 0,
+    directAssignmentAvailable: false,
+    keepsOriginalProfessional: true,
+    keepsOriginalRoom: true,
+    financialContextCompatible: true,
+    financialReviewRequired: false,
+    reasons: ['Este horário está fora da jornada configurada do profissional.'],
+  }]);
+
+  assert.deepEqual(ranked.reasons, ['Este horário está fora da jornada configurada do profissional.']);
+  assert.doesNotMatch(ranked.reasons.join(' '), /combinação livre/i);
+});
+
 test('approval flow batches conflicts and resolves competing requests atomically', () => {
   const root = process.cwd();
   const server = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
@@ -100,4 +116,7 @@ test('approval flow batches conflicts and resolves competing requests atomically
   assert.match(calendar, /Recusar cancelamento/);
   assert.match(calendar, /result\.actionRequests/);
   assert.match(calendar, /result\.statusHistory/);
+  assert.match(server, /id: sanitizeString\(row\?\.id, 120\) \|\| null/);
+  assert.match(server, /Solicitação de cancelamento encerrada após a remarcação/);
+  assert.match(calendar, /latestResponsibleRequestHistoryId && String\(entry\.id \|\| ''\)/);
 });

@@ -310,7 +310,7 @@ test('reschedule approval preflights all submitted options and only accepts serv
   assert.match(preview, /fetchConflictRooms\(assignment\.clinicId, assignment\.organizationId\)/);
   assert.match(preview, /Promise\.all\(\[[\s\S]*?fetchConflictAppointmentsFromTable[\s\S]*?fetchConflictAppointmentsFromState/);
   assert.match(preview, /checkLocalScheduleConflicts\(\{/);
-  assert.match(preview, /buildAvailableRescheduleSlots\(\{/);
+  assert.match(preview, /evaluateRequestedRescheduleSlot\(\{/);
   assert.match(preview, /!conflictTypes\.has\('patient'\)/);
   assert.match(preview, /alternatives\.length >= 3/);
 
@@ -334,6 +334,8 @@ test('reschedule approval is idempotent and does not record a false approval bef
   const route = serverCode.slice(routeStart, routeEnd);
   assert.match(route, /requestRow\.status === 'APPROVED'/);
   assert.match(route, /recoveringApprovedReschedule = true/);
+  assert.match(route, /let atomicPayload: any = \{\};/);
+  assert.doesNotMatch(route, /const atomicPayload/);
   assert.match(route, /appointmentScheduleMatches\(persistedAppointment/);
   assert.match(route, /supabase\.rpc\('approve_appointment_reschedule_v2'/);
   assert.match(route, /appointmentScheduleMatches\(confirmedAppointment/);

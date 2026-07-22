@@ -393,6 +393,121 @@ const buildBlockedPeriodsForDate = (
 const slotOverlapsAnyBlockedPeriod = (startMinutes: number, endMinutes: number, blockedPeriods: ReturnType<typeof normalizePeriod>[]) =>
   blockedPeriods.some((period) => period && startMinutes < period.endMinutes && endMinutes > period.startMinutes);
 
+export type RequestedRescheduleSlotConstraint = 'time' | 'professional' | 'room' | null;
+
+export type RequestedRescheduleSlotEvaluation = {
+  available: boolean;
+  reasonCode:
+    | 'AVAILABLE'
+    | 'INVALID_TIME'
+    | 'MIN_LEAD_TIME'
+    | 'WORK_SCHEDULE_INACTIVE'
+    | 'OUTSIDE_WORKING_HOURS'
+    | 'LOCATION_NOT_ALLOWED'
+    | 'ROOM_NOT_ALLOWED'
+    | 'BLOCKED_PERIOD';
+  constraint: RequestedRescheduleSlotConstraint;
+  message: string;
+};
+
+// Requested options are validated by interval containment. The cadence used to
+// generate suggestions must not reject a valid time selected by the family.
+export function evaluateRequestedRescheduleSlot(params: {
+  scheduledStart?: string | Date | null;
+  durationMinutes?: number | string | null;
+  roomId?: string | null;
+  locationType?: string | null;
+  now?: string | Date;
+  minLeadMinutes?: number | string | null;
+  workdayStart?: string | null;
+  workdayEnd?: string | null;
+  workingSchedule?: PortalProfessionalWorkingSchedule | null;
+  scheduleExceptions?: PortalScheduleException[];
+}): RequestedRescheduleSlotEvaluation {
+  const start = params.scheduledStart instanceof Date
+    ? params.scheduledStart
+    : new Date(params.scheduledStart || '');
+  if (Number.isNaN(start.getTime())) {
+    return { available: false, reasonCode: 'INVALID_TIME', constraint: 'time', message: 'Este horário não pôde ser validado.' };
+  }
+
+  const schedule = params.workingSchedule && typeof params.workingSchedule === 'object'
+    ? params.workingSchedule
+    : null;
+  if (schedule?.active === false) {
+    return { available: false, reasonCode: 'WORK_SCHEDULE_INACTIVE', constraint: 'professional', message: 'A jornada deste profissional está inativa.' };
+  }
+
+  const durationMinutes = clampNumber(params.durationMinutes, 50, 15, 360);
+  const sessionBufferMinutes = clampNumber(schedule?.sessionBufferMinutes ?? schedule?.session_buffer_minutes, 0, 0, 120);
+  const minLeadMinutes = clampNumber(params.minLeadMinutes ?? schedule?.minLeadMinutes ?? schedule?.min_lead_minutes, DEFAULT_MIN_LEAD_MINUTES, 0, 30 * 24 * 60);
+  const now = params.now instanceof Date ? params.now : new Date(params.now || Date.now());
+  const minimumStart = now.getTime() + minLeadMinutes * 60_000;
+  if (start.getTime() <= minimumStart) {
+    return {
+      available: false,
+      reasonCode: 'MIN_LEAD_TIME',
+      constraint: 'time',
+      message: start.getTime() <= now.getTime()
+        ? 'Este horário já passou e não pode mais ser aprovado.'
+        : 'Este horário não respeita a antecedência mínima configurada pela clínica.'
+    };
+  }
+
+  const dateKey = dateKeyInPortalTimeZone(start);
+  const startMinutes = timeToMinutes(formatTimeLabel(start), -1);
+  const endMinutes = startMinutes + durationMinutes;
+  if (startMinutes < 0 || endMinutes > 24 * 60) {
+    return { available: false, reasonCode: 'INVALID_TIME', constraint: 'time', message: 'Este horário não pôde ser validado.' };
+  }
+
+  const fallbackWorkdayStart = readString(params.workdayStart) || DEFAULT_WORKDAY_START;
+  const fallbackWorkdayEnd = readString(params.workdayEnd) || DEFAULT_WORKDAY_END;
+  const workingDays = normalizeWorkingDays(schedule);
+  const scheduleConfigured = Boolean(schedule && Object.keys(workingDays).length > 0);
+  const daySource = scheduleConfigured
+    ? resolveDaySource(workingDays, dateKey)
+    : [{ start: fallbackWorkdayStart, end: fallbackWorkdayEnd }];
+  const { periods, blockedPeriods } = normalizeDayPeriods(daySource, fallbackWorkdayStart, fallbackWorkdayEnd);
+  const matchingTimePeriods = periods.filter((period) =>
+    period && startMinutes >= period.startMinutes && endMinutes + sessionBufferMinutes <= period.endMinutes
+  );
+  if (matchingTimePeriods.length === 0) {
+    return { available: false, reasonCode: 'OUTSIDE_WORKING_HOURS', constraint: 'professional', message: 'Este horário está fora da jornada configurada do profissional.' };
+  }
+
+  const locationType = normalizeLocationType(params.locationType);
+  const roomId = readString(params.roomId);
+  const scheduleAllowedLocationTypes = normalizeStringList(schedule?.allowedLocationTypes ?? schedule?.allowed_location_types);
+  if (!hasRestrictionMatch(scheduleAllowedLocationTypes, locationType, normalizeLocationType)) {
+    return { available: false, reasonCode: 'LOCATION_NOT_ALLOWED', constraint: 'professional', message: 'O local deste atendimento não está habilitado na jornada do profissional.' };
+  }
+  const locationPeriods = matchingTimePeriods.filter((period) => hasRestrictionMatch(period?.locationTypes, locationType, normalizeLocationType));
+  if (locationPeriods.length === 0) {
+    return { available: false, reasonCode: 'LOCATION_NOT_ALLOWED', constraint: 'professional', message: 'O local deste atendimento não está habilitado nesse período da jornada.' };
+  }
+
+  if (locationType === 'clinica') {
+    const scheduleAllowedRoomIds = normalizeStringList(schedule?.allowedRoomIds ?? schedule?.allowed_room_ids);
+    if (!hasRestrictionMatch(scheduleAllowedRoomIds, roomId)) {
+      return { available: false, reasonCode: 'ROOM_NOT_ALLOWED', constraint: 'room', message: 'A sala selecionada não está habilitada para este profissional.' };
+    }
+    if (!locationPeriods.some((period) => hasRestrictionMatch(period?.roomIds, roomId))) {
+      return { available: false, reasonCode: 'ROOM_NOT_ALLOWED', constraint: 'room', message: 'A sala selecionada não está habilitada nesse período da jornada.' };
+    }
+  }
+
+  const dateBlockedPeriods = [
+    ...blockedPeriods,
+    ...buildBlockedPeriodsForDate(dateKey, schedule, params.scheduleExceptions, fallbackWorkdayStart, fallbackWorkdayEnd)
+  ];
+  if (slotOverlapsAnyBlockedPeriod(startMinutes, endMinutes, dateBlockedPeriods)) {
+    return { available: false, reasonCode: 'BLOCKED_PERIOD', constraint: 'professional', message: 'Este horário coincide com almoço, bloqueio, folga ou feriado do profissional.' };
+  }
+
+  return { available: true, reasonCode: 'AVAILABLE', constraint: null, message: '' };
+}
+
 export function buildAvailableRescheduleSlots(params: {
   appointmentId?: string | null;
   patientId?: string | null;

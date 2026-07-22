@@ -10,6 +10,7 @@ import {
 import {
   buildAvailableRescheduleSlots,
   buildRescheduleRequestNote,
+  evaluateRequestedRescheduleSlot,
   normalizeRescheduleOptions,
   parseRescheduleRequestPayload,
   parseRescheduleRequestNote,
@@ -345,6 +346,60 @@ test('remarcacao do portal respeita intervalo entre sessoes da jornada', () => {
   const starts = availability.days[0]?.slots.map((slot) => slot.start) || [];
   assert.deepEqual(starts, ['08:00', '09:00', '10:00', '11:00']);
   assert.ok(!starts.includes('08:50'));
+});
+
+test('aprovacao aceita intervalo solicitado dentro da jornada mesmo fora da cadencia de sugestoes', () => {
+  const evaluation = evaluateRequestedRescheduleSlot({
+    scheduledStart: '2026-07-22T12:00:00.000Z',
+    durationMinutes: 50,
+    roomId: 'room-aba',
+    locationType: 'clinica',
+    now: '2026-07-21T08:00:00-03:00',
+    workingSchedule: {
+      active: true,
+      stepMinutes: 50,
+      minLeadMinutes: 0,
+      days: {
+        wednesday: {
+          enabled: true,
+          periods: [{ start: '08:00', end: '12:00' }],
+          intervals: []
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(evaluation, {
+    available: true,
+    reasonCode: 'AVAILABLE',
+    constraint: null,
+    message: ''
+  });
+});
+
+test('aprovacao rejeita apenas impedimento real da jornada solicitada', () => {
+  const evaluation = evaluateRequestedRescheduleSlot({
+    scheduledStart: '2026-07-22T12:00:00.000Z',
+    durationMinutes: 50,
+    roomId: 'room-aba',
+    locationType: 'clinica',
+    now: '2026-07-21T08:00:00-03:00',
+    workingSchedule: {
+      active: true,
+      minLeadMinutes: 0,
+      days: {
+        wednesday: {
+          enabled: true,
+          periods: [{ start: '08:00', end: '12:00' }],
+          intervals: [{ start: '08:50', end: '09:50' }]
+        }
+      }
+    }
+  });
+
+  assert.equal(evaluation.available, false);
+  assert.equal(evaluation.reasonCode, 'BLOCKED_PERIOD');
+  assert.equal(evaluation.constraint, 'professional');
 });
 
 test('configuracao de jornada profissional persiste no perfil e exige permissao administrativa', () => {

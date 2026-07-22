@@ -2523,6 +2523,7 @@ export const ClinicalAgendaBoard = ({
   const handleActionRequestDecision = async (request: any, decision: 'approve' | 'reject', payload: any = {}) => {
     const requestId = String(request?.id || '').trim();
     if (!requestId) return false;
+    const isRescheduleRequest = String(request?.request_type || request?.requestType || '').toUpperCase() === 'RESCHEDULE';
     setActionRequestState({ loadingId: requestId, error: '' });
     const isApprove = decision === 'approve';
     const result = isApprove
@@ -2571,7 +2572,13 @@ export const ClinicalAgendaBoard = ({
     setActionRequestState({
       loadingId: '',
       error: '',
-      message: decision === 'approve' ? 'Solicitação aprovada e agenda atualizada.' : 'Solicitação recusada. O horário atual foi mantido.'
+      message: decision === 'approve'
+        ? isRescheduleRequest
+          ? 'Consulta remarcada e agenda atualizada.'
+          : 'Cancelamento de sessão aprovado.'
+        : isRescheduleRequest
+          ? 'Remarcação recusada. O horário atual foi mantido.'
+          : 'Cancelamento recusado. A sessão foi mantida.'
     });
     setActionRequestResolution({ requestId: '', note: '' });
     return true;
@@ -4408,7 +4415,13 @@ export const ClinicalAgendaBoard = ({
                                 const assignmentLabel = [assignment?.professionalName, assignment?.roomDisplayName || assignment?.roomName].filter(Boolean).join(' · ');
                                 const optionReady = optionAvailability?.approvalAllowed === true;
                                 const optionViewable = optionAvailability?.available === true;
-                                const optionUnavailable = optionAvailability?.available === false;
+                                const optionMessage = String(optionAvailability?.message || '').trim();
+                                const displayedReasons = Array.isArray(optionAvailability?.reasons)
+                                  ? optionAvailability.reasons.filter((reason: unknown) => {
+                                      const text = String(reason || '').trim();
+                                      return Boolean(text) && text !== optionMessage;
+                                    })
+                                  : [];
                                 const recommendation = String(optionAvailability?.recommendation || (optionReady ? 'good' : 'unavailable'));
                                 const recommendationLabel = optionAvailability?.recommendationLabel || (optionReady ? 'Disponível' : 'Indisponível');
                                 const optionTone = recommendation === 'best' || recommendation === 'good'
@@ -4437,14 +4450,14 @@ export const ClinicalAgendaBoard = ({
                                           ) : null}
                                         </div>
                                         {assignmentLabel && <p className={`mt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{assignmentLabel}</p>}
-                                        {optionAvailability?.message && (
+                                        {optionMessage && (
                                           <p className={`mt-1 text-xs ${optionReady ? (isDark ? 'text-emerald-300' : 'text-emerald-700') : (isDark ? 'text-amber-200' : 'text-amber-700')}`}>
-                                            {optionAvailability.message}
+                                            {optionMessage}
                                           </p>
                                         )}
-                                        {Array.isArray(optionAvailability?.reasons) && optionAvailability.reasons.length > 0 && (
+                                        {displayedReasons.length > 0 && (
                                           <ul className={`mt-2 space-y-1 text-xs ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                                            {optionAvailability.reasons.slice(0, 3).map((reason: string) => <li key={reason}>• {reason}</li>)}
+                                            {displayedReasons.slice(0, 3).map((reason: string) => <li key={reason}>• {reason}</li>)}
                                           </ul>
                                         )}
                                         {assignments.length > 1 && (
@@ -4523,10 +4536,10 @@ export const ClinicalAgendaBoard = ({
                     </div>
                   ))}
                   {statusHistory.slice(0, 8).map((entry: any, index: number) => (
-                    <div key={entry.id || `history-${index}`} className={`rounded-2xl border px-3 py-2 text-sm ${String(entry.id || '') === String(latestResponsibleRequestHistoryId || '') ? 'border-violet-200 bg-violet-50' : 'border-transparent bg-white/80'}`}>
+                    <div key={entry.id || `history-${index}`} className={`rounded-2xl border px-3 py-2 text-sm ${latestResponsibleRequestHistoryId && String(entry.id || '') === String(latestResponsibleRequestHistoryId) ? 'border-violet-200 bg-violet-50' : 'border-transparent bg-white/80'}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="font-semibold text-slate-800">{entry.label || 'Ação registrada'}</p>
-                        {String(entry.id || '') === String(latestResponsibleRequestHistoryId || '') && (
+                        {latestResponsibleRequestHistoryId && String(entry.id || '') === String(latestResponsibleRequestHistoryId) && (
                           <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-medium text-violet-700">Última ação do responsável</span>
                         )}
                       </div>

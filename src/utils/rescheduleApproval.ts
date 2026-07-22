@@ -96,17 +96,16 @@ export function parseRescheduleAssignmentId(value: unknown, expectedOptionIndex?
 function evaluateRescheduleOption(input: RescheduleOptionEvaluationInput): RescheduleOptionEvaluation {
   const available = input.availableAssignmentCount > 0;
   if (!available) {
-    const reasons = uniqueReasons([
-      ...(input.reasons || []),
-      'Não existe uma combinação livre de profissional e sala para este horário.'
-    ]);
+    const reasons = uniqueReasons(input.reasons || []);
     return {
       ...input,
       available: false,
       score: 0,
       recommendation: 'unavailable',
       recommendationLabel: recommendationLabels.unavailable,
-      reasons
+      reasons: reasons.length > 0
+        ? reasons
+        : ['Não existe uma configuração válida para este horário.']
     };
   }
 
