@@ -195,7 +195,7 @@ test('/api/auth/login profile lookup keeps removing many optional legacy-missing
   assert.equal(supabase.calls.at(-1)?.selectColumns, finalSelect);
 });
 
-test('profile selects do not expose 2FA secret outside explicit auth verification', () => {
+test('profile selects do not expose 2FA secret and MFA login uses a password-bound challenge', () => {
   assert.ok(!PROFILE_SELECT.split(',').includes('two_factor_secret'));
 
   const serverSource = fs.readFileSync(path.resolve('server.ts'), 'utf8');
@@ -203,9 +203,12 @@ test('profile selects do not expose 2FA secret outside explicit auth verificatio
   assert.ok(adminClientsBlock.includes('select(USER_PROFILE_SELECT)'));
   assert.ok(!adminClientsBlock.includes('two_factor_secret'));
 
-  const twoFactorLoginBlock = serverSource.match(/app\.post\('\/api\/auth\/2fa\/login'[\s\S]*?app\.post\('\/api\/auth\/logout'/)?.[0] || '';
-  assert.ok(twoFactorLoginBlock.includes('includeTwoFactorSecret: true'));
-  assert.ok(twoFactorLoginBlock.includes('findAuthUserByEmail(email)'));
+  const twoFactorLoginBlock = serverSource.match(/app\.post\('\/api\/auth\/2fa\/login'[\s\S]*?const registerUserWithEmailConfirmation/)?.[0] || '';
+  assert.ok(twoFactorLoginBlock.includes('req.body?.challengeId'));
+  assert.ok(twoFactorLoginBlock.includes(".from('auth_mfa_challenges')"));
+  assert.ok(twoFactorLoginBlock.includes('fetchMfaSecurityProfile(boundUserId)'));
+  assert.ok(!twoFactorLoginBlock.includes('req.body?.email'));
+  assert.ok(!twoFactorLoginBlock.includes('findAuthUserByEmail(email)'));
   assert.ok(!twoFactorLoginBlock.includes('supabase.auth.admin.listUsers()'));
 });
 

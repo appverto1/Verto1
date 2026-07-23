@@ -1494,6 +1494,16 @@ export default function App() {
           if (!response.ok || !result?.success) {
             return { success: false, error: result?.error || 'Erro no login' };
           }
+          if (result.twoFactorRequired) {
+            return {
+              success: true,
+              twoFactorRequired: true,
+              twoFactorSetupRequired: Boolean(result.twoFactorSetupRequired),
+              challengeId: result.challengeId,
+              qrCodeUrl: result.qrCodeUrl || null,
+              expiresAt: result.expiresAt || null,
+            };
+          }
           const resolvedUser = await applyResolvedUserState(result.user, null);
           return { success: true, user: resolvedUser };
         }
@@ -1604,7 +1614,14 @@ export default function App() {
       const data = await response.json();
       if (data.success) {
         if (data.twoFactorRequired) {
-          return { success: true, twoFactorRequired: true, email: data.email };
+          return {
+            success: true,
+            twoFactorRequired: true,
+            twoFactorSetupRequired: Boolean(data.twoFactorSetupRequired),
+            challengeId: data.challengeId,
+            qrCodeUrl: data.qrCodeUrl || null,
+            expiresAt: data.expiresAt || null,
+          };
         }
         const resolvedUser = await applyResolvedUserState(data.user, supabaseSession);
         return { success: true, user: resolvedUser };

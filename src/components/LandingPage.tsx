@@ -89,11 +89,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
   const [loading, setLoading] = useState(false);
   const [twoFactorRequired, setTwoFactorRequired] = useState(false);
   const [twoFactorToken, setTwoFactorToken] = useState('');
-  const [twoFactorEmail, setTwoFactorEmail] = useState('');
+  const [twoFactorChallengeId, setTwoFactorChallengeId] = useState('');
+  const [twoFactorSetupRequired, setTwoFactorSetupRequired] = useState(false);
   const [show2FASetup, setShow2FASetup] = useState(false);
   const [loginStep, setLoginStep] = useState<'email' | 'password'>('email');
   const [qrCodeUrl, setQrCodeUrl] = useState('');
-  const [tempSecret, setTempSecret] = useState('');
   const [showPasswordRecovery, setShowPasswordRecovery] = useState(false);
   const [recoveryStep, setRecoveryStep] = useState<'request' | 'verify'>('request');
   const [recoveryEmail, setRecoveryEmail] = useState('');
@@ -186,7 +186,10 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         
         if (loginRes?.twoFactorRequired) {
           setTwoFactorRequired(true);
-          setTwoFactorEmail(loginRes.email);
+          setTwoFactorChallengeId(loginRes.challengeId || '');
+          setTwoFactorSetupRequired(Boolean(loginRes.twoFactorSetupRequired));
+          setQrCodeUrl(loginRes.qrCodeUrl || '');
+          setTwoFactorToken('');
           setLoginStep('password');
           setShowLogin(true); // Ensure login modal is still open
         } else if (loginRes?.success) {
@@ -462,25 +465,36 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
     setLoading(true);
     
     try {
-      const supabase = await getSupabase();
-      const { data: { session } } = await supabase.auth.getSession();
-      const token = session?.access_token;
-
       const response = await fetch('/api/auth/2fa/login', {
         method: 'POST',
         headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : ''
+          'Content-Type': 'application/json'
         },
         credentials: 'include',
-        body: JSON.stringify({ email: twoFactorEmail, token: twoFactorToken })
+        body: JSON.stringify({ challengeId: twoFactorChallengeId, token: twoFactorToken })
       });
       
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Código inválido');
+      if (!response.ok) {
+        const message = data.error === 'MFA_CODE_INVALID'
+          ? 'Código inválido. Confira o Google Authenticator e tente novamente.'
+          : data.error === 'MFA_CHALLENGE_EXPIRED'
+            ? 'Esta verificação expirou. Entre novamente com sua senha.'
+            : 'Não foi possível concluir a verificação de segurança.';
+        throw new Error(message);
+      }
       
       if (data.success) {
-        window.location.reload(); // Reload to pick up new session
+        const resolvedLogin = await onLogin(null, loginType);
+        if (!resolvedLogin?.success) {
+          throw new Error(resolvedLogin?.error || 'Não foi possível abrir sua sessão protegida.');
+        }
+        setTwoFactorRequired(false);
+        setTwoFactorSetupRequired(false);
+        setTwoFactorChallengeId('');
+        setTwoFactorToken('');
+        setQrCodeUrl('');
+        setShowLogin(false);
       }
     } catch (err: any) {
       setLoginError(err.message);
@@ -505,7 +519,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       const data = await response.json();
       if (data.qrCodeUrl) {
         setQrCodeUrl(data.qrCodeUrl);
-        setTempSecret(data.secret);
         setShow2FASetup(true);
       }
     } catch (err) {
@@ -1592,14 +1605,27 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                       <div className="p-4 bg-purple-50 rounded-2xl flex items-start gap-3">
                         <Shield className="text-[#7a32fc] mt-0.5" size={20} />
                         <div>
-                          <p className="text-sm font-bold text-gray-800">Autenticação de 2 Fatores</p>
-                          <p className="text-xs text-gray-500">Insira o código gerado pelo seu app Google Authenticator.</p>
+                          <p className="text-sm font-semibold text-gray-800">
+                            {twoFactorSetupRequired ? 'Proteja o acesso administrativo' : 'Autenticação de dois fatores'}
+                          </p>
+                          <p className="text-xs font-normal text-gray-500">
+                            {twoFactorSetupRequired
+                              ? 'Escaneie o QR Code no Google Authenticator e confirme o primeiro código.'
+                              : 'Insira o código gerado pelo Google Authenticator.'}
+                          </p>
                         </div>
                       </div>
+                      {twoFactorSetupRequired && qrCodeUrl && (
+                        <div className="flex justify-center rounded-2xl border border-purple-100 bg-white p-4">
+                          <SecureImage src={qrCodeUrl} alt="QR Code para configurar o Google Authenticator" className="h-44 w-44" />
+                        </div>
+                      )}
                       <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Código de Verificação</label>
+                        <label className="text-xs font-medium text-gray-500">Código de verificação</label>
                         <input 
                           type="text" 
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
                           required
                           value={twoFactorToken}
                           onChange={(e) => setTwoFactorToken(e.target.value)}
@@ -1642,7 +1668,9 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     {(showPasswordRecovery ? recoveryLoading : loading) ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : null}
                     {showPasswordRecovery
                       ? (recoveryStep === 'request' ? 'Enviar código' : 'Redefinir senha')
-                      : (loginStep === 'email' ? 'Continuar' : 'Entrar na Verto')}
+                      : twoFactorRequired
+                        ? (twoFactorSetupRequired ? 'Ativar e entrar' : 'Verificar e entrar')
+                        : (loginStep === 'email' ? 'Continuar' : 'Entrar na Verto')}
                   </button>
 
                   {!showPasswordRecovery && (

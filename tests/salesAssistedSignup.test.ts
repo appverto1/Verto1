@@ -289,7 +289,8 @@ test("ativação comercial pública exige oferta paga e vínculo exato da sessã
   assert.match(server, /\.eq\("source", "sales_assisted_signup"\)/);
   assert.match(server, /\.eq\("status", "paid"\)/);
   assert.match(server, /\.eq\("stripe_checkout_session_id", checkoutSessionId\)/);
-  assert.match(server, /crypto\.randomBytes\(36\)\.toString\("base64url"\)/);
+  assert.match(server, /deriveSalesActivationToken\(session\.id\)/);
+  assert.match(server, /createHmac\("sha256", secret\)/);
   assert.match(server, /const tokenHash = hashSalesOfferToken\(activationToken\)/);
   assert.match(server, /error: "WEAK_PASSWORD"/);
   assert.doesNotMatch(salesActivation, /clinicId|offerId|leadId|stripe_/i);

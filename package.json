@@ -60,6 +60,8 @@
     "test:billing": "tsx tests/billing.test.ts",
     "test:sales-assisted": "tsx tests/salesAssistedSignup.test.ts",
     "test:sales-schema": "tsx tests/salesCommercialSchemaReconciliation.test.ts",
+    "test:sales-checkout-provisioning": "tsx tests/salesCheckoutProvisioning.test.ts",
+    "test:owner-mfa": "tsx tests/ownerMfaEnforcement.test.ts",
     "test:demo-sandbox": "tsx tests/demoSandbox.test.ts",
     "test:calendar-events": "tsx tests/calendarEvents.test.ts",
     "test:scheduling": "tsx tests/scheduling.test.ts",

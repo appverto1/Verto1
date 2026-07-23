@@ -20,14 +20,67 @@ type PublicOffer = {
   stripeReady: boolean;
 };
 
+type PaymentReturnState =
+  | 'idle'
+  | 'confirming'
+  | 'payment_confirmed'
+  | 'activation_email_sent'
+  | 'review_required'
+  | 'unavailable';
+
 export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [offer, setOffer] = useState<PublicOffer | null>(null);
   const [loading, setLoading] = useState(true);
   const [continuing, setContinuing] = useState(false);
   const [error, setError] = useState('');
+  const [paymentReturnState, setPaymentReturnState] = useState<PaymentReturnState>('idle');
 
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: number | null = null;
+    const query = new URLSearchParams(window.location.search);
+    const checkoutSessionId = query.get('session_id') || '';
+    const returnedFromPayment = query.get('payment') === 'success' && Boolean(checkoutSessionId);
+
+    const loadPaymentStatus = async () => {
+      setPaymentReturnState('confirming');
+      setLoading(false);
+      const maxAttempts = 8;
+      for (let attempt = 0; attempt < maxAttempts && !cancelled; attempt += 1) {
+        try {
+          const response = await fetch(
+            `/api/public/sales-offers/${encodeURIComponent(token)}/payment-status?session_id=${encodeURIComponent(checkoutSessionId)}`,
+            { credentials: 'omit', cache: 'no-store' }
+          );
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok && response.status !== 202) {
+            throw new Error(data?.error || 'PAYMENT_STATUS_UNAVAILABLE');
+          }
+          if (cancelled) return;
+          if (data?.state === 'activation_email_sent') {
+            setPaymentReturnState('activation_email_sent');
+            return;
+          }
+          if (data?.state === 'review_required') {
+            setPaymentReturnState('review_required');
+            return;
+          }
+          if (data?.state === 'payment_confirmed') {
+            setPaymentReturnState('payment_confirmed');
+          }
+        } catch {
+          if (attempt === maxAttempts - 1 && !cancelled) {
+            setPaymentReturnState('unavailable');
+            return;
+          }
+        }
+        await new Promise<void>((resolve) => {
+          retryTimer = window.setTimeout(resolve, 2000);
+        });
+      }
+      if (!cancelled) setPaymentReturnState('payment_confirmed');
+    };
+
     const loadOffer = async () => {
       try {
         const response = await fetch(`/api/public/sales-offers/${encodeURIComponent(token)}`, {
@@ -44,9 +97,11 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         if (!cancelled) setLoading(false);
       }
     };
-    void loadOffer();
+    if (returnedFromPayment) void loadPaymentStatus();
+    else void loadOffer();
     return () => {
       cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
   }, [token]);
 
@@ -78,7 +133,37 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       <div className="mx-auto max-w-2xl">
         <div className="mb-6 flex justify-center"><LogoVerto /></div>
         <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm md:p-8">
-          {loading ? (
+          {paymentReturnState !== 'idle' ? (
+            <div className="flex min-h-72 flex-col items-center justify-center text-center">
+              {paymentReturnState === 'confirming' ? (
+                <Loader2 className="mb-4 animate-spin text-violet-600" size={30} />
+              ) : paymentReturnState === 'unavailable' || paymentReturnState === 'review_required' ? (
+                <AlertCircle className="mb-4 text-amber-600" size={32} />
+              ) : (
+                <CheckCircle2 className="mb-4 text-emerald-600" size={32} />
+              )}
+              <h1 className="text-xl font-semibold text-slate-900">
+                {paymentReturnState === 'confirming'
+                  ? 'Confirmando seu pagamento'
+                  : paymentReturnState === 'activation_email_sent'
+                    ? 'Pagamento confirmado'
+                    : paymentReturnState === 'review_required'
+                      ? 'Pagamento recebido'
+                      : paymentReturnState === 'unavailable'
+                        ? 'Confirmação em andamento'
+                        : 'Pagamento confirmado'}
+              </h1>
+              <p className="mt-3 max-w-md text-sm font-normal leading-6 text-slate-600">
+                {paymentReturnState === 'activation_email_sent'
+                  ? 'Enviamos o link de ativação para o e-mail informado no Checkout. Abra a mensagem para criar seu acesso à Verto.'
+                  : paymentReturnState === 'review_required'
+                    ? 'Seu pagamento foi preservado. A equipe da Verto revisará os dados de ativação antes de liberar o acesso.'
+                    : paymentReturnState === 'unavailable'
+                      ? 'Ainda não recebemos a confirmação final. Aguarde alguns minutos e verifique seu e-mail; se necessário, fale com o suporte.'
+                      : 'A Stripe confirmou o retorno e estamos preparando seu e-mail de ativação. Esta página não cria a conta automaticamente.'}
+              </p>
+            </div>
+          ) : loading ? (
             <div className="flex min-h-72 items-center justify-center gap-3 text-sm text-slate-600">
               <Loader2 className="animate-spin" size={20} /> Carregando proposta...
             </div>

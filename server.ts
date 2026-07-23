@@ -1418,6 +1418,21 @@ function hashSalesOfferToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+function deriveSalesActivationToken(checkoutSessionId: string): string {
+  const sessionId = sanitizeString(checkoutSessionId, 200);
+  const secret = sanitizeString(
+    process.env.DATA_ENCRYPTION_KEY || process.env.SESSION_SECRET,
+    2000,
+  );
+  if (!sessionId || !secret) {
+    throw new Error("SALES_ACTIVATION_TOKEN_CONFIGURATION_MISSING");
+  }
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`sales-assisted-activation:${sessionId}`)
+    .digest("base64url");
+}
+
 function deriveSalesOfferPublicToken(
   actorUserId: string,
   idempotencyKey: string,
@@ -1606,51 +1621,90 @@ async function persistStripeSubscriptionReference(params: {
 async function reserveStripeWebhookEvent(event: Stripe.Event): Promise<boolean> {
   const eventId = sanitizeString(event?.id, 200);
   const eventType = sanitizeString(event?.type, 120);
-  if (!eventId || !eventType) return true;
-  try {
-    const { error } = await supabase
-      .from('stripe_webhook_events')
-      .insert([{
-        id: eventId,
-        event_type: eventType,
-        status: 'processing',
-        metadata: {}
-      }]);
-    if (!error) return true;
-    const code = sanitizeString((error as any)?.code, 20);
-    const message = sanitizeString((error as any)?.message || '', 300).toLowerCase();
-    if (code === '23505' || message.includes('duplicate')) {
-      return false;
-    }
-    if (isMissingRelationError(error) || extractMissingColumnName(error)) {
-      console.warn('[Stripe Webhook] Tabela de idempotencia ausente; processando com fallback.', {
-        eventType
-      });
-      return true;
-    }
-    throw error;
-  } catch (error: any) {
-    console.warn('[Stripe Webhook] Falha no guard de idempotencia; processando com fallback.', {
-      eventType,
-      message: sanitizeString(error?.message || String(error), 200)
-    });
-    return true;
+  if (!eventId || !eventType) {
+    throw new Error('STRIPE_WEBHOOK_EVENT_ID_INVALID');
   }
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('stripe_webhook_events')
+    .insert([{
+      id: eventId,
+      event_type: eventType,
+      status: 'processing',
+      metadata: {},
+      processed_at: now,
+      updated_at: now,
+      attempt_count: 1
+    }]);
+  if (!error) return true;
+
+  const code = sanitizeString((error as any)?.code, 20);
+  const message = sanitizeString((error as any)?.message || '', 300).toLowerCase();
+  if (code !== '23505' && !message.includes('duplicate')) {
+    throw error;
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from('stripe_webhook_events')
+    .select('id,status,processed_at,attempt_count')
+    .eq('id', eventId)
+    .maybeSingle();
+  if (existingError || !existing) {
+    throw existingError || new Error('STRIPE_WEBHOOK_RESERVATION_NOT_FOUND');
+  }
+  if (sanitizeString(existing.status, 40) === 'processed') return false;
+
+  const staleBefore = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const canRetry =
+    sanitizeString(existing.status, 40) === 'failed' ||
+    (sanitizeString(existing.status, 40) === 'processing' &&
+      sanitizeString(existing.processed_at, 80) < staleBefore);
+  if (!canRetry) return false;
+
+  let retryQuery = supabase
+    .from('stripe_webhook_events')
+    .update({
+      status: 'processing',
+      processed_at: now,
+      updated_at: now,
+      last_error_code: null,
+      attempt_count: Math.max(1, Number(existing.attempt_count || 1)) + 1
+    })
+    .eq('id', eventId)
+    .eq('status', sanitizeString(existing.status, 40));
+  if (sanitizeString(existing.status, 40) === 'processing') {
+    retryQuery = retryQuery.lt('processed_at', staleBefore);
+  }
+  const { data: retried, error: retryError } = await retryQuery.select('id');
+  if (retryError) throw retryError;
+  return Array.isArray(retried) && retried.length === 1;
 }
 
-async function markStripeWebhookEventStatus(event: Stripe.Event, status: 'processed' | 'failed'): Promise<void> {
+async function markStripeWebhookEventStatus(
+  event: Stripe.Event,
+  status: 'processed' | 'failed',
+  errorCode?: string | null
+): Promise<void> {
   const eventId = sanitizeString(event?.id, 200);
   if (!eventId) return;
   try {
-    await supabase
+    const now = new Date().toISOString();
+    const { error } = await supabase
       .from('stripe_webhook_events')
       .update({
         status,
-        processed_at: new Date().toISOString()
+        processed_at: now,
+        updated_at: now,
+        last_error_code: status === 'failed' ? sanitizeString(errorCode, 120) || 'PROCESSING_FAILED' : null
       })
       .eq('id', eventId);
-  } catch {
-    // Best-effort audit only. Never retry webhook work because audit status failed.
+    if (error) throw error;
+  } catch (statusError: any) {
+    console.error('[Stripe Webhook] Falha ao persistir status do evento.', {
+      eventType: sanitizeString(event?.type, 120),
+      message: sanitizeString(statusError?.message || String(statusError), 200)
+    });
   }
 }
 
@@ -5835,12 +5889,28 @@ function normalizeRequestedRole(role: unknown): AppRole {
   return 'therapist';
 }
 
+const OWNER_MFA_POLICY_VERSION = '2026-07-23-v1';
+
+function hasVerifiedOwnerMfaSession(user: any): boolean {
+  if (sanitizeString(user?.role, 40).toLowerCase() !== 'owner') return true;
+  const verifiedAt = Date.parse(sanitizeString(user?.mfaVerifiedAt, 80));
+  return user?.mfaVerified === true &&
+    sanitizeString(user?.mfaMethod, 20).toLowerCase() === 'totp' &&
+    Number.isFinite(verifiedAt);
+}
+
 function requireRoles(...allowedRoles: AppRole[]) {
   const allowed = new Set<AppRole>(allowedRoles);
   return (req: any, res: any, next: any) => {
     const role = req.session?.user?.role;
     if (!ensureRole(role) || !allowed.has(role)) {
       return res.status(403).json({ error: 'Acesso negado para este perfil.' });
+    }
+    if (role === 'owner' && !hasVerifiedOwnerMfaSession(req.session?.user)) {
+      return res.status(401).json({
+        error: 'OWNER_MFA_REQUIRED',
+        message: 'Confirme o Google Authenticator para acessar esta area.'
+      });
     }
     return next();
   };
@@ -5898,6 +5968,141 @@ function decryptJsonPayload(payload: string | null | undefined): Record<string, 
     console.error('[Encryption] Falha ao descriptografar payload clínico:', error?.message || String(error));
     return null;
   }
+}
+
+const MFA_STORED_SECRET_PREFIX = 'enc:v1:';
+
+function isEncryptedStoredMfaSecret(value: unknown): boolean {
+  return sanitizeString(value, 4000).startsWith(MFA_STORED_SECRET_PREFIX);
+}
+
+function resolveStoredMfaSecret(value: unknown): string {
+  const stored = sanitizeString(value, 4000);
+  if (!stored) return '';
+  if (!stored.startsWith(MFA_STORED_SECRET_PREFIX)) {
+    // Compatibilidade de leitura para segredos existentes. Depois de uma
+    // validacao TOTP bem-sucedida, o mesmo segredo e gravado criptografado.
+    return sanitizeString(stored, 512);
+  }
+  return sanitizeString(
+    decryptJsonPayload(stored.slice(MFA_STORED_SECRET_PREFIX.length))?.secret,
+    512,
+  );
+}
+
+function encryptStoredMfaSecret(secret: unknown): string {
+  const normalized = sanitizeString(secret, 512);
+  if (!normalized) throw new Error('MFA_SECRET_INVALID');
+  const encrypted = encryptJsonPayload({ secret: normalized });
+  if (!encrypted) throw new Error('MFA_ENCRYPTION_UNAVAILABLE');
+  return `${MFA_STORED_SECRET_PREFIX}${encrypted}`;
+}
+
+const AUTH_MFA_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const AUTH_MFA_MAX_ATTEMPTS = 5;
+const AUTH_MFA_CHALLENGE_SELECT =
+  'id,challenge_hash,user_id,purpose,setup_secret_encrypted,attempts,max_attempts,expires_at,consumed_at,created_at';
+
+function hashAuthMfaChallenge(challengeId: string): string {
+  const secret = (process.env.SESSION_SECRET || '').trim();
+  if (!secret) throw new Error('SESSION_SECRET_REQUIRED_FOR_MFA');
+  return crypto.createHmac('sha256', secret).update(challengeId).digest('hex');
+}
+
+function constantTimeStringEquals(left: unknown, right: unknown): boolean {
+  const leftBuffer = Buffer.from(String(left || ''), 'utf8');
+  const rightBuffer = Buffer.from(String(right || ''), 'utf8');
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function regenerateExpressSession(req: any): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.regenerate((error: any) => error ? reject(error) : resolve());
+  });
+}
+
+function saveExpressSession(req: any): Promise<void> {
+  return new Promise((resolve, reject) => {
+    req.session.save((error: any) => error ? reject(error) : resolve());
+  });
+}
+
+async function fetchMfaSecurityProfile(userId: string) {
+  if (!supabase || !isUuid(userId)) {
+    return { data: null, error: new Error('MFA_SECURITY_PROFILE_UNAVAILABLE') };
+  }
+  return await supabase
+    .from('users')
+    .select('id,role,two_factor_enabled,two_factor_secret')
+    .eq('id', userId)
+    .maybeSingle();
+}
+
+async function createAuthMfaChallenge(params: {
+  req: any;
+  userId: string;
+  email: string;
+  purpose: 'login' | 'setup';
+  setupSecret?: string | null;
+}) {
+  const challengeId = crypto.randomBytes(32).toString('base64url');
+  const challengeHash = hashAuthMfaChallenge(challengeId);
+  const expiresAt = new Date(Date.now() + AUTH_MFA_CHALLENGE_TTL_MS).toISOString();
+  let setupSecretEncrypted: string | null = null;
+  let qrCodeUrl: string | null = null;
+
+  if (params.purpose === 'setup') {
+    const setupSecret = sanitizeString(params.setupSecret, 512) || generateSecret();
+    setupSecretEncrypted = encryptJsonPayload({ secret: setupSecret });
+    if (!setupSecretEncrypted) throw new Error('MFA_ENCRYPTION_UNAVAILABLE');
+    const otpauth = generateURI({ issuer: 'Verto', label: params.email, secret: setupSecret });
+    qrCodeUrl = await QRCode.toDataURL(otpauth);
+  }
+
+  const consumedAt = new Date().toISOString();
+  const invalidateResult = await supabase
+    .from('auth_mfa_challenges')
+    .update({ consumed_at: consumedAt })
+    .eq('user_id', params.userId)
+    .is('consumed_at', null);
+  if (invalidateResult.error) throw invalidateResult.error;
+
+  const insertResult = await supabase
+    .from('auth_mfa_challenges')
+    .insert({
+      challenge_hash: challengeHash,
+      user_id: params.userId,
+      purpose: params.purpose,
+      setup_secret_encrypted: setupSecretEncrypted,
+      attempts: 0,
+      max_attempts: AUTH_MFA_MAX_ATTEMPTS,
+      expires_at: expiresAt,
+    })
+    .select('id')
+    .single();
+  if (insertResult.error) throw insertResult.error;
+
+  try {
+    await regenerateExpressSession(params.req);
+    params.req.session.mfaChallengeHash = challengeHash;
+    params.req.session.mfaChallengeUserId = params.userId;
+    params.req.session.mfaChallengeExpiresAt = expiresAt;
+    await saveExpressSession(params.req);
+  } catch (error) {
+    await supabase
+      .from('auth_mfa_challenges')
+      .update({ consumed_at: new Date().toISOString() })
+      .eq('challenge_hash', challengeHash)
+      .is('consumed_at', null);
+    throw error;
+  }
+
+  return {
+    challengeId,
+    expiresAt,
+    purpose: params.purpose,
+    qrCodeUrl,
+  };
 }
 
 function pseudonymizeValue(value: string): string {
@@ -11081,9 +11286,12 @@ function buildSessionUserPayload(input: any) {
   const selectedWorkspace = activeWorkspaceId
     ? workspaces.find((w: any) => w.clinicId === activeWorkspaceId) || null
     : null;
+  const canonicalInputRole = sanitizeString(input?.role, 40).toLowerCase();
   const resolvedRole = explicitDemoUser
     ? selectedWorkspace?.role || workspaces[0]?.role || 'coordinator'
-    : selectedWorkspace?.role || input?.role;
+    : canonicalInputRole === 'owner'
+      ? 'owner'
+      : selectedWorkspace?.role || input?.role;
   const mustSelectWorkspace = workspaces.length > 1 && !activeWorkspaceId;
   const resolvedBillingModel = sanitizeString(
     selectedWorkspace?.billingModel || input?.billingModel || input?.billing_model,
@@ -11118,6 +11326,10 @@ function buildSessionUserPayload(input: any) {
     activeWorkspaceId,
     mustSelectWorkspace,
     sessionToken: sanitizeString(input?.sessionToken, 120) || null,
+    mfaVerified: input?.mfaVerified === true,
+    mfaVerifiedAt: sanitizeString(input?.mfaVerifiedAt, 80) || null,
+    mfaMethod: input?.mfaMethod === 'totp' ? 'totp' : null,
+    authPolicyVersion: OWNER_MFA_POLICY_VERSION,
     emailVerified: Boolean(input?.emailVerified),
     phoneVerified: Boolean(input?.phoneVerified),
     portalVerified: Boolean(input?.portalVerified),
@@ -13234,6 +13446,18 @@ async function startServer() {
     message: { error: 'Muitas tentativas de login. Tente novamente em alguns minutos.' }
   });
 
+  const authMfaLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 12,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: {
+      error: 'MFA_RATE_LIMITED',
+      message: 'Muitas tentativas de verificacao. Aguarde alguns minutos.'
+    }
+  });
+
   const authMeLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
     max: 300,
@@ -13411,7 +13635,7 @@ async function startServer() {
           : "ended";
     const now = new Date().toISOString();
 
-    await supabase.from("sales_subscription_discounts").upsert(
+    const { error: discountUpsertError } = await supabase.from("sales_subscription_discounts").upsert(
       [
         {
           offer_id: offerId,
@@ -13438,8 +13662,9 @@ async function startServer() {
       ],
       { onConflict: "stripe_subscription_id" },
     );
+    if (discountUpsertError) throw discountUpsertError;
 
-    await supabase
+    const { error: offerDiscountError } = await supabase
       .from("sales_offers")
       .update({
         stripe_subscription_id: subscription.id,
@@ -13452,6 +13677,7 @@ async function startServer() {
       })
       .eq("id", offerId)
       .eq("lead_id", leadId);
+    if (offerDiscountError) throw offerDiscountError;
   };
 
   const eventTypeSubscriptionIsActive = (status: string) =>
@@ -13509,18 +13735,10 @@ async function startServer() {
     if (leadError || !lead) {
       throw leadError || new Error("SALES_LEAD_NOT_FOUND");
     }
-    if (sanitizeEmail(lead.normalized_email || lead.email) !== customerEmail) {
-      throw new Error("SALES_CHECKOUT_EMAIL_MISMATCH");
-    }
-    if (
-      offer.revoked_at ||
-      ["cancelled", "expired"].includes(sanitizeString(offer.status, 40))
-    ) {
-      throw new Error("SALES_OFFER_NOT_ACTIVE");
-    }
-
     let subscription: Stripe.Subscription | null = null;
-    if (subscriptionId) {
+    // A paid Checkout is already authoritative for the financial transition.
+    // Only no-payment sessions need the subscription status before persistence.
+    if (paymentStatus === "no_payment_required" && subscriptionId) {
       subscription = await stripe.subscriptions.retrieve(subscriptionId, {
         expand: ["discounts", "items.data.price"],
       } as any);
@@ -13573,51 +13791,96 @@ async function startServer() {
         (result: any) => result?.error,
       )?.error;
       if (pendingError) throw pendingError;
-      if (subscription) await syncSalesSubscriptionDiscount(subscription);
+      if (subscription) {
+        try {
+          await syncSalesSubscriptionDiscount(subscription);
+        } catch (discountError: any) {
+          console.warn("[Sales Checkout] Checkout pendente preservado; sincronizacao de desconto adiada.", {
+            offerId,
+            leadId,
+            message: sanitizeString(discountError?.message || String(discountError), 200),
+          });
+        }
+      }
       return { paymentConfirmed: false, activationPrepared: false };
     }
 
-    const paymentResults = await Promise.all([
-      supabase
-        .from("sales_offers")
-        .update({
-          status: "paid",
-          stripe_customer_id: customerId || null,
-          stripe_checkout_session_id: session.id,
-          stripe_subscription_id: subscriptionId || null,
-          accepted_at: now,
-          updated_at: now,
-        })
-        .eq("id", offerId)
-        .eq("lead_id", leadId),
-      supabase
-        .from("sales_leads")
-        .update({ status: "payment_pending", updated_at: now })
-        .eq("id", leadId)
-        .is("deleted_at", null),
-      supabase.from("sales_lead_events").upsert(
-        [
-          {
-            lead_id: leadId,
-            event_type: "payment_completed",
-            metadata: {
-              offer_id: offerId,
-              checkout_session_id: session.id,
-              payment_status: paymentStatus,
-            },
-            idempotency_key: `payment-completed:${session.id}`,
-          },
-        ],
-        { onConflict: "idempotency_key", ignoreDuplicates: true },
-      ),
-    ]);
-    const paymentError = paymentResults.find(
-      (result: any) => result?.error,
-    )?.error;
-    if (paymentError) throw paymentError;
+    const { data: paymentConfirmation, error: paymentConfirmationError } =
+      await supabase.rpc("confirm_sales_assisted_checkout_payment", {
+        p_offer_id: offerId,
+        p_lead_id: leadId,
+        p_checkout_session_id: session.id,
+        p_customer_email: customerEmail,
+        p_stripe_customer_id: customerId || null,
+        p_stripe_subscription_id: subscriptionId || null,
+        p_payment_status: paymentStatus || "paid",
+        p_idempotency_key: `payment-completed:${session.id}`,
+      });
+    if (paymentConfirmationError) throw paymentConfirmationError;
 
-    if (subscription) {
-      await syncSalesSubscriptionDiscount(subscription);
+    if (!subscription && subscriptionId) {
+      try {
+        subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+          expand: ["discounts", "items.data.price"],
+        } as any);
+      } catch (subscriptionError: any) {
+        console.warn("[Sales Checkout] Pagamento persistido; leitura da assinatura sera retomada por webhook/retry.", {
+          offerId,
+          leadId,
+          message: sanitizeString(subscriptionError?.message || String(subscriptionError), 200),
+        });
+      }
+    }
+
+    const paymentState =
+      paymentConfirmation && typeof paymentConfirmation === "object"
+        ? (paymentConfirmation as Record<string, any>)
+        : {};
+    const emailState = sanitizeString(paymentState.email_state, 40);
+    const reviewRequired = paymentState.review_required === true;
+
+    if (emailState === "mismatch" || reviewRequired) {
+      console.error("[Sales Checkout] Pagamento confirmado exige revisao de identidade.", {
+        leadId,
+        offerId,
+        checkoutSessionId: sanitizeString(session.id, 200),
+        reason: emailState === "mismatch" ? "checkout_email_mismatch" : "offer_state_review",
+      });
+      const ownerId = sanitizeString(process.env.SALES_OWNER_USER_ID, 120);
+      if (isUuid(ownerId)) {
+        await persistActivityLog({
+          userId: ownerId,
+          title: "Pagamento comercial requer revisao",
+          content: "O pagamento foi confirmado, mas a identidade comercial precisa de revisao antes da ativacao.",
+          type: "sales",
+          action: "sales_checkout_identity_review_required",
+          payload: { leadId, offerId, checkoutSessionId: session.id },
+        });
+      }
+      if (subscription) {
+        try {
+          await syncSalesSubscriptionDiscount(subscription);
+        } catch (discountError: any) {
+          console.warn("[Sales Checkout] Pagamento em revisao preservado; sincronizacao de desconto pendente.", {
+            offerId,
+            leadId,
+            message: sanitizeString(discountError?.message || String(discountError), 200),
+          });
+        }
+      }
+      return {
+        paymentConfirmed: true,
+        activationPrepared: false,
+        reviewRequired: true,
+      };
+    }
+
+    if (emailState === "collision") {
+      console.warn("[Sales Checkout] E-mail do Checkout pertence a outro lead; ativacao preservada sem merge.", {
+        leadId,
+        offerId,
+        checkoutSessionId: sanitizeString(session.id, 200),
+      });
     }
 
     const activationExpiresAt = new Date(
@@ -13625,11 +13888,13 @@ async function startServer() {
     ).toISOString();
     let activationToken = "";
     let activationEmailAlreadySent = false;
+    let activationEmailSent = false;
+    let activationEmailAttempts = 0;
 
     const { data: existingActivation, error: existingActivationError } =
       await supabase
         .from("pending_activations")
-        .select("id,activation_email_sent_at")
+        .select("id,activation_email_sent_at,activation_email_attempts")
         .eq("stripe_checkout_session_id", session.id)
         .eq("source", "sales_assisted_signup")
         .limit(1)
@@ -13639,8 +13904,13 @@ async function startServer() {
     activationEmailAlreadySent = Boolean(
       existingActivation?.activation_email_sent_at,
     );
+    activationEmailSent = activationEmailAlreadySent;
+    activationEmailAttempts = Math.max(
+      0,
+      Number(existingActivation?.activation_email_attempts || 0),
+    );
     if (!activationEmailAlreadySent) {
-      activationToken = crypto.randomBytes(36).toString("base64url");
+      activationToken = deriveSalesActivationToken(session.id);
       const tokenHash = hashSalesOfferToken(activationToken);
       if (existingActivation?.id) {
         const { error: updateActivationError } = await supabase
@@ -13676,7 +13946,7 @@ async function startServer() {
           const { data: racedActivation, error: racedActivationError } =
             await supabase
               .from("pending_activations")
-              .select("id,activation_email_sent_at")
+              .select("id,activation_email_sent_at,activation_email_attempts")
               .eq("stripe_checkout_session_id", session.id)
               .eq("source", "sales_assisted_signup")
               .limit(1)
@@ -13685,6 +13955,10 @@ async function startServer() {
             throw insertActivationError;
           activationEmailAlreadySent = Boolean(
             racedActivation.activation_email_sent_at,
+          );
+          activationEmailAttempts = Math.max(
+            activationEmailAttempts,
+            Number(racedActivation.activation_email_attempts || 0),
           );
           if (!activationEmailAlreadySent) {
             const { error: rotateError } = await supabase
@@ -13698,18 +13972,34 @@ async function startServer() {
       }
     }
 
+    const { error: activationPreparedStatusError } = await supabase
+      .from("sales_offers")
+      .update({
+        provisioning_status: activationEmailAlreadySent ? "completed" : "email_pending",
+        provisioning_error_code: null,
+        provisioning_updated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", offerId)
+      .eq("lead_id", leadId)
+      .eq("status", "paid");
+    if (activationPreparedStatusError) throw activationPreparedStatusError;
+
     if (!activationEmailAlreadySent && activationToken) {
       try {
         const resend = getResend();
         const from =
           sanitizeString(process.env.RESEND_FROM_EMAIL || "", 320) ||
           OFFICIAL_FROM_NOREPLY;
-        const emailResult = await resend.emails.send({
+        const emailResult = await resend.emails.send(
+          {
           from,
           to: customerEmail,
           subject: "Bem-vindo à Verto: conclua sua ativação",
           html: buildSalesPostPaymentActivationEmail(activationToken),
-        });
+          },
+          { idempotencyKey: `sales-activation:${session.id}` },
+        );
         if (emailResult.error) {
           throw new Error(
             String(
@@ -13718,10 +14008,15 @@ async function startServer() {
           );
         }
 
-        await Promise.all([
+        const activationSentResults = await Promise.all([
           supabase
             .from("pending_activations")
-            .update({ activation_email_sent_at: new Date().toISOString() })
+            .update({
+              activation_email_sent_at: new Date().toISOString(),
+              activation_email_last_attempt_at: new Date().toISOString(),
+              activation_email_error_code: null,
+              activation_email_attempts: activationEmailAttempts + 1,
+            })
             .eq("stripe_checkout_session_id", session.id)
             .eq("source", "sales_assisted_signup")
             .eq("used", false),
@@ -13739,7 +14034,23 @@ async function startServer() {
             ],
             { onConflict: "idempotency_key", ignoreDuplicates: true },
           ),
+          supabase
+            .from("sales_offers")
+            .update({
+              provisioning_status: "completed",
+              provisioning_error_code: null,
+              provisioning_updated_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", offerId)
+            .eq("lead_id", leadId)
+            .eq("status", "paid"),
         ]);
+        const activationSentError = activationSentResults.find(
+          (result: any) => result?.error,
+        )?.error;
+        if (activationSentError) throw activationSentError;
+        activationEmailSent = true;
       } catch (emailError: any) {
         console.error(
           "[Sales Checkout] Pagamento persistido, mas o e-mail de ativação falhou:",
@@ -13767,10 +14078,248 @@ async function startServer() {
             },
           });
         }
+        const emailFailureCode = sanitizeString(
+          emailError?.code || emailError?.name || "ACTIVATION_EMAIL_FAILED",
+          120,
+        );
+        const emailFailureResults = await Promise.all([
+          supabase
+            .from("pending_activations")
+            .update({
+              activation_email_last_attempt_at: new Date().toISOString(),
+              activation_email_error_code: emailFailureCode,
+              activation_email_attempts: activationEmailAttempts + 1,
+            })
+            .eq("stripe_checkout_session_id", session.id)
+            .eq("source", "sales_assisted_signup")
+            .eq("used", false),
+          supabase
+            .from("sales_offers")
+            .update({
+              provisioning_status: "email_pending",
+              provisioning_error_code: emailFailureCode,
+              provisioning_updated_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", offerId)
+            .eq("lead_id", leadId)
+            .eq("status", "paid"),
+        ]);
+        const emailFailurePersistenceError = emailFailureResults.find(
+          (result: any) => result?.error,
+        )?.error;
+        if (emailFailurePersistenceError) throw emailFailurePersistenceError;
       }
     }
 
-    return { paymentConfirmed: true, activationPrepared: true };
+    if (subscription) {
+      try {
+        await syncSalesSubscriptionDiscount(subscription);
+      } catch (discountError: any) {
+        console.warn("[Sales Checkout] Pagamento e ativacao preservados; sincronizacao de desconto pendente.", {
+          offerId,
+          leadId,
+          message: sanitizeString(discountError?.message || String(discountError), 200),
+        });
+      }
+    }
+
+    return {
+      paymentConfirmed: true,
+      activationPrepared: true,
+      activationEmailSent,
+    };
+  };
+
+  const stripeInvoiceSubscriptionId = (invoice: Stripe.Invoice) =>
+    sanitizeString(
+      String(
+        (invoice as any)?.subscription ||
+          (invoice as any)?.parent?.subscription_details?.subscription ||
+          "",
+      ),
+      200,
+    );
+
+  const isSalesAssistedStripeEvent = async (
+    stripe: Stripe,
+    event: Stripe.Event,
+  ): Promise<boolean> => {
+    if (
+      event.type === "checkout.session.completed" ||
+      event.type === "checkout.session.expired"
+    ) {
+      const session = event.data.object as Stripe.Checkout.Session;
+      return (
+        sanitizeString((session.metadata as any)?.flowType, 80) ===
+        "sales_assisted_signup"
+      );
+    }
+    if (
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted"
+    ) {
+      const subscription = event.data.object as Stripe.Subscription;
+      return (
+        sanitizeString((subscription.metadata as any)?.flowType, 80) ===
+        "sales_assisted_signup"
+      );
+    }
+    if (
+      event.type === "invoice.paid" ||
+      event.type === "invoice.payment_succeeded" ||
+      event.type === "invoice.payment_failed"
+    ) {
+      const subscriptionId = stripeInvoiceSubscriptionId(
+        event.data.object as Stripe.Invoice,
+      );
+      if (!subscriptionId) return false;
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      return (
+        sanitizeString((subscription.metadata as any)?.flowType, 80) ===
+        "sales_assisted_signup"
+      );
+    }
+    return false;
+  };
+
+  const processSalesAssistedStripeEvent = async (
+    stripe: Stripe,
+    event: Stripe.Event,
+  ): Promise<{ handled: boolean; result?: Record<string, any> }> => {
+    if (!(await isSalesAssistedStripeEvent(stripe, event))) {
+      return { handled: false };
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const result = await processSalesAssistedCheckoutCompleted(
+        stripe,
+        event.data.object as Stripe.Checkout.Session,
+      );
+      return { handled: true, result };
+    }
+
+    if (event.type === "checkout.session.expired") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const offerId = sanitizeString((session.metadata as any)?.offerId, 120);
+      const leadId = sanitizeString((session.metadata as any)?.leadId, 120);
+      if (!isUuid(offerId) || !isUuid(leadId)) {
+        throw new Error("SALES_CHECKOUT_METADATA_INVALID");
+      }
+      const [offerResult, eventResult] = await Promise.all([
+        supabase
+          .from("sales_offers")
+          .update({ status: "expired", updated_at: new Date().toISOString() })
+          .eq("id", offerId)
+          .eq("lead_id", leadId)
+          .eq("stripe_checkout_session_id", session.id)
+          .neq("status", "paid"),
+        supabase.from("sales_lead_events").upsert(
+          [
+            {
+              lead_id: leadId,
+              event_type: "checkout_expired",
+              metadata: {
+                offer_id: offerId,
+                checkout_session_id: session.id,
+              },
+              idempotency_key: `checkout-expired:${session.id}`,
+            },
+          ],
+          { onConflict: "idempotency_key", ignoreDuplicates: true },
+        ),
+      ]);
+      const error = offerResult.error || eventResult.error;
+      if (error) throw error;
+      return { handled: true };
+    }
+
+    let subscription: Stripe.Subscription;
+    let invoice: Stripe.Invoice | null = null;
+    if (
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted"
+    ) {
+      subscription = event.data.object as Stripe.Subscription;
+    } else {
+      invoice = event.data.object as Stripe.Invoice;
+      const subscriptionId = stripeInvoiceSubscriptionId(invoice);
+      if (!subscriptionId) {
+        throw new Error("SALES_SUBSCRIPTION_LINKAGE_INVALID");
+      }
+      subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+        expand: ["discounts", "items.data.price"],
+      } as any);
+    }
+
+    const metadata = (subscription.metadata || {}) as Record<string, string>;
+    const offerId = sanitizeString(metadata.offerId, 120);
+    const leadId = sanitizeString(metadata.leadId, 120);
+    if (!isUuid(offerId) || !isUuid(leadId)) {
+      throw new Error("SALES_SUBSCRIPTION_METADATA_INVALID");
+    }
+    const { data: offer, error: offerError } = await supabase
+      .from("sales_offers")
+      .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id")
+      .eq("id", offerId)
+      .eq("lead_id", leadId)
+      .maybeSingle();
+    if (offerError || !offer) {
+      throw offerError || new Error("SALES_OFFER_NOT_FOUND");
+    }
+    if (
+      offer.stripe_subscription_id &&
+      offer.stripe_subscription_id !== subscription.id
+    ) {
+      throw new Error("SALES_SUBSCRIPTION_LINKAGE_INVALID");
+    }
+
+    if (
+      event.type === "invoice.paid" ||
+      event.type === "invoice.payment_succeeded"
+    ) {
+      if (sanitizeString(offer.status, 40) !== "paid") {
+        const checkoutSessionId = sanitizeString(
+          offer.stripe_checkout_session_id,
+          200,
+        );
+        if (!checkoutSessionId) {
+          throw new Error("SALES_CHECKOUT_SESSION_LINKAGE_MISSING");
+        }
+        const checkoutSession = await stripe.checkout.sessions.retrieve(
+          checkoutSessionId,
+        );
+        const result = await processSalesAssistedCheckoutCompleted(
+          stripe,
+          checkoutSession,
+        );
+        return { handled: true, result };
+      }
+    }
+
+    if (event.type !== "invoice.payment_failed") {
+      await syncSalesSubscriptionDiscount(subscription);
+    }
+
+    const lifecycleEvent = await supabase.from("sales_lead_events").upsert(
+      [
+        {
+          lead_id: leadId,
+          event_type: "lead_updated",
+          metadata: {
+            offer_id: offerId,
+            stripe_event_type: event.type,
+            invoice_payment_failed: event.type === "invoice.payment_failed",
+            subscription_status: sanitizeString(subscription.status, 40),
+          },
+          idempotency_key: `sales-stripe-lifecycle:${event.id}`,
+        },
+      ],
+      { onConflict: "idempotency_key", ignoreDuplicates: true },
+    );
+    if (lifecycleEvent.error) throw lifecycleEvent.error;
+
+    return { handled: true };
   };
 
   // Stripe Payment Link activation webhook - MUST BE BEFORE express.json()
@@ -13801,27 +14350,27 @@ async function startServer() {
           .send(`Webhook Error: ${err?.message || String(err)}`);
       }
 
-      if (event.type !== "checkout.session.completed") {
-        return res.json({ received: true, ignored: true });
-      }
-      const session = event.data.object as Stripe.Checkout.Session;
-      if (!(await reserveStripeWebhookEvent(event))) {
-        return res.json({ received: true, duplicate: true });
-      }
-
       try {
-        if (
-          sanitizeString((session.metadata as any)?.flowType, 80) ===
-          "sales_assisted_signup"
-        ) {
-          const stripe = getStripe();
-          const result = await processSalesAssistedCheckoutCompleted(
-            stripe,
-            session,
-          );
-          await markStripeWebhookEventStatus(event, "processed");
-          return res.json({ success: true, received: true, ...result });
+        const stripe = getStripe();
+        const salesAssisted = await isSalesAssistedStripeEvent(stripe, event);
+        if (event.type !== "checkout.session.completed" && !salesAssisted) {
+          return res.json({ received: true, ignored: true });
         }
+        if (!(await reserveStripeWebhookEvent(event))) {
+          return res.json({ received: true, duplicate: true });
+        }
+
+        if (salesAssisted) {
+          const processed = await processSalesAssistedStripeEvent(stripe, event);
+          await markStripeWebhookEventStatus(event, "processed");
+          return res.json({
+            success: true,
+            received: true,
+            ...(processed.result || {}),
+          });
+        }
+
+        const session = event.data.object as Stripe.Checkout.Session;
 
         const customerEmail = sanitizeEmail(
           session.customer_details?.email || session.customer_email,
@@ -13878,7 +14427,11 @@ async function startServer() {
         await markStripeWebhookEventStatus(event, "processed");
         return res.json({ success: true, received: true });
       } catch (webhookError: any) {
-        await markStripeWebhookEventStatus(event, "failed");
+        await markStripeWebhookEventStatus(
+          event,
+          "failed",
+          sanitizeString(webhookError?.code || webhookError?.message, 120),
+        );
         console.error(
           "[Stripe Activation Webhook] Erro ao processar ativação:",
           {
@@ -13920,6 +14473,18 @@ async function startServer() {
         if (!(await reserveStripeWebhookEvent(event))) {
           return res.json({ received: true, duplicate: true });
         }
+        const salesAssisted = await processSalesAssistedStripeEvent(
+          stripe,
+          event,
+        );
+        if (salesAssisted.handled) {
+          await markStripeWebhookEventStatus(event, "processed");
+          return res.json({
+            received: true,
+            success: true,
+            ...(salesAssisted.result || {}),
+          });
+        }
         switch (event.type) {
           case "checkout.session.completed": {
             const session = event.data.object as Stripe.Checkout.Session;
@@ -13956,11 +14521,6 @@ async function startServer() {
                     : "unknown_or_legacy",
                 },
               );
-              break;
-            }
-
-            if (flowType === "sales_assisted_signup") {
-              await processSalesAssistedCheckoutCompleted(stripe, session);
               break;
             }
 
@@ -14456,15 +15016,26 @@ async function startServer() {
         }
         await markStripeWebhookEventStatus(event, "processed");
       } catch (webhookProcessingError: any) {
-        await markStripeWebhookEventStatus(event, "failed");
+        await markStripeWebhookEventStatus(
+          event,
+          "failed",
+          sanitizeString(
+            webhookProcessingError?.code || webhookProcessingError?.message,
+            120,
+          ),
+        );
         console.error("[Stripe Webhook] Erro ao processar evento:", {
           type: event?.type,
           message:
             webhookProcessingError?.message || String(webhookProcessingError),
         });
+        return res.status(500).json({
+          received: false,
+          error: "STRIPE_WEBHOOK_PROCESSING_FAILED",
+        });
       }
 
-      res.json({ received: true });
+      return res.json({ received: true });
     },
   );
 
@@ -14708,6 +15279,37 @@ async function startServer() {
           message: 'Sua conta foi acessada em outro dispositivo. Faça login novamente.'
         });
       }
+      if (req.session.user?.authPolicyVersion !== OWNER_MFA_POLICY_VERSION) {
+        const legacySecurityProfile = await fetchMfaSecurityProfile(sessionUserId);
+        if (legacySecurityProfile.error || !legacySecurityProfile.data) {
+          invalidateActiveSession(sessionUserId, sessionToken);
+          req.session.destroy(() => {});
+          return res.status(503).json({
+            error: 'OWNER_MFA_SCHEMA_UNAVAILABLE',
+            message: 'Entre novamente para validar a politica de seguranca da sua sessao.'
+          });
+        }
+        if (
+          sanitizeString(legacySecurityProfile.data.role, 40).toLowerCase() === 'owner' &&
+          !hasVerifiedOwnerMfaSession({ ...req.session.user, role: 'owner' })
+        ) {
+          invalidateActiveSession(sessionUserId, sessionToken);
+          req.session.destroy(() => {});
+          return res.status(401).json({
+            error: 'OWNER_MFA_REQUIRED',
+            message: 'Entre novamente com sua senha e confirme o Google Authenticator.'
+          });
+        }
+        req.session.user.authPolicyVersion = OWNER_MFA_POLICY_VERSION;
+      }
+      if (!hasVerifiedOwnerMfaSession(req.session.user)) {
+        invalidateActiveSession(sessionUserId, sessionToken);
+        req.session.destroy(() => {});
+        return res.status(401).json({
+          error: 'OWNER_MFA_REQUIRED',
+          message: 'Confirme o Google Authenticator para acessar o painel administrativo.'
+        });
+      }
       syncWorkspaceContextInSession(req, res, () => {});
       if (isPendingPatientActivation(req.session.user)) {
         return res.status(403).json({
@@ -14781,10 +15383,21 @@ async function startServer() {
           if (profile) {
             const workspaces = await fetchUserWorkspaces(user.id);
             const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
+            const resolvedRole = selectedWorkspace?.role || profile.role;
+            const canonicalProfileRole = sanitizeString(profile.role, 40).toLowerCase();
+            if (
+              canonicalProfileRole === 'owner' ||
+              sanitizeString(resolvedRole, 40).toLowerCase() === 'owner'
+            ) {
+              return res.status(401).json({
+                error: 'OWNER_MFA_REQUIRED',
+                message: 'Entre novamente com sua senha e confirme o Google Authenticator.'
+              });
+            }
               req.session.user = buildSessionUserPayload({
                 id: user.id,
                 email: user.email,
-                role: selectedWorkspace?.role || profile.role,
+                role: resolvedRole,
                 name: profile.name,
                 sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
                 profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
@@ -16126,12 +16739,67 @@ async function startServer() {
         }
 
         const stripe = getStripe();
+        const persistCheckoutSession = async (
+          checkoutSession: Stripe.Checkout.Session,
+        ) => {
+          const now = new Date().toISOString();
+          const [offerResult, leadResult, eventResult] = await Promise.all([
+            supabase
+              .from("sales_offers")
+              .update({
+                status: "checkout_created",
+                stripe_checkout_session_id: checkoutSession.id,
+                updated_at: now,
+              })
+              .eq("id", offer.id)
+              .eq("lead_id", lead.id)
+              .in("status", [
+                "ready",
+                "sent",
+                "opened",
+                "checkout_created",
+                "payment_pending",
+              ])
+              .select("id,stripe_checkout_session_id")
+              .maybeSingle(),
+            supabase
+              .from("sales_leads")
+              .update({ status: "checkout_sent", updated_at: now })
+              .eq("id", lead.id)
+              .is("deleted_at", null),
+            supabase.from("sales_lead_events").upsert(
+              [
+                {
+                  lead_id: lead.id,
+                  event_type: "checkout_created",
+                  metadata: { offer_id: offer.id },
+                  idempotency_key: `offer-checkout-created:${offer.id}:${checkoutSession.id}`,
+                },
+              ],
+              { onConflict: "idempotency_key", ignoreDuplicates: true },
+            ),
+          ]);
+          const persistenceError = [offerResult, leadResult, eventResult].find(
+            (result: any) => result?.error,
+          )?.error;
+          if (
+            persistenceError ||
+            !offerResult.data ||
+            offerResult.data.stripe_checkout_session_id !== checkoutSession.id
+          ) {
+            const error = new Error("CHECKOUT_PERSISTENCE_FAILED");
+            (error as any).code = "CHECKOUT_PERSISTENCE_FAILED";
+            (error as any).cause = persistenceError || null;
+            throw error;
+          }
+        };
         if (offer.stripe_checkout_session_id) {
           try {
             const existingSession = await stripe.checkout.sessions.retrieve(
               String(offer.stripe_checkout_session_id),
             );
             if (existingSession.status === "open" && existingSession.url) {
+              await persistCheckoutSession(existingSession);
               return res.json({ success: true, url: existingSession.url });
             }
             return res.status(409).json({
@@ -16141,6 +16809,14 @@ async function startServer() {
                 "A sessão de pagamento desta oferta foi encerrada. Solicite uma nova oferta à equipe da Verto.",
             });
           } catch (sessionError: any) {
+            if (
+              sanitizeString(
+                sessionError?.code || sessionError?.message,
+                120,
+              ) === "CHECKOUT_PERSISTENCE_FAILED"
+            ) {
+              throw sessionError;
+            }
             console.warn(
               "[Sales Offer] Sessão Stripe vinculada indisponível:",
               {
@@ -16205,39 +16881,107 @@ async function startServer() {
           },
         );
         if (!session.url) throw new Error("STRIPE_CHECKOUT_URL_MISSING");
-        await supabase
-          .from("sales_offers")
-          .update({
-            status: "checkout_created",
-            stripe_checkout_session_id: session.id,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", offer.id);
-        await supabase
-          .from("sales_leads")
-          .update({
-            status: "checkout_sent",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", lead.id);
-        await supabase.from("sales_lead_events").insert([
-          {
-            lead_id: lead.id,
-            event_type: "checkout_created",
-            metadata: { offer_id: offer.id },
-            idempotency_key: `offer-checkout-created:${offer.id}:${session.id}`,
-          },
-        ]);
+        await persistCheckoutSession(session);
         return res.json({ success: true, url: session.url });
       } catch (error: any) {
         console.error("[Sales Offer] Falha ao criar checkout autorizado:", {
           message: sanitizeString(error?.message || String(error), 240),
           code: sanitizeString(error?.code, 80),
         });
-        return res.status(502).json({
+        const persistenceFailure =
+          sanitizeString(error?.code || error?.message, 120) ===
+          "CHECKOUT_PERSISTENCE_FAILED";
+        return res.status(persistenceFailure ? 503 : 502).json({
           success: false,
-          error: "CHECKOUT_CREATION_FAILED",
-          message: "Não foi possível preparar o Checkout agora.",
+          error: persistenceFailure
+            ? "CHECKOUT_PERSISTENCE_FAILED"
+            : "CHECKOUT_CREATION_FAILED",
+          message: persistenceFailure
+            ? "O Checkout foi reservado, mas ainda não foi possível confirmar sua gravação. Tente novamente para reutilizar a mesma sessão."
+            : "Não foi possível preparar o Checkout agora.",
+        });
+      }
+    },
+  );
+
+  app.get(
+    "/api/public/sales-offers/:token/payment-status",
+    publicSalesLeadIpLimiter,
+    async (req: any, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      const token = sanitizeString(req.params?.token, 256);
+      const checkoutSessionId = sanitizeString(req.query?.session_id, 200);
+      if (token.length < 32 || !checkoutSessionId) {
+        return res.status(400).json({
+          success: false,
+          error: "PAYMENT_STATUS_CONTEXT_INVALID",
+        });
+      }
+
+      try {
+        const tokenHash = hashSalesOfferToken(token);
+        const { data: offer, error: offerError } = await supabase
+          .from("sales_offers")
+          .select(
+            "id,lead_id,status,payment_confirmed_at,provisioning_status,provisioning_error_code",
+          )
+          .eq("public_token_hash", tokenHash)
+          .eq("stripe_checkout_session_id", checkoutSessionId)
+          .maybeSingle();
+        if (offerError) throw offerError;
+        if (!offer) {
+          return res.status(404).json({
+            success: false,
+            error: "PAYMENT_STATUS_NOT_FOUND",
+          });
+        }
+
+        const { data: activation, error: activationError } = await supabase
+          .from("pending_activations")
+          .select("activation_email_sent_at")
+          .eq("source", "sales_assisted_signup")
+          .eq("sales_offer_id", offer.id)
+          .eq("sales_lead_id", offer.lead_id)
+          .eq("stripe_checkout_session_id", checkoutSessionId)
+          .limit(1)
+          .maybeSingle();
+        if (activationError) throw activationError;
+
+        const paymentConfirmed =
+          sanitizeString(offer.status, 40) === "paid" &&
+          Boolean(offer.payment_confirmed_at);
+        const activationEmailSent = Boolean(
+          activation?.activation_email_sent_at,
+        );
+        const reviewRequired =
+          sanitizeString(offer.provisioning_status, 40) ===
+          "review_required";
+        const state = reviewRequired
+          ? "review_required"
+          : activationEmailSent
+            ? "activation_email_sent"
+            : paymentConfirmed
+              ? "payment_confirmed"
+              : "payment_pending";
+
+        return res.status(state === "payment_pending" ? 202 : 200).json({
+          success: true,
+          state,
+          paymentConfirmed,
+          activationEmailSent,
+          reviewRequired,
+          retryAfterMs:
+            state === "payment_pending" || state === "payment_confirmed"
+              ? 2000
+              : null,
+        });
+      } catch (error: any) {
+        console.error("[Sales Offer] Falha ao consultar status do pagamento.", {
+          message: sanitizeString(error?.message || String(error), 200),
+        });
+        return res.status(503).json({
+          success: false,
+          error: "PAYMENT_STATUS_UNAVAILABLE",
         });
       }
     },
@@ -16293,7 +17037,6 @@ async function startServer() {
         .from("sales_leads")
         .select("id,name,email,normalized_email,clinic_name,deleted_at")
         .eq("id", leadId)
-        .eq("normalized_email", email)
         .is("deleted_at", null)
         .maybeSingle(),
     ]);
@@ -16507,7 +17250,6 @@ async function startServer() {
           .from("sales_leads")
           .select("id,normalized_email,deleted_at")
           .eq("id", leadId)
-          .eq("normalized_email", normalizedEmail)
           .is("deleted_at", null)
           .maybeSingle(),
         supabase
@@ -17024,114 +17766,243 @@ async function startServer() {
 
   // --- API ROUTES ---
   
-  // 2FA Setup - Generate Secret and QR Code
-  app.post('/api/auth/2fa/setup', async (req, res) => {
-    if (!req.session.user) return res.status(401).json({ error: "Não autenticado" });
-    
-    const userEmail = req.session.user.email;
-    const secret = generateSecret();
-    const otpauth = generateURI({ issuer: 'Verto', label: userEmail, secret });
-    
-    try {
-      const qrCodeUrl = await QRCode.toDataURL(otpauth);
-      
-      // Store secret temporarily in session (not enabled yet)
-      req.session.temp2faSecret = secret;
-      
-      res.json({ secret, qrCodeUrl });
-    } catch (err) {
-      res.status(500).json({ error: "Erro ao gerar QR Code" });
+  // Authenticated users can enroll MFA without exposing the TOTP secret to the browser.
+  app.post('/api/auth/2fa/setup', authMfaLimiter, checkAuth, async (req: any, res) => {
+    const userId = sanitizeString(req.session.user?.id, 120);
+    const userEmail = sanitizeEmail(req.session.user?.email);
+    if (!isUuid(userId) || !userEmail) {
+      return res.status(401).json({ error: 'MFA_SESSION_INVALID' });
     }
-  });
 
-  // 2FA Verify - Enable 2FA after first verification
-  app.post('/api/auth/2fa/verify', async (req, res) => {
-    if (!req.session.user || !req.session.temp2faSecret) {
-      return res.status(401).json({ error: "Sessão inválida para setup de 2FA" });
-    }
-    
-    const { token } = req.body;
-    const result = verifySync({ token, secret: req.session.temp2faSecret });
-    
-    if (!result.valid) {
-      return res.status(400).json({ error: "Código inválido" });
-    }
-    
     try {
-      // Save secret to database and enable 2FA
-      const { error } = await supabase
-        .from('users')
-        .update({ 
-          two_factor_secret: req.session.temp2faSecret,
-          two_factor_enabled: true 
-        })
-        .eq('id', req.session.user.id);
-        
-      if (error) throw error;
-      
-      delete req.session.temp2faSecret;
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 2FA Login Verification
-  app.post('/api/auth/2fa/login', async (req, res) => {
-    const { email, token } = req.body;
-    if (!email || !token) return res.status(400).json({ error: "E-mail e código são obrigatórios" });
-    
-    try {
-      const user = await findAuthUserByEmail(email);
-      if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
-      const isEmailVerified = Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at);
-      if (!isEmailVerified) {
-        return res.status(403).json({
-          error: 'EMAIL_NOT_CONFIRMED',
-          message: 'Confirme seu e-mail antes de concluir o login.'
+      const securityProfileResult = await fetchMfaSecurityProfile(userId);
+      if (securityProfileResult.error || !securityProfileResult.data) {
+        console.error('[MFA] setup security profile unavailable:', sanitizeString(securityProfileResult.error?.message, 200));
+        return res.status(503).json({
+          error: 'MFA_SCHEMA_UNAVAILABLE',
+          message: 'A configuração de segurança está temporariamente indisponível.'
         });
       }
-      
+      if (securityProfileResult.data.two_factor_enabled === true) {
+        return res.status(409).json({ error: 'MFA_ALREADY_ENABLED' });
+      }
+
+      const secret = resolveStoredMfaSecret(securityProfileResult.data.two_factor_secret) || generateSecret();
+      const encryptedSecret = encryptJsonPayload({ secret });
+      if (!encryptedSecret) throw new Error('MFA_ENCRYPTION_UNAVAILABLE');
+      const otpauth = generateURI({ issuer: 'Verto', label: userEmail, secret });
+      const qrCodeUrl = await QRCode.toDataURL(otpauth);
+
+      req.session.temp2faSecretEncrypted = encryptedSecret;
+      req.session.temp2faUserId = userId;
+      req.session.temp2faExpiresAt = new Date(Date.now() + AUTH_MFA_CHALLENGE_TTL_MS).toISOString();
+      await saveExpressSession(req);
+      return res.json({ success: true, qrCodeUrl });
+    } catch (error: any) {
+      console.error('[MFA] setup failed:', sanitizeString(error?.message, 200));
+      return res.status(500).json({ error: 'MFA_SETUP_FAILED' });
+    }
+  });
+
+  app.post('/api/auth/2fa/verify', authMfaLimiter, checkAuth, async (req: any, res) => {
+    const userId = sanitizeString(req.session.user?.id, 120);
+    const setupUserId = sanitizeString(req.session.temp2faUserId, 120);
+    const expiresAt = new Date(sanitizeString(req.session.temp2faExpiresAt, 80)).getTime();
+    const encryptedSecret = sanitizeString(req.session.temp2faSecretEncrypted, 4000);
+    const token = sanitizeString(req.body?.token, 12).replace(/\D/g, '');
+    if (!isUuid(userId) || userId !== setupUserId || !encryptedSecret || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      return res.status(401).json({ error: 'MFA_SETUP_SESSION_EXPIRED' });
+    }
+    if (!/^\d{6}$/.test(token)) return res.status(400).json({ error: 'MFA_CODE_INVALID' });
+
+    try {
+      const decrypted = decryptJsonPayload(encryptedSecret);
+      const secret = sanitizeString(decrypted?.secret, 512);
+      if (!secret || !verifySync({ token, secret }).valid) {
+        return res.status(400).json({ error: 'MFA_CODE_INVALID' });
+      }
+
+      const securityProfileResult = await fetchMfaSecurityProfile(userId);
+      if (securityProfileResult.error || !securityProfileResult.data) {
+        return res.status(503).json({ error: 'MFA_SCHEMA_UNAVAILABLE' });
+      }
+      const updatePayload: Record<string, any> = {
+        two_factor_enabled: true,
+        two_factor_secret: encryptStoredMfaSecret(secret),
+      };
+      const updateResult = await supabase
+        .from('users')
+        .update(updatePayload)
+        .eq('id', userId)
+        .select('id,two_factor_enabled')
+        .maybeSingle();
+      if (updateResult.error || updateResult.data?.two_factor_enabled !== true) {
+        throw updateResult.error || new Error('MFA_ENABLE_NOT_PERSISTED');
+      }
+
+      delete req.session.temp2faSecretEncrypted;
+      delete req.session.temp2faUserId;
+      delete req.session.temp2faExpiresAt;
+      await saveExpressSession(req);
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error('[MFA] verify failed:', sanitizeString(error?.message, 200));
+      return res.status(500).json({ error: 'MFA_ENABLE_FAILED' });
+    }
+  });
+
+  // MFA login is bound to a password-validated, short-lived, one-use challenge.
+  app.post('/api/auth/2fa/login', authMfaLimiter, async (req: any, res) => {
+    const challengeId = sanitizeString(req.body?.challengeId, 220);
+    const token = sanitizeString(req.body?.token, 12).replace(/\D/g, '');
+    if (!/^[A-Za-z0-9_-]{32,220}$/.test(challengeId) || !/^\d{6}$/.test(token)) {
+      return res.status(400).json({ error: 'MFA_CHALLENGE_INVALID' });
+    }
+
+    try {
+      const challengeHash = hashAuthMfaChallenge(challengeId);
+      const boundHash = sanitizeString(req.session?.mfaChallengeHash, 128);
+      const boundUserId = sanitizeString(req.session?.mfaChallengeUserId, 120);
+      const boundExpiresAt = new Date(sanitizeString(req.session?.mfaChallengeExpiresAt, 80)).getTime();
+      if (
+        !isUuid(boundUserId) ||
+        !constantTimeStringEquals(challengeHash, boundHash) ||
+        !Number.isFinite(boundExpiresAt) ||
+        boundExpiresAt <= Date.now()
+      ) {
+        return res.status(401).json({ error: 'MFA_CHALLENGE_EXPIRED' });
+      }
+
+      const challengeResult = await supabase
+        .from('auth_mfa_challenges')
+        .select(AUTH_MFA_CHALLENGE_SELECT)
+        .eq('challenge_hash', challengeHash)
+        .eq('user_id', boundUserId)
+        .maybeSingle();
+      if (challengeResult.error) throw challengeResult.error;
+      const challenge = challengeResult.data as any;
+      const challengeExpiresAt = new Date(challenge?.expires_at || '').getTime();
+      const currentAttempts = Number(challenge?.attempts || 0);
+      const maxAttempts = Number(challenge?.max_attempts || AUTH_MFA_MAX_ATTEMPTS);
+      if (
+        !challenge ||
+        challenge.consumed_at ||
+        !Number.isFinite(challengeExpiresAt) ||
+        challengeExpiresAt <= Date.now() ||
+        currentAttempts >= maxAttempts
+      ) {
+        return res.status(401).json({ error: 'MFA_CHALLENGE_EXPIRED' });
+      }
+
+      const attemptResult = await supabase
+        .from('auth_mfa_challenges')
+        .update({ attempts: currentAttempts + 1 })
+        .eq('id', challenge.id)
+        .eq('attempts', currentAttempts)
+        .is('consumed_at', null)
+        .select(AUTH_MFA_CHALLENGE_SELECT)
+        .maybeSingle();
+      if (attemptResult.error) throw attemptResult.error;
+      if (!attemptResult.data) return res.status(409).json({ error: 'MFA_CHALLENGE_ALREADY_USED' });
+
+      const securityProfileResult = await fetchMfaSecurityProfile(boundUserId);
+      if (securityProfileResult.error || !securityProfileResult.data) {
+        console.error('[MFA] login security profile unavailable:', sanitizeString(securityProfileResult.error?.message, 200));
+        return res.status(503).json({ error: 'MFA_SCHEMA_UNAVAILABLE' });
+      }
+      const securityProfile = securityProfileResult.data as any;
+      const purpose = sanitizeString(challenge.purpose, 20);
+      let secret = '';
+      if (purpose === 'setup') {
+        secret = sanitizeString(decryptJsonPayload(challenge.setup_secret_encrypted)?.secret, 512);
+      } else if (purpose === 'login') {
+        if (securityProfile.two_factor_enabled !== true) {
+          return res.status(401).json({ error: 'MFA_CONFIGURATION_REQUIRED' });
+        }
+        secret = resolveStoredMfaSecret(securityProfile.two_factor_secret);
+      }
+
+      if (!secret || !verifySync({ token, secret }).valid) {
+        if (currentAttempts + 1 >= maxAttempts) {
+          await supabase
+            .from('auth_mfa_challenges')
+            .update({ consumed_at: new Date().toISOString() })
+            .eq('id', challenge.id)
+            .is('consumed_at', null);
+        }
+        return res.status(401).json({ error: 'MFA_CODE_INVALID' });
+      }
+
+      const consumeResult = await supabase
+        .from('auth_mfa_challenges')
+        .update({ consumed_at: new Date().toISOString() })
+        .eq('id', challenge.id)
+        .eq('attempts', currentAttempts + 1)
+        .is('consumed_at', null)
+        .select('id')
+        .maybeSingle();
+      if (consumeResult.error) throw consumeResult.error;
+      if (!consumeResult.data) return res.status(409).json({ error: 'MFA_CHALLENGE_ALREADY_USED' });
+
+      if (purpose === 'setup') {
+        const enablePayload: Record<string, any> = {
+          two_factor_enabled: true,
+          two_factor_secret: encryptStoredMfaSecret(secret),
+        };
+        const enableResult = await supabase
+          .from('users')
+          .update(enablePayload)
+          .eq('id', boundUserId)
+          .select('id,two_factor_enabled')
+          .maybeSingle();
+        if (enableResult.error || enableResult.data?.two_factor_enabled !== true) {
+          throw enableResult.error || new Error('MFA_ENABLE_NOT_PERSISTED');
+        }
+      } else if (!isEncryptedStoredMfaSecret(securityProfile.two_factor_secret)) {
+        const encryptLegacyResult = await supabase
+          .from('users')
+          .update({ two_factor_secret: encryptStoredMfaSecret(secret) })
+          .eq('id', boundUserId)
+          .eq('two_factor_secret', securityProfile.two_factor_secret);
+        if (encryptLegacyResult.error) throw encryptLegacyResult.error;
+      }
+
+      const authUserResult = await supabase.auth.admin.getUserById(boundUserId);
+      const user = authUserResult.data?.user;
+      if (authUserResult.error || !user) throw authUserResult.error || new Error('MFA_AUTH_USER_NOT_FOUND');
+      const isEmailVerified = Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at);
+      if (!isEmailVerified) return res.status(403).json({ error: 'EMAIL_NOT_CONFIRMED' });
+
       const profileResult = await fetchProfileWithSchemaFallback({
         supabase,
-        userId: user.id,
+        userId: boundUserId,
         logger: console,
-        includeTwoFactorSecret: true
       });
-      if (profileResult.error) {
-        return sendAuthRouteError(res, '/api/auth/2fa/login', 'profile_select', profileResult.error, {
-          requestId: requestIdForLogs(req),
-          userId: sanitizeString(user.id, 120),
-          email: maskEmail(email)
-        });
+      if (profileResult.error || !profileResult.data) {
+        throw profileResult.error || new Error('MFA_PROFILE_NOT_FOUND');
       }
       const profile = profileResult.data as any;
-      if (!profile || !profile.two_factor_enabled || !profile.two_factor_secret) {
-        return res.status(400).json({ error: "2FA não habilitado para este usuário" });
+      const workspaces = await fetchUserWorkspaces(boundUserId);
+      const selectedWorkspace = workspaces.find((workspace: any) => workspace.clinicId === profile.clinic_id) || workspaces[0] || null;
+      const roleForSession = securityProfile.role === 'owner' ? 'owner' : selectedWorkspace?.role || profile.role;
+      if (roleForSession === 'owner' && securityProfile.role !== 'owner') {
+        throw new Error('OWNER_ROLE_INCONSISTENT');
       }
-      
-      const result = verifySync({ token, secret: profile.two_factor_secret });
-      if (!result.valid) return res.status(400).json({ error: 'Codigo invalido' });
-
-      const workspaces = await fetchUserWorkspaces(user.id);
-      const selectedWorkspace = workspaces.find((w: any) => w.clinicId === profile.clinic_id) || workspaces[0] || null;
-      const roleForSession = selectedWorkspace?.role || profile.role;
       const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
       const treatmentStatus = await updatePatientStatusIfNeeded({
-        id: user.id,
+        id: boundUserId,
         role: roleForSession,
         clinicId: clinicForSession,
         activeWorkspaceId: clinicForSession,
-        workspaces
+        workspaces,
       });
-
-      // Complete login
-      const userData = {
-        id: user.id,
+      const verifiedAt = new Date().toISOString();
+      const userData = buildSessionUserPayload({
+        id: boundUserId,
         email: user.email,
         role: roleForSession,
         name: profile.name,
-        sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
+        sessionToken: issueSessionToken(boundUserId),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -17149,20 +18020,26 @@ async function startServer() {
         treatmentStatus,
         clinicId: clinicForSession,
         activeWorkspaceId: clinicForSession,
-        emailVerified: isEmailVerified,
+        emailVerified: true,
         phoneVerified: Boolean(profile.phone_verified_at),
         crp: resolveStoredCrp(profile),
         signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
         specialties: (profile as any)?.specialties || null,
         miniCurriculum: (profile as any)?.miniCurriculum || (profile as any)?.mini_curriculum || null,
         clinicSettings: user.user_metadata?.clinic_settings || null,
-        workspaces
-      };
+        workspaces,
+        mfaVerified: true,
+        mfaVerifiedAt: verifiedAt,
+        mfaMethod: 'totp',
+      });
 
-      req.session.user = buildSessionUserPayload(userData);
-      res.json({ success: true, user: userData });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      await regenerateExpressSession(req);
+      req.session.user = userData;
+      await saveExpressSession(req);
+      return res.json({ success: true, user: userData });
+    } catch (error: any) {
+      console.error('[MFA] login failed:', sanitizeString(error?.message, 200));
+      return res.status(500).json({ error: 'MFA_LOGIN_FAILED' });
     }
   });
 
@@ -17897,13 +18774,32 @@ async function startServer() {
         return res.status(400).json(genericError);
       }
 
-      const { data: profile } = await supabase
-        .from('users')
-        .select('id, two_factor_enabled, two_factor_secret')
-        .eq('id', challenge.userId)
-        .maybeSingle();
+      const securityProfileResult = await fetchMfaSecurityProfile(challenge.userId);
+      if (securityProfileResult.error || !securityProfileResult.data) {
+        console.error('[MFA] password recovery security profile unavailable:', sanitizeString(securityProfileResult.error?.message, 200));
+        return res.status(503).json({
+          error: 'MFA_SCHEMA_UNAVAILABLE',
+          message: 'A recuperacao esta temporariamente bloqueada ate a validacao da estrutura de seguranca.'
+        });
+      }
+      const securityProfile = securityProfileResult.data as any;
+      const recoveryRole = sanitizeString(securityProfile.role, 40).toLowerCase();
+      const recoveryMfaEnabled = securityProfile.two_factor_enabled === true;
+      const recoveryMfaSecret = resolveStoredMfaSecret(securityProfile.two_factor_secret);
+      if (recoveryRole === 'owner' && !recoveryMfaEnabled) {
+        return res.status(403).json({
+          error: 'OWNER_MFA_CONFIGURATION_REQUIRED',
+          message: 'A recuperacao administrativa exige um Google Authenticator ja configurado.'
+        });
+      }
 
-      if (profile?.two_factor_enabled) {
+      if (recoveryMfaEnabled) {
+        if (!recoveryMfaSecret) {
+          return res.status(503).json({
+            error: 'MFA_CONFIGURATION_INVALID',
+            message: 'A recuperacao esta bloqueada ate a revisao da configuracao de seguranca.'
+          });
+        }
         if (!mfaToken) {
           await persistIdentityAuditLog({
             title: 'Recuperação bloqueada por MFA ausente',
@@ -17916,7 +18812,7 @@ async function startServer() {
           });
           return res.status(401).json({ error: 'MFA_REQUIRED', message: 'Validação MFA obrigatória para concluir a recuperação.' });
         }
-        const mfaResult = verifySync({ token: mfaToken, secret: profile.two_factor_secret });
+        const mfaResult = verifySync({ token: mfaToken, secret: recoveryMfaSecret });
         if (!mfaResult?.valid) {
           await persistIdentityAuditLog({
             title: 'Recuperação bloqueada por MFA inválido',
@@ -18098,11 +18994,6 @@ async function startServer() {
         });
       }
 
-      // Check for 2FA
-      if (profile?.two_factor_enabled) {
-        return res.json({ success: true, twoFactorRequired: true, email: user.email });
-      }
-
       // If profile doesn't exist for this auth user ID, try reconciling by e-mail first.
       if (!profile && user.email) {
         const safeUserEmail = sanitizeEmail(user.email);
@@ -18273,7 +19164,6 @@ async function startServer() {
                     .from("sales_leads")
                     .select("id,normalized_email,deleted_at")
                     .eq("id", leadId)
-                    .eq("normalized_email", safeUserEmail)
                     .is("deleted_at", null)
                     .maybeSingle(),
                 ]);
@@ -18450,6 +19340,102 @@ async function startServer() {
         null;
       const roleForSession = selectedWorkspace?.role || profile.role;
       const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
+
+      const securityProfileResult = await fetchMfaSecurityProfile(sanitizeString(user.id, 120));
+      const securityProfile = securityProfileResult.data as any;
+      const isOwnerLogin = [
+        roleForSession,
+        profile?.role,
+        securityProfile?.role,
+      ].some((role) => sanitizeString(role, 40).toLowerCase() === 'owner');
+      if (isOwnerLogin) {
+        if (securityProfileResult.error || !securityProfile) {
+          console.error('[MFA] owner security profile unavailable:', sanitizeString(securityProfileResult.error?.message, 200));
+          return res.status(503).json({
+            error: 'OWNER_MFA_SCHEMA_UNAVAILABLE',
+            message: 'O acesso administrativo está bloqueado até a validação da estrutura de segurança.'
+          });
+        }
+        if (sanitizeString(securityProfile.role, 40).toLowerCase() !== 'owner') {
+          return res.status(403).json({ error: 'OWNER_ROLE_INCONSISTENT' });
+        }
+        if (!hasCredentials || !supabaseAuthClient || credentialEmail !== safeAuthEmail) {
+          return res.status(401).json({
+            error: 'OWNER_PASSWORD_REQUIRED',
+            message: 'Entre com e-mail e senha para iniciar a verificação do Google Authenticator.'
+          });
+        }
+        const passwordCheck = await supabaseAuthClient.auth.signInWithPassword({
+          email: credentialEmail as string,
+          password: credentialPassword,
+        });
+        if (passwordCheck.error || passwordCheck.data?.user?.id !== user.id) {
+          return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
+        }
+      }
+
+      const resolvedSecurityMfaSecret = resolveStoredMfaSecret(
+        securityProfile?.two_factor_secret,
+      );
+      const securityMfaEnabled = securityProfile?.two_factor_enabled === true;
+      if (securityMfaEnabled && !resolvedSecurityMfaSecret) {
+        console.error('[MFA] enabled MFA secret is unavailable or invalid.', {
+          userId: sanitizeString(user.id, 120),
+          role: sanitizeString(securityProfile?.role, 40),
+        });
+        return res.status(503).json({
+          error: 'MFA_CONFIGURATION_INVALID',
+          message: 'O acesso esta bloqueado ate a revisao da configuracao do Google Authenticator.'
+        });
+      }
+      const hasConfiguredMfa =
+        securityMfaEnabled &&
+        Boolean(resolvedSecurityMfaSecret);
+      const mustChallengeMfa = isOwnerLogin || securityMfaEnabled;
+      if (mustChallengeMfa) {
+        if (!isOwnerLogin && (!hasCredentials || !supabaseAuthClient || credentialEmail !== safeAuthEmail)) {
+          return res.status(401).json({
+            error: 'MFA_PASSWORD_REQUIRED',
+            message: 'Entre com e-mail e senha antes de confirmar o Google Authenticator.'
+          });
+        }
+        if (!isOwnerLogin) {
+          const passwordCheck = await supabaseAuthClient.auth.signInWithPassword({
+            email: credentialEmail as string,
+            password: credentialPassword,
+          });
+          if (passwordCheck.error || passwordCheck.data?.user?.id !== user.id) {
+            return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
+          }
+        }
+
+        try {
+          const purpose = hasConfiguredMfa ? 'login' : 'setup';
+          const challenge = await createAuthMfaChallenge({
+            req,
+            userId: sanitizeString(user.id, 120),
+            email: safeAuthEmail,
+            purpose,
+            setupSecret: purpose === 'setup'
+              ? resolvedSecurityMfaSecret || null
+              : null,
+          });
+          return res.json({
+            success: true,
+            twoFactorRequired: true,
+            twoFactorSetupRequired: purpose === 'setup',
+            challengeId: challenge.challengeId,
+            expiresAt: challenge.expiresAt,
+            qrCodeUrl: challenge.qrCodeUrl,
+          });
+        } catch (challengeError: any) {
+          console.error('[MFA] challenge creation failed:', sanitizeString(challengeError?.message, 200));
+          return res.status(503).json({
+            error: 'MFA_CHALLENGE_UNAVAILABLE',
+            message: 'Não foi possível iniciar a verificação de segurança. Tente novamente.'
+          });
+        }
+      }
       let authActivationRequired = Boolean((user as any)?.user_metadata?.patient_activation_required);
 
       if (roleForSession === 'patient') {
@@ -18627,6 +19613,12 @@ async function startServer() {
 
   app.get('/api/auth/me', authMeLimiter, syncWorkspaceContextInSession, async (req: any, res: any) => {
     if (req.session.user) {
+      if (!hasVerifiedOwnerMfaSession(req.session.user)) {
+        invalidateActiveSession(req.session.user?.id, req.session.user?.sessionToken);
+        req.session.destroy(() => {});
+        res.clearCookie('verto-session');
+        return res.status(401).json({ user: null, error: 'OWNER_MFA_REQUIRED' });
+      }
       return res.json({ user: req.session.user });
     }
 
@@ -63108,10 +64100,13 @@ async function startServer() {
   });
 
   const checkOwner = (req: any, res: any, next: any) => {
-    if (req.session.user?.role === 'owner') {
+    if (req.session.user?.role === 'owner' && hasVerifiedOwnerMfaSession(req.session.user)) {
       return next();
     }
-    return res.status(403).json({ error: 'Acesso negado. Apenas super admins podem acessar esta rota.' });
+    return res.status(403).json({
+      error: 'OWNER_MFA_REQUIRED',
+      message: 'Acesso administrativo exige autenticação de dois fatores.'
+    });
   };
 
   // Owner-only stats (CEO dashboard)
@@ -66092,6 +67087,69 @@ async function startServer() {
         return res
           .status(500)
           .json({ success: false, error: "Não foi possível criar a oferta." });
+      }
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/offers/:offerId/resend-activation",
+    checkAuth,
+    requireRoles("owner", "admin"),
+    resendActivationLimiter,
+    async (req: any, res) => {
+      const offerId = sanitizeString(req.params?.offerId, 120);
+      if (!isUuid(offerId)) {
+        return res.status(400).json({
+          success: false,
+          error: "SALES_OFFER_INVALID",
+        });
+      }
+      try {
+        const { data: offer, error: offerError } = await supabase
+          .from("sales_offers")
+          .select(
+            "id,lead_id,status,stripe_checkout_session_id,provisioning_status",
+          )
+          .eq("id", offerId)
+          .eq("status", "paid")
+          .maybeSingle();
+        if (offerError) throw offerError;
+        const checkoutSessionId = sanitizeString(
+          offer?.stripe_checkout_session_id,
+          200,
+        );
+        if (!offer || !checkoutSessionId) {
+          return res.status(404).json({
+            success: false,
+            error: "PAID_SALES_OFFER_NOT_FOUND",
+          });
+        }
+
+        const stripe = getStripe();
+        const checkoutSession = await stripe.checkout.sessions.retrieve(
+          checkoutSessionId,
+        );
+        const result = await processSalesAssistedCheckoutCompleted(
+          stripe,
+          checkoutSession,
+        );
+        return res.status(result.activationEmailSent ? 200 : 202).json({
+          success: true,
+          paymentConfirmed: result.paymentConfirmed,
+          activationEmailSent: result.activationEmailSent,
+          message: result.activationEmailSent
+            ? "E-mail de ativacao confirmado."
+            : "Pagamento preservado; o envio da ativacao continua pendente.",
+        });
+      } catch (error: any) {
+        console.error("[Owner Sales] Falha ao reenviar ativacao.", {
+          offerId,
+          message: sanitizeString(error?.message || String(error), 200),
+        });
+        return res.status(503).json({
+          success: false,
+          error: "SALES_ACTIVATION_RESEND_FAILED",
+        });
       }
     },
   );
