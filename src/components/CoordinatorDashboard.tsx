@@ -1611,6 +1611,18 @@ export function CoordinatorDashboard({
     setToast({ type, message });
   };
 
+  const showGrowthMilestone = (result: any): boolean => {
+    const milestone = Number(
+      result?.billing?.growthMilestone ||
+      result?.data?.billing?.growthMilestone ||
+      result?.data?.growthMilestone ||
+      0,
+    );
+    if (!Number.isInteger(milestone) || milestone < 10 || milestone % 10 !== 0) return false;
+    showToast("Parabéns! Sua clínica está crescendo.", "success");
+    return true;
+  };
+
   const parseMoneyInput = (value: any) => {
     if (typeof value === "number") return Number.isFinite(value) ? value : 0;
     const raw = String(value || "").trim();
@@ -4328,12 +4340,14 @@ export function CoordinatorDashboard({
         title: "Paciente adicionado",
         message: `O paciente ${quickPatientName} foi cadastrado com sucesso.`,
       });
-      showToast(
-        addResult?.data?.patientSyncPending
-          ? "Cadastro salvo localmente. Sincronização pendente."
-          : "Dados salvos com sucesso! Custo de R$ 4,90 será cobrado da clínica.",
-        addResult?.data?.patientSyncPending ? "info" : "info",
-      );
+      if (!showGrowthMilestone(addResult)) {
+        showToast(
+          addResult?.data?.patientSyncPending
+            ? "Cadastro salvo localmente. Sincronização pendente."
+            : "Dados salvos com sucesso!",
+          "info",
+        );
+      }
     } finally {
       hideProcessing();
     }
@@ -5037,7 +5051,9 @@ export function CoordinatorDashboard({
           title: "Paciente editado",
           message: `As informações de ${newPatient.name} foram atualizadas com sucesso.`,
         });
-        showToast("Dados salvos com sucesso!");
+        if (!showGrowthMilestone(updateResult)) {
+          showToast("Dados salvos com sucesso!");
+        }
       } else {
         const addPatientResult = await onAddPatient(newPatient);
         if (addPatientResult?.success === false) {
@@ -5074,12 +5090,14 @@ export function CoordinatorDashboard({
             title: "Paciente adicionado",
             message: `O paciente ${newPatient.name} foi cadastrado com sucesso.${emailMessage}`,
           });
-          showToast(
-            activationEmailSent === false
-              ? "Paciente cadastrado. Ativação pendente de envio."
-              : "Dados salvos com sucesso!",
-            activationEmailSent === false ? "error" : "info"
-          );
+          if (!showGrowthMilestone(addPatientResult)) {
+            showToast(
+              activationEmailSent === false
+                ? "Paciente cadastrado. Ativação pendente de envio."
+                : "Dados salvos com sucesso!",
+              activationEmailSent === false ? "error" : "info"
+            );
+          }
         }
       }
       setIsPatientRegistrationModalOpen(false);
@@ -5227,8 +5245,9 @@ export function CoordinatorDashboard({
     showProcessing(isUnlinkOnly ? "Desvinculando paciente..." : "Arquivando paciente...");
 
     try {
+      let updateResult: any = null;
       if (onUpdatePatient) {
-        const updateResult = await onUpdatePatient({
+        updateResult = await onUpdatePatient({
           id: patient.id,
           ...(isUnlinkOnly ? { clinic_id: null, unlinkedAt: new Date().toISOString() } : {}),
           status: isUnlinkOnly ? "deleted" : "archived",
@@ -5253,7 +5272,9 @@ export function CoordinatorDashboard({
           ? `O paciente ${patientName} foi desvinculado da clínica.`
           : `O paciente ${patientName} foi arquivado com sucesso. O histórico da clínica permanece preservado para consulta.`,
       });
-      showToast(isUnlinkOnly ? "Paciente desvinculado da clínica." : "Paciente arquivado com sucesso.");
+      if (!showGrowthMilestone(updateResult)) {
+        showToast(isUnlinkOnly ? "Paciente desvinculado da clínica." : "Paciente arquivado com sucesso.");
+      }
       setOpenMenuId(null);
     } finally {
       hideProcessing();
@@ -14680,8 +14701,5 @@ export function CoordinatorDashboard({
     </div>
   );
 }
-
-
-
 
 

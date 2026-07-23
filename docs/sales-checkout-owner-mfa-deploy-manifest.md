@@ -14,11 +14,11 @@ Data: 23/07/2026
 
 ## Endpoint Stripe canonico
 
-O endpoint atualmente cadastrado na Stripe foi auditado, sem alteracoes:
+O endpoint canônico definido pelo código é:
 
 `https://www.appverto.com.br/api/stripe/webhook`
 
-Esse endpoint deve permanecer como o unico endpoint configurado para este fluxo. A rota legada
+Compare a URL acima com o endpoint que já estiver cadastrado na Stripe antes do deploy. Ela deve permanecer como o único endpoint configurado para este fluxo. A rota legada
 `/api/webhook/stripe` continua disponivel apenas para compatibilidade e delega ao mesmo processador;
 a reserva por `event.id` impede efeitos duplicados.
 
@@ -62,6 +62,40 @@ nao faz parte deste pacote e nao deve ser sobrescrito por este deploy.
 6. Nao cadastrar um segundo webhook Stripe. Manter a URL canonica acima e o secret ja associado a ela.
 7. Testar primeiro com um lead novo sem e-mail e uma sessao Checkout de teste.
 8. Encerrar sessoes antigas de owner por logout/login; o backend tambem bloqueia qualquer sessao sem `mfaVerified`.
+
+## PowerShell de entrega
+
+Execute este unico bloco no PowerShell a partir de uma maquina que ja possua acesso ao repositorio, ao remoto Git e ao projeto Railway vinculado. Ele nao executa SQL, nao altera Stripe e interrompe caso uma validacao falhe.
+
+```powershell
+$repo = 'C:\Users\kageo\Downloads\Verto1'
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$branch = "release/sales-checkout-owner-mfa-$stamp"
+$backup = Join-Path $repo "backups\$branch"
+
+Set-Location $repo
+git status --short
+git switch -c $branch
+New-Item -ItemType Directory -Path $backup -Force | Out-Null
+robocopy $repo $backup /E /XD .git node_modules dist backups /XF *.log | Out-Null
+if ($LASTEXITCODE -gt 7) { throw "Falha ao criar backup (robocopy exit $LASTEXITCODE)." }
+
+npm.cmd run lint
+npm.cmd run test:sales-assisted
+npm.cmd run test:sales-checkout-provisioning
+npm.cmd run test:owner-mfa
+npm.cmd run test:auth-login-recovery-fallback
+npm.cmd run check:docker-runtime-imports
+npm.cmd run build
+git diff --check
+
+git add server.ts package.json src/App.tsx src/components/LandingPage.tsx src/components/PublicSalesOffer.tsx supabase/migrations/20260722170000_sales_lead_minimal_capture.sql supabase/migrations/20260723120000_sales_checkout_payment_reconciliation.sql supabase/migrations/20260723123000_owner_mfa_contract.sql tests/authLoginRecoveryFallback.test.ts tests/salesAssistedSignup.test.ts tests/salesCheckoutProvisioning.test.ts tests/ownerMfaEnforcement.test.ts docs/sales-checkout-owner-mfa-deploy-manifest.md artifacts/verto-sales-checkout-owner-mfa-*.zip
+git commit -m 'fix: harden assisted checkout and owner MFA'
+git push -u origin $branch
+railway up
+```
+
+Depois do deploy, aplique manualmente no SQL Editor apenas as duas migrations novas listadas acima, na ordem indicada. A migration historica de captura minima deve permanecer versionada no repositorio, mas nao deve ser reaplicada manualmente em bancos que ja a registraram.
 
 ## Variaveis existentes necessarias
 

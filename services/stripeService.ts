@@ -869,8 +869,8 @@ export async function syncClinicActivePatientAddonQuantity(params: {
   clinicId: string;
   trigger: string;
   activePatientPriceId: string;
-  allowStripeQuantityUpdate?: boolean;
   requestedBillingQuantity?: number | null;
+  idempotencyKey?: string | null;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
 }): Promise<{
   success: boolean;
@@ -899,52 +899,10 @@ export async function syncClinicActivePatientAddonQuantity(params: {
   }
 
   const activePatients = await getBillableActivePatientCount({ supabase: params.supabase, clinicId });
-  const limitState = await getClinicActivePatientLimitState(params.supabase, clinicId);
-  const confirmedPendingQuantity =
-    limitState.pendingBillingStatus === 'confirmed_next_cycle' && limitState.pendingBillingQuantity
-      ? limitState.pendingBillingQuantity
-      : null;
-  const currentLimit = confirmedPendingQuantity || limitState.currentActivePatientLimit || null;
   const requestedBillingQuantity = toSafeInteger(params.requestedBillingQuantity);
-  const billableQuantity = Math.max(
-    1,
-    requestedBillingQuantity || currentLimit || activePatients
-  );
-
-  if (!params.allowStripeQuantityUpdate) {
-    const upgradeRequired = Boolean(currentLimit && activePatients > currentLimit);
-    await patchClinicBillingSafely(params.supabase, clinicId, {
-      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
-      stripe_price_id: priceId,
-      active_patient_count: activePatients,
-      current_active_patient_count: activePatients,
-      billing_sync_status: upgradeRequired ? 'upgrade_required' : 'within_current_limit',
-      billing_sync_error: upgradeRequired
-        ? 'Pacientes ativos acima do limite contratado. Confirme upgrade antes de alterar Stripe.'
-        : null,
-      last_billing_sync_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    });
-    logger.log('[Stripe Sync] Contagem local atualizada sem alterar quantity no Stripe.', {
-      clinicId,
-      activePatients,
-      currentLimit,
-      billableQuantity,
-      trigger: params.trigger,
-      reason: upgradeRequired
-        ? 'upgrade_required_confirm_upgrade_first'
-        : 'within_current_limit_no_stripe_update'
-    });
-    return {
-      success: true,
-      activePatients,
-      billableQuantity,
-      synced: false,
-      reason: upgradeRequired
-        ? 'upgrade_required_confirm_upgrade_first'
-        : 'within_current_limit_no_stripe_update'
-    };
-  }
+  // The add-on mirrors the canonical active-patient count. A zero quantity keeps
+  // the base subscription intact while removing the patient add-on for next cycle.
+  const billableQuantity = requestedBillingQuantity ?? activePatients;
 
   const clinicEmails = await resolveClinicEmails(params.supabase, clinicId);
   const subscription = await findSubscriptionForClinic({
@@ -969,8 +927,8 @@ export async function syncClinicActivePatientAddonQuantity(params: {
   }
 
   const item = resolveSubscriptionItemByPriceId(subscription, priceId);
-  const idempotencySeed = `${clinicId}:${subscription.id}:${priceId}:${billableQuantity}:${params.trigger}:${new Date().toISOString().slice(0, 13)}`;
-  const idempotencyKey = buildIdempotencyKey(idempotencySeed);
+  const idempotencySeed = `${clinicId}:${subscription.id}:${priceId}:${billableQuantity}:${params.trigger}`;
+  const idempotencyKey = toSafeString(params.idempotencyKey, 255) || buildIdempotencyKey(idempotencySeed);
   let subscriptionItemId = toSafeString(item?.id, 120);
 
   if (item) {
@@ -979,7 +937,7 @@ export async function syncClinicActivePatientAddonQuantity(params: {
       { quantity: billableQuantity, proration_behavior: 'none' } as any,
       { idempotencyKey }
     );
-  } else {
+  } else if (billableQuantity > 0) {
     const createdItem = await params.stripe.subscriptionItems.create(
       {
         subscription: subscription.id,
@@ -1002,6 +960,9 @@ export async function syncClinicActivePatientAddonQuantity(params: {
       active_patient_count: activePatients,
       current_active_patient_count: activePatients,
       current_active_patient_limit: billableQuantity,
+      pending_billing_quantity: billableQuantity,
+      pending_billing_status: 'scheduled_next_cycle',
+      pending_effective_date: new Date().toISOString(),
       billing_sync_status: 'synced',
       billing_sync_error: null,
       last_billing_sync_at: new Date().toISOString(),
@@ -1054,7 +1015,7 @@ export async function reportClinicActivePatientUsage(params: {
     logger
   });
 
-  logger.log('[Stripe Sync] Rota legada report-usage atualizou contagem local sem upgrade silencioso.', {
+  logger.log('[Stripe Sync] Rota legada report-usage confirmou a quantidade silenciosamente.', {
     clinicId,
     subscriptionId: syncResult.subscriptionId,
     subscriptionItemId: syncResult.subscriptionItemId,

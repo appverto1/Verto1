@@ -994,7 +994,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         anamnesisFlow?.response?.id || null
       );
       if (!result?.success) throw new Error(result?.error || result?.message || 'Não foi possível revisar a anamnese.');
-      setAnamnesisFlowMessage('Anamnese marcada como revisada.');
+      const growthMilestone = Number(result?.billing?.growthMilestone || result?.data?.billing?.growthMilestone || 0);
+      setAnamnesisFlowMessage(
+        Number.isInteger(growthMilestone) && growthMilestone >= 10 && growthMilestone % 10 === 0
+          ? 'Parabéns! Sua clínica está crescendo.'
+          : 'Anamnese marcada como revisada.'
+      );
       onUpdatePatient?.({
         id: patient.id,
         status: 'ACTIVE',

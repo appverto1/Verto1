@@ -2547,45 +2547,6 @@ export default function App() {
     window.open(target, '_blank', 'noopener,noreferrer');
   };
 
-  const confirmActivePatientBillingUpgrade = async (result: any) => {
-    const details = result?.details || result?.data?.details || result?.data || {};
-    const message =
-      String(result?.message || result?.error || '').trim() ||
-      `Seu plano atual cobre até ${details.currentLimit || 0} pacientes ativos. Para ativar este paciente, atualize a faixa.`;
-    if (details.enterpriseRequired) {
-      window.alert(`${message}\n\nPara volumes acima do limite self-service, solicite uma proposta personalizada.`);
-      handleEnterpriseContact(user, details.salesContactUrl);
-      return false;
-    }
-
-    const requiredLimit = Number(details.requiredLimit || details.pendingBillingQuantity || 0);
-    if (!Number.isFinite(requiredLimit) || requiredLimit < 1) {
-      window.alert('Não foi possível identificar a nova faixa de pacientes ativos. Tente novamente ou fale com o suporte.');
-      return false;
-    }
-
-    const confirmed = window.confirm(
-      `${message}\n\nA atualização será confirmada agora, entra no próximo ciclo de faturamento e não gera cobrança proporcional imediata. Deseja confirmar o upgrade?`
-    );
-    if (!confirmed) return false;
-
-    const response = await fetch('/api/billing/active-patient-limit/confirm-upgrade', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        requestedLimit: requiredLimit,
-        activePatients: Number(details.requiredActivePatients || requiredLimit)
-      })
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || payload?.success === false) {
-      window.alert(payload?.error || 'Não foi possível confirmar o upgrade agora. Tente novamente em instantes.');
-      return false;
-    }
-    window.alert(payload?.message || 'Upgrade confirmado. Você pode ativar o paciente agora.');
-    return true;
-  };
-
   const SubscriptionRequired = ({ user, onLogout }: { user: any, onLogout: () => void }) => {
     const isPatientCheckout = String(user?.role || '').toLowerCase() === 'patient';
     const [plansState, setPlansState] = useState<{
@@ -5074,7 +5035,8 @@ export default function App() {
         activationMessage: activationMessage || "Paciente cadastrado. Envie a ficha de anamnese para concluir a ativação clínica.",
         portabilityAvailable,
         onboardingStatus: "NOT_STARTED",
-        anamnesisRequired: true
+        anamnesisRequired: true,
+        billing: fbResult?.billing || fbResult?.data?.billing || null
       }
     };
     } catch (error: any) {
@@ -5209,6 +5171,8 @@ export default function App() {
       onAddActivityLog("Atualização de Cadastro", `Dados de ${formatPatientLabel(mergedIdentityPatient)} atualizados.`, 'management');
     }
 
+    let billingSync: any = null;
+
     // Sync to Backend
     if (typeof updatedData.id === 'string' || typeof updatedData.id === 'number') {
       const { dataService } = await import('./services/dataService');
@@ -5219,6 +5183,7 @@ export default function App() {
           alert(`Não foi possível arquivar/desvincular paciente: ${errorMessage}`);
           return { success: false, error: errorMessage };
         }
+        billingSync = (deleteResult as any)?.billing || deleteResult?.data?.billing || null;
       } else {
         const patientUpdatePayload = {
           name: preserveCurrentFullName ? undefined : updatedData.name,
@@ -5275,18 +5240,13 @@ export default function App() {
           clinic_id: updatedData.clinic_id,
           status: updatedData.status
         };
-        let updateResult = await dataService.updatePatient(String(updatedData.id), patientUpdatePayload);
-        if (!updateResult?.success && updateResult?.code === 'BILLING_UPGRADE_REQUIRED') {
-          const upgradeConfirmed = await confirmActivePatientBillingUpgrade(updateResult);
-          if (upgradeConfirmed) {
-            updateResult = await dataService.updatePatient(String(updatedData.id), patientUpdatePayload);
-          }
-        }
+        const updateResult = await dataService.updatePatient(String(updatedData.id), patientUpdatePayload);
         if (!updateResult?.success) {
           const errorMessage = toReadableError(updateResult?.error || updateResult?.warning || 'Erro desconhecido');
           alert(`Não foi possível confirmar a persistência do cadastro: ${errorMessage}`);
           return { success: false, error: errorMessage };
         }
+        billingSync = updateResult?.billing || updateResult?.data?.billing || null;
       }
 
       if (
@@ -5366,7 +5326,7 @@ export default function App() {
         }
       }
     }
-    return { success: true };
+    return { success: true, billing: billingSync };
   };
   const handleScheduleSession = async (sess: any) => {
     const requestedPatientId = String(sess.patientId || sess.patient_id || '').trim();

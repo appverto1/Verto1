@@ -27,8 +27,6 @@ import {
   getClinicBillingSummary,
   isVertoPatientBasedBillingEnabled,
   listStripeActivePatientBillingPlans,
-  reportAllClinicsActivePatientUsage,
-  syncAllClinicsActivePatientAddonQuantity,
   syncClinicActivePatientAddonQuantity
 } from './services/stripeService';
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
@@ -801,7 +799,7 @@ async function isPatientCurrentlyBillableActive(params: {
   );
 }
 
-async function assertCanActivateBillablePatient(params: {
+async function legacyAssertCanActivateBillablePatient(params: {
   clinicId?: string | null;
   patientId?: string | null;
   targetStatus?: string | null;
@@ -865,6 +863,19 @@ async function assertCanActivateBillablePatient(params: {
       enterpriseRequired: limitResolution.enterpriseRequired
     })
   };
+}
+
+async function assertCanActivateBillablePatient(params: {
+  clinicId?: string | null;
+  patientId?: string | null;
+  targetStatus?: string | null;
+  actorUserId?: string | null;
+  trigger: string;
+}): Promise<{ ok: true } | { ok: false; payload: ReturnType<typeof billingUpgradeRequiredPayload> }> {
+  // Patient activation must never wait for an operator to authorize a pricing
+  // change. The post-mutation queue mirrors the canonical count in Stripe.
+  void params;
+  return { ok: true };
 }
 
 function withEnterpriseThreshold<T extends { enterpriseThreshold?: number | null }>(plan: T, fallbackThreshold: number): T & { enterpriseThreshold: number } {
@@ -1260,7 +1271,7 @@ const DEMO_PRESENTATION_CLINIC_ID = uuidFromStableString('verto:presentation-dem
 const DEMO_PLAYGROUND_CLINIC_ID = uuidFromStableString('verto:playground-demo-clinic');
 const DEMO_SHARED_USER_EMAIL = 'coordenador.teste@verto.com';
 
-function queueActivePatientSync(clinicId: string | null | undefined, trigger: string) {
+function legacyQueueActivePatientSync(clinicId: string | null | undefined, trigger: string) {
   const safeClinicId = sanitizeString(clinicId, 120);
   const activePatientPriceId = resolveActivePatientPriceId();
   if (!safeClinicId || !activePatientPriceId) return;
@@ -1294,6 +1305,235 @@ function queueActivePatientSync(clinicId: string | null | undefined, trigger: st
       trigger,
       message: error?.message || String(error)
     });
+  }
+}
+
+type ActivePatientSyncQueueResult = {
+  queued: boolean;
+  activePatientCount: number;
+  queueVersion: number | null;
+  growthMilestone: number | null;
+};
+
+type ActivePatientSyncQueueJob = {
+  clinic_id: string;
+  desired_active_patient_count: number;
+  queue_version: number;
+  attempts: number;
+  trigger: string;
+};
+
+function isActivePatientSyncQueueUnavailable(error: any): boolean {
+  const message = sanitizeString(`${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`, 600).toLowerCase();
+  return (
+    isMissingRelationError(error) ||
+    message.includes('enqueue_active_patient_billing_sync') ||
+    message.includes('active_patient_billing_sync_queue') ||
+    message.includes('clinic_growth_milestones')
+  );
+}
+
+function activePatientSyncIdempotencyKey(clinicId: string, queueVersion: number, quantity: number): string {
+  return crypto
+    .createHash('sha256')
+    .update(`active-patient-sync:${clinicId}:${queueVersion}:${quantity}`)
+    .digest('hex');
+}
+
+let activePatientSyncDrainInFlight = false;
+
+async function completeActivePatientSyncJob(params: {
+  clinicId: string;
+  lockToken: string;
+  queueVersion: number;
+  activePatientCount: number;
+}) {
+  const { error } = await supabase.rpc('complete_active_patient_billing_sync_job', {
+    p_clinic_id: params.clinicId,
+    p_lock_token: params.lockToken,
+    p_queue_version: params.queueVersion,
+    p_synced_active_patient_count: params.activePatientCount
+  });
+  if (error) throw error;
+}
+
+async function failActivePatientSyncJob(params: {
+  clinicId: string;
+  lockToken: string;
+  queueVersion: number;
+  errorMessage: string;
+}) {
+  const { error } = await supabase.rpc('fail_active_patient_billing_sync_job', {
+    p_clinic_id: params.clinicId,
+    p_lock_token: params.lockToken,
+    p_queue_version: params.queueVersion,
+    p_error: sanitizeString(params.errorMessage, 1000) || 'active_patient_sync_failed'
+  });
+  if (error) throw error;
+}
+
+async function drainActivePatientSyncQueue(trigger: string): Promise<void> {
+  if (activePatientSyncDrainInFlight) return;
+  const activePatientPriceId = resolveActivePatientPriceId();
+  if (!activePatientPriceId) return;
+  activePatientSyncDrainInFlight = true;
+  const lockToken = crypto.randomUUID();
+
+  try {
+    const { data, error } = await supabase.rpc('claim_active_patient_billing_sync_jobs', {
+      p_lock_token: lockToken,
+      p_limit: 20
+    });
+    if (error) {
+      if (isActivePatientSyncQueueUnavailable(error)) return;
+      throw error;
+    }
+
+    for (const rawJob of (data || []) as ActivePatientSyncQueueJob[]) {
+      const job: ActivePatientSyncQueueJob = {
+        clinic_id: sanitizeString(rawJob?.clinic_id, 120),
+        desired_active_patient_count: Math.max(0, Math.floor(Number(rawJob?.desired_active_patient_count || 0))),
+        queue_version: Math.max(1, Math.floor(Number(rawJob?.queue_version || 1))),
+        attempts: Math.max(0, Math.floor(Number(rawJob?.attempts || 0))),
+        trigger: sanitizeString(rawJob?.trigger, 100) || 'patient_lifecycle'
+      };
+      if (!isUuid(job.clinic_id)) continue;
+
+      try {
+        const liveCount = await getBillableActivePatientCount({ supabase, clinicId: job.clinic_id });
+        if (liveCount !== job.desired_active_patient_count) {
+          await queueActivePatientSync(job.clinic_id, 'worker_count_reconciliation');
+          await completeActivePatientSyncJob({
+            clinicId: job.clinic_id,
+            lockToken,
+            queueVersion: job.queue_version,
+            activePatientCount: job.desired_active_patient_count
+          });
+          continue;
+        }
+
+        const syncResult = await syncClinicActivePatientAddonQuantity({
+          supabase,
+          stripe: getStripe(),
+          clinicId: job.clinic_id,
+          trigger: `queue:${sanitizeString(trigger, 40)}:${job.trigger}`,
+          activePatientPriceId,
+          requestedBillingQuantity: job.desired_active_patient_count,
+          idempotencyKey: activePatientSyncIdempotencyKey(job.clinic_id, job.queue_version, job.desired_active_patient_count),
+          logger: console
+        });
+        const terminalReason = ['demo_billing_disabled'].includes(sanitizeString(syncResult.reason, 80));
+        if (!syncResult.success || (!syncResult.synced && !terminalReason)) {
+          await failActivePatientSyncJob({
+            clinicId: job.clinic_id,
+            lockToken,
+            queueVersion: job.queue_version,
+            errorMessage: syncResult.reason || 'stripe_active_patient_sync_pending'
+          });
+          continue;
+        }
+        await completeActivePatientSyncJob({
+          clinicId: job.clinic_id,
+          lockToken,
+          queueVersion: job.queue_version,
+          activePatientCount: syncResult.activePatients
+        });
+      } catch (error: any) {
+        try {
+          await failActivePatientSyncJob({
+            clinicId: job.clinic_id,
+            lockToken,
+            queueVersion: job.queue_version,
+            errorMessage: error?.message || String(error)
+          });
+        } catch (queueError: any) {
+          console.error('[ActivePatientSync] retry persistence failed', {
+            clinicId: job.clinic_id,
+            trigger,
+            message: sanitizeString(queueError?.message || String(queueError), 240)
+          });
+        }
+      }
+    }
+  } catch (error: any) {
+    console.error('[ActivePatientSync] queue drain failed', {
+      trigger,
+      message: sanitizeString(error?.message || String(error), 240)
+    });
+  } finally {
+    activePatientSyncDrainInFlight = false;
+  }
+}
+
+async function queueActivePatientSync(
+  clinicId: string | null | undefined,
+  trigger: string,
+  options: { previousActivePatientCount?: number | null } = {}
+): Promise<ActivePatientSyncQueueResult> {
+  const safeClinicId = sanitizeString(clinicId, 120);
+  if (!isUuid(safeClinicId)) {
+    return { queued: false, activePatientCount: 0, queueVersion: null, growthMilestone: null };
+  }
+
+  try {
+    const demoState = await fetchClinicDemoState(safeClinicId);
+    if (demoState.isDemo) {
+      return { queued: false, activePatientCount: 0, queueVersion: null, growthMilestone: null };
+    }
+    const activePatientCount = await getBillableActivePatientCount({ supabase, clinicId: safeClinicId });
+    const { data, error } = await supabase.rpc('enqueue_active_patient_billing_sync', {
+      p_clinic_id: safeClinicId,
+      p_desired_active_patient_count: activePatientCount,
+      p_trigger: sanitizeString(trigger, 100) || 'patient_lifecycle',
+      p_previous_active_patient_count:
+        typeof options.previousActivePatientCount === 'number' && options.previousActivePatientCount >= 0
+          ? Math.floor(options.previousActivePatientCount)
+          : null
+    });
+    if (error) {
+      if (isActivePatientSyncQueueUnavailable(error)) {
+        console.warn('[ActivePatientSync] persistent queue unavailable', { clinicId: safeClinicId, trigger: sanitizeString(trigger, 100) });
+        return { queued: false, activePatientCount, queueVersion: null, growthMilestone: null };
+      }
+      throw error;
+    }
+
+    const row = Array.isArray(data) ? data[0] : data;
+    const result: ActivePatientSyncQueueResult = {
+      queued: row?.queued !== false,
+      activePatientCount,
+      queueVersion: Number.isFinite(Number(row?.queue_version)) ? Number(row.queue_version) : null,
+      growthMilestone: Number.isFinite(Number(row?.growth_milestone)) ? Number(row.growth_milestone) : null
+    };
+    void drainActivePatientSyncQueue('patient_lifecycle_enqueue');
+    return result;
+  } catch (error: any) {
+    console.error('[ActivePatientSync] queue enqueue failed', {
+      clinicId: safeClinicId,
+      trigger: sanitizeString(trigger, 100),
+      message: sanitizeString(error?.message || String(error), 240)
+    });
+    return { queued: false, activePatientCount: 0, queueVersion: null, growthMilestone: null };
+  }
+}
+
+async function reconcileActivePatientSyncQueue(trigger: string): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc('reconcile_active_patient_billing_sync_queue', {
+      p_trigger: sanitizeString(trigger, 100) || 'scheduled_reconciliation'
+    });
+    if (error) {
+      if (isActivePatientSyncQueueUnavailable(error)) return 0;
+      throw error;
+    }
+    await drainActivePatientSyncQueue(trigger);
+    return Math.max(0, Number(data || 0));
+  } catch (error: any) {
+    console.error('[ActivePatientSync] reconciliation failed', {
+      trigger,
+      message: sanitizeString(error?.message || String(error), 240)
+    });
+    return 0;
   }
 }
 
@@ -25005,6 +25245,7 @@ async function startServer() {
       if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
       const nowIso = new Date().toISOString();
       const actorId = sanitizeString(req.session.user?.id, 120);
+      const activePatientCountBeforeMutation = await getBillableActivePatientCount({ supabase, clinicId });
       if (isUuid(responseId)) {
         await updateRowsWithSchemaFallback({
           tableName: 'patient_anamnesis_responses',
@@ -25051,6 +25292,9 @@ async function startServer() {
         },
         context: 'anamnesis-review-patient'
       });
+      const billingSync = await queueActivePatientSync(clinicId, 'anamnesis_review', {
+        previousActivePatientCount: activePatientCountBeforeMutation
+      });
       const reviewedFlow = await fetchPatientAnamnesisFlow(patientId, clinicId);
       void persistAnamnesisFinalFileFallback({
         patientId,
@@ -25071,7 +25315,7 @@ async function startServer() {
         actionType: 'ANAMNESIS_REVIEWED',
         payload: { patientId, requestId: isUuid(requestId) ? requestId : null }
       });
-      return res.json({ success: true, message: 'Anamnese revisada.' });
+      return res.json({ success: true, message: 'Anamnese revisada.', billing: billingSync });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients/:patientId/anamnesis/review [POST]', error, {
         patientId: sanitizeString(req.params.patientId, 120),
@@ -27509,6 +27753,10 @@ async function startServer() {
         });
       }
 
+      const activePatientCountBeforeMutation = await getBillableActivePatientCount({
+        supabase,
+        clinicId: safeBody.clinic_id || safeClinicId
+      });
       const activationCheck = await assertCanActivateBillablePatient({
         clinicId: safeBody.clinic_id || safeClinicId,
         patientId: safeBody.id,
@@ -27527,9 +27775,11 @@ async function startServer() {
         (data as any)?.clinic_id || safeBody.clinic_id || currentClinicId(req.session.user),
         120
       );
-      if (isUuid(clinicForSync)) {
-        queueActivePatientSync(clinicForSync, 'patient_upsert');
-      }
+      const billingSync = isUuid(clinicForSync)
+        ? await queueActivePatientSync(clinicForSync, 'patient_upsert', {
+            previousActivePatientCount: activePatientCountBeforeMutation
+          })
+        : null;
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
@@ -27538,7 +27788,7 @@ async function startServer() {
         content: `Paciente ${safeBody.name} foi salvo no sistema.`,
         type: 'management'
       });
-      res.json({ success: true, data });
+      res.json({ success: true, data, billing: billingSync });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients [POST]', error, {
         userId: sanitizeString(req.session?.user?.id, 120),
@@ -28194,6 +28444,35 @@ async function startServer() {
         status: req.body?.status !== undefined ? safeStatusPatch : undefined
       });
 
+      let billingSourceClinicId = '';
+      let activePatientCountBeforeMutation: number | null = null;
+      if (updates.status !== undefined || updates.clinic_id !== undefined) {
+        let billingScopeQuery = supabase
+          .from('patients')
+          .select('id, clinic_id')
+          .eq('id', req.params.id)
+          .eq('is_active', true)
+          .is('deleted_at', null);
+        if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+          billingScopeQuery = billingScopeQuery.eq('clinic_id', scopedClinicId);
+        }
+        if (explicitDemoUser) {
+          billingScopeQuery = billingScopeQuery.eq('is_demo', true);
+        }
+        if (role === 'therapist') {
+          billingScopeQuery = billingScopeQuery.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+        }
+        const { data: billingPatient, error: billingPatientError } = await billingScopeQuery.maybeSingle();
+        if (billingPatientError) throw billingPatientError;
+        billingSourceClinicId = sanitizeString(billingPatient?.clinic_id, 120);
+        if (isUuid(billingSourceClinicId)) {
+          activePatientCountBeforeMutation = await getBillableActivePatientCount({
+            supabase,
+            clinicId: billingSourceClinicId
+          });
+        }
+      }
+
       if (updates.status !== undefined && isBillableActivePatientStatus(updates.status)) {
         let activationScopeQuery = supabase
           .from('patients')
@@ -28271,12 +28550,24 @@ async function startServer() {
       }
       
       if (error) throw error;
+      const explicitClinicPatch = Object.prototype.hasOwnProperty.call(updates, 'clinic_id')
+        ? updates.clinic_id
+        : undefined;
       const clinicForSync = sanitizeString(
-        updates?.clinic_id || updatedPatient?.clinic_id || currentClinicId(req.session.user),
+        explicitClinicPatch ?? updatedPatient?.clinic_id ?? billingSourceClinicId ?? currentClinicId(req.session.user),
         120
-      );
+      ) || billingSourceClinicId;
+      let billingSync: ActivePatientSyncQueueResult | null = null;
+      if (isUuid(billingSourceClinicId) && billingSourceClinicId !== clinicForSync) {
+        await queueActivePatientSync(billingSourceClinicId, 'patient_patch_source_clinic', {
+          previousActivePatientCount: activePatientCountBeforeMutation
+        });
+      }
       if (isUuid(clinicForSync)) {
-        queueActivePatientSync(clinicForSync, 'patient_patch');
+        billingSync = await queueActivePatientSync(clinicForSync, 'patient_patch', {
+          previousActivePatientCount:
+            billingSourceClinicId === clinicForSync ? activePatientCountBeforeMutation : null
+        });
       }
 
       const patientEmail = sanitizeEmail(updatedPatient?.email);
@@ -28323,7 +28614,7 @@ async function startServer() {
             : 'Dados cadastrais do paciente foram atualizados.',
         type: 'management'
       });
-      res.json({ success: true });
+      res.json({ success: true, data: updatedPatient, billing: billingSync });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
@@ -29950,6 +30241,10 @@ async function startServer() {
       const alreadyArchived =
         String(patientRow?.status || '').toUpperCase() === PATIENT_STATUS_ARCHIVED ||
         String(parseStoredJsonObject(patientRow?.metadata)?.archive?.status || '').toLowerCase() === 'archived';
+      const patientClinicId = sanitizeString(patientRow?.clinic_id || scopedClinicId, 120);
+      const activePatientCountBeforeMutation = !alreadyArchived && isUuid(patientClinicId)
+        ? await getBillableActivePatientCount({ supabase, clinicId: patientClinicId })
+        : null;
 
       if (!alreadyArchived) {
         const archivePayload = cleanObject({
@@ -29970,9 +30265,11 @@ async function startServer() {
         if (archiveResult.error) throw archiveResult.error;
       }
 
-      if (scopedClinicId && isUuid(scopedClinicId)) {
-        queueActivePatientSync(scopedClinicId, 'patient_archive');
-      }
+      const billingSync = !alreadyArchived && isUuid(patientClinicId)
+        ? await queueActivePatientSync(patientClinicId, 'patient_archive', {
+            previousActivePatientCount: activePatientCountBeforeMutation
+          })
+        : null;
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(patientRow?.clinic_id || scopedClinicId || req.session.user?.id, 120),
@@ -29999,7 +30296,8 @@ async function startServer() {
         message: 'Paciente arquivado com sucesso.',
         archivedId: patientId,
         deletedId: patientId,
-        idempotent: alreadyArchived
+        idempotent: alreadyArchived,
+        billing: billingSync
       });
     } catch (error) {
       logRouteDbError('/api/patients/:id [DELETE]', error, {
@@ -30036,6 +30334,10 @@ async function startServer() {
       const nextStatus = patientRow?.anamnesis_required !== false && !patientRow?.anamnesis_reviewed_at
         ? PATIENT_STATUS_PENDING_ANAMNESIS
         : PATIENT_STATUS_ACTIVE;
+      const patientClinicId = sanitizeString(patientRow?.clinic_id || scopedClinicId, 120);
+      const activePatientCountBeforeMutation = isUuid(patientClinicId)
+        ? await getBillableActivePatientCount({ supabase, clinicId: patientClinicId })
+        : null;
       const reactivationMetadata = {
         ...parseStoredJsonObject(patientRow?.metadata),
         reactivation: {
@@ -30072,9 +30374,11 @@ async function startServer() {
       });
       if (reactivationResult.error) throw reactivationResult.error;
 
-      if (scopedClinicId && isUuid(scopedClinicId)) {
-        queueActivePatientSync(scopedClinicId, 'patient_reactivate');
-      }
+      const billingSync = isUuid(patientClinicId)
+        ? await queueActivePatientSync(patientClinicId, 'patient_reactivate', {
+            previousActivePatientCount: activePatientCountBeforeMutation
+          })
+        : null;
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(patientRow?.clinic_id || scopedClinicId || req.session.user?.id, 120),
@@ -30093,7 +30397,7 @@ async function startServer() {
         type: 'management'
       });
 
-      return res.json({ success: true, message: 'Paciente reativado com sucesso.', patientId, status: nextStatus });
+      return res.json({ success: true, message: 'Paciente reativado com sucesso.', patientId, status: nextStatus, billing: billingSync });
     } catch (error) {
       logRouteDbError('/api/patients/:id/reactivate [POST]', error, {
         patientId: sanitizeString(req.params.id, 120),
@@ -67567,6 +67871,20 @@ async function startServer() {
   }
 
   app.post('/api/billing/active-patient-limit/confirm-upgrade', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    const clinicId = sanitizeString(req.session.user?.activeWorkspaceId || req.session.user?.clinicId || req.session.user?.id, 120);
+    if (!isUuid(clinicId)) {
+      return res.status(400).json({ success: false, code: 'MISSING_ORGANIZATION', error: 'NÃ£o foi possÃ­vel identificar a clÃ­nica.' });
+    }
+    const billing = await queueActivePatientSync(clinicId, 'deprecated_manual_upgrade_confirmation');
+    return res.json({
+      success: true,
+      idempotent: true,
+      message: 'A quantidade de pacientes ativos Ã© atualizada automaticamente para a prÃ³xima fatura.',
+      billing
+    });
+  });
+
+  app.post('/api/billing/_legacy/active-patient-limit/confirm-upgrade', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     let diagnostics: Record<string, unknown> = {
       route: '/api/billing/active-patient-limit/confirm-upgrade',
       requestedLimit: normalizeActivePatientQuantity(req.body?.requestedLimit || req.body?.requested_limit || req.body?.activePatients),
@@ -67747,7 +68065,15 @@ async function startServer() {
     }
   });
 
-  app.post('/api/billing/active-patient-limit/cancel-pending', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/billing/active-patient-limit/cancel-pending', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (_req: any, res) => {
+    return res.status(410).json({
+      success: false,
+      code: 'ACTIVE_PATIENT_SYNC_AUTOMATIC',
+      error: 'A quantidade de pacientes ativos Ã© sincronizada automaticamente.'
+    });
+  });
+
+  app.post('/api/billing/_legacy/active-patient-limit/cancel-pending', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const user = req.session.user;
       const clinicId = sanitizeString(user.activeWorkspaceId || user.clinicId || user.id, 120);
@@ -68288,25 +68614,14 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Acesso negado para reportar uso de billing.' });
       }
 
-      const activePatientPriceId = resolveActivePatientPriceId();
-      if (!activePatientPriceId) {
-        return res.status(400).json({ success: false, error: 'STRIPE_ACTIVE_PATIENT_PRICE_ID não configurado.' });
-      }
-
-      const results = await reportAllClinicsActivePatientUsage({
-        supabase,
-        stripe: getStripe(),
-        activePatientPriceId,
-        trigger: sanitizeString(req.body?.trigger, 80) || 'manual_endpoint',
-        allowOverNegotiationLimit: sanitizeString(process.env.STRIPE_ALLOW_OVER_299_USAGE || process.env.STRIPE_ALLOW_OVER_50_USAGE || '', 10).toLowerCase() === 'true',
-        logger: console
-      });
+      const trigger = sanitizeString(req.body?.trigger, 80) || 'manual_endpoint';
+      const queued = await reconcileActivePatientSyncQueue(trigger);
+      await drainActivePatientSyncQueue(`${trigger}:manual`);
 
       return res.json({
         success: true,
-        reported: results.filter((item) => item.reported).length,
-        skipped: results.filter((item) => !item.reported).length,
-        results
+        queued,
+        message: 'Reconciliação de pacientes ativos adicionada à fila persistente.'
       });
     } catch (error: any) {
       console.error('[Stripe Sync] Endpoint legado report-usage falhou:', {
@@ -68332,26 +68647,15 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Acesso negado para reconciliar billing.' });
       }
 
-      const activePatientPriceId = resolveActivePatientPriceId();
-      if (!activePatientPriceId) {
-        return res.status(400).json({ success: false, error: 'STRIPE_ACTIVE_PATIENT_PRICE_ID não configurado.' });
-      }
-
-      const results = await reportAllClinicsActivePatientUsage({
-        supabase,
-        stripe: getStripe(),
-        activePatientPriceId,
-        trigger: sanitizeString(req.body?.trigger, 80) || 'reconcile_active_patient_usage',
-        allowOverNegotiationLimit: true,
-        logger: console
-      });
+      const trigger = sanitizeString(req.body?.trigger, 80) || 'reconcile_active_patient_usage';
+      const queued = await reconcileActivePatientSyncQueue(trigger);
+      await drainActivePatientSyncQueue(`${trigger}:manual`);
 
       return res.json({
         success: true,
         billingModel: ACTIVE_PATIENT_BILLING_MODEL,
-        synced: results.filter((item) => item.reported).length,
-        skipped: results.filter((item) => !item.reported).length,
-        results
+        queued,
+        message: 'Reconciliação de pacientes ativos adicionada à fila persistente.'
       });
     } catch (error: any) {
       console.error('[Stripe Billing] Reconcile active patient usage failed:', {
@@ -68429,35 +68733,23 @@ async function startServer() {
     });
   });
 
-  const activePatientPriceId = resolveActivePatientPriceId();
-  if (activePatientPriceId) {
-    const runDailyBillingSync = async (trigger: string) => {
-      try {
-        await syncAllClinicsActivePatientAddonQuantity({
-          supabase,
-          stripe: getStripe(),
-          activePatientPriceId,
-          logger: console
-        });
-        console.log('[Stripe Sync] Lote diário concluído.', { trigger });
-      } catch (error: any) {
-        console.error('[CRITICAL] Falha no lote diário de sync Stripe (não bloqueante).', {
-          trigger,
-          message: error?.message || String(error)
-        });
-      }
-    };
+  const runQueuedActivePatientReconciliation = async (trigger: string) => {
+    const queued = await reconcileActivePatientSyncQueue(trigger);
+    await drainActivePatientSyncQueue(`${trigger}:drain`);
+    console.log('[ActivePatientSync] reconciliação concluída.', { trigger, queued });
+  };
 
-    setTimeout(() => {
-      void runDailyBillingSync('startup_warmup');
-    }, 90 * 1000);
+  setTimeout(() => {
+    void runQueuedActivePatientReconciliation('startup_warmup');
+  }, 90 * 1000);
 
-    setInterval(() => {
-      void runDailyBillingSync('daily_interval');
-    }, 24 * 60 * 60 * 1000);
-  } else {
-    console.warn('[Stripe Sync] STRIPE_ACTIVE_PATIENT_PRICE_ID não configurado. Sync de pacientes ativos desabilitado.');
-  }
+  setInterval(() => {
+    void drainActivePatientSyncQueue('scheduled_retry_drain');
+  }, 5 * 60 * 1000);
+
+  setInterval(() => {
+    void runQueuedActivePatientReconciliation('daily_reconciliation');
+  }, 24 * 60 * 60 * 1000);
 
   startAppointmentReminderCron({
     supabase,
