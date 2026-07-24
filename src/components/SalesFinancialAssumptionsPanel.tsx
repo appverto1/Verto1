@@ -212,7 +212,17 @@ const sourceLabels: Record<SimulationValueSource, string> = {
   unavailable: 'Indisponível',
 };
 
-const parseDisplayValue = (
+export const isValidFinancialAssumptionDraft = (
+  value: string,
+  type: FieldDefinition['type']
+) => {
+  if (value === '') return true;
+  return type === 'count'
+    ? /^\d*$/.test(value)
+    : /^\d*(?:[,.]\d{0,2})?$/.test(value);
+};
+
+export const parseFinancialAssumptionInput = (
   value: string,
   type: FieldDefinition['type']
 ): number | null => {
@@ -224,14 +234,16 @@ const parseDisplayValue = (
     : Math.round(parsed * 100);
 };
 
-const toDisplayValue = (
+export const formatFinancialAssumptionInput = (
   value: unknown,
   type: FieldDefinition['type']
 ) => {
   if (value == null || value === '') return '';
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return '';
-  return type === 'count' ? String(parsed) : String(parsed / 100);
+  return type === 'count'
+    ? String(parsed)
+    : String(parsed / 100).replace('.', ',');
 };
 
 const formatDateTime = (value?: string) => {
@@ -286,6 +298,7 @@ export const SalesFinancialAssumptionsPanel = () => {
   const [dirtyFields, setDirtyFields] = useState<
     Set<keyof SalesAssumptionValues>
   >(new Set());
+  const [inputDrafts, setInputDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -304,6 +317,7 @@ export const SalesFinancialAssumptionsPanel = () => {
           loadedActive?.values || data.editableTemplate || null
         );
         setDirtyFields(new Set());
+        setInputDrafts({});
       } catch (loadError: any) {
         if (!cancelled) {
           setError(
@@ -325,11 +339,16 @@ export const SalesFinancialAssumptionsPanel = () => {
     field: FieldDefinition,
     rawValue: string
   ) => {
+    if (!isValidFinancialAssumptionDraft(rawValue, field.type)) return;
+    setInputDrafts((current) => ({
+      ...current,
+      [String(field.key)]: rawValue,
+    }));
     setValues((current) =>
       current
         ? {
             ...current,
-            [field.key]: parseDisplayValue(rawValue, field.type),
+            [field.key]: parseFinancialAssumptionInput(rawValue, field.type),
           }
         : current
     );
@@ -341,6 +360,12 @@ export const SalesFinancialAssumptionsPanel = () => {
     field: FieldDefinition,
     rawValue: string
   ) => {
+    if (!isValidFinancialAssumptionDraft(rawValue, field.type)) return;
+    const draftKey = `${profile}:${String(field.key)}`;
+    setInputDrafts((current) => ({
+      ...current,
+      [draftKey]: rawValue,
+    }));
     setValues((current) => {
       if (!current) return current;
       return {
@@ -349,7 +374,7 @@ export const SalesFinancialAssumptionsPanel = () => {
           ...(current.usageProfiles || {}),
           [profile]: {
             ...(current.usageProfiles?.[profile] || {}),
-            [field.key]: parseDisplayValue(rawValue, field.type),
+            [field.key]: parseFinancialAssumptionInput(rawValue, field.type),
           },
         },
       };
@@ -421,6 +446,7 @@ export const SalesFinancialAssumptionsPanel = () => {
         ...current.filter((item) => item.id !== saved.id),
       ]);
       setDirtyFields(new Set());
+      setInputDrafts({});
       setNotice(`Versão ${saved.version} criada e ativada.`);
     } catch (saveError: any) {
       setError(
@@ -434,6 +460,7 @@ export const SalesFinancialAssumptionsPanel = () => {
 
   const renderField = (field: FieldDefinition) => {
     const source = getSource(field.key);
+    const draftKey = String(field.key);
     return (
       <label
         key={String(field.key)}
@@ -450,9 +477,19 @@ export const SalesFinancialAssumptionsPanel = () => {
           </span>
           <input
             inputMode="decimal"
-            value={toDisplayValue(values?.[field.key], field.type)}
+            value={
+              inputDrafts[draftKey]
+              ?? formatFinancialAssumptionInput(values?.[field.key], field.type)
+            }
             onChange={(event) =>
               updateField(field, event.target.value)
+            }
+            onBlur={() =>
+              setInputDrafts((current) => {
+                const next = { ...current };
+                delete next[draftKey];
+                return next;
+              })
             }
             placeholder="Dado indisponível"
             className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm font-normal outline-none"
@@ -674,7 +711,9 @@ export const SalesFinancialAssumptionsPanel = () => {
                         {label}
                       </p>
                       <div className="mt-3 space-y-3">
-                        {usageProfileFields.map((field) => (
+                        {usageProfileFields.map((field) => {
+                          const draftKey = `${profile}:${String(field.key)}`;
+                          return (
                           <label
                             key={`${profile}:${String(field.key)}`}
                             className="block text-[11px] font-medium text-slate-600"
@@ -686,12 +725,15 @@ export const SalesFinancialAssumptionsPanel = () => {
                               </span>
                               <input
                                 inputMode="decimal"
-                                value={toDisplayValue(
-                                  values.usageProfiles?.[profile]?.[
-                                    field.key
-                                  ],
-                                  field.type
-                                )}
+                                value={
+                                  inputDrafts[draftKey]
+                                  ?? formatFinancialAssumptionInput(
+                                    values.usageProfiles?.[profile]?.[
+                                      field.key
+                                    ],
+                                    field.type
+                                  )
+                                }
                                 onChange={(event) =>
                                   updateUsageProfile(
                                     profile,
@@ -699,12 +741,20 @@ export const SalesFinancialAssumptionsPanel = () => {
                                     event.target.value
                                   )
                                 }
+                                onBlur={() =>
+                                  setInputDrafts((current) => {
+                                    const next = { ...current };
+                                    delete next[draftKey];
+                                    return next;
+                                  })
+                                }
                                 placeholder="Herdar base"
                                 className="min-w-0 flex-1 bg-transparent px-1 py-2 text-xs font-normal outline-none"
                               />
                             </div>
                           </label>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
@@ -781,4 +831,3 @@ export const SalesFinancialAssumptionsPanel = () => {
     </div>
   );
 };
-

@@ -18,6 +18,10 @@ const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'), 'utf8');
 const migrationSql = readFileSync(join(root, 'supabase/migrations/20260527120000_aba_next_session_planning.sql'), 'utf8');
+const integrityMigrationSql = readFileSync(
+  join(root, 'supabase/migrations/20260724163000_aba_recommendation_transactional_integrity.sql'),
+  'utf8'
+);
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -393,7 +397,7 @@ test('alertas distintos do mesmo alvo, motivo e janela geram um único card', ()
   );
 });
 
-test('requisições concorrentes para o mesmo ciclo geram o mesmo ID idempotente', () => {
+test('requisições concorrentes produzem a mesma chave candidata sem ID persistente no frontend', () => {
   const input = {
     ...baseInput,
     focusType: 'MAINTENANCE',
@@ -401,7 +405,8 @@ test('requisições concorrentes para o mesmo ciclo geram o mesmo ID idempotente
   };
   const left = generateNextSessionRecommendations(input);
   const right = generateNextSessionRecommendations(input);
-  assert.equal(left.recommendations[0].id, right.recommendations[0].id);
+  assert.equal(left.recommendations[0].id, undefined);
+  assert.equal(right.recommendations[0].id, undefined);
   assert.equal(
     buildAbaRecommendationSemanticKey(left.recommendations[0]),
     buildAbaRecommendationSemanticKey(right.recommendations[0])
@@ -478,7 +483,11 @@ test('infraestrutura de planning esta persistente, economica e sem select star',
   assert.match(serverCode, /Informe o motivo da recusa/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/recommendations\/:recommendationId\/apply-to-next-session'/);
   assert.match(serverCode, /canonicalizeAbaRecommendationRows/);
-  assert.match(serverCode, /\.upsert\(payloads, \{ onConflict: 'id' \}\)/);
+  assert.match(serverCode, /upsert_aba_clinical_recommendations_v2/);
+  assert.match(serverCode, /apply_aba_clinical_recommendation_decision_v2/);
+  assert.match(integrityMigrationSql, /on conflict \(organization_id, patient_id, suggestion_key\)/);
+  assert.match(integrityMigrationSql, /for update/);
+  assert.doesNotMatch(serverCode, /\.upsert\(payloads, \{ onConflict: 'id' \}\)/);
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
 

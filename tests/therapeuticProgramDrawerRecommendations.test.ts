@@ -17,6 +17,8 @@ const server = read('server.ts');
 const dataService = read('src/services/dataService.ts');
 const planningEngine = read('src/utils/abaPlanningEngine.ts');
 const migration = read('supabase/migrations/20260716170000_therapeutic_recommendation_context.sql');
+const recommendationIdentity = read('src/server/abaRecommendationIdentity.ts');
+const integrityMigration = read('supabase/migrations/20260724163000_aba_recommendation_transactional_integrity.sql');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -331,21 +333,22 @@ test('conversao e idempotente e serializada entre retries ou duas abas', () => {
   assert.match(migration, /THERAPEUTIC_RECOMMENDATION_ALREADY_CONVERTED/);
   assert.match(migration, /before insert or update on public\.aba_programs/);
   assert.match(migration, /create index if not exists idx_aba_programs_recommendation_origin_lookup/);
-  assert.match(planningEngine, /recommendationIdSeed/);
+  assert.match(recommendationIdentity, /createHash\('sha256'\)/);
+  assert.match(recommendationIdentity, /rec-sha256-/);
   assert.match(planningEngine, /pushUnique/);
   assert.match(planningEngine, /contextHash/);
   assert.doesNotMatch(migration, /drop table|delete from public\.aba_clinical_recommendations/i);
 });
 
-test('aplicacao contextual usa ids deterministas em retries', () => {
-  const acceptStart = planningEngine.indexOf('export function acceptRecommendationForNextSession');
-  const acceptEnd = planningEngine.indexOf('export function rejectRecommendation', acceptStart);
-  const acceptBlock = acceptStart >= 0 && acceptEnd > acceptStart ? planningEngine.slice(acceptStart, acceptEnd) : '';
-  assert.match(acceptBlock, /id: `plan-\$\{stableHash\(`/);
-  assert.match(acceptBlock, /source_recommendation_id: accepted\.id/);
-  assert.match(acceptBlock, /const auditAction = input\.createPlanItem/);
-  assert.match(acceptBlock, /id: `audit-\$\{stableHash\(`\$\{accepted\.id \|\| ''\}\|\$\{auditAction\}`\)/);
-  assert.doesNotMatch(acceptBlock, /accepted\|\$\{now\}/);
+test('aplicacao contextual usa ids criptograficos e RPC transacional em retries', () => {
+  assert.match(integrityMigration, /v_event_id := 'audit-sha256-'/);
+  assert.match(integrityMigration, /'plan-sha256-' \|\| public\.aba_recommendation_sha256/);
+  assert.match(integrityMigration, /p_idempotency_key/);
+  assert.match(integrityMigration, /apply_aba_clinical_recommendation_decision_v2/);
+  assert.match(
+    integrityMigration,
+    /v_recommendation\.id \|\| '\|' \|\| v_action \|\| '\|' \|\| p_idempotency_key/
+  );
 });
 
 test('programa so e vinculado no RPC final e cancelar nao trata recomendacao', () => {

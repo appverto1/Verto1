@@ -776,6 +776,7 @@ export const SessionMode = ({
   const [planningDecisionLoadingId, setPlanningDecisionLoadingId] = useState('');
   const planningGenerationInFlightRef = useRef(false);
   const planningDecisionInFlightRef = useRef(new Set<string>());
+  const planningDecisionRequestKeysRef = useRef(new Map<string, string>());
   const [editingRecommendation, setEditingRecommendation] = useState<any>(null);
   const [editRecommendationForm, setEditRecommendationForm] = useState({
     title: '',
@@ -4652,21 +4653,48 @@ export const SessionMode = ({
     }
   };
 
+  const getPlanningDecisionRequestKey = (scope: string) => {
+    const existing = planningDecisionRequestKeysRef.current.get(scope);
+    if (existing) return existing;
+    const requestKey = crypto.randomUUID();
+    planningDecisionRequestKeysRef.current.set(scope, requestKey);
+    return requestKey;
+  };
+
+  const applyPlanningDecisionResult = (result: any, fallbackRecommendationId: string) => {
+    const recommendation = result?.data;
+    if (!recommendation?.id) return;
+    const groupedIds = new Set<string>([
+      fallbackRecommendationId,
+      ...(Array.isArray(result?.groupedRecommendationIds) ? result.groupedRecommendationIds : [])
+    ].map((value) => String(value || '')).filter(Boolean));
+    setPlanningRecommendations((previous) => {
+      const remaining = previous.filter((item) => !groupedIds.has(String(item?.id || '')));
+      return [recommendation, ...remaining];
+    });
+  };
+
   const handleAcceptRecommendation = async (recommendation: any, applyToNextSession = true) => {
     const recommendationId = String(recommendation?.id || '');
     if (!recommendationId || planningDecisionInFlightRef.current.has(recommendationId)) return false;
     planningDecisionInFlightRef.current.add(recommendationId);
     setPlanningDecisionLoadingId(recommendationId);
     setPlanningMessage('');
+    const actionType = applyToNextSession ? 'APPLIED_TO_NEXT_SESSION' : 'ACCEPTED';
+    const requestScope = `${actionType}:${recommendationId}`;
+    const idempotencyKey = getPlanningDecisionRequestKey(requestScope);
     try {
       const result = applyToNextSession
-        ? await dataService.applyAbaRecommendationToNextSession(recommendationId)
-        : await dataService.acceptAbaRecommendation(recommendationId);
+        ? await dataService.applyAbaRecommendationToNextSession(recommendationId, { idempotencyKey })
+        : await dataService.acceptAbaRecommendation(recommendationId, { idempotencyKey });
       if (result?.success === false) {
+        applyPlanningDecisionResult(result, recommendationId);
+        if (result?.data) planningDecisionRequestKeysRef.current.delete(requestScope);
         setPlanningMessage(result?.error || 'Nao foi possivel atualizar a sugestao agora.');
         return false;
       }
-      setPlanningRecommendations((prev) => prev.map((item) => item.id === recommendationId ? (result.data || item) : item));
+      planningDecisionRequestKeysRef.current.delete(requestScope);
+      applyPlanningDecisionResult(result, recommendationId);
       if (result?.planItem) {
         setNextSessionPlanItems((prev) => [result.planItem, ...prev.filter((item) => item.id !== result.planItem.id)]);
         setPlanningMessage('Sugestao aceita e adicionada ao plano da proxima sessao.');
@@ -4716,16 +4744,25 @@ export const SessionMode = ({
     }
     planningDecisionInFlightRef.current.add(recommendationId);
     setPlanningDecisionLoadingId(recommendationId);
+    const decisionPayload = {
+      reason,
+      notes: rejectRecommendationNotes.trim()
+    };
+    const requestScope = `REJECTED:${recommendationId}:${JSON.stringify(decisionPayload)}`;
+    const idempotencyKey = getPlanningDecisionRequestKey(requestScope);
     try {
       const result = await dataService.rejectAbaRecommendation(recommendationId, {
-        reason,
-        notes: rejectRecommendationNotes.trim()
+        ...decisionPayload,
+        idempotencyKey
       });
       if (result?.success === false) {
+        applyPlanningDecisionResult(result, recommendationId);
+        if (result?.data) planningDecisionRequestKeysRef.current.delete(requestScope);
         setPlanningMessage(result?.error || 'Nao foi possivel recusar a sugestao agora.');
         return;
       }
-      setPlanningRecommendations((prev) => prev.map((item) => item.id === recommendationId ? (result.data || item) : item));
+      planningDecisionRequestKeysRef.current.delete(requestScope);
+      applyPlanningDecisionResult(result, recommendationId);
       setRejectingRecommendation(null);
       setRejectRecommendationReason('');
       setRejectRecommendationNotes('');
@@ -4763,25 +4800,34 @@ export const SessionMode = ({
     }
     planningDecisionInFlightRef.current.add(recommendationId);
     setPlanningDecisionLoadingId(recommendationId);
+    const editPayload = {
+      title: editRecommendationForm.title.trim(),
+      priority: editRecommendationForm.priority,
+      recommendation_type: editRecommendationForm.recommendationType,
+      target_id: editRecommendationForm.targetId || null,
+      suggested_action: editRecommendationForm.suggestedAction.trim(),
+      summary: editRecommendationForm.summary.trim(),
+      rationale: editRecommendationForm.rationale.trim(),
+      clinicalNote: editRecommendationForm.clinicalNote.trim(),
+      applyForDate: editRecommendationForm.applyForDate || null,
+      responsibleProfessionalId: editRecommendationForm.responsibleProfessionalId || null
+    };
+    const requestScope = `EDITED:${recommendationId}:${JSON.stringify(editPayload)}`;
+    const idempotencyKey = getPlanningDecisionRequestKey(requestScope);
     try {
       const result = await dataService.updateAbaRecommendation(recommendationId, {
-        title: editRecommendationForm.title.trim(),
-        priority: editRecommendationForm.priority,
-        recommendation_type: editRecommendationForm.recommendationType,
-        target_id: editRecommendationForm.targetId || null,
-        suggested_action: editRecommendationForm.suggestedAction.trim(),
-        summary: editRecommendationForm.summary.trim(),
-        rationale: editRecommendationForm.rationale.trim(),
-        clinicalNote: editRecommendationForm.clinicalNote.trim(),
-        applyForDate: editRecommendationForm.applyForDate || null,
-        responsibleProfessionalId: editRecommendationForm.responsibleProfessionalId || null
+        ...editPayload,
+        idempotencyKey
       });
       if (result?.success === false) {
+        applyPlanningDecisionResult(result, recommendationId);
+        if (result?.data) planningDecisionRequestKeysRef.current.delete(requestScope);
         setPlanningMessage(result?.error || 'Nao foi possivel editar a sugestao agora.');
         return;
       }
       const edited = result.data || editingRecommendation;
-      setPlanningRecommendations((prev) => [edited, ...prev.filter((item) => item.id !== recommendationId)]);
+      planningDecisionRequestKeysRef.current.delete(requestScope);
+      applyPlanningDecisionResult({ ...result, data: edited }, recommendationId);
       setEditingRecommendation(null);
       setPlanningMessage(acceptAfterSave ? 'Edicao salva. Aplicando sugestao...' : 'Sugestao editada e mantida como pendente.');
       planningDecisionInFlightRef.current.delete(recommendationId);

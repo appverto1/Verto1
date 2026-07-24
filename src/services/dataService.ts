@@ -4815,12 +4815,17 @@ export const dataService = {
   async acceptAbaRecommendation(recommendationId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/accept`;
+    const idempotencyKey = String(payload?.idempotencyKey || generateId());
     try {
       const response = await fetchClinical(endpoint, {
         method: 'POST',
-        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        headers: {
+          ...(await getAuthHeaders()),
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': idempotencyKey
+        },
         credentials: 'include',
-        body: JSON.stringify(payload || {})
+        body: JSON.stringify({ ...(payload || {}), idempotencyKey })
       }, { helperName: 'acceptAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
       return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
@@ -4831,12 +4836,17 @@ export const dataService = {
   async rejectAbaRecommendation(recommendationId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/reject`;
+    const idempotencyKey = String(payload?.idempotencyKey || generateId());
     try {
       const response = await fetchClinical(endpoint, {
         method: 'POST',
-        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        headers: {
+          ...(await getAuthHeaders()),
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': idempotencyKey
+        },
         credentials: 'include',
-        body: JSON.stringify(payload || {})
+        body: JSON.stringify({ ...(payload || {}), idempotencyKey })
       }, { helperName: 'rejectAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
       return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
@@ -4847,12 +4857,17 @@ export const dataService = {
   async updateAbaRecommendation(recommendationId: string, patch: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}`;
+    const idempotencyKey = String(patch?.idempotencyKey || generateId());
     try {
       const response = await fetchClinical(endpoint, {
         method: 'PATCH',
-        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        headers: {
+          ...(await getAuthHeaders()),
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': idempotencyKey
+        },
         credentials: 'include',
-        body: JSON.stringify(patch || {})
+        body: JSON.stringify({ ...(patch || {}), idempotencyKey })
       }, { helperName: 'updateAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
       return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
@@ -4879,12 +4894,17 @@ export const dataService = {
   async applyAbaRecommendationToNextSession(recommendationId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/apply-to-next-session`;
+    const idempotencyKey = String(payload?.idempotencyKey || generateId());
     try {
       const response = await fetchClinical(endpoint, {
         method: 'POST',
-        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        headers: {
+          ...(await getAuthHeaders()),
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': idempotencyKey
+        },
         credentials: 'include',
-        body: JSON.stringify(payload || {})
+        body: JSON.stringify({ ...(payload || {}), idempotencyKey })
       }, { helperName: 'applyAbaRecommendationToNextSession', operation: 'write', table: 'aba_next_session_plan_items', hasExplicitColumns: true });
       return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {

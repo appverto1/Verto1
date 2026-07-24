@@ -25,7 +25,7 @@ export type AbaRecommendationType =
   | 'GENERALIZATION';
 
 export type AbaRecommendationPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type AbaRecommendationStatus = 'SUGGESTED' | 'ACCEPTED' | 'EDITED' | 'REJECTED' | 'APPLIED_TO_NEXT_SESSION' | 'EXPIRED';
+export type AbaRecommendationStatus = 'SUGGESTED' | 'ACCEPTED' | 'EDITED' | 'REJECTED' | 'APPLIED_TO_NEXT_SESSION' | 'EXPIRED' | 'SUPERSEDED';
 
 export type AbaClinicalRecommendation = {
   id?: string;
@@ -54,6 +54,13 @@ export type AbaClinicalRecommendation = {
   rejected_by?: string | null;
   rejected_at?: string | null;
   edited_from_id?: string | null;
+  suggestion_key?: string | null;
+  suggestion_key_version?: number | null;
+  canonical_recommendation_id?: string | null;
+  merged_recommendation_ids?: string[];
+  resolved_at?: string | null;
+  resolution_reason?: string | null;
+  decision_event_id?: string | null;
   context_hash: string;
   created_at?: string;
   updated_at?: string;
@@ -462,8 +469,6 @@ export const deduplicateAbaRecommendationsForDecisionQueue = (recommendations: a
   return Array.from(grouped.values());
 };
 
-const recommendationIdSeed = (recommendation: AbaClinicalRecommendation) => buildAbaRecommendationSemanticKey(recommendation);
-
 const stableJson = (value: any): string => {
   if (value === null || value === undefined) return 'null';
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -535,10 +540,7 @@ const makeRecommendation = (
     ...recommendation.evidence,
     suggestionKey
   };
-  return {
-    ...recommendation,
-    id: `rec-${stableHash(recommendationIdSeed(recommendation)).replace(/^ctx_/, '')}`
-  };
+  return recommendation;
 };
 
 const hasCriticalBlocker = (alerts: any[], schedules: any[], now: Date) => {
@@ -1090,7 +1092,6 @@ export function acceptRecommendationForNextSession(input: {
   };
   const planItem: AbaNextSessionPlanItem | null = input.createPlanItem
     ? {
-        id: `plan-${stableHash(`${accepted.id || ''}|${accepted.context_hash}`).replace(/^ctx_/, '')}`,
         organization_id: accepted.organization_id,
         patient_id: accepted.patient_id,
         source_session_id: accepted.source_session_id,
@@ -1111,7 +1112,6 @@ export function acceptRecommendationForNextSession(input: {
     recommendation: accepted,
     planItem,
     auditLog: {
-      id: `audit-${stableHash(`${accepted.id || ''}|${auditAction}`).replace(/^ctx_/, '')}`,
       organization_id: accepted.organization_id,
       patient_id: accepted.patient_id,
       recommendation_id: accepted.id || '',
@@ -1147,7 +1147,6 @@ export function rejectRecommendation(input: {
   return {
     recommendation: rejected,
     auditLog: {
-      id: `audit-${stableHash(`${rejected.id || ''}|rejected|${now}`).replace(/^ctx_/, '')}`,
       organization_id: rejected.organization_id,
       patient_id: rejected.patient_id,
       recommendation_id: rejected.id || '',
