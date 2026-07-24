@@ -28,6 +28,9 @@ const legacySalesForm = read("src/components/SalesLeadForm.tsx");
 const legacyCommercialConfig = read("src/config/commercial.ts");
 const app = read("src/App.tsx");
 const superAdmin = read("src/components/SuperAdminDashboard.tsx");
+const profitabilitySimulator = read(
+  "src/components/SalesProfitabilitySimulator.tsx",
+);
 const subscriptionSummary = read("src/components/SubscriptionDiscountSummary.tsx");
 const salesActivation = read("src/components/SalesActivationAccess.tsx");
 const clinicSettings = read("src/components/ClinicGlobalSettingsPanel.tsx");
@@ -246,16 +249,19 @@ test("webhook e avisos de desconto estão preparados de forma idempotente", () =
   assert.match(migration, /sales_discount_notifications_idempotency_uidx/);
 });
 
-test("painel comercial preserva legado, filtra leads e cria oferta lógica", () => {
+test("painel comercial preserva legado, filtra leads e prepara oferta pelo simulador", () => {
   assert.match(superAdmin, /label="Comercial"/);
   assert.match(superAdmin, /Leads e propostas/);
   assert.match(superAdmin, /checkout legado/i);
   assert.match(superAdmin, /api\/owner\/sales\/leads/);
-  assert.match(superAdmin, /api\/owner\/sales\/offers/);
-  assert.match(superAdmin, /Cupom 6 meses/);
-  assert.match(superAdmin, /Cupom 12 meses/);
-  assert.match(superAdmin, /Cupom 24 meses/);
-  assert.match(superAdmin, /"X-Idempotency-Key": requestKey/);
+  assert.match(superAdmin, /SalesProfitabilitySimulator/);
+  assert.match(profitabilitySimulator, /api\/owner\/sales\/offers/);
+  assert.match(profitabilitySimulator, /discountDurationMonths/);
+  assert.match(profitabilitySimulator, /max=\{36\}/);
+  assert.match(
+    profitabilitySimulator,
+    /'X-Idempotency-Key': requestKey/,
+  );
   assert.match(server, /idempotency_key: requestIdempotencyKey/);
 });
 

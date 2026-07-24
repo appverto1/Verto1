@@ -74,6 +74,16 @@ import {
   normalizePublicSalesWhatsappNumber
 } from './src/constants/salesCommercial';
 import {
+  calculateSalesProfitability,
+  validateSalesSimulationInput,
+  type FixedCostAllocationMethod,
+  type SalesAssumptionSnapshot,
+  type SalesAssumptionValues,
+  type SalesSimulationInput,
+  type SalesUsageProfile,
+  type SimulationValueSource
+} from './src/utils/salesProfitability';
+import {
   buildAbaPromptSnapshot,
   normalizeAbaPromptTypeConfig,
   resolveAbaPromptLevel,
@@ -1712,6 +1722,380 @@ function resolveSalesStripeConfiguration() {
       );
     },
   };
+}
+
+const SALES_SIMULATION_SOURCE_VALUES = new Set<SimulationValueSource>([
+  "actual",
+  "calculated",
+  "estimated",
+  "manual",
+  "unavailable",
+]);
+const SALES_SIMULATION_USAGE_PROFILES = new Set<SalesUsageProfile>([
+  "light",
+  "standard",
+  "intensive",
+  "custom",
+]);
+const SALES_FIXED_ALLOCATION_METHODS = new Set<FixedCostAllocationMethod>([
+  "per_patient",
+  "per_clinic",
+  "none",
+  "custom",
+]);
+const SALES_ASSUMPTION_BASIS_POINTS_KEYS: Array<keyof SalesAssumptionValues> = [
+  "stripeFeeBasisPoints",
+  "revenueTaxBasisPoints",
+  "estimatedDelinquencyBasisPoints",
+  "commercialCommissionBasisPoints",
+  "profitTaxBasisPoints",
+  "minimumMarginBasisPoints",
+  "healthyMarginBasisPoints",
+  "attentionMarginBasisPoints",
+];
+const SALES_ASSUMPTION_CENTS_KEYS: Array<keyof SalesAssumptionValues> = [
+  "stripeFixedFeeCents",
+  "variablePatientCostCents",
+  "variableClinicCostCents",
+  "storageCostCents",
+  "egressCostCents",
+  "processingCostCents",
+  "notificationCostCents",
+  "otherVariableCostCents",
+  "monthlySupportClinicCostCents",
+  "supportPatientCostCents",
+  "monthlyOperationalCostCents",
+  "defaultOnboardingCostCents",
+  "fixedMonthlyEligibleCostCents",
+  "customFixedAllocationCents",
+  "depreciationAmortizationCents",
+  "financialExpensesCents",
+  "otherBelowEbitdaCents",
+];
+const SALES_ASSUMPTION_COUNT_KEYS: Array<keyof SalesAssumptionValues> = [
+  "fixedAllocationPatientCount",
+  "fixedAllocationClinicCount",
+];
+const SALES_USAGE_PROFILE_OVERRIDE_KEYS: Array<keyof SalesAssumptionValues> = [
+  "variablePatientCostCents",
+  "variableClinicCostCents",
+  "storageCostCents",
+  "egressCostCents",
+  "processingCostCents",
+  "notificationCostCents",
+  "otherVariableCostCents",
+  "monthlySupportClinicCostCents",
+  "supportPatientCostCents",
+];
+const SALES_OFFER_SIMULATION_SELECT =
+  "id,lead_id,created_by,status,assumption_set_id,model_version,initial_active_patient_quantity,base_unit_amount_cents,currency,discount_type,discount_percentage,discount_duration_months,offer_validity_days,usage_profile,custom_monthly_cost_cents,onboarding_cost_cents,assumptions_snapshot,results_snapshot,profitability_rating,internal_justification,internal_notes,selected_for_offer_at,created_at,updated_at";
+
+function buildEmptySalesAssumptionValues(): SalesAssumptionValues {
+  return {
+    officialUnitAmountCents: PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents,
+    stripeFeeBasisPoints: null,
+    stripeFixedFeeCents: null,
+    revenueTaxBasisPoints: null,
+    estimatedDelinquencyBasisPoints: null,
+    variablePatientCostCents: null,
+    variableClinicCostCents: null,
+    storageCostCents: null,
+    egressCostCents: null,
+    processingCostCents: null,
+    notificationCostCents: null,
+    otherVariableCostCents: null,
+    monthlySupportClinicCostCents: null,
+    supportPatientCostCents: null,
+    monthlyOperationalCostCents: null,
+    defaultOnboardingCostCents: null,
+    commercialCommissionBasisPoints: null,
+    fixedMonthlyEligibleCostCents: null,
+    fixedAllocationMethod: "none",
+    fixedAllocationPatientCount: null,
+    fixedAllocationClinicCount: null,
+    customFixedAllocationCents: null,
+    depreciationAmortizationCents: null,
+    financialExpensesCents: null,
+    profitTaxBasisPoints: null,
+    otherBelowEbitdaCents: null,
+    minimumMarginBasisPoints: null,
+    healthyMarginBasisPoints: null,
+    attentionMarginBasisPoints: null,
+    usageProfiles: {},
+  };
+}
+
+function normalizeNullableInteger(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+  field: string,
+): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    const error = new Error(`SIMULATION_ASSUMPTION_INVALID:${field}`);
+    (error as any).code = "SIMULATION_INPUT_INVALID";
+    throw error;
+  }
+  return parsed;
+}
+
+function normalizeSalesAssumptionValues(
+  raw: unknown,
+  options: { forceCanonicalPrice?: boolean } = {},
+): SalesAssumptionValues {
+  const source = raw && typeof raw === "object"
+    ? raw as Record<string, any>
+    : {};
+  const fixedAllocationMethod = sanitizeString(
+    source.fixedAllocationMethod,
+    40,
+  ) as FixedCostAllocationMethod;
+  if (!SALES_FIXED_ALLOCATION_METHODS.has(fixedAllocationMethod)) {
+    const error = new Error(
+      "SIMULATION_ASSUMPTION_INVALID:fixedAllocationMethod",
+    );
+    (error as any).code = "SIMULATION_INPUT_INVALID";
+    throw error;
+  }
+
+  const normalized: Record<string, any> = {
+    officialUnitAmountCents: options.forceCanonicalPrice
+      ? PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents
+      : normalizeNullableInteger(
+          source.officialUnitAmountCents,
+          1,
+          100_000_000,
+          "officialUnitAmountCents",
+        ),
+    fixedAllocationMethod,
+  };
+  if (!normalized.officialUnitAmountCents) {
+    normalized.officialUnitAmountCents =
+      PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents;
+  }
+  for (const key of SALES_ASSUMPTION_BASIS_POINTS_KEYS) {
+    normalized[key] = normalizeNullableInteger(
+      source[key],
+      0,
+      10_000,
+      String(key),
+    );
+  }
+  for (const key of SALES_ASSUMPTION_CENTS_KEYS) {
+    normalized[key] = normalizeNullableInteger(
+      source[key],
+      0,
+      1_000_000_000,
+      String(key),
+    );
+  }
+  for (const key of SALES_ASSUMPTION_COUNT_KEYS) {
+    normalized[key] = normalizeNullableInteger(
+      source[key],
+      1,
+      100_000_000,
+      String(key),
+    );
+  }
+
+  const profilesSource = source.usageProfiles;
+  if (
+    profilesSource !== null
+    && profilesSource !== undefined
+    && (typeof profilesSource !== "object" || Array.isArray(profilesSource))
+  ) {
+    const error = new Error("SIMULATION_ASSUMPTION_INVALID:usageProfiles");
+    (error as any).code = "SIMULATION_INPUT_INVALID";
+    throw error;
+  }
+  const usageProfiles: Record<string, Record<string, number | null>> = {};
+  for (const profile of ["light", "standard", "intensive"] as const) {
+    const profileSource = profilesSource?.[profile];
+    if (!profileSource || typeof profileSource !== "object") continue;
+    usageProfiles[profile] = {};
+    for (const key of SALES_USAGE_PROFILE_OVERRIDE_KEYS) {
+      if (!(key in profileSource)) continue;
+      usageProfiles[profile][key] = normalizeNullableInteger(
+        profileSource[key],
+        0,
+        1_000_000_000,
+        `usageProfiles.${profile}.${String(key)}`,
+      );
+    }
+  }
+  normalized.usageProfiles = usageProfiles;
+
+  const healthyMargin = normalized.healthyMarginBasisPoints;
+  const attentionMargin = normalized.attentionMarginBasisPoints;
+  const minimumMargin = normalized.minimumMarginBasisPoints;
+  if (
+    healthyMargin !== null
+    && attentionMargin !== null
+    && healthyMargin < attentionMargin
+  ) {
+    const error = new Error(
+      "SIMULATION_ASSUMPTION_INVALID:healthyMarginBasisPoints",
+    );
+    (error as any).code = "SIMULATION_INPUT_INVALID";
+    throw error;
+  }
+  if (
+    minimumMargin !== null
+    && healthyMargin !== null
+    && minimumMargin > healthyMargin
+  ) {
+    const error = new Error(
+      "SIMULATION_ASSUMPTION_INVALID:minimumMarginBasisPoints",
+    );
+    (error as any).code = "SIMULATION_INPUT_INVALID";
+    throw error;
+  }
+  return normalized as SalesAssumptionValues;
+}
+
+function normalizeSalesAssumptionSourceMetadata(raw: unknown) {
+  const source = raw && typeof raw === "object"
+    ? raw as Record<string, any>
+    : {};
+  const sources: Record<string, SimulationValueSource> = {};
+  const details: Record<string, string> = {};
+  const sourceValues = source.sources && typeof source.sources === "object"
+    ? source.sources as Record<string, unknown>
+    : {};
+  const sourceDetails =
+    source.sourceDetails && typeof source.sourceDetails === "object"
+      ? source.sourceDetails as Record<string, unknown>
+      : {};
+  for (const key of [
+    "officialUnitAmountCents",
+    ...SALES_ASSUMPTION_BASIS_POINTS_KEYS,
+    ...SALES_ASSUMPTION_CENTS_KEYS,
+    ...SALES_ASSUMPTION_COUNT_KEYS,
+  ].map(String)) {
+    const value = sanitizeString(sourceValues[key], 30) as SimulationValueSource;
+    sources[key] = SALES_SIMULATION_SOURCE_VALUES.has(value)
+      ? value
+      : "unavailable";
+    const detail = sanitizeString(sourceDetails[key], 220);
+    if (detail) details[key] = detail;
+  }
+  sources.officialUnitAmountCents = "actual";
+  details.officialUnitAmountCents =
+    "Preço público canônico por paciente ativo.";
+  return {
+    basis: sanitizeString(source.basis || "manual", 40) || "manual",
+    periodStart: sanitizeString(source.periodStart, 40) || null,
+    periodEnd: sanitizeString(source.periodEnd, 40) || null,
+    sources,
+    sourceDetails: details,
+  };
+}
+
+function mapSalesAssumptionSnapshot(row: any): SalesAssumptionSnapshot {
+  const metadata = normalizeSalesAssumptionSourceMetadata(
+    row?.source_metadata,
+  );
+  return {
+    id: sanitizeString(row?.id, 120),
+    version: Number(row?.version || 0),
+    name: sanitizeString(row?.name, 120),
+    effectiveAt: String(row?.effective_at || ""),
+    values: normalizeSalesAssumptionValues(row?.values),
+    sources: metadata.sources as SalesAssumptionSnapshot["sources"],
+    sourceDetails:
+      metadata.sourceDetails as SalesAssumptionSnapshot["sourceDetails"],
+  };
+}
+
+function normalizeStoredSalesAssumptionSnapshot(
+  raw: unknown,
+): SalesAssumptionSnapshot {
+  const source = raw && typeof raw === "object"
+    ? raw as Record<string, any>
+    : {};
+  const id = sanitizeString(source.id, 120);
+  const version = Number(source.version || 0);
+  const name = sanitizeString(source.name, 120);
+  const effectiveAt = sanitizeString(
+    source.effectiveAt || source.effective_at,
+    80,
+  );
+  if (!isUuid(id) || !Number.isInteger(version) || version < 1 || !name) {
+    const error = new Error("SIMULATION_SNAPSHOT_INVALID");
+    (error as any).code = "OFFER_SIMULATION_CHANGED";
+    throw error;
+  }
+  const sources: Record<string, SimulationValueSource> = {};
+  const rawSources = source.sources && typeof source.sources === "object"
+    ? source.sources as Record<string, unknown>
+    : {};
+  for (const [key, value] of Object.entries(rawSources)) {
+    const normalized = sanitizeString(value, 30) as SimulationValueSource;
+    if (SALES_SIMULATION_SOURCE_VALUES.has(normalized)) {
+      sources[key] = normalized;
+    }
+  }
+  const sourceDetails: Record<string, string> = {};
+  const rawDetails =
+    source.sourceDetails && typeof source.sourceDetails === "object"
+      ? source.sourceDetails as Record<string, unknown>
+      : {};
+  for (const [key, value] of Object.entries(rawDetails)) {
+    const detail = sanitizeString(value, 220);
+    if (detail) sourceDetails[key] = detail;
+  }
+  return {
+    id,
+    version,
+    name,
+    effectiveAt,
+    values: normalizeSalesAssumptionValues(source.values),
+    sources: sources as SalesAssumptionSnapshot["sources"],
+    sourceDetails:
+      sourceDetails as SalesAssumptionSnapshot["sourceDetails"],
+  };
+}
+
+function normalizeSalesSimulationRequest(raw: unknown): SalesSimulationInput {
+  const source = raw && typeof raw === "object"
+    ? raw as Record<string, any>
+    : {};
+  const usageProfile = sanitizeString(
+    source.usageProfile || "standard",
+    30,
+  ) as SalesUsageProfile;
+  const input: SalesSimulationInput = {
+    initialActivePatientQuantity: Number(source.initialActivePatientQuantity),
+    baseUnitAmountCents: PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents,
+    discountBasisPoints: Number(source.discountBasisPoints || 0),
+    discountDurationMonths: Number(source.discountDurationMonths || 0),
+    offerValidityDays: Number(source.offerValidityDays || 14),
+    usageProfile,
+    customMonthlyCostCents: Number(source.customMonthlyCostCents || 0),
+    onboardingCostCents: Number(source.onboardingCostCents || 0),
+  };
+  if (!SALES_SIMULATION_USAGE_PROFILES.has(usageProfile)) {
+    input.usageProfile = "invalid" as SalesUsageProfile;
+  }
+  return input;
+}
+
+function isCustomCouponDurationMonths(value: unknown): value is number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 36;
+}
+
+function isSalesOfferStripeReady(offer: any, stripeConfig: ReturnType<
+  typeof resolveSalesStripeConfiguration
+>): boolean {
+  if (!stripeConfig.enabled || !stripeConfig.basePriceId) return false;
+  const discountType = sanitizeString(offer?.discount_type, 20);
+  if (discountType !== "coupon") return true;
+  if (sanitizeString(offer?.stripe_coupon_id, 240)) return true;
+  const duration = Number(offer?.discount_duration_months || 0) || null;
+  return stripeConfig.readyForDuration(duration);
 }
 
 function buildSalesOfferPublicUrl(req: any, token: string): string {
@@ -13887,7 +14271,7 @@ async function startServer() {
             sanitizeString(discount?.promotion_code, 200) || null,
           discount_type: discount ? "coupon" : "none",
           discount_percentage: percentage,
-          discount_duration_months: isCouponDurationMonths(durationMonths)
+          discount_duration_months: isCustomCouponDurationMonths(durationMonths)
             ? durationMonths
             : null,
           discount_started_at: discountStartsAt,
@@ -16836,7 +17220,7 @@ async function startServer() {
     const { data: offer, error } = await supabase
       .from("sales_offers")
       .select(
-        "id,lead_id,status,base_unit_amount_cents,currency,initial_active_patient_quantity,discount_duration_months,discount_type,discount_percentage,stripe_checkout_session_id,expires_at,revoked_at,accepted_at",
+        "id,lead_id,status,base_unit_amount_cents,currency,initial_active_patient_quantity,discount_duration_months,discount_type,discount_percentage,stripe_coupon_id,promotional_unit_amount_cents,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,stripe_checkout_session_id,expires_at,revoked_at,accepted_at",
       )
       .eq("public_token_hash", tokenHash)
       .maybeSingle();
@@ -16877,6 +17261,31 @@ async function startServer() {
         const { offer, lead } = loaded;
         const stripeConfig = resolveSalesStripeConfiguration();
         const duration = Number(offer.discount_duration_months || 0) || null;
+        const baseUnitAmountCents = Number(
+          offer.base_unit_amount_cents ||
+            PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents,
+        );
+        const quantity = Number(offer.initial_active_patient_quantity || 1);
+        const discountPercentage =
+          offer.discount_percentage == null
+            ? null
+            : Number(offer.discount_percentage);
+        const promotionalUnitAmountCents = Number(
+          offer.promotional_unit_amount_cents ??
+            Math.round(
+              baseUnitAmountCents
+                * (100 - Number(discountPercentage || 0))
+                / 100,
+            ),
+        );
+        const promotionalMonthlyAmountCents = Number(
+          offer.promotional_monthly_amount_cents ??
+            promotionalUnitAmountCents * quantity,
+        );
+        const postDiscountMonthlyAmountCents = Number(
+          offer.post_discount_monthly_amount_cents ??
+            baseUnitAmountCents * quantity,
+        );
         if (
           sanitizeString(offer.status, 40) === "ready" ||
           sanitizeString(offer.status, 40) === "sent"
@@ -16909,28 +17318,23 @@ async function startServer() {
           offer: {
             leadName: sanitizeString(lead.name, 180),
             clinicName: sanitizeString(lead.clinic_name, 180) || null,
-            baseUnitAmountCents: Number(
-              offer.base_unit_amount_cents ||
-                PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents,
-            ),
+            baseUnitAmountCents,
             currency:
               sanitizeString(offer.currency, 12) ||
               PUBLIC_ACTIVE_PATIENT_PRICE.currency,
-            initialActivePatientQuantity: Number(
-              offer.initial_active_patient_quantity || 1,
-            ),
+            initialActivePatientQuantity: quantity,
             discountType:
               sanitizeString(offer.discount_type, 20) === "coupon"
                 ? "coupon"
                 : "none",
             discountDurationMonths: duration,
-            discountPercentage:
-              offer.discount_percentage == null
-                ? null
-                : Number(offer.discount_percentage),
+            discountPercentage,
+            promotionalUnitAmountCents,
+            promotionalMonthlyAmountCents,
+            postDiscountMonthlyAmountCents,
             expiresAt: offer.expires_at,
             status: offer.status,
-            stripeReady: stripeConfig.readyForDuration(duration),
+            stripeReady: isSalesOfferStripeReady(offer, stripeConfig),
           },
         });
       } catch (error: any) {
@@ -16970,7 +17374,7 @@ async function startServer() {
         const { offer, lead, token } = loaded;
         const duration = Number(offer.discount_duration_months || 0) || null;
         const stripeConfig = resolveSalesStripeConfiguration();
-        if (!stripeConfig.enabled || !stripeConfig.readyForDuration(duration)) {
+        if (!isSalesOfferStripeReady(offer, stripeConfig)) {
           return res.status(503).json({
             success: false,
             error: "STRIPE_SALES_CONFIGURATION_PENDING",
@@ -17080,10 +17484,15 @@ async function startServer() {
           }
         }
 
-        const discounts =
+        const customCouponId = sanitizeString(offer.stripe_coupon_id, 240);
+        const legacyCouponId =
           duration && isCouponDurationMonths(duration)
-            ? [{ coupon: stripeConfig.couponIds[duration] }]
-            : undefined;
+            ? stripeConfig.couponIds[duration]
+            : "";
+        const discountCouponId = customCouponId || legacyCouponId;
+        const discounts = discountCouponId
+          ? [{ coupon: discountCouponId }]
+          : undefined;
         const session = await stripe.checkout.sessions.create(
           {
             payment_method_types: ["card"],
@@ -67194,6 +67603,1078 @@ async function startServer() {
   );
 
   app.get(
+    "/api/owner/sales/profitability-assumptions",
+    checkAuth,
+    checkOwner,
+    async (_req: any, res) => {
+      try {
+        const { data, error } = await supabase
+          .from("sales_financial_assumption_sets")
+          .select(
+            "id,version,name,effective_at,values,source_metadata,created_by,created_at",
+          )
+          .order("version", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (error) throw error;
+        return res.json({
+          success: true,
+          assumptionSet: data
+            ? {
+                ...mapSalesAssumptionSnapshot(data),
+                createdBy: data.created_by,
+                createdAt: data.created_at,
+                sourceMetadata: normalizeSalesAssumptionSourceMetadata(
+                  data.source_metadata,
+                ),
+              }
+            : null,
+          editableTemplate: buildEmptySalesAssumptionValues(),
+          officialPrice: PUBLIC_ACTIVE_PATIENT_PRICE,
+          actualDataAvailability: {
+            currentMonth: {
+              available: false,
+              reason:
+                "A DRE atual não possui denominadores auditáveis de clínicas e pacientes para rateio comercial.",
+            },
+            lastClosedMonth: {
+              available: false,
+              reason:
+                "Não há fechamento com custos classificados por paciente ou clínica.",
+            },
+            last3Months: {
+              available: false,
+              reason:
+                "Média não calculada sem base homogênea e denominadores persistidos.",
+            },
+            last6Months: {
+              available: false,
+              reason:
+                "Média não calculada sem base homogênea e denominadores persistidos.",
+            },
+            manual: { available: true, reason: null },
+          },
+        });
+      } catch (error: any) {
+        const missingSchema =
+          isMissingRelationError(error) || extractMissingColumnName(error);
+        console.error("[Sales Profitability] Falha ao carregar premissas.", {
+          code: sanitizeString(error?.code, 80),
+          message: sanitizeString(error?.message || String(error), 200),
+        });
+        return res.status(missingSchema ? 503 : 500).json({
+          success: false,
+          code: missingSchema
+            ? "SIMULATION_ASSUMPTIONS_MISSING"
+            : "SIMULATION_ASSUMPTIONS_UNAVAILABLE",
+          error: missingSchema
+            ? "A estrutura do simulador ainda não foi aplicada."
+            : "Não foi possível carregar as premissas financeiras.",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/profitability-assumptions",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const name = sanitizeString(req.body?.name, 120);
+      if (!isUuid(actorUserId) || name.length < 2) {
+        return res.status(400).json({
+          success: false,
+          code: "SIMULATION_INPUT_INVALID",
+          error: "Informe um nome para a versão das premissas.",
+        });
+      }
+      try {
+        const values = normalizeSalesAssumptionValues(req.body?.values, {
+          forceCanonicalPrice: true,
+        });
+        const sourceMetadata = normalizeSalesAssumptionSourceMetadata(
+          req.body?.sourceMetadata,
+        );
+        const { data, error } = await supabase.rpc(
+          "create_sales_financial_assumption_set",
+          {
+            p_name: name,
+            p_values: values,
+            p_source_metadata: sourceMetadata,
+            p_created_by: actorUserId,
+          },
+        );
+        if (error) throw error;
+        if (!data) throw new Error("SIMULATION_ASSUMPTION_NOT_PERSISTED");
+        const row = Array.isArray(data) ? data[0] : data;
+        return res.status(201).json({
+          success: true,
+          assumptionSet: {
+            ...mapSalesAssumptionSnapshot(row),
+            createdBy: row.created_by,
+            createdAt: row.created_at,
+            sourceMetadata: normalizeSalesAssumptionSourceMetadata(
+              row.source_metadata,
+            ),
+          },
+        });
+      } catch (error: any) {
+        const code = sanitizeString(
+          error?.code || error?.message,
+          160,
+        );
+        const inputInvalid =
+          code.includes("SIMULATION_INPUT_INVALID")
+          || code.includes("SIMULATION_ASSUMPTION_INVALID");
+        console.error("[Sales Profitability] Falha ao salvar premissas.", {
+          code: sanitizeString(error?.code, 80),
+          message: sanitizeString(error?.message || String(error), 200),
+        });
+        return res.status(inputInvalid ? 422 : 500).json({
+          success: false,
+          code: inputInvalid
+            ? "SIMULATION_INPUT_INVALID"
+            : "SIMULATION_ASSUMPTION_PERSISTENCE_FAILED",
+          error: inputInvalid
+            ? "Revise os valores e as faixas das premissas."
+            : "Não foi possível criar a nova versão das premissas.",
+        });
+      }
+    },
+  );
+
+  app.get(
+    "/api/owner/sales/leads/:leadId/simulations",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const leadId = sanitizeString(req.params?.leadId, 120);
+      if (!isUuid(leadId)) {
+        return res.status(400).json({
+          success: false,
+          code: "SIMULATION_INPUT_INVALID",
+          error: "Lead inválido.",
+        });
+      }
+      try {
+        const [leadResult, simulationsResult, offersResult] =
+          await Promise.all([
+            supabase
+              .from("sales_leads")
+              .select("id")
+              .eq("id", leadId)
+              .is("deleted_at", null)
+              .maybeSingle(),
+            supabase
+              .from("sales_offer_simulations")
+              .select(SALES_OFFER_SIMULATION_SELECT)
+              .eq("lead_id", leadId)
+              .is("deleted_at", null)
+              .order("created_at", { ascending: false })
+              .limit(100),
+            supabase
+              .from("sales_offers")
+              .select(
+                "id,simulation_id,status,expires_at,created_at",
+              )
+              .eq("lead_id", leadId)
+              .not("simulation_id", "is", null)
+              .order("created_at", { ascending: false }),
+          ]);
+        if (leadResult.error) throw leadResult.error;
+        if (!leadResult.data) {
+          return res.status(404).json({
+            success: false,
+            code: "SIMULATION_LEAD_NOT_FOUND",
+            error: "Lead não encontrado.",
+          });
+        }
+        if (simulationsResult.error) throw simulationsResult.error;
+        if (offersResult.error) throw offersResult.error;
+        const offerBySimulationId = new Map(
+          (offersResult.data || []).map((offer: any) => [
+            sanitizeString(offer.simulation_id, 120),
+            offer,
+          ]),
+        );
+        return res.json({
+          success: true,
+          simulations: (simulationsResult.data || []).map(
+            (simulation: any) => ({
+              ...simulation,
+              offer:
+                offerBySimulationId.get(
+                  sanitizeString(simulation.id, 120),
+                ) || null,
+            }),
+          ),
+        });
+      } catch (error: any) {
+        console.error("[Sales Profitability] Falha ao listar simulações.", {
+          leadId,
+          code: sanitizeString(error?.code, 80),
+          message: sanitizeString(error?.message || String(error), 200),
+        });
+        return res.status(500).json({
+          success: false,
+          code: "SIMULATION_LIST_FAILED",
+          error: "Não foi possível carregar as simulações deste lead.",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/leads/:leadId/simulations",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const leadId = sanitizeString(req.params?.leadId, 120);
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const assumptionSetId = sanitizeString(
+        req.body?.assumptionSetId,
+        120,
+      );
+      const idempotencyKey = sanitizeString(
+        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
+        240,
+      );
+      if (
+        !isUuid(leadId)
+        || !isUuid(actorUserId)
+        || !isUuid(assumptionSetId)
+        || idempotencyKey.length < 12
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "SIMULATION_INPUT_INVALID",
+          error: "Dados da simulação inválidos.",
+        });
+      }
+      try {
+        const simulationInput = normalizeSalesSimulationRequest(req.body);
+        const invalidFields = validateSalesSimulationInput(simulationInput);
+        if (invalidFields.length > 0) {
+          return res.status(422).json({
+            success: false,
+            code: "SIMULATION_INPUT_INVALID",
+            fields: invalidFields,
+            error: "Revise os campos da simulação.",
+          });
+        }
+        const [leadResult, assumptionResult, existingResult] =
+          await Promise.all([
+            supabase
+              .from("sales_leads")
+              .select("id")
+              .eq("id", leadId)
+              .is("deleted_at", null)
+              .maybeSingle(),
+            supabase
+              .from("sales_financial_assumption_sets")
+              .select(
+                "id,version,name,effective_at,values,source_metadata",
+              )
+              .eq("id", assumptionSetId)
+              .maybeSingle(),
+            supabase
+              .from("sales_offer_simulations")
+              .select(SALES_OFFER_SIMULATION_SELECT)
+              .eq("created_by", actorUserId)
+              .eq("idempotency_key", idempotencyKey)
+              .maybeSingle(),
+          ]);
+        if (leadResult.error) throw leadResult.error;
+        if (!leadResult.data) {
+          return res.status(404).json({
+            success: false,
+            code: "SIMULATION_LEAD_NOT_FOUND",
+            error: "Lead não encontrado.",
+          });
+        }
+        if (assumptionResult.error) throw assumptionResult.error;
+        if (!assumptionResult.data) {
+          return res.status(422).json({
+            success: false,
+            code: "SIMULATION_ASSUMPTIONS_MISSING",
+            error: "Selecione uma versão de premissas válida.",
+          });
+        }
+        const assumptionSnapshot = mapSalesAssumptionSnapshot(
+          assumptionResult.data,
+        );
+        const results = calculateSalesProfitability(
+          simulationInput,
+          assumptionSnapshot,
+        );
+        const justification = sanitizeString(
+          req.body?.internalJustification,
+          1500,
+        );
+        if (results.requiresJustification && justification.length < 12) {
+          return res.status(422).json({
+            success: false,
+            code: "SIMULATION_JUSTIFICATION_REQUIRED",
+            error:
+              "Informe uma justificativa administrativa para esta margem.",
+          });
+        }
+
+        if (existingResult.error) throw existingResult.error;
+        if (existingResult.data) {
+          const existingInput =
+            existingResult.data.results_snapshot?.input || {};
+          const sameRequest =
+            existingResult.data.lead_id === leadId
+            && existingResult.data.assumption_set_id === assumptionSetId
+            && JSON.stringify(existingInput) ===
+              JSON.stringify(simulationInput);
+          if (!sameRequest) {
+            return res.status(409).json({
+              success: false,
+              code: "SIMULATION_VERSION_CONFLICT",
+              error:
+                "Esta chave já foi usada para outra simulação. Recalcule antes de salvar.",
+            });
+          }
+          return res.json({
+            success: true,
+            simulation: existingResult.data,
+            idempotent: true,
+          });
+        }
+
+        const discountType =
+          simulationInput.discountBasisPoints > 0 ? "coupon" : "none";
+        const { data: simulation, error: insertError } = await supabase
+          .from("sales_offer_simulations")
+          .insert([
+            {
+              lead_id: leadId,
+              created_by: actorUserId,
+              status: "saved",
+              assumption_set_id: assumptionSetId,
+              model_version: results.modelVersion,
+              initial_active_patient_quantity:
+                simulationInput.initialActivePatientQuantity,
+              base_unit_amount_cents: simulationInput.baseUnitAmountCents,
+              currency: PUBLIC_ACTIVE_PATIENT_PRICE.currency,
+              discount_type: discountType,
+              discount_percentage:
+                simulationInput.discountBasisPoints / 100,
+              discount_duration_months:
+                discountType === "coupon"
+                  ? simulationInput.discountDurationMonths
+                  : null,
+              offer_validity_days: simulationInput.offerValidityDays,
+              usage_profile: simulationInput.usageProfile,
+              custom_monthly_cost_cents:
+                simulationInput.customMonthlyCostCents,
+              onboarding_cost_cents: simulationInput.onboardingCostCents,
+              assumptions_snapshot: assumptionSnapshot,
+              results_snapshot: results,
+              profitability_rating: results.rating,
+              internal_justification: justification || null,
+              internal_notes:
+                sanitizeString(req.body?.internalNotes, 2000) || null,
+              idempotency_key: idempotencyKey,
+            },
+          ])
+          .select(SALES_OFFER_SIMULATION_SELECT)
+          .single();
+        if (insertError) {
+          if (String(insertError.code || "") === "23505") {
+            const { data: concurrentSimulation, error: concurrentError } =
+              await supabase
+                .from("sales_offer_simulations")
+                .select(SALES_OFFER_SIMULATION_SELECT)
+                .eq("created_by", actorUserId)
+                .eq("idempotency_key", idempotencyKey)
+                .maybeSingle();
+            if (concurrentError) throw concurrentError;
+            if (concurrentSimulation) {
+              return res.json({
+                success: true,
+                simulation: concurrentSimulation,
+                idempotent: true,
+              });
+            }
+          }
+          throw insertError;
+        }
+        const { error: eventError } = await supabase
+          .from("sales_lead_events")
+          .upsert(
+            [
+              {
+                lead_id: leadId,
+                event_type: "lead_updated",
+                actor_user_id: actorUserId,
+                metadata: {
+                  action: "profitability_simulation_created",
+                  simulation_id: simulation.id,
+                  assumption_version: assumptionSnapshot.version,
+                  profitability_rating: results.rating,
+                },
+                idempotency_key: `simulation-created:${simulation.id}`,
+              },
+            ],
+            { onConflict: "idempotency_key", ignoreDuplicates: true },
+          );
+        if (eventError) throw eventError;
+        return res.status(201).json({
+          success: true,
+          simulation,
+          idempotent: false,
+        });
+      } catch (error: any) {
+        const rawCode = sanitizeString(
+          error?.code || error?.message,
+          160,
+        );
+        const inputInvalid = rawCode.includes("SIMULATION_INPUT_INVALID");
+        console.error("[Sales Profitability] Falha ao salvar simulação.", {
+          leadId,
+          code: sanitizeString(error?.code, 80),
+          message: sanitizeString(error?.message || String(error), 220),
+        });
+        return res.status(inputInvalid ? 422 : 500).json({
+          success: false,
+          code: inputInvalid
+            ? "SIMULATION_INPUT_INVALID"
+            : "SIMULATION_PERSISTENCE_FAILED",
+          error: inputInvalid
+            ? "Revise os dados informados."
+            : "A simulação não pôde ser salva.",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/leads/:leadId/simulations/:simulationId/select",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const leadId = sanitizeString(req.params?.leadId, 120);
+      const simulationId = sanitizeString(req.params?.simulationId, 120);
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      if (
+        !isUuid(leadId)
+        || !isUuid(simulationId)
+        || !isUuid(actorUserId)
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "SIMULATION_INPUT_INVALID",
+          error: "Simulação inválida.",
+        });
+      }
+      try {
+        const now = new Date().toISOString();
+        const { data, error } = await supabase
+          .from("sales_offer_simulations")
+          .update({
+            status: "selected",
+            selected_for_offer_at: now,
+            updated_at: now,
+          })
+          .eq("id", simulationId)
+          .eq("lead_id", leadId)
+          .is("deleted_at", null)
+          .in("status", ["saved", "selected"])
+          .select(
+            "id,lead_id,status,selected_for_offer_at,updated_at",
+          )
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) {
+          return res.status(409).json({
+            success: false,
+            code: "SIMULATION_VERSION_CONFLICT",
+            error:
+              "Esta simulação já foi convertida ou não está mais disponível.",
+          });
+        }
+        const { error: eventError } = await supabase
+          .from("sales_lead_events")
+          .upsert(
+            [
+              {
+                lead_id: leadId,
+                event_type: "lead_updated",
+                actor_user_id: actorUserId,
+                metadata: {
+                  action: "profitability_simulation_selected",
+                  simulation_id: simulationId,
+                },
+                idempotency_key: `simulation-selected:${simulationId}`,
+              },
+            ],
+            { onConflict: "idempotency_key", ignoreDuplicates: true },
+          );
+        if (eventError) throw eventError;
+        return res.json({ success: true, simulation: data });
+      } catch (error: any) {
+        console.error("[Sales Profitability] Falha ao selecionar simulação.", {
+          leadId,
+          simulationId,
+          code: sanitizeString(error?.code, 80),
+        });
+        return res.status(500).json({
+          success: false,
+          code: "SIMULATION_SELECTION_FAILED",
+          error: "Não foi possível selecionar a simulação.",
+        });
+      }
+    },
+  );
+
+  const prepareSalesOfferFromSimulation = async (
+    req: any,
+    res: any,
+    params: {
+      leadId: string;
+      simulationId: string;
+      actorUserId: string;
+      idempotencyKey: string;
+    },
+  ) => {
+    const { leadId, simulationId, actorUserId, idempotencyKey } = params;
+    if (
+      req.session?.user?.role !== "owner"
+      || !hasVerifiedOwnerMfaSession(req.session?.user)
+    ) {
+      return res.status(403).json({
+        success: false,
+        code: "SIMULATION_ACCESS_DENIED",
+        error: "Esta ação exige acesso owner com MFA validado.",
+      });
+    }
+    if (
+      !isUuid(leadId)
+      || !isUuid(simulationId)
+      || !isUuid(actorUserId)
+      || idempotencyKey.length < 12
+    ) {
+      return res.status(400).json({
+        success: false,
+        code: "OFFER_SIMULATION_REQUIRED",
+        error: "Selecione uma simulação salva antes de preparar a oferta.",
+      });
+    }
+
+    const offerSelect =
+      "id,lead_id,simulation_id,status,base_unit_amount_cents,currency,initial_active_patient_quantity,discount_duration_months,discount_type,discount_percentage,stripe_coupon_id,promotional_unit_amount_cents,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,expires_at,created_by,idempotency_key,created_at";
+    const stripeConfig = resolveSalesStripeConfiguration();
+
+    const ensureStripeDiscount = async (offer: any, simulation: any) => {
+      const discountPercentage = Number(
+        simulation.discount_percentage || 0,
+      );
+      const duration = Number(
+        simulation.discount_duration_months || 0,
+      );
+      const requiresCoupon =
+        sanitizeString(simulation.discount_type, 20) === "coupon";
+      if (!requiresCoupon) {
+        if (sanitizeString(offer.status, 40) !== "ready") {
+          const { data, error } = await supabase
+            .from("sales_offers")
+            .update({
+              status: "ready",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", offer.id)
+            .eq("simulation_id", simulation.id)
+            .select(offerSelect)
+            .single();
+          if (error) throw error;
+          return data;
+        }
+        return offer;
+      }
+      if (
+        !Number.isFinite(discountPercentage)
+        || discountPercentage <= 0
+        || discountPercentage > 100
+        || !isCustomCouponDurationMonths(duration)
+      ) {
+        const error = new Error("CUSTOM_DISCOUNT_INVALID");
+        (error as any).code = "CUSTOM_DISCOUNT_INVALID";
+        throw error;
+      }
+      if (!stripeConfig.enabled || !stripeConfig.basePriceId) {
+        const error = new Error("CUSTOM_DISCOUNT_STRIPE_UNAVAILABLE");
+        (error as any).code = "CUSTOM_DISCOUNT_STRIPE_UNAVAILABLE";
+        throw error;
+      }
+      if (sanitizeString(offer.stripe_coupon_id, 240)) {
+        if (sanitizeString(offer.status, 40) === "ready") return offer;
+        const { data, error } = await supabase
+          .from("sales_offers")
+          .update({
+            status: "ready",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", offer.id)
+          .eq("simulation_id", simulation.id)
+          .select(offerSelect)
+          .single();
+        if (error) throw error;
+        return data;
+      }
+
+      const stripe = getStripe();
+      let price: Stripe.Price;
+      try {
+        price = await stripe.prices.retrieve(stripeConfig.basePriceId);
+      } catch (error: any) {
+        const wrapped = new Error(
+          error?.code === "resource_missing"
+            ? "CUSTOM_DISCOUNT_MODE_MISMATCH"
+            : "CUSTOM_DISCOUNT_STRIPE_UNAVAILABLE",
+        );
+        (wrapped as any).code = wrapped.message;
+        throw wrapped;
+      }
+      if (
+        !price.active
+        || price.type !== "recurring"
+        || Number(price.unit_amount || 0)
+          !== PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents
+      ) {
+        const error = new Error("CUSTOM_DISCOUNT_MODE_MISMATCH");
+        (error as any).code = "CUSTOM_DISCOUNT_MODE_MISMATCH";
+        throw error;
+      }
+      const productId =
+        typeof price.product === "string" ? price.product : price.product?.id;
+      let coupon: Stripe.Coupon;
+      try {
+        coupon = await stripe.coupons.create(
+          {
+            percent_off: discountPercentage,
+            duration: "repeating",
+            duration_in_months: duration,
+            name: `Oferta Verto ${String(offer.id).slice(0, 8)}`,
+            applies_to: productId
+              ? { products: [productId] }
+              : undefined,
+            metadata: {
+              flowType: "sales_assisted_signup",
+              offerId: String(offer.id),
+              leadId,
+              simulationId,
+            },
+          },
+          {
+            idempotencyKey: `sales-offer-coupon:${offer.id}`,
+          },
+        );
+      } catch (error: any) {
+        const wrapped = new Error("CUSTOM_DISCOUNT_CREATION_FAILED");
+        (wrapped as any).code = "CUSTOM_DISCOUNT_CREATION_FAILED";
+        (wrapped as any).cause = error;
+        throw wrapped;
+      }
+      const { data: persistedOffer, error: persistenceError } =
+        await supabase
+          .from("sales_offers")
+          .update({
+            stripe_coupon_id: coupon.id,
+            status: "ready",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", offer.id)
+          .eq("simulation_id", simulation.id)
+          .select(offerSelect)
+          .single();
+      if (persistenceError || !persistedOffer) {
+        const error = new Error("CUSTOM_DISCOUNT_PERSISTENCE_FAILED");
+        (error as any).code = "CUSTOM_DISCOUNT_PERSISTENCE_FAILED";
+        (error as any).cause = persistenceError || null;
+        throw error;
+      }
+      return persistedOffer;
+    };
+
+    const serializePreparedOffer = (
+      offer: any,
+      rawToken: string,
+      idempotent: boolean,
+    ) => {
+      const stripeReady = isSalesOfferStripeReady(offer, stripeConfig);
+      return res.status(idempotent ? 200 : 201).json({
+        success: true,
+        offerId: offer.id,
+        offer,
+        publicUrl: stripeReady
+          ? buildSalesOfferPublicUrl(req, rawToken)
+          : null,
+        status: offer.status,
+        stripeReady,
+        idempotent,
+        message: idempotent
+          ? "A mesma proposta individual foi recuperada."
+          : "Proposta individual criada e pronta para envio.",
+      });
+    };
+    const finalizePreparedOffer = async (
+      offer: any,
+      storedInput: SalesSimulationInput,
+      recalculated: ReturnType<typeof calculateSalesProfitability>,
+    ) => {
+      const now = new Date().toISOString();
+      const [simulationUpdate, leadUpdate, eventUpsert] =
+        await Promise.all([
+          supabase
+            .from("sales_offer_simulations")
+            .update({ status: "offered", updated_at: now })
+            .eq("id", simulationId)
+            .eq("lead_id", leadId)
+            .in("status", ["saved", "selected", "offered"]),
+          supabase
+            .from("sales_leads")
+            .update({
+              status: "proposal_preparing",
+              updated_at: now,
+            })
+            .eq("id", leadId)
+            .is("deleted_at", null),
+          supabase
+            .from("sales_lead_events")
+            .upsert(
+              [
+                {
+                  lead_id: leadId,
+                  event_type: "proposal_created",
+                  actor_user_id: actorUserId,
+                  metadata: {
+                    offer_id: offer.id,
+                    simulation_id: simulationId,
+                    discount_percentage:
+                      storedInput.discountBasisPoints / 100,
+                    duration_months:
+                      storedInput.discountDurationMonths || null,
+                    profitability_rating: recalculated.rating,
+                  },
+                  idempotency_key: `proposal-created:${offer.id}`,
+                },
+              ],
+              { onConflict: "idempotency_key", ignoreDuplicates: true },
+            ),
+        ]);
+      const persistenceError = [
+        simulationUpdate,
+        leadUpdate,
+        eventUpsert,
+      ].find((result: any) => result?.error)?.error;
+      if (persistenceError) {
+        const error = new Error("CUSTOM_DISCOUNT_PERSISTENCE_FAILED");
+        (error as any).code = "CUSTOM_DISCOUNT_PERSISTENCE_FAILED";
+        (error as any).cause = persistenceError;
+        throw error;
+      }
+    };
+
+    try {
+      const [leadResult, simulationResult, offerBySimulationResult] =
+        await Promise.all([
+          supabase
+            .from("sales_leads")
+            .select("id,status")
+            .eq("id", leadId)
+            .is("deleted_at", null)
+            .maybeSingle(),
+          supabase
+            .from("sales_offer_simulations")
+            .select(
+              "id,lead_id,created_by,status,assumption_set_id,model_version,initial_active_patient_quantity,base_unit_amount_cents,currency,discount_type,discount_percentage,discount_duration_months,offer_validity_days,usage_profile,custom_monthly_cost_cents,onboarding_cost_cents,assumptions_snapshot,results_snapshot,profitability_rating,internal_justification,internal_notes,selected_for_offer_at,created_at,updated_at",
+            )
+            .eq("id", simulationId)
+            .eq("lead_id", leadId)
+            .is("deleted_at", null)
+            .maybeSingle(),
+          supabase
+            .from("sales_offers")
+            .select(offerSelect)
+            .eq("simulation_id", simulationId)
+            .maybeSingle(),
+        ]);
+      if (leadResult.error) throw leadResult.error;
+      if (!leadResult.data) {
+        return res.status(404).json({
+          success: false,
+          code: "SIMULATION_LEAD_NOT_FOUND",
+          error: "Lead não encontrado.",
+        });
+      }
+      if (simulationResult.error) throw simulationResult.error;
+      const simulation = simulationResult.data;
+      if (!simulation) {
+        return res.status(404).json({
+          success: false,
+          code: "OFFER_SIMULATION_REQUIRED",
+          error: "Simulação não encontrada.",
+        });
+      }
+      if (offerBySimulationResult.error) {
+        throw offerBySimulationResult.error;
+      }
+
+      const storedAssumptions = normalizeStoredSalesAssumptionSnapshot(
+        simulation.assumptions_snapshot,
+      );
+      const storedInput: SalesSimulationInput = {
+        initialActivePatientQuantity: Number(
+          simulation.initial_active_patient_quantity,
+        ),
+        baseUnitAmountCents: Number(simulation.base_unit_amount_cents),
+        discountBasisPoints: Math.round(
+          Number(simulation.discount_percentage || 0) * 100,
+        ),
+        discountDurationMonths: Number(
+          simulation.discount_duration_months || 0,
+        ),
+        offerValidityDays: Number(simulation.offer_validity_days || 14),
+        usageProfile: sanitizeString(
+          simulation.usage_profile,
+          30,
+        ) as SalesUsageProfile,
+        customMonthlyCostCents: Number(
+          simulation.custom_monthly_cost_cents || 0,
+        ),
+        onboardingCostCents: Number(
+          simulation.onboarding_cost_cents || 0,
+        ),
+      };
+      const recalculated = calculateSalesProfitability(
+        storedInput,
+        storedAssumptions,
+      );
+      const storedResult = simulation.results_snapshot || {};
+      const snapshotMatches =
+        simulation.model_version === recalculated.modelVersion
+        && Number(storedResult.promotionalUnitAmountCents)
+          === recalculated.promotionalUnitAmountCents
+        && Number(storedResult.promotionalMonthlyRevenueCents)
+          === recalculated.promotionalMonthlyRevenueCents
+        && sanitizeString(storedResult.rating, 40) === recalculated.rating
+        && Number(storedResult?.input?.discountBasisPoints)
+          === storedInput.discountBasisPoints;
+      if (!snapshotMatches) {
+        return res.status(409).json({
+          success: false,
+          code: "OFFER_SIMULATION_CHANGED",
+          error:
+            "O snapshot da simulação divergiu. Duplique e salve uma nova simulação.",
+        });
+      }
+      if (
+        recalculated.rating === "insufficient_data"
+        || recalculated.missingAssumptions.length > 0
+      ) {
+        return res.status(422).json({
+          success: false,
+          code: "SIMULATION_FINANCIAL_DATA_INSUFFICIENT",
+          error:
+            "Complete as premissas financeiras obrigatórias antes de preparar a oferta.",
+        });
+      }
+      if (
+        recalculated.requiresJustification
+        && sanitizeString(
+          simulation.internal_justification,
+          1500,
+        ).length < 12
+      ) {
+        return res.status(422).json({
+          success: false,
+          code: "SIMULATION_JUSTIFICATION_REQUIRED",
+          error:
+            "Esta oferta exige uma justificativa administrativa antes do preparo.",
+        });
+      }
+
+      if (offerBySimulationResult.data) {
+        const existingOffer = offerBySimulationResult.data;
+        const existingToken = deriveSalesOfferPublicToken(
+          sanitizeString(existingOffer.created_by, 120),
+          sanitizeString(existingOffer.idempotency_key, 240),
+        );
+        const readyOffer = await ensureStripeDiscount(
+          existingOffer,
+          simulation,
+        );
+        await finalizePreparedOffer(
+          readyOffer,
+          storedInput,
+          recalculated,
+        );
+        return serializePreparedOffer(readyOffer, existingToken, true);
+      }
+
+      const token = deriveSalesOfferPublicToken(
+        actorUserId,
+        idempotencyKey,
+      );
+      const expiresAt = new Date(
+        Date.now()
+          + storedInput.offerValidityDays * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      const { data: insertedOffer, error: insertError } = await supabase
+        .from("sales_offers")
+        .insert([
+          {
+            lead_id: leadId,
+            simulation_id: simulationId,
+            simulation_snapshot: {
+              modelVersion: recalculated.modelVersion,
+              assumptionSet: storedAssumptions,
+              input: storedInput,
+              results: recalculated,
+              createdAt: simulation.created_at,
+            },
+            status: "draft",
+            base_unit_amount_cents:
+              PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents,
+            currency: PUBLIC_ACTIVE_PATIENT_PRICE.currency,
+            initial_active_patient_quantity:
+              storedInput.initialActivePatientQuantity,
+            discount_duration_months:
+              storedInput.discountBasisPoints > 0
+                ? storedInput.discountDurationMonths
+                : null,
+            discount_type:
+              storedInput.discountBasisPoints > 0 ? "coupon" : "none",
+            discount_percentage: storedInput.discountBasisPoints / 100,
+            promotional_unit_amount_cents:
+              recalculated.promotionalUnitAmountCents,
+            promotional_monthly_amount_cents:
+              recalculated.promotionalMonthlyRevenueCents,
+            post_discount_monthly_amount_cents:
+              recalculated.officialMonthlyRevenueCents,
+            internal_justification:
+              sanitizeString(
+                simulation.internal_justification,
+                1500,
+              ) || null,
+            public_token_hash: hashSalesOfferToken(token),
+            commercial_notes:
+              sanitizeString(simulation.internal_notes, 1500) || null,
+            expires_at: expiresAt,
+            created_by: actorUserId,
+            idempotency_key: idempotencyKey,
+          },
+        ])
+        .select(offerSelect)
+        .single();
+      if (insertError) {
+        if (String(insertError.code || "") === "23505") {
+          const { data: concurrentOffer, error: concurrentError } =
+            await supabase
+              .from("sales_offers")
+              .select(offerSelect)
+              .eq("simulation_id", simulationId)
+              .maybeSingle();
+          if (concurrentError) throw concurrentError;
+          if (concurrentOffer) {
+            const concurrentToken = deriveSalesOfferPublicToken(
+              sanitizeString(concurrentOffer.created_by, 120),
+              sanitizeString(concurrentOffer.idempotency_key, 240),
+            );
+            const readyConcurrent = await ensureStripeDiscount(
+              concurrentOffer,
+              simulation,
+            );
+            await finalizePreparedOffer(
+              readyConcurrent,
+              storedInput,
+              recalculated,
+            );
+            return serializePreparedOffer(
+              readyConcurrent,
+              concurrentToken,
+              true,
+            );
+          }
+        }
+        throw insertError;
+      }
+
+      const readyOffer = await ensureStripeDiscount(
+        insertedOffer,
+        simulation,
+      );
+      await finalizePreparedOffer(
+        readyOffer,
+        storedInput,
+        recalculated,
+      );
+      return serializePreparedOffer(readyOffer, token, false);
+    } catch (error: any) {
+      const code = sanitizeString(
+        error?.code || error?.message,
+        160,
+      );
+      const expectedCodes = new Set([
+        "CUSTOM_DISCOUNT_INVALID",
+        "CUSTOM_DISCOUNT_STRIPE_UNAVAILABLE",
+        "CUSTOM_DISCOUNT_MODE_MISMATCH",
+        "CUSTOM_DISCOUNT_CREATION_FAILED",
+        "CUSTOM_DISCOUNT_PERSISTENCE_FAILED",
+        "OFFER_SIMULATION_CHANGED",
+      ]);
+      const publicCode = expectedCodes.has(code)
+        ? code
+        : "OFFER_SIMULATION_PREPARATION_FAILED";
+      console.error(
+        "[Owner Sales] Falha ao preparar oferta da simulação.",
+        {
+          leadId,
+          simulationId,
+          code: publicCode,
+          message: sanitizeString(error?.message || String(error), 220),
+        },
+      );
+      const status =
+        code === "CUSTOM_DISCOUNT_INVALID"
+          ? 422
+          : code === "OFFER_SIMULATION_CHANGED"
+            ? 409
+            : code === "CUSTOM_DISCOUNT_STRIPE_UNAVAILABLE"
+              || code === "CUSTOM_DISCOUNT_MODE_MISMATCH"
+              || code === "CUSTOM_DISCOUNT_CREATION_FAILED"
+              || code === "CUSTOM_DISCOUNT_PERSISTENCE_FAILED"
+                ? 503
+                : 500;
+      const messages: Record<string, string> = {
+        CUSTOM_DISCOUNT_INVALID:
+          "O percentual ou a duração do desconto é inválido.",
+        CUSTOM_DISCOUNT_STRIPE_UNAVAILABLE:
+          "A Stripe está indisponível para preparar este desconto.",
+        CUSTOM_DISCOUNT_MODE_MISMATCH:
+          "O Price configurado não pertence ao mesmo ambiente Stripe.",
+        CUSTOM_DISCOUNT_CREATION_FAILED:
+          "Não foi possível criar o desconto personalizado. A simulação foi preservada.",
+        CUSTOM_DISCOUNT_PERSISTENCE_FAILED:
+          "A oferta foi reservada, mas sua persistência ainda precisa ser confirmada. Tente novamente.",
+        OFFER_SIMULATION_CHANGED:
+          "A simulação mudou. Salve uma nova versão antes de preparar a oferta.",
+      };
+      return res.status(status).json({
+        success: false,
+        code: publicCode,
+        error:
+          messages[publicCode]
+          || "Não foi possível preparar a oferta agora.",
+      });
+    }
+  };
+
+  app.get(
     "/api/owner/sales/leads/:leadId/events",
     checkAuth,
     requireRoles("owner", "admin"),
@@ -67224,6 +68705,31 @@ async function startServer() {
     requireRoles("owner", "admin"),
     async (req: any, res) => {
       const leadId = sanitizeString(req.body?.leadId, 120);
+      const simulationId = sanitizeString(req.body?.simulationId, 120);
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const requestIdempotencyKey = sanitizeString(
+        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
+        180,
+      );
+      if (
+        req.body?.stripeCouponId ||
+        req.body?.couponId ||
+        req.body?.stripePriceId ||
+        req.body?.priceId
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "IDs Stripe não são aceitos pelo cliente.",
+        });
+      }
+      if (simulationId) {
+        return prepareSalesOfferFromSimulation(req, res, {
+          leadId,
+          simulationId,
+          actorUserId,
+          idempotencyKey: requestIdempotencyKey,
+        });
+      }
       const quantity = normalizeSalesInteger(
         req.body?.initialActivePatientQuantity,
         SALES_ESTIMATED_ACTIVE_PATIENTS_MAX,
@@ -67238,11 +68744,6 @@ async function startServer() {
         1,
         Math.min(90, Number(req.body?.expiresInDays || 14)),
       );
-      const actorUserId = sanitizeString(req.session?.user?.id, 120);
-      const requestIdempotencyKey = sanitizeString(
-        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
-        180,
-      );
       if (
         !isUuid(leadId) ||
         !isUuid(actorUserId) ||
@@ -67254,17 +68755,6 @@ async function startServer() {
         return res
           .status(400)
           .json({ success: false, error: "Dados da oferta inválidos." });
-      }
-      if (
-        req.body?.stripeCouponId ||
-        req.body?.couponId ||
-        req.body?.stripePriceId ||
-        req.body?.priceId
-      ) {
-        return res.status(400).json({
-          success: false,
-          error: "IDs Stripe não são aceitos pelo cliente.",
-        });
       }
       try {
         const { data: lead } = await supabase
@@ -67549,7 +69039,7 @@ async function startServer() {
                     discount.discount_percentage == null
                       ? null
                       : Number(discount.discount_percentage),
-                  discountDurationMonths: isCouponDurationMonths(
+                  discountDurationMonths: isCustomCouponDurationMonths(
                     Number(discount.discount_duration_months),
                   )
                     ? Number(discount.discount_duration_months)

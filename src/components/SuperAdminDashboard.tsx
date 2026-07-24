@@ -32,6 +32,7 @@ import {
 } from 'recharts';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
+import { SalesProfitabilitySimulator } from './SalesProfitabilitySimulator';
 import { TechnicalDetails } from './TechnicalDetails';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { getSupabase } from '../lib/supabase';
@@ -136,9 +137,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [leadStatusFilter, setLeadStatusFilter] = useState<'all' | SalesLeadStatus>('all');
   const [leadAction, setLeadAction] = useState<string | null>(null);
   const leadStatusRequestKeysRef = useRef<Record<string, string>>({});
-  const salesOfferRequestKeysRef = useRef<Record<string, string>>({});
-  const [offerDurationByLead, setOfferDurationByLead] = useState<Record<string, number>>({});
-  const [offerQuantityByLead, setOfferQuantityByLead] = useState<Record<string, number>>({});
+  const [profitabilityLead, setProfitabilityLead] = useState<any | null>(null);
   const [protocolRequests, setProtocolRequests] = useState<any[]>([]);
   const [protocolRequestsError, setProtocolRequestsError] = useState<string | null>(null);
   const [approvingProtocolId, setApprovingProtocolId] = useState<string | null>(null);
@@ -653,66 +652,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       );
     } catch (error: any) {
       alert(error?.message || "Não foi possível atualizar o lead.");
-    } finally {
-      setLeadAction(null);
-    }
-  };
-
-  const createSalesOffer = async (lead: any) => {
-    if (
-      lead?.legacyReadOnly ||
-      !lead?.id ||
-      String(lead.id).startsWith("legacy:")
-    )
-      return;
-    const duration = Number(offerDurationByLead[lead.id] || 0);
-    const quantity = Math.max(
-      1,
-      Number(offerQuantityByLead[lead.id] || lead.estimatedActivePatients || 1),
-    );
-    const requestKeyName = `${lead.id}:${quantity}:${duration || 0}`;
-    const requestKey =
-      salesOfferRequestKeysRef.current[requestKeyName] || crypto.randomUUID();
-    salesOfferRequestKeysRef.current[requestKeyName] = requestKey;
-    setLeadAction(`offer:${lead.id}`);
-    try {
-      const supabase = await getSupabase();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const response = await fetch("/api/owner/sales/offers", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: session?.access_token
-            ? `Bearer ${session.access_token}`
-            : "",
-          "X-Idempotency-Key": requestKey,
-        },
-        body: JSON.stringify({
-          leadId: lead.id,
-          initialActivePatientQuantity: quantity,
-          discountDurationMonths: duration || null,
-          expiresInDays: 14,
-          idempotencyKey: requestKey,
-        }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data?.success === false)
-        throw new Error(data?.error || "Não foi possível criar a oferta.");
-      delete salesOfferRequestKeysRef.current[requestKeyName];
-      if (data.publicUrl) {
-        await navigator.clipboard.writeText(data.publicUrl);
-        alert("Oferta criada e link individual copiado.");
-      } else {
-        alert(
-          data.message ||
-            "Oferta salva como rascunho. Configuração Stripe pendente.",
-        );
-      }
-      await refreshAll();
-    } catch (error: any) {
-      alert(error?.message || "Não foi possível criar a oferta.");
     } finally {
       setLeadAction(null);
     }
@@ -1289,57 +1228,20 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                             ) : (
                               <div className="rounded-xl border border-slate-200 bg-white p-3">
                                 <p className="text-xs font-semibold text-slate-800">
-                                  Criar oferta individual
+                                  Proposta individual
                                 </p>
-                                <div className="mt-2 grid grid-cols-2 gap-2">
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    max={100000}
-                                    aria-label="Quantidade inicial de pacientes"
-                                    value={
-                                      offerQuantityByLead[lead.id] ??
-                                      Math.max(
-                                        1,
-                                        Number(
-                                          lead.estimatedActivePatients || 1,
-                                        ),
-                                      )
-                                    }
-                                    onChange={(event) =>
-                                      setOfferQuantityByLead((current) => ({
-                                        ...current,
-                                        [lead.id]: Number(event.target.value),
-                                      }))
-                                    }
-                                    className="min-h-10 rounded-xl border border-slate-200 px-3 text-xs outline-none focus:border-violet-400"
-                                  />
-                                  <select
-                                    aria-label="Duração do cupom"
-                                    value={offerDurationByLead[lead.id] || 0}
-                                    onChange={(event) =>
-                                      setOfferDurationByLead((current) => ({
-                                        ...current,
-                                        [lead.id]: Number(event.target.value),
-                                      }))
-                                    }
-                                    className="min-h-10 rounded-xl border border-slate-200 px-3 text-xs outline-none focus:border-violet-400"
-                                  >
-                                    <option value={0}>Sem desconto</option>
-                                    <option value={6}>Cupom 6 meses</option>
-                                    <option value={12}>Cupom 12 meses</option>
-                                    <option value={24}>Cupom 24 meses</option>
-                                  </select>
-                                </div>
+                                <p className="mt-1 text-[11px] font-normal leading-4 text-slate-500">
+                                  Compare desconto, custos e margens antes de
+                                  criar o link público.
+                                </p>
                                 <button
                                   type="button"
-                                  onClick={() => void createSalesOffer(lead)}
+                                  onClick={() => setProfitabilityLead(lead)}
                                   disabled={actionBusy}
-                                  className="mt-2 min-h-10 w-full rounded-xl bg-[#7a32fc] px-3 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
+                                  className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#7a32fc] px-3 text-xs font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
                                 >
-                                  {leadAction === `offer:${lead.id}`
-                                    ? "Salvando..."
-                                    : "Preparar oferta"}
+                                  <TrendingUp size={14} />
+                                  Simular rentabilidade
                                 </button>
                                 {lead.latestOffer ? (
                                   <p className="mt-2 text-[11px] font-normal text-slate-500">
@@ -1819,6 +1721,28 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         )}
       </main>
+      {profitabilityLead ? (
+        <SalesProfitabilitySimulator
+          lead={profitabilityLead}
+          onClose={() => setProfitabilityLead(null)}
+          onOfferPrepared={(leadId, offer) => {
+            setLeadRecoveryItems((current) =>
+              current.map((item) =>
+                item.id === leadId
+                  ? {
+                      ...item,
+                      latestOffer: {
+                        ...offer,
+                        discount_duration_months:
+                          offer?.discount_duration_months ?? null,
+                      },
+                    }
+                  : item
+              )
+            );
+          }}
+        />
+      ) : null}
     </div>
   );
 };

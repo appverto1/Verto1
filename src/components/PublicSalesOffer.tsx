@@ -15,6 +15,9 @@ type PublicOffer = {
   discountType: 'none' | 'coupon';
   discountDurationMonths?: number | null;
   discountPercentage?: number | null;
+  promotionalUnitAmountCents: number;
+  promotionalMonthlyAmountCents: number;
+  postDiscountMonthlyAmountCents: number;
   expiresAt: string;
   status: string;
   stripeReady: boolean;
@@ -191,22 +194,61 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <p className="text-xs font-medium text-slate-500">Preço oficial</p>
-                  <p className="mt-1 text-base font-semibold text-slate-900">{PUBLIC_ACTIVE_PATIENT_PRICE_LABEL}</p>
+                  <p className="mt-1 text-base font-semibold text-slate-900">
+                    {offer.baseUnitAmountCents
+                      ? `${formatSalesCurrency(offer.baseUnitAmountCents, offer.currency)} por paciente ativo/mês`
+                      : PUBLIC_ACTIVE_PATIENT_PRICE_LABEL}
+                  </p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <p className="text-xs font-medium text-slate-500">Quantidade inicial</p>
                   <p className="mt-1 text-base font-semibold text-slate-900">{offer.initialActivePatientQuantity} pacientes ativos</p>
                 </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
-                  <p className="text-xs font-medium text-slate-500">Condição comercial</p>
-                  <p className="mt-1 text-base font-semibold text-slate-900">
+                {offer.discountType === 'coupon' ? (
+                  <>
+                    <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+                      <p className="text-xs font-medium text-violet-700">Condição promocional</p>
+                      <p className="mt-1 text-base font-semibold text-slate-900">
+                        {Number(offer.discountPercentage || 0).toLocaleString('pt-BR', {
+                          maximumFractionDigits: 2
+                        })}% de desconto por {offer.discountDurationMonths} meses
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+                      <p className="text-xs font-medium text-violet-700">Preço promocional</p>
+                      <p className="mt-1 text-base font-semibold text-slate-900">
+                        {formatSalesCurrency(offer.promotionalUnitAmountCents, offer.currency)} por paciente
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 sm:col-span-2">
+                      <p className="text-xs font-medium text-emerald-700">Total mensal durante a promoção</p>
+                      <p className="mt-1 text-xl font-semibold text-slate-900">
+                        {formatSalesCurrency(offer.promotionalMonthlyAmountCents, offer.currency)}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+                    <p className="text-xs font-medium text-slate-500">Condição comercial</p>
+                    <p className="mt-1 text-base font-semibold text-slate-900">
+                      Preço oficial, sem desconto temporário
+                    </p>
+                  </div>
+                )}
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:col-span-2">
+                  <p className="text-xs font-medium text-slate-500">
                     {offer.discountType === 'coupon'
-                      ? `${offer.discountPercentage ? `${offer.discountPercentage}% de desconto` : 'Cupom temporário'} por ${offer.discountDurationMonths} meses`
-                      : 'Sem desconto temporário'}
+                      ? 'Após o encerramento do desconto'
+                      : 'Total mensal'}
                   </p>
-                  <p className="mt-2 text-xs font-normal leading-5 text-slate-500">
-                    A cobrança final, o percentual aplicado e a duração real serão confirmados pela Stripe no Checkout. Depois do período promocional, o preço unitário volta a {formatSalesCurrency(offer.baseUnitAmountCents, offer.currency)}.
+                  <p className="mt-1 text-base font-semibold text-slate-900">
+                    {formatSalesCurrency(offer.postDiscountMonthlyAmountCents, offer.currency)} por mês
                   </p>
+                  {offer.discountType === 'coupon' ? (
+                    <p className="mt-2 text-xs font-normal leading-5 text-slate-500">
+                      O preço retorna automaticamente a {formatSalesCurrency(offer.baseUnitAmountCents, offer.currency)} por paciente, sem recriar a assinatura ou reiniciar o ciclo.
+                    </p>
+                  ) : null}
                 </div>
               </div>
 
