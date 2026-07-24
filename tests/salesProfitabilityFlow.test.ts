@@ -6,6 +6,9 @@ const root = process.cwd();
 const read = (file: string) => readFileSync(join(root, file), 'utf8');
 const server = read('server.ts');
 const simulator = read('src/components/SalesProfitabilitySimulator.tsx');
+const assumptionsPanel = read(
+  'src/components/SalesFinancialAssumptionsPanel.tsx'
+);
 const dashboard = read('src/components/SuperAdminDashboard.tsx');
 const publicOffer = read('src/components/PublicSalesOffer.tsx');
 const migration = read(
@@ -171,6 +174,90 @@ test('simulador carrega premissas e historico em lote e oferece envio do link', 
   assert.match(simulator, /Copiar link/);
   assert.match(simulator, /Enviar pelo WhatsApp/);
   assert.doesNotMatch(simulator, /window\.location\.reload|refreshAll/);
+});
+
+test('premissas globais ficam fora do simulador e preservam versoes e origens', () => {
+  assert.match(dashboard, /Configurações financeiras/);
+  assert.match(dashboard, /SalesFinancialAssumptionsPanel/);
+  assert.match(
+    assumptionsPanel,
+    /Premissas de simulação comercial/
+  );
+  assert.match(assumptionsPanel, /Configuração básica/);
+  assert.match(assumptionsPanel, /Configurações avançadas/);
+  assert.match(assumptionsPanel, /Histórico de versões/);
+  assert.match(assumptionsPanel, /Perfis de uso/);
+  for (const source of [
+    'Real',
+    'Calculado',
+    'Estimado',
+    'Manual',
+    'Indisponível',
+  ]) {
+    assert.match(assumptionsPanel, new RegExp(source));
+  }
+  assert.doesNotMatch(simulator, /Nome da nova versão/);
+  assert.doesNotMatch(simulator, /Criar nova versão/);
+  assert.doesNotMatch(simulator, /Tarifa percentual da Stripe/);
+});
+
+test('drawer do lead e compacto e mantem detalhes secundarios recolhidos', () => {
+  for (const label of [
+    'Pacientes ativos iniciais',
+    'Preço oficial por paciente',
+    'Desconto personalizado',
+    'Duração do desconto',
+    'Validade da proposta',
+    'Perfil de uso',
+    'Observação interna',
+    'Custos adicionais desta proposta',
+    'Receita promocional',
+    'Margem de contribuição',
+    'EBITDA incremental',
+    'Margem EBITDA',
+    'Lucro líquido estimado',
+    'Classificação da oferta',
+    'Projeções de 12, 24 e 36 meses',
+    'Ponto de equilíbrio',
+    'Detalhamento dos custos',
+    'Origem dos dados',
+    'Memória de cálculo',
+    'Histórico de simulações',
+  ]) {
+    assert.match(simulator, new RegExp(label));
+  }
+  assert.match(simulator, /<details/);
+  assert.match(simulator, /Premissas utilizadas/);
+  assert.match(simulator, /Ver ou alterar premissas/);
+});
+
+test('ausencia de premissas permite snapshot incompleto sem liberar oferta', () => {
+  assert.match(
+    simulator,
+    /Configure as premissas financeiras uma única vez/
+  );
+  assert.match(simulator, /Salvar simulação incompleta/);
+  assert.match(simulator, /Configurar dados ausentes/);
+  assert.match(
+    simulator,
+    /selectedSimulation\.profitability_rating === 'insufficient_data'/
+  );
+  assert.match(
+    simulator,
+    /Complete as premissas financeiras obrigatórias antes de preparar a oferta/
+  );
+});
+
+test('endpoint entrega versao ativa e historico em uma unica consulta limitada', () => {
+  const route = sliceFrom(
+    server,
+    '"/api/owner/sales/profitability-assumptions"',
+    3500
+  );
+  assert.match(route, /\.limit\(50\)/);
+  assert.match(route, /assumptionSet: assumptionSets\[0\] \|\| null/);
+  assert.match(route, /assumptionSets,/);
+  assert.doesNotMatch(route, /Promise\.all/);
 });
 
 test('webhook persiste duracoes personalizadas de um a 36 meses', () => {

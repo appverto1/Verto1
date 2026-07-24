@@ -2,9 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
   CircleDollarSign,
   Copy,
-  Database,
   ExternalLink,
   GitCompareArrows,
   Loader2,
@@ -29,6 +29,7 @@ import {
 type SalesProfitabilitySimulatorProps = {
   lead: any;
   onClose: () => void;
+  onOpenAssumptions: () => void;
   onOfferPrepared?: (leadId: string, offer: any) => void;
 };
 
@@ -56,89 +57,43 @@ type SavedSimulation = {
   } | null;
 };
 
-type FieldDefinition = {
-  key: keyof SalesAssumptionValues;
-  label: string;
-  type: 'currency' | 'percent' | 'count';
-  help?: string;
+const assumptionLabels: Partial<
+  Record<keyof SalesAssumptionValues, string>
+> = {
+  stripeFeeBasisPoints: 'tarifa percentual da Stripe',
+  stripeFixedFeeCents: 'tarifa fixa da Stripe',
+  revenueTaxBasisPoints: 'impostos sobre faturamento',
+  variablePatientCostCents: 'custo variável por paciente',
+  variableClinicCostCents: 'custo mensal por clínica',
+  storageCostCents: 'armazenamento',
+  egressCostCents: 'tráfego / egress',
+  processingCostCents: 'processamento',
+  notificationCostCents: 'e-mails e notificações',
+  otherVariableCostCents: 'outros custos variáveis',
+  monthlySupportClinicCostCents: 'suporte mensal por clínica',
+  supportPatientCostCents: 'suporte por paciente',
+  monthlyOperationalCostCents: 'custo operacional atribuível',
+  commercialCommissionBasisPoints: 'comissão comercial',
+  fixedMonthlyEligibleCostCents: 'custos fixos elegíveis',
+  fixedAllocationPatientCount: 'pacientes na base de rateio',
+  fixedAllocationClinicCount: 'clínicas na base de rateio',
+  customFixedAllocationCents: 'rateio mensal personalizado',
+  depreciationAmortizationCents: 'depreciação e amortização',
+  financialExpensesCents: 'despesas financeiras',
+  profitTaxBasisPoints: 'impostos sobre lucro',
+  otherBelowEbitdaCents: 'outras despesas abaixo do EBITDA',
+  minimumMarginBasisPoints: 'margem mínima',
+  healthyMarginBasisPoints: 'faixa de oferta saudável',
+  attentionMarginBasisPoints: 'faixa de atenção',
 };
 
-const assumptionGroups: Array<{
-  title: string;
-  description: string;
-  fields: FieldDefinition[];
-}> = [
-  {
-    title: 'Receita e pagamento',
-    description: 'Tarifas e incidências sobre a receita promocional.',
-    fields: [
-      { key: 'stripeFeeBasisPoints', label: 'Tarifa percentual da Stripe', type: 'percent' },
-      { key: 'stripeFixedFeeCents', label: 'Tarifa fixa por cobrança', type: 'currency' },
-      { key: 'revenueTaxBasisPoints', label: 'Impostos sobre faturamento', type: 'percent' },
-      { key: 'estimatedDelinquencyBasisPoints', label: 'Inadimplência estimada', type: 'percent' },
-    ],
-  },
-  {
-    title: 'Infraestrutura',
-    description: 'Custos mensais atribuíveis ao uso da plataforma.',
-    fields: [
-      { key: 'variablePatientCostCents', label: 'Variável por paciente', type: 'currency' },
-      { key: 'variableClinicCostCents', label: 'Variável por clínica', type: 'currency' },
-      { key: 'storageCostCents', label: 'Armazenamento', type: 'currency' },
-      { key: 'egressCostCents', label: 'Tráfego / egress', type: 'currency' },
-      { key: 'processingCostCents', label: 'Processamento', type: 'currency' },
-      { key: 'notificationCostCents', label: 'E-mails e notificações', type: 'currency' },
-      { key: 'otherVariableCostCents', label: 'Outros variáveis', type: 'currency' },
-    ],
-  },
-  {
-    title: 'Atendimento e operação',
-    description: 'Suporte e operação diretamente relacionados à nova clínica.',
-    fields: [
-      { key: 'monthlySupportClinicCostCents', label: 'Suporte por clínica', type: 'currency' },
-      { key: 'supportPatientCostCents', label: 'Suporte por paciente', type: 'currency' },
-      { key: 'monthlyOperationalCostCents', label: 'Operacional atribuível', type: 'currency' },
-      { key: 'defaultOnboardingCostCents', label: 'Onboarding padrão', type: 'currency' },
-      { key: 'commercialCommissionBasisPoints', label: 'Comissão comercial', type: 'percent' },
-    ],
-  },
-  {
-    title: 'Resultado gerencial',
-    description: 'Premissas abaixo do EBITDA e faixas de decisão.',
-    fields: [
-      { key: 'depreciationAmortizationCents', label: 'Depreciação e amortização', type: 'currency' },
-      { key: 'financialExpensesCents', label: 'Despesas financeiras', type: 'currency' },
-      { key: 'profitTaxBasisPoints', label: 'Impostos sobre lucro', type: 'percent' },
-      { key: 'otherBelowEbitdaCents', label: 'Outras despesas', type: 'currency' },
-      { key: 'minimumMarginBasisPoints', label: 'Margem mínima', type: 'percent' },
-      { key: 'attentionMarginBasisPoints', label: 'Faixa de atenção', type: 'percent' },
-      { key: 'healthyMarginBasisPoints', label: 'Oferta saudável a partir de', type: 'percent' },
-    ],
-  },
-];
-
-const usageProfileFields: FieldDefinition[] = [
-  {
-    key: 'variablePatientCostCents',
-    label: 'Variável por paciente',
-    type: 'currency',
-  },
-  {
-    key: 'processingCostCents',
-    label: 'Processamento',
-    type: 'currency',
-  },
-  {
-    key: 'notificationCostCents',
-    label: 'Notificações',
-    type: 'currency',
-  },
-  {
-    key: 'monthlySupportClinicCostCents',
-    label: 'Suporte por clínica',
-    type: 'currency',
-  },
-];
+const sourceLabels = {
+  actual: 'Real',
+  calculated: 'Calculado',
+  estimated: 'Estimado',
+  manual: 'Manual',
+  unavailable: 'Indisponível',
+} as const;
 
 const ratingCopy: Record<
   OfferProfitabilityRating,
@@ -178,30 +133,6 @@ const formatPercent = (basisPoints: number | null | undefined) =>
         maximumFractionDigits: 2,
       })}%`;
 
-const parseDisplayValue = (
-  value: string,
-  type: FieldDefinition['type']
-): number | null => {
-  if (value.trim() === '') return null;
-  const parsed = Number(value.replace(',', '.'));
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  if (type === 'currency') return Math.round(parsed * 100);
-  if (type === 'percent') return Math.round(parsed * 100);
-  return Math.round(parsed);
-};
-
-const toDisplayValue = (
-  value: unknown,
-  type: FieldDefinition['type']
-) => {
-  if (value == null || value === '') return '';
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return '';
-  return type === 'currency' || type === 'percent'
-    ? String(parsed / 100)
-    : String(parsed);
-};
-
 const simulationToInput = (simulation: SavedSimulation): SalesSimulationInput => ({
   initialActivePatientQuantity: Number(
     simulation.initial_active_patient_quantity
@@ -224,6 +155,7 @@ const simulationToInput = (simulation: SavedSimulation): SalesSimulationInput =>
 export const SalesProfitabilitySimulator = ({
   lead,
   onClose,
+  onOpenAssumptions,
   onOfferPrepared,
 }: SalesProfitabilitySimulatorProps) => {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -241,10 +173,6 @@ export const SalesProfitabilitySimulator = ({
     useState<SalesAssumptionSnapshot | null>(null);
   const [assumptionValues, setAssumptionValues] =
     useState<SalesAssumptionValues | null>(null);
-  const [assumptionName, setAssumptionName] = useState(
-    `Premissas ${new Date().toLocaleDateString('pt-BR')}`
-  );
-  const [showAssumptions, setShowAssumptions] = useState(false);
   const [simulations, setSimulations] = useState<SavedSimulation[]>([]);
   const [selectedSimulationId, setSelectedSimulationId] = useState('');
   const [comparisonIds, setComparisonIds] = useState<string[]>([]);
@@ -395,7 +323,6 @@ export const SalesProfitabilitySimulator = ({
             current.onboardingCostCents ||
             Number(loadedValues?.defaultOnboardingCostCents || 0),
         }));
-        setShowAssumptions(!loadedAssumption);
         const loadedSimulations =
           simulationsResponse.simulations || [];
         setSimulations(loadedSimulations);
@@ -480,99 +407,7 @@ export const SalesProfitabilitySimulator = ({
     });
   };
 
-  const updateAssumption = (
-    field: FieldDefinition,
-    rawValue: string
-  ) => {
-    setAssumptionValues((current) =>
-      current
-        ? {
-            ...current,
-            [field.key]: parseDisplayValue(rawValue, field.type),
-          }
-        : current
-    );
-  };
-
-  const updateUsageProfileAssumption = (
-    profile: Exclude<SalesUsageProfile, 'custom'>,
-    key: keyof SalesAssumptionValues,
-    rawValue: string
-  ) => {
-    setAssumptionValues((current) => {
-      if (!current) return current;
-      const currentProfiles = current.usageProfiles || {};
-      return {
-        ...current,
-        usageProfiles: {
-          ...currentProfiles,
-          [profile]: {
-            ...(currentProfiles[profile] || {}),
-            [key]: parseDisplayValue(rawValue, 'currency'),
-          },
-        },
-      };
-    });
-  };
-
-  const saveAssumptions = async () => {
-    if (!assumptionValues) return;
-    setBusy('assumptions');
-    setError('');
-    setNotice('');
-    try {
-      const sources = Object.fromEntries(
-        Object.entries(assumptionValues)
-          .filter(([key]) => key !== 'usageProfiles')
-          .map(([key, value]) => [
-            key,
-            key === 'officialUnitAmountCents'
-              ? 'actual'
-              : value == null
-                ? 'unavailable'
-                : 'manual',
-          ])
-      );
-      const data = await authenticatedFetch(
-        '/api/owner/sales/profitability-assumptions',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            name: assumptionName,
-            values: assumptionValues,
-            sourceMetadata: {
-              basis: 'manual',
-              sources,
-              sourceDetails: {
-                officialUnitAmountCents:
-                  'Preço público canônico por paciente ativo.',
-              },
-            },
-          }),
-        }
-      );
-      setAssumptionSet(data.assumptionSet);
-      setAssumptionValues(data.assumptionSet.values);
-      setShowAssumptions(false);
-      setNotice(
-        `Premissas salvas na versão ${data.assumptionSet.version}.`
-      );
-    } catch (saveError: any) {
-      setError(
-        saveError?.message ||
-          'Não foi possível salvar as premissas.'
-      );
-    } finally {
-      setBusy('');
-    }
-  };
-
   const saveSimulation = async () => {
-    if (!assumptionSet) {
-      setShowAssumptions(true);
-      setError('Salve uma versão de premissas antes da simulação.');
-      return;
-    }
     setBusy('simulation');
     setError('');
     setNotice('');
@@ -580,6 +415,59 @@ export const SalesProfitabilitySimulator = ({
       saveIdempotencyKeyRef.current || crypto.randomUUID();
     saveIdempotencyKeyRef.current = requestKey;
     try {
+      let simulationAssumptionSet = assumptionSet;
+      if (!simulationAssumptionSet) {
+        if (!assumptionValues) {
+          throw new Error(
+            'Não foi possível montar o snapshot incompleto da simulação.'
+          );
+        }
+        const sources = Object.fromEntries(
+          Object.entries(assumptionValues)
+            .filter(([key]) => key !== 'usageProfiles')
+            .map(([key, value]) => [
+              key,
+              key === 'officialUnitAmountCents'
+                ? 'actual'
+                : value == null
+                  ? 'unavailable'
+                  : 'manual',
+            ])
+        );
+        const assumptionResponse = await authenticatedFetch(
+          '/api/owner/sales/profitability-assumptions',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              name: `Premissas pendentes · ${new Date().toLocaleDateString(
+                'pt-BR'
+              )}`,
+              values: assumptionValues,
+              sourceMetadata: {
+                basis: 'manual',
+                sources,
+                sourceDetails: {
+                  officialUnitAmountCents:
+                    'Preço público canônico por paciente ativo.',
+                },
+              },
+            }),
+          }
+        );
+        simulationAssumptionSet = assumptionResponse.assumptionSet;
+        if (!simulationAssumptionSet) {
+          throw new Error(
+            'A versão incompleta das premissas não foi confirmada pelo servidor.'
+          );
+        }
+        setAssumptionSet(simulationAssumptionSet);
+        setAssumptionValues(simulationAssumptionSet.values);
+      }
+      if (!simulationAssumptionSet) {
+        throw new Error(
+          'Não foi possível vincular as premissas à simulação.'
+        );
+      }
       const data = await authenticatedFetch(
         `/api/owner/sales/leads/${encodeURIComponent(
           lead.id
@@ -589,7 +477,7 @@ export const SalesProfitabilitySimulator = ({
           headers: { 'X-Idempotency-Key': requestKey },
           body: JSON.stringify({
             ...input,
-            assumptionSetId: assumptionSet.id,
+            assumptionSetId: simulationAssumptionSet.id,
             internalNotes,
             internalJustification,
             idempotencyKey: requestKey,
@@ -605,7 +493,9 @@ export const SalesProfitabilitySimulator = ({
       setNotice(
         data.idempotent
           ? 'A simulação já estava salva.'
-          : 'Simulação salva sem alterar a DRE ou criar objetos Stripe.'
+          : simulationAssumptionSet === assumptionSet
+            ? 'Simulação salva sem alterar a DRE ou criar objetos Stripe.'
+            : 'Simulação incompleta salva. Configure os dados ausentes antes de preparar a oferta.'
       );
     } catch (saveError: any) {
       setError(
@@ -840,341 +730,71 @@ export const SalesProfitabilitySimulator = ({
                 </div>
               ) : null}
 
-              <section className="border border-slate-200 bg-white">
-                <button
-                  type="button"
-                  onClick={() => setShowAssumptions((current) => !current)}
-                  className="flex min-h-14 w-full items-center justify-between gap-3 px-4 py-3 text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500"
-                  aria-expanded={showAssumptions}
-                >
-                  <span className="flex items-center gap-3">
-                    <span className="flex size-9 items-center justify-center bg-violet-50 text-violet-700">
-                      <Settings2 size={18} />
+              {assumptionSet ? (
+                <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-violet-100 bg-violet-50/60 px-4 py-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-white text-violet-700">
+                      <Settings2 size={17} />
                     </span>
-                    <span>
-                      <span className="block text-sm font-semibold text-slate-900">
-                        Premissas financeiras
-                      </span>
-                      <span className="block text-xs font-normal text-slate-500">
-                        {assumptionSet
-                          ? `Versão ${assumptionSet.version} · ${assumptionSet.name}`
-                          : 'Nenhuma versão salva'}
-                      </span>
-                    </span>
-                  </span>
-                  <span className="text-xs font-medium text-violet-700">
-                    {showAssumptions ? 'Recolher' : 'Revisar'}
-                  </span>
-                </button>
-
-                {showAssumptions && assumptionValues ? (
-                  <div className="border-t border-slate-200 p-4">
-                    <div className="mb-4 border border-amber-200 bg-amber-50 p-3 text-xs font-normal leading-5 text-amber-900">
-                      A DRE atual não possui denominadores auditáveis para
-                      rateio por paciente ou clínica. Valores vazios continuam
-                      indisponíveis; nenhum custo é estimado automaticamente.
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-violet-700">
+                        Premissas utilizadas
+                      </p>
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {assumptionSet.name} · versão {assumptionSet.version} ativa
+                      </p>
                     </div>
-                    <label className="block text-xs font-medium text-slate-700">
-                      Nome da nova versão
-                      <input
-                        value={assumptionName}
-                        onChange={(event) =>
-                          setAssumptionName(event.target.value)
-                        }
-                        className="mt-1 min-h-11 w-full border border-slate-200 bg-white px-3 text-sm font-normal outline-none focus:border-violet-500"
-                      />
-                    </label>
-
-                    <div className="mt-4 space-y-5">
-                      {assumptionGroups.map((group) => (
-                        <fieldset key={group.title}>
-                          <legend className="text-sm font-semibold text-slate-900">
-                            {group.title}
-                          </legend>
-                          <p className="mt-0.5 text-xs font-normal text-slate-500">
-                            {group.description}
-                          </p>
-                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                            {group.fields.map((field) => (
-                              <label
-                                key={String(field.key)}
-                                className="text-xs font-medium text-slate-700"
-                              >
-                                {field.label}
-                                <div className="mt-1 flex min-h-11 items-center border border-slate-200 bg-white focus-within:border-violet-500">
-                                  <span className="px-3 text-xs font-normal text-slate-400">
-                                    {field.type === 'currency'
-                                      ? 'R$'
-                                      : field.type === 'percent'
-                                        ? '%'
-                                        : '#'}
-                                  </span>
-                                  <input
-                                    inputMode="decimal"
-                                    value={toDisplayValue(
-                                      assumptionValues[field.key],
-                                      field.type
-                                    )}
-                                    onChange={(event) =>
-                                      updateAssumption(
-                                        field,
-                                        event.target.value
-                                      )
-                                    }
-                                    placeholder="Dado indisponível"
-                                    className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm font-normal outline-none"
-                                  />
-                                </div>
-                                <span className="mt-1 block text-[10px] font-normal text-slate-500">
-                                  {assumptionValues[field.key] == null
-                                    ? 'Dado indisponível'
-                                    : 'Informado manualmente'}
-                                </span>
-                              </label>
-                            ))}
-                          </div>
-                        </fieldset>
-                      ))}
-
-                      <fieldset>
-                        <legend className="text-sm font-semibold text-slate-900">
-                          Rateio de custos fixos
-                        </legend>
-                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                          <label className="text-xs font-medium text-slate-700">
-                            Método
-                            <select
-                              value={assumptionValues.fixedAllocationMethod}
-                              onChange={(event) =>
-                                setAssumptionValues((current) =>
-                                  current
-                                    ? {
-                                        ...current,
-                                        fixedAllocationMethod:
-                                          event.target.value as SalesAssumptionValues['fixedAllocationMethod'],
-                                      }
-                                    : current
-                                )
-                              }
-                              className="mt-1 min-h-11 w-full border border-slate-200 bg-white px-3 text-sm font-normal outline-none focus:border-violet-500"
-                            >
-                              <option value="none">Sem rateio</option>
-                              <option value="per_patient">
-                                Por paciente ativo
-                              </option>
-                              <option value="per_clinic">Por clínica</option>
-                              <option value="custom">Personalizado</option>
-                            </select>
-                          </label>
-                          <label className="text-xs font-medium text-slate-700">
-                            Custos fixos elegíveis
-                            <div className="mt-1 flex min-h-11 border border-slate-200 bg-white">
-                              <span className="px-3 py-2.5 text-xs text-slate-400">
-                                R$
-                              </span>
-                              <input
-                                inputMode="decimal"
-                                value={toDisplayValue(
-                                  assumptionValues.fixedMonthlyEligibleCostCents,
-                                  'currency'
-                                )}
-                                onChange={(event) =>
-                                  setAssumptionValues((current) =>
-                                    current
-                                      ? {
-                                          ...current,
-                                          fixedMonthlyEligibleCostCents:
-                                            parseDisplayValue(
-                                              event.target.value,
-                                              'currency'
-                                            ),
-                                        }
-                                      : current
-                                  )
-                                }
-                                className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm outline-none"
-                              />
-                            </div>
-                          </label>
-                          {assumptionValues.fixedAllocationMethod ===
-                          'per_patient' ? (
-                            <label className="text-xs font-medium text-slate-700">
-                              Pacientes na base de rateio
-                              <input
-                                type="number"
-                                min={1}
-                                value={
-                                  assumptionValues.fixedAllocationPatientCount ||
-                                  ''
-                                }
-                                onChange={(event) =>
-                                  setAssumptionValues((current) =>
-                                    current
-                                      ? {
-                                          ...current,
-                                          fixedAllocationPatientCount:
-                                            parseDisplayValue(
-                                              event.target.value,
-                                              'count'
-                                            ),
-                                        }
-                                      : current
-                                  )
-                                }
-                                className="mt-1 min-h-11 w-full border border-slate-200 px-3 text-sm outline-none focus:border-violet-500"
-                              />
-                            </label>
-                          ) : null}
-                          {assumptionValues.fixedAllocationMethod ===
-                          'per_clinic' ? (
-                            <label className="text-xs font-medium text-slate-700">
-                              Clínicas na base de rateio
-                              <input
-                                type="number"
-                                min={1}
-                                value={
-                                  assumptionValues.fixedAllocationClinicCount ||
-                                  ''
-                                }
-                                onChange={(event) =>
-                                  setAssumptionValues((current) =>
-                                    current
-                                      ? {
-                                          ...current,
-                                          fixedAllocationClinicCount:
-                                            parseDisplayValue(
-                                              event.target.value,
-                                              'count'
-                                            ),
-                                        }
-                                      : current
-                                  )
-                                }
-                                className="mt-1 min-h-11 w-full border border-slate-200 px-3 text-sm outline-none focus:border-violet-500"
-                              />
-                            </label>
-                          ) : null}
-                          {assumptionValues.fixedAllocationMethod ===
-                          'custom' ? (
-                            <label className="text-xs font-medium text-slate-700">
-                              Rateio mensal personalizado
-                              <div className="mt-1 flex min-h-11 border border-slate-200 bg-white">
-                                <span className="px-3 py-2.5 text-xs text-slate-400">
-                                  R$
-                                </span>
-                                <input
-                                  inputMode="decimal"
-                                  value={toDisplayValue(
-                                    assumptionValues.customFixedAllocationCents,
-                                    'currency'
-                                  )}
-                                  onChange={(event) =>
-                                    setAssumptionValues((current) =>
-                                      current
-                                        ? {
-                                            ...current,
-                                            customFixedAllocationCents:
-                                              parseDisplayValue(
-                                                event.target.value,
-                                                'currency'
-                                              ),
-                                          }
-                                        : current
-                                    )
-                                  }
-                                  className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm outline-none"
-                                />
-                              </div>
-                            </label>
-                          ) : null}
-                        </div>
-                      </fieldset>
-
-                      <fieldset>
-                        <legend className="text-sm font-semibold text-slate-900">
-                          Perfis de uso
-                        </legend>
-                        <p className="mt-0.5 text-xs font-normal text-slate-500">
-                          Campos vazios herdam a premissa base. Informe somente
-                          diferenças sustentadas por estimativa administrativa.
-                        </p>
-                        <div className="mt-3 space-y-3">
-                          {(
-                            [
-                              ['light', 'Uso leve'],
-                              ['standard', 'Uso padrão'],
-                              ['intensive', 'Uso intensivo'],
-                            ] as const
-                          ).map(([profile, label]) => (
-                            <div
-                              key={profile}
-                              className="border border-slate-200 p-3"
-                            >
-                              <p className="text-xs font-semibold text-slate-800">
-                                {label}
-                              </p>
-                              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                                {usageProfileFields.map((field) => (
-                                  <label
-                                    key={`${profile}:${String(field.key)}`}
-                                    className="text-[11px] font-medium text-slate-600"
-                                  >
-                                    {field.label}
-                                    <div className="mt-1 flex min-h-10 border border-slate-200 bg-white focus-within:border-violet-500">
-                                      <span className="px-2.5 py-2 text-xs text-slate-400">
-                                        R$
-                                      </span>
-                                      <input
-                                        inputMode="decimal"
-                                        value={toDisplayValue(
-                                          assumptionValues.usageProfiles?.[
-                                            profile
-                                          ]?.[field.key],
-                                          'currency'
-                                        )}
-                                        onChange={(event) =>
-                                          updateUsageProfileAssumption(
-                                            profile,
-                                            field.key,
-                                            event.target.value
-                                          )
-                                        }
-                                        placeholder="Herdar base"
-                                        className="min-w-0 flex-1 bg-transparent px-1 py-2 text-xs font-normal outline-none"
-                                      />
-                                    </div>
-                                    <span className="mt-1 block text-[10px] font-normal text-slate-500">
-                                      {assumptionValues.usageProfiles?.[
-                                        profile
-                                      ]?.[field.key] == null
-                                        ? 'Herda a premissa base'
-                                        : 'Estimativa manual do perfil'}
-                                    </span>
-                                  </label>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </fieldset>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onOpenAssumptions}
+                    className="min-h-10 text-xs font-medium text-violet-700 underline-offset-4 hover:underline focus:outline-none focus:ring-2 focus:ring-violet-500"
+                  >
+                    Ver ou alterar premissas
+                  </button>
+                </section>
+              ) : (
+                <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle
+                      className="mt-0.5 shrink-0 text-amber-700"
+                      size={18}
+                    />
+                    <div>
+                      <h3 className="text-sm font-semibold text-amber-950">
+                        Premissas financeiras ainda não configuradas
+                      </h3>
+                      <p className="mt-1 text-sm font-normal leading-5 text-amber-900">
+                        Configure as premissas financeiras uma única vez para
+                        calcular margem, EBITDA e lucro desta proposta.
+                      </p>
                     </div>
-
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => void saveAssumptions()}
-                      disabled={busy === 'assumptions'}
-                      className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 bg-slate-900 px-4 text-sm font-medium text-white transition hover:bg-slate-800 disabled:opacity-60"
+                      onClick={onOpenAssumptions}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-amber-900 px-3 text-xs font-medium text-white"
                     >
-                      {busy === 'assumptions' ? (
-                        <Loader2 className="animate-spin" size={17} />
+                      <Settings2 size={15} />
+                      Configurar premissas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveSimulation()}
+                      disabled={Boolean(busy) || !preview}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-medium text-amber-900 disabled:opacity-50"
+                    >
+                      {busy === 'simulation' ? (
+                        <Loader2 className="animate-spin" size={15} />
                       ) : (
-                        <Database size={17} />
+                        <Save size={15} />
                       )}
-                      Criar nova versão
+                      Salvar simulação incompleta
                     </button>
                   </div>
-                ) : null}
-              </section>
+                </section>
+              )}
 
               <section
                 data-sales-simulator-form
@@ -1304,54 +924,6 @@ export const SalesProfitabilitySimulator = ({
                       <option value="custom">Personalizado</option>
                     </select>
                   </label>
-                  <label className="text-xs font-medium text-slate-700">
-                    Custo extra mensal
-                    <div className="mt-1 flex min-h-11 border border-slate-200 focus-within:border-violet-500">
-                      <span className="px-3 py-2.5 text-xs text-slate-400">
-                        R$
-                      </span>
-                      <input
-                        inputMode="decimal"
-                        value={input.customMonthlyCostCents / 100}
-                        onChange={(event) =>
-                          updateInput(
-                            'customMonthlyCostCents',
-                            Math.max(
-                              0,
-                              Math.round(
-                                Number(event.target.value || 0) * 100
-                              )
-                            )
-                          )
-                        }
-                        className="min-w-0 flex-1 px-1 text-sm font-normal outline-none"
-                      />
-                    </div>
-                  </label>
-                  <label className="text-xs font-medium text-slate-700">
-                    Custo único de onboarding
-                    <div className="mt-1 flex min-h-11 border border-slate-200 focus-within:border-violet-500">
-                      <span className="px-3 py-2.5 text-xs text-slate-400">
-                        R$
-                      </span>
-                      <input
-                        inputMode="decimal"
-                        value={input.onboardingCostCents / 100}
-                        onChange={(event) =>
-                          updateInput(
-                            'onboardingCostCents',
-                            Math.max(
-                              0,
-                              Math.round(
-                                Number(event.target.value || 0) * 100
-                              )
-                            )
-                          )
-                        }
-                        className="min-w-0 flex-1 px-1 text-sm font-normal outline-none"
-                      />
-                    </div>
-                  </label>
                 </div>
 
                 <label className="mt-3 block text-xs font-medium text-slate-700">
@@ -1367,6 +939,74 @@ export const SalesProfitabilitySimulator = ({
                     className="mt-1 w-full resize-y border border-slate-200 px-3 py-2 text-sm font-normal outline-none focus:border-violet-500"
                   />
                 </label>
+
+                <details className="group mt-4 rounded-lg border border-slate-200 bg-slate-50/60">
+                  <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500">
+                    <span>
+                      <span className="block text-sm font-medium text-slate-800">
+                        Custos adicionais desta proposta
+                      </span>
+                      <span className="block text-xs font-normal text-slate-500">
+                        Use somente quando esta proposta tiver custos fora das
+                        premissas globais.
+                      </span>
+                    </span>
+                    <ChevronDown
+                      size={17}
+                      className="shrink-0 text-slate-500 transition group-open:rotate-180"
+                    />
+                  </summary>
+                  <div className="grid gap-3 border-t border-slate-200 bg-white p-3 sm:grid-cols-2">
+                    <label className="text-xs font-medium text-slate-700">
+                      Custo adicional mensal
+                      <div className="mt-1 flex min-h-11 rounded-lg border border-slate-200 focus-within:border-violet-500">
+                        <span className="px-3 py-2.5 text-xs text-slate-400">
+                          R$
+                        </span>
+                        <input
+                          inputMode="decimal"
+                          value={input.customMonthlyCostCents / 100}
+                          onChange={(event) =>
+                            updateInput(
+                              'customMonthlyCostCents',
+                              Math.max(
+                                0,
+                                Math.round(
+                                  Number(event.target.value || 0) * 100
+                                )
+                              )
+                            )
+                          }
+                          className="min-w-0 flex-1 px-1 text-sm font-normal outline-none"
+                        />
+                      </div>
+                    </label>
+                    <label className="text-xs font-medium text-slate-700">
+                      Custo único de onboarding
+                      <div className="mt-1 flex min-h-11 rounded-lg border border-slate-200 focus-within:border-violet-500">
+                        <span className="px-3 py-2.5 text-xs text-slate-400">
+                          R$
+                        </span>
+                        <input
+                          inputMode="decimal"
+                          value={input.onboardingCostCents / 100}
+                          onChange={(event) =>
+                            updateInput(
+                              'onboardingCostCents',
+                              Math.max(
+                                0,
+                                Math.round(
+                                  Number(event.target.value || 0) * 100
+                                )
+                              )
+                            )
+                          }
+                          className="min-w-0 flex-1 px-1 text-sm font-normal outline-none"
+                        />
+                      </div>
+                    </label>
+                  </div>
+                </details>
 
                 {preview?.requiresJustification ? (
                   <label className="mt-3 block text-xs font-medium text-rose-800">
@@ -1413,7 +1053,7 @@ export const SalesProfitabilitySimulator = ({
 
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     {renderMetric(
-                      'Receita promocional mensal',
+                      'Receita promocional',
                       formatCurrency(
                         preview.promotionalMonthlyRevenueCents
                       )
@@ -1430,7 +1070,10 @@ export const SalesProfitabilitySimulator = ({
                     )}
                     {renderMetric(
                       'EBITDA incremental',
-                      formatCurrency(preview.promotional.ebitdaCents),
+                      formatCurrency(preview.promotional.ebitdaCents)
+                    )}
+                    {renderMetric(
+                      'Margem EBITDA',
                       formatPercent(
                         preview.promotional.ebitdaMarginBasisPoints
                       )
@@ -1438,23 +1081,11 @@ export const SalesProfitabilitySimulator = ({
                     {renderMetric(
                       'Lucro líquido estimado',
                       formatCurrency(preview.promotional.netIncomeCents),
-                      formatPercent(
-                        preview.promotional.netMarginBasisPoints
-                      )
+                      formatPercent(preview.promotional.netMarginBasisPoints)
                     )}
                     {renderMetric(
-                      'Conversão LL / EBITDA',
-                      preview.promotional
-                        .netIncomeToEbitdaBasisPoints == null
-                        ? 'Não aplicável'
-                        : formatPercent(
-                            preview.promotional
-                              .netIncomeToEbitdaBasisPoints
-                          )
-                    )}
-                    {renderMetric(
-                      'Economia mensal concedida',
-                      formatCurrency(preview.monthlySavingsCents)
+                      'Classificação da oferta',
+                      ratingCopy[preview.rating].label
                     )}
                   </div>
 
@@ -1544,44 +1175,216 @@ export const SalesProfitabilitySimulator = ({
                     </div>
                   </div>
 
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {(['12', '24', '36'] as const).map((horizon) =>
-                      renderMetric(
-                        `Acumulado em ${horizon} meses`,
-                        formatCurrency(
-                          preview.horizons[horizon].ebitdaCents
-                        ),
-                        `EBITDA estimado · receita ${formatCurrency(
-                          preview.horizons[horizon].revenueCents
-                        )}`
-                      )
-                    )}
-                  </div>
-
-                  <div className="border border-slate-200 bg-white p-4">
-                    <h4 className="text-xs font-semibold text-slate-900">
-                      Ponto de equilíbrio
-                    </h4>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                      {renderMetric(
-                        'Contribuição positiva',
-                        preview.breakEven.contributionPositiveQuantity == null
-                          ? 'Não alcançável'
-                          : `${preview.breakEven.contributionPositiveQuantity} pacientes`
-                      )}
-                      {renderMetric(
-                        'EBITDA não negativo',
-                        preview.breakEven.nonNegativeEbitdaQuantity == null
-                          ? 'Não alcançável'
-                          : `${preview.breakEven.nonNegativeEbitdaQuantity} pacientes`
-                      )}
-                      {renderMetric(
-                        'Margem mínima',
-                        preview.breakEven.minimumMarginQuantity == null
-                          ? 'Não calculável'
-                          : `${preview.breakEven.minimumMarginQuantity} pacientes`
-                      )}
+                  {preview.missingAssumptions.length > 0 ? (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                      <p className="text-sm font-medium text-amber-950">
+                        Não foi possível calcular todas as margens porque faltam:
+                      </p>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm font-normal text-amber-900">
+                        {preview.missingAssumptions.map((key) => (
+                          <li key={key}>
+                            {assumptionLabels[
+                              key as keyof SalesAssumptionValues
+                            ] || key}
+                          </li>
+                        ))}
+                      </ul>
+                      <button
+                        type="button"
+                        onClick={onOpenAssumptions}
+                        className="mt-3 inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-3 text-xs font-medium text-amber-900"
+                      >
+                        <Settings2 size={15} />
+                        Configurar dados ausentes
+                      </button>
                     </div>
+                  ) : null}
+
+                  <div className="space-y-2">
+                    <details className="group rounded-lg border border-slate-200 bg-white">
+                      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500">
+                        <span className="text-sm font-medium text-slate-800">
+                          Projeções de 12, 24 e 36 meses
+                        </span>
+                        <ChevronDown
+                          size={17}
+                          className="text-slate-500 transition group-open:rotate-180"
+                        />
+                      </summary>
+                      <div className="grid gap-2 border-t border-slate-200 p-4 sm:grid-cols-3">
+                        {(['12', '24', '36'] as const).map((horizon) =>
+                          renderMetric(
+                            `Acumulado em ${horizon} meses`,
+                            formatCurrency(
+                              preview.horizons[horizon].ebitdaCents
+                            ),
+                            `EBITDA estimado · receita ${formatCurrency(
+                              preview.horizons[horizon].revenueCents
+                            )}`
+                          )
+                        )}
+                      </div>
+                    </details>
+
+                    <details className="group rounded-lg border border-slate-200 bg-white">
+                      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500">
+                        <span className="text-sm font-medium text-slate-800">
+                          Ponto de equilíbrio
+                        </span>
+                        <ChevronDown
+                          size={17}
+                          className="text-slate-500 transition group-open:rotate-180"
+                        />
+                      </summary>
+                      <div className="grid gap-2 border-t border-slate-200 p-4 sm:grid-cols-3">
+                        {renderMetric(
+                          'Contribuição positiva',
+                          preview.breakEven.contributionPositiveQuantity == null
+                            ? 'Não alcançável'
+                            : `${preview.breakEven.contributionPositiveQuantity} pacientes`
+                        )}
+                        {renderMetric(
+                          'EBITDA não negativo',
+                          preview.breakEven.nonNegativeEbitdaQuantity == null
+                            ? 'Não alcançável'
+                            : `${preview.breakEven.nonNegativeEbitdaQuantity} pacientes`
+                        )}
+                        {renderMetric(
+                          'Margem mínima',
+                          preview.breakEven.minimumMarginQuantity == null
+                            ? 'Não calculável'
+                            : `${preview.breakEven.minimumMarginQuantity} pacientes`
+                        )}
+                      </div>
+                    </details>
+
+                    <details className="group rounded-lg border border-slate-200 bg-white">
+                      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500">
+                        <span className="text-sm font-medium text-slate-800">
+                          Detalhamento dos custos
+                        </span>
+                        <ChevronDown
+                          size={17}
+                          className="text-slate-500 transition group-open:rotate-180"
+                        />
+                      </summary>
+                      <dl className="grid gap-2 border-t border-slate-200 p-4 sm:grid-cols-2">
+                        {[
+                          [
+                            'Inadimplência estimada',
+                            preview.promotional.estimatedDelinquencyCents,
+                          ],
+                          ['Stripe', preview.promotional.stripeCostCents],
+                          [
+                            'Impostos sobre receita',
+                            preview.promotional.revenueTaxCents,
+                          ],
+                          [
+                            'Custos variáveis',
+                            preview.promotional.variableCostsCents,
+                          ],
+                          [
+                            'Custos operacionais',
+                            preview.promotional.operationalCostsCents,
+                          ],
+                          [
+                            'Custos fixos rateados',
+                            preview.promotional.fixedCostsAllocatedCents,
+                          ],
+                          [
+                            'Custos comerciais únicos',
+                            preview.oneTimeCommercialCostCents,
+                          ],
+                        ].map(([label, value]) => (
+                          <div
+                            key={String(label)}
+                            className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5"
+                          >
+                            <dt className="text-xs font-normal text-slate-600">
+                              {label}
+                            </dt>
+                            <dd className="text-xs font-medium text-slate-900">
+                              {formatCurrency(value as number | null)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </details>
+
+                    <details className="group rounded-lg border border-slate-200 bg-white">
+                      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500">
+                        <span className="text-sm font-medium text-slate-800">
+                          Origem dos dados
+                        </span>
+                        <ChevronDown
+                          size={17}
+                          className="text-slate-500 transition group-open:rotate-180"
+                        />
+                      </summary>
+                      <div className="border-t border-slate-200 p-4">
+                        {assumptionSet ? (
+                          <dl className="grid gap-2 sm:grid-cols-2">
+                            {Object.entries(assumptionSet.sources).map(
+                              ([key, source]) => (
+                                <div
+                                  key={key}
+                                  className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2.5"
+                                >
+                                  <dt className="text-xs font-normal text-slate-600">
+                                    {assumptionLabels[
+                                      key as keyof SalesAssumptionValues
+                                    ] || key}
+                                  </dt>
+                                  <dd className="text-xs font-medium text-slate-900">
+                                    {
+                                      sourceLabels[
+                                        source as keyof typeof sourceLabels
+                                      ]
+                                    }
+                                  </dd>
+                                </div>
+                              )
+                            )}
+                          </dl>
+                        ) : (
+                          <p className="text-sm font-normal text-slate-600">
+                            Ainda não há uma versão ativa para informar a origem
+                            dos custos.
+                          </p>
+                        )}
+                      </div>
+                    </details>
+
+                    <details className="group rounded-lg border border-slate-200 bg-white">
+                      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500">
+                        <span className="text-sm font-medium text-slate-800">
+                          Memória de cálculo
+                        </span>
+                        <ChevronDown
+                          size={17}
+                          className="text-slate-500 transition group-open:rotate-180"
+                        />
+                      </summary>
+                      <div className="space-y-2 border-t border-slate-200 p-4 text-xs font-normal leading-5 text-slate-600">
+                        <p>
+                          Modelo: <span className="font-medium text-slate-800">{preview.modelVersion}</span>
+                        </p>
+                        <p>
+                          Receita mensal = pacientes ativos × preço por paciente
+                          após o desconto.
+                        </p>
+                        <p>
+                          Margem, EBITDA e lucro usam o snapshot da versão de
+                          premissas vinculada à simulação.
+                        </p>
+                        <p>
+                          Economia mensal concedida:{' '}
+                          <span className="font-medium text-slate-800">
+                            {formatCurrency(preview.monthlySavingsCents)}
+                          </span>
+                        </p>
+                      </div>
+                    </details>
                   </div>
 
                   {preview.warnings.length > 0 ? (
@@ -1605,29 +1408,34 @@ export const SalesProfitabilitySimulator = ({
                 </section>
               ) : null}
 
-              <section className="border border-slate-200 bg-white p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900">
-                      Simulações salvas
-                    </h3>
-                    <p className="mt-1 text-xs font-normal text-slate-500">
-                      Compare até três versões. Snapshots históricos não são
-                      recalculados.
-                    </p>
-                  </div>
-                  <span className="text-xs font-medium text-slate-500">
-                    {simulations.length} registro(s)
+              <details className="group border border-slate-200 bg-white">
+                <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 p-4 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500">
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-900">
+                      Histórico de simulações
+                    </span>
+                    <span className="mt-1 block text-xs font-normal text-slate-500">
+                      {simulations.length} registro(s) · snapshots imutáveis
+                    </span>
                   </span>
-                </div>
+                  <ChevronDown
+                    size={18}
+                    className="shrink-0 text-slate-500 transition group-open:rotate-180"
+                  />
+                </summary>
 
-                {simulations.length === 0 ? (
-                  <div className="mt-4 border border-dashed border-slate-300 p-5 text-center text-sm font-normal text-slate-500">
-                    Nenhuma simulação salva para este lead.
-                  </div>
-                ) : (
-                  <div className="mt-4 space-y-2">
-                    {simulations.map((simulation) => {
+                <div className="border-t border-slate-200 p-4">
+                  <p className="mb-4 text-xs font-normal text-slate-500">
+                    Compare até três versões. Snapshots históricos não são
+                    recalculados.
+                  </p>
+                  {simulations.length === 0 ? (
+                    <div className="border border-dashed border-slate-300 p-5 text-center text-sm font-normal text-slate-500">
+                      Nenhuma simulação salva para este lead.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {simulations.map((simulation) => {
                       const result = simulation.results_snapshot;
                       const selected =
                         selectedSimulationId === simulation.id;
@@ -1746,10 +1554,11 @@ export const SalesProfitabilitySimulator = ({
                           </div>
                         </article>
                       );
-                    })}
-                  </div>
-                )}
-              </section>
+                      })}
+                    </div>
+                  )}
+                </div>
+              </details>
 
               {comparedSimulations.length > 1 ? (
                 <section className="overflow-x-auto border border-slate-200 bg-white p-4">
@@ -1887,8 +1696,7 @@ export const SalesProfitabilitySimulator = ({
                 onClick={() => void saveSimulation()}
                 disabled={
                   Boolean(busy) ||
-                  !preview ||
-                  !assumptionSet
+                  !preview
                 }
                 className="inline-flex min-h-11 items-center justify-center gap-2 border border-violet-300 bg-white px-4 text-sm font-medium text-violet-700 disabled:opacity-50"
               >
@@ -1897,7 +1705,9 @@ export const SalesProfitabilitySimulator = ({
                 ) : (
                   <Save size={17} />
                 )}
-                Salvar simulação
+                {assumptionSet
+                  ? 'Salvar simulação'
+                  : 'Salvar simulação incompleta'}
               </button>
               <button
                 type="button"

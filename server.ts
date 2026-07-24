@@ -67614,21 +67614,20 @@ async function startServer() {
             "id,version,name,effective_at,values,source_metadata,created_by,created_at",
           )
           .order("version", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+          .limit(50);
         if (error) throw error;
+        const assumptionSets = (data || []).map((row: any) => ({
+          ...mapSalesAssumptionSnapshot(row),
+          createdBy: row.created_by,
+          createdAt: row.created_at,
+          sourceMetadata: normalizeSalesAssumptionSourceMetadata(
+            row.source_metadata,
+          ),
+        }));
         return res.json({
           success: true,
-          assumptionSet: data
-            ? {
-                ...mapSalesAssumptionSnapshot(data),
-                createdBy: data.created_by,
-                createdAt: data.created_at,
-                sourceMetadata: normalizeSalesAssumptionSourceMetadata(
-                  data.source_metadata,
-                ),
-              }
-            : null,
+          assumptionSet: assumptionSets[0] || null,
+          assumptionSets,
           editableTemplate: buildEmptySalesAssumptionValues(),
           officialPrice: PUBLIC_ACTIVE_PATIENT_PRICE,
           actualDataAvailability: {

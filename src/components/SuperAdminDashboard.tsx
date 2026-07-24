@@ -15,6 +15,7 @@ import {
   MessageCircle,
   Phone,
   RotateCcw,
+  Settings2,
   Shield,
   TrendingUp,
   Users
@@ -33,6 +34,7 @@ import {
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
 import { SalesProfitabilitySimulator } from './SalesProfitabilitySimulator';
+import { SalesFinancialAssumptionsPanel } from './SalesFinancialAssumptionsPanel';
 import { TechnicalDetails } from './TechnicalDetails';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { getSupabase } from '../lib/supabase';
@@ -121,7 +123,7 @@ const VERTO_PROTOCOL_OPTIONS = VERTO_PROTOCOL_EDITOR_CATALOG.map(({ protocol, ..
 export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [loading, setLoading] = useState(true);
   const [bootstrapping, setBootstrapping] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads' | 'demos' | 'protocols'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads' | 'simulation-settings' | 'demos' | 'protocols'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [financial, setFinancial] = useState<any>({
     summary: {},
@@ -693,6 +695,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} />
           <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />
           <SidebarItem icon={<MessageCircle size={18} />} label="Comercial" active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} />
+          <SidebarItem icon={<Settings2 size={18} />} label="Configurações financeiras" active={activeTab === 'simulation-settings'} onClick={() => setActiveTab('simulation-settings')} />
           <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => setActiveTab('demos')} />
           <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => setActiveTab('protocols')} />
         </nav>
@@ -720,6 +723,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     ? 'Clientes e Performance'
                     : activeTab === 'leads'
                       ? 'Leads e propostas'
+                      : activeTab === 'simulation-settings'
+                        ? 'Configurações financeiras'
                       : activeTab === 'demos'
                         ? 'Ambientes Demo'
                         : 'Governanca de Protocolos'}
@@ -1264,6 +1269,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         )}
 
+        {activeTab === 'simulation-settings' && (
+          <SalesFinancialAssumptionsPanel />
+        )}
+
         {activeTab === 'demos' && (
           <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-5">
@@ -1725,6 +1734,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         <SalesProfitabilitySimulator
           lead={profitabilityLead}
           onClose={() => setProfitabilityLead(null)}
+          onOpenAssumptions={() => {
+            setProfitabilityLead(null);
+            setActiveTab('simulation-settings');
+          }}
           onOfferPrepared={(leadId, offer) => {
             setLeadRecoveryItems((current) =>
               current.map((item) =>
