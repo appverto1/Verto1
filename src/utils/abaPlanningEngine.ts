@@ -25,7 +25,7 @@ export type AbaRecommendationType =
   | 'GENERALIZATION';
 
 export type AbaRecommendationPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type AbaRecommendationStatus = 'SUGGESTED' | 'ACCEPTED' | 'EDITED' | 'REJECTED' | 'APPLIED_TO_NEXT_SESSION' | 'EXPIRED' | 'SUPERSEDED';
+export type AbaRecommendationStatus = 'SUGGESTED' | 'ACCEPTED' | 'EDITED' | 'REJECTED' | 'APPLIED_TO_NEXT_SESSION' | 'EXPIRED';
 
 export type AbaClinicalRecommendation = {
   id?: string;
@@ -54,13 +54,6 @@ export type AbaClinicalRecommendation = {
   rejected_by?: string | null;
   rejected_at?: string | null;
   edited_from_id?: string | null;
-  suggestion_key?: string | null;
-  suggestion_key_version?: number | null;
-  canonical_recommendation_id?: string | null;
-  merged_recommendation_ids?: string[];
-  resolved_at?: string | null;
-  resolution_reason?: string | null;
-  decision_event_id?: string | null;
   context_hash: string;
   created_at?: string;
   updated_at?: string;
@@ -295,62 +288,19 @@ const normalizeDecisionKeyPart = (value: unknown, fallback = '') => (
     .replace(/\s+/g, ' ') || fallback
 );
 
-const clinicalWeekKey = (value: unknown) => {
-  const raw = safeString(value);
-  if (!raw) return '';
-  const timestamp = new Date(raw).getTime();
-  return Number.isFinite(timestamp) ? `week-${Math.floor(timestamp / 604_800_000)}` : normalizeDecisionKeyPart(raw);
-};
-
-const recommendationClinicalWindowKey = (recommendation: any) => {
+const recommendationClinicalCycleKeyV3 = (recommendation: any) => {
   const evidence = recommendationEvidence(recommendation);
-  const type = safeString(recommendation?.recommendation_type || recommendation?.recommendationType).toUpperCase();
-  const explicit = safeString(evidence?.clinicalWindowKey || evidence?.clinical_window_key);
+  const explicit = safeString(evidence?.clinicalCycleKeyV3 || evidence?.clinical_cycle_key_v3);
   if (explicit) return explicit;
-
-  if (type === 'REGRESSION_ATTENTION') {
-    const probeResultId = safeString(evidence?.probeResultId || evidence?.probe_result_id || evidence?.maintenanceProbeResultId || evidence?.maintenance_probe_result_id);
-    if (probeResultId) return `probe-result:${probeResultId}`;
-    const snapshotId = safeString(evidence?.snapshotId || evidence?.snapshot_id);
-    if (snapshotId) return `snapshot:${snapshotId}`;
-    const targetId = safeString(recommendation?.target_id || recommendation?.targetId);
-    const alertWeek = clinicalWeekKey(evidence?.createdAt || evidence?.created_at);
-    if (targetId && alertWeek) return `regression:${alertWeek}`;
-    const alertId = safeString(evidence?.alertId || evidence?.alert_id);
-    if (alertId) return `alert:${alertId}`;
+  const type = safeString(recommendation?.recommendation_type || recommendation?.recommendationType).toUpperCase();
+  if (!['REGRESSION_ATTENTION', 'MAINTENANCE_PROBE'].includes(type)) {
+    const legacyClinicalWindow = safeString(evidence?.clinicalWindowKey || evidence?.clinical_window_key);
+    if (legacyClinicalWindow) return legacyClinicalWindow;
   }
-
-  const directSourceId = safeString(
-    evidence?.scheduleId ||
-    evidence?.schedule_id ||
-    evidence?.evaluationId ||
-    evidence?.evaluation_id ||
-    evidence?.snapshotId ||
-    evidence?.snapshot_id ||
-    evidence?.summaryId ||
-    evidence?.summary_id ||
-    evidence?.behaviorSummaryId ||
-    evidence?.behavior_summary_id
-  );
-  if (directSourceId) return `source:${directSourceId}`;
-
-  const pairedSnapshotIds = [
-    safeString(evidence?.accuracySnapshotId || evidence?.accuracy_snapshot_id),
-    safeString(evidence?.independenceSnapshotId || evidence?.independence_snapshot_id)
-  ].filter(Boolean).sort();
-  if (pairedSnapshotIds.length) return `snapshots:${pairedSnapshotIds.join(',')}`;
-
-  const nextProbe = evidence?.nextProbe && typeof evidence.nextProbe === 'object' ? evidence.nextProbe : {};
-  const probeWindow = [
-    safeString(nextProbe?.scheduleId || nextProbe?.schedule_id),
-    safeString(nextProbe?.dueDate || nextProbe?.due_date),
-    safeString(nextProbe?.status),
-    nextProbe?.noSchedule === true ? 'unscheduled' : ''
-  ].filter(Boolean);
-  if (probeWindow.length) return `maintenance:${probeWindow.join(':')}`;
-
   return 'active';
 };
+
+const recommendationClinicalWindowKey = recommendationClinicalCycleKeyV3;
 
 const recommendationReasonCode = (recommendation: any) => {
   const evidence = recommendationEvidence(recommendation);
@@ -381,31 +331,27 @@ export const buildAbaRecommendationSemanticKey = (recommendation: any) => {
   const behaviorId = safeString(recommendation?.behavior_id || recommendation?.behaviorId);
   const programId = safeString(recommendation?.program_id || recommendation?.programId);
   const skillId = safeString(evidence?.skillId || evidence?.skill_id);
-  const unscopedSourceId = !targetId && !behaviorId && !programId && !skillId
-    ? safeString(
-      evidence?.alertId ||
-      evidence?.alert_id ||
-      evidence?.snapshotId ||
-      evidence?.snapshot_id ||
-      evidence?.evaluationId ||
-      evidence?.evaluation_id ||
-      evidence?.summaryId ||
-      evidence?.summary_id
-    )
+  const canonicalTargetId = targetId || skillId;
+  const distinctSkillId = skillId && normalizeDecisionKeyPart(skillId) !== normalizeDecisionKeyPart(canonicalTargetId)
+    ? skillId
     : '';
-
   return [
     normalizeDecisionKeyPart(recommendation?.organization_id || recommendation?.organizationId, 'organization-missing'),
     normalizeDecisionKeyPart(recommendation?.patient_id || recommendation?.patientId, 'patient-missing'),
     normalizeDecisionKeyPart(recommendation?.recommendation_type || recommendation?.recommendationType, 'type-missing'),
-    normalizeDecisionKeyPart(targetId, 'target-none'),
-    normalizeDecisionKeyPart(skillId, 'skill-none'),
+    normalizeDecisionKeyPart(canonicalTargetId, 'target-none'),
+    normalizeDecisionKeyPart(distinctSkillId, 'skill-none'),
     normalizeDecisionKeyPart(programId, 'program-none'),
     normalizeDecisionKeyPart(behaviorId, 'behavior-none'),
-    normalizeDecisionKeyPart(unscopedSourceId, 'source-scoped'),
     normalizeDecisionKeyPart(recommendationReasonCode(recommendation), 'reason-missing'),
-    normalizeDecisionKeyPart(recommendationClinicalWindowKey(recommendation), 'window-missing'),
-    normalizeDecisionKeyPart(evidence?.configurationKey || evidence?.configuration_key || evidence?.ruleVersion || evidence?.rule_version, 'config-default')
+    normalizeDecisionKeyPart(recommendationClinicalCycleKeyV3(recommendation), 'active'),
+    normalizeDecisionKeyPart(
+      evidence?.configurationKeyV3 ||
+      evidence?.configuration_key_v3 ||
+      evidence?.ruleVersion ||
+      evidence?.rule_version,
+      'config-default'
+    )
   ].join('|');
 };
 
@@ -468,6 +414,8 @@ export const deduplicateAbaRecommendationsForDecisionQueue = (recommendations: a
   }
   return Array.from(grouped.values());
 };
+
+const recommendationIdSeed = (recommendation: AbaClinicalRecommendation) => buildAbaRecommendationSemanticKey(recommendation);
 
 const stableJson = (value: any): string => {
   if (value === null || value === undefined) return 'null';
@@ -540,7 +488,10 @@ const makeRecommendation = (
     ...recommendation.evidence,
     suggestionKey
   };
-  return recommendation;
+  return {
+    ...recommendation,
+    id: `candidate-${stableHash(recommendationIdSeed(recommendation)).replace(/^ctx_/, '')}`
+  };
 };
 
 const hasCriticalBlocker = (alerts: any[], schedules: any[], now: Date) => {
@@ -709,6 +660,9 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       delta_value: null,
       evidence: evidenceBase({
         reasonCode: 'maintenance_probe_due',
+        clinicalCycleKeyV3: nextProbe.noSchedule
+          ? (maintenanceCycle === 'initial' ? 'active' : `maintenance:result:${maintenanceCycle}`)
+          : `maintenance:schedule:${safeString(nextProbe?.schedule?.id) || 'active'}`,
         clinicalWindowKey: nextProbe.noSchedule
           ? `maintenance:NO_SCHEDULE:unscheduled${maintenanceCycle === 'initial' ? '' : `:${maintenanceCycle}`}`
           : `maintenance:${safeString(nextProbe.dueDate) || 'date-missing'}:${safeString(nextProbe.status) || 'status-missing'}`,
@@ -746,7 +700,8 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       delta_value: null,
       evidence: evidenceBase({
         reasonCode: 'unresolved_regression_alert',
-        clinicalWindowKey: `regression:${clinicalWeekKey(alert?.created_at || alert?.createdAt) || 'active'}`,
+        clinicalCycleKeyV3: 'active',
+        clinicalWindowKey: 'active',
         alertId: safeString(alert?.id),
         probeResultId: safeString(alert?.maintenance_probe_result_id || alert?.maintenanceProbeResultId) || null,
         severity: safeString(alert?.severity),
@@ -1092,6 +1047,7 @@ export function acceptRecommendationForNextSession(input: {
   };
   const planItem: AbaNextSessionPlanItem | null = input.createPlanItem
     ? {
+        id: `plan-${stableHash(`${accepted.id || ''}|${accepted.context_hash}`).replace(/^ctx_/, '')}`,
         organization_id: accepted.organization_id,
         patient_id: accepted.patient_id,
         source_session_id: accepted.source_session_id,
@@ -1112,6 +1068,7 @@ export function acceptRecommendationForNextSession(input: {
     recommendation: accepted,
     planItem,
     auditLog: {
+      id: `audit-${stableHash(`${accepted.id || ''}|${auditAction}`).replace(/^ctx_/, '')}`,
       organization_id: accepted.organization_id,
       patient_id: accepted.patient_id,
       recommendation_id: accepted.id || '',
@@ -1147,6 +1104,7 @@ export function rejectRecommendation(input: {
   return {
     recommendation: rejected,
     auditLog: {
+      id: `audit-${stableHash(`${rejected.id || ''}|rejected|${now}`).replace(/^ctx_/, '')}`,
       organization_id: rejected.organization_id,
       patient_id: rejected.patient_id,
       recommendation_id: rejected.id || '',

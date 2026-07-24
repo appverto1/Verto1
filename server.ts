@@ -104,10 +104,8 @@ import {
 import {
   deduplicateAbaRecommendationsForDecisionQueue,
   generateNextSessionRecommendations,
-  normalizePlanningFocusType,
-  type AbaClinicalRecommendation
+  normalizePlanningFocusType
 } from './src/utils/abaPlanningEngine';
-import { applyServerAbaRecommendationIdentity } from './src/server/abaRecommendationIdentity';
 import { decodeClinicalTextEntities } from './src/utils/clinicalText';
 import {
   aggregateAbaClinicalLinePoints,
@@ -34158,7 +34156,7 @@ async function startServer() {
   const THERAPEUTIC_PROGRAM_CREATION_RECOMMENDATION_TYPES = new Set(['INTRODUCE_NEW_TARGET']);
   const THERAPEUTIC_PROGRAM_ORIGIN_TYPES = new Set(['manual', 'template', 'protocol', 'recommendation']);
   const ABA_RECOMMENDATION_PRIORITIES = new Set(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
-  const ABA_RECOMMENDATION_STATUSES = new Set(['SUGGESTED', 'ACCEPTED', 'EDITED', 'REJECTED', 'APPLIED_TO_NEXT_SESSION', 'EXPIRED', 'SUPERSEDED']);
+  const ABA_RECOMMENDATION_STATUSES = new Set(['SUGGESTED', 'ACCEPTED', 'EDITED', 'REJECTED', 'APPLIED_TO_NEXT_SESSION', 'EXPIRED']);
   const ABA_PLAN_ITEM_STATUSES = new Set(['PLANNED', 'USED_IN_SESSION', 'SKIPPED', 'CANCELLED']);
   const ABA_PLAN_TRIAL_TYPES = new Set(['dtt', 'net', 'cold_probe', 'baseline_probe', 'maintenance_probe']);
   const ABA_REGRESSION_ALERT_SEVERITIES = new Set(['LOW', 'MEDIUM', 'HIGH']);
@@ -34914,14 +34912,18 @@ async function startServer() {
     'rejected_by',
     'rejected_at',
     'edited_from_id',
+    'context_hash',
     'suggestion_key',
+    'suggestion_key_v3',
     'suggestion_key_version',
     'canonical_recommendation_id',
     'merged_recommendation_ids',
     'resolved_at',
     'resolution_reason',
     'decision_event_id',
-    'context_hash',
+    'terminal_conflict',
+    'conflict_reason',
+    'conflict_detected_at',
     'created_at',
     'updated_at'
   ].join(',');
@@ -42851,7 +42853,6 @@ async function startServer() {
           .select(ABA_CLINICAL_RECOMMENDATION_SELECT)
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
-          .is('canonical_recommendation_id', null)
           .in('status', ['ACCEPTED', 'APPLIED_TO_NEXT_SESSION'])
           .order('updated_at', { ascending: false })
           .limit(20);
@@ -55529,6 +55530,7 @@ async function startServer() {
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .is('canonical_recommendation_id', null)
+          .neq('status', 'SUPERSEDED')
           .in('status', recommendationStatuses)
           .order('created_at', { ascending: false })
           .limit(30),
@@ -55577,74 +55579,6 @@ async function startServer() {
     })
   );
 
-  const persistGeneratedRecommendations = async (params: {
-    recommendations: AbaClinicalRecommendation[];
-    clinicId: string;
-    organizationId: string;
-    patientId: string;
-    createdBy: string;
-  }) => {
-    if (!params.recommendations.length) return { ok: true, status: 200, data: [] };
-    const payloads = params.recommendations.map((rawRecommendation) => {
-      const recommendation = applyServerAbaRecommendationIdentity(
-        rawRecommendation,
-        params.organizationId,
-        params.patientId
-      );
-      return cleanObject({
-        id: sanitizeString(recommendation.id, 180),
-        organization_id: params.organizationId,
-        clinic_id: params.clinicId,
-        patient_id: params.patientId,
-        source_session_id: sanitizeString(recommendation.source_session_id, 180) || null,
-        next_session_focus_id: sanitizeString(recommendation.next_session_focus_id, 180) || null,
-        recommendation_type: normalizeAbaRecommendationType(recommendation.recommendation_type),
-        priority: normalizeAbaRecommendationPriority(recommendation.priority),
-        title: sanitizeAbaRecommendationText(recommendation.title, 240),
-        summary: sanitizeAbaRecommendationText(recommendation.summary, 500),
-        rationale: sanitizeAbaRecommendationText(recommendation.rationale, 1000),
-        suggested_action: sanitizeAbaRecommendationText(recommendation.suggested_action, 1000),
-        target_id: sanitizeString(recommendation.target_id, 120) || null,
-        behavior_id: sanitizeString(recommendation.behavior_id, 120) || null,
-        program_id: sanitizeString(recommendation.program_id, 120) || null,
-        domain: sanitizeAbaRecommendationText(recommendation.domain, 180) || null,
-        metric_name: sanitizeAbaRecommendationText(recommendation.metric_name, 160) || null,
-        previous_value: recommendation.previous_value ?? null,
-        current_value: recommendation.current_value ?? null,
-        delta_value: recommendation.delta_value ?? null,
-        evidence: sanitizeClinicalPayload(recommendation.evidence || {}),
-        status: normalizeAbaRecommendationStatus(recommendation.status),
-        accepted_by: sanitizeString(recommendation.accepted_by, 120) || null,
-        accepted_at: recommendation.accepted_at || null,
-        rejected_by: sanitizeString(recommendation.rejected_by, 120) || null,
-        rejected_at: recommendation.rejected_at || null,
-        edited_from_id: sanitizeString(recommendation.edited_from_id, 180) || null,
-        suggestion_key: sanitizeString(recommendation.suggestion_key, 80),
-        suggestion_key_version: 2,
-        context_hash: sanitizeString(recommendation.context_hash, 180),
-        created_at: recommendation.created_at || new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      });
-    });
-    const { data, error } = await supabase.rpc('upsert_aba_clinical_recommendations_v2', {
-      p_organization_id: params.organizationId,
-      p_clinic_id: params.clinicId,
-      p_patient_id: params.patientId,
-      p_actor_id: params.createdBy,
-      p_recommendations: payloads
-    });
-    if (error) {
-      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
-        return { ok: false, status: 503, error: 'A atualização transacional da fila clínica ainda não foi aplicada.', data: [] };
-      }
-      throw error;
-    }
-    const persistedRows = Array.isArray((data as any)?.recommendations)
-      ? (data as any).recommendations
-      : [];
-    return { ok: true, status: 200, data: persistedRows };
-  };
-
   const fetchAbaRecommendationById = async (recommendationId: string, clinicId: string) => {
     let query = supabase
       .from('aba_clinical_recommendations')
@@ -55659,98 +55593,77 @@ async function startServer() {
     return data || null;
   };
 
-  const applyAbaRecommendationDecision = async (params: {
+  const abaRecommendationIdempotencyKey = (req: any) => sanitizeString(
+    req.body?.idempotencyKey ||
+      req.body?.idempotency_key ||
+      req.get?.('Idempotency-Key') ||
+      req.headers?.['idempotency-key'],
+    180
+  );
+
+  const applyAbaRecommendationDecisionV3 = async (params: {
     recommendation: any;
-    clinicId: string;
-    organizationId: string;
-    actorId: string;
     actionType: 'ACCEPTED' | 'REJECTED' | 'EDITED' | 'APPLIED_TO_NEXT_SESSION';
+    payload: Record<string, any>;
     idempotencyKey: string;
-    payload?: Record<string, any>;
+    actor: any;
+    clinicId: string;
   }) => {
     const patientId = sanitizeString(params.recommendation?.patient_id, 120);
-    const recommendationId = sanitizeString(params.recommendation?.id, 180);
-    const { data, error } = await supabase.rpc('apply_aba_clinical_recommendation_decision_v2', {
-      p_organization_id: params.organizationId,
+    const actorId = sanitizeString(params.actor?.id || params.actor?.user_id, 120);
+    if (!params.idempotencyKey) {
+      return { ok: false, status: 400, error: 'Chave de idempotência obrigatória.' };
+    }
+    const { data, error } = await supabase.rpc('apply_aba_clinical_recommendation_decision_v3', {
       p_clinic_id: params.clinicId,
       p_patient_id: patientId,
-      p_recommendation_id: recommendationId,
+      p_recommendation_id: sanitizeString(params.recommendation?.id, 180),
       p_action_type: params.actionType,
       p_idempotency_key: params.idempotencyKey,
       p_payload: sanitizeClinicalPayload(params.payload || {}),
-      p_actor_id: params.actorId
+      p_actor_id: actorId
     });
     if (error) {
-      const code = sanitizeString(error?.message || error?.code, 400);
-      if (code.includes('FORBIDDEN') || code.includes('SCOPE_INVALID') || code.includes('TENANT')) {
-        return { ok: false, status: 403, error: 'Esta sugestão não pertence ao seu contexto clínico.' };
+      const code = sanitizeString(error?.message || error?.code, 600);
+      if (code.includes('ABA_RECOMMENDATION_ACTOR_FORBIDDEN') || (code.includes('ABA_RECOMMENDATION_') && code.includes('_SCOPE_INVALID'))) {
+        return { ok: false, status: 403, error: 'Sugestão fora do escopo desta clínica.' };
       }
-      if (code.includes('NOT_FOUND')) {
+      if (code.includes('ABA_RECOMMENDATION_DECISION_INPUT_INVALID') || code.includes('ABA_RECOMMENDATION_ACTION_INVALID') || code.includes('ABA_RECOMMENDATION_TARGET_REQUIRED')) {
+        return { ok: false, status: 400, error: 'Dados inválidos para atualizar esta sugestão.' };
+      }
+      if (code.includes('ABA_RECOMMENDATION_NOT_FOUND') || code.includes('ABA_RECOMMENDATION_CANONICAL_NOT_FOUND')) {
         return { ok: false, status: 404, error: 'Sugestão não encontrada.' };
       }
-      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
-        return { ok: false, status: 503, error: 'A atualização transacional da fila clínica ainda não foi aplicada.' };
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error) || code.includes('apply_aba_clinical_recommendation_decision_v3')) {
+        return { ok: false, status: 503, error: 'Migration v3 das sugestões clínicas ainda não aplicada.' };
       }
       throw error;
     }
-    if ((data as any)?.conflict) {
+    const result = data && typeof data === 'object' ? data as any : {};
+    if (result?.conflict || result?.success === false) {
+      const conflictMessages: Record<string, string> = {
+        ABA_RECOMMENDATION_ALREADY_DECIDED: 'Esta sugestão já foi decidida em outra aba ou dispositivo.',
+        ABA_RECOMMENDATION_IDEMPOTENCY_CONFLICT: 'A mesma operação foi reenviada com dados diferentes.',
+        ABA_RECOMMENDATION_TERMINAL_HISTORY_CONFLICT: 'Esta sugestão possui decisões históricas contraditórias e precisa de revisão.',
+        ABA_RECOMMENDATION_EDIT_IDENTITY_CONFLICT: 'Já existe uma sugestão clínica equivalente para os campos selecionados.'
+      };
       return {
         ok: false,
         status: 409,
-        error: 'Esta sugestão já foi decidida em outra aba ou dispositivo.',
-        data: (data as any)?.recommendation || null,
-        code: (data as any)?.code || 'ABA_RECOMMENDATION_CONFLICT',
-        groupedRecommendationIds: Array.isArray((data as any)?.groupedRecommendationIds)
-          ? (data as any).groupedRecommendationIds
-          : []
+        error: conflictMessages[String(result?.code || '')] || 'A sugestão foi alterada por outra operação.',
+        data: result?.recommendation || null,
+        groupedRecommendationIds: result?.groupedRecommendationIds || []
       };
     }
     return {
       ok: true,
       status: 200,
-      data: (data as any)?.recommendation || null,
-      planItem: (data as any)?.planItem || null,
-      auditEventId: (data as any)?.auditEventId || null,
-      groupedRecommendationIds: Array.isArray((data as any)?.groupedRecommendationIds)
-        ? (data as any).groupedRecommendationIds
-        : [],
-      idempotent: Boolean((data as any)?.idempotent)
+      data: result?.recommendation || null,
+      planItem: result?.planItem || null,
+      auditEventId: result?.auditEventId || null,
+      groupedRecommendationIds: result?.groupedRecommendationIds || [],
+      idempotent: Boolean(result?.idempotent)
     };
-  };
-
-  const readAbaRecommendationIdempotencyKey = (req: any) => sanitizeString(
-    req.body?.idempotencyKey
-      || req.body?.idempotency_key
-      || req.get?.('X-Idempotency-Key'),
-    180
-  );
-
-  const hasAbaOrganizationClaimMismatch = (req: any, organizationId: string) => {
-    const claimedOrganizationId = sanitizeString(
-      req.body?.organization_id || req.body?.organizationId,
-      120
-    );
-    return Boolean(claimedOrganizationId && claimedOrganizationId !== organizationId);
-  };
-
-  const sendAbaRecommendationDecisionResult = (res: any, result: any) => {
-    if (!result?.ok) {
-      return res.status(result?.status || 500).json({
-        success: false,
-        error: result?.error || 'Não foi possível atualizar a sugestão agora.',
-        code: result?.code || undefined,
-        data: result?.data || null,
-        groupedRecommendationIds: result?.groupedRecommendationIds || []
-      });
-    }
-    return res.json({
-      success: true,
-      data: result.data,
-      planItem: result.planItem || null,
-      auditEventId: result.auditEventId || null,
-      groupedRecommendationIds: result.groupedRecommendationIds || [],
-      idempotent: Boolean(result.idempotent)
-    });
   };
 
   const assertAbaSessionCanAcceptClinicalWrite = async (
@@ -60954,8 +60867,7 @@ async function startServer() {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      const sourceSessionId = sanitizeString(req.query?.sourceSessionId || req.query?.source_session_id, 180);
+      const organizationId = clinicId;
       const limit = parseAbaRecordListLimit(req.query?.limit);
       const beforeRaw = sanitizeString(req.query?.before, 80);
       const beforeIso = beforeRaw ? sanitizeIsoDateTime(beforeRaw, '') : '';
@@ -60963,24 +60875,25 @@ async function startServer() {
         .from('aba_clinical_recommendations')
         .select(ABA_CLINICAL_RECOMMENDATION_SELECT)
         .eq('organization_id', organizationId)
+        .eq('clinic_id', clinicId)
         .eq('patient_id', patientId)
         .is('canonical_recommendation_id', null)
+        .neq('status', 'SUPERSEDED')
         .in('status', ['SUGGESTED', 'ACCEPTED', 'EDITED', 'REJECTED', 'APPLIED_TO_NEXT_SESSION', 'EXPIRED'])
         .order('created_at', { ascending: false })
         .limit(limit + 1);
-      if (sourceSessionId) query = query.eq('source_session_id', sourceSessionId);
       if (beforeIso) query = query.lt('created_at', beforeIso);
-      query = applyAbaTenantScope(query, req.session.user, clinicId, organizationId);
       const { data, error } = await query;
       if (error) {
-        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) {
+          return res.status(503).json({ success: false, error: 'Migration v3 das sugestões clínicas ainda não aplicada.' });
+        }
         throw error;
       }
       const pageRows = (data || []).slice(0, limit);
       const hasMore = (data || []).length > limit;
-      const canonicalRows = canonicalizeAbaRecommendationRows(pageRows);
       const enriched = await enrichTherapeuticRecommendationContexts({
-        recommendations: canonicalRows,
+        recommendations: pageRows,
         patientId,
         clinicId,
         organizationId
@@ -60991,8 +60904,9 @@ async function startServer() {
         meta: {
           queryCount: enriched.queryCount + 1,
           batched: true,
-          pageSize: canonicalRows.length,
-          consolidatedCount: Math.max(0, pageRows.length - canonicalRows.length),
+          pageSize: pageRows.length,
+          consolidatedCount: 0,
+          identityVersion: 3,
           hasMore,
           nextCursor: hasMore && pageRows.length ? pageRows[pageRows.length - 1]?.created_at || null : null
         }
@@ -61007,9 +60921,11 @@ async function startServer() {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de geração de planejamento ABA')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      if (hasAbaOrganizationClaimMismatch(req, organizationId)) {
-        return res.status(403).json({ success: false, error: 'A organização informada não corresponde à sessão autenticada.' });
+      const organizationId = clinicId;
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const requestedOrganizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId, 120);
+      if (requestedOrganizationId && requestedOrganizationId !== organizationId) {
+        return res.status(403).json({ success: false, error: 'Organização divergente do contexto autenticado.' });
       }
       const focusType = normalizePlanningFocusType(req.body?.focusType || req.body?.focus_type || req.query?.focusType || req.query?.focus_type);
       const sourceSessionId = sanitizeString(req.body?.sourceSessionId || req.body?.source_session_id || req.query?.sourceSessionId || req.query?.source_session_id, 180) || null;
@@ -61019,16 +60935,11 @@ async function startServer() {
         patientId,
         sourceSessionId,
         focusType,
-        supervisorId: sanitizeString(req.session.user?.id, 120),
+        supervisorId: actorId,
         ...context
       });
       if (generated.recommendations.length === 0) {
-        return res.json({
-          success: true,
-          data: [],
-          contextHash: generated.contextHash,
-          reusedExisting: generated.reusedExisting
-        });
+        return res.json({ success: true, data: [], contextHash: generated.contextHash, reusedExisting: generated.reusedExisting, identityVersion: 3 });
       }
       const focusId = `focus-${abaPlanningHash([organizationId, patientId, sourceSessionId || '', focusType, generated.contextHash])}`;
       const focusPayload = cleanObject({
@@ -61039,30 +60950,63 @@ async function startServer() {
         source_session_id: sourceSessionId,
         focus_type: normalizeAbaPlanningFocusType(focusType),
         status: 'GENERATED',
-        created_by: sanitizeString(req.session.user?.id, 120),
+        created_by: actorId,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
-      const focusResult = await writeAbaRowWithSchemaFallback('aba_next_session_focuses', focusPayload, 'upsert');
-      if (focusResult.error) {
-        if (hasMissingFinancialSchema(focusResult.error)) {
-          return res.status(503).json({ success: false, error: 'Schema de planejamento ABA ainda não aplicado.' });
-        }
-        throw focusResult.error;
-      }
-      const persisted = await persistGeneratedRecommendations({
-        recommendations: generated.recommendations.map((recommendation) => ({ ...recommendation, next_session_focus_id: focusId })),
-        clinicId,
-        organizationId,
-        patientId,
-        createdBy: sanitizeString(req.session.user?.id, 120)
+      await writeAbaRowWithSchemaFallback('aba_next_session_focuses', focusPayload, 'upsert');
+      const candidates = generated.recommendations.map((recommendation) => cleanObject({
+        organization_id: organizationId,
+        patient_id: patientId,
+        source_session_id: sanitizeString(recommendation.source_session_id, 180) || sourceSessionId,
+        next_session_focus_id: focusId,
+        recommendation_type: normalizeAbaRecommendationType(recommendation.recommendation_type),
+        priority: normalizeAbaRecommendationPriority(recommendation.priority),
+        title: sanitizeAbaRecommendationText(recommendation.title, 240),
+        summary: sanitizeAbaRecommendationText(recommendation.summary, 500),
+        rationale: sanitizeAbaRecommendationText(recommendation.rationale, 1000),
+        suggested_action: sanitizeAbaRecommendationText(recommendation.suggested_action, 1000),
+        target_id: sanitizeString(recommendation.target_id, 120) || null,
+        behavior_id: sanitizeString(recommendation.behavior_id, 120) || null,
+        program_id: sanitizeString(recommendation.program_id, 120) || null,
+        domain: sanitizeAbaRecommendationText(recommendation.domain, 180) || null,
+        metric_name: sanitizeAbaRecommendationText(recommendation.metric_name, 160) || null,
+        previous_value: recommendation.previous_value ?? null,
+        current_value: recommendation.current_value ?? null,
+        delta_value: recommendation.delta_value ?? null,
+        evidence: sanitizeClinicalPayload(recommendation.evidence || {}),
+        context_hash: sanitizeString(recommendation.context_hash || generated.contextHash, 180),
+        created_at: recommendation.created_at || new Date().toISOString()
+      }));
+      const { data, error } = await supabase.rpc('upsert_aba_clinical_recommendations_v3', {
+        p_clinic_id: clinicId,
+        p_patient_id: patientId,
+        p_actor_id: actorId,
+        p_recommendations: candidates
       });
-      if (!persisted.ok) return res.status((persisted as any).status || 503).json({ success: false, error: (persisted as any).error });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 600);
+        if (code.includes('TENANT_PAYLOAD_MISMATCH') || code.includes('PATIENT_PAYLOAD_MISMATCH') || code.includes('ACTOR_FORBIDDEN') || code.includes('SCOPE_INVALID')) {
+          return res.status(403).json({ success: false, error: 'Sugestão fora do escopo autenticado.' });
+        }
+        if (hasMissingFinancialSchema(error) || isMissingRelationError(error) || code.includes('upsert_aba_clinical_recommendations_v3')) {
+          return res.status(503).json({ success: false, error: 'Migration v3 das sugestões clínicas ainda não aplicada.' });
+        }
+        throw error;
+      }
+      const persistedRows = Array.isArray((data as any)?.recommendations) ? (data as any).recommendations : [];
+      const enriched = await enrichTherapeuticRecommendationContexts({
+        recommendations: persistedRows,
+        patientId,
+        clinicId,
+        organizationId
+      });
       return res.json({
         success: true,
-        data: canonicalizeAbaRecommendationRows(persisted.data || []),
+        data: enriched.rows,
         contextHash: generated.contextHash,
-        reusedExisting: generated.reusedExisting
+        reusedExisting: generated.reusedExisting,
+        identityVersion: 3
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível gerar sugestões agora.' });
@@ -61073,35 +61017,28 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de aceite de sugestão ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      if (hasAbaOrganizationClaimMismatch(req, organizationId)) {
-        return res.status(403).json({ success: false, error: 'A organização informada não corresponde à sessão autenticada.' });
-      }
-      const idempotencyKey = readAbaRecommendationIdempotencyKey(req);
-      if (!idempotencyKey) {
-        return res.status(400).json({ success: false, error: 'Chave de idempotência obrigatória.' });
-      }
       const recommendation = await fetchAbaRecommendationById(sanitizeString(req.params.recommendationId, 180), clinicId);
       if (!recommendation?.id) return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
-      if (sanitizeString(recommendation.organization_id, 120) !== organizationId) {
-        return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
-      }
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
       }
-      const actionType = Boolean(req.body?.applyToNextSession || req.body?.createPlanItem)
-        ? 'APPLIED_TO_NEXT_SESSION'
-        : 'ACCEPTED';
-      const persisted = await applyAbaRecommendationDecision({
+      const actionType = req.body?.applyToNextSession || req.body?.createPlanItem ? 'APPLIED_TO_NEXT_SESSION' : 'ACCEPTED';
+      const persisted = await applyAbaRecommendationDecisionV3({
         recommendation,
-        clinicId,
-        organizationId,
-        actorId: sanitizeString(req.session.user?.id, 120),
         actionType,
-        idempotencyKey,
-        payload: { createPlanItem: actionType === 'APPLIED_TO_NEXT_SESSION' }
+        payload: {},
+        idempotencyKey: abaRecommendationIdempotencyKey(req),
+        actor: req.session.user,
+        clinicId
       });
-      return sendAbaRecommendationDecisionResult(res, persisted);
+      if (!persisted.ok) return res.status(persisted.status).json({ success: false, error: persisted.error, data: persisted.data || null, groupedRecommendationIds: persisted.groupedRecommendationIds || [] });
+      return res.json({
+        success: true,
+        data: persisted.data,
+        planItem: persisted.planItem || null,
+        groupedRecommendationIds: persisted.groupedRecommendationIds || [],
+        idempotent: persisted.idempotent
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível aceitar a sugestão agora.' });
     }
@@ -61111,37 +61048,31 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de recusa de sugestão ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      if (hasAbaOrganizationClaimMismatch(req, organizationId)) {
-        return res.status(403).json({ success: false, error: 'A organização informada não corresponde à sessão autenticada.' });
-      }
-      const idempotencyKey = readAbaRecommendationIdempotencyKey(req);
-      if (!idempotencyKey) {
-        return res.status(400).json({ success: false, error: 'Chave de idempotência obrigatória.' });
-      }
       const recommendation = await fetchAbaRecommendationById(sanitizeString(req.params.recommendationId, 180), clinicId);
       if (!recommendation?.id) return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
-      if (sanitizeString(recommendation.organization_id, 120) !== organizationId) {
-        return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
-      }
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
       }
       const reason = sanitizeTextField(req.body?.reason || req.body?.motivo, 500);
       if (!reason) return res.status(400).json({ success: false, error: 'Informe o motivo da recusa.' });
-      const persisted = await applyAbaRecommendationDecision({
+      const persisted = await applyAbaRecommendationDecisionV3({
         recommendation,
-        clinicId,
-        organizationId,
-        actorId: sanitizeString(req.session.user?.id, 120),
         actionType: 'REJECTED',
-        idempotencyKey,
         payload: {
           reason,
           notes: sanitizeTextField(req.body?.notes || req.body?.observacao || req.body?.observation, 1000)
-        }
+        },
+        idempotencyKey: abaRecommendationIdempotencyKey(req),
+        actor: req.session.user,
+        clinicId
       });
-      return sendAbaRecommendationDecisionResult(res, persisted);
+      if (!persisted.ok) return res.status(persisted.status).json({ success: false, error: persisted.error, data: persisted.data || null, groupedRecommendationIds: persisted.groupedRecommendationIds || [] });
+      return res.json({
+        success: true,
+        data: persisted.data,
+        groupedRecommendationIds: persisted.groupedRecommendationIds || [],
+        idempotent: persisted.idempotent
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível recusar a sugestão agora.' });
     }
@@ -61151,7 +61082,7 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Vínculo de origem da recomendação ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const organizationId = clinicId;
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const recommendationId = sanitizeString(req.params.recommendationId, 180);
       const targetId = sanitizeString(req.body?.targetId || req.body?.target_id, 180);
@@ -61203,23 +61134,12 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de edição de sugestão ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      if (hasAbaOrganizationClaimMismatch(req, organizationId)) {
-        return res.status(403).json({ success: false, error: 'A organização informada não corresponde à sessão autenticada.' });
-      }
-      const idempotencyKey = readAbaRecommendationIdempotencyKey(req);
-      if (!idempotencyKey) {
-        return res.status(400).json({ success: false, error: 'Chave de idempotência obrigatória.' });
-      }
       const recommendation = await fetchAbaRecommendationById(sanitizeString(req.params.recommendationId, 180), clinicId);
       if (!recommendation?.id) return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
-      if (sanitizeString(recommendation.organization_id, 120) !== organizationId) {
-        return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
-      }
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
       }
-      const editablePayload = cleanObject({
+      const payload = cleanObject({
         title: sanitizeAbaRecommendationText(req.body?.title ?? recommendation.title, 240),
         summary: sanitizeAbaRecommendationText(req.body?.summary ?? recommendation.summary, 500),
         rationale: sanitizeAbaRecommendationText(req.body?.rationale ?? recommendation.rationale, 1000),
@@ -61234,20 +61154,23 @@ async function startServer() {
         clinical_note: sanitizeTextField(req.body?.clinicalNote || req.body?.clinical_note || req.body?.notes || '', 1000) || null,
         apply_for_date: sanitizeString(req.body?.applyForDate || req.body?.apply_for_date, 40) || null,
         responsible_professional_id: sanitizeString(req.body?.responsibleProfessionalId || req.body?.responsible_professional_id, 120) || null,
-        changed_fields: Object.keys(req.body || {})
-          .filter((key) => !['idempotencyKey', 'idempotency_key', 'organizationId', 'organization_id', 'groupedRecommendationIds'].includes(key))
-          .slice(0, 50)
+        changed_fields: Object.keys(req.body || {}).slice(0, 50)
       });
-      const persisted = await applyAbaRecommendationDecision({
+      const persisted = await applyAbaRecommendationDecisionV3({
         recommendation,
-        clinicId,
-        organizationId,
-        actorId: sanitizeString(req.session.user?.id, 120),
         actionType: 'EDITED',
-        idempotencyKey,
-        payload: editablePayload
+        payload,
+        idempotencyKey: abaRecommendationIdempotencyKey(req),
+        actor: req.session.user,
+        clinicId
       });
-      return sendAbaRecommendationDecisionResult(res, persisted);
+      if (!persisted.ok) return res.status(persisted.status).json({ success: false, error: persisted.error, data: persisted.data || null, groupedRecommendationIds: persisted.groupedRecommendationIds || [] });
+      return res.json({
+        success: true,
+        data: persisted.data,
+        groupedRecommendationIds: persisted.groupedRecommendationIds || [],
+        idempotent: persisted.idempotent
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível editar a sugestão agora.' });
     }
@@ -61257,32 +61180,27 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de aplicação ao plano ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      if (hasAbaOrganizationClaimMismatch(req, organizationId)) {
-        return res.status(403).json({ success: false, error: 'A organização informada não corresponde à sessão autenticada.' });
-      }
-      const idempotencyKey = readAbaRecommendationIdempotencyKey(req);
-      if (!idempotencyKey) {
-        return res.status(400).json({ success: false, error: 'Chave de idempotência obrigatória.' });
-      }
       const recommendation = await fetchAbaRecommendationById(sanitizeString(req.params.recommendationId, 180), clinicId);
       if (!recommendation?.id) return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
-      if (sanitizeString(recommendation.organization_id, 120) !== organizationId) {
-        return res.status(404).json({ success: false, error: 'Sugestão não encontrada.' });
-      }
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(recommendation.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
       }
-      const persisted = await applyAbaRecommendationDecision({
+      const persisted = await applyAbaRecommendationDecisionV3({
         recommendation,
-        clinicId,
-        organizationId,
-        actorId: sanitizeString(req.session.user?.id, 120),
         actionType: 'APPLIED_TO_NEXT_SESSION',
-        idempotencyKey,
-        payload: { createPlanItem: true }
+        payload: {},
+        idempotencyKey: abaRecommendationIdempotencyKey(req),
+        actor: req.session.user,
+        clinicId
       });
-      return sendAbaRecommendationDecisionResult(res, persisted);
+      if (!persisted.ok) return res.status(persisted.status).json({ success: false, error: persisted.error, data: persisted.data || null, groupedRecommendationIds: persisted.groupedRecommendationIds || [] });
+      return res.json({
+        success: true,
+        data: persisted.data,
+        planItem: persisted.planItem || null,
+        groupedRecommendationIds: persisted.groupedRecommendationIds || [],
+        idempotent: persisted.idempotent
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível aplicar a sugestão ao plano agora.' });
     }

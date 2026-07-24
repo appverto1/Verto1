@@ -18,10 +18,8 @@ const packageJson = readFileSync(join(root, 'package.json'), 'utf8');
 const serverCode = readFileSync(join(root, 'server.ts'), 'utf8');
 const sessionModeCode = readFileSync(join(root, 'src/components/SessionMode.tsx'), 'utf8');
 const migrationSql = readFileSync(join(root, 'supabase/migrations/20260527120000_aba_next_session_planning.sql'), 'utf8');
-const integrityMigrationSql = readFileSync(
-  join(root, 'supabase/migrations/20260724163000_aba_recommendation_transactional_integrity.sql'),
-  'utf8'
-);
+const identityV3MigrationSql = readFileSync(join(root, 'supabase/migrations/20260724180000_aba_recommendation_identity_v3.sql'), 'utf8');
+const dataServiceCode = readFileSync(join(root, 'src/services/dataService.ts'), 'utf8');
 
 const tests: Array<{ name: string; fn: () => void }> = [];
 const test = (name: string, fn: () => void) => tests.push({ name, fn });
@@ -338,8 +336,9 @@ test('manutenção legada sem chave explícita é reconciliada sem criar outro c
     existingRecommendations: [legacy]
   });
   assert.equal(regenerated.recommendations.length, 1);
-  assert.equal(regenerated.recommendations[0].id, 'legacy-maintenance');
-  assert.equal(regenerated.reusedExisting, true);
+  const queue = deduplicateAbaRecommendationsForDecisionQueue([legacy, ...regenerated.recommendations]);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].groupedCount, 2);
 });
 
 test('regressão legada usa a janela clínica canônica e não reaparece em nova sessão', () => {
@@ -373,8 +372,9 @@ test('regressão legada usa a janela clínica canônica e não reaparece em nova
     existingRecommendations: [legacy]
   });
   assert.equal(regenerated.recommendations.length, 1);
-  assert.equal(regenerated.recommendations[0].id, 'legacy-regression');
-  assert.equal(regenerated.reusedExisting, true);
+  const queue = deduplicateAbaRecommendationsForDecisionQueue([legacy, ...regenerated.recommendations]);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].groupedCount, 2);
 });
 
 test('alertas distintos do mesmo alvo, motivo e janela geram um único card', () => {
@@ -397,7 +397,7 @@ test('alertas distintos do mesmo alvo, motivo e janela geram um único card', ()
   );
 });
 
-test('requisições concorrentes produzem a mesma chave candidata sem ID persistente no frontend', () => {
+test('requisições concorrentes para o mesmo ciclo geram o mesmo ID idempotente', () => {
   const input = {
     ...baseInput,
     focusType: 'MAINTENANCE',
@@ -405,8 +405,7 @@ test('requisições concorrentes produzem a mesma chave candidata sem ID persist
   };
   const left = generateNextSessionRecommendations(input);
   const right = generateNextSessionRecommendations(input);
-  assert.equal(left.recommendations[0].id, undefined);
-  assert.equal(right.recommendations[0].id, undefined);
+  assert.equal(left.recommendations[0].id, right.recommendations[0].id);
   assert.equal(
     buildAbaRecommendationSemanticKey(left.recommendations[0]),
     buildAbaRecommendationSemanticKey(right.recommendations[0])
@@ -441,10 +440,138 @@ test('ciclos clínicos diferentes continuam como sugestões distintas', () => {
     status: 'SUGGESTED'
   };
   const queue = deduplicateAbaRecommendationsForDecisionQueue([
-    { ...common, id: 'cycle-1', evidence: { reasonCode: 'maintenance_probe_due', clinicalWindowKey: 'schedule-1' } },
-    { ...common, id: 'cycle-2', evidence: { reasonCode: 'maintenance_probe_due', clinicalWindowKey: 'schedule-2' } }
+    { ...common, id: 'cycle-1', evidence: { reasonCode: 'maintenance_probe_due', clinicalCycleKeyV3: 'schedule-1' } },
+    { ...common, id: 'cycle-2', evidence: { reasonCode: 'maintenance_probe_due', clinicalCycleKeyV3: 'schedule-2' } }
   ]);
   assert.equal(queue.length, 2);
+});
+
+
+test('identidade v3 ignora sessão, contexto, título, alertId e suggestionKey diagnóstica', () => {
+  const common = {
+    organization_id: 'clinic-1',
+    patient_id: 'patient-1',
+    recommendation_type: 'REGRESSION_ATTENTION',
+    target_id: 'target-1',
+    metric_name: 'regression_alert',
+    status: 'SUGGESTED'
+  };
+  const left = buildAbaRecommendationSemanticKey({
+    ...common,
+    source_session_id: 'session-a',
+    context_hash: 'context-a',
+    title: 'Ponto de atencao para regressao',
+    evidence: { alertId: 'alert-a', suggestionKey: 'legacy-a', clinicalWindowKey: 'week-a' }
+  });
+  const right = buildAbaRecommendationSemanticKey({
+    ...common,
+    source_session_id: 'session-b',
+    context_hash: 'context-b',
+    title: 'Atenção para regressão em &quot;alvo do PEI&quot;',
+    evidence: { alertId: 'alert-b', suggestionKey: 'legacy-b', clinicalWindowKey: 'week-b' }
+  });
+  assert.equal(left, right);
+});
+
+test('identidade v3 mantém alvos diferentes separados mesmo com o mesmo título', () => {
+  const common = {
+    organization_id: 'clinic-1',
+    patient_id: 'patient-1',
+    recommendation_type: 'MAINTENANCE_PROBE',
+    metric_name: 'maintenance_schedule',
+    title: 'Agendar sondagem de manutenção: Nomeia 6 itens nao reforcadores',
+    evidence: { clinicalCycleKeyV3: 'active' }
+  };
+  assert.notEqual(
+    buildAbaRecommendationSemanticKey({ ...common, target_id: 'target-a' }),
+    buildAbaRecommendationSemanticKey({ ...common, target_id: 'target-b' })
+  );
+});
+
+test('identidade v3 trata skillId como o mesmo alvo canônico quando target_id está ausente ou é igual', () => {
+  const common = {
+    organization_id: 'clinic-1',
+    patient_id: 'patient-1',
+    recommendation_type: 'MAINTENANCE_PROBE',
+    metric_name: 'maintenance_schedule',
+    evidence: { reasonCode: 'maintenance_probe_due', clinicalCycleKeyV3: 'active' }
+  };
+  const targetOnly = buildAbaRecommendationSemanticKey({ ...common, target_id: 'target-a' });
+  const skillOnly = buildAbaRecommendationSemanticKey({ ...common, evidence: { ...common.evidence, skillId: 'target-a' } });
+  const targetAndSameSkill = buildAbaRecommendationSemanticKey({ ...common, target_id: 'target-a', evidence: { ...common.evidence, skillId: 'target-a' } });
+  assert.equal(targetOnly, skillOnly);
+  assert.equal(targetOnly, targetAndSameSkill);
+});
+
+test('identidade v3 preserva janela clínica explícita para tipos fora de regressão e manutenção', () => {
+  const common = {
+    organization_id: 'clinic-1',
+    patient_id: 'patient-1',
+    recommendation_type: 'GENERALIZATION',
+    target_id: 'target-a',
+    metric_name: 'generalization_candidate'
+  };
+  assert.notEqual(
+    buildAbaRecommendationSemanticKey({ ...common, evidence: { clinicalWindowKey: 'snapshot-a' } }),
+    buildAbaRecommendationSemanticKey({ ...common, evidence: { clinicalWindowKey: 'snapshot-b' } })
+  );
+});
+
+test('os 36 registros auditados convergem para oito grupos clínicos v3', () => {
+  const rows = [
+    ...Array.from({ length: 7 }, (_, index) => ({ id: `r1-${index}`, recommendation_type: 'REGRESSION_ATTENTION', target_id: '1780494368466' })),
+    ...Array.from({ length: 6 }, (_, index) => ({ id: `r2-${index}`, recommendation_type: 'REGRESSION_ATTENTION', target_id: '1780420265023' })),
+    ...Array.from({ length: 6 }, (_, index) => ({ id: `r3-${index}`, recommendation_type: 'REGRESSION_ATTENTION', target_id: '1780420265939' })),
+    ...Array.from({ length: 6 }, (_, index) => ({ id: `r4-${index}`, recommendation_type: 'REGRESSION_ATTENTION', target_id: '1780420267884' })),
+    ...Array.from({ length: 3 }, (_, index) => ({ id: `m1-${index}`, recommendation_type: 'MAINTENANCE_PROBE', target_id: '6c3284c8-2a1e-509d-b6c0-018ba1c4b866' })),
+    ...Array.from({ length: 3 }, (_, index) => ({ id: `m2-${index}`, recommendation_type: 'MAINTENANCE_PROBE', target_id: 'c7b837c3-fc67-5d36-a5cb-04624a001649' })),
+    ...Array.from({ length: 3 }, (_, index) => ({ id: `m3-${index}`, recommendation_type: 'MAINTENANCE_PROBE', target_id: 'de65b3f1-bc01-5359-b650-b6c70678504a' })),
+    ...Array.from({ length: 2 }, (_, index) => ({ id: `m4-${index}`, recommendation_type: 'MAINTENANCE_PROBE', target_id: 'd089666d-b4e2-5890-8dd9-2219adb200d2' }))
+  ].map((row) => ({
+    ...row,
+    organization_id: '1bbf0c80-dfe0-4801-8a4f-7447e06cc0d6',
+    patient_id: '1ede0f1a-af0e-4c49-94b4-7d9bd81dac23',
+    metric_name: row.recommendation_type === 'REGRESSION_ATTENTION' ? 'regression_alert' : 'maintenance_schedule',
+    evidence: { clinicalCycleKeyV3: 'active' }
+  }));
+  assert.equal(rows.length, 36);
+  assert.equal(new Set(rows.map(buildAbaRecommendationSemanticKey)).size, 8);
+});
+
+test('migration v3 reconstrói identidade no banco e preserva conflito terminal', () => {
+  assert.match(identityV3MigrationSql, /suggestion_key_v3 text/i);
+  assert.match(identityV3MigrationSql, /aba_recommendation_semantic_material_v3/i);
+  assert.match(identityV3MigrationSql, /CONTRADICTORY_TERMINAL_DECISIONS/);
+  assert.match(identityV3MigrationSql, /TERMINAL_CONFLICT_DETECTED/);
+  assert.match(identityV3MigrationSql, /upsert_aba_clinical_recommendations_v3/);
+  assert.match(identityV3MigrationSql, /apply_aba_clinical_recommendation_decision_v3/);
+  assert.match(identityV3MigrationSql, /for update/i);
+  assert.match(identityV3MigrationSql, /idempotency_key/);
+  assert.match(identityV3MigrationSql, /aba_recommendation_audit_append_only/);
+  assert.match(identityV3MigrationSql, /rec-v3-' \|\| public\.aba_recommendation_sha256\(\s*v_organization_id \|\| '\|' \|\| p_patient_id::text \|\| '\|' \|\| v_suggestion_key_v3/);
+  assert.match(identityV3MigrationSql, /clientSuggestionKeyDiagnostic/);
+  assert.match(identityV3MigrationSql, /revoke all on function public\.aba_can_read_recommendation_scope_v3/);
+  assert.match(identityV3MigrationSql, /grant execute on function public\.aba_can_read_recommendation_scope_v3[\s\S]*to authenticated, service_role/);
+  const semanticFunction = identityV3MigrationSql.match(/create or replace function public\.aba_recommendation_semantic_material_v3\([\s\S]*?\n\$\$;/i)?.[0] || '';
+  assert.ok(semanticFunction);
+  assert.doesNotMatch(semanticFunction, /suggestionKey|source_session_id|context_hash|alertId|snapshotId|title/i);
+});
+
+test('servidor usa tenant autenticado e RPC v3 antes da paginação', () => {
+  assert.match(serverCode, /const organizationId = clinicId;/);
+  assert.match(serverCode, /upsert_aba_clinical_recommendations_v3/);
+  assert.match(serverCode, /apply_aba_clinical_recommendation_decision_v3/);
+  assert.match(serverCode, /\.is\('canonical_recommendation_id', null\)/);
+  assert.match(serverCode, /\.neq\('status', 'SUPERSEDED'\)/);
+  assert.match(dataServiceCode, /abaDecisionIdempotencyKeys/);
+  assert.match(dataServiceCode, /idempotencyKey/);
+  assert.match(serverCode, /groupedRecommendationIds: persisted\.groupedRecommendationIds \|\| \[\]/);
+  const queueRoute = serverCode.slice(
+    serverCode.indexOf("app.get('/api/aba/patients/:patientId/next-session/recommendations'"),
+    serverCode.indexOf("app.post('/api/aba/patients/:patientId/next-session/recommendations/generate'")
+  );
+  assert.ok(queueRoute);
+  assert.doesNotMatch(queueRoute, /\.eq\('source_session_id'/);
 });
 
 test('estado editado prevalece sobre duplicata pendente sem remover o histórico', () => {
@@ -482,12 +609,8 @@ test('infraestrutura de planning esta persistente, economica e sem select star',
   assert.match(serverCode, /app\.post\('\/api\/aba\/recommendations\/:recommendationId\/accept'/);
   assert.match(serverCode, /Informe o motivo da recusa/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/recommendations\/:recommendationId\/apply-to-next-session'/);
-  assert.match(serverCode, /canonicalizeAbaRecommendationRows/);
-  assert.match(serverCode, /upsert_aba_clinical_recommendations_v2/);
-  assert.match(serverCode, /apply_aba_clinical_recommendation_decision_v2/);
-  assert.match(integrityMigrationSql, /on conflict \(organization_id, patient_id, suggestion_key\)/);
-  assert.match(integrityMigrationSql, /for update/);
-  assert.doesNotMatch(serverCode, /\.upsert\(payloads, \{ onConflict: 'id' \}\)/);
+  assert.match(serverCode, /upsert_aba_clinical_recommendations_v3/);
+  assert.match(serverCode, /apply_aba_clinical_recommendation_decision_v3/);
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
 
@@ -503,6 +626,8 @@ test('UI nao aplica sugestao sem aceite', () => {
   assert.match(sessionModeCode, /abaRecommendationTypeLabel/);
   assert.match(sessionModeCode, /planningDecisionInFlightRef/);
   assert.match(sessionModeCode, /formatAbaRecommendationTitle/);
+  assert.match(sessionModeCode, /deduplicateAbaRecommendationsForDecisionQueue\(\[\s*\.\.\.generatedRows,\s*\.\.\.previous/);
+  assert.match(sessionModeCode, /Conflito histórico entre aceite e recusa preservado/);
   assert.doesNotMatch(sessionModeCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(sessionModeCode, /window\.prompt\('Editar acao sugerida'/);
   assert.doesNotMatch(sessionModeCode, /\{recommendation\.priority \|\| 'MEDIUM'\}/);

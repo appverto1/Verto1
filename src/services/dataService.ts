@@ -567,6 +567,36 @@ function normalizeClinicalMutationResult(result: any, fallback: string) {
   return result;
 }
 
+const abaDecisionIdempotencyKeys = new Map<string, string>();
+
+function stableClinicalMutationPayload(value: any): string {
+  if (value === null || value === undefined) return 'null';
+  if (Array.isArray(value)) return `[${value.map(stableClinicalMutationPayload).join(',')}]`;
+  if (typeof value === 'object') {
+    return `{${Object.keys(value).filter((key) => !['idempotencyKey', 'idempotency_key'].includes(key)).sort().map((key) => `${JSON.stringify(key)}:${stableClinicalMutationPayload(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function abaDecisionPayload(scope: string, payload: any = {}) {
+  const cleanPayload = { ...(payload || {}) };
+  delete cleanPayload.idempotencyKey;
+  delete cleanPayload.idempotency_key;
+  const material = `${scope}:${stableClinicalMutationPayload(cleanPayload)}`;
+  let idempotencyKey = abaDecisionIdempotencyKeys.get(material);
+  if (!idempotencyKey) {
+    idempotencyKey = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    abaDecisionIdempotencyKeys.set(material, idempotencyKey);
+  }
+  return {
+    material,
+    body: { ...cleanPayload, idempotencyKey },
+    complete(result: any) {
+      if (result?.success !== false) abaDecisionIdempotencyKeys.delete(material);
+    }
+  };
+}
+
 function normalizePatientInviteSuccess(result: any) {
   const status = String(result?.status || '').trim().toUpperCase();
   if (!result?.success) return result;
@@ -4815,19 +4845,17 @@ export const dataService = {
   async acceptAbaRecommendation(recommendationId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/accept`;
-    const idempotencyKey = String(payload?.idempotencyKey || generateId());
     try {
+      const decision = abaDecisionPayload(`accept:${recommendationId}`, payload);
       const response = await fetchClinical(endpoint, {
         method: 'POST',
-        headers: {
-          ...(await getAuthHeaders()),
-          'Content-Type': 'application/json',
-          'X-Idempotency-Key': idempotencyKey
-        },
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ ...(payload || {}), idempotencyKey })
+        body: JSON.stringify(decision.body)
       }, { helperName: 'acceptAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      return normalizeClinicalTextRecord(await safeJson(response));
+      const result = normalizeClinicalTextRecord(await safeJson(response));
+      decision.complete(result);
+      return result;
     } catch (error) {
       return { success: false, error: 'Não foi possível aceitar a sugestão agora.' };
     }
@@ -4836,19 +4864,17 @@ export const dataService = {
   async rejectAbaRecommendation(recommendationId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/reject`;
-    const idempotencyKey = String(payload?.idempotencyKey || generateId());
     try {
+      const decision = abaDecisionPayload(`reject:${recommendationId}`, payload);
       const response = await fetchClinical(endpoint, {
         method: 'POST',
-        headers: {
-          ...(await getAuthHeaders()),
-          'Content-Type': 'application/json',
-          'X-Idempotency-Key': idempotencyKey
-        },
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ ...(payload || {}), idempotencyKey })
+        body: JSON.stringify(decision.body)
       }, { helperName: 'rejectAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      return normalizeClinicalTextRecord(await safeJson(response));
+      const result = normalizeClinicalTextRecord(await safeJson(response));
+      decision.complete(result);
+      return result;
     } catch (error) {
       return { success: false, error: 'Não foi possível recusar a sugestão agora.' };
     }
@@ -4857,19 +4883,17 @@ export const dataService = {
   async updateAbaRecommendation(recommendationId: string, patch: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}`;
-    const idempotencyKey = String(patch?.idempotencyKey || generateId());
     try {
+      const decision = abaDecisionPayload(`edit:${recommendationId}`, patch);
       const response = await fetchClinical(endpoint, {
         method: 'PATCH',
-        headers: {
-          ...(await getAuthHeaders()),
-          'Content-Type': 'application/json',
-          'X-Idempotency-Key': idempotencyKey
-        },
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ ...(patch || {}), idempotencyKey })
+        body: JSON.stringify(decision.body)
       }, { helperName: 'updateAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      return normalizeClinicalTextRecord(await safeJson(response));
+      const result = normalizeClinicalTextRecord(await safeJson(response));
+      decision.complete(result);
+      return result;
     } catch (error) {
       return { success: false, error: 'Não foi possível editar a sugestão agora.' };
     }
@@ -4894,19 +4918,17 @@ export const dataService = {
   async applyAbaRecommendationToNextSession(recommendationId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/recommendations/${encodeURIComponent(String(recommendationId))}/apply-to-next-session`;
-    const idempotencyKey = String(payload?.idempotencyKey || generateId());
     try {
+      const decision = abaDecisionPayload(`apply:${recommendationId}`, payload);
       const response = await fetchClinical(endpoint, {
         method: 'POST',
-        headers: {
-          ...(await getAuthHeaders()),
-          'Content-Type': 'application/json',
-          'X-Idempotency-Key': idempotencyKey
-        },
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ ...(payload || {}), idempotencyKey })
+        body: JSON.stringify(decision.body)
       }, { helperName: 'applyAbaRecommendationToNextSession', operation: 'write', table: 'aba_next_session_plan_items', hasExplicitColumns: true });
-      return normalizeClinicalTextRecord(await safeJson(response));
+      const result = normalizeClinicalTextRecord(await safeJson(response));
+      decision.complete(result);
+      return result;
     } catch (error) {
       return { success: false, error: 'Não foi possível aplicar ao plano agora.' };
     }

@@ -776,7 +776,6 @@ export const SessionMode = ({
   const [planningDecisionLoadingId, setPlanningDecisionLoadingId] = useState('');
   const planningGenerationInFlightRef = useRef(false);
   const planningDecisionInFlightRef = useRef(new Set<string>());
-  const planningDecisionRequestKeysRef = useRef(new Map<string, string>());
   const [editingRecommendation, setEditingRecommendation] = useState<any>(null);
   const [editRecommendationForm, setEditRecommendationForm] = useState({
     title: '',
@@ -4644,7 +4643,11 @@ export const SessionMode = ({
         setPlanningMessage(result?.error || 'Nao foi possivel gerar sugestoes agora.');
         return;
       }
-      setPlanningRecommendations(Array.isArray(result?.data) ? result.data : []);
+      const generatedRows = Array.isArray(result?.data) ? result.data : [];
+      setPlanningRecommendations((previous) => deduplicateAbaRecommendationsForDecisionQueue([
+        ...generatedRows,
+        ...previous
+      ]));
       setPlanningFilter('pending');
       if (result?.reusedExisting) setPlanningMessage('Sugestoes existentes reutilizadas para este contexto.');
     } finally {
@@ -4653,24 +4656,22 @@ export const SessionMode = ({
     }
   };
 
-  const getPlanningDecisionRequestKey = (scope: string) => {
-    const existing = planningDecisionRequestKeysRef.current.get(scope);
-    if (existing) return existing;
-    const requestKey = crypto.randomUUID();
-    planningDecisionRequestKeysRef.current.set(scope, requestKey);
-    return requestKey;
-  };
-
   const applyPlanningDecisionResult = (result: any, fallbackRecommendationId: string) => {
-    const recommendation = result?.data;
-    if (!recommendation?.id) return;
-    const groupedIds = new Set<string>([
-      fallbackRecommendationId,
-      ...(Array.isArray(result?.groupedRecommendationIds) ? result.groupedRecommendationIds : [])
-    ].map((value) => String(value || '')).filter(Boolean));
+    if (!result?.data) return;
+    const canonicalId = String(result.data?.id || fallbackRecommendationId);
+    const groupedIds = new Set<string>(
+      (Array.isArray(result?.groupedRecommendationIds) ? result.groupedRecommendationIds : [])
+        .map((value: any) => String(value || ''))
+        .filter(Boolean)
+    );
     setPlanningRecommendations((previous) => {
-      const remaining = previous.filter((item) => !groupedIds.has(String(item?.id || '')));
-      return [recommendation, ...remaining];
+      const withoutGroupedCopies = previous.filter((item) => {
+        const itemId = String(item?.id || '');
+        return !groupedIds.has(itemId) || itemId === canonicalId;
+      });
+      const hasCanonical = withoutGroupedCopies.some((item) => String(item?.id || '') === canonicalId);
+      if (!hasCanonical) return [result.data, ...withoutGroupedCopies];
+      return withoutGroupedCopies.map((item) => String(item?.id || '') === canonicalId ? result.data : item);
     });
   };
 
@@ -4680,20 +4681,15 @@ export const SessionMode = ({
     planningDecisionInFlightRef.current.add(recommendationId);
     setPlanningDecisionLoadingId(recommendationId);
     setPlanningMessage('');
-    const actionType = applyToNextSession ? 'APPLIED_TO_NEXT_SESSION' : 'ACCEPTED';
-    const requestScope = `${actionType}:${recommendationId}`;
-    const idempotencyKey = getPlanningDecisionRequestKey(requestScope);
     try {
       const result = applyToNextSession
-        ? await dataService.applyAbaRecommendationToNextSession(recommendationId, { idempotencyKey })
-        : await dataService.acceptAbaRecommendation(recommendationId, { idempotencyKey });
+        ? await dataService.applyAbaRecommendationToNextSession(recommendationId)
+        : await dataService.acceptAbaRecommendation(recommendationId);
       if (result?.success === false) {
         applyPlanningDecisionResult(result, recommendationId);
-        if (result?.data) planningDecisionRequestKeysRef.current.delete(requestScope);
         setPlanningMessage(result?.error || 'Nao foi possivel atualizar a sugestao agora.');
         return false;
       }
-      planningDecisionRequestKeysRef.current.delete(requestScope);
       applyPlanningDecisionResult(result, recommendationId);
       if (result?.planItem) {
         setNextSessionPlanItems((prev) => [result.planItem, ...prev.filter((item) => item.id !== result.planItem.id)]);
@@ -4744,24 +4740,16 @@ export const SessionMode = ({
     }
     planningDecisionInFlightRef.current.add(recommendationId);
     setPlanningDecisionLoadingId(recommendationId);
-    const decisionPayload = {
-      reason,
-      notes: rejectRecommendationNotes.trim()
-    };
-    const requestScope = `REJECTED:${recommendationId}:${JSON.stringify(decisionPayload)}`;
-    const idempotencyKey = getPlanningDecisionRequestKey(requestScope);
     try {
       const result = await dataService.rejectAbaRecommendation(recommendationId, {
-        ...decisionPayload,
-        idempotencyKey
+        reason,
+        notes: rejectRecommendationNotes.trim()
       });
       if (result?.success === false) {
         applyPlanningDecisionResult(result, recommendationId);
-        if (result?.data) planningDecisionRequestKeysRef.current.delete(requestScope);
         setPlanningMessage(result?.error || 'Nao foi possivel recusar a sugestao agora.');
         return;
       }
-      planningDecisionRequestKeysRef.current.delete(requestScope);
       applyPlanningDecisionResult(result, recommendationId);
       setRejectingRecommendation(null);
       setRejectRecommendationReason('');
@@ -4800,33 +4788,25 @@ export const SessionMode = ({
     }
     planningDecisionInFlightRef.current.add(recommendationId);
     setPlanningDecisionLoadingId(recommendationId);
-    const editPayload = {
-      title: editRecommendationForm.title.trim(),
-      priority: editRecommendationForm.priority,
-      recommendation_type: editRecommendationForm.recommendationType,
-      target_id: editRecommendationForm.targetId || null,
-      suggested_action: editRecommendationForm.suggestedAction.trim(),
-      summary: editRecommendationForm.summary.trim(),
-      rationale: editRecommendationForm.rationale.trim(),
-      clinicalNote: editRecommendationForm.clinicalNote.trim(),
-      applyForDate: editRecommendationForm.applyForDate || null,
-      responsibleProfessionalId: editRecommendationForm.responsibleProfessionalId || null
-    };
-    const requestScope = `EDITED:${recommendationId}:${JSON.stringify(editPayload)}`;
-    const idempotencyKey = getPlanningDecisionRequestKey(requestScope);
     try {
       const result = await dataService.updateAbaRecommendation(recommendationId, {
-        ...editPayload,
-        idempotencyKey
+        title: editRecommendationForm.title.trim(),
+        priority: editRecommendationForm.priority,
+        recommendation_type: editRecommendationForm.recommendationType,
+        target_id: editRecommendationForm.targetId || null,
+        suggested_action: editRecommendationForm.suggestedAction.trim(),
+        summary: editRecommendationForm.summary.trim(),
+        rationale: editRecommendationForm.rationale.trim(),
+        clinicalNote: editRecommendationForm.clinicalNote.trim(),
+        applyForDate: editRecommendationForm.applyForDate || null,
+        responsibleProfessionalId: editRecommendationForm.responsibleProfessionalId || null
       });
       if (result?.success === false) {
         applyPlanningDecisionResult(result, recommendationId);
-        if (result?.data) planningDecisionRequestKeysRef.current.delete(requestScope);
         setPlanningMessage(result?.error || 'Nao foi possivel editar a sugestao agora.');
         return;
       }
       const edited = result.data || editingRecommendation;
-      planningDecisionRequestKeysRef.current.delete(requestScope);
       applyPlanningDecisionResult({ ...result, data: edited }, recommendationId);
       setEditingRecommendation(null);
       setPlanningMessage(acceptAfterSave ? 'Edicao salva. Aplicando sugestao...' : 'Sugestao editada e mantida como pendente.');
@@ -5714,6 +5694,9 @@ export const SessionMode = ({
                           {Number(recommendation.groupedCount || 1) > 1 && (
                             <span className="rounded-full bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">{recommendation.groupedCount} agrupadas</span>
                           )}
+                          {recommendation.terminal_conflict && (
+                            <span className="rounded-full bg-red-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-red-700">Conflito histórico</span>
+                          )}
                         </div>
                         <h4 className="mt-3 text-sm font-bold text-gray-900">{planningRecommendationTitle(recommendation)}</h4>
                         {recommendation.summary && <p className="mt-1 text-xs font-semibold text-gray-600">{translateAbaRecommendationText(recommendation.summary)}</p>}
@@ -5722,6 +5705,11 @@ export const SessionMode = ({
                         <p className="mt-2 text-[11px] font-semibold text-gray-500">
                           Vínculo: {recommendation.target_id ? 'alvo do PEI' : recommendation.behavior_id ? 'comportamento' : 'resumo clínico'}
                         </p>
+                        {recommendation.terminal_conflict && (
+                          <p className="mt-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
+                            Há decisões históricas de aceite e recusa preservadas para este mesmo contexto clínico. O item está bloqueado para nova decisão e deve ser revisado no histórico.
+                          </p>
+                        )}
                         {isPending ? (
                         <div className="mt-3 flex flex-wrap gap-2">
                           {isMaintenanceSuggestion && (
@@ -5778,6 +5766,9 @@ export const SessionMode = ({
                           <div key={recommendation.id} className="rounded-xl bg-gray-50 px-3 py-2">
                             <p className="text-xs font-bold text-gray-800">{planningRecommendationTitle(recommendation)}</p>
                             <p className="mt-1 text-[11px] font-semibold text-gray-500">{abaRecommendationStatusLabel(recommendation.status)} · {abaRecommendationPriorityLabel(recommendation.priority)}</p>
+                            {recommendation.terminal_conflict && (
+                              <p className="mt-1 text-[11px] font-bold text-red-600">Conflito histórico entre aceite e recusa preservado.</p>
+                            )}
                           </div>
                         ))}
                       </div>
