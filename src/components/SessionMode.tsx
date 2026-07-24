@@ -90,6 +90,7 @@ import {
   abaRecommendationStatusLabel,
   abaRecommendationTypeLabel,
   deduplicateAbaRecommendationsForDecisionQueue,
+  formatAbaRecommendationTitle,
   translateAbaRecommendationText
 } from '../utils/abaPlanningEngine';
 
@@ -773,6 +774,8 @@ export const SessionMode = ({
   const [planningMessage, setPlanningMessage] = useState('');
   const [planningFilter, setPlanningFilter] = useState<'pending' | 'high' | 'regression' | 'maintenance' | 'prompt_fading' | 'edited' | 'history'>('pending');
   const [planningDecisionLoadingId, setPlanningDecisionLoadingId] = useState('');
+  const planningGenerationInFlightRef = useRef(false);
+  const planningDecisionInFlightRef = useRef(new Set<string>());
   const [editingRecommendation, setEditingRecommendation] = useState<any>(null);
   const [editRecommendationForm, setEditRecommendationForm] = useState({
     title: '',
@@ -4062,17 +4065,17 @@ export const SessionMode = ({
     return source;
   }, [historyPlanningRecommendations, pendingPlanningRecommendations, planningFilter]);
   const planningRecommendationTitle = (recommendation: any) => {
-    const rawTitle = translateAbaRecommendationText(recommendation?.title || '');
+    const rawTitle = formatAbaRecommendationTitle(recommendation?.title || '');
     const targetName = planningTargetNameById.get(String(recommendation?.target_id || recommendation?.targetId || '').trim());
     const type = String(recommendation?.recommendation_type || '').toUpperCase();
     if (targetName && (rawTitle === 'Ponto de atenção para regressão' || rawTitle === 'Atenção para regressão clínica')) {
-      return `Atenção para regressão em "${targetName}"`;
+      return `Atenção para regressão em “${targetName}”`;
     }
     if (targetName && rawTitle === 'Queda relevante em indicador clinico') {
-      return `Queda de desempenho em "${targetName}"`;
+      return `Queda de desempenho em “${targetName}”`;
     }
     if (targetName && rawTitle === 'Revisar reducao gradual de ajuda') {
-      return `Reduzir ajuda em "${targetName}"`;
+      return `Reduzir ajuda em “${targetName}”`;
     }
     if (!rawTitle) return abaRecommendationTypeLabel(type);
     return rawTitle;
@@ -4627,6 +4630,8 @@ export const SessionMode = ({
   };
 
   const handleGeneratePlanningRecommendations = async () => {
+    if (planningGenerationInFlightRef.current) return;
+    planningGenerationInFlightRef.current = true;
     setPlanningLoading(true);
     setPlanningMessage('');
     try {
@@ -4642,32 +4647,55 @@ export const SessionMode = ({
       setPlanningFilter('pending');
       if (result?.reusedExisting) setPlanningMessage('Sugestoes existentes reutilizadas para este contexto.');
     } finally {
+      planningGenerationInFlightRef.current = false;
       setPlanningLoading(false);
     }
   };
 
   const handleAcceptRecommendation = async (recommendation: any, applyToNextSession = true) => {
-    if (!recommendation?.id) return;
-    setPlanningDecisionLoadingId(String(recommendation.id));
+    const recommendationId = String(recommendation?.id || '');
+    if (!recommendationId || planningDecisionInFlightRef.current.has(recommendationId)) return false;
+    planningDecisionInFlightRef.current.add(recommendationId);
+    setPlanningDecisionLoadingId(recommendationId);
     setPlanningMessage('');
     try {
       const result = applyToNextSession
-        ? await dataService.applyAbaRecommendationToNextSession(recommendation.id)
-        : await dataService.acceptAbaRecommendation(recommendation.id);
+        ? await dataService.applyAbaRecommendationToNextSession(recommendationId)
+        : await dataService.acceptAbaRecommendation(recommendationId);
       if (result?.success === false) {
         setPlanningMessage(result?.error || 'Nao foi possivel atualizar a sugestao agora.');
-        return;
+        return false;
       }
-      setPlanningRecommendations((prev) => prev.map((item) => item.id === recommendation.id ? (result.data || item) : item));
+      setPlanningRecommendations((prev) => prev.map((item) => item.id === recommendationId ? (result.data || item) : item));
       if (result?.planItem) {
         setNextSessionPlanItems((prev) => [result.planItem, ...prev.filter((item) => item.id !== result.planItem.id)]);
         setPlanningMessage('Sugestao aceita e adicionada ao plano da proxima sessao.');
       } else {
         setPlanningMessage('Sugestao aceita para a proxima sessao.');
       }
+      return true;
     } finally {
+      planningDecisionInFlightRef.current.delete(recommendationId);
       setPlanningDecisionLoadingId('');
     }
+  };
+
+  const handleAcceptMaintenanceRecommendation = async (
+    recommendation: any,
+    scheduleMode: 'NEXT_PATIENT_SESSION' | 'CUSTOM_DATE' | 'DEFAULT_SEQUENCE'
+  ) => {
+    const accepted = await handleAcceptRecommendation(recommendation, scheduleMode === 'NEXT_PATIENT_SESSION');
+    if (!accepted) return;
+    const goal = sessionGoals.find((entry: any) => (
+      String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || '')
+    ));
+    if (!goal) return;
+    if (scheduleMode === 'NEXT_PATIENT_SESSION') {
+      await handleScheduleMaintenanceForNextSession(goal);
+      return;
+    }
+    openMaintenanceScheduleModal(goal);
+    setMaintenanceScheduleMode(scheduleMode);
   };
 
   const openRejectRecommendationModal = (recommendation: any) => {
@@ -4679,14 +4707,17 @@ export const SessionMode = ({
 
   const confirmRejectRecommendation = async () => {
     if (!rejectingRecommendation?.id) return;
+    const recommendationId = String(rejectingRecommendation.id);
+    if (planningDecisionInFlightRef.current.has(recommendationId)) return;
     const reason = rejectRecommendationReason.trim();
     if (!reason) {
       setPlanningMessage('Informe o motivo da recusa.');
       return;
     }
-    setPlanningDecisionLoadingId(String(rejectingRecommendation.id));
+    planningDecisionInFlightRef.current.add(recommendationId);
+    setPlanningDecisionLoadingId(recommendationId);
     try {
-      const result = await dataService.rejectAbaRecommendation(rejectingRecommendation.id, {
+      const result = await dataService.rejectAbaRecommendation(recommendationId, {
         reason,
         notes: rejectRecommendationNotes.trim()
       });
@@ -4694,12 +4725,13 @@ export const SessionMode = ({
         setPlanningMessage(result?.error || 'Nao foi possivel recusar a sugestao agora.');
         return;
       }
-      setPlanningRecommendations((prev) => prev.map((item) => item.id === rejectingRecommendation.id ? (result.data || item) : item));
+      setPlanningRecommendations((prev) => prev.map((item) => item.id === recommendationId ? (result.data || item) : item));
       setRejectingRecommendation(null);
       setRejectRecommendationReason('');
       setRejectRecommendationNotes('');
       setPlanningMessage('Sugestao recusada e registrada no historico.');
     } finally {
+      planningDecisionInFlightRef.current.delete(recommendationId);
       setPlanningDecisionLoadingId('');
     }
   };
@@ -4723,13 +4755,16 @@ export const SessionMode = ({
 
   const saveEditedRecommendation = async (acceptAfterSave = false) => {
     if (!editingRecommendation?.id) return;
+    const recommendationId = String(editingRecommendation.id);
+    if (planningDecisionInFlightRef.current.has(recommendationId)) return;
     if (!editRecommendationForm.title.trim() || !editRecommendationForm.suggestedAction.trim()) {
       setPlanningMessage('Informe titulo e acao recomendada antes de salvar.');
       return;
     }
-    setPlanningDecisionLoadingId(String(editingRecommendation.id));
+    planningDecisionInFlightRef.current.add(recommendationId);
+    setPlanningDecisionLoadingId(recommendationId);
     try {
-      const result = await dataService.updateAbaRecommendation(editingRecommendation.id, {
+      const result = await dataService.updateAbaRecommendation(recommendationId, {
         title: editRecommendationForm.title.trim(),
         priority: editRecommendationForm.priority,
         recommendation_type: editRecommendationForm.recommendationType,
@@ -4746,11 +4781,13 @@ export const SessionMode = ({
         return;
       }
       const edited = result.data || editingRecommendation;
-      setPlanningRecommendations((prev) => [edited, ...prev.filter((item) => item.id !== editingRecommendation.id)]);
+      setPlanningRecommendations((prev) => [edited, ...prev.filter((item) => item.id !== recommendationId)]);
       setEditingRecommendation(null);
       setPlanningMessage(acceptAfterSave ? 'Edicao salva. Aplicando sugestao...' : 'Sugestao editada e mantida como pendente.');
+      planningDecisionInFlightRef.current.delete(recommendationId);
       if (acceptAfterSave) await handleAcceptRecommendation(edited, true);
     } finally {
+      planningDecisionInFlightRef.current.delete(recommendationId);
       setPlanningDecisionLoadingId('');
     }
   };
@@ -5644,29 +5681,17 @@ export const SessionMode = ({
                           {isMaintenanceSuggestion && (
                             <>
                               <button type="button" onClick={() => {
-                                void handleAcceptRecommendation(recommendation, true);
-                                const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || ''));
-                                if (goal) void handleScheduleMaintenanceForNextSession(goal);
+                                void handleAcceptMaintenanceRecommendation(recommendation, 'NEXT_PATIENT_SESSION');
                               }} disabled={decisionBusy} className="rounded-full bg-emerald-600 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white disabled:opacity-60">
                                 Aceitar e agendar para próxima sessão
                               </button>
                               <button type="button" onClick={() => {
-                                void handleAcceptRecommendation(recommendation, false);
-                                const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || ''));
-                                if (goal) {
-                                  openMaintenanceScheduleModal(goal);
-                                  setMaintenanceScheduleMode('CUSTOM_DATE');
-                                }
+                                void handleAcceptMaintenanceRecommendation(recommendation, 'CUSTOM_DATE');
                               }} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 disabled:opacity-60">
                                 Aceitar e escolher data
                               </button>
                               <button type="button" onClick={() => {
-                                void handleAcceptRecommendation(recommendation, false);
-                                const goal = sessionGoals.find((entry: any) => String(entry?.id || entry?.target_id || entry?.targetId || '') === String(recommendation.target_id || ''));
-                                if (goal) {
-                                  openMaintenanceScheduleModal(goal);
-                                  setMaintenanceScheduleMode('DEFAULT_SEQUENCE');
-                                }
+                                void handleAcceptMaintenanceRecommendation(recommendation, 'DEFAULT_SEQUENCE');
                               }} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 disabled:opacity-60">
                                 Aceitar e usar 7/14/30/60
                               </button>

@@ -51,6 +51,23 @@ test('normaliza somente campos clínicos e preserva ids e estados', () => {
   assert.equal(normalized.targets[1].name, '<alvo>');
 });
 
+test('normaliza todos os textos retornados pelos cards de sugestão clínica', () => {
+  const normalized = normalizeClinicalTextRecord({
+    data: [{
+      id: 'recommendation&amp;1',
+      title: 'Atenção em &quot;alvo&quot;',
+      summary: 'João &amp; Maria',
+      rationale: '&#39;Revisar&#39;',
+      suggested_action: 'Aplicar&nbsp;sondagem'
+    }]
+  });
+  assert.equal(normalized.data[0].id, 'recommendation&amp;1');
+  assert.equal(normalized.data[0].title, 'Atenção em "alvo"');
+  assert.equal(normalized.data[0].summary, 'João & Maria');
+  assert.equal(normalized.data[0].rationale, "'Revisar'");
+  assert.equal(normalized.data[0].suggested_action, 'Aplicar sondagem');
+});
+
 for (const { name, fn } of tests) {
   fn();
   console.log(`[ok] ${name}`);

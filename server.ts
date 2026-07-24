@@ -103,12 +103,14 @@ import {
 } from './src/utils/abaMaintenanceScheduling';
 import {
   acceptRecommendationForNextSession,
+  deduplicateAbaRecommendationsForDecisionQueue,
   generateNextSessionRecommendations,
   normalizePlanningFocusType,
   rejectRecommendation,
   type AbaClinicalRecommendation,
   type AbaNextSessionPlanItem
 } from './src/utils/abaPlanningEngine';
+import { decodeClinicalTextEntities } from './src/utils/clinicalText';
 import {
   aggregateAbaClinicalLinePoints,
   analyzeBehaviorContextPatterns,
@@ -55557,37 +55559,68 @@ async function startServer() {
     };
   };
 
+  const sanitizeAbaRecommendationText = (value: unknown, maxLength: number) => (
+    sanitizeString(decodeClinicalTextEntities(value), maxLength)
+  );
+
+  const canonicalizeAbaRecommendationRows = (rows: any[]) => (
+    deduplicateAbaRecommendationsForDecisionQueue(rows).map((row: any) => {
+      const { groupedRecommendations: _groupedRecommendations, ...canonical } = row;
+      return canonical;
+    })
+  );
+
   const persistGeneratedRecommendations = async (params: {
     recommendations: AbaClinicalRecommendation[];
     clinicId: string;
     createdBy: string;
   }) => {
-    const saved: any[] = [];
-    for (const recommendation of params.recommendations) {
-      const payload = cleanObject({
-        ...recommendation,
+    if (!params.recommendations.length) return { ok: true, status: 200, data: [] };
+    const persistedAt = new Date().toISOString();
+    const payloads = params.recommendations.map((recommendation) => cleanObject({
+        id: sanitizeString(recommendation.id, 180),
+        organization_id: sanitizeString(recommendation.organization_id, 120),
         clinic_id: params.clinicId,
         patient_id: sanitizeString(recommendation.patient_id, 120),
-        organization_id: sanitizeString(recommendation.organization_id, 120),
         source_session_id: sanitizeString(recommendation.source_session_id, 180) || null,
+        next_session_focus_id: sanitizeString(recommendation.next_session_focus_id, 180) || null,
         recommendation_type: normalizeAbaRecommendationType(recommendation.recommendation_type),
         priority: normalizeAbaRecommendationPriority(recommendation.priority),
-        title: sanitizeTextField(recommendation.title, 240),
-        summary: sanitizeTextField(recommendation.summary, 500),
-        rationale: sanitizeTextField(recommendation.rationale, 1000),
-        suggested_action: sanitizeTextField(recommendation.suggested_action, 1000),
+        title: sanitizeAbaRecommendationText(recommendation.title, 240),
+        summary: sanitizeAbaRecommendationText(recommendation.summary, 500),
+        rationale: sanitizeAbaRecommendationText(recommendation.rationale, 1000),
+        suggested_action: sanitizeAbaRecommendationText(recommendation.suggested_action, 1000),
+        target_id: sanitizeString(recommendation.target_id, 120) || null,
+        behavior_id: sanitizeString(recommendation.behavior_id, 120) || null,
+        program_id: sanitizeString(recommendation.program_id, 120) || null,
+        domain: sanitizeAbaRecommendationText(recommendation.domain, 180) || null,
+        metric_name: sanitizeAbaRecommendationText(recommendation.metric_name, 160) || null,
+        previous_value: recommendation.previous_value ?? null,
+        current_value: recommendation.current_value ?? null,
+        delta_value: recommendation.delta_value ?? null,
         evidence: sanitizeClinicalPayload(recommendation.evidence || {}),
         status: normalizeAbaRecommendationStatus(recommendation.status),
+        accepted_by: sanitizeString(recommendation.accepted_by, 120) || null,
+        accepted_at: recommendation.accepted_at || null,
+        rejected_by: sanitizeString(recommendation.rejected_by, 120) || null,
+        rejected_at: recommendation.rejected_at || null,
+        edited_from_id: sanitizeString(recommendation.edited_from_id, 180) || null,
+        context_hash: sanitizeString(recommendation.context_hash, 180),
         created_at: recommendation.created_at || new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      });
-      const result = await writeAbaRowWithSchemaFallback('aba_clinical_recommendations', payload, 'upsert');
-      if (result.error) {
-        if (hasMissingFinancialSchema(result.error)) return { ok: false, status: 503, error: 'Schema de planejamento ABA ainda não aplicado.', data: saved };
-        throw result.error;
+        updated_at: persistedAt
+      }));
+    const recommendationResult = await supabase
+      .from('aba_clinical_recommendations')
+      .upsert(payloads, { onConflict: 'id' })
+      .select('id');
+    if (recommendationResult.error) {
+      if (hasMissingFinancialSchema(recommendationResult.error)) {
+        return { ok: false, status: 503, error: 'Schema de planejamento ABA ainda não aplicado.', data: [] };
       }
-      saved.push({ ...payload, id: (result.data as any)?.id || payload.id });
-      const auditPayload = cleanObject({
+      throw recommendationResult.error;
+    }
+
+    const auditPayloads = payloads.map((payload) => cleanObject({
         id: `audit-${abaPlanningHash([payload.id, 'GENERATED', payload.context_hash])}`,
         organization_id: payload.organization_id,
         clinic_id: params.clinicId,
@@ -55597,12 +55630,19 @@ async function startServer() {
         previous_status: null,
         new_status: payload.status,
         performed_by: params.createdBy,
-        performed_at: new Date().toISOString(),
+        performed_at: persistedAt,
         metadata: sanitizeClinicalPayload({ contextHash: payload.context_hash, summaryDriven: true })
-      });
-      await writeAbaRowWithSchemaFallback('aba_clinical_recommendation_audit_logs', auditPayload, 'upsert');
+      }));
+    const auditResult = await supabase
+      .from('aba_clinical_recommendation_audit_logs')
+      .upsert(auditPayloads, { onConflict: 'id' });
+    if (auditResult.error) {
+      if (hasMissingFinancialSchema(auditResult.error)) {
+        return { ok: false, status: 503, error: 'Schema de auditoria do planejamento ABA ainda não aplicado.', data: payloads };
+      }
+      throw auditResult.error;
     }
-    return { ok: true, status: 200, data: saved };
+    return { ok: true, status: 200, data: payloads };
   };
 
   const fetchAbaRecommendationById = async (recommendationId: string, clinicId: string) => {
@@ -55633,15 +55673,15 @@ async function startServer() {
       accepted_at: params.recommendation.accepted_at || null,
       rejected_by: sanitizeString(params.recommendation.rejected_by, 120) || null,
       rejected_at: params.recommendation.rejected_at || null,
-      title: sanitizeTextField(params.recommendation.title, 240),
-      summary: sanitizeTextField(params.recommendation.summary, 500),
-      rationale: sanitizeTextField(params.recommendation.rationale, 1000),
-      suggested_action: sanitizeTextField(params.recommendation.suggested_action, 1000),
+      title: sanitizeAbaRecommendationText(params.recommendation.title, 240),
+      summary: sanitizeAbaRecommendationText(params.recommendation.summary, 500),
+      rationale: sanitizeAbaRecommendationText(params.recommendation.rationale, 1000),
+      suggested_action: sanitizeAbaRecommendationText(params.recommendation.suggested_action, 1000),
       target_id: sanitizeString(params.recommendation.target_id, 120) || null,
       behavior_id: sanitizeString(params.recommendation.behavior_id, 120) || null,
       program_id: sanitizeString(params.recommendation.program_id, 120) || null,
-      domain: sanitizeTextField(params.recommendation.domain, 180) || null,
-      metric_name: sanitizeTextField(params.recommendation.metric_name, 160) || null,
+      domain: sanitizeAbaRecommendationText(params.recommendation.domain, 180) || null,
+      metric_name: sanitizeAbaRecommendationText(params.recommendation.metric_name, 160) || null,
       evidence: sanitizeClinicalPayload(params.recommendation.evidence || {}),
       updated_at: new Date().toISOString()
     });
@@ -60907,8 +60947,9 @@ async function startServer() {
       }
       const pageRows = (data || []).slice(0, limit);
       const hasMore = (data || []).length > limit;
+      const canonicalRows = canonicalizeAbaRecommendationRows(pageRows);
       const enriched = await enrichTherapeuticRecommendationContexts({
-        recommendations: pageRows,
+        recommendations: canonicalRows,
         patientId,
         clinicId,
         organizationId
@@ -60919,7 +60960,8 @@ async function startServer() {
         meta: {
           queryCount: enriched.queryCount + 1,
           batched: true,
-          pageSize: pageRows.length,
+          pageSize: canonicalRows.length,
+          consolidatedCount: Math.max(0, pageRows.length - canonicalRows.length),
           hasMore,
           nextCursor: hasMore && pageRows.length ? pageRows[pageRows.length - 1]?.created_at || null : null
         }
@@ -60946,8 +60988,19 @@ async function startServer() {
         supervisorId: sanitizeString(req.session.user?.id, 120),
         ...context
       });
-      if (generated.reusedExisting) {
-        return res.json({ success: true, data: generated.recommendations, contextHash: generated.contextHash, reusedExisting: true });
+      const existingIds = new Set(
+        (context.existingRecommendations || []).map((recommendation: any) => sanitizeString(recommendation?.id, 180)).filter(Boolean)
+      );
+      const recommendationsToPersist = generated.recommendations.filter((recommendation) => (
+        recommendation?.id && !existingIds.has(sanitizeString(recommendation.id, 180))
+      ));
+      if (generated.reusedExisting || recommendationsToPersist.length === 0) {
+        return res.json({
+          success: true,
+          data: canonicalizeAbaRecommendationRows(generated.recommendations),
+          contextHash: generated.contextHash,
+          reusedExisting: true
+        });
       }
       const focusId = `focus-${abaPlanningHash([organizationId, patientId, sourceSessionId || '', focusType, generated.contextHash])}`;
       const focusPayload = cleanObject({
@@ -60964,12 +61017,21 @@ async function startServer() {
       });
       await writeAbaRowWithSchemaFallback('aba_next_session_focuses', focusPayload, 'upsert');
       const persisted = await persistGeneratedRecommendations({
-        recommendations: generated.recommendations.map((recommendation) => ({ ...recommendation, next_session_focus_id: focusId })),
+        recommendations: recommendationsToPersist.map((recommendation) => ({ ...recommendation, next_session_focus_id: focusId })),
         clinicId,
         createdBy: sanitizeString(req.session.user?.id, 120)
       });
       if (!persisted.ok) return res.status((persisted as any).status || 503).json({ success: false, error: (persisted as any).error });
-      return res.json({ success: true, data: persisted.data, contextHash: generated.contextHash, reusedExisting: false });
+      const persistedById = new Map((persisted.data || []).map((recommendation: any) => [String(recommendation?.id || ''), recommendation]));
+      const responseRows = generated.recommendations.map((recommendation) => (
+        persistedById.get(String(recommendation?.id || '')) || recommendation
+      ));
+      return res.json({
+        success: true,
+        data: canonicalizeAbaRecommendationRows(responseRows),
+        contextHash: generated.contextHash,
+        reusedExisting: false
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível gerar sugestões agora.' });
     }
@@ -61097,17 +61159,17 @@ async function startServer() {
       const edited = cleanObject({
         ...recommendation,
         id: `rec-edit-${abaPlanningHash([recommendation.id, new Date().toISOString()])}`,
-        title: sanitizeTextField(req.body?.title ?? recommendation.title, 240),
-        summary: sanitizeTextField(req.body?.summary ?? recommendation.summary, 500),
-        rationale: sanitizeTextField(req.body?.rationale ?? recommendation.rationale, 1000),
-        suggested_action: sanitizeTextField(req.body?.suggested_action ?? req.body?.suggestedAction ?? recommendation.suggested_action, 1000),
+        title: sanitizeAbaRecommendationText(req.body?.title ?? recommendation.title, 240),
+        summary: sanitizeAbaRecommendationText(req.body?.summary ?? recommendation.summary, 500),
+        rationale: sanitizeAbaRecommendationText(req.body?.rationale ?? recommendation.rationale, 1000),
+        suggested_action: sanitizeAbaRecommendationText(req.body?.suggested_action ?? req.body?.suggestedAction ?? recommendation.suggested_action, 1000),
         recommendation_type: normalizeAbaRecommendationType(req.body?.recommendation_type ?? req.body?.recommendationType ?? recommendation.recommendation_type),
         priority: normalizeAbaRecommendationPriority(req.body?.priority ?? recommendation.priority),
         target_id: sanitizeString(req.body?.target_id ?? req.body?.targetId ?? recommendation.target_id, 120) || null,
         behavior_id: sanitizeString(req.body?.behavior_id ?? req.body?.behaviorId ?? recommendation.behavior_id, 120) || null,
         program_id: sanitizeString(req.body?.program_id ?? req.body?.programId ?? recommendation.program_id, 120) || null,
-        domain: sanitizeTextField(req.body?.domain ?? recommendation.domain, 180) || null,
-        metric_name: sanitizeTextField(req.body?.metric_name ?? req.body?.metricName ?? recommendation.metric_name, 160) || null,
+        domain: sanitizeAbaRecommendationText(req.body?.domain ?? recommendation.domain, 180) || null,
+        metric_name: sanitizeAbaRecommendationText(req.body?.metric_name ?? req.body?.metricName ?? recommendation.metric_name, 160) || null,
         evidence: editedEvidence,
         status: 'EDITED',
         edited_from_id: recommendation.id,

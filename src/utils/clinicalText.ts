@@ -89,6 +89,8 @@ const CLINICAL_TEXT_FIELDS = new Set([
   'skill_name',
   'stimuli',
   'summary',
+  'suggestedAction',
+  'suggested_action',
   'targetName',
   'target_name',
   'text',

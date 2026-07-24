@@ -4806,7 +4806,7 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'generateNextSessionRecommendations', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
       return { success: false, error: 'Não foi possível gerar sugestões agora.' };
     }
@@ -4822,7 +4822,7 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'acceptAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
       return { success: false, error: 'Não foi possível aceitar a sugestão agora.' };
     }
@@ -4838,7 +4838,7 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'rejectAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
       return { success: false, error: 'Não foi possível recusar a sugestão agora.' };
     }
@@ -4854,7 +4854,7 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(patch || {})
       }, { helperName: 'updateAbaRecommendation', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
       return { success: false, error: 'Não foi possível editar a sugestão agora.' };
     }
@@ -4870,7 +4870,7 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'linkAbaRecommendationTarget', operation: 'write', table: 'aba_clinical_recommendations', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
       return { success: false, error: 'Não foi possível vincular a habilidade de origem agora.' };
     }
@@ -4886,7 +4886,7 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'applyAbaRecommendationToNextSession', operation: 'write', table: 'aba_next_session_plan_items', hasExplicitColumns: true });
-      return await safeJson(response);
+      return normalizeClinicalTextRecord(await safeJson(response));
     } catch (error) {
       return { success: false, error: 'Não foi possível aplicar ao plano agora.' };
     }

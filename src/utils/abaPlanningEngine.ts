@@ -3,6 +3,7 @@ import {
   isActiveMaintenanceSchedule,
   normalizeMaintenanceScheduleStatus
 } from './abaMaintenanceScheduling';
+import { decodeClinicalTextEntities } from './clinicalText';
 
 export type AbaPlanningFocusType =
   | 'MAINTENANCE'
@@ -251,57 +252,217 @@ export const abaRecommendationStatusLabel = (value: unknown) => {
   return 'Pendente';
 };
 
-export const translateAbaRecommendationText = (value: unknown) => safeString(value)
-  .replace(/\bMaintenance Probe\b/gi, 'sondagem de manutenção')
-  .replace(/\bREGRESSION_ATTENTION\b/g, 'Atenção para regressão')
-  .replace(/\bMAINTENANCE_PROBE\b/g, 'Sondagem de manutenção')
-  .replace(/\bPROMPT_FADING\b/g, 'Redução gradual de ajuda')
-  .replace(/\bHIGH\b/g, 'Alta')
-  .replace(/\bMEDIUM\b/g, 'Média')
-  .replace(/\bLOW\b/g, 'Baixa')
-  .replace(/\bsummary-driven\b/gi, 'baseado no resumo clínico')
-  .replace(/\bsummary_driven\b/gi, 'baseado no resumo clínico')
-  .replace(/\btarget\b/gi, 'alvo')
-  .replace(/\bprompt fading\b/gi, 'redução gradual de ajuda')
-  .replace(/\bprobe\b/gi, 'sondagem')
-  .replace(/\bmaintenance\b/gi, 'manutenção')
-  .trim();
+export const translateAbaRecommendationText = (value: unknown) => (
+  safeString(decodeClinicalTextEntities(value))
+    .replace(/\bMaintenance Probe\b/gi, 'sondagem de manutenção')
+    .replace(/\bREGRESSION_ATTENTION\b/g, 'Atenção para regressão')
+    .replace(/\bMAINTENANCE_PROBE\b/g, 'Sondagem de manutenção')
+    .replace(/\bPROMPT_FADING\b/g, 'Redução gradual de ajuda')
+    .replace(/\bHIGH\b/g, 'Alta')
+    .replace(/\bMEDIUM\b/g, 'Média')
+    .replace(/\bLOW\b/g, 'Baixa')
+    .replace(/\bsummary-driven\b/gi, 'baseado no resumo clínico')
+    .replace(/\bsummary_driven\b/gi, 'baseado no resumo clínico')
+    .replace(/\btarget\b/gi, 'alvo')
+    .replace(/\bprompt fading\b/gi, 'redução gradual de ajuda')
+    .replace(/\bprobe\b/gi, 'sondagem')
+    .replace(/\bmaintenance\b/gi, 'manutenção')
+    .trim()
+);
 
-export const buildAbaRecommendationDecisionKey = (recommendation: any) => [
-  safeString(recommendation?.recommendation_type || recommendation?.recommendationType),
-  safeString(recommendation?.target_id || recommendation?.targetId),
-  safeString(recommendation?.behavior_id || recommendation?.behaviorId),
-  safeString(recommendation?.source_session_id || recommendation?.sourceSessionId),
-  translateAbaRecommendationText(recommendation?.suggested_action || recommendation?.suggestedAction)
-].join('|');
+export const formatAbaRecommendationTitle = (value: unknown) => (
+  translateAbaRecommendationText(value).replace(/"([^"\r\n]+)"/g, '“$1”')
+);
+
+const recommendationEvidence = (recommendation: any): Record<string, any> => (
+  recommendation?.evidence && typeof recommendation.evidence === 'object' && !Array.isArray(recommendation.evidence)
+    ? recommendation.evidence
+    : {}
+);
+
+const normalizeDecisionKeyPart = (value: unknown, fallback = '') => (
+  decodeClinicalTextEntities(value)
+    .normalize('NFC')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ') || fallback
+);
+
+const clinicalWeekKey = (value: unknown) => {
+  const raw = safeString(value);
+  if (!raw) return '';
+  const timestamp = new Date(raw).getTime();
+  return Number.isFinite(timestamp) ? `week-${Math.floor(timestamp / 604_800_000)}` : normalizeDecisionKeyPart(raw);
+};
+
+const recommendationClinicalWindowKey = (recommendation: any) => {
+  const evidence = recommendationEvidence(recommendation);
+  const type = safeString(recommendation?.recommendation_type || recommendation?.recommendationType).toUpperCase();
+  const explicit = safeString(evidence?.clinicalWindowKey || evidence?.clinical_window_key);
+  if (explicit) return explicit;
+
+  if (type === 'REGRESSION_ATTENTION') {
+    const probeResultId = safeString(evidence?.probeResultId || evidence?.probe_result_id || evidence?.maintenanceProbeResultId || evidence?.maintenance_probe_result_id);
+    if (probeResultId) return `probe-result:${probeResultId}`;
+    const snapshotId = safeString(evidence?.snapshotId || evidence?.snapshot_id);
+    if (snapshotId) return `snapshot:${snapshotId}`;
+    const targetId = safeString(recommendation?.target_id || recommendation?.targetId);
+    const alertWeek = clinicalWeekKey(evidence?.createdAt || evidence?.created_at);
+    if (targetId && alertWeek) return `regression:${alertWeek}`;
+    const alertId = safeString(evidence?.alertId || evidence?.alert_id);
+    if (alertId) return `alert:${alertId}`;
+  }
+
+  const directSourceId = safeString(
+    evidence?.scheduleId ||
+    evidence?.schedule_id ||
+    evidence?.evaluationId ||
+    evidence?.evaluation_id ||
+    evidence?.snapshotId ||
+    evidence?.snapshot_id ||
+    evidence?.summaryId ||
+    evidence?.summary_id ||
+    evidence?.behaviorSummaryId ||
+    evidence?.behavior_summary_id
+  );
+  if (directSourceId) return `source:${directSourceId}`;
+
+  const pairedSnapshotIds = [
+    safeString(evidence?.accuracySnapshotId || evidence?.accuracy_snapshot_id),
+    safeString(evidence?.independenceSnapshotId || evidence?.independence_snapshot_id)
+  ].filter(Boolean).sort();
+  if (pairedSnapshotIds.length) return `snapshots:${pairedSnapshotIds.join(',')}`;
+
+  const nextProbe = evidence?.nextProbe && typeof evidence.nextProbe === 'object' ? evidence.nextProbe : {};
+  const probeWindow = [
+    safeString(nextProbe?.scheduleId || nextProbe?.schedule_id),
+    safeString(nextProbe?.dueDate || nextProbe?.due_date),
+    safeString(nextProbe?.status),
+    nextProbe?.noSchedule === true ? 'unscheduled' : ''
+  ].filter(Boolean);
+  if (probeWindow.length) return `maintenance:${probeWindow.join(':')}`;
+
+  return 'active';
+};
+
+const recommendationReasonCode = (recommendation: any) => {
+  const evidence = recommendationEvidence(recommendation);
+  const type = safeString(recommendation?.recommendation_type || recommendation?.recommendationType).toUpperCase();
+  const explicit = safeString(evidence?.reasonCode || evidence?.reason_code || evidence?.ruleCode || evidence?.rule_code);
+  if (explicit) return explicit;
+  const metricName = safeString(recommendation?.metric_name || recommendation?.metricName);
+  const canonicalMetricReasons: Record<string, string> = {
+    regression_alert: 'unresolved_regression_alert',
+    maintenance_schedule: 'maintenance_probe_due',
+    mastery_evaluation: 'mastery_review',
+    accuracy_independence_gap: 'accuracy_independence_gap',
+    abc_collection_gap: 'abc_collection_gap',
+    pei_candidate_target: 'new_target_candidate',
+    generalization_candidate: 'generalization_candidate'
+  };
+  const canonicalMetricReason = canonicalMetricReasons[metricName.toLowerCase()];
+  if (canonicalMetricReason) return canonicalMetricReason;
+  const regressionReason = type === 'REGRESSION_ATTENTION'
+    ? translateAbaRecommendationText(recommendation?.summary || recommendation?.rationale)
+    : '';
+  return [metricName || type || 'clinical_recommendation', regressionReason].filter(Boolean).join(':');
+};
+
+export const buildAbaRecommendationSemanticKey = (recommendation: any) => {
+  const evidence = recommendationEvidence(recommendation);
+  const targetId = safeString(recommendation?.target_id || recommendation?.targetId);
+  const behaviorId = safeString(recommendation?.behavior_id || recommendation?.behaviorId);
+  const programId = safeString(recommendation?.program_id || recommendation?.programId);
+  const skillId = safeString(evidence?.skillId || evidence?.skill_id);
+  const unscopedSourceId = !targetId && !behaviorId && !programId && !skillId
+    ? safeString(
+      evidence?.alertId ||
+      evidence?.alert_id ||
+      evidence?.snapshotId ||
+      evidence?.snapshot_id ||
+      evidence?.evaluationId ||
+      evidence?.evaluation_id ||
+      evidence?.summaryId ||
+      evidence?.summary_id
+    )
+    : '';
+
+  return [
+    normalizeDecisionKeyPart(recommendation?.organization_id || recommendation?.organizationId, 'organization-missing'),
+    normalizeDecisionKeyPart(recommendation?.patient_id || recommendation?.patientId, 'patient-missing'),
+    normalizeDecisionKeyPart(recommendation?.recommendation_type || recommendation?.recommendationType, 'type-missing'),
+    normalizeDecisionKeyPart(targetId, 'target-none'),
+    normalizeDecisionKeyPart(skillId, 'skill-none'),
+    normalizeDecisionKeyPart(programId, 'program-none'),
+    normalizeDecisionKeyPart(behaviorId, 'behavior-none'),
+    normalizeDecisionKeyPart(unscopedSourceId, 'source-scoped'),
+    normalizeDecisionKeyPart(recommendationReasonCode(recommendation), 'reason-missing'),
+    normalizeDecisionKeyPart(recommendationClinicalWindowKey(recommendation), 'window-missing'),
+    normalizeDecisionKeyPart(evidence?.configurationKey || evidence?.configuration_key || evidence?.ruleVersion || evidence?.rule_version, 'config-default')
+  ].join('|');
+};
+
+export const buildAbaRecommendationDecisionKey = buildAbaRecommendationSemanticKey;
+
+const normalizeRecommendationTextFields = (recommendation: any) => ({
+  ...recommendation,
+  title: decodeClinicalTextEntities(recommendation?.title),
+  summary: decodeClinicalTextEntities(recommendation?.summary),
+  rationale: decodeClinicalTextEntities(recommendation?.rationale),
+  suggested_action: decodeClinicalTextEntities(recommendation?.suggested_action || recommendation?.suggestedAction)
+});
+
+const recommendationStatusRank = (value: unknown) => {
+  const status = safeString(value, 'SUGGESTED').toUpperCase();
+  if (status === 'APPLIED_TO_NEXT_SESSION') return 60;
+  if (status === 'ACCEPTED' || status === 'REJECTED') return 50;
+  if (status === 'EDITED') return 40;
+  if (status === 'SUGGESTED') return 30;
+  return 10;
+};
+
+const recommendationTimestamp = (recommendation: any) => {
+  const timestamp = new Date(recommendation?.updated_at || recommendation?.updatedAt || recommendation?.created_at || recommendation?.createdAt || 0).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const shouldReplaceRecommendationCanonical = (current: any, candidate: any) => {
+  const currentRank = recommendationStatusRank(current?.status);
+  const candidateRank = recommendationStatusRank(candidate?.status);
+  if (candidateRank !== currentRank) return candidateRank > currentRank;
+  return recommendationTimestamp(candidate) > recommendationTimestamp(current);
+};
 
 export const deduplicateAbaRecommendationsForDecisionQueue = (recommendations: any[] = []) => {
   const grouped = new Map<string, any>();
-  for (const recommendation of Array.isArray(recommendations) ? recommendations : []) {
+  for (const rawRecommendation of Array.isArray(recommendations) ? recommendations : []) {
+    const recommendation = normalizeRecommendationTextFields(rawRecommendation);
     const key = buildAbaRecommendationDecisionKey(recommendation);
     const existing = grouped.get(key);
     if (!existing) {
-      grouped.set(key, { ...recommendation, groupedCount: 1, groupedRecommendations: [recommendation] });
+      grouped.set(key, {
+        ...recommendation,
+        suggestionKey: key,
+        groupedCount: 1,
+        groupedRecommendationIds: recommendation?.id ? [recommendation.id] : [],
+        groupedRecommendations: [recommendation]
+      });
       continue;
     }
+    const groupedRecommendations = [...(existing.groupedRecommendations || []), recommendation];
+    const canonical = shouldReplaceRecommendationCanonical(existing, recommendation) ? recommendation : existing;
     grouped.set(key, {
-      ...existing,
-      groupedCount: Number(existing.groupedCount || 1) + 1,
-      groupedRecommendations: [...(existing.groupedRecommendations || []), recommendation]
+      ...canonical,
+      suggestionKey: key,
+      groupedCount: groupedRecommendations.length,
+      groupedRecommendationIds: Array.from(new Set(groupedRecommendations.map((item: any) => item?.id).filter(Boolean))),
+      groupedRecommendations
     });
   }
   return Array.from(grouped.values());
 };
 
-const recommendationIdSeed = (recommendation: Pick<AbaClinicalRecommendation, 'organization_id' | 'patient_id' | 'source_session_id' | 'recommendation_type' | 'target_id' | 'behavior_id' | 'context_hash'>) => [
-  recommendation.organization_id,
-  recommendation.patient_id,
-  recommendation.source_session_id || '',
-  recommendation.recommendation_type,
-  recommendation.target_id || '',
-  recommendation.behavior_id || '',
-  recommendation.context_hash
-].join('|');
+const recommendationIdSeed = (recommendation: AbaClinicalRecommendation) => buildAbaRecommendationSemanticKey(recommendation);
 
 const stableJson = (value: any): string => {
   if (value === null || value === undefined) return 'null';
@@ -369,6 +530,11 @@ const makeRecommendation = (
     created_at: now,
     updated_at: now
   };
+  const suggestionKey = buildAbaRecommendationSemanticKey(recommendation);
+  recommendation.evidence = {
+    ...recommendation.evidence,
+    suggestionKey
+  };
   return {
     ...recommendation,
     id: `rec-${stableHash(recommendationIdSeed(recommendation)).replace(/^ctx_/, '')}`
@@ -402,13 +568,44 @@ const getTargetMetric = (snapshots: any[], namePart: string) => {
 };
 
 const pushUnique = (recommendations: AbaClinicalRecommendation[], recommendation: AbaClinicalRecommendation) => {
-  const duplicate = recommendations.some((existing) =>
-    existing.recommendation_type === recommendation.recommendation_type &&
-    safeString(existing.target_id) === safeString(recommendation.target_id) &&
-    safeString(existing.behavior_id) === safeString(recommendation.behavior_id) &&
-    existing.title === recommendation.title
-  );
-  if (!duplicate) recommendations.push(recommendation);
+  const key = buildAbaRecommendationSemanticKey(recommendation);
+  const duplicateIndex = recommendations.findIndex((existing) => buildAbaRecommendationSemanticKey(existing) === key);
+  if (duplicateIndex < 0) {
+    recommendations.push(recommendation);
+    return;
+  }
+
+  const existing = recommendations[duplicateIndex];
+  const existingEvidence = recommendationEvidence(existing);
+  const existingSources = [
+    ...(Array.isArray(existingEvidence?.relatedSourceIds) ? existingEvidence.relatedSourceIds : []),
+    existingEvidence.alertId,
+    existingEvidence.probeResultId,
+    existingEvidence.scheduleId,
+    existingEvidence.snapshotId,
+    existingEvidence.summaryId,
+    existingEvidence.behaviorSummaryId,
+    existingEvidence.evaluationId
+  ].map((value) => safeString(value)).filter(Boolean);
+  const incomingEvidence = recommendationEvidence(recommendation);
+  const incomingSources = [
+    incomingEvidence.alertId,
+    incomingEvidence.probeResultId,
+    incomingEvidence.scheduleId,
+    incomingEvidence.snapshotId,
+    incomingEvidence.summaryId,
+    incomingEvidence.behaviorSummaryId,
+    incomingEvidence.evaluationId
+  ].map((value) => safeString(value)).filter(Boolean);
+  const keepIncoming = PRIORITY_WEIGHT[recommendation.priority] > PRIORITY_WEIGHT[existing.priority];
+  const canonical = keepIncoming ? recommendation : existing;
+  recommendations[duplicateIndex] = {
+    ...canonical,
+    evidence: {
+      ...canonical.evidence,
+      relatedSourceIds: Array.from(new Set([...existingSources, ...incomingSources]))
+    }
+  };
 };
 
 const sortForFocus = (recommendations: AbaClinicalRecommendation[], focusType: AbaPlanningFocusType) => {
@@ -452,10 +649,11 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
     VALID_EXISTING_STATUSES.has(safeString(recommendation?.status, 'SUGGESTED').toUpperCase())
   );
   if (existing.length > 0) {
+    const canonicalExisting = deduplicateAbaRecommendationsForDecisionQueue(existing);
     return {
       focusType,
       contextHash,
-      recommendations: existing.map((recommendation) => ({ ...recommendation, context_hash: contextHash })) as AbaClinicalRecommendation[],
+      recommendations: canonicalExisting.map((recommendation) => ({ ...recommendation, context_hash: contextHash })) as AbaClinicalRecommendation[],
       reusedExisting: true
     };
   }
@@ -488,6 +686,8 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
     const nextProbe = getNextMaintenanceProbeForTarget(targetSchedules, nowDate);
     const shouldSuggest = nextProbe.noSchedule || nextProbe.isOverdue || nextProbe.isToday || nextProbe.status === 'UNSCHEDULED' || nextProbe.status === 'MISSED';
     if (!shouldSuggest) continue;
+    const latestMaintenanceResult = maintenanceResults.find((result) => targetMatches(result, targetId));
+    const maintenanceCycle = safeString(latestMaintenanceResult?.id) || 'initial';
     pushUnique(recommendations, makeRecommendation({
       organization_id: organizationId,
       patient_id: patientId,
@@ -506,8 +706,13 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       current_value: null,
       delta_value: null,
       evidence: evidenceBase({
+        reasonCode: 'maintenance_probe_due',
+        clinicalWindowKey: nextProbe.noSchedule
+          ? `maintenance:NO_SCHEDULE:unscheduled${maintenanceCycle === 'initial' ? '' : `:${maintenanceCycle}`}`
+          : `maintenance:${safeString(nextProbe.dueDate) || 'date-missing'}:${safeString(nextProbe.status) || 'status-missing'}`,
         targetClinicalStatus: clinicalStatus,
         nextProbe: {
+          scheduleId: safeString(nextProbe?.schedule?.id) || null,
           dueDate: nextProbe.dueDate,
           appointmentId: nextProbe.appointmentId,
           status: nextProbe.status,
@@ -527,7 +732,7 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       recommendation_type: 'REGRESSION_ATTENTION',
       priority: safeString(alert?.severity).toUpperCase() === 'HIGH' ? 'CRITICAL' : 'HIGH',
       title: safeString(alert?.target_id || alert?.targetId)
-        ? `Atenção para regressão em "${targetDisplayName(alert?.target_id || alert?.targetId)}"`
+        ? `Atenção para regressão em “${targetDisplayName(alert?.target_id || alert?.targetId)}”`
         : 'Atenção para regressão clínica',
       summary: safeString(alert?.message, 'Existe alerta ativo de regressao/manutencao.'),
       rationale: 'Há alerta ativo baseado no resumo clínico ainda não resolvido.',
@@ -538,7 +743,10 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       current_value: null,
       delta_value: null,
       evidence: evidenceBase({
+        reasonCode: 'unresolved_regression_alert',
+        clinicalWindowKey: `regression:${clinicalWeekKey(alert?.created_at || alert?.createdAt) || 'active'}`,
         alertId: safeString(alert?.id),
+        probeResultId: safeString(alert?.maintenance_probe_result_id || alert?.maintenanceProbeResultId) || null,
         severity: safeString(alert?.severity),
         createdAt: safeString(alert?.created_at || alert?.createdAt)
       })
@@ -560,7 +768,7 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         source_session_id: sourceSessionId,
         recommendation_type: 'REGRESSION_ATTENTION',
         priority: drop >= 20 ? 'HIGH' : 'MEDIUM',
-        title: `Queda de desempenho em "${targetDisplayName(targetId)}"`,
+        title: `Queda de desempenho em “${targetDisplayName(targetId)}”`,
         summary: `${metricNameOf(snapshot)} caiu ${Math.round(drop)} p.p.`,
         rationale: 'Queda igual ou superior a 10 pontos percentuais em métrica baseada no resumo clínico.',
         suggested_action: 'Revisar este alvo na próxima sessão antes de ampliar demanda.',
@@ -570,6 +778,8 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         current_value: current,
         delta_value: deltaValueOf(snapshot),
         evidence: evidenceBase({
+          reasonCode: 'metric_drop',
+          clinicalWindowKey: `snapshot:${safeString(snapshot?.id) || safeString(snapshot?.changed_at || snapshot?.changedAt || snapshot?.updated_at || snapshot?.updatedAt) || contextHash}`,
           metricType,
           previousValue: previous,
           currentValue: current,
@@ -593,7 +803,7 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
           source_session_id: sourceSessionId,
           recommendation_type: 'PROMPT_FADING',
           priority: 'MEDIUM',
-          title: `Reduzir ajuda em "${targetDisplayName(targetId)}"`,
+          title: `Reduzir ajuda em “${targetDisplayName(targetId)}”`,
           summary: 'Alta acurácia com independência menor sugere ponto de revisão.',
           rationale: 'Métrica baseada no resumo clínico indica acurácia alta e independência mais baixa.',
           suggested_action: 'Pode ser útil considerar redução gradual de ajuda, com validação do supervisor.',
@@ -603,6 +813,11 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
           current_value: metricValueOf(accuracy),
           delta_value: accuracyValue - independenceValue,
           evidence: evidenceBase({
+            reasonCode: 'accuracy_independence_gap',
+            clinicalWindowKey: `snapshots:${[
+              safeString(accuracy?.id),
+              safeString(independence?.id)
+            ].filter(Boolean).sort().join(',') || contextHash}`,
             accuracyPercent: accuracyValue,
             independencePercent: independenceValue,
             accuracySnapshotId: safeString(accuracy?.id),
@@ -632,6 +847,8 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       current_value: safeNumber(evaluation?.accuracy_percent ?? evaluation?.accuracyPercent, 0),
       delta_value: null,
       evidence: evidenceBase({
+        reasonCode: 'mastery_review',
+        clinicalWindowKey: `evaluation:${safeString(evaluation?.id) || safeString(evaluation?.evaluated_at || evaluation?.evaluatedAt) || contextHash}`,
         evaluationId: safeString(evaluation?.id),
         status,
         accuracyPercent: evaluation?.accuracy_percent ?? evaluation?.accuracyPercent ?? null,
@@ -671,6 +888,8 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         current_value: metricValueOf(improvedSnapshot),
         delta_value: deltaValueOf(improvedSnapshot),
         evidence: evidenceBase({
+          reasonCode: 'continue_training',
+          clinicalWindowKey: `snapshot:${safeString(improvedSnapshot?.id) || safeString(improvedSnapshot?.changed_at || improvedSnapshot?.changedAt || improvedSnapshot?.updated_at || improvedSnapshot?.updatedAt) || contextHash}`,
           targetClinicalStatus: status,
           snapshotId: safeString(improvedSnapshot?.id)
         })
@@ -706,6 +925,8 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
       current_value: current,
       delta_value: deltaValueOf(row),
       evidence: evidenceBase({
+        reasonCode: 'behavior_increase',
+        clinicalWindowKey: `behavior-summary:${safeString(row?.id) || safeString(row?.date || row?.updated_at || row?.updatedAt) || contextHash}`,
         metricType,
         previousValue: previous,
         currentValue: current,
@@ -732,6 +953,8 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         current_value: current,
         delta_value: deltaValueOf(row),
         evidence: evidenceBase({
+          reasonCode: 'abc_collection_gap',
+          clinicalWindowKey: `behavior-summary:${safeString(row?.id) || safeString(row?.date || row?.updated_at || row?.updatedAt) || contextHash}`,
           metricType,
           abcCount,
           behaviorSummaryId: safeString(row?.id)
@@ -766,6 +989,8 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         current_value: null,
         delta_value: null,
         evidence: evidenceBase({
+          reasonCode: 'new_target_candidate',
+          clinicalWindowKey: `target-state:${safeString(newTarget?.updated_at || newTarget?.updatedAt || newTarget?.created_at || newTarget?.createdAt) || targetIdOf(newTarget)}`,
           targetClinicalStatus: targetStatusOf(newTarget),
           blockerPresent: false
         })
@@ -796,6 +1021,11 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
         current_value: accuracyValue,
         delta_value: accuracyValue - independenceValue,
         evidence: evidenceBase({
+          reasonCode: 'generalization_candidate',
+          clinicalWindowKey: `snapshots:${[
+            safeString(accuracy?.id),
+            safeString(independence?.id)
+          ].filter(Boolean).sort().join(',') || contextHash}`,
           accuracyPercent: accuracyValue,
           independencePercent: independenceValue
         })
@@ -809,12 +1039,32 @@ export function generateNextSessionRecommendations(input: GenerateNextSessionRec
   const limited = focusType === 'BALANCED'
     ? limitBalanced(sorted, Math.min(maxRecommendations, 6))
     : sorted.slice(0, Math.min(maxRecommendations, 8));
+  const existingByKey = new Map(
+    deduplicateAbaRecommendationsForDecisionQueue(input.existingRecommendations || [])
+      .map((recommendation) => [buildAbaRecommendationSemanticKey(recommendation), recommendation])
+  );
+  let reusedCount = 0;
+  const reconciled = limited.map((recommendation) => {
+    const key = buildAbaRecommendationSemanticKey(recommendation);
+    const persisted = existingByKey.get(key);
+    if (!persisted) return recommendation;
+    reusedCount += 1;
+    return {
+      ...recommendation,
+      ...persisted,
+      evidence: {
+        ...recommendation.evidence,
+        ...recommendationEvidence(persisted),
+        suggestionKey: key
+      }
+    } as AbaClinicalRecommendation;
+  });
 
   return {
     focusType,
     contextHash,
-    recommendations: limited,
-    reusedExisting: false
+    recommendations: reconciled,
+    reusedExisting: reconciled.length > 0 && reusedCount === reconciled.length
   };
 }
 

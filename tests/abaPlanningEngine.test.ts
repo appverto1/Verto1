@@ -5,7 +5,9 @@ import {
   acceptRecommendationForNextSession,
   abaRecommendationPriorityLabel,
   abaRecommendationTypeLabel,
+  buildAbaRecommendationSemanticKey,
   deduplicateAbaRecommendationsForDecisionQueue,
+  formatAbaRecommendationTitle,
   generateNextSessionRecommendations,
   rejectRecommendation,
   translateAbaRecommendationText
@@ -247,6 +249,219 @@ test('fila de decisao deduplica sugestoes equivalentes', () => {
   assert.equal(queue[0].groupedCount, 2);
 });
 
+test('titulo legado decodifica entidades e usa aspas tipograficas sem executar HTML', () => {
+  assert.equal(
+    formatAbaRecommendationTitle('Atenção para regressão em &quot;alvo do PEI&quot;'),
+    'Atenção para regressão em “alvo do PEI”'
+  );
+  assert.equal(
+    translateAbaRecommendationText('&lt;script&gt;alert(1)&lt;/script&gt;'),
+    '<script>alert(1)</script>'
+  );
+});
+
+test('quatro regressões do mesmo alvo, motivo e janela resultam em um card', () => {
+  const rows = Array.from({ length: 4 }, (_, index) => ({
+    id: `regression-${index + 1}`,
+    organization_id: 'clinic-1',
+    patient_id: 'patient-1',
+    source_session_id: `session-${index + 1}`,
+    recommendation_type: 'REGRESSION_ATTENTION',
+    priority: 'HIGH',
+    title: 'Atenção para regressão em &quot;alvo do PEI&quot;',
+    summary: '2 probes consecutivos abaixo do critério.',
+    rationale: 'Há alerta ativo.',
+    suggested_action: 'Revisar dados recentes.',
+    target_id: 'target-1',
+    metric_name: 'regression_alert',
+    evidence: {
+      alertId: `alert-${index + 1}`,
+      createdAt: `2026-05-2${index + 4}T10:00:00.000Z`
+    },
+    status: 'SUGGESTED',
+    context_hash: `context-${index + 1}`,
+    created_at: `2026-05-2${index + 1}T12:00:00.000Z`
+  }));
+  const queue = deduplicateAbaRecommendationsForDecisionQueue(rows);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].groupedCount, 4);
+  assert.equal(formatAbaRecommendationTitle(queue[0].title), 'Atenção para regressão em “alvo do PEI”');
+});
+
+test('manutenção idêntica entre sessões reutiliza a mesma sugestão persistida', () => {
+  const first = generateNextSessionRecommendations({
+    ...baseInput,
+    focusType: 'MAINTENANCE',
+    targets: [target({ clinical_status: 'MAINTENANCE' })]
+  });
+  const second = generateNextSessionRecommendations({
+    ...baseInput,
+    sourceSessionId: 'session-2',
+    focusType: 'MAINTENANCE',
+    targets: [target({ clinical_status: 'MAINTENANCE' })],
+    existingRecommendations: first.recommendations
+  });
+  assert.equal(second.reusedExisting, true);
+  assert.equal(second.recommendations.length, 1);
+  assert.equal(second.recommendations[0].id, first.recommendations[0].id);
+});
+
+test('manutenção legada sem chave explícita é reconciliada sem criar outro card', () => {
+  const initial = generateNextSessionRecommendations({
+    ...baseInput,
+    focusType: 'MAINTENANCE',
+    targets: [target({ clinical_status: 'MAINTENANCE' })],
+    maintenanceSchedules: []
+  });
+  const legacy = {
+    ...initial.recommendations[0],
+    id: 'legacy-maintenance',
+    source_session_id: 'legacy-session',
+    evidence: {
+      source: 'summary_driven',
+      nextProbe: {
+        status: 'NO_SCHEDULE',
+        noSchedule: true
+      }
+    }
+  };
+  const regenerated = generateNextSessionRecommendations({
+    ...baseInput,
+    sourceSessionId: 'new-session',
+    focusType: 'MAINTENANCE',
+    targets: [target({ clinical_status: 'MAINTENANCE' })],
+    maintenanceSchedules: [],
+    existingRecommendations: [legacy]
+  });
+  assert.equal(regenerated.recommendations.length, 1);
+  assert.equal(regenerated.recommendations[0].id, 'legacy-maintenance');
+  assert.equal(regenerated.reusedExisting, true);
+});
+
+test('regressão legada usa a janela clínica canônica e não reaparece em nova sessão', () => {
+  const regressionAlert = {
+    id: 'alert-legacy',
+    target_id: 'target-1',
+    severity: 'HIGH',
+    message: '2 probes consecutivos abaixo do critério.',
+    created_at: '2026-05-27T10:00:00.000Z'
+  };
+  const initial = generateNextSessionRecommendations({
+    ...baseInput,
+    focusType: 'BALANCED',
+    regressionAlerts: [regressionAlert]
+  });
+  const legacy = {
+    ...initial.recommendations[0],
+    id: 'legacy-regression',
+    source_session_id: 'legacy-session',
+    evidence: {
+      source: 'summary_driven',
+      alertId: 'alert-legacy',
+      createdAt: regressionAlert.created_at
+    }
+  };
+  const regenerated = generateNextSessionRecommendations({
+    ...baseInput,
+    sourceSessionId: 'new-session',
+    focusType: 'BALANCED',
+    regressionAlerts: [regressionAlert],
+    existingRecommendations: [legacy]
+  });
+  assert.equal(regenerated.recommendations.length, 1);
+  assert.equal(regenerated.recommendations[0].id, 'legacy-regression');
+  assert.equal(regenerated.reusedExisting, true);
+});
+
+test('alertas distintos do mesmo alvo, motivo e janela geram um único card', () => {
+  const result = generateNextSessionRecommendations({
+    ...baseInput,
+    focusType: 'BALANCED',
+    regressionAlerts: Array.from({ length: 4 }, (_, index) => ({
+      id: `alert-${index + 1}`,
+      target_id: 'target-1',
+      severity: 'HIGH',
+      message: '2 probes consecutivos abaixo do critério.',
+      created_at: `2026-05-2${index + 4}T10:00:00.000Z`
+    }))
+  });
+  assert.equal(result.recommendations.length, 1);
+  assert.equal(result.recommendations[0].recommendation_type, 'REGRESSION_ATTENTION');
+  assert.deepEqual(
+    new Set(result.recommendations[0].evidence.relatedSourceIds),
+    new Set(['alert-1', 'alert-2', 'alert-3', 'alert-4'])
+  );
+});
+
+test('requisições concorrentes para o mesmo ciclo geram o mesmo ID idempotente', () => {
+  const input = {
+    ...baseInput,
+    focusType: 'MAINTENANCE',
+    targets: [target({ clinical_status: 'MAINTENANCE' })]
+  };
+  const left = generateNextSessionRecommendations(input);
+  const right = generateNextSessionRecommendations(input);
+  assert.equal(left.recommendations[0].id, right.recommendations[0].id);
+  assert.equal(
+    buildAbaRecommendationSemanticKey(left.recommendations[0]),
+    buildAbaRecommendationSemanticKey(right.recommendations[0])
+  );
+});
+
+test('chave semântica preserva alvos, pacientes e organizações diferentes', () => {
+  const common = {
+    organization_id: 'clinic-1',
+    patient_id: 'patient-1',
+    recommendation_type: 'MAINTENANCE_PROBE',
+    target_id: 'target-1',
+    metric_name: 'maintenance_schedule',
+    evidence: { reasonCode: 'maintenance_probe_due', clinicalWindowKey: 'maintenance-unscheduled:initial' }
+  };
+  const keys = [
+    buildAbaRecommendationSemanticKey(common),
+    buildAbaRecommendationSemanticKey({ ...common, target_id: 'target-2' }),
+    buildAbaRecommendationSemanticKey({ ...common, patient_id: 'patient-2' }),
+    buildAbaRecommendationSemanticKey({ ...common, organization_id: 'clinic-2' })
+  ];
+  assert.equal(new Set(keys).size, 4);
+});
+
+test('ciclos clínicos diferentes continuam como sugestões distintas', () => {
+  const common = {
+    organization_id: 'clinic-1',
+    patient_id: 'patient-1',
+    recommendation_type: 'MAINTENANCE_PROBE',
+    target_id: 'target-1',
+    metric_name: 'maintenance_schedule',
+    status: 'SUGGESTED'
+  };
+  const queue = deduplicateAbaRecommendationsForDecisionQueue([
+    { ...common, id: 'cycle-1', evidence: { reasonCode: 'maintenance_probe_due', clinicalWindowKey: 'schedule-1' } },
+    { ...common, id: 'cycle-2', evidence: { reasonCode: 'maintenance_probe_due', clinicalWindowKey: 'schedule-2' } }
+  ]);
+  assert.equal(queue.length, 2);
+});
+
+test('estado editado prevalece sobre duplicata pendente sem remover o histórico', () => {
+  const common = {
+    organization_id: 'clinic-1',
+    patient_id: 'patient-1',
+    recommendation_type: 'REGRESSION_ATTENTION',
+    target_id: 'target-1',
+    metric_name: 'regression_alert',
+    title: 'Atenção para regressão',
+    evidence: { reasonCode: 'unresolved_regression_alert', clinicalWindowKey: 'probe-result:probe-1' }
+  };
+  const queue = deduplicateAbaRecommendationsForDecisionQueue([
+    { ...common, id: 'original', status: 'SUGGESTED', updated_at: '2026-05-27T10:00:00.000Z' },
+    { ...common, id: 'edited', status: 'EDITED', updated_at: '2026-05-27T11:00:00.000Z' }
+  ]);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].id, 'edited');
+  assert.equal(queue[0].status, 'EDITED');
+  assert.deepEqual(new Set(queue[0].groupedRecommendationIds), new Set(['original', 'edited']));
+});
+
 test('infraestrutura de planning esta persistente, economica e sem select star', () => {
   assert.match(packageJson, /"test:aba-planning-engine"/);
   for (const tableName of [
@@ -262,6 +477,8 @@ test('infraestrutura de planning esta persistente, economica e sem select star',
   assert.match(serverCode, /app\.post\('\/api\/aba\/recommendations\/:recommendationId\/accept'/);
   assert.match(serverCode, /Informe o motivo da recusa/);
   assert.match(serverCode, /app\.post\('\/api\/aba\/recommendations\/:recommendationId\/apply-to-next-session'/);
+  assert.match(serverCode, /canonicalizeAbaRecommendationRows/);
+  assert.match(serverCode, /\.upsert\(payloads, \{ onConflict: 'id' \}\)/);
   assert.doesNotMatch(serverCode, /select\('\*'\)/);
 });
 
@@ -275,6 +492,9 @@ test('UI nao aplica sugestao sem aceite', () => {
   assert.match(sessionModeCode, /Motivo da recusa|Escolha o motivo da recusa/);
   assert.match(sessionModeCode, /abaRecommendationPriorityLabel/);
   assert.match(sessionModeCode, /abaRecommendationTypeLabel/);
+  assert.match(sessionModeCode, /planningDecisionInFlightRef/);
+  assert.match(sessionModeCode, /formatAbaRecommendationTitle/);
+  assert.doesNotMatch(sessionModeCode, /dangerouslySetInnerHTML/);
   assert.doesNotMatch(sessionModeCode, /window\.prompt\('Editar acao sugerida'/);
   assert.doesNotMatch(sessionModeCode, /\{recommendation\.priority \|\| 'MEDIUM'\}/);
   assert.doesNotMatch(sessionModeCode, /\{recommendation\.recommendation_type\}/);
