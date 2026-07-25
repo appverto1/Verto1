@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -49,12 +49,14 @@ import {
   ShieldCheck,
   LayoutGrid,
   List,
+  GraduationCap,
 } from "lucide-react";
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { SettingsMenu } from "./SettingsMenu";
 import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
+import { SchoolsManagement } from "./SchoolsManagement";
 import { AnamnesisModal } from "./Anamnesis";
 import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
@@ -131,6 +133,7 @@ type DashboardTab =
   | "team"
   | "financial"
   | "patients"
+  | "schools"
   | "agenda"
   | "closure"
   | "conference"
@@ -722,6 +725,7 @@ export function CoordinatorDashboard({
     | "team"
     | "financial"
     | "patients"
+    | "schools"
     | "agenda"
     | "closure"
     | "conference"
@@ -1067,6 +1071,7 @@ export function CoordinatorDashboard({
     team: "Gestão da Equipe",
     financial: "Financeiro",
     patients: "Pacientes",
+    schools: "Escolas",
     agenda: "Agenda",
     closure: "Fechamento operacional",
     conference: "Pré-faturamento mensal",
@@ -8394,6 +8399,7 @@ export function CoordinatorDashboard({
           { id: "dashboard", label: "Painel", icon: LayoutDashboard },
           { id: "agenda", label: "Agenda", icon: CalendarDays },
           { id: "patients", label: "Pacientes", icon: ClipboardList },
+          { id: "schools", label: "Escolas", icon: GraduationCap },
           { id: "birthdays", label: "Aniversariantes", icon: Heart },
           { id: "protocols", label: "Protocolos", icon: BookOpenCheck },
         ],
@@ -11490,6 +11496,20 @@ export function CoordinatorDashboard({
                     </div>
                   )}
                 </div>
+              </motion.div>
+            )}
+            {activeTab === "schools" && (
+              <motion.div
+                key="schools"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+              >
+                <SchoolsManagement
+                  patients={allPatients}
+                  professionals={Object.values(therapistMembersById)}
+                  userRole={role}
+                />
               </motion.div>
             )}
             {activeTab === "agenda" && (

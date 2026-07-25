@@ -1,4 +1,5 @@
-﻿import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { PatientSchoolInformation } from "./PatientSchoolInformation";
 import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock, StopCircle } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { TutorialOverlay } from './Tutorial';
@@ -80,7 +81,7 @@ const isVbMappProtocol = (protocol: any) => {
   return source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp');
 };
 
-type PatientDetailTab = 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'files';
+type PatientDetailTab = 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'school' | 'files';
 type PatientHistoryPeriod = 'all' | '30d' | '90d' | '180d' | '365d' | 'custom';
 type PatientHistoryPaginationState = {
   initialized: boolean;
@@ -593,6 +594,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     'plan',
     'session',
     'aba-charts',
+    'school',
     'files',
   ];
   const allowedTabsSet = useMemo(() => {
@@ -9147,6 +9149,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           {abaV2Enabled && canAccessTab('aba-charts') && isKidsProfile && (
             <button id="tab-aba-charts" onClick={() => setActiveTab('aba-charts')} className={`min-w-[7rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos ABA</button>
           )}
+          {canAccessTab('school') && <button id="tab-school" onClick={() => setActiveTab('school')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'school' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Escola</button>}
           {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'files' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Arquivos</button>}
         </div> 
       </div> 
@@ -10747,6 +10750,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <AbaClinicalChartsPanel patientId={String(patient.id)} isPanelDark={isPanelDark} />
         ) : activeTab === 'session' && isKidsProfile ? (
           null
+        ) : activeTab === 'school' ? (
+          <PatientSchoolInformation patientId={String(patient.id)} canManage={['owner', 'admin', 'coordinator', 'receptionist'].includes(String(userRole || '').toLowerCase())} isPanelDark={isPanelDark} />
         ) : (
           <div className="space-y-6 animate-fade-in">
             <div className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>

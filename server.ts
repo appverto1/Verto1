@@ -70193,6 +70193,246 @@ async function startServer() {
     }
   });
 
+  // --- STRUCTURED SCHOOL MANAGEMENT ---
+  const getSchoolWorkspace = (req: any) => {
+    const user = req.session?.user || {};
+    const clinicId = sanitizeString(currentClinicId(user), 120);
+    return {
+      user,
+      actorId: sanitizeString(user?.id, 120),
+      role: sanitizeString(user?.role, 40).toLowerCase(),
+      organizationId: clinicId,
+      clinicId
+    };
+  };
+
+  const schoolPagination = (req: any) => {
+    const page = Math.max(1, Math.min(100000, Number(req.query?.page || 1) || 1));
+    const pageSize = Math.max(10, Math.min(100, Number(req.query?.pageSize || 25) || 25));
+    return { page, pageSize, from: (page - 1) * pageSize, to: page * pageSize - 1 };
+  };
+
+  const schoolError = (res: any, error: any, fallback = 'Não foi possível concluir a operação escolar.') => {
+    const code = sanitizeString(error?.code || error?.message, 120);
+    if (/IDEMPOTENCY_CONFLICT|duplicate|23505/i.test(code)) return res.status(409).json({ success: false, error: 'SCHOOL_CONFLICT', message: 'Já existe um cadastro ou operação equivalente.' });
+    if (/ACCESS_DENIED|AUTH_REQUIRED/i.test(code)) return res.status(403).json({ success: false, error: 'SCHOOL_ACCESS_DENIED', message: 'Você não possui acesso a este recurso.' });
+    if (/NOT_FOUND|PGRST116/i.test(code)) return res.status(404).json({ success: false, error: 'SCHOOL_NOT_FOUND', message: 'Recurso não encontrado.' });
+    if (/INVALID|MISMATCH|CHECK/i.test(code)) return res.status(422).json({ success: false, error: 'SCHOOL_BUSINESS_RULE', message: 'Os dados não atendem às regras do vínculo escolar.' });
+    console.error('[Schools]', { code, message: sanitizeString(error?.message, 240) });
+    return res.status(500).json({ success: false, error: 'SCHOOL_OPERATION_FAILED', message: fallback });
+  };
+
+  app.get('/api/schools', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
+    const scope = getSchoolWorkspace(req);
+    const { page, pageSize, from, to } = schoolPagination(req);
+    if (!scope.organizationId) return res.status(403).json({ error: 'SCHOOL_WORKSPACE_REQUIRED' });
+    const search = sanitizeString(req.query?.search, 160);
+    const city = sanitizeString(req.query?.city, 120);
+    const state = sanitizeString(req.query?.state, 2).toUpperCase();
+    const network = sanitizeString(req.query?.network, 40).toUpperCase();
+    const type = sanitizeString(req.query?.type, 40).toUpperCase();
+    const includeArchived = String(req.query?.includeArchived || '') === 'true';
+    let query = supabase.from('schools').select('id,organization_id,clinic_id,legal_name,display_name,trade_name,school_type,education_network,tax_id,inep_code,email,phone,whatsapp,city,state,is_active,responsible_professional_id,created_at,updated_at,archived_at', { count: 'exact' }).eq('organization_id', scope.organizationId);
+    if (!includeArchived) query = query.is('archived_at', null).eq('is_active', true);
+    if (search) query = query.or(`display_name.ilike.%${search.replace(/[%_,]/g, '')}%,legal_name.ilike.%${search.replace(/[%_,]/g, '')}%,trade_name.ilike.%${search.replace(/[%_,]/g, '')}%`);
+    if (city) query = query.ilike('city', city);
+    if (state) query = query.eq('state', state);
+    if (network) query = query.eq('education_network', network);
+    if (type) query = query.eq('school_type', type);
+    const { data, error, count } = await query.order('display_name', { ascending: true }).range(from, to);
+    if (error) return schoolError(res, error, 'Não foi possível listar as escolas.');
+    const schoolIds = (data || []).map((row: any) => row.id);
+    const [enrollmentsResult, unitsResult, contactsResult, meetingsResult] = await Promise.all([
+      schoolIds.length ? supabase.from('patient_school_enrollments').select('school_id,patient_id').eq('organization_id', scope.organizationId).eq('is_current', true).in('school_id', schoolIds) : Promise.resolve({ data: [], error: null }),
+      schoolIds.length ? supabase.from('school_units').select('id,school_id,name,city,state,is_active').eq('organization_id', scope.organizationId).is('archived_at', null).in('school_id', schoolIds) : Promise.resolve({ data: [], error: null }),
+      schoolIds.length ? supabase.from('school_contacts').select('id,school_id,name,role,email,phone,whatsapp,is_primary').eq('organization_id', scope.organizationId).eq('is_active', true).in('school_id', schoolIds) : Promise.resolve({ data: [], error: null }),
+      schoolIds.length ? supabase.from('school_meetings').select('id,school_id,title,status,scheduled_start').eq('organization_id', scope.organizationId).in('school_id', schoolIds).order('scheduled_start', { ascending: false }).limit(Math.min(1000, schoolIds.length * 20)) : Promise.resolve({ data: [], error: null })
+    ] as any);
+    const rows = (data || []).map((school: any) => {
+      const meetings = (meetingsResult.data || []).filter((meeting: any) => meeting.school_id === school.id);
+      const now = Date.now();
+      return {
+        ...school,
+        patientCount: new Set((enrollmentsResult.data || []).filter((row: any) => row.school_id === school.id).map((row: any) => row.patient_id)).size,
+        units: (unitsResult.data || []).filter((row: any) => row.school_id === school.id),
+        contacts: (contactsResult.data || []).filter((row: any) => row.school_id === school.id),
+        nextMeeting: meetings.filter((m: any) => m.scheduled_start && new Date(m.scheduled_start).getTime() >= now && ['SCHEDULED','CONFIRMED'].includes(m.status)).sort((a: any,b: any) => String(a.scheduled_start).localeCompare(String(b.scheduled_start)))[0] || null,
+        lastMeeting: meetings.filter((m: any) => m.scheduled_start && new Date(m.scheduled_start).getTime() < now).sort((a: any,b: any) => String(b.scheduled_start).localeCompare(String(a.scheduled_start)))[0] || null
+      };
+    });
+    const total = Number(count || 0);
+    return res.json({ success: true, data: rows, pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)), hasNextPage: page * pageSize < total }, filters: { search, city, state, network, type, includeArchived } });
+  });
+
+  app.get('/api/schools/autocomplete', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
+    const scope = getSchoolWorkspace(req);
+    const search = sanitizeString(req.query?.search, 120);
+    let query = supabase.from('schools').select('id,display_name,legal_name,city,state,education_network,school_type').eq('organization_id', scope.organizationId).eq('is_active', true).is('archived_at', null).limit(30);
+    if (search) query = query.or(`display_name.ilike.%${search.replace(/[%_,]/g, '')}%,legal_name.ilike.%${search.replace(/[%_,]/g, '')}%`);
+    const { data, error } = await query.order('display_name');
+    if (error) return schoolError(res, error);
+    return res.json({ success: true, data: data || [] });
+  });
+
+  app.post('/api/schools', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res: any) => {
+    const scope = getSchoolWorkspace(req);
+    const displayName = sanitizeString(req.body?.displayName || req.body?.display_name, 180);
+    if (!displayName) return res.status(400).json({ error: 'SCHOOL_NAME_REQUIRED', message: 'Informe o nome da escola.' });
+    const city = sanitizeString(req.body?.city, 120);
+    const state = sanitizeString(req.body?.state, 2).toUpperCase();
+    const taxId = sanitizeString(req.body?.taxId || req.body?.tax_id, 30).replace(/\D/g, '') || null;
+    const inepCode = sanitizeString(req.body?.inepCode || req.body?.inep_code, 30).replace(/\D/g, '') || null;
+    const normalizedName = displayName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\b(colegio|escola|instituto|centro educacional|unidade|campus)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+    let duplicateQuery = supabase.from('schools').select('id,display_name,city,state,tax_id,inep_code').eq('organization_id', scope.organizationId).is('archived_at', null).limit(10);
+    if (taxId) duplicateQuery = duplicateQuery.eq('tax_id', taxId);
+    else if (inepCode) duplicateQuery = duplicateQuery.eq('inep_code', inepCode);
+    else duplicateQuery = duplicateQuery.eq('normalized_name', normalizedName).eq('city', city || '').eq('state', state || '');
+    const duplicates = await duplicateQuery;
+    if (duplicates.error) return schoolError(res, duplicates.error);
+    if ((duplicates.data || []).length && req.body?.confirmPossibleDuplicate !== true) return res.status(409).json({ success: false, error: 'POSSIBLE_SCHOOL_DUPLICATE', message: 'Encontramos uma escola possivelmente equivalente.', candidates: duplicates.data });
+    const payload = {
+      organization_id: scope.organizationId, clinic_id: scope.clinicId, display_name: displayName,
+      legal_name: sanitizeString(req.body?.legalName || req.body?.legal_name, 180) || null,
+      trade_name: sanitizeString(req.body?.tradeName || req.body?.trade_name, 180) || null,
+      normalized_name: normalizedName,
+      school_type: sanitizeString(req.body?.schoolType || req.body?.school_type, 40).toUpperCase() || 'OTHER',
+      education_network: sanitizeString(req.body?.educationNetwork || req.body?.education_network, 40).toUpperCase() || 'OTHER',
+      tax_id: taxId, inep_code: inepCode,
+      email: sanitizeString(req.body?.email, 200) || null, phone: sanitizeString(req.body?.phone, 40) || null, whatsapp: sanitizeString(req.body?.whatsapp, 40) || null,
+      website: sanitizeString(req.body?.website, 300) || null, postal_code: sanitizeString(req.body?.postalCode || req.body?.postal_code, 20) || null,
+      street: sanitizeString(req.body?.street, 180) || null, street_number: sanitizeString(req.body?.streetNumber || req.body?.street_number, 40) || null,
+      address_complement: sanitizeString(req.body?.addressComplement || req.body?.address_complement, 120) || null,
+      district: sanitizeString(req.body?.district, 120) || null, city: city || null, state: state || null, country: sanitizeString(req.body?.country, 2).toUpperCase() || 'BR',
+      notes: sanitizeString(req.body?.notes, 4000) || null, responsible_professional_id: sanitizeString(req.body?.responsibleProfessionalId, 120) || null,
+      created_by: scope.actorId, updated_by: scope.actorId
+    };
+    const { data, error } = await supabase.from('schools').insert(payload).select('*').single();
+    if (error) return schoolError(res, error);
+    await supabase.from('school_audit_events').insert({ organization_id: scope.organizationId, clinic_id: scope.clinicId, actor_id: scope.actorId, resource_type: 'SCHOOL', resource_id: data.id, action: 'SCHOOL_CREATED', after_state: { displayName, city, state }, idempotency_key: sanitizeString(req.body?.idempotencyKey, 160) || null });
+    return res.status(201).json({ success: true, data });
+  });
+
+  app.patch('/api/schools/:schoolId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res: any) => {
+    const scope = getSchoolWorkspace(req); const schoolId = sanitizeString(req.params.schoolId, 120);
+    const current = await supabase.from('schools').select('*').eq('id', schoolId).eq('organization_id', scope.organizationId).maybeSingle();
+    if (current.error || !current.data) return schoolError(res, current.error || new Error('NOT_FOUND'));
+    const updates: any = { updated_by: scope.actorId };
+    const allowed: Record<string,string> = { displayName:'display_name',legalName:'legal_name',tradeName:'trade_name',schoolType:'school_type',educationNetwork:'education_network',taxId:'tax_id',inepCode:'inep_code',email:'email',phone:'phone',whatsapp:'whatsapp',website:'website',postalCode:'postal_code',street:'street',streetNumber:'street_number',addressComplement:'address_complement',district:'district',city:'city',state:'state',country:'country',notes:'notes',responsibleProfessionalId:'responsible_professional_id',isActive:'is_active' };
+    Object.entries(allowed).forEach(([key,column]) => { if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) updates[column] = typeof req.body[key] === 'string' ? sanitizeString(req.body[key], column === 'notes' ? 4000 : 300) || null : req.body[key]; });
+    if (updates.display_name) updates.normalized_name = updates.display_name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\b(colegio|escola|instituto|centro educacional|unidade|campus)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+    if (req.body?.archive === true) { updates.is_active = false; updates.archived_at = new Date().toISOString(); }
+    const result = await supabase.from('schools').update(updates).eq('id', schoolId).eq('organization_id', scope.organizationId).select('*').single();
+    if (result.error) return schoolError(res, result.error);
+    await supabase.from('school_audit_events').insert({ organization_id: scope.organizationId, clinic_id: scope.clinicId, actor_id: scope.actorId, resource_type: 'SCHOOL', resource_id: schoolId, action: req.body?.archive === true ? 'SCHOOL_ARCHIVED' : 'SCHOOL_UPDATED', before_state: current.data, after_state: result.data, reason: sanitizeString(req.body?.reason, 500) || null });
+    return res.json({ success: true, data: result.data });
+  });
+
+  app.get('/api/schools/:schoolId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
+    const scope = getSchoolWorkspace(req); const schoolId = sanitizeString(req.params.schoolId, 120);
+    const [school, units, contacts, enrollments, meetings, documents] = await Promise.all([
+      supabase.from('schools').select('*').eq('id', schoolId).eq('organization_id', scope.organizationId).maybeSingle(),
+      supabase.from('school_units').select('*').eq('school_id', schoolId).eq('organization_id', scope.organizationId).order('name'),
+      supabase.from('school_contacts').select('*').eq('school_id', schoolId).eq('organization_id', scope.organizationId).order('is_primary', { ascending: false }).order('name'),
+      supabase.from('patient_school_enrollments').select('id,patient_id,school_unit_id,academic_year,grade_level,class_name,shift,is_current,started_at,ended_at,teacher_contact_id,coordinator_contact_id').eq('school_id', schoolId).eq('organization_id', scope.organizationId).order('is_current', { ascending: false }).order('academic_year', { ascending: false }).limit(500),
+      supabase.from('school_meetings').select('id,title,meeting_type,status,scheduled_start,scheduled_end,school_unit_id,responsible_professional_id').eq('school_id', schoolId).eq('organization_id', scope.organizationId).order('scheduled_start', { ascending: false }).limit(100),
+      supabase.from('school_document_links').select('id,document_id,document_type,visibility,document_date,patient_id,meeting_id').eq('school_id', schoolId).eq('organization_id', scope.organizationId).order('document_date', { ascending: false }).limit(100)
+    ] as any);
+    if (school.error || !school.data) return schoolError(res, school.error || new Error('NOT_FOUND'));
+    const patientIds = [...new Set((enrollments.data || []).map((row: any) => row.patient_id))];
+    const patients = patientIds.length ? await supabase.from('patients').select('id,name,birth_date,status,therapist_id').eq('clinic_id', scope.organizationId).in('id', patientIds) : { data: [], error: null };
+    return res.json({ success: true, data: { ...school.data, units: units.data || [], contacts: contacts.data || [], enrollments: enrollments.data || [], patients: patients.data || [], meetings: meetings.data || [], documents: documents.data || [] } });
+  });
+
+  app.post('/api/schools/:schoolId/units', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator','receptionist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const schoolId=sanitizeString(req.params.schoolId,120); const name=sanitizeString(req.body?.name,160);
+    if(!name) return res.status(400).json({error:'SCHOOL_UNIT_NAME_REQUIRED'});
+    const school=await supabase.from('schools').select('id').eq('id',schoolId).eq('organization_id',scope.organizationId).maybeSingle(); if(!school.data) return res.status(404).json({error:'SCHOOL_NOT_FOUND'});
+    const normalized=name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+    const payload={organization_id:scope.organizationId,school_id:schoolId,name,normalized_name:normalized,code:sanitizeString(req.body?.code,60)||null,email:sanitizeString(req.body?.email,200)||null,phone:sanitizeString(req.body?.phone,40)||null,whatsapp:sanitizeString(req.body?.whatsapp,40)||null,postal_code:sanitizeString(req.body?.postalCode,20)||null,street:sanitizeString(req.body?.street,180)||null,street_number:sanitizeString(req.body?.streetNumber,40)||null,address_complement:sanitizeString(req.body?.addressComplement,120)||null,district:sanitizeString(req.body?.district,120)||null,city:sanitizeString(req.body?.city,120)||null,state:sanitizeString(req.body?.state,2).toUpperCase()||null,country:sanitizeString(req.body?.country,2).toUpperCase()||'BR',created_by:scope.actorId,updated_by:scope.actorId};
+    const result=await supabase.from('school_units').insert(payload).select('*').single(); if(result.error) return schoolError(res,result.error); return res.status(201).json({success:true,data:result.data});
+  });
+
+  app.post('/api/schools/:schoolId/contacts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator','receptionist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const schoolId=sanitizeString(req.params.schoolId,120); const name=sanitizeString(req.body?.name,160); if(!name) return res.status(400).json({error:'SCHOOL_CONTACT_NAME_REQUIRED'});
+    const unitId=sanitizeString(req.body?.schoolUnitId,120)||null; if(unitId){const unit=await supabase.from('school_units').select('id').eq('id',unitId).eq('school_id',schoolId).eq('organization_id',scope.organizationId).maybeSingle();if(!unit.data)return res.status(404).json({error:'SCHOOL_UNIT_NOT_FOUND'});}
+    const payload={organization_id:scope.organizationId,school_id:schoolId,school_unit_id:unitId,name,role:sanitizeString(req.body?.role,40).toUpperCase()||'OTHER',department:sanitizeString(req.body?.department,120)||null,email:sanitizeString(req.body?.email,200)||null,phone:sanitizeString(req.body?.phone,40)||null,whatsapp:sanitizeString(req.body?.whatsapp,40)||null,preferred_contact_method:sanitizeString(req.body?.preferredContactMethod,20).toUpperCase()||null,notes:sanitizeString(req.body?.notes,2000)||null,is_primary:req.body?.isPrimary===true,is_active:true,created_by:scope.actorId,updated_by:scope.actorId};
+    const result=await supabase.from('school_contacts').insert(payload).select('*').single(); if(result.error)return schoolError(res,result.error); return res.status(201).json({success:true,data:result.data});
+  });
+
+  app.get('/api/patients/:patientId/school-enrollments', noStoreDynamicResponse, checkAuth, checkPatientAccess, requireRoles('coordinator','receptionist','therapist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const patientId=sanitizeString(req.params.patientId,120);
+    const result=await supabase.from('patient_school_enrollments').select('*,schools(id,display_name,city,state),school_units(id,name,city,state),teacher:school_contacts!patient_school_enrollments_teacher_contact_id_fkey(id,name,role),coordinator:school_contacts!patient_school_enrollments_coordinator_contact_id_fkey(id,name,role)').eq('organization_id',scope.organizationId).eq('patient_id',patientId).order('is_current',{ascending:false}).order('academic_year',{ascending:false});
+    if(result.error)return schoolError(res,result.error); return res.json({success:true,data:result.data||[]});
+  });
+
+  app.post('/api/patients/:patientId/school-enrollments', portalActionLimiter, noStoreDynamicResponse, checkAuth, checkPatientAccess, requireRoles('coordinator','receptionist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const patientId=sanitizeString(req.params.patientId,120); const schoolId=sanitizeString(req.body?.schoolId,120); if(!schoolId)return res.status(400).json({error:'SCHOOL_REQUIRED'});
+    const school=await supabase.from('schools').select('id').eq('id',schoolId).eq('organization_id',scope.organizationId).eq('is_active',true).maybeSingle(); if(!school.data)return res.status(404).json({error:'SCHOOL_NOT_FOUND'});
+    const unitId=sanitizeString(req.body?.schoolUnitId,120)||null; if(unitId){const unit=await supabase.from('school_units').select('id').eq('id',unitId).eq('school_id',schoolId).eq('organization_id',scope.organizationId).maybeSingle();if(!unit.data)return res.status(404).json({error:'SCHOOL_UNIT_NOT_FOUND'});}
+    if(req.body?.closeCurrent!==false){await supabase.from('patient_school_enrollments').update({is_current:false,ended_at:sanitizeString(req.body?.previousEndedAt,20)||new Date().toISOString().slice(0,10),exit_reason:sanitizeString(req.body?.previousExitReason,500)||'Alteração de vínculo escolar',updated_by:scope.actorId}).eq('organization_id',scope.organizationId).eq('patient_id',patientId).eq('is_current',true);}
+    const payload={organization_id:scope.organizationId,clinic_id:scope.clinicId,patient_id:patientId,school_id:schoolId,school_unit_id:unitId,academic_year:Number(req.body?.academicYear)||new Date().getFullYear(),grade_level:sanitizeString(req.body?.gradeLevel,80)||null,class_name:sanitizeString(req.body?.className,80)||null,shift:sanitizeString(req.body?.shift,20).toUpperCase()||null,enrollment_code:sanitizeString(req.body?.enrollmentCode,80)||null,teacher_contact_id:sanitizeString(req.body?.teacherContactId,120)||null,coordinator_contact_id:sanitizeString(req.body?.coordinatorContactId,120)||null,is_current:true,started_at:sanitizeString(req.body?.startedAt,20)||new Date().toISOString().slice(0,10),notes:sanitizeString(req.body?.notes,3000)||null,created_by:scope.actorId,updated_by:scope.actorId};
+    const result=await supabase.from('patient_school_enrollments').insert(payload).select('*').single(); if(result.error)return schoolError(res,result.error);
+    await supabase.from('school_audit_events').insert({organization_id:scope.organizationId,clinic_id:scope.clinicId,actor_id:scope.actorId,resource_type:'SCHOOL_ENROLLMENT',resource_id:result.data.id,action:'PATIENT_LINKED',after_state:{patientId,schoolId,unitId,academicYear:payload.academic_year},idempotency_key:sanitizeString(req.body?.idempotencyKey,160)||null});
+    return res.status(201).json({success:true,data:result.data});
+  });
+
+  app.post('/api/patients/:patientId/school-consents', portalActionLimiter, noStoreDynamicResponse, checkAuth, checkPatientAccess, requireRoles('coordinator','receptionist','therapist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const patientId=sanitizeString(req.params.patientId,120); const consentType=sanitizeString(req.body?.consentType,60).toUpperCase(); const status=sanitizeString(req.body?.status,30).toUpperCase();
+    if(!consentType||!status)return res.status(400).json({error:'SCHOOL_CONSENT_REQUIRED'});
+    const enrollmentId=sanitizeString(req.body?.schoolEnrollmentId,120)||null; if(enrollmentId){const enrollment=await supabase.from('patient_school_enrollments').select('id').eq('id',enrollmentId).eq('patient_id',patientId).eq('organization_id',scope.organizationId).maybeSingle();if(!enrollment.data)return res.status(404).json({error:'SCHOOL_ENROLLMENT_NOT_FOUND'});}
+    const existing=await supabase.from('school_consents').select('id').eq('organization_id',scope.organizationId).eq('patient_id',patientId).eq('consent_type',consentType).is('revoked_at',null).order('updated_at',{ascending:false}).limit(1).maybeSingle();
+    const payload={organization_id:scope.organizationId,clinic_id:scope.clinicId,patient_id:patientId,school_enrollment_id:enrollmentId,consent_type:consentType,status,granted_by_responsible_id:sanitizeString(req.body?.grantedByResponsibleId,120)||null,granted_at:status==='AUTHORIZED'?(sanitizeString(req.body?.grantedAt,80)||new Date().toISOString()):null,expires_at:sanitizeString(req.body?.expiresAt,80)||null,revoked_at:status==='REVOKED'?new Date().toISOString():null,revocation_reason:sanitizeString(req.body?.revocationReason,500)||null,document_id:sanitizeString(req.body?.documentId,120)||null,notes:sanitizeString(req.body?.notes,2000)||null,created_by:scope.actorId,updated_by:scope.actorId};
+    const result=existing.data?await supabase.from('school_consents').update(payload).eq('id',existing.data.id).eq('organization_id',scope.organizationId).select('*').single():await supabase.from('school_consents').insert(payload).select('*').single(); if(result.error)return schoolError(res,result.error); return res.json({success:true,data:result.data});
+  });
+
+  app.get('/api/schools/patients/search', noStoreDynamicResponse, checkAuth, requireRoles('coordinator','receptionist','therapist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const {page,pageSize,from,to}=schoolPagination(req); const schoolId=sanitizeString(req.query?.schoolId,120); if(!schoolId)return res.status(400).json({error:'SCHOOL_REQUIRED'});
+    let enrollmentQuery=supabase.from('patient_school_enrollments').select('id,patient_id,school_id,school_unit_id,academic_year,grade_level,class_name,shift,is_current,teacher_contact_id,coordinator_contact_id,schools(display_name,city,state),school_units(name)',{count:'exact'}).eq('organization_id',scope.organizationId).eq('school_id',schoolId);
+    const unitId=sanitizeString(req.query?.unitId,120); const grade=sanitizeString(req.query?.gradeLevel,80); const className=sanitizeString(req.query?.className,80); const shift=sanitizeString(req.query?.shift,20).toUpperCase(); const history=sanitizeString(req.query?.scope,20)==='history';
+    if(!history)enrollmentQuery=enrollmentQuery.eq('is_current',true); if(unitId)enrollmentQuery=enrollmentQuery.eq('school_unit_id',unitId); if(grade)enrollmentQuery=enrollmentQuery.eq('grade_level',grade); if(className)enrollmentQuery=enrollmentQuery.eq('class_name',className); if(shift)enrollmentQuery=enrollmentQuery.eq('shift',shift);
+    const enrollments=await enrollmentQuery.order('patient_id').range(from,to); if(enrollments.error)return schoolError(res,enrollments.error);
+    const patientIds=(enrollments.data||[]).map((row:any)=>row.patient_id); let patients:any={data:[]}; if(patientIds.length){let pq=supabase.from('patients').select('id,name,birth_date,status,therapist_id,phone').eq('clinic_id',scope.organizationId).in('id',patientIds); const professionalId=sanitizeString(req.query?.professionalId,120); if(professionalId)pq=pq.eq('therapist_id',professionalId); patients=await pq;}
+    const patientMap=new Map((patients.data||[]).map((p:any)=>[p.id,p])); const enrollmentIds=(enrollments.data||[]).map((e:any)=>e.id);
+    const [consents,meetingPatients]=await Promise.all([patientIds.length?supabase.from('school_consents').select('patient_id,consent_type,status,expires_at').eq('organization_id',scope.organizationId).in('patient_id',patientIds):Promise.resolve({data:[]}),enrollmentIds.length?supabase.from('school_meeting_patients').select('patient_id,meeting_id,school_meetings(title,status,scheduled_start)').eq('organization_id',scope.organizationId).in('school_enrollment_id',enrollmentIds).limit(1000):Promise.resolve({data:[]})] as any);
+    const rows=(enrollments.data||[]).map((e:any)=>{const meetings=(meetingPatients.data||[]).filter((m:any)=>m.patient_id===e.patient_id).map((m:any)=>m.school_meetings).filter(Boolean).sort((a:any,b:any)=>String(b.scheduled_start||'').localeCompare(String(a.scheduled_start||''))); return {...e,patient:patientMap.get(e.patient_id)||null,consents:(consents.data||[]).filter((c:any)=>c.patient_id===e.patient_id),lastMeeting:meetings.find((m:any)=>m.scheduled_start&&new Date(m.scheduled_start)<new Date())||null,nextMeeting:meetings.filter((m:any)=>m.scheduled_start&&new Date(m.scheduled_start)>=new Date()).sort((a:any,b:any)=>String(a.scheduled_start).localeCompare(String(b.scheduled_start)))[0]||null};}).filter((r:any)=>r.patient);
+    const total=Number(enrollments.count||0); return res.json({success:true,data:rows,pagination:{page,pageSize,total,totalPages:Math.max(1,Math.ceil(total/pageSize)),hasNextPage:page*pageSize<total}});
+  });
+
+  app.get('/api/school-meetings', noStoreDynamicResponse, checkAuth, requireRoles('coordinator','receptionist','therapist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const {page,pageSize,from,to}=schoolPagination(req); let query=supabase.from('school_meetings').select('*,schools(id,display_name,city,state),school_units(id,name),school_meeting_minutes(id,status,completed_at),school_meeting_patients(id,patient_id,participation_status)',{count:'exact'}).eq('organization_id',scope.organizationId);
+    const schoolId=sanitizeString(req.query?.schoolId,120); const status=sanitizeString(req.query?.status,30).toUpperCase(); const dateFrom=sanitizeString(req.query?.dateFrom,30); const dateTo=sanitizeString(req.query?.dateTo,30); if(schoolId)query=query.eq('school_id',schoolId); if(status)query=query.eq('status',status); if(dateFrom)query=query.gte('scheduled_start',dateFrom); if(dateTo)query=query.lte('scheduled_start',dateTo);
+    const result=await query.order('scheduled_start',{ascending:false}).range(from,to); if(result.error)return schoolError(res,result.error); const total=Number(result.count||0); return res.json({success:true,data:result.data||[],pagination:{page,pageSize,total,totalPages:Math.max(1,Math.ceil(total/pageSize)),hasNextPage:page*pageSize<total}});
+  });
+
+  app.post('/api/school-meetings/batch', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator','receptionist','therapist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const patientIds=[...new Set((Array.isArray(req.body?.patientIds)?req.body.patientIds:[]).map((id:any)=>sanitizeString(id,120)).filter(Boolean))]; if(!patientIds.length)return res.status(400).json({error:'SCHOOL_MEETING_PATIENTS_REQUIRED'});
+    const idempotencyKey=sanitizeString(req.body?.idempotencyKey,160); if(!idempotencyKey)return res.status(400).json({error:'IDEMPOTENCY_KEY_REQUIRED'}); const canonicalPayload=JSON.stringify({schoolId:req.body?.schoolId,schoolUnitId:req.body?.schoolUnitId||null,patientIds:[...patientIds].sort(),title:req.body?.title,meetingType:req.body?.meetingType,scheduledStart:req.body?.scheduledStart,scheduledEnd:req.body?.scheduledEnd,status:req.body?.status}); const payloadHash=crypto.createHash('sha256').update(canonicalPayload).digest('hex');
+    const result=await supabase.rpc('create_school_meeting_batch',{p_organization_id:scope.organizationId,p_clinic_id:scope.clinicId,p_actor_id:scope.actorId,p_school_id:sanitizeString(req.body?.schoolId,120),p_school_unit_id:sanitizeString(req.body?.schoolUnitId,120)||null,p_patient_ids:patientIds,p_title:sanitizeString(req.body?.title,200)||'Reunião escolar',p_meeting_type:sanitizeString(req.body?.meetingType,40).toUpperCase()||'SCHOOL_MEETING',p_scheduled_start:sanitizeString(req.body?.scheduledStart,80)||null,p_scheduled_end:sanitizeString(req.body?.scheduledEnd,80)||null,p_timezone:sanitizeString(req.body?.timezone,80)||'America/Sao_Paulo',p_location_type:sanitizeString(req.body?.locationType,30).toUpperCase()||'SCHOOL',p_location:sanitizeString(req.body?.location,300)||null,p_online_meeting_url:sanitizeString(req.body?.onlineMeetingUrl,500)||null,p_agenda:sanitizeString(req.body?.agenda,10000)||null,p_responsible_professional_id:sanitizeString(req.body?.responsibleProfessionalId,120)||null,p_status:sanitizeString(req.body?.status,30).toUpperCase()||'DRAFT',p_idempotency_key:idempotencyKey,p_payload_hash:payloadHash});
+    if(result.error)return schoolError(res,result.error,'Não foi possível criar a reunião em lote.'); return res.status(201).json(result.data);
+  });
+
+  app.patch('/api/school-meetings/:meetingId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator','receptionist','therapist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const meetingId=sanitizeString(req.params.meetingId,120); const current=await supabase.from('school_meetings').select('*').eq('id',meetingId).eq('organization_id',scope.organizationId).maybeSingle(); if(!current.data)return res.status(404).json({error:'SCHOOL_MEETING_NOT_FOUND'});
+    const updates:any={}; const map:Record<string,string>={title:'title',description:'description',agenda:'agenda',scheduledStart:'scheduled_start',scheduledEnd:'scheduled_end',timezone:'timezone',locationType:'location_type',location:'location',onlineMeetingUrl:'online_meeting_url',status:'status',responsibleProfessionalId:'responsible_professional_id',cancellationReason:'cancellation_reason'}; Object.entries(map).forEach(([k,c])=>{if(Object.prototype.hasOwnProperty.call(req.body||{},k))updates[c]=typeof req.body[k]==='string'?sanitizeString(req.body[k],['description','agenda'].includes(k)?10000:500)||null:req.body[k];}); if(updates.status==='COMPLETED')updates.completed_at=new Date().toISOString(); if(updates.status==='CANCELLED')updates.cancelled_at=new Date().toISOString();
+    const result=await supabase.from('school_meetings').update(updates).eq('id',meetingId).eq('organization_id',scope.organizationId).select('*').single(); if(result.error)return schoolError(res,result.error); await supabase.from('school_audit_events').insert({organization_id:scope.organizationId,clinic_id:scope.clinicId,actor_id:scope.actorId,resource_type:'SCHOOL_MEETING',resource_id:meetingId,action:updates.status==='CANCELLED'?'MEETING_CANCELLED':updates.scheduled_start?'MEETING_RESCHEDULED':'MEETING_UPDATED',before_state:current.data,after_state:result.data,reason:updates.cancellation_reason||null}); return res.json({success:true,data:result.data});
+  });
+
+  app.put('/api/school-meetings/:meetingId/minutes', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator','therapist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const meetingId=sanitizeString(req.params.meetingId,120); const meeting=await supabase.from('school_meetings').select('id').eq('id',meetingId).eq('organization_id',scope.organizationId).maybeSingle(); if(!meeting.data)return res.status(404).json({error:'SCHOOL_MEETING_NOT_FOUND'});
+    const payload={organization_id:scope.organizationId,clinic_id:scope.clinicId,meeting_id:meetingId,actual_start:sanitizeString(req.body?.actualStart,80)||null,actual_end:sanitizeString(req.body?.actualEnd,80)||null,general_summary:sanitizeString(req.body?.generalSummary,15000)||null,decisions:sanitizeString(req.body?.decisions,15000)||null,referrals:sanitizeString(req.body?.referrals,15000)||null,next_meeting_at:sanitizeString(req.body?.nextMeetingAt,80)||null,status:sanitizeString(req.body?.status,30).toUpperCase()||'DRAFT',completed_by:req.body?.status==='COMPLETED'?scope.actorId:null,completed_at:req.body?.status==='COMPLETED'?new Date().toISOString():null,created_by:scope.actorId,updated_by:scope.actorId}; const result=await supabase.from('school_meeting_minutes').upsert(payload,{onConflict:'meeting_id'}).select('*').single(); if(result.error)return schoolError(res,result.error);
+    const patientNotes=Array.isArray(req.body?.patientNotes)?req.body.patientNotes:[]; if(patientNotes.length){const allowedPatients=await supabase.from('school_meeting_patients').select('patient_id').eq('organization_id',scope.organizationId).eq('meeting_id',meetingId).in('patient_id',patientNotes.map((n:any)=>sanitizeString(n.patientId,120))); const allowed=new Set((allowedPatients.data||[]).map((r:any)=>r.patient_id)); const rows=patientNotes.filter((n:any)=>allowed.has(sanitizeString(n.patientId,120))).map((n:any)=>({organization_id:scope.organizationId,clinic_id:scope.clinicId,meeting_id:meetingId,patient_id:sanitizeString(n.patientId,120),note:sanitizeString(n.note,12000)||null,decisions:sanitizeString(n.decisions,12000)||null,referrals:sanitizeString(n.referrals,12000)||null,visibility:sanitizeString(n.visibility,40).toUpperCase()||'CLINICAL_TEAM',created_by:scope.actorId,updated_by:scope.actorId})); if(rows.length)await supabase.from('school_meeting_patient_notes').upsert(rows,{onConflict:'meeting_id,patient_id'});}
+    return res.json({success:true,data:result.data});
+  });
+
+  app.get('/api/school-calendar-events', noStoreDynamicResponse, checkAuth, requireRoles('coordinator','receptionist','therapist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const from=sanitizeString(req.query?.from,80); const to=sanitizeString(req.query?.to,80); let query=supabase.from('school_meetings').select('id,title,meeting_type,status,scheduled_start,scheduled_end,location_type,location,school_id,school_unit_id,schools(display_name),school_units(name)').eq('organization_id',scope.organizationId).not('scheduled_start','is',null); if(from)query=query.gte('scheduled_start',from); if(to)query=query.lte('scheduled_start',to); const schoolId=sanitizeString(req.query?.schoolId,120); if(schoolId)query=query.eq('school_id',schoolId); const result=await query.order('scheduled_start').limit(1000); if(result.error)return schoolError(res,result.error); return res.json({success:true,data:(result.data||[]).map((m:any)=>({id:`school-${m.id}`,schoolMeetingId:m.id,title:m.title,start:m.scheduled_start,end:m.scheduled_end,eventType:m.meeting_type,locationType:m.location_type,location:m.location,status:m.status,schoolId:m.school_id,schoolUnitId:m.school_unit_id,schoolName:m.schools?.display_name,schoolUnitName:m.school_units?.name,source:'school_meeting'}))});
+  });
+
+  app.get('/api/schools/:schoolId/indicators', noStoreDynamicResponse, checkAuth, requireRoles('coordinator','receptionist','therapist','admin','owner'), async (req: any,res: any) => {
+    const scope=getSchoolWorkspace(req); const schoolId=sanitizeString(req.params.schoolId,120); const [enrollments,meetings,consents,tasks,contacts]=await Promise.all([supabase.from('patient_school_enrollments').select('patient_id,school_unit_id,grade_level,shift,is_current').eq('organization_id',scope.organizationId).eq('school_id',schoolId),supabase.from('school_meetings').select('id,status,scheduled_start').eq('organization_id',scope.organizationId).eq('school_id',schoolId),supabase.from('school_consents').select('patient_id,status').eq('organization_id',scope.organizationId).in('patient_id',(await supabase.from('patient_school_enrollments').select('patient_id').eq('organization_id',scope.organizationId).eq('school_id',schoolId)).data?.map((r:any)=>r.patient_id)||[]),supabase.from('school_audit_events').select('id,action,after_state').eq('organization_id',scope.organizationId).eq('resource_type','SCHOOL_MEETING').eq('action','TASK_CREATED'),supabase.from('school_contacts').select('id,is_primary,is_active').eq('organization_id',scope.organizationId).eq('school_id',schoolId)] as any); const now=Date.now(); const rows=enrollments.data||[]; return res.json({success:true,data:{activePatients:new Set(rows.filter((r:any)=>r.is_current).map((r:any)=>r.patient_id)).size,units:new Set(rows.map((r:any)=>r.school_unit_id).filter(Boolean)).size,meetings:(meetings.data||[]).length,completedMeetings:(meetings.data||[]).filter((m:any)=>m.status==='COMPLETED').length,cancelledMeetings:(meetings.data||[]).filter((m:any)=>m.status==='CANCELLED').length,upcomingMeetings:(meetings.data||[]).filter((m:any)=>m.scheduled_start&&new Date(m.scheduled_start).getTime()>=now&&['SCHEDULED','CONFIRMED'].includes(m.status)).length,pendingConsents:(consents.data||[]).filter((c:any)=>['PENDING','EXPIRED','REVOKED'].includes(c.status)).length,contacts:(contacts.data||[]).filter((c:any)=>c.is_active).length,derivedTasks:(tasks.data||[]).length}});
+  });
+
+
   // Catch-all for API routes that don't exist to prevent falling through to Vite/SPA fallback
   app.all('/api/*', (req, res) => {
     res.status(404).json({ error: `API route not found: ${req.method} ${req.path}` });
