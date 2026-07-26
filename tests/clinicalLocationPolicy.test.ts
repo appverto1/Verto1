@@ -24,6 +24,7 @@ const clinicSettings = read('src/components/ClinicGlobalSettingsPanel.tsx');
 const patientSchool = read('src/components/PatientSchoolInformation.tsx');
 const schoolManagement = read('src/components/SchoolsManagement.tsx');
 const coordinator = read('src/components/CoordinatorDashboard.tsx');
+const app = read('src/App.tsx');
 const patientDashboard = read('src/components/PatientDashboard.tsx');
 
 assert.equal(normalizeCareSetting('SCHOOL'), 'SCHOOL');
@@ -176,6 +177,10 @@ assert.match(schoolManagement, /SchoolEnrollmentDialog/);
 assert.match(coordinator, /getPatientCareLocations/);
 assert.match(coordinator, /school_id: sessionLocationType === "escola"/);
 assert.match(coordinator, /refresh_location_snapshot: sessionRefreshLocationSnapshot/);
+assert.match(app, /const schoolId =[\s\S]*sess\.schoolId \|\| sess\.school_id/);
+assert.match(app, /care_setting: careSetting/);
+assert.match(app, /school_id: locationType === 'escola' \? schoolId : null/);
+assert.match(app, /school_unit_id: locationType === 'escola' \? schoolUnitId \|\| null : null/);
 assert.match(patientDashboard, /canRequestReschedule/);
 
 console.log('clinical location, school link and reschedule policy checks passed');

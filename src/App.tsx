@@ -5361,6 +5361,24 @@ export default function App() {
           sess.locationType || sess.location_type || 'outro',
         );
     const durationMinutes = normalizeDurationMinutes(sess.durationMinutes || sess.duration_minutes || 50, 50);
+    const careSetting =
+      locationType === 'clinica'
+        ? 'CLINIC'
+        : locationType === 'online'
+          ? 'ONLINE'
+          : locationType === 'domicilio'
+            ? 'PATIENT_HOME'
+            : locationType === 'escola'
+              ? 'SCHOOL'
+              : 'OTHER';
+    const schoolId =
+      locationType === 'escola'
+        ? String(sess.schoolId || sess.school_id || '').trim()
+        : '';
+    const schoolUnitId =
+      locationType === 'escola'
+        ? String(sess.schoolUnitId || sess.school_unit_id || '').trim()
+        : '';
     const roomId = locationType === 'clinica' ? requestedRoomId : '';
     const roomName = locationType === 'clinica'
       ? String(sess.roomName || sess.room_name || rooms.find((room: any) => String(room?.id || '') === roomId)?.name || roomId).trim()
@@ -5502,6 +5520,9 @@ export default function App() {
     if (locationType === 'clinica' && !roomId) {
       return { success: false, errors: ['Selecione uma sala da clínica para este atendimento.'] };
     }
+    if (locationType === 'escola' && !schoolId) {
+      return { success: false, errors: ['Selecione uma escola atualmente vinculada ao paciente.'] };
+    }
 
     for (let i = 0; i < recurrenceDates.length; i += 1) {
       const dateStr = recurrenceDates[i];
@@ -5612,6 +5633,18 @@ export default function App() {
           location: locationType,
           locationType,
           location_type: locationType,
+          careSetting,
+          care_setting: careSetting,
+          schoolId: locationType === 'escola' ? schoolId : null,
+          school_id: locationType === 'escola' ? schoolId : null,
+          schoolUnitId: locationType === 'escola' ? schoolUnitId || null : null,
+          school_unit_id: locationType === 'escola' ? schoolUnitId || null : null,
+          refreshLocationSnapshot: Boolean(
+            sess.refreshLocationSnapshot ?? sess.refresh_location_snapshot ?? false,
+          ),
+          refresh_location_snapshot: Boolean(
+            sess.refreshLocationSnapshot ?? sess.refresh_location_snapshot ?? false,
+          ),
           locationNotes: sess.locationNotes || '',
           location_notes: sess.locationNotes || '',
           callLink: sess.callLink || '',
