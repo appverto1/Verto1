@@ -1679,6 +1679,7 @@ export default function App() {
     professionalName: string;
     professionalLogoUrl: string;
     professionalRole: string;
+    canRequestReschedule: boolean;
     status: string;
     isLoading: boolean;
     isUpdating: boolean;
@@ -1867,6 +1868,7 @@ export default function App() {
       patientName: appointmentConfirmation.patientName,
       status: appointmentConfirmation.status,
       branding,
+      canRequestReschedule: appointmentConfirmation.canRequestReschedule,
     });
   };
 
@@ -2060,6 +2062,7 @@ export default function App() {
       professionalName: '',
       professionalLogoUrl: '',
       professionalRole: '',
+      canRequestReschedule: true,
       status: '',
       isLoading: !hasFallbackDateTime,
       isUpdating: false,
@@ -2094,6 +2097,9 @@ export default function App() {
                   professionalName: String(result.appointment?.professionalName || result.appointment?.professional_name || '').trim(),
                   professionalLogoUrl: String(result.appointment?.professionalLogoUrl || result.appointment?.professional_logo_url || result.appointment?.professionalAvatarUrl || result.appointment?.professional_avatar_url || '').trim(),
                   professionalRole: String(result.appointment?.professionalRole || result.appointment?.professional_role || '').trim(),
+                  canRequestReschedule:
+                    result.appointment?.allowedActions?.canRequestReschedule !== false &&
+                    result.appointment?.allowPatientReschedule !== false,
                   status: String(result.appointment?.patientConfirmationStatus || result.appointment?.status || '').trim(),
                   isLoading: false,
                   hasError: false,
@@ -6699,6 +6705,14 @@ export default function App() {
 
   const handleAppointmentConfirmationChoice = async (status: 'confirmed' | 'reschedule' | 'canceled') => {
     if (!appointmentConfirmation?.appointmentId) return;
+    if (status === 'reschedule' && appointmentConfirmation.canRequestReschedule === false) {
+      setAppointmentConfirmation((prev) => prev ? {
+        ...prev,
+        hasError: false,
+        message: 'Esta clínica permite apenas confirmar ou cancelar esta sessão.'
+      } : prev);
+      return;
+    }
     const normalizeConfirmationResultStatus = (value: any) => {
       const normalized = String(value || '').toLowerCase();
       if (normalized.includes('confirm')) return 'confirmed';
@@ -6910,14 +6924,16 @@ export default function App() {
               >
                 <CheckCircle2 size={18} /> {appointmentConfirmationViewModel?.confirmLabel || 'Confirmar presença'}
               </button>
-              <button
-                type="button"
-                disabled={appointmentConfirmation.isUpdating || appointmentConfirmation.isLoading}
-                onClick={() => void handleAppointmentConfirmationChoice('reschedule')}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-amber-500/25 transition hover:bg-amber-600 disabled:opacity-60"
-              >
-                <AlertCircle size={18} /> {appointmentConfirmationViewModel?.rescheduleLabel || 'Remarcar consulta'}
-              </button>
+              {appointmentConfirmation.canRequestReschedule !== false && (
+                <button
+                  type="button"
+                  disabled={appointmentConfirmation.isUpdating || appointmentConfirmation.isLoading}
+                  onClick={() => void handleAppointmentConfirmationChoice('reschedule')}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 py-3 text-sm font-black text-white shadow-lg shadow-amber-500/25 transition hover:bg-amber-600 disabled:opacity-60"
+                >
+                  <AlertCircle size={18} /> {appointmentConfirmationViewModel?.rescheduleLabel || 'Solicitar reagendamento'}
+                </button>
+              )}
               <button
                 type="button"
                 disabled={appointmentConfirmation.isUpdating || appointmentConfirmation.isLoading}

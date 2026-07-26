@@ -7241,8 +7241,8 @@ export const dataService = {
     }, 'A lista de escolas ficou desatualizada.');
   },
 
-  async getSchoolAutocomplete(search = '') {
-    const endpoint = endpointWithQuery('/api/schools/autocomplete', { search });
+  async getSchoolAutocomplete(search = '', page = 1, pageSize = 20) {
+    const endpoint = endpointWithQuery('/api/schools/autocomplete', { search, page, pageSize });
     return await fetchNoStoreJsonWithRetry(endpoint, { credentials: 'include' }, {
       helperName: 'getSchoolAutocomplete', operation: 'list', table: 'schools', hasExplicitColumns: true, requiresPatientOrSession: false
     }, 'A busca de escolas ficou desatualizada.');
@@ -7291,6 +7291,11 @@ export const dataService = {
     const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
   },
 
+  async updatePatientSchoolEnrollment(patientId: string, enrollmentId: string, payload: any) {
+    const response = await fetchClinical(`/api/patients/${encodeURIComponent(patientId)}/school-enrollments/${encodeURIComponent(enrollmentId)}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'updatePatientSchoolEnrollment', operation: 'write', table: 'patient_school_enrollments,school_consents,school_audit_events', hasExplicitColumns: true, requiresPatientOrSession: true });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
   async endPatientSchoolEnrollment(patientId: string, enrollmentId: string, payload: any) {
     const response = await fetchClinical(`/api/patients/${encodeURIComponent(patientId)}/school-enrollments/${encodeURIComponent(enrollmentId)}/end`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'endPatientSchoolEnrollment', operation: 'write', table: 'patient_school_enrollments,school_audit_events', hasExplicitColumns: true, requiresPatientOrSession: true });
     const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
@@ -7303,6 +7308,23 @@ export const dataService = {
 
   async searchSchoolPatients(params: Record<string, any>) {
     return await fetchNoStoreJsonWithRetry(endpointWithQuery('/api/schools/patients/search', params), { credentials: 'include' }, { helperName: 'searchSchoolPatients', operation: 'list', table: 'patient_school_enrollments,patients,school_consents,school_meeting_patients', hasExplicitColumns: true, requiresPatientOrSession: false }, 'A lista de pacientes por escola ficou desatualizada.');
+  },
+
+  async searchPatientsForSchool(schoolId: string, params: Record<string, any> = {}) {
+    return await fetchNoStoreJsonWithRetry(endpointWithQuery(`/api/schools/${encodeURIComponent(schoolId)}/patients/autocomplete`, params), { credentials: 'include' }, { helperName: 'searchPatientsForSchool', operation: 'list', table: 'patients,patient_school_enrollments', hasExplicitColumns: true, requiresPatientOrSession: false }, 'A busca de pacientes ficou desatualizada.');
+  },
+
+  async getPatientCareLocations(patientId: string) {
+    return await fetchNoStoreJsonWithRetry(`/api/patients/${encodeURIComponent(patientId)}/care-locations`, { credentials: 'include' }, { helperName: 'getPatientCareLocations', operation: 'detail', table: 'patients,patient_school_enrollments,schools,school_units,school_contacts', hasExplicitColumns: true, requiresPatientOrSession: true }, 'Os locais de atendimento ficaram desatualizados.');
+  },
+
+  async getClinicAppointmentPolicy() {
+    return await fetchNoStoreJsonWithRetry('/api/clinic/appointment-policy', { credentials: 'include' }, { helperName: 'getClinicAppointmentPolicy', operation: 'detail', table: 'clinics', hasExplicitColumns: true, requiresPatientOrSession: false }, 'A política de reagendamento ficou desatualizada.');
+  },
+
+  async updateClinicAppointmentPolicy(payload: any) {
+    const response = await fetchClinical('/api/clinic/appointment-policy', { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'updateClinicAppointmentPolicy', operation: 'write', table: 'clinics,clinic_policy_audit_events', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
   },
 
   async getSchoolMeetings(params: Record<string, any> = {}) {

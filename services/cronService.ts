@@ -59,6 +59,7 @@ type ReminderAppointment = {
   legacyNotification12Sent?: boolean | null;
   hasAppointmentsTableSource: boolean;
   hasClinicStateSource: boolean;
+  canRequestReschedule?: boolean;
 };
 
 const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
@@ -630,7 +631,38 @@ async function fetchReminderAppointments(
   const appointments = Array.from(tableAppointments.values()).sort((a, b) =>
     a.scheduledAt.localeCompare(b.scheduledAt),
   );
-  return hydrateReminderAppointmentPatients(options, appointments);
+  const hydrated = await hydrateReminderAppointmentPatients(options, appointments);
+  const clinicIds = Array.from(new Set(
+    hydrated
+      .map((appointment) => sanitizeText(appointment.clinicId || appointment.patientClinicId, 120))
+      .filter((clinicId) => isUuid(clinicId))
+  ));
+  const policyByClinicId = new Map<string, boolean>(clinicIds.map((clinicId) => [clinicId, true]));
+  if (clinicIds.length > 0) {
+    const policyResult = await options.supabase
+      .from('clinics')
+      .select('id,allow_patient_reschedule')
+      .in('id', clinicIds)
+      .limit(clinicIds.length);
+    if (!policyResult.error) {
+      for (const clinic of policyResult.data || []) {
+        policyByClinicId.set(
+          sanitizeText(clinic?.id, 120),
+          clinic?.allow_patient_reschedule !== false
+        );
+      }
+    } else if (extractReminderMissingColumnName(policyResult.error) !== 'allow_patient_reschedule') {
+      options.logger.warn('[Appointment Reminder Cron] Politicas de reagendamento indisponiveis.', {
+        clinicCount: clinicIds.length,
+        message: policyResult.error.message
+      });
+    }
+  }
+  return hydrated.map((appointment) => ({
+    ...appointment,
+    canRequestReschedule:
+      policyByClinicId.get(sanitizeText(appointment.clinicId || appointment.patientClinicId, 120)) !== false
+  }));
 }
 
 async function updateAppointmentsTableMarker(params: {
@@ -1006,7 +1038,12 @@ async function persistPortalReminder(params: {
     scheduledAt: params.appointment.scheduledAt,
     clinicName: params.appointment.clinicName || null,
     clinicLogoUrl: params.appointment.clinicLogoUrl || null,
-    patientName: params.appointment.patientName || null
+    patientName: params.appointment.patientName || null,
+    allowedActions: {
+      canConfirm: true,
+      canCancel: true,
+      canRequestReschedule: params.appointment.canRequestReschedule !== false
+    }
   };
 
   if (isUuid(params.appointment.appointmentId)) {
@@ -1213,6 +1250,7 @@ async function runAppointmentReminderJob(
           patientName: appointment.patientName,
           reminderKind: dueReminder.kind,
           branding,
+          canRequestReschedule: appointment.canRequestReschedule !== false,
         });
         const title = reminderPayload.title;
         const body = reminderPayload.body;
@@ -1241,7 +1279,8 @@ async function runAppointmentReminderJob(
                 clinicLogoUrl,
                 patientName: appointment.patientName,
                 professionalDisplayName: appointment.professionalDisplayName,
-                professionalLogoUrl: appointment.professionalLogoUrl
+                professionalLogoUrl: appointment.professionalLogoUrl,
+                canRequestReschedule: appointment.canRequestReschedule !== false
               },
               clinicId: appointment.clinicId || null,
               reminderKind: dueReminder.kind,

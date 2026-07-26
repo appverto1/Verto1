@@ -28,6 +28,7 @@ type ReminderPayloadInput = {
   reminderKind?: string | null;
   branding: BrandingContext;
   url?: string | null;
+  canRequestReschedule?: boolean;
 };
 
 type ReminderModalInput = {
@@ -38,12 +39,16 @@ type ReminderModalInput = {
   patientName?: string | null;
   status?: string | null;
   branding: BrandingContext;
+  canRequestReschedule?: boolean;
 };
 
 const DEFAULT_CLINIC_NAME = "Clínica";
 export const VERTO_NOTIFICATION_ICON_URL = VERTO_BRAND_ASSETS.notificationIcon;
 export const VERTO_NOTIFICATION_BADGE_URL = VERTO_BRAND_ASSETS.notificationBadge;
-const APPOINTMENT_RESPONSE_COPY = "Toque para confirmar, remarcar ou cancelar.";
+const appointmentResponseCopy = (canRequestReschedule: boolean) =>
+  canRequestReschedule
+    ? "Toque aqui para confirmar, cancelar ou solicitar reagendamento."
+    : "Toque aqui para confirmar ou cancelar a sessão.";
 const FRIENDLY_ERROR_COPY = "Não foi possível concluir sua solicitação agora. Tente novamente em alguns instantes.";
 
 const sanitizeText = (value: unknown, maxLength = 240) =>
@@ -237,9 +242,11 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
   const reminderKind = sanitizeText(input.reminderKind, 40) || "appointment";
   const whenText = buildWhenText(input);
   const patientName = sanitizeText(input.patientName, 160);
+  const canRequestReschedule = input.canRequestReschedule !== false;
+  const responseCopy = appointmentResponseCopy(canRequestReschedule);
   const body = patientName
-    ? `Lembrete de consulta de ${patientName}${whenText ? ` ${whenText}` : ""}. ${APPOINTMENT_RESPONSE_COPY}`
-    : `Lembrete de consulta${whenText ? ` ${whenText}` : ""}. ${APPOINTMENT_RESPONSE_COPY}`;
+    ? `Lembrete de consulta de ${patientName}${whenText ? ` ${whenText}` : ""}. ${responseCopy}`
+    : `Lembrete de consulta${whenText ? ` ${whenText}` : ""}. ${responseCopy}`;
   const fallbackUrl = appointmentId ? `/?appointment_id=${encodeURIComponent(appointmentId)}` : "/";
   const url = sanitizeText(input.url, 2000) || fallbackUrl;
   const clinicLogoUrl = firstUrl(input.branding.logoUrl) || null;
@@ -256,6 +263,11 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
     dateLabel: sanitizeText(input.dateLabel, 40),
     timeLabel: sanitizeText(input.timeLabel, 40),
     branding: input.branding,
+    allowedActions: {
+      canConfirm: true,
+      canCancel: true,
+      canRequestReschedule
+    },
     data: {
       url,
       appointmentId,
@@ -263,6 +275,11 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
       brandName: input.branding.displayName,
       brandLogoUrl: clinicLogoUrl,
       brandSourceType: input.branding.sourceType,
+      allowedActions: {
+        canConfirm: true,
+        canCancel: true,
+        canRequestReschedule
+      },
     },
   };
 }
@@ -271,6 +288,7 @@ export function buildPatientReminderModalViewModel(input: ReminderModalInput) {
   const patientName = sanitizeText(input.patientName, 160);
   const hasPatientName = !isGenericReminderPatientName(patientName);
   const whenText = buildReminderModalWhenText(input);
+  const canRequestReschedule = input.canRequestReschedule !== false;
   return {
     brandName: input.branding.displayName,
     brandLogoUrl: input.branding.logoUrl,
@@ -287,8 +305,13 @@ export function buildPatientReminderModalViewModel(input: ReminderModalInput) {
         : 'Sua sessão está marcada.',
     statusLabel: sanitizeText(input.status, 80),
     confirmLabel: "Confirmar presença",
-    rescheduleLabel: "Remarcar consulta",
+    rescheduleLabel: canRequestReschedule ? "Solicitar reagendamento" : null,
     cancelLabel: "Cancelar agendamento",
+    allowedActions: {
+      canConfirm: true,
+      canCancel: true,
+      canRequestReschedule
+    },
     friendlyErrorCopy: FRIENDLY_ERROR_COPY,
   };
 }

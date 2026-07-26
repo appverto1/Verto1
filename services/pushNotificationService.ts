@@ -64,6 +64,7 @@ type SendAppointmentNotificationParams = {
     patientName?: string | null;
     professionalDisplayName?: string | null;
     professionalLogoUrl?: string | null;
+    canRequestReschedule?: boolean;
   };
   clinicId?: string | null;
   professionalId?: string | null;
@@ -704,6 +705,7 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     reminderKind,
     branding,
     url: `/?${appointmentQuery}`,
+    canRequestReschedule: params.appointment.canRequestReschedule !== false,
   });
   const payload = JSON.stringify({
     ...notificationPayload,

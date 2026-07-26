@@ -54,7 +54,7 @@ assert.equal((clinicPush as any).image, undefined);
 assert.equal(clinicPush.data.brandLogoUrl, 'https://cdn.example.com/clinic-logo.png');
 assert.equal((clinicPush as any).actions, undefined);
 assert.match(clinicPush.body, /Pedro Henrique/);
-assert.match(clinicPush.body, /Toque para confirmar, remarcar ou cancelar/);
+assert.match(clinicPush.body, /confirmar, cancelar ou solicitar reagendamento/);
 assert.doesNotMatch(clinicPush.body, /Abra o painel para confirmar ou remarcar/);
 assert.doesNotMatch(clinicPush.title, /Verto/);
 assert.doesNotMatch(clinicPush.body, /abrir a Verto/i);
@@ -91,7 +91,7 @@ assert.match(
 );
 assert.doesNotMatch(clinicModal.appointmentSummaryText, /Consulta de Paciente/);
 assert.equal(clinicModal.confirmLabel, 'Confirmar presença');
-assert.equal(clinicModal.rescheduleLabel, 'Remarcar consulta');
+assert.equal(clinicModal.rescheduleLabel, 'Solicitar reagendamento');
 assert.equal(clinicModal.cancelLabel, 'Cancelar agendamento');
 
 const unidentifiedPatientModal = buildPatientReminderModalViewModel({

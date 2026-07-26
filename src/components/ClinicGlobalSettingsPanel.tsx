@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { AlertCircle, CheckCircle2, Plus, X } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, CalendarClock, CheckCircle2, Loader2, Plus, X } from "lucide-react";
 import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { SubscriptionDiscountSummary } from "./SubscriptionDiscountSummary";
@@ -88,6 +88,126 @@ function SaveButton({ children, onSave }: { children: React.ReactNode; onSave: (
     >
       {children}
     </button>
+  );
+}
+
+function PatientReschedulePolicySettings() {
+  const [state, setState] = useState({
+    loading: true,
+    saving: false,
+    allowPatientReschedule: true,
+    canManage: false,
+    error: "",
+    message: ""
+  });
+  const idempotencyKeyByValue = useRef(new Map<boolean, string>());
+
+  useEffect(() => {
+    let cancelled = false;
+    void dataService.getClinicAppointmentPolicy().then((result: any) => {
+      if (cancelled) return;
+      if (!result?.success) {
+        setState((current) => ({
+          ...current,
+          loading: false,
+          error: result?.message || result?.error || "Não foi possível carregar esta configuração."
+        }));
+        return;
+      }
+      setState({
+        loading: false,
+        saving: false,
+        allowPatientReschedule: result?.data?.allowPatientReschedule !== false,
+        canManage: result?.data?.canManage === true,
+        error: "",
+        message: ""
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const updatePolicy = async () => {
+    if (state.loading || state.saving || !state.canManage) return;
+    const nextValue = !state.allowPatientReschedule;
+    const confirmed = window.confirm(
+      nextValue
+        ? "Reativar novas solicitações de reagendamento feitas por pacientes?"
+        : "Desativar novas solicitações de reagendamento feitas por pacientes? Solicitações antigas serão preservadas."
+    );
+    if (!confirmed) return;
+    let idempotencyKey = idempotencyKeyByValue.current.get(nextValue);
+    if (!idempotencyKey) {
+      idempotencyKey = crypto.randomUUID();
+      idempotencyKeyByValue.current.set(nextValue, idempotencyKey);
+    }
+    setState((current) => ({ ...current, saving: true, error: "", message: "" }));
+    const result = await dataService.updateClinicAppointmentPolicy({
+      allowPatientReschedule: nextValue,
+      reason: nextValue
+        ? "Reativado nas configurações da agenda"
+        : "Desativado nas configurações da agenda",
+      idempotencyKey
+    });
+    if (!result?.success) {
+      setState((current) => ({
+        ...current,
+        saving: false,
+        error: result?.message || result?.error || "Não foi possível salvar esta configuração."
+      }));
+      return;
+    }
+    idempotencyKeyByValue.current.delete(nextValue);
+    setState((current) => ({
+      ...current,
+      saving: false,
+          allowPatientReschedule: result?.data?.allowPatientReschedule !== false,
+      error: "",
+      message: nextValue
+        ? "Pacientes voltaram a poder solicitar reagendamento."
+        : "Novas solicitações de pacientes foram desativadas. O histórico foi mantido."
+    }));
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#7a32fc] shadow-sm">
+            <CalendarClock size={19} aria-hidden="true" />
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-slate-900">Permitir que pacientes solicitem reagendamento</p>
+            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
+              Quando desativado, o portal e os lembretes oferecem apenas confirmar ou cancelar. A equipe continua podendo reagendar e o histórico permanece intacto.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={state.allowPatientReschedule}
+          aria-label="Permitir que pacientes solicitem reagendamento"
+          disabled={state.loading || state.saving || !state.canManage}
+          onClick={() => void updatePolicy()}
+          className={`relative min-h-11 w-full shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition sm:w-32 ${
+            state.allowPatientReschedule
+              ? "bg-emerald-600 text-white"
+              : "border border-slate-300 bg-white text-slate-600"
+          } disabled:cursor-wait disabled:opacity-60`}
+        >
+          {state.loading || state.saving ? (
+            <span className="flex items-center justify-center gap-2"><Loader2 size={15} className="animate-spin" /> {state.loading ? "Carregando" : "Salvando"}</span>
+          ) : state.allowPatientReschedule ? "Ativado" : "Desativado"}
+        </button>
+      </div>
+      {state.error && <p role="alert" className="mt-3 text-xs font-medium text-rose-700">{state.error}</p>}
+      {state.message && <p role="status" className="mt-3 text-xs font-medium text-emerald-700">{state.message}</p>}
+      {!state.loading && !state.canManage && !state.error && (
+        <p className="mt-3 text-xs text-slate-500">Somente owner, administração ou coordenação podem alterar esta política.</p>
+      )}
+    </div>
   );
 }
 
@@ -977,6 +1097,7 @@ export function ClinicGlobalSettingsPanel({
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                   <label className={labelClass}>Início do expediente<input type="time" value={values.workStart} onChange={(event) => setters.setWorkStart(event.target.value)} className={inputClass} /></label>
                   <label className={labelClass}>Fim do expediente<input type="time" value={values.workEnd} onChange={(event) => setters.setWorkEnd(event.target.value)} className={inputClass} /></label>
+                  <div className="md:col-span-2"><PatientReschedulePolicySettings /></div>
                   <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar preferências</SaveButton></div>
                 </div>
               </SectionCard>

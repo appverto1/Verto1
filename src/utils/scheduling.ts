@@ -1,4 +1,5 @@
 export type ScheduleLocationType = 'clinica' | 'online' | 'domicilio' | 'escola' | 'outro';
+export type CareSetting = 'CLINIC' | 'ONLINE' | 'PATIENT_HOME' | 'SCHOOL' | 'OTHER';
 
 export type ScheduleConflictType = 'professional' | 'room' | 'patient' | 'team';
 
@@ -91,6 +92,28 @@ export function normalizeScheduleLocationType(value: any): ScheduleLocationType 
   if (normalized.includes('escola')) return 'escola';
   if (normalized.includes('outro')) return 'outro';
   return 'clinica';
+}
+
+export function normalizeCareSetting(value: any, legacyLocationType?: any): CareSetting {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (['CLINIC', 'ONLINE', 'PATIENT_HOME', 'SCHOOL', 'OTHER'].includes(normalized)) {
+    return normalized as CareSetting;
+  }
+  const legacy = normalizeScheduleLocationType(legacyLocationType ?? value);
+  if (legacy === 'clinica') return 'CLINIC';
+  if (legacy === 'online') return 'ONLINE';
+  if (legacy === 'domicilio') return 'PATIENT_HOME';
+  if (legacy === 'escola') return 'SCHOOL';
+  return 'OTHER';
+}
+
+export function careSettingToLocationType(value: any): ScheduleLocationType {
+  const setting = normalizeCareSetting(value);
+  if (setting === 'CLINIC') return 'clinica';
+  if (setting === 'ONLINE') return 'online';
+  if (setting === 'PATIENT_HOME') return 'domicilio';
+  if (setting === 'SCHOOL') return 'escola';
+  return 'outro';
 }
 
 export function isClinicLocationType(value: any): boolean {

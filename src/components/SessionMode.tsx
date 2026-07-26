@@ -10,6 +10,7 @@ import {
   Flame,
   History as HistoryIcon,
   Loader2,
+  MapPin,
   MoreHorizontal,
   Pause,
   Pencil,
@@ -730,6 +731,16 @@ export const SessionMode = ({
   const resolvedTherapistId = String(therapistId || activeSession?.therapistId || activeSession?.therapist_id || '').trim();
   const resolvedClinicId = String(clinicId || activeSession?.clinicId || activeSession?.clinic_id || patient?.clinicId || patient?.clinic_id || patient?.organizationId || patient?.organization_id || '').trim();
   const activeAppointmentId = String(activeSession?.appointmentId || activeSession?.appointment_id || '').trim();
+  const activeSessionLocationName = String(
+    activeSession?.locationNameSnapshot ||
+      activeSession?.location_name_snapshot ||
+      activeSession?.locationContextSnapshot?.locationName ||
+      activeSession?.location_context_snapshot?.locationName ||
+      activeSession?.roomName ||
+      activeSession?.room_name ||
+      '',
+  ).trim();
+  const activeSessionCareSetting = String(activeSession?.careSetting || activeSession?.care_setting || '').toUpperCase();
   const sessionClinicalDate = activeSession?.clinicalDate || activeSession?.clinical_date || activeSession?.sessionDate || activeSession?.session_date || activeSession?.date || activeSession?.scheduledAt || activeSession?.scheduled_at || activeSession?.startedAt || activeSession?.started_at || activeSession?.created_at || new Date().toISOString();
   const maintenanceTimeZone = String(activeSession?.timeZone || activeSession?.timezone || patient?.timeZone || patient?.timezone || patient?.clinicTimeZone || patient?.clinic_timezone || 'America/Sao_Paulo').trim() || 'America/Sao_Paulo';
   const patientDisplayName = formatPatientLabel(patient);
@@ -3787,6 +3798,22 @@ export const SessionMode = ({
       patientName: patientDisplayName,
       therapistId: resolvedTherapistId || null,
       therapistName: therapistDisplayName,
+      careSetting: (activeSessionCareSetting || null) as SessionSummary['careSetting'],
+      locationNameSnapshot: activeSessionLocationName || null,
+      locationContextSnapshot: {
+        careSetting: activeSessionCareSetting || null,
+        schoolId: activeSession?.schoolId || activeSession?.school_id || null,
+        schoolUnitId: activeSession?.schoolUnitId || activeSession?.school_unit_id || null,
+        locationName: activeSessionLocationName || null,
+        locationSource:
+          activeSession?.locationContextSnapshot?.locationSource ||
+          activeSession?.location_context_snapshot?.locationSource ||
+          null,
+        locationTimezone:
+          activeSession?.locationContextSnapshot?.locationTimezone ||
+          activeSession?.location_context_snapshot?.locationTimezone ||
+          maintenanceTimeZone,
+      },
       startedAt: activeSession?.startedAt || endedAt,
       endedAt,
       trials: records.filter((record) => record.kind === 'trial'),
@@ -3839,6 +3866,8 @@ export const SessionMode = ({
           source: 'verto_web',
           clinicId: resolvedClinicId || undefined,
           appointmentId: activeAppointmentId || undefined,
+          careSetting: finalSummary.careSetting || undefined,
+          locationName: finalSummary.locationNameSnapshot || undefined,
           patientName: finalSummary.patientName,
           therapistName: finalSummary.therapistName,
           teachingSummary: finalSummary.teachingSummary,
@@ -5193,6 +5222,9 @@ export const SessionMode = ({
     : 'Sessao avulsa';
   const sessionOriginLabel = activeSession?.appointmentId || activeSession?.appointment_id ? 'Agenda' : 'Sessao avulsa';
   const scheduledSessionPlaceLabel =
+    postClosureSummary?.locationNameSnapshot ||
+    postClosureSummary?.locationContextSnapshot?.locationName ||
+    activeSessionLocationName ||
     activeSession?.roomName ||
     activeSession?.room_name ||
     activeSession?.roomId ||
@@ -5244,6 +5276,16 @@ export const SessionMode = ({
         id: resolvedPersistedTherapistId
       }),
       patientName: formatPatientLabel({ name: payload.patientName || fallback.patientName || patientDisplayName, id: row.patient_id || row.patientId || fallback.patientId || patientId }),
+      careSetting: (row.care_setting || row.careSetting || payload.careSetting || fallback.careSetting || null) as SessionSummary['careSetting'],
+      locationNameSnapshot: row.location_name_snapshot || row.locationNameSnapshot || payload.locationName || fallback.locationNameSnapshot || null,
+      locationContextSnapshot:
+        row.location_context_snapshot ||
+        row.locationContextSnapshot ||
+        fallback.locationContextSnapshot ||
+        {
+          careSetting: row.care_setting || row.careSetting || payload.careSetting || null,
+          locationName: row.location_name_snapshot || row.locationNameSnapshot || payload.locationName || null,
+        },
       startedAt: row.started_at || row.startedAt || fallback.startedAt,
       endedAt: row.ended_at || row.endedAt || fallback.endedAt,
       durationSeconds: Number(row.duration_seconds ?? row.durationSeconds ?? fallback.durationSeconds ?? 0) || 0,
@@ -5457,7 +5499,7 @@ export const SessionMode = ({
                       ['Fim', postClosureReport.header.endedAt],
                       ['Duração planejada', scheduledSessionDurationLabel],
                       ['Duração total', postClosureReport.header.duration],
-                      ['Sala/local', scheduledSessionPlaceLabel],
+                      ['Contexto do atendimento', scheduledSessionPlaceLabel],
                       ['Origem', sessionOriginLabel],
                       ['Status', 'concluída']
                     ].map(([label, value]) => (
@@ -6742,6 +6784,14 @@ export const SessionMode = ({
             );
           })}
         </div>
+        {(activeSessionLocationName || activeSessionCareSetting) && (
+          <div className="flex items-center gap-2 border-t border-purple-50 px-4 py-2 text-xs text-slate-600 lg:px-6" data-aba-session-location-context>
+            <MapPin size={14} className="shrink-0 text-violet-500" />
+            <span className="truncate">
+              Contexto: {activeSessionLocationName || (activeSessionCareSetting === 'PATIENT_HOME' ? 'Domicílio do paciente' : activeSessionCareSetting === 'SCHOOL' ? 'Escola' : activeSessionCareSetting === 'ONLINE' ? 'Online' : activeSessionCareSetting === 'CLINIC' ? 'Clínica' : 'Outro local')}
+            </span>
+          </div>
+        )}
       </div>
 
       <div ref={sessionScrollRef} className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden lg:overflow-hidden grid grid-cols-1 ${sessionHistoryOpen ? 'xl:grid-cols-[minmax(0,1fr)_360px]' : 'xl:grid-cols-1'}`}>

@@ -770,6 +770,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const openPortalRescheduleModal = () => {
+    const appointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
+    if (appointment?.allowedActions?.canRequestReschedule === false || appointment?.allowPatientReschedule === false) {
+      setPortalAppointmentsState((prev) => ({
+        ...prev,
+        error: '',
+        message: 'Esta clínica não aceita novas solicitações de reagendamento. Você ainda pode confirmar ou cancelar.'
+      }));
+      return;
+    }
     const appointmentId = String((portalAppointmentDetail?.appointment || selectedPortalAppointment)?.id || '').trim();
     setPortalSelectedRescheduleSlots([]);
     setPortalActionForm((prev) => ({ ...prev, requestedStart: '' }));
@@ -823,6 +832,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const submitPortalAction = async () => {
     const appointmentId = String((portalAppointmentDetail?.appointment || selectedPortalAppointment)?.id || '').trim();
     if (!appointmentId || !portalModal) return;
+    const appointment = portalAppointmentDetail?.appointment || selectedPortalAppointment;
+    if (portalModal === 'reschedule' && (appointment?.allowedActions?.canRequestReschedule === false || appointment?.allowPatientReschedule === false)) {
+      closePortalActionModal();
+      setPortalAppointmentsState((prev) => ({
+        ...prev,
+        error: '',
+        message: 'Esta clínica não aceita novas solicitações de reagendamento. Você ainda pode confirmar ou cancelar.'
+      }));
+      return;
+    }
     if (portalModal === 'reschedule' && portalSelectedRescheduleSlots.length === 0) {
       setPortalAppointmentsState((prev) => ({ ...prev, error: 'Escolha pelo menos um horário disponível.' }));
       return;
@@ -2471,6 +2490,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const getPortalNotificationMessage = (notification: any) => {
     const metadata = parsePortalMetadata(notification?.metadata);
+    const canRequestReschedule = metadata?.allowedActions?.canRequestReschedule !== false;
     const notificationType = normalizePortalLower(notification?.type).replace(/_(24h|12h)$/i, '');
     if (notificationType && notificationType !== 'appointment_reminder') {
       return firstPortalText(notification?.message) || 'Atualização da sua consulta disponível.';
@@ -2495,10 +2515,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const dayText = formatPortalReminderDay(scheduledAt);
     const timeText = formatPortalTime(scheduledAt);
     const whenText = [dayText ? `dia ${dayText}` : '', timeText ? `às ${timeText}` : ''].filter(Boolean).join(' ');
+    const actionCopy = canRequestReschedule
+      ? 'Toque aqui para confirmar, cancelar ou solicitar reagendamento.'
+      : 'Toque aqui para confirmar ou cancelar a sessão.';
     if (whenText) {
-      return `Lembrete de consulta de ${patientName} ${whenText}. Toque para confirmar, remarcar ou cancelar.`;
+      return `Lembrete de consulta de ${patientName} ${whenText}. ${actionCopy}`;
     }
-    return firstPortalText(notification?.message) || `Lembrete de consulta de ${patientName}. Toque para confirmar, remarcar ou cancelar.`;
+    return firstPortalText(notification?.message) || `Lembrete de consulta de ${patientName}. ${actionCopy}`;
   };
 
   const portalNotificationsSummary = !portalNotificationsLoaded ? (
@@ -3044,6 +3067,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     user?.clinicSettings?.clinicLogoUrl
   );
   const portalActionBlocked = activePortalStatus.includes('CANCEL') || activePortalStatus.includes('COMPLET') || activePortalStatus.includes('NO_SHOW');
+  const activePortalCanRequestReschedule =
+    activePortalAppointment?.allowedActions?.canRequestReschedule !== false &&
+    activePortalAppointment?.allowPatientReschedule !== false;
   const portalAppointmentsPanel = (
     <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -3190,9 +3216,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <button type="button" disabled={portalActionSaving || portalActionBlocked || activePortalConfirmed} onClick={() => void confirmPortalAppointment(activePortalAppointment)} className="flex items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
             <CheckCircle size={17} /> {activePortalConfirmed ? 'Presença confirmada' : 'Confirmar presença'}
           </button>
-          <button type="button" disabled={portalActionBlocked} onClick={() => openPortalRescheduleModal()} className="flex items-center justify-center gap-2 rounded-2xl border border-purple-100 bg-white px-4 py-3 text-sm font-semibold text-[#7a32fc] disabled:opacity-50">
-            <RefreshCcw size={17} /> Solicitar remarcação
-          </button>
+          {activePortalCanRequestReschedule && (
+            <button type="button" disabled={portalActionBlocked} onClick={() => openPortalRescheduleModal()} className="flex items-center justify-center gap-2 rounded-2xl border border-purple-100 bg-white px-4 py-3 text-sm font-semibold text-[#7a32fc] disabled:opacity-50">
+              <RefreshCcw size={17} /> Solicitar reagendamento
+            </button>
+          )}
           <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('cancel')} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-100 bg-white px-4 py-3 text-sm font-semibold text-rose-600 disabled:opacity-50">
             <Ban size={17} /> Solicitar cancelamento
           </button>

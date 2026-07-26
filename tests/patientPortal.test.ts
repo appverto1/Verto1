@@ -190,7 +190,10 @@ test('notificacoes do portal sao deduplicadas e normalizadas por consulta penden
   assert.match(notificationsRoute, /title: branding\.displayName/);
   assert.match(notificationsRoute, /formatPortalReminderMessage/);
   assert.match(notificationsRoute, /normalizePortalNotificationType\(row\?\.type\) === 'appointment_reminder'/);
-  assert.match(notificationsRoute, /Toque para confirmar, remarcar ou cancelar/);
+  assert.match(notificationsRoute, /readClinicPatientReschedulePolicies/);
+  assert.match(notificationsRoute, /canRequestReschedule/);
+  assert.match(notificationsRoute, /confirmar, cancelar ou solicitar reagendamento/);
+  assert.match(notificationsRoute, /confirmar ou cancelar a sessão/);
   assert.match(notificationsRoute, /dedupedRowsByAppointment/);
   assert.match(notificationsRoute, /type === 'appointment_reschedule_approved' && patientId && eventScheduledAt/);
   assert.match(notificationsRoute, /latestPendingAppointmentReminder/);

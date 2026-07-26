@@ -49,6 +49,7 @@ import {
   ShieldCheck,
   LayoutGrid,
   List,
+  Loader2,
   GraduationCap,
 } from "lucide-react";
 import { TeamManagement } from "./TeamManagement";
@@ -146,6 +147,15 @@ type DashboardTab =
   | "billing"
   | "flow"
   | "birthdays";
+
+const SCHOOL_ENROLLMENT_TYPE_LABELS: Record<string, string> = {
+  PRIMARY_SCHOOL: "Escola principal",
+  SECONDARY_SCHOOL: "Escola secundária",
+  SUPPORT_INSTITUTION: "Instituição de apoio",
+  HOME_EDUCATION: "Educação domiciliar",
+  COURSE: "Curso",
+  OTHER: "Outro vínculo",
+};
 
 type ConferenceNavigationTab =
   | "sessions"
@@ -1317,6 +1327,15 @@ export function CoordinatorDashboard({
   const [sessionRoom, setSessionRoom] = useState("");
   const [sessionLocationNotes, setSessionLocationNotes] = useState("");
   const [sessionCallLink, setSessionCallLink] = useState("");
+  const [sessionSchoolId, setSessionSchoolId] = useState("");
+  const [sessionSchoolUnitId, setSessionSchoolUnitId] = useState("");
+  const [sessionRefreshLocationSnapshot, setSessionRefreshLocationSnapshot] = useState(false);
+  const [sessionCareLocations, setSessionCareLocations] = useState<{
+    loading: boolean;
+    error: string;
+    home: any | null;
+    schools: any[];
+  }>({ loading: false, error: "", home: null, schools: [] });
   const [sessionProfessional, setSessionProfessional] = useState("");
   const [sessionProfessionalId, setSessionProfessionalId] = useState("");
   const [sessionProfessionalManuallySelected, setSessionProfessionalManuallySelected] = useState(false);
@@ -1366,7 +1385,7 @@ export function CoordinatorDashboard({
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
   const [view, setView] = useState<"home" | "patient">("home");
   const [patientOpenTab, setPatientOpenTab] = useState<
-    "history" | "notes" | "report" | "plan" | "session" | "files"
+    "history" | "notes" | "report" | "plan" | "session" | "school" | "files"
   >("history");
   const [openAnamnesisOnPatientOpen, setOpenAnamnesisOnPatientOpen] =
     useState(false);
@@ -3450,6 +3469,36 @@ export function CoordinatorDashboard({
     );
   }, [allPatients, sessionPatientName]);
 
+  useEffect(() => {
+    if (!isAddSessionModalOpen || !selectedSessionPatient?.id || !["escola", "domicilio"].includes(sessionLocationType)) {
+      setSessionCareLocations({ loading: false, error: "", home: null, schools: [] });
+      return;
+    }
+    let cancelled = false;
+    setSessionCareLocations((current) => ({ ...current, loading: true, error: "" }));
+    void dataService.getPatientCareLocations(selectedSessionPatient.id).then((result: any) => {
+      if (cancelled) return;
+      if (result?.success) {
+        setSessionCareLocations({
+          loading: false,
+          error: "",
+          home: result.data?.home || null,
+          schools: Array.isArray(result.data?.schools) ? result.data.schools : [],
+        });
+      } else {
+        setSessionCareLocations({
+          loading: false,
+          error: result?.message || "Não foi possível carregar os locais canônicos deste paciente.",
+          home: null,
+          schools: [],
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAddSessionModalOpen, selectedSessionPatient?.id, sessionLocationType]);
+
   const selectedSessionPatientResponsibleProfessionalId = useMemo(
     () => resolvePatientResponsibleProfessionalId(selectedSessionPatient),
     [selectedSessionPatient],
@@ -3867,6 +3916,17 @@ export function CoordinatorDashboard({
     sessionPayerNameSnapshot,
   ]);
 
+  const editingAppointment = useMemo(
+    () =>
+      editingAppointmentId === null
+        ? null
+        : therapistAgenda.find(
+            (appointment: any) =>
+              String(appointment?.id) === String(editingAppointmentId),
+          ) || null,
+    [editingAppointmentId, therapistAgenda],
+  );
+
   const sessionRecurrenceDates = useMemo(
     () =>
       buildRecurrenceDateKeys({
@@ -3877,6 +3937,72 @@ export function CoordinatorDashboard({
     [editingAppointmentId, sessionDate, sessionNumSessions, sessionRecurrencePattern],
   );
 
+  const sessionCareSetting =
+    sessionLocationType === "clinica"
+      ? "CLINIC"
+      : sessionLocationType === "online"
+        ? "ONLINE"
+        : sessionLocationType === "domicilio"
+          ? "PATIENT_HOME"
+          : sessionLocationType === "escola"
+            ? "SCHOOL"
+            : "OTHER";
+  const selectedSessionSchoolLocation = sessionCareLocations.schools.find(
+    (row: any) => String(row.school_id || row.schools?.id || "") === sessionSchoolId,
+  );
+  const selectedSessionSchool = Array.isArray(selectedSessionSchoolLocation?.schools)
+    ? selectedSessionSchoolLocation.schools[0]
+    : selectedSessionSchoolLocation?.schools;
+  const selectedSessionSchoolUnit = Array.isArray(selectedSessionSchoolLocation?.school_units)
+    ? selectedSessionSchoolLocation.school_units[0]
+    : selectedSessionSchoolLocation?.school_units;
+  const editingLocationAddressSnapshot = String(
+    editingAppointment?.locationAddressSnapshot ||
+      editingAppointment?.location_address_snapshot ||
+      "",
+  ).trim();
+  const editingLocationNameSnapshot = String(
+    editingAppointment?.locationNameSnapshot ||
+      editingAppointment?.location_name_snapshot ||
+      "",
+  ).trim();
+  const editingSchoolSnapshotMatches = Boolean(
+    editingAppointment &&
+      sessionLocationType === "escola" &&
+      editingLocationAddressSnapshot &&
+      String(editingAppointment?.schoolId || editingAppointment?.school_id || "") === sessionSchoolId &&
+      String(editingAppointment?.schoolUnitId || editingAppointment?.school_unit_id || "") === sessionSchoolUnitId,
+  );
+  const canPreserveHistoricalLocation =
+    Boolean(editingAppointmentId && !sessionRefreshLocationSnapshot && editingLocationAddressSnapshot) &&
+    (sessionLocationType === "domicilio" || editingSchoolSnapshotMatches);
+  const sessionStructuredLocationReady =
+    sessionLocationType === "clinica"
+      ? Boolean(sessionRoom)
+      : sessionLocationType === "escola"
+        ? Boolean(
+            canPreserveHistoricalLocation ||
+              (
+                sessionSchoolId &&
+                selectedSessionSchoolLocation &&
+                !selectedSessionSchoolLocation.requiresUnit &&
+                !sessionCareLocations.loading &&
+                !sessionCareLocations.error
+              ),
+          )
+        : sessionLocationType === "domicilio"
+          ? Boolean(
+              canPreserveHistoricalLocation ||
+                (
+                  sessionCareLocations.home?.isComplete &&
+                  !sessionCareLocations.loading &&
+                  !sessionCareLocations.error
+                ),
+            )
+          : sessionLocationType === "outro"
+            ? Boolean(sessionLocationNotes.trim())
+            : true;
+
   const requiredSessionFieldsReady = Boolean(
     sessionPatientName.trim() &&
       sessionDate &&
@@ -3884,7 +4010,7 @@ export function CoordinatorDashboard({
       sessionApproach &&
       selectedSessionProfessional?.id &&
       sessionDurationMinutes >= 15 &&
-      (sessionLocationType !== "clinica" || sessionRoom),
+      sessionStructuredLocationReady,
   );
   const selectedFinancialContextOption = APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.find(
     (option) => option.value === sessionFinancialContextType,
@@ -4022,6 +4148,10 @@ export function CoordinatorDashboard({
     setSessionRoom("");
     setSessionLocationNotes("");
     setSessionCallLink("");
+    setSessionSchoolId("");
+    setSessionSchoolUnitId("");
+    setSessionRefreshLocationSnapshot(false);
+    setSessionCareLocations({ loading: false, error: "", home: null, schools: [] });
     setSessionApproach("");
     setSessionProfessional("");
     setSessionProfessionalId("");
@@ -4047,16 +4177,6 @@ export function CoordinatorDashboard({
     setScheduleConflictState({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
   };
 
-  const editingAppointment = useMemo(
-    () =>
-      editingAppointmentId === null
-        ? null
-        : therapistAgenda.find(
-            (appointment: any) =>
-              String(appointment?.id) === String(editingAppointmentId),
-          ) || null,
-    [editingAppointmentId, therapistAgenda],
-  );
   const isEditingRecurringAppointment = Boolean(
     editingAppointment &&
       (editingAppointment.isRecurring ||
@@ -4078,9 +4198,37 @@ export function CoordinatorDashboard({
     setIsAddSessionModalOpen(true);
   };
 
+  const openSchoolSessionFromEnrollment = (enrollment: any) => {
+    const patientId = String(enrollment?.patient_id || enrollment?.patient?.id || "");
+    const patient =
+      allPatients.find((row: any) => String(row?.id || "") === patientId) ||
+      enrollment?.patient ||
+      null;
+    if (!patient?.name) {
+      showToast("Não foi possível identificar o paciente deste vínculo.", "error");
+      return;
+    }
+    resetSessionForm();
+    setSessionPatientName(String(patient.name));
+    setSessionDate(getLocalDateKey(new Date()));
+    setSessionLocationType("escola");
+    setSessionSchoolId(String(enrollment?.school_id || ""));
+    setSessionSchoolUnitId(String(enrollment?.school_unit_id || ""));
+    navigateToTab("agenda");
+    setIsAddSessionModalOpen(true);
+  };
+
   const handleSessionSubmit = async () => {
     if (!requiredSessionFieldsReady) {
-      showToast("Preencha paciente, data, horário, duração, tipo, profissional e sala quando o local for clínica.", "error");
+      const locationMessage =
+        sessionLocationType === "escola"
+          ? "Selecione um vínculo escolar atual do paciente."
+          : sessionLocationType === "domicilio"
+            ? "Complete o endereço no cadastro do paciente antes de agendar em domicílio."
+            : sessionLocationType === "outro"
+              ? "Descreva o local do atendimento."
+              : "Selecione uma sala quando o atendimento for na clínica.";
+      showToast(`Preencha os dados obrigatórios. ${locationMessage}`, "error");
       return;
     }
     if (sessionFinancialContextError) {
@@ -4181,6 +4329,14 @@ export function CoordinatorDashboard({
         scheduled_duration_minutes: sessionDurationMinutes,
         locationType: sessionLocationType,
         location_type: sessionLocationType,
+        careSetting: sessionCareSetting,
+        care_setting: sessionCareSetting,
+        schoolId: sessionLocationType === "escola" ? sessionSchoolId : null,
+        school_id: sessionLocationType === "escola" ? sessionSchoolId : null,
+        schoolUnitId: sessionLocationType === "escola" ? sessionSchoolUnitId || null : null,
+        school_unit_id: sessionLocationType === "escola" ? sessionSchoolUnitId || null : null,
+        refreshLocationSnapshot: sessionRefreshLocationSnapshot,
+        refresh_location_snapshot: sessionRefreshLocationSnapshot,
         room: sessionLocationType === "clinica" ? sessionRoom : "",
         roomId: sessionLocationType === "clinica" ? sessionRoom : "",
         room_id: sessionLocationType === "clinica" ? sessionRoom : "",
@@ -4316,6 +4472,12 @@ export function CoordinatorDashboard({
       duration_minutes: sessionDurationMinutes,
       locationType: sessionLocationType,
       location_type: sessionLocationType,
+      careSetting: sessionCareSetting,
+      care_setting: sessionCareSetting,
+      schoolId: sessionLocationType === "escola" ? sessionSchoolId : null,
+      school_id: sessionLocationType === "escola" ? sessionSchoolId : null,
+      schoolUnitId: sessionLocationType === "escola" ? sessionSchoolUnitId || null : null,
+      school_unit_id: sessionLocationType === "escola" ? sessionSchoolUnitId || null : null,
       room: sessionLocationType === "clinica" ? sessionRoom : "",
       roomId: sessionLocationType === "clinica" ? sessionRoom : "",
       room_id: sessionLocationType === "clinica" ? sessionRoom : "",
@@ -5490,6 +5652,17 @@ export function CoordinatorDashboard({
         );
     setSessionLocationType(nextLocationType);
     setSessionRoom(nextLocationType === "clinica" ? appointmentRoomId : "");
+    setSessionSchoolId(
+      nextLocationType === "escola"
+        ? String(appointment.schoolId || appointment.school_id || "")
+        : "",
+    );
+    setSessionSchoolUnitId(
+      nextLocationType === "escola"
+        ? String(appointment.schoolUnitId || appointment.school_unit_id || "")
+        : "",
+    );
+    setSessionRefreshLocationSnapshot(false);
     setSessionLocationNotes(String(appointment.locationNotes || appointment.location_notes || ""));
     setSessionCallLink(String(appointment.callLink || appointment.call_link || ""));
     const appointmentProfessionalId = String(
@@ -5622,7 +5795,7 @@ export function CoordinatorDashboard({
   const onPatientClick = (
     patientId: any,
     options?: {
-      tab?: "history" | "notes" | "report" | "plan" | "session" | "files";
+      tab?: "history" | "notes" | "report" | "plan" | "session" | "school" | "files";
       openAnamnesis?: boolean;
     },
     fallbackPatientName?: string,
@@ -11622,6 +11795,8 @@ export function CoordinatorDashboard({
                   patients={allPatients}
                   professionals={Object.values(therapistMembersById)}
                   userRole={role}
+                  onOpenPatient={(patientId, patientName) => onPatientClick(patientId, { tab: "school" }, patientName)}
+                  onScheduleSchoolSession={openSchoolSessionFromEnrollment}
                 />
               </motion.div>
             )}
@@ -12894,7 +13069,12 @@ export function CoordinatorDashboard({
                     onChange={(e) => {
                       const nextLocation = e.target.value as ScheduleLocationType;
                       setSessionLocationType(nextLocation);
+                      setSessionRefreshLocationSnapshot(false);
                       if (nextLocation !== "clinica") setSessionRoom("");
+                      if (nextLocation !== "escola") {
+                        setSessionSchoolId("");
+                        setSessionSchoolUnitId("");
+                      }
                     }}
                   >
                     {SCHEDULE_LOCATION_OPTIONS.map((option) => (
@@ -12941,17 +13121,213 @@ export function CoordinatorDashboard({
                     placeholder="https://..."
                   />
                 </div>
+              ) : sessionLocationType === "escola" ? (
+                <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <div>
+                    <label className={sessionModalLabelClass}>
+                      Escola atual do paciente <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      className={sessionModalSelectClass}
+                      value={sessionSchoolId}
+                      disabled={sessionCareLocations.loading}
+                      onChange={(event) => {
+                        const nextSchoolId = event.target.value;
+                        const nextLocation = sessionCareLocations.schools.find(
+                          (row: any) => String(row.school_id || row.schools?.id || "") === nextSchoolId,
+                        );
+                        const unit = Array.isArray(nextLocation?.school_units)
+                          ? nextLocation.school_units[0]
+                          : nextLocation?.school_units;
+                        setSessionSchoolId(nextSchoolId);
+                        setSessionSchoolUnitId(String(nextLocation?.school_unit_id || unit?.id || ""));
+                      }}
+                    >
+                      <option value="">{sessionCareLocations.loading ? "Carregando vínculos…" : "Selecione…"}</option>
+                      {sessionSchoolId && !selectedSessionSchoolLocation && editingSchoolSnapshotMatches && (
+                        <option value={sessionSchoolId}>
+                          {editingLocationNameSnapshot || "Local escolar salvo"} · snapshot histórico
+                        </option>
+                      )}
+                      {sessionCareLocations.schools.map((row: any) => {
+                        const school = Array.isArray(row.schools) ? row.schools[0] : row.schools;
+                        const unit = Array.isArray(row.school_units) ? row.school_units[0] : row.school_units;
+                        return <option key={row.id} value={row.school_id || school?.id}>{school?.display_name || "Escola vinculada"}{unit?.name ? ` · ${unit.name}` : ""}</option>;
+                      })}
+                    </select>
+                  </div>
+                  {sessionCareLocations.error && <p role="alert" className="text-sm text-rose-600">{sessionCareLocations.error}</p>}
+                  {!sessionCareLocations.loading && !sessionCareLocations.error && sessionCareLocations.schools.length === 0 && (
+                    <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-sm text-amber-800">Este paciente não possui escola vinculada.</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {!isTherapist && selectedSessionPatient?.id && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAddSessionModalOpen(false);
+                              onPatientClick(selectedSessionPatient.id, { tab: "school" }, sessionPatientName);
+                            }}
+                            className="min-h-10 rounded-xl bg-white px-3 text-xs font-medium text-violet-700 shadow-sm"
+                          >
+                            Vincular escola no prontuário
+                          </button>
+                        )}
+                        {!isTherapist && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAddSessionModalOpen(false);
+                              navigateToTab("schools");
+                            }}
+                            className="min-h-10 rounded-xl bg-white px-3 text-xs font-medium text-slate-700 shadow-sm"
+                          >
+                            Cadastrar nova escola
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setSessionLocationType("clinica")}
+                          className="min-h-10 rounded-xl px-3 text-xs font-medium text-amber-900"
+                        >
+                          Escolher outro local
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {selectedSessionSchoolLocation && (
+                    <div className="rounded-xl border border-violet-100 bg-white p-3 text-sm text-slate-600">
+                      <p className="font-medium text-slate-800">{selectedSessionSchool?.display_name || "Escola vinculada"}{selectedSessionSchoolUnit?.name ? ` · ${selectedSessionSchoolUnit.name}` : ""}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {SCHOOL_ENROLLMENT_TYPE_LABELS[String(selectedSessionSchoolLocation.enrollment_type || "")] || "Vínculo escolar atual"}
+                        {selectedSessionSchoolLocation.grade_level ? ` · ${selectedSessionSchoolLocation.grade_level}` : ""}
+                        {selectedSessionSchoolLocation.class_name ? ` · turma ${selectedSessionSchoolLocation.class_name}` : ""}
+                      </p>
+                      <p className="mt-1">{[
+                        selectedSessionSchoolUnit?.street || selectedSessionSchool?.street,
+                        selectedSessionSchoolUnit?.street_number || selectedSessionSchool?.street_number,
+                        selectedSessionSchoolUnit?.address_complement || selectedSessionSchool?.address_complement,
+                        selectedSessionSchoolUnit?.district || selectedSessionSchool?.district,
+                        selectedSessionSchoolUnit?.city || selectedSessionSchool?.city,
+                        selectedSessionSchoolUnit?.state || selectedSessionSchool?.state,
+                        selectedSessionSchoolUnit?.postal_code || selectedSessionSchool?.postal_code,
+                      ].filter(Boolean).join(", ") || "Endereço pendente no cadastro da instituição."}</p>
+                      {(selectedSessionSchoolLocation.teacher?.name || selectedSessionSchoolLocation.coordinator?.name) && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          {[
+                            selectedSessionSchoolLocation.teacher?.name
+                              ? `Professor(a): ${selectedSessionSchoolLocation.teacher.name}${selectedSessionSchoolLocation.teacher.phone ? ` · ${selectedSessionSchoolLocation.teacher.phone}` : ""}`
+                              : "",
+                            selectedSessionSchoolLocation.coordinator?.name
+                              ? `Coordenação: ${selectedSessionSchoolLocation.coordinator.name}${selectedSessionSchoolLocation.coordinator.phone ? ` · ${selectedSessionSchoolLocation.coordinator.phone}` : ""}`
+                              : "",
+                          ].filter(Boolean).join(" · ")}
+                        </p>
+                      )}
+                      <p className="mt-1 text-xs text-slate-400">Este endereço será congelado como snapshot do agendamento.</p>
+                    </div>
+                  )}
+                  {selectedSessionSchoolLocation?.requiresUnit && (
+                    <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                      Esta escola possui unidades, mas o vínculo atual não informa uma unidade. Edite o vínculo escolar do paciente antes de salvar a consulta.
+                    </p>
+                  )}
+                  {editingAppointmentId && editingLocationAddressSnapshot && (
+                    <div className="rounded-xl border border-slate-200 bg-white p-3">
+                      <p className="text-xs font-medium text-slate-700">Snapshot salvo</p>
+                      <p className="mt-1 text-sm text-slate-600">{editingLocationNameSnapshot ? `${editingLocationNameSnapshot} · ` : ""}{editingLocationAddressSnapshot}</p>
+                      <label className="mt-3 flex min-h-11 items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={sessionRefreshLocationSnapshot}
+                          disabled={!selectedSessionSchoolLocation || Boolean(selectedSessionSchoolLocation?.requiresUnit)}
+                          onChange={(event) => setSessionRefreshLocationSnapshot(event.target.checked)}
+                        />
+                        Atualizar o snapshot com o endereço atual deste vínculo
+                      </label>
+                      {!selectedSessionSchoolLocation && (
+                        <p className="text-xs text-slate-500">O vínculo não é mais atual; o endereço histórico será preservado.</p>
+                      )}
+                    </div>
+                  )}
+                  <div>
+                    <label className={sessionModalLabelClass}>Orientação de acesso <span className="text-slate-300 normal-case tracking-normal">(opcional)</span></label>
+                    <input type="text" className={sessionModalInputClass} value={sessionLocationNotes} onChange={(event) => setSessionLocationNotes(event.target.value)} placeholder="Portaria, bloco ou referência operacional" />
+                  </div>
+                </div>
+              ) : sessionLocationType === "domicilio" ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <label className={sessionModalLabelClass}>Endereço canônico do paciente</label>
+                  {editingAppointmentId && editingLocationAddressSnapshot && (
+                    <div className="mb-3 rounded-xl border border-slate-200 bg-white p-3">
+                      <p className="text-xs font-medium text-slate-700">Snapshot salvo</p>
+                      <p className="mt-1 text-sm text-slate-600">{editingLocationAddressSnapshot}</p>
+                      <label className="mt-3 flex min-h-11 items-center gap-2 text-sm text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={sessionRefreshLocationSnapshot}
+                          disabled={!sessionCareLocations.home?.isComplete}
+                          onChange={(event) => setSessionRefreshLocationSnapshot(event.target.checked)}
+                        />
+                        Atualizar o snapshot com o endereço atual do cadastro
+                      </label>
+                    </div>
+                  )}
+                  {sessionCareLocations.loading ? (
+                    <p className="flex items-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={16}/> Carregando endereço…</p>
+                  ) : sessionCareLocations.error ? (
+                    <p role="alert" className="text-sm text-rose-600">{sessionCareLocations.error}</p>
+                  ) : sessionCareLocations.home?.isComplete ? (
+                    <>
+                      <p className="text-sm font-medium text-slate-800">{[
+                        sessionCareLocations.home.address?.street,
+                        sessionCareLocations.home.address?.number,
+                        sessionCareLocations.home.address?.complement,
+                        sessionCareLocations.home.address?.district,
+                        sessionCareLocations.home.address?.city,
+                        sessionCareLocations.home.address?.state,
+                        sessionCareLocations.home.address?.postalCode,
+                        sessionCareLocations.home.address?.reference,
+                      ].filter(Boolean).join(", ")}</p>
+                      {sessionCareLocations.home.address?.operationalPhone && (
+                        <p className="mt-1 text-xs text-slate-500">Telefone operacional: {sessionCareLocations.home.address.operationalPhone}</p>
+                      )}
+                      <p className="mt-1 text-xs text-slate-500">
+                        {editingAppointmentId && !sessionRefreshLocationSnapshot && editingLocationAddressSnapshot
+                          ? "O endereço atual será usado somente se você marcar a atualização do snapshot."
+                          : "O endereço será congelado como snapshot. Observações abaixo não substituem o cadastro do paciente."}
+                      </p>
+                    </>
+                  ) : (
+                    <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                      <p className="text-sm text-amber-800">Endereço incompleto no cadastro do paciente{sessionCareLocations.home?.missing?.length ? `: faltam ${sessionCareLocations.home.missing.join(", ")}` : "."} Corrija o cadastro antes de agendar em domicílio.</p>
+                      {!isTherapist && selectedSessionPatient && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsAddSessionModalOpen(false);
+                            handleEditPatient(selectedSessionPatient, "personal");
+                          }}
+                          className="mt-3 min-h-10 rounded-xl bg-white px-3 text-xs font-medium text-violet-700 shadow-sm"
+                        >
+                          Editar cadastro do paciente
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <input type="text" className={`${sessionModalInputClass} mt-3`} value={sessionLocationNotes} onChange={(event) => setSessionLocationNotes(event.target.value)} placeholder="Referência de acesso (opcional)" />
+                </div>
               ) : (
                 <div>
                   <label className={sessionModalLabelClass}>
-                    Endereço/observação <span className="text-slate-300 normal-case tracking-normal">(opcional)</span>
+                    Local ou referência <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
                     className={sessionModalInputClass}
                     value={sessionLocationNotes}
                     onChange={(e) => setSessionLocationNotes(e.target.value)}
-                    placeholder="Endereço, sala externa ou referência"
+                    placeholder="Descreva o local do atendimento"
                   />
                 </div>
               )}
@@ -14844,5 +15220,3 @@ export function CoordinatorDashboard({
     </div>
   );
 }
-
-

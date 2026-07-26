@@ -24,6 +24,7 @@ import {
   Plus,
   RefreshCcw,
   Search,
+  School,
   Stethoscope,
   Trash2,
   User,
@@ -35,7 +36,7 @@ import { dataService } from '../services/dataService';
 import { SchoolMeetingWorkspace } from './SchoolMeetingWorkspace';
 import { formatDisplayDate, formatDisplayDateTime, formatDisplayMonthYear } from '../utils/dateFormatting';
 import { formatRescheduleOptionLabel, parseRescheduleRequestPayload } from '../services/portalRescheduleAvailability';
-import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
+import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes, normalizeScheduleLocationType } from '../utils/scheduling';
 import { resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { mergeAppointmentIdentity } from '../utils/appointmentActionUpdates';
 import { createRescheduleIdempotencyKey } from '../utils/rescheduleApproval';
@@ -913,12 +914,13 @@ const locationTypeLabel = (value: any) => {
 const resolveRoomInfo = (event: any, roomLookup?: Map<string, any>) => {
   const roomId = String(event?.room_id || event?.roomId || '').trim();
   const matchedRoom = roomId ? roomLookup?.get(roomId) : null;
+  const snapshotName = String(event?.location_name_snapshot || event?.locationNameSnapshot || '').trim();
   const locationType = roomId
     ? 'clinica'
-    : event?.location_type || event?.locationType || event?.location || '';
+    : normalizeScheduleLocationType(event?.care_setting || event?.careSetting || event?.location_type || event?.locationType || event?.location || '');
   const locationLabel = roomId
     ? 'Clínica'
-    : event?.location_label || event?.locationLabel || locationTypeLabel(locationType);
+    : snapshotName || event?.location_label || event?.locationLabel || locationTypeLabel(locationType);
   const roomName =
     sanitizeHumanRoomName(event?.room_name) ||
     sanitizeHumanRoomName(event?.roomName) ||
@@ -947,7 +949,7 @@ const resolveRoomInfo = (event: any, roomLookup?: Map<string, any>) => {
 const getRoomDisplayLine = (event: any) => {
   const specialties = normalizeRoomSpecialties(event?.roomSpecialties || event?.room_specialties);
   if (event?.roomName) return specialties.length ? `${specialties[0]} · ${event.roomName}` : event.roomName;
-  return event?.locationLabel || event?.location || 'Não informado';
+  return event?.locationNameSnapshot || event?.location_name_snapshot || event?.locationLabel || event?.location || 'Não informado';
 };
 
 const getProfessionalDisplayLine = (event: any) => {
@@ -1345,6 +1347,18 @@ const normalizeClinicalEvent = (event: any, roomLookup?: Map<string, any>) => {
     location_type: roomInfo.locationType,
     locationLabel: roomInfo.locationLabel,
     location_label: roomInfo.locationLabel,
+    careSetting: event?.care_setting || event?.careSetting || source?.care_setting || source?.careSetting || null,
+    care_setting: event?.care_setting || event?.careSetting || source?.care_setting || source?.careSetting || null,
+    schoolId: event?.school_id || event?.schoolId || source?.school_id || source?.schoolId || null,
+    school_id: event?.school_id || event?.schoolId || source?.school_id || source?.schoolId || null,
+    schoolUnitId: event?.school_unit_id || event?.schoolUnitId || source?.school_unit_id || source?.schoolUnitId || null,
+    school_unit_id: event?.school_unit_id || event?.schoolUnitId || source?.school_unit_id || source?.schoolUnitId || null,
+    locationSnapshot: event?.location_snapshot || event?.locationSnapshot || source?.location_snapshot || source?.locationSnapshot || null,
+    location_snapshot: event?.location_snapshot || event?.locationSnapshot || source?.location_snapshot || source?.locationSnapshot || null,
+    locationNameSnapshot: event?.location_name_snapshot || event?.locationNameSnapshot || source?.location_name_snapshot || source?.locationNameSnapshot || roomInfo.locationLabel,
+    location_name_snapshot: event?.location_name_snapshot || event?.locationNameSnapshot || source?.location_name_snapshot || source?.locationNameSnapshot || roomInfo.locationLabel,
+    locationAddressSnapshot: event?.location_address_snapshot || event?.locationAddressSnapshot || source?.location_address_snapshot || source?.locationAddressSnapshot || null,
+    location_address_snapshot: event?.location_address_snapshot || event?.locationAddressSnapshot || source?.location_address_snapshot || source?.locationAddressSnapshot || null,
     start,
     end,
     date: toDateKey(start),
@@ -1431,6 +1445,7 @@ export const ClinicalAgendaBoard = ({
   const [selectedSchoolUnitIds, setSelectedSchoolUnitIds] = useState<string[]>([]);
   const [selectedSchoolEventTypes, setSelectedSchoolEventTypes] = useState<string[]>([]);
   const [schoolOptions, setSchoolOptions] = useState<any[]>([]);
+  const [patientReschedulePolicy, setPatientReschedulePolicy] = useState<boolean | null>(null);
   const [patientSearch, setPatientSearch] = useState('');
   const [significantOnly, setSignificantOnly] = useState(false);
   const [improvementOnly, setImprovementOnly] = useState(false);
@@ -1763,10 +1778,24 @@ export const ClinicalAgendaBoard = ({
 
   useEffect(() => {
     let active = true;
-    dataService.getSchools({ page: 1, pageSize: 100 })
+    dataService.getSchoolAutocomplete('', 1, 50)
       .then((result: any) => { if (active && result?.success) setSchoolOptions(result.data || []); })
       .catch(() => undefined);
     return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    dataService.getClinicAppointmentPolicy()
+      .then((result: any) => {
+        if (active && result?.success) {
+          setPatientReschedulePolicy(result.data?.allowPatientReschedule !== false);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -3504,6 +3533,12 @@ export const ClinicalAgendaBoard = ({
 
   return (
     <div className="flex flex-col gap-2 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-4.25rem)] xl:min-h-[580px] xl:overflow-hidden xl:pb-0">
+      {patientReschedulePolicy !== null && (
+        <div className={`mx-1 flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-xs ${patientReschedulePolicy ? (isDark ? 'border-emerald-900/60 bg-emerald-950/30 text-emerald-300' : 'border-emerald-100 bg-emerald-50 text-emerald-700') : (isDark ? 'border-amber-900/60 bg-amber-950/30 text-amber-300' : 'border-amber-100 bg-amber-50 text-amber-800')}`}>
+          {patientReschedulePolicy ? <CheckCircle2 size={15} className="shrink-0" /> : <Ban size={15} className="shrink-0" />}
+          <span>{patientReschedulePolicy ? 'Portal: pacientes podem solicitar remarcação.' : 'Portal: solicitações de remarcação estão desativadas; pacientes ainda podem confirmar ou cancelar.'}</span>
+        </div>
+      )}
       <div className="shrink-0 px-1 py-1">
         <div className="grid gap-2 xl:grid-cols-[1fr_auto_1fr] xl:items-center">
           <div className="hidden xl:block" aria-hidden="true" />
@@ -4316,6 +4351,9 @@ export const ClinicalAgendaBoard = ({
               {[
                 { label: 'Duração', value: `${Math.max(1, Math.round((detailEvent.end.getTime() - detailEvent.start.getTime()) / 60000))} min`, icon: Clock },
                 { label: 'Sala/local', value: getRoomDisplayLine(detailEvent), icon: MapPin },
+                ...(detailEvent.locationAddressSnapshot || detailEvent.location_address_snapshot
+                  ? [{ label: 'Endereço registrado', value: detailEvent.locationAddressSnapshot || detailEvent.location_address_snapshot, icon: MapPin }]
+                  : []),
                 { label: 'Equipe/profissional', value: getProfessionalDisplayLine(detailEvent), icon: Users },
                 { label: 'Responsável familiar', value: getFamilyResponsibleDisplayLine(detailEvent), icon: User }
               ].map((item) => {

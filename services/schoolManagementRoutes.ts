@@ -73,6 +73,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
     if (/IDEMPOTENCY_CONFLICT|23505|duplicate/i.test(raw)) return res.status(409).json({ success: false, error: 'SCHOOL_CONFLICT', message: 'A operação conflita com um registro existente ou com outra tentativa.' });
     if (/CONSENT_REQUIRED|CONSENT_INVALID|ACCESS_DENIED|PATIENT_ACCESS_DENIED/i.test(raw)) return res.status(/CONSENT/i.test(raw) ? 422 : 403).json({ success: false, error: /CONSENT/i.test(raw) ? 'SCHOOL_CONSENT_REQUIRED' : 'SCHOOL_ACCESS_DENIED', message: /CONSENT/i.test(raw) ? 'A autorização necessária não está válida.' : 'Você não possui acesso a este recurso.' });
     if (/NOT_FOUND|PGRST116/i.test(raw)) return res.status(404).json({ success: false, error: 'SCHOOL_NOT_FOUND', message: 'Recurso não encontrado no seu escopo.' });
+    if (/SCHOOL_UNIT_REQUIRED/i.test(raw)) return res.status(422).json({ success: false, error: 'SCHOOL_UNIT_REQUIRED', message: 'Selecione a unidade correta: esta escola possui unidades ativas.' });
     if (/INVALID|MISMATCH|TRANSITION|CHECK|REQUIRED/i.test(raw)) return res.status(422).json({ success: false, error: 'SCHOOL_BUSINESS_RULE', message: 'Os dados não atendem às regras da operação escolar.' });
     if (error?.statusCode) return res.status(error.statusCode).json({ success: false, error: raw, message: fallback });
     console.error('[SchoolManagement]', { code: sanitizeString(error?.code, 80), message: sanitizeString(raw, 240) });
@@ -226,12 +227,54 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
 
   app.get('/api/schools/autocomplete', noStoreDynamicResponse, checkAuth, requireRoles(...READ_ROLES), async (req: any, res: any) => {
     try {
-      const scope = await workspace(req); const visibleIds = await schoolVisibilityIds(scope);
-      if (visibleIds && !visibleIds.length) return res.json({ success: true, data: [] });
-      let query = supabase.from('schools').select('id,display_name,legal_name,city,state,education_network,school_type').eq('organization_id', scope.organizationId).eq('is_active', true).is('archived_at', null).limit(40);
+      const scope = await workspace(req);
+      const { page, pageSize, from, to } = pagination(req, 20);
+      const visibleIds = await schoolVisibilityIds(scope);
+      if (visibleIds && !visibleIds.length) {
+        return res.json({ success: true, data: [], pagination: { page, pageSize, total: 0, totalPages: 1, hasNextPage: false } });
+      }
+      let query = supabase
+        .from('schools')
+        .select('id,display_name,legal_name,city,state,education_network,school_type,street,street_number,address_complement,district,postal_code', { count: 'exact' })
+        .eq('organization_id', scope.organizationId)
+        .eq('is_active', true)
+        .is('archived_at', null);
       if (visibleIds) query = query.in('id', visibleIds);
       const search = sanitizeString(req.query?.search, 120).replace(/[%_,]/g, ''); if (search) query = query.or(`display_name.ilike.%${search}%,legal_name.ilike.%${search}%`);
-      const result = await query.order('display_name'); if (result.error) throw result.error; res.json({ success: true, data: result.data || [] });
+      const result = await query.order('display_name').range(from, to);
+      if (result.error) throw result.error;
+      const schoolIds = uniq((result.data || []).map((school: any) => school.id));
+      const units = schoolIds.length
+        ? await supabase
+            .from('school_units')
+            .select('id,school_id,name,city,state,is_active')
+            .eq('organization_id', scope.organizationId)
+            .eq('is_active', true)
+            .is('archived_at', null)
+            .in('school_id', schoolIds)
+            .order('name')
+        : { data: [] };
+      if ((units as any).error) throw (units as any).error;
+      const unitsBySchool = new Map<string, any[]>();
+      for (const unit of (units as any).data || []) {
+        const key = String(unit.school_id);
+        unitsBySchool.set(key, [...(unitsBySchool.get(key) || []), unit]);
+      }
+      const total = Number(result.count || 0);
+      res.json({
+        success: true,
+        data: (result.data || []).map((school: any) => ({
+          ...school,
+          units: unitsBySchool.get(String(school.id)) || []
+        })),
+        pagination: {
+          page,
+          pageSize,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / pageSize)),
+          hasNextPage: page * pageSize < total
+        }
+      });
     } catch (error) { errorResponse(res, error); }
   });
 
@@ -335,8 +378,139 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
   app.patch('/api/schools/:schoolId/contacts/:contactId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles(...WRITE_ROLES), async (req:any,res:any)=>{try{const scope=await workspace(req);await ensureSchoolVisible(scope,sanitizeString(req.params.schoolId,120));const result=await rpc('school_upsert_contact_v2',scope,{p_school_id:sanitizeString(req.params.schoolId,120),p_contact_id:sanitizeString(req.params.contactId,120),p_payload:req.body||{}},req.body||{});res.json(result);}catch(error){errorResponse(res,error);} });
 
   app.get('/api/patients/:patientId/school-enrollments', noStoreDynamicResponse, checkAuth, requireRoles(...READ_ROLES), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await supabase.from('patient_school_enrollments').select('*,schools(id,display_name,city,state),school_units(id,name),teacher:school_contacts!patient_school_enrollments_teacher_contact_id_fkey(id,name),coordinator:school_contacts!patient_school_enrollments_coordinator_contact_id_fkey(id,name)').eq('organization_id',scope.organizationId).eq('patient_id',patientId).order('started_at',{ascending:false});if(result.error)throw result.error;res.json({success:true,data:result.data||[]});}catch(error){errorResponse(res,error);} });
-  app.post('/api/patients/:patientId/school-enrollments', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles(...WRITE_ROLES), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await rpc('school_change_enrollment_v2',scope,{p_patient_id:patientId,p_payload:req.body||{}},req.body||{});res.status(201).json(result);}catch(error){errorResponse(res,error);} });
+  app.post('/api/patients/:patientId/school-enrollments', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles(...WRITE_ROLES), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await rpc('school_save_enrollment_v3',scope,{p_patient_id:patientId,p_payload:req.body||{}},req.body||{});res.status(201).json(result);}catch(error){errorResponse(res,error);} });
+  app.patch('/api/patients/:patientId/school-enrollments/:enrollmentId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles(...WRITE_ROLES), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const body={...(req.body||{}),enrollmentId:sanitizeString(req.params.enrollmentId,120)};const result=await rpc('school_save_enrollment_v3',scope,{p_patient_id:patientId,p_payload:body},body);res.json(result);}catch(error){errorResponse(res,error);} });
   app.post('/api/patients/:patientId/school-enrollments/:enrollmentId/end', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles(...WRITE_ROLES), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const body=req.body||{};const result=await rpc('school_end_enrollment_v2',scope,{p_patient_id:patientId,p_enrollment_id:sanitizeString(req.params.enrollmentId,120),p_reason:sanitizeString(body.reason,1000)||null},body);res.json(result);}catch(error){errorResponse(res,error);} });
+
+  app.get('/api/schools/:schoolId/patients/autocomplete', noStoreDynamicResponse, checkAuth, requireRoles(...READ_ROLES), async (req:any,res:any)=>{
+    try {
+      const scope=await workspace(req);
+      const schoolId=sanitizeString(req.params.schoolId,120);
+      await ensureSchoolVisible(scope,schoolId);
+      const {page,pageSize,from,to}=pagination(req,20);
+      const search=sanitizeString(req.query?.search,120).replace(/[%_,]/g,'');
+      let query=supabase
+        .from('patients')
+        .select('id,name,email,status,therapist_id',{count:'exact'})
+        .eq('clinic_id',scope.clinicId)
+        .or('status.is.null,status.neq.inactive');
+      if(scope.role==='therapist')query=query.eq('therapist_id',scope.actorId);
+      if(search)query=query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
+      const patients=await query.order('name').range(from,to);
+      if(patients.error)throw patients.error;
+      const patientIds=uniq((patients.data||[]).map((patient:any)=>patient.id));
+      const enrollments=patientIds.length
+        ? await supabase
+            .from('patient_school_enrollments')
+            .select('id,patient_id,school_id,enrollment_type,is_current,started_at')
+            .eq('organization_id',scope.organizationId)
+            .eq('clinic_id',scope.clinicId)
+            .eq('is_current',true)
+            .in('patient_id',patientIds)
+        : {data:[]};
+      if((enrollments as any).error)throw (enrollments as any).error;
+      const linksByPatient=new Map<string,any[]>();
+      for(const enrollment of (enrollments as any).data||[]){
+        const key=String(enrollment.patient_id);
+        linksByPatient.set(key,[...(linksByPatient.get(key)||[]),enrollment]);
+      }
+      const total=Number(patients.count||0);
+      return res.json({
+        success:true,
+        data:(patients.data||[]).map((patient:any)=>{
+          const links=linksByPatient.get(String(patient.id))||[];
+          return {
+            ...patient,
+            alreadyLinkedToSchool:links.some((link:any)=>String(link.school_id)===schoolId),
+            currentSchoolLinks:links
+          };
+        }),
+        pagination:{page,pageSize,total,totalPages:Math.max(1,Math.ceil(total/pageSize)),hasNextPage:page*pageSize<total}
+      });
+    } catch(error){errorResponse(res,error,'Não foi possível buscar pacientes para vínculo.');}
+  });
+
+  app.get('/api/patients/:patientId/care-locations', noStoreDynamicResponse, checkAuth, requireRoles(...READ_ROLES), async (req:any,res:any)=>{
+    try {
+      const scope=await workspace(req);
+      const patientId=sanitizeString(req.params.patientId,120);
+      const allowed=await canAccessPatients(scope,[patientId]);
+      if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');
+      const [patient,enrollments]=await Promise.all([
+        supabase
+          .from('patients')
+          .select('id,name,phone,cep,metadata,clinic_id')
+          .eq('id',patientId)
+          .eq('clinic_id',scope.clinicId)
+          .maybeSingle(),
+        supabase
+          .from('patient_school_enrollments')
+          .select('id,school_id,school_unit_id,enrollment_type,academic_year,grade_level,class_name,shift,teacher_contact_id,coordinator_contact_id,schools(id,display_name,street,street_number,address_complement,district,city,state,postal_code),school_units(id,name,street,street_number,address_complement,district,city,state,postal_code)')
+          .eq('organization_id',scope.organizationId)
+          .eq('clinic_id',scope.clinicId)
+          .eq('patient_id',patientId)
+          .eq('is_current',true)
+          .order('enrollment_type')
+      ] as any);
+      if(patient.error)throw patient.error;
+      if(enrollments.error)throw enrollments.error;
+      if(!patient.data)throw new Error('PATIENT_NOT_FOUND');
+      const contactIds=uniq((enrollments.data||[]).flatMap((row:any)=>[row.teacher_contact_id,row.coordinator_contact_id]).filter(Boolean));
+      const schoolIds=uniq((enrollments.data||[]).map((row:any)=>row.school_id).filter(Boolean));
+      const [contacts,availableUnits]=await Promise.all([
+        contactIds.length
+          ? supabase.from('school_contacts').select('id,school_id,school_unit_id,name,role,email,phone,whatsapp,is_primary').eq('organization_id',scope.organizationId).in('id',contactIds)
+          : Promise.resolve({data:[]}),
+        schoolIds.length
+          ? supabase.from('school_units').select('id,school_id,name,street,street_number,address_complement,district,city,state,postal_code').eq('organization_id',scope.organizationId).in('school_id',schoolIds).eq('is_active',true).is('archived_at',null).order('name')
+          : Promise.resolve({data:[]})
+      ] as any);
+      if((contacts as any).error)throw (contacts as any).error;
+      if((availableUnits as any).error)throw (availableUnits as any).error;
+      const contactMap=new Map(((contacts as any).data||[]).map((contact:any)=>[String(contact.id),contact]));
+      const unitsBySchool=new Map<string,any[]>();
+      for(const unit of ((availableUnits as any).data||[])){
+        const key=String(unit.school_id);
+        unitsBySchool.set(key,[...(unitsBySchool.get(key)||[]),unit]);
+      }
+      const metadata=patient.data.metadata&&typeof patient.data.metadata==='object'?patient.data.metadata:{};
+      const address=metadata.address&&typeof metadata.address==='object'?metadata.address:{};
+      const homeAddress={
+        postalCode:sanitizeString(patient.data.cep||address.cep||address.postalCode,20)||null,
+        street:sanitizeString(address.logradouro||address.street,180)||null,
+        number:sanitizeString(address.numero||address.number,40)||null,
+        complement:sanitizeString(address.complemento||address.complement,120)||null,
+        district:sanitizeString(address.bairro||address.district||address.neighborhood,120)||null,
+        city:sanitizeString(address.cidade||address.city,120)||null,
+        state:sanitizeString(address.uf||address.state,2).toUpperCase()||null,
+        reference:sanitizeString(address.referencia||address.reference,240)||null,
+        operationalPhone:sanitizeString(patient.data.phone,40)||null
+      };
+      const homeAddressComplete=Boolean(homeAddress.street&&homeAddress.number&&homeAddress.city);
+      return res.json({
+        success:true,
+        data:{
+          patient:{id:patient.data.id,name:patient.data.name},
+          home:{
+            address:homeAddress,
+            isComplete:homeAddressComplete,
+            missing:[
+              ...(!homeAddress.street?['logradouro']:[]),
+              ...(!homeAddress.number?['número']:[]),
+              ...(!homeAddress.city?['cidade']:[])
+            ]
+          },
+          schools:(enrollments.data||[]).map((enrollment:any)=>({
+            ...enrollment,
+            teacher:contactMap.get(String(enrollment.teacher_contact_id))||null,
+            coordinator:contactMap.get(String(enrollment.coordinator_contact_id))||null,
+            availableUnits:unitsBySchool.get(String(enrollment.school_id))||[],
+            requiresUnit:(unitsBySchool.get(String(enrollment.school_id))||[]).length>0&&!enrollment.school_unit_id
+          }))
+        }
+      });
+    } catch(error){errorResponse(res,error,'Não foi possível carregar os locais de atendimento deste paciente.');}
+  });
 
   app.get('/api/patients/:patientId/school-consents', noStoreDynamicResponse, checkAuth, requireRoles(...READ_ROLES), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await supabase.from('school_consents').select('*,patient_school_enrollments(id,school_id,school_unit_id),schools:patient_school_enrollments(schools(id,display_name))').eq('organization_id',scope.organizationId).eq('patient_id',patientId).order('effective_at',{ascending:false});if(result.error)throw result.error;res.json({success:true,data:result.data||[],current:(result.data||[]).filter((c:any)=>c.is_current)});}catch(error){errorResponse(res,error);} });
   app.post('/api/patients/:patientId/school-consents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles(...WRITE_ROLES), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const body=req.body||{};const result=await rpc('school_record_consent_v2',scope,{p_patient_id:patientId,p_payload:body},body);const patient=await supabase.from('patients').select('id,email,responsible_user_id').eq('id',patientId).eq('clinic_id',scope.clinicId).maybeSingle();if(patient.data){const status=String(body.status||'PENDING').toUpperCase();const notification=await supabase.from('portal_notifications').upsert({organization_id:scope.organizationId,clinic_id:scope.clinicId,recipient_user_id:patient.data.responsible_user_id||null,recipient_email:patient.data.email||null,patient_id:patientId,type:status==='PENDING'?'SCHOOL_CONSENT_PENDING':'SCHOOL_CONSENT_UPDATED',title:status==='PENDING'?'Autorização escolar pendente':'Autorização escolar atualizada',message:'O status de uma autorização escolar foi atualizado.',idempotency_key:`school:consent:${safeIdempotencyKey(body.idempotencyKey)}`,metadata:{consentType:body.consentType,status,administrativeOnly:true}},{onConflict:'idempotency_key',ignoreDuplicates:true});if(notification.error)throw notification.error;}res.status(201).json(result);}catch(error){errorResponse(res,error);} });

@@ -31,6 +31,7 @@ import {
 } from './services/stripeService';
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
+import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
 import {
   classifyReservationSchemaProbe,
   checkAppointmentActionResolutionSchema,
@@ -135,6 +136,7 @@ import {
   formatDateInAppointmentTimezone,
   formatTimeInAppointmentTimezone,
   getAppointmentDurationMinutes,
+  normalizeCareSetting,
   normalizeAppointmentTime,
   normalizeDurationMinutes,
   normalizeScheduleLocationType,
@@ -4757,6 +4759,14 @@ const APPOINTMENT_SELECT = [
   'room_id',
   'room_name',
   'location_type',
+  'care_setting',
+  'school_id',
+  'school_unit_id',
+  'location_snapshot',
+  'location_name_snapshot',
+  'location_address_snapshot',
+  'location_source',
+  'location_timezone',
   'location_notes',
   'call_link',
   'status',
@@ -4808,6 +4818,14 @@ const PORTAL_APPOINTMENT_SELECT = [
   'room_id',
   'room_name',
   'location_type',
+  'care_setting',
+  'school_id',
+  'school_unit_id',
+  'location_snapshot',
+  'location_name_snapshot',
+  'location_address_snapshot',
+  'location_source',
+  'location_timezone',
   'location_notes',
   'call_link',
   'status',
@@ -5773,6 +5791,14 @@ const CALENDAR_EVENT_SELECT = [
   'room_id',
   'room_name',
   'location_type',
+  'care_setting',
+  'school_id',
+  'school_unit_id',
+  'location_snapshot',
+  'location_name_snapshot',
+  'location_address_snapshot',
+  'location_source',
+  'location_timezone',
   'location_notes',
   'call_link',
   'status',
@@ -5824,6 +5850,10 @@ const SCHEDULE_CONFLICT_APPOINTMENT_SELECT = [
   'room_id',
   'room_name',
   'location_type',
+  'care_setting',
+  'school_id',
+  'school_unit_id',
+  'location_name_snapshot',
   'status',
   'source_payload'
 ].join(',');
@@ -5902,6 +5932,14 @@ const CLOSURE_APPOINTMENT_SELECT = [
   'room_id',
   'room_name',
   'location_type',
+  'care_setting',
+  'school_id',
+  'school_unit_id',
+  'location_snapshot',
+  'location_name_snapshot',
+  'location_address_snapshot',
+  'location_source',
+  'location_timezone',
   'status',
   'payer_id',
   'payer_name_snapshot',
@@ -5938,6 +5976,14 @@ const CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS = new Set([
   'room_id',
   'room_name',
   'location_type',
+  'care_setting',
+  'school_id',
+  'school_unit_id',
+  'location_snapshot',
+  'location_name_snapshot',
+  'location_address_snapshot',
+  'location_source',
+  'location_timezone',
   'status',
   'payer_id',
   'payer_name_snapshot',
@@ -5995,6 +6041,11 @@ const CLOSURE_ABA_SESSION_SELECT = [
   'room_id',
   'room_name',
   'location_type',
+  'care_setting',
+  'school_id',
+  'school_unit_id',
+  'location_name_snapshot',
+  'location_context_snapshot',
   'status',
   'started_at',
   'ended_at',
@@ -6011,6 +6062,9 @@ const CLOSURE_SESSION_SUMMARY_SELECT = [
   'session_id',
   'patient_id',
   'therapist_id',
+  'care_setting',
+  'location_name_snapshot',
+  'location_context_snapshot',
   'started_at',
   'ended_at',
   'duration_seconds',
@@ -9176,6 +9230,7 @@ function serializePersistedAppointmentForAgenda(row: any) {
           source?.location_type ||
           'outro'
       );
+  const careSetting = normalizeCareSetting(row?.care_setting || source?.careSetting || source?.care_setting, locationType);
   const uiStatus = normalizeAppointmentStatusForUi(row?.status || source?.status || 'pending');
   const confirmationSnapshot = resolveAppointmentConfirmationSnapshot(row, source);
   const patientConfirmationStatus = normalizePatientConfirmationStatusForAgenda(
@@ -9232,6 +9287,22 @@ function serializePersistedAppointmentForAgenda(row: any) {
     location: locationType,
     locationType,
     location_type: locationType,
+    careSetting,
+    care_setting: careSetting,
+    schoolId: sanitizeString(row?.school_id || source?.schoolId || source?.school_id, 120) || null,
+    school_id: sanitizeString(row?.school_id || source?.school_id || source?.schoolId, 120) || null,
+    schoolUnitId: sanitizeString(row?.school_unit_id || source?.schoolUnitId || source?.school_unit_id, 120) || null,
+    school_unit_id: sanitizeString(row?.school_unit_id || source?.school_unit_id || source?.schoolUnitId, 120) || null,
+    locationSnapshot: parseStoredJsonObject(row?.location_snapshot || source?.locationSnapshot || source?.location_snapshot),
+    location_snapshot: parseStoredJsonObject(row?.location_snapshot || source?.location_snapshot || source?.locationSnapshot),
+    locationNameSnapshot: sanitizeString(row?.location_name_snapshot || source?.locationNameSnapshot || source?.location_name_snapshot, 240) || null,
+    location_name_snapshot: sanitizeString(row?.location_name_snapshot || source?.location_name_snapshot || source?.locationNameSnapshot, 240) || null,
+    locationAddressSnapshot: sanitizeString(row?.location_address_snapshot || source?.locationAddressSnapshot || source?.location_address_snapshot, 1000) || null,
+    location_address_snapshot: sanitizeString(row?.location_address_snapshot || source?.location_address_snapshot || source?.locationAddressSnapshot, 1000) || null,
+    locationSource: sanitizeString(row?.location_source || source?.locationSource || source?.location_source, 60) || null,
+    location_source: sanitizeString(row?.location_source || source?.location_source || source?.locationSource, 60) || null,
+    locationTimezone: sanitizeString(row?.location_timezone || source?.locationTimezone || source?.location_timezone, 80) || 'America/Sao_Paulo',
+    location_timezone: sanitizeString(row?.location_timezone || source?.location_timezone || source?.locationTimezone, 80) || 'America/Sao_Paulo',
     locationNotes: sanitizeString(row?.location_notes || source?.locationNotes || source?.location_notes, 1000) || '',
     location_notes: sanitizeString(row?.location_notes || source?.location_notes || source?.locationNotes, 1000) || '',
     callLink: sanitizeString(row?.call_link || source?.callLink || source?.call_link, 500) || '',
@@ -11365,6 +11436,10 @@ async function syncAppointmentsTableFromClinicState(params: {
             appointment?.location ||
             'outro'
         );
+    const careSetting = normalizeCareSetting(
+      appointment?.care_setting || appointment?.careSetting,
+      locationType
+    );
     const professionalIds = Array.from(
       new Set(
         [
@@ -11527,6 +11602,18 @@ async function syncAppointmentsTableFromClinicState(params: {
       room_id: roomId || null,
       room_name: roomName || (roomId && !isUuid(roomId) ? roomId : null),
       location_type: locationType,
+      care_setting: careSetting,
+      school_id: isUuid(sanitizeString(appointment?.school_id || appointment?.schoolId, 120))
+        ? sanitizeString(appointment?.school_id || appointment?.schoolId, 120)
+        : null,
+      school_unit_id: isUuid(sanitizeString(appointment?.school_unit_id || appointment?.schoolUnitId, 120))
+        ? sanitizeString(appointment?.school_unit_id || appointment?.schoolUnitId, 120)
+        : null,
+      location_snapshot: parseStoredJsonObject(appointment?.location_snapshot || appointment?.locationSnapshot),
+      location_name_snapshot: sanitizeString(appointment?.location_name_snapshot || appointment?.locationNameSnapshot, 240) || null,
+      location_address_snapshot: sanitizeString(appointment?.location_address_snapshot || appointment?.locationAddressSnapshot, 1000) || null,
+      location_source: sanitizeString(appointment?.location_source || appointment?.locationSource, 60) || null,
+      location_timezone: sanitizeString(appointment?.location_timezone || appointment?.locationTimezone, 80) || 'America/Sao_Paulo',
       location_notes: sanitizeString(appointment?.location_notes || appointment?.locationNotes || appointment?.addressNote, 1000) || null,
       call_link: sanitizeString(appointment?.call_link || appointment?.callLink, 500) || null,
       recurrence_group_id: sanitizeString(appointment?.recurrenceGroupId || appointment?.recurrence_group_id, 120) || null,
@@ -11552,6 +11639,18 @@ async function syncAppointmentsTableFromClinicState(params: {
         roomName: roomName || appointment?.roomName || null,
         locationType,
         location_type: locationType,
+        careSetting,
+        care_setting: careSetting,
+        schoolId: appointment?.school_id || appointment?.schoolId || null,
+        school_id: appointment?.school_id || appointment?.schoolId || null,
+        schoolUnitId: appointment?.school_unit_id || appointment?.schoolUnitId || null,
+        school_unit_id: appointment?.school_unit_id || appointment?.schoolUnitId || null,
+        locationSnapshot: appointment?.location_snapshot || appointment?.locationSnapshot || {},
+        location_snapshot: appointment?.location_snapshot || appointment?.locationSnapshot || {},
+        locationNameSnapshot: appointment?.location_name_snapshot || appointment?.locationNameSnapshot || null,
+        location_name_snapshot: appointment?.location_name_snapshot || appointment?.locationNameSnapshot || null,
+        locationAddressSnapshot: appointment?.location_address_snapshot || appointment?.locationAddressSnapshot || null,
+        location_address_snapshot: appointment?.location_address_snapshot || appointment?.locationAddressSnapshot || null,
         durationMinutes: safeDuration,
         duration_minutes: safeDuration,
         scheduled_end_at: appointment?.scheduled_end_at || appointment?.scheduledEndAt || scheduledEndAt
@@ -22417,7 +22516,140 @@ async function startServer() {
     return sanitizeString(userResult.data?.clinic_id, 120) === clinicId;
   };
 
-  const prepareAppointmentForWrite = async (rawAppointment: any, actor: any, clinicId: string) => {
+  const formatStructuredLocationAddress = (address: any) =>
+    [
+      [sanitizeString(address?.street || address?.logradouro, 180), sanitizeString(address?.number || address?.numero, 40)].filter(Boolean).join(', '),
+      sanitizeString(address?.complement || address?.address_complement || address?.complemento, 120),
+      sanitizeString(address?.district || address?.bairro, 120),
+      [sanitizeString(address?.city || address?.cidade, 120), sanitizeString(address?.state || address?.uf, 2).toUpperCase()].filter(Boolean).join('/'),
+      sanitizeString(address?.postalCode || address?.postal_code || address?.cep, 20)
+    ].filter(Boolean).join(' • ');
+
+  const resolveStructuredAppointmentLocation = async (
+    raw: any,
+    patient: any,
+    patientId: string,
+    clinicId: string,
+    existingAppointment?: any | null,
+  ) => {
+    const requestedRoomId = sanitizeString(raw?.room_id || raw?.roomId || raw?.room, 180);
+    const careSetting = normalizeCareSetting(
+      raw?.care_setting || raw?.careSetting || (requestedRoomId ? 'CLINIC' : null),
+      raw?.location_type || raw?.locationType || raw?.location
+    );
+    const locationType = careSetting === 'CLINIC' ? 'clinica' : careSetting === 'ONLINE' ? 'online' : careSetting === 'PATIENT_HOME' ? 'domicilio' : careSetting === 'SCHOOL' ? 'escola' : 'outro';
+    const existingCareSetting = existingAppointment
+      ? normalizeCareSetting(existingAppointment?.care_setting, existingAppointment?.location_type)
+      : null;
+    const existingSnapshot = parseStoredJsonObject(existingAppointment?.location_snapshot);
+    const preserveHistoricalSnapshot =
+      Boolean(existingAppointment?.id) &&
+      ['PATIENT_HOME', 'SCHOOL'].includes(careSetting) &&
+      existingCareSetting === careSetting &&
+      raw?.refresh_location_snapshot !== true &&
+      raw?.refreshLocationSnapshot !== true &&
+      Object.keys(existingSnapshot).length > 0 &&
+      (
+        careSetting !== 'SCHOOL' ||
+        (
+          sanitizeString(existingAppointment?.school_id, 120) === sanitizeString(raw?.school_id || raw?.schoolId, 120) &&
+          sanitizeString(existingAppointment?.school_unit_id, 120) === sanitizeString(raw?.school_unit_id || raw?.schoolUnitId, 120)
+        )
+      );
+    if (preserveHistoricalSnapshot) {
+      return {
+        ok: true,
+        data: {
+          careSetting,
+          locationType,
+          roomId: null,
+          roomName: null,
+          schoolId: careSetting === 'SCHOOL' ? sanitizeString(existingAppointment?.school_id, 120) || null : null,
+          schoolUnitId: careSetting === 'SCHOOL' ? sanitizeString(existingAppointment?.school_unit_id, 120) || null : null,
+          locationSnapshot: existingSnapshot,
+          locationNameSnapshot: sanitizeString(existingAppointment?.location_name_snapshot, 180) || (careSetting === 'PATIENT_HOME' ? 'Domicílio' : 'Escola'),
+          locationAddressSnapshot: sanitizeString(existingAppointment?.location_address_snapshot, 500) || null,
+          locationSource: sanitizeString(existingAppointment?.location_source, 40) || (careSetting === 'PATIENT_HOME' ? 'PATIENT_PROFILE' : 'SCHOOL_DIRECTORY'),
+          locationTimezone: sanitizeString(existingAppointment?.location_timezone, 80) || 'America/Sao_Paulo',
+        },
+      };
+    }
+    if (careSetting === 'CLINIC') {
+      if (!requestedRoomId) return { ok: false, status: 422, error: 'Selecione uma sala da clínica para este atendimento.' };
+      const roomName = sanitizeString(raw?.room_name || raw?.roomName || raw?.roomDisplayName || requestedRoomId, 180);
+      return { ok: true, data: { careSetting, locationType, roomId: requestedRoomId, roomName, schoolId: null, schoolUnitId: null, locationSnapshot: { careSetting, roomId: requestedRoomId, roomName }, locationNameSnapshot: roomName || 'Clínica', locationAddressSnapshot: null, locationSource: 'CLINIC_DIRECTORY', locationTimezone: 'America/Sao_Paulo' } };
+    }
+    if (careSetting === 'ONLINE') {
+      return { ok: true, data: { careSetting, locationType, roomId: null, roomName: null, schoolId: null, schoolUnitId: null, locationSnapshot: { careSetting, callLinkPresent: Boolean(sanitizeString(raw?.call_link || raw?.callLink, 500)) }, locationNameSnapshot: 'Online', locationAddressSnapshot: null, locationSource: 'ONLINE', locationTimezone: 'America/Sao_Paulo' } };
+    }
+    if (careSetting === 'PATIENT_HOME') {
+      const metadata = parseStoredJsonObject(patient?.metadata);
+      const address = parseStoredJsonObject(metadata?.address);
+      const snapshot = cleanObject({
+        postalCode: sanitizeString(patient?.cep || address?.cep || address?.postalCode, 20) || null,
+        street: sanitizeString(address?.logradouro || address?.street, 180) || null,
+        number: sanitizeString(address?.numero || address?.number, 40) || null,
+        complement: sanitizeString(address?.complemento || address?.complement, 120) || null,
+        district: sanitizeString(address?.bairro || address?.district || address?.neighborhood, 120) || null,
+        city: sanitizeString(address?.cidade || address?.city, 120) || null,
+        state: sanitizeString(address?.uf || address?.state, 2).toUpperCase() || null,
+        reference: sanitizeString(address?.referencia || address?.reference, 240) || null,
+        operationalPhone: sanitizeString(patient?.phone, 40) || null
+      });
+      const missing = [...(!snapshot.street ? ['logradouro'] : []), ...(!snapshot.number ? ['número'] : []), ...(!snapshot.city ? ['cidade'] : [])];
+      if (missing.length) return { ok: false, status: 422, code: 'PATIENT_HOME_ADDRESS_INCOMPLETE', error: `Complete o endereço do paciente antes de agendar no domicílio. Faltando: ${missing.join(', ')}.` };
+      return { ok: true, data: { careSetting, locationType, roomId: null, roomName: null, schoolId: null, schoolUnitId: null, locationSnapshot: { careSetting, patientId, address: snapshot }, locationNameSnapshot: `Domicílio • ${sanitizeString(patient?.name, 180) || 'Paciente'}`, locationAddressSnapshot: formatStructuredLocationAddress(snapshot), locationSource: 'PATIENT_PROFILE', locationTimezone: 'America/Sao_Paulo' } };
+    }
+    if (careSetting === 'SCHOOL') {
+      const schoolId = sanitizeString(raw?.school_id || raw?.schoolId, 120);
+      const schoolUnitId = sanitizeString(raw?.school_unit_id || raw?.schoolUnitId, 120);
+      if (!isUuid(schoolId)) return { ok: false, status: 422, code: 'APPOINTMENT_SCHOOL_REQUIRED', error: 'Selecione uma escola atualmente vinculada ao paciente.' };
+      let query = supabase
+        .from('patient_school_enrollments')
+        .select('id,organization_id,school_id,school_unit_id,enrollment_type,schools(id,display_name,street,street_number,address_complement,district,city,state,postal_code),school_units(id,name,street,street_number,address_complement,district,city,state,postal_code)')
+        .eq('clinic_id', clinicId)
+        .eq('patient_id', patientId)
+        .eq('school_id', schoolId)
+        .eq('is_current', true);
+      if (schoolUnitId) query = query.eq('school_unit_id', schoolUnitId);
+      const result = await query.limit(1).maybeSingle();
+      if (result.error) throw result.error;
+      if (!result.data?.id) return { ok: false, status: 403, code: 'APPOINTMENT_PATIENT_SCHOOL_LINK_REQUIRED', error: 'A escola ou unidade não pertence aos vínculos atuais deste paciente.' };
+      if (!schoolUnitId) {
+        const unitsResult = await supabase
+          .from('school_units')
+          .select('id')
+          .eq('organization_id', result.data.organization_id)
+          .eq('school_id', schoolId)
+          .eq('is_active', true)
+          .is('archived_at', null)
+          .limit(1);
+        if (unitsResult.error) throw unitsResult.error;
+        if ((unitsResult.data || []).length > 0) {
+          return { ok: false, status: 422, code: 'APPOINTMENT_SCHOOL_UNIT_REQUIRED', error: 'Esta escola possui unidades. Atualize o vínculo escolar do paciente e selecione a unidade correta.' };
+        }
+      }
+      const school = Array.isArray(result.data.schools) ? result.data.schools[0] : result.data.schools;
+      const unit = Array.isArray(result.data.school_units) ? result.data.school_units[0] : result.data.school_units;
+      const source = unit || school || {};
+      const address = cleanObject({ postalCode: sanitizeString(source?.postal_code, 20) || null, street: sanitizeString(source?.street, 180) || null, number: sanitizeString(source?.street_number, 40) || null, complement: sanitizeString(source?.address_complement, 120) || null, district: sanitizeString(source?.district, 120) || null, city: sanitizeString(source?.city, 120) || null, state: sanitizeString(source?.state, 2).toUpperCase() || null });
+      const addressText = formatStructuredLocationAddress(address);
+      if (!address.street || !address.city || !addressText) return { ok: false, status: 422, code: 'SCHOOL_ADDRESS_INCOMPLETE', error: 'Complete o endereço da escola ou da unidade antes de agendar uma sessão escolar.' };
+      const schoolName = sanitizeString(school?.display_name, 180) || 'Escola';
+      const unitName = sanitizeString(unit?.name, 180) || null;
+      return { ok: true, data: { careSetting, locationType, roomId: null, roomName: null, schoolId, schoolUnitId: schoolUnitId || null, locationSnapshot: { careSetting, schoolId, schoolUnitId: schoolUnitId || null, schoolName, unitName, enrollmentId: result.data.id, enrollmentType: result.data.enrollment_type, address }, locationNameSnapshot: unitName ? `${schoolName} • ${unitName}` : schoolName, locationAddressSnapshot: addressText, locationSource: 'SCHOOL_DIRECTORY', locationTimezone: 'America/Sao_Paulo' } };
+    }
+    const name = sanitizeString(raw?.location_name_snapshot || raw?.locationNameSnapshot || raw?.locationLabel, 180) || 'Outro local';
+    const address = sanitizeString(raw?.location_address_snapshot || raw?.locationAddressSnapshot || raw?.location_notes || raw?.locationNotes, 500) || null;
+    return { ok: true, data: { careSetting: 'OTHER', locationType: 'outro', roomId: null, roomName: null, schoolId: null, schoolUnitId: null, locationSnapshot: { careSetting: 'OTHER', name, address }, locationNameSnapshot: name, locationAddressSnapshot: address, locationSource: 'MANUAL', locationTimezone: 'America/Sao_Paulo' } };
+  };
+
+  const prepareAppointmentForWrite = async (
+    rawAppointment: any,
+    actor: any,
+    clinicId: string,
+    existingAppointment?: any | null,
+  ) => {
     const appointmentId = sanitizeString(rawAppointment?.id, 120);
     if (!isUuid(appointmentId)) {
       return { ok: false, status: 400, error: 'Agendamento sem identificador persistente.' };
@@ -22430,7 +22662,7 @@ async function startServer() {
 
     const patientResult = await supabase
       .from('patients')
-      .select('id, name, email, clinic_id')
+      .select('id, name, email, phone, cep, metadata, clinic_id')
       .eq('id', patientId)
       .eq('clinic_id', clinicId)
       .limit(1)
@@ -22506,24 +22738,18 @@ async function startServer() {
     if (!professionalName || ['equipe', 'team'].includes(professionalName.toLowerCase())) {
       return { ok: false, status: 400, error: 'O profissional responsável selecionado não possui um nome válido.' };
     }
-    const roomId = sanitizeString(
-      rawAppointment?.room_id || rawAppointment?.roomId || rawAppointment?.room,
-      180
+    const structuredLocation = await resolveStructuredAppointmentLocation(
+      rawAppointment,
+      patientResult.data,
+      patientId,
+      clinicId,
+      existingAppointment,
     );
-    const roomName = sanitizeString(
-      rawAppointment?.room_name ||
-        rawAppointment?.roomName ||
-        rawAppointment?.roomDisplayName,
-      180
-    );
-    const locationType = roomId
-      ? 'clinica'
-      : normalizeScheduleLocationType(
-          rawAppointment?.location_type ||
-            rawAppointment?.locationType ||
-            rawAppointment?.location ||
-            'outro'
-        );
+    if (!structuredLocation.ok) return structuredLocation;
+    const location = structuredLocation.data;
+    const roomId = location.roomId;
+    const roomName = location.roomName;
+    const locationType = location.locationType;
     if (locationType === 'clinica' && !roomId) {
       return { ok: false, status: 400, error: 'Selecione uma sala da clínica para este atendimento.' };
     }
@@ -22562,6 +22788,22 @@ async function startServer() {
         roomName: roomName || null,
         location_type: locationType,
         locationType,
+        care_setting: location.careSetting,
+        careSetting: location.careSetting,
+        school_id: location.schoolId,
+        schoolId: location.schoolId,
+        school_unit_id: location.schoolUnitId,
+        schoolUnitId: location.schoolUnitId,
+        location_snapshot: location.locationSnapshot,
+        locationSnapshot: location.locationSnapshot,
+        location_name_snapshot: location.locationNameSnapshot,
+        locationNameSnapshot: location.locationNameSnapshot,
+        location_address_snapshot: location.locationAddressSnapshot,
+        locationAddressSnapshot: location.locationAddressSnapshot,
+        location_source: location.locationSource,
+        locationSource: location.locationSource,
+        location_timezone: location.locationTimezone,
+        locationTimezone: location.locationTimezone,
         scheduled_at: scheduledAt,
         scheduledAt,
         scheduled_start_at: scheduledAt,
@@ -22836,6 +23078,11 @@ async function startServer() {
           payload: sanitizeClinicalPayload({
             source: 'appointment_action',
             status: appointment?.status || null,
+            careSetting: appointment?.care_setting || appointment?.careSetting || null,
+            schoolId: appointment?.school_id || appointment?.schoolId || null,
+            schoolUnitId: appointment?.school_unit_id || appointment?.schoolUnitId || null,
+            locationNameSnapshot: appointment?.location_name_snapshot || appointment?.locationNameSnapshot || null,
+            locationSource: appointment?.location_source || appointment?.locationSource || null,
             ...params.payload,
           }),
           created_at: new Date().toISOString()
@@ -22978,9 +23225,23 @@ async function startServer() {
       return res.status(400).json({ success: false, error: 'Nenhum agendamento enviado.' });
     }
 
+    const existingRows = params.requireExisting
+      ? await readPersistedAppointmentRows(
+          rawAppointments.map((appointment: any) => sanitizeString(appointment?.id, 120)),
+          clinicId,
+        )
+      : [];
+    const existingById = new Map(
+      existingRows.map((appointment: any) => [sanitizeString(appointment?.id, 120), appointment]),
+    );
     const preparedAppointments: any[] = [];
     for (const rawAppointment of rawAppointments) {
-      const prepared = await prepareAppointmentForWrite(rawAppointment, actor, clinicId);
+      const prepared = await prepareAppointmentForWrite(
+        rawAppointment,
+        actor,
+        clinicId,
+        existingById.get(sanitizeString(rawAppointment?.id, 120)) || null,
+      );
       if (!prepared.ok) {
         return res.status((prepared as any).status || 400).json({ success: false, error: (prepared as any).error });
       }
@@ -24274,6 +24535,7 @@ async function startServer() {
         foundAppointment,
         parseCalendarSourcePayload(foundAppointment?.source_payload || foundAppointment?.sourcePayload)
       );
+      const allowPatientReschedule = await readClinicPatientReschedulePolicy(appointmentClinicId);
 
       if (sanitizeString(actor?.role, 40) === 'patient') {
         const actorId = sanitizeString(actor?.id, 120);
@@ -24315,6 +24577,8 @@ async function startServer() {
           professionalName: displayContext.professionalName,
           professionalRole: displayContext.professionalRole,
           professionalAvatarUrl: displayContext.professionalAvatarUrl,
+          allowPatientReschedule,
+          allowedActions: portalAllowedActions(allowPatientReschedule),
           source: foundInAppointmentsTable ? 'appointments' : 'clinic_state'
         }
       });
@@ -24498,6 +24762,21 @@ async function startServer() {
 
       if (!foundAppointment) {
         return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+      }
+
+      if (isPatientActor && normalizedStatus === 'reschedule') {
+        const scopedClinicId = sanitizeString(
+          foundAppointment?.clinic_id ||
+            foundAppointment?.clinicId ||
+            foundAppointment?.organization_id ||
+            foundAppointment?.organizationId ||
+            foundClinicId ||
+            clinicId,
+          120
+        );
+        if (!(await readClinicPatientReschedulePolicy(scopedClinicId))) {
+          return res.status(403).json(patientRescheduleDisabledResponse());
+        }
       }
 
       const appointments = Array.isArray(ownerState?.appointments) ? ownerState.appointments : [];
@@ -25224,6 +25503,7 @@ async function startServer() {
           req.body?.professionalLogoUrl ||
           req.body?.professionalAvatarUrl
       );
+      const canRequestReschedule = await readClinicPatientReschedulePolicy(reminderClinicId);
 
       const result = await sendAppointmentNotification({
         supabase,
@@ -25240,7 +25520,8 @@ async function startServer() {
           clinicLogoUrl: clinicBranding.logoUrl,
           patientName,
           professionalDisplayName,
-          professionalLogoUrl
+          professionalLogoUrl,
+          canRequestReschedule
         },
         clinicId: reminderClinicId,
         reminderKind: 'manual',
@@ -34345,6 +34626,11 @@ async function startServer() {
     'room_id',
     'room_name',
     'location_type',
+    'care_setting',
+    'school_id',
+    'school_unit_id',
+    'location_name_snapshot',
+    'location_context_snapshot',
     'status',
     'started_at',
     'ended_at',
@@ -34593,6 +34879,9 @@ async function startServer() {
     'session_id',
     'patient_id',
     'therapist_id',
+    'care_setting',
+    'location_name_snapshot',
+    'location_context_snapshot',
     'started_at',
     'ended_at',
     'duration_seconds',
@@ -36315,6 +36604,9 @@ async function startServer() {
       source?.room
     ) || (isClinicLocation ? (roomId ? 'Sala não identificada' : 'Sala não informada') : '');
     const roomSpecialties = normalizeClinicRoomSpecialties(source?.room_specialties || source?.roomSpecialties || row?.room_specialties || row?.roomSpecialties);
+    const careSetting = normalizeCareSetting(row?.care_setting || source?.care_setting || source?.careSetting, location);
+    const locationNameSnapshot = sanitizeString(row?.location_name_snapshot || source?.location_name_snapshot || source?.locationNameSnapshot, 240) || null;
+    const locationAddressSnapshot = sanitizeString(row?.location_address_snapshot || source?.location_address_snapshot || source?.locationAddressSnapshot, 1000) || null;
     const locationLabel = location ? (
       /online|remoto/i.test(location) ? 'Online' :
       /domic/i.test(location) ? 'Domicílio' :
@@ -36432,6 +36724,22 @@ async function startServer() {
       patient_response_source: sanitizeString(confirmationSnapshot.source, 80) || null,
       location: location || (room ? 'sala' : 'clinica'),
       location_type: normalizeScheduleLocationType(location || (room ? 'clinica' : 'outro')),
+      care_setting: careSetting,
+      careSetting,
+      school_id: sanitizeString(row?.school_id || source?.school_id || source?.schoolId, 120) || null,
+      schoolId: sanitizeString(row?.school_id || source?.schoolId || source?.school_id, 120) || null,
+      school_unit_id: sanitizeString(row?.school_unit_id || source?.school_unit_id || source?.schoolUnitId, 120) || null,
+      schoolUnitId: sanitizeString(row?.school_unit_id || source?.schoolUnitId || source?.school_unit_id, 120) || null,
+      location_snapshot: parseStoredJsonObject(row?.location_snapshot || source?.location_snapshot || source?.locationSnapshot),
+      locationSnapshot: parseStoredJsonObject(row?.location_snapshot || source?.locationSnapshot || source?.location_snapshot),
+      location_name_snapshot: locationNameSnapshot,
+      locationNameSnapshot,
+      location_address_snapshot: locationAddressSnapshot,
+      locationAddressSnapshot,
+      location_source: sanitizeString(row?.location_source || source?.location_source || source?.locationSource, 60) || null,
+      locationSource: sanitizeString(row?.location_source || source?.locationSource || source?.location_source, 60) || null,
+      location_timezone: sanitizeString(row?.location_timezone || source?.location_timezone || source?.locationTimezone, 80) || 'America/Sao_Paulo',
+      locationTimezone: sanitizeString(row?.location_timezone || source?.locationTimezone || source?.location_timezone, 80) || 'America/Sao_Paulo',
       location_label: locationLabel,
       room_id: roomId || null,
       roomId: roomId || null,
@@ -36476,6 +36784,11 @@ async function startServer() {
   };
 
   const classifyCalendarEventLocation = (event: any) => {
+    const careSetting = normalizeCareSetting(event?.care_setting || event?.careSetting, event?.location_type || event?.location);
+    if (careSetting === 'ONLINE') return 'online';
+    if (careSetting === 'PATIENT_HOME') return 'domicilio';
+    if (careSetting === 'SCHOOL') return 'escola';
+    if (careSetting === 'CLINIC') return 'sala';
     const value = sanitizeString(`${event?.location || ''} ${event?.location_type || ''} ${event?.location_label || ''} ${event?.room_name || ''} ${event?.room || ''}`, 600).toLowerCase();
     if (value.includes('online') || value.includes('remoto')) return 'online';
     if (value.includes('domic')) return 'domicilio';
@@ -36490,6 +36803,8 @@ async function startServer() {
     if (filters.therapistIds.length > 0 && !filters.therapistIds.includes(String(event.therapist_id || ''))) return false;
     if (filters.patientIds.length > 0 && !filters.patientIds.includes(String(event.patient_id || ''))) return false;
     if (filters.roomIds?.length > 0 && !filters.roomIds.includes(String(event.room_id || ''))) return false;
+    if (filters.schoolIds?.length > 0 && !filters.schoolIds.includes(String(event.school_id || event.schoolId || ''))) return false;
+    if (filters.schoolUnitIds?.length > 0 && !filters.schoolUnitIds.includes(String(event.school_unit_id || event.schoolUnitId || ''))) return false;
     if (filters.locationTypes?.length > 0) {
       const locationClass = classifyCalendarEventLocation(event);
       const locationType = sanitizeString(event.location_type, 80).toLowerCase();
@@ -36793,8 +37108,88 @@ async function startServer() {
       professionalIds,
       roomId
     }).catch(() => []);
+    let institutionalEvents: any[] = [];
+    const conflictDateKeys = (parsedDates.recurrenceDates.length > 0 ? parsedDates.recurrenceDates : [parsedDates.date])
+      .map((value: any) => sanitizeDate(value))
+      .filter(Boolean)
+      .sort();
+    if (conflictDateKeys.length > 0) {
+      const institutionalFrom = new Date(`${conflictDateKeys[0]}T00:00:00-03:00`).toISOString();
+      const institutionalToDate = new Date(`${conflictDateKeys[conflictDateKeys.length - 1]}T00:00:00-03:00`);
+      institutionalToDate.setUTCDate(institutionalToDate.getUTCDate() + 1);
+      const meetingsResult = await supabase
+        .from('school_meetings')
+        .select('id,title,meeting_type,status,scheduled_start,scheduled_end,responsible_professional_id,school_id,school_unit_id,location_type,timezone')
+        .eq('organization_id', organizationId)
+        .eq('clinic_id', clinicId)
+        .in('status', ['SCHEDULED', 'CONFIRMED', 'RESCHEDULED'])
+        .gte('scheduled_start', institutionalFrom)
+        .lt('scheduled_start', institutionalToDate.toISOString())
+        .limit(1000);
+      if (!meetingsResult.error && (meetingsResult.data || []).length > 0) {
+        const meetingIds = (meetingsResult.data || []).map((meeting: any) => meeting.id);
+        const [patientLinks, participantLinks] = await Promise.all([
+          supabase
+            .from('school_meeting_patients')
+            .select('meeting_id,patient_id')
+            .eq('organization_id', organizationId)
+            .in('meeting_id', meetingIds)
+            .neq('participation_status', 'REMOVED'),
+          supabase
+            .from('school_meeting_participants')
+            .select('meeting_id,professional_id')
+            .eq('organization_id', organizationId)
+            .in('meeting_id', meetingIds)
+            .is('removed_at', null),
+        ]);
+        if (patientLinks.error) throw patientLinks.error;
+        if (participantLinks.error) throw participantLinks.error;
+        const patientsByMeeting = new Map<string, string[]>();
+        const professionalsByMeeting = new Map<string, string[]>();
+        for (const link of patientLinks.data || []) {
+          const key = sanitizeString(link.meeting_id, 120);
+          patientsByMeeting.set(key, [...(patientsByMeeting.get(key) || []), sanitizeString(link.patient_id, 120)].filter(Boolean));
+        }
+        for (const link of participantLinks.data || []) {
+          const key = sanitizeString(link.meeting_id, 120);
+          professionalsByMeeting.set(key, [...(professionalsByMeeting.get(key) || []), sanitizeString(link.professional_id, 120)].filter(Boolean));
+        }
+        institutionalEvents = (meetingsResult.data || []).flatMap((meeting: any) => {
+          const meetingId = sanitizeString(meeting.id, 120);
+          const meetingPatientIds = patientsByMeeting.get(meetingId) || [];
+          const meetingProfessionalIds = Array.from(new Set([
+            sanitizeString(meeting.responsible_professional_id, 120),
+            ...(professionalsByMeeting.get(meetingId) || []),
+          ].filter(Boolean)));
+          const patientRows = meetingPatientIds.length > 0 ? meetingPatientIds : [null];
+          return patientRows.map((meetingPatientId: string | null, index: number) => ({
+            id: `${meetingId}:institutional:${index}`,
+            source: 'school_meeting',
+            type: sanitizeString(meeting.title || meeting.meeting_type, 180) || 'Compromisso escolar',
+            status: 'scheduled',
+            patient_id: meetingPatientId,
+            patientId: meetingPatientId,
+            professional_ids: meetingProfessionalIds,
+            professionalIds: meetingProfessionalIds,
+            therapist_id: meeting.responsible_professional_id || meetingProfessionalIds[0] || null,
+            scheduled_at: meeting.scheduled_start,
+            scheduled_start_at: meeting.scheduled_start,
+            scheduled_end_at: meeting.scheduled_end,
+            start_time: meeting.scheduled_start,
+            end_time: meeting.scheduled_end,
+            location_type: 'escola',
+            care_setting: 'SCHOOL',
+            school_id: meeting.school_id,
+            school_unit_id: meeting.school_unit_id,
+            timezone: meeting.timezone || 'America/Sao_Paulo',
+          }));
+        });
+      } else if (meetingsResult.error && !isMissingRelationError(meetingsResult.error)) {
+        throw meetingsResult.error;
+      }
+    }
     const appointmentsById = new Map<string, any>();
-    [...stateAppointments, ...tableAppointments].forEach((appointment: any, index: number) => {
+    [...stateAppointments, ...tableAppointments, ...institutionalEvents].forEach((appointment: any, index: number) => {
       appointmentsById.set(sanitizeString(appointment?.id, 180) || `idx-${index}`, appointment);
     });
     const appointments = Array.from(appointmentsById.values());
@@ -36858,6 +37253,58 @@ async function startServer() {
 
   const isResponsiblePortalRole = (role: unknown) =>
     ['patient', 'responsible', 'responsavel', 'guardian'].includes(sanitizeString(role, 40).toLowerCase());
+
+  const readClinicPatientReschedulePolicy = async (clinicIdValue: unknown) => {
+    const clinicId = sanitizeString(clinicIdValue, 120);
+    if (!isUuid(clinicId)) return true;
+    const result = await supabase
+      .from('clinics')
+      .select('allow_patient_reschedule')
+      .eq('id', clinicId)
+      .limit(1)
+      .maybeSingle();
+    if (result.error) {
+      if (extractMissingColumnName(result.error) === 'allow_patient_reschedule') return true;
+      throw result.error;
+    }
+    return result.data?.allow_patient_reschedule !== false;
+  };
+
+  const readClinicPatientReschedulePolicies = async (clinicIdsValue: unknown[]) => {
+    const clinicIds = Array.from(new Set(
+      (Array.isArray(clinicIdsValue) ? clinicIdsValue : [])
+        .map((value) => sanitizeString(value, 120))
+        .filter((value) => isUuid(value))
+    ));
+    const policies = new Map<string, boolean>(clinicIds.map((clinicId) => [clinicId, true]));
+    if (clinicIds.length === 0) return policies;
+    const result = await supabase
+      .from('clinics')
+      .select('id,allow_patient_reschedule')
+      .in('id', clinicIds)
+      .limit(clinicIds.length);
+    if (result.error) {
+      if (extractMissingColumnName(result.error) === 'allow_patient_reschedule') return policies;
+      throw result.error;
+    }
+    for (const row of result.data || []) {
+      policies.set(sanitizeString(row?.id, 120), row?.allow_patient_reschedule !== false);
+    }
+    return policies;
+  };
+
+  const portalAllowedActions = (allowPatientReschedule: boolean) => ({
+    canConfirm: true,
+    canCancel: true,
+    canRequestReschedule: allowPatientReschedule
+  });
+
+  const patientRescheduleDisabledResponse = () => ({
+    success: false,
+    error: 'PATIENT_RESCHEDULE_DISABLED',
+    code: 'PATIENT_RESCHEDULE_DISABLED',
+    message: 'Esta clínica não aceita novas solicitações de reagendamento pelo portal. Você ainda pode confirmar ou cancelar a sessão.'
+  });
 
   const sanitizePortalRoomName = (value: unknown) => {
     const room = sanitizeString(value, 180);
@@ -37337,12 +37784,32 @@ async function startServer() {
         return resolved;
       };
 
-      const formatPortalReminderMessage = (row: any, patientName: string) => {
+      const notificationClinicIds = Array.from(new Set(
+        rows.map((row: any) => {
+          const metadata = parseStoredJsonObject(row?.metadata);
+          const appointmentContext = appointmentContextById.get(sanitizeString(row?.appointment_id, 120));
+          const patientId = sanitizeString(row?.patient_id || metadata.patientId || appointmentContext?.patientId, 120);
+          return sanitizeString(
+            patientClinicIdsById.get(patientId) ||
+              appointmentContext?.clinicId ||
+              row?.clinic_id ||
+              metadata.clinicId ||
+              row?.organization_id,
+            120
+          );
+        }).filter((clinicId: string) => isUuid(clinicId))
+      ));
+      const policyByClinicId = await readClinicPatientReschedulePolicies(notificationClinicIds);
+
+      const formatPortalReminderMessage = (row: any, patientName: string, canRequestReschedule: boolean) => {
         const metadata = parseStoredJsonObject(row?.metadata);
         const scheduledAt = sanitizeString(metadata.scheduledAt || row?.scheduled_for, 120);
         const date = new Date(scheduledAt || '');
+        const actionCopy = canRequestReschedule
+          ? 'Toque aqui para confirmar, cancelar ou solicitar reagendamento.'
+          : 'Toque aqui para confirmar ou cancelar a sessão.';
         if (Number.isNaN(date.getTime())) {
-          return `Lembrete de consulta de ${patientName}. Toque para confirmar, remarcar ou cancelar.`;
+          return `Lembrete de consulta de ${patientName}. ${actionCopy}`;
         }
         const shortDate = date.toLocaleDateString('pt-BR', {
           timeZone: 'America/Sao_Paulo',
@@ -37370,7 +37837,7 @@ async function startServer() {
           hour: '2-digit',
           minute: '2-digit'
         });
-        return `Lembrete de consulta de ${patientName} dia ${shortDate}${relative} às ${time}. Toque para confirmar, remarcar ou cancelar.`;
+        return `Lembrete de consulta de ${patientName} dia ${shortDate}${relative} às ${time}. ${actionCopy}`;
       };
 
       const normalizedRows: any[] = [];
@@ -37394,6 +37861,7 @@ async function startServer() {
             row?.organization_id,
           120
         );
+        const canRequestReschedule = policyByClinicId.get(clinicId) !== false;
         const branding = await resolveNotificationClinicBranding(clinicId);
         const metadataPatientName = sanitizeString(metadata.patientName || metadata.patient_name, 160);
         const appointmentPatientName = sanitizeString(appointmentContext?.patientName, 160);
@@ -37408,7 +37876,8 @@ async function startServer() {
           clinicName: branding.displayName,
           clinicLogoUrl: branding.logoUrl || sanitizeClinicBrandImageUrl(metadata.clinicLogoUrl) || null,
           patientName,
-          scheduledAt: scheduledAt || metadata.scheduledAt || null
+          scheduledAt: scheduledAt || metadata.scheduledAt || null,
+          allowedActions: portalAllowedActions(canRequestReschedule)
         };
         normalizedRows.push({
           ...row,
@@ -37428,7 +37897,7 @@ async function startServer() {
           scheduled_for: scheduledAt || row?.scheduled_for,
           title: branding.displayName,
           message: normalizePortalNotificationType(row?.type) === 'appointment_reminder'
-            ? formatPortalReminderMessage({ ...row, scheduled_for: scheduledAt, metadata: normalizedMetadata }, patientName)
+            ? formatPortalReminderMessage({ ...row, scheduled_for: scheduledAt, metadata: normalizedMetadata }, patientName, canRequestReschedule)
             : sanitizeTextField(row?.message, 1000) || 'Atualização da sua consulta disponível.',
           metadata: normalizedMetadata
         });
@@ -37681,9 +38150,13 @@ async function startServer() {
   const serializePortalAppointmentForFamilyView = async (
     row: any,
     extras: Record<string, any> = {},
-    preloaded: { patient?: any; clinicBranding?: any } = {}
+    preloaded: { patient?: any; clinicBranding?: any; allowPatientReschedule?: boolean } = {}
   ) => {
     const displayContext = await buildFamilyAppointmentDisplayContext(row, preloaded);
+    const allowPatientReschedule =
+      typeof preloaded.allowPatientReschedule === 'boolean'
+        ? preloaded.allowPatientReschedule
+        : await readClinicPatientReschedulePolicy(displayContext.clinicId);
     return serializePortalAppointment(row, {
       clinicId: displayContext.clinicId,
       clinicName: displayContext.clinicName,
@@ -37696,6 +38169,8 @@ async function startServer() {
       professionalName: displayContext.professionalName,
       professionalRole: displayContext.professionalRole,
       professionalAvatarUrl: displayContext.professionalAvatarUrl,
+      allowPatientReschedule,
+      allowedActions: portalAllowedActions(allowPatientReschedule),
       ...extras
     });
   };
@@ -39199,6 +39674,12 @@ async function startServer() {
       await Promise.all(Array.from(patientClinicIds).map(async (clinicId) => {
         clinicBrandingById.set(clinicId, await readClinicBrandingForFamilyView(clinicId));
       }));
+      const policyByClinicId = await readClinicPatientReschedulePolicies(
+        visibleRows.map((row: any) => {
+          const source = parseAppointmentSourcePayloadForFamilyView(row?.source_payload || row?.sourcePayload);
+          return row?.clinic_id || row?.clinicId || source?.clinic_id || source?.clinicId;
+        })
+      );
       return res.json({
         success: true,
         data: await Promise.all(visibleRows.map((row) => {
@@ -39207,7 +39688,8 @@ async function startServer() {
           const clinicId = sanitizeString(row?.clinic_id || row?.clinicId || source?.clinic_id || source?.clinicId, 120);
           return serializePortalAppointmentForFamilyView(row, {}, {
             patient: portalPatientContextsById.get(patientId) || null,
-            clinicBranding: clinicBrandingById.get(clinicId) || null
+            clinicBranding: clinicBrandingById.get(clinicId) || null,
+            allowPatientReschedule: policyByClinicId.get(clinicId) !== false
           });
         }))
       });
@@ -39398,6 +39880,8 @@ async function startServer() {
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
       const appointment = (context as any).appointment;
+      const allowPatientReschedule = await readClinicPatientReschedulePolicy(appointment.clinic_id || appointment.clinicId);
+      if (!allowPatientReschedule) return res.status(403).json(patientRescheduleDisabledResponse());
       const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
       if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
       const result = await buildPortalRescheduleAvailabilityForAppointment(appointment, req.session.user, req.query || {});
@@ -39414,6 +39898,21 @@ async function startServer() {
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
       const appointment = (context as any).appointment;
+      const allowPatientReschedule = await readClinicPatientReschedulePolicy(appointment.clinic_id || appointment.clinicId);
+      if (!allowPatientReschedule) {
+        await writeAppointmentStatusAuditLog({
+          organizationId: appointment.organization_id || appointment.clinic_id,
+          appointmentId: appointment.id,
+          patientId: appointment.patient_id,
+          action: 'RESCHEDULE_REQUEST_BLOCKED_BY_POLICY',
+          previousStatus: normalizeOperationalAppointmentStatus(appointment.status),
+          newStatus: normalizeOperationalAppointmentStatus(appointment.status),
+          performedBy: sanitizeString(req.session.user?.id, 120),
+          performedByRole: sanitizeString(req.session.user?.role, 40) || 'responsible',
+          metadata: { source: 'portal', policy: 'allow_patient_reschedule', allowed: false }
+        });
+        return res.status(403).json(patientRescheduleDisabledResponse());
+      }
       const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
       if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
       const selectedOptionsResult = await resolveValidPortalRescheduleOptions(appointment, req.session.user, req.body || {});
@@ -42667,7 +43166,9 @@ async function startServer() {
         types: parseCalendarFilterList(req.query?.type || req.query?.types),
         statuses: parseCalendarFilterList(req.query?.status || req.query?.statuses),
         roomIds: parseCalendarFilterList(req.query?.roomId || req.query?.roomIds).filter((id) => id !== 'all'),
-        locationTypes: parseCalendarFilterList(req.query?.locationType || req.query?.locationTypes).filter((id) => id !== 'all')
+        locationTypes: parseCalendarFilterList(req.query?.locationType || req.query?.locationTypes).filter((id) => id !== 'all'),
+        schoolIds: parseCalendarFilterList(req.query?.schoolId || req.query?.schoolIds).filter((id) => id !== 'all'),
+        schoolUnitIds: parseCalendarFilterList(req.query?.schoolUnitId || req.query?.schoolUnitIds).filter((id) => id !== 'all')
       };
 
       let query = supabase
@@ -42684,6 +43185,8 @@ async function startServer() {
       if (filters.therapistIds.length > 0) query = query.in('therapist_id', filters.therapistIds);
       if (filters.patientIds.length > 0) query = query.in('patient_id', filters.patientIds);
       if (filters.roomIds.length > 0) query = query.in('room_id', filters.roomIds);
+      if (filters.schoolIds.length > 0) query = query.in('school_id', filters.schoolIds);
+      if (filters.schoolUnitIds.length > 0) query = query.in('school_unit_id', filters.schoolUnitIds);
       if (filters.statuses.length === 1 && !filters.statuses[0].includes('_')) query = query.eq('status', filters.statuses[0]);
 
       const { data, error } = await query;
@@ -62624,6 +63127,35 @@ async function startServer() {
         room_id: sanitizeString(req.body?.room_id || req.body?.roomId || linkedAppointment?.room_id, 180) || null,
         room_name: sanitizeString(req.body?.room_name || req.body?.roomName || linkedAppointment?.room_name, 180) || null,
         location_type: sanitizeString(req.body?.location_type || req.body?.locationType || linkedAppointment?.location_type, 80) || null,
+        care_setting: normalizeCareSetting(
+          linkedAppointment?.care_setting || req.body?.care_setting || req.body?.careSetting,
+          linkedAppointment?.location_type || req.body?.location_type || req.body?.locationType,
+        ),
+        school_id: isUuid(sanitizeString(linkedAppointment?.school_id, 120))
+          ? sanitizeString(linkedAppointment?.school_id, 120)
+          : null,
+        school_unit_id: isUuid(sanitizeString(linkedAppointment?.school_unit_id, 120))
+          ? sanitizeString(linkedAppointment?.school_unit_id, 120)
+          : null,
+        location_name_snapshot: sanitizeString(
+          linkedAppointment?.location_name_snapshot ||
+            linkedAppointment?.room_name ||
+            req.body?.location_name_snapshot ||
+            req.body?.locationNameSnapshot,
+          180,
+        ) || null,
+        location_context_snapshot: sanitizeClinicalPayload({
+          source: linkedAppointment?.id ? 'APPOINTMENT_SNAPSHOT' : 'SESSION_INPUT',
+          appointmentId: linkedAppointment?.id || null,
+          careSetting: linkedAppointment?.care_setting || req.body?.care_setting || req.body?.careSetting || null,
+          schoolId: linkedAppointment?.school_id || null,
+          schoolUnitId: linkedAppointment?.school_unit_id || null,
+          locationName: linkedAppointment?.location_name_snapshot || linkedAppointment?.room_name || null,
+          locationAddress: linkedAppointment?.location_address_snapshot || null,
+          locationSource: linkedAppointment?.location_source || null,
+          locationTimezone: linkedAppointment?.location_timezone || 'America/Sao_Paulo',
+          locationSnapshot: parseStoredJsonObject(linkedAppointment?.location_snapshot),
+        }),
         service_type: sanitizeString(req.body?.service_type || req.body?.serviceType || linkedAppointment?.service_type || linkedAppointment?.approach, 120) || null,
         started_at: existingInProgressSession?.started_at || startedAt,
         ended_at: req.body?.ended_at || req.body?.endedAt ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, startedAt) : resolvedActualEndAt,
@@ -62862,6 +63394,35 @@ async function startServer() {
         clinicId,
         user: req.session.user
       });
+      let persistedSessionContext: any = null;
+      const sessionContextResult = await supabase
+        .from('aba_sessions')
+        .select('id,care_setting,school_id,school_unit_id,location_name_snapshot,location_context_snapshot')
+        .eq('id', sessionId)
+        .eq('patient_id', patientId)
+        .eq('clinic_id', clinicId)
+        .limit(1)
+        .maybeSingle();
+      if (!sessionContextResult.error) {
+        persistedSessionContext = sessionContextResult.data || null;
+      } else if (!hasMissingFinancialSchema(sessionContextResult.error)) {
+        throw sessionContextResult.error;
+      }
+      const persistedLocationContext = parseStoredJsonObject(persistedSessionContext?.location_context_snapshot);
+      const rawSummaryCareSetting = persistedSessionContext?.care_setting || persistedLocationContext?.careSetting;
+      const summaryCareSetting = rawSummaryCareSetting ? normalizeCareSetting(rawSummaryCareSetting, null) : null;
+      const summaryLocationName = sanitizeString(
+        persistedSessionContext?.location_name_snapshot || persistedLocationContext?.locationName,
+        180,
+      ) || null;
+      const summaryLocationContext = sanitizeClinicalPayload({
+        careSetting: summaryCareSetting,
+        schoolId: persistedSessionContext?.school_id || persistedLocationContext?.schoolId || null,
+        schoolUnitId: persistedSessionContext?.school_unit_id || persistedLocationContext?.schoolUnitId || null,
+        locationName: summaryLocationName,
+        locationSource: persistedLocationContext?.locationSource || null,
+        locationTimezone: persistedLocationContext?.locationTimezone || 'America/Sao_Paulo',
+      });
       let masterySummaryPayload = sanitizeClinicalPayload(req.body?.mastery_summary || req.body?.masterySummary || []);
       let maintenanceSummaryPayload = sanitizeClinicalPayload(req.body?.maintenance_summary || req.body?.maintenanceSummary || []);
       try {
@@ -62903,6 +63464,9 @@ async function startServer() {
         appointment_id: sessionSummaryAppointmentId,
         patient_id: patientId,
         therapist_id: sanitizeString(req.body?.therapist_id || req.body?.therapistId || req.session.user?.id, 120),
+        care_setting: summaryCareSetting,
+        location_name_snapshot: summaryLocationName,
+        location_context_snapshot: summaryLocationContext,
         started_at: startedAt,
         ended_at: endedAt,
         duration_seconds: durationSeconds,
@@ -62931,6 +63495,8 @@ async function startServer() {
           ...(req.body?.summary_payload || req.body?.summaryPayload || {}),
           source: requestSource,
           appointmentId: sessionSummaryAppointmentId || undefined,
+          careSetting: summaryCareSetting,
+          locationName: summaryLocationName,
           patientName: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
           therapistName: sanitizeString(req.body?.therapist_name || req.body?.therapistName, 180),
           teachingSummary: req.body?.teaching_summary || req.body?.teachingSummary || undefined,
@@ -70196,6 +70762,16 @@ async function startServer() {
 
   // --- STRUCTURED SCHOOL MANAGEMENT ---
   registerSchoolManagementRoutes(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireRoles,
+    portalActionLimiter,
+    sanitizeString,
+    currentClinicId
+  });
+
+  registerClinicAppointmentPolicyRoutes(app, {
     supabase,
     noStoreDynamicResponse,
     checkAuth,

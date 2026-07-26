@@ -38,6 +38,16 @@ export type SessionSummary = {
   therapistId: string | null;
   therapistName?: string | null;
   patientName?: string;
+  careSetting?: 'CLINIC' | 'ONLINE' | 'PATIENT_HOME' | 'SCHOOL' | 'OTHER' | null;
+  locationNameSnapshot?: string | null;
+  locationContextSnapshot?: {
+    careSetting?: string | null;
+    schoolId?: string | null;
+    schoolUnitId?: string | null;
+    locationName?: string | null;
+    locationSource?: string | null;
+    locationTimezone?: string | null;
+  } | null;
   startedAt: string;
   endedAt: string;
   durationSeconds: number;
@@ -204,6 +214,9 @@ type CalculateSessionSummaryInput = {
   patientName?: string;
   therapistId?: string | null;
   therapistName?: string | null;
+  careSetting?: SessionSummary['careSetting'];
+  locationNameSnapshot?: string | null;
+  locationContextSnapshot?: SessionSummary['locationContextSnapshot'];
   startedAt?: string;
   endedAt?: string;
   trials?: any[];
@@ -621,6 +634,9 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
     therapistId: input.therapistId || null,
     therapistName: input.therapistName || null,
     patientName: input.patientName,
+    careSetting: input.careSetting || null,
+    locationNameSnapshot: input.locationNameSnapshot || null,
+    locationContextSnapshot: input.locationContextSnapshot || null,
     startedAt,
     endedAt,
     durationSeconds,

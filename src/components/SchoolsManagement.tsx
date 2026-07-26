@@ -14,14 +14,17 @@ import {
   GraduationCap,
   Loader2,
   MapPin,
+  Pencil,
   Plus,
   Search,
   ShieldCheck,
   Trash2,
+  Unlink,
   Users,
   X,
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { SchoolEnrollmentDialog } from './SchoolEnrollmentDialog';
 import { SchoolMeetingWorkspace } from './SchoolMeetingWorkspace';
 
 type School = {
@@ -84,11 +87,33 @@ const STATUS_LABELS: Record<string, string> = {
   NOT_HELD: 'Não realizada',
 };
 
+const ENROLLMENT_TYPE_LABELS: Record<string, string> = {
+  PRIMARY_SCHOOL: 'Escola principal',
+  SECONDARY_SCHOOL: 'Escola secundária',
+  SUPPORT_INSTITUTION: 'Instituição de apoio',
+  HOME_EDUCATION: 'Educação domiciliar',
+  COURSE: 'Curso',
+  OTHER: 'Outro vínculo',
+};
+
+const SHIFT_LABELS: Record<string, string> = {
+  MORNING: 'Manhã',
+  AFTERNOON: 'Tarde',
+  EVENING: 'Noite',
+  FULL_TIME: 'Integral',
+  OTHER: 'Outro turno',
+};
+
 const formatDateTime = (value?: string | null) => {
   if (!value) return 'Não informada';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return 'Não informada';
   return parsed.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+};
+
+const formatDateOnly = (value?: string | null) => {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : '';
 };
 
 const Modal = ({ title, children, onClose, wide = false }: { title: string; children: React.ReactNode; onClose: () => void; wide?: boolean }) => (
@@ -103,7 +128,19 @@ const Modal = ({ title, children, onClose, wide = false }: { title: string; chil
   </div>
 );
 
-export function SchoolsManagement({ patients = [], professionals = [], userRole = 'coordinator' }: { patients?: any[]; professionals?: any[]; userRole?: string }) {
+export function SchoolsManagement({
+  patients = [],
+  professionals = [],
+  userRole = 'coordinator',
+  onOpenPatient,
+  onScheduleSchoolSession,
+}: {
+  patients?: any[];
+  professionals?: any[];
+  userRole?: string;
+  onOpenPatient?: (patientId: string, patientName?: string) => void;
+  onScheduleSchoolSession?: (enrollment: any) => void;
+}) {
   const [schools, setSchools] = useState<School[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -136,6 +173,10 @@ export function SchoolsManagement({ patients = [], professionals = [], userRole 
   const [reviewCounts, setReviewCounts] = useState<Record<string,number>>({});
   const [reviewLoading, setReviewLoading] = useState(false);
   const [pendingReviewForNewSchool, setPendingReviewForNewSchool] = useState<any>(null);
+  const [enrollmentDialog, setEnrollmentDialog] = useState<any | null | undefined>(undefined);
+  const [endingEnrollment, setEndingEnrollment] = useState<any | null>(null);
+  const [endingReason, setEndingReason] = useState('');
+  const [endingIdempotencyKey, setEndingIdempotencyKey] = useState('');
   const [schoolForm, setSchoolForm] = useState({ displayName: '', legalName: '', schoolType: 'OTHER', educationNetwork: 'OTHER', taxId: '', inepCode: '', email: '', phone: '', whatsapp: '', postalCode: '', street: '', streetNumber: '', district: '', city: '', state: '', notes: '' });
   const [meetingForm, setMeetingForm] = useState({ title: 'Reunião escolar', meetingType: 'SCHOOL_MEETING', scheduledStart: '', scheduledEnd: '', status: 'DRAFT', locationType: 'SCHOOL', location: '', onlineMeetingUrl: '', agenda: '', responsibleProfessionalId: '' });
 
@@ -219,6 +260,25 @@ export function SchoolsManagement({ patients = [], professionals = [], userRole 
     if (!selectedSchool?.id) return;
     const result = await dataService.getSchoolDetail(selectedSchool.id);
     if (result?.success) setSelectedSchool(result.data);
+  };
+
+  const endSchoolEnrollment = async () => {
+    if (!endingEnrollment?.patient_id || !endingEnrollment?.id || !endingReason.trim()) return;
+    setSaving(true);
+    setNotice('');
+    const result = await dataService.endPatientSchoolEnrollment(endingEnrollment.patient_id, endingEnrollment.id, {
+      reason: endingReason.trim(),
+      idempotencyKey: endingIdempotencyKey,
+    });
+    if (result?.success) {
+      setNotice('Vínculo encerrado sem apagar o histórico escolar.');
+      setEndingEnrollment(null);
+      setEndingReason('');
+      await Promise.all([refreshSelectedSchool(), loadSchoolPatients()]);
+    } else {
+      setNotice(result?.message || 'Não foi possível encerrar o vínculo escolar.');
+    }
+    setSaving(false);
   };
 
   const openSchoolDocument = async (link: any) => {
@@ -347,8 +407,45 @@ export function SchoolsManagement({ patients = [], professionals = [], userRole 
           ] as const).map(([id,label,Icon]) => <button key={id} type="button" onClick={() => setActiveDetailTab(id)} className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold ${activeDetailTab===id?'bg-violet-100 text-violet-700':'bg-slate-50 text-slate-600'}`}><Icon size={15} />{label}</button>)}</div>
           {activeDetailTab === 'summary' && <div className="space-y-4"><div className="grid grid-cols-1 gap-4 lg:grid-cols-3"><div className="rounded-2xl bg-slate-50 p-4 lg:col-span-2"><h3 className="font-semibold text-slate-900">Dados institucionais</h3><dl className="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2"><div><dt className="text-xs text-slate-400">Local</dt><dd className="font-medium text-slate-700">{[selectedSchool.city,selectedSchool.state].filter(Boolean).join(' / ') || 'Não informado'}</dd></div><div><dt className="text-xs text-slate-400">Rede</dt><dd className="font-medium text-slate-700">{NETWORK_LABELS[selectedSchool.education_network] || 'Outra'}</dd></div><div><dt className="text-xs text-slate-400">Tipo</dt><dd className="font-medium text-slate-700">{TYPE_LABELS[selectedSchool.school_type] || 'Outro'}</dd></div><div><dt className="text-xs text-slate-400">Contatos ativos</dt><dd className="font-medium text-slate-700">{selectedSchool.contacts?.filter((c:any)=>c.is_active).length || 0}</dd></div></dl></div><div className="rounded-2xl border border-violet-100 bg-violet-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-violet-500">Pacientes atuais</p><p className="mt-2 text-3xl font-semibold text-violet-900">{new Set((selectedSchool.enrollments||[]).filter((e:any)=>e.is_current).map((e:any)=>e.patient_id)).size}</p><button type="button" onClick={() => setActiveDetailTab('patients')} className="mt-4 text-sm font-semibold text-violet-700">Abrir vínculos →</button></div></div><section className="rounded-2xl border border-slate-100 p-4"><div className="flex items-center justify-between"><div><h3 className="font-semibold text-slate-900">Unidades e campi</h3><p className="text-xs text-slate-500">Instituição e unidade permanecem entidades distintas.</p></div>{canManage&&<button onClick={()=>{setEditingUnit(null);setUnitForm({name:'',code:'',city:'',state:'',phone:'',isActive:true,reason:''});setShowUnitForm(true)}} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white"><Plus size={14} className="mr-1 inline"/>Unidade</button>}</div><div className="mt-3 grid gap-2 md:grid-cols-2">{(selectedSchool.units||[]).map((unit:any)=><button key={unit.id} type="button" onClick={()=>{if(!canManage)return;setEditingUnit(unit);setUnitForm({name:unit.name||'',code:unit.code||'',city:unit.city||'',state:unit.state||'',phone:unit.phone||'',isActive:unit.is_active!==false,reason:''});setShowUnitForm(true)}} className="rounded-2xl border border-slate-100 p-3 text-left"><p className="font-semibold text-slate-800">{unit.name}</p><p className="text-xs text-slate-500">{[unit.city,unit.state].filter(Boolean).join(' / ')||'Endereço não informado'} · {unit.is_active?'Ativa':'Arquivada'}</p></button>)}</div></section></div>}
           {activeDetailTab === 'patients' && <div className="space-y-4"><div className="grid grid-cols-1 gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-4"><select value={patientFilter.unitId} onChange={(e)=>setPatientFilter((f)=>({...f,unitId:e.target.value}))} className="rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="">Todas as unidades</option>{(selectedSchool.units||[]).map((u:any)=><option key={u.id} value={u.id}>{u.name}</option>)}</select><input placeholder="Série/ano" value={patientFilter.gradeLevel} onChange={(e)=>setPatientFilter((f)=>({...f,gradeLevel:e.target.value}))} className="rounded-xl border border-slate-200 p-3 text-sm" /><input placeholder="Turma" value={patientFilter.className} onChange={(e)=>setPatientFilter((f)=>({...f,className:e.target.value}))} className="rounded-xl border border-slate-200 p-3 text-sm" /><select value={patientFilter.shift} onChange={(e)=>setPatientFilter((f)=>({...f,shift:e.target.value}))} className="rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="">Todos os turnos</option><option value="MORNING">Manhã</option><option value="AFTERNOON">Tarde</option><option value="EVENING">Noite</option><option value="FULL_TIME">Integral</option></select></div>
-            <div className="flex flex-wrap items-center justify-between gap-3"><label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700"><input type="checkbox" checked={allSelected} onChange={() => setSelectedPatientIds(allSelected ? [] : filteredPatientIds)} className="h-4 w-4 rounded" /> Selecionar resultados</label><button type="button" disabled={selectedPatientIds.length===0} onClick={()=>setShowMeeting(true)} className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-40"><CalendarDays size={17}/> Criar reunião escolar ({selectedPatientIds.length})</button></div>
-            {patientLoading ? <div className="py-12 text-center"><Loader2 className="mx-auto animate-spin text-violet-600" /></div> : <div className="space-y-2">{schoolPatients.map((row:any)=><label key={row.id} className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-100 p-4 hover:bg-slate-50"><input type="checkbox" checked={selectedPatientIds.includes(row.patient_id)} onChange={()=>setSelectedPatientIds((ids)=>ids.includes(row.patient_id)?ids.filter((id)=>id!==row.patient_id):[...ids,row.patient_id])} className="h-4 w-4 rounded"/><div className="min-w-0 flex-1"><p className="truncate font-semibold text-slate-900">{row.patient?.name || 'Paciente'}</p><p className="text-xs text-slate-500">{[row.school_units?.name,row.grade_level,row.class_name,row.shift].filter(Boolean).join(' · ') || 'Vínculo sem detalhes de turma'}</p></div><span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${(row.consents||[]).some((c:any)=>c.status==='AUTHORIZED')?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>{(row.consents||[]).some((c:any)=>c.status==='AUTHORIZED')?'Autorização registrada':'Revisar autorização'}</span></label>)}</div>}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <label className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-slate-700">
+                <input type="checkbox" checked={allSelected} onChange={() => setSelectedPatientIds(allSelected ? [] : filteredPatientIds)} className="h-4 w-4 rounded" /> Selecionar resultados
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {canManage && <button type="button" onClick={() => setEnrollmentDialog(null)} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-violet-200 px-4 text-sm font-medium text-violet-700"><Plus size={17}/> Vincular paciente</button>}
+                <button type="button" disabled={selectedPatientIds.length===0} onClick={()=>setShowMeeting(true)} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-sm font-medium text-white disabled:opacity-40"><CalendarDays size={17}/> Criar reunião escolar ({selectedPatientIds.length})</button>
+              </div>
+            </div>
+            {patientLoading ? (
+              <div className="py-12 text-center"><Loader2 className="mx-auto animate-spin text-violet-600" /></div>
+            ) : (
+              <div className="space-y-2">
+                {schoolPatients.map((row:any) => (
+                  <div key={row.id} className="flex flex-col gap-3 rounded-2xl border border-slate-100 p-4 hover:bg-slate-50 sm:flex-row sm:items-center">
+                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                      <input type="checkbox" checked={selectedPatientIds.includes(row.patient_id)} onChange={()=>setSelectedPatientIds((ids)=>ids.includes(row.patient_id)?ids.filter((id)=>id!==row.patient_id):[...ids,row.patient_id])} className="h-4 w-4 rounded"/>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-semibold text-slate-900">{row.patient?.name || 'Paciente'}</p>
+                        <p className="text-xs text-slate-500">
+                          {[row.school_units?.name,ENROLLMENT_TYPE_LABELS[row.enrollment_type] || 'Vínculo escolar',row.grade_level,row.class_name,SHIFT_LABELS[row.shift] || null,formatDateOnly(row.started_at) ? `desde ${formatDateOnly(row.started_at)}` : ''].filter(Boolean).join(' · ') || 'Vínculo sem detalhes de turma'}
+                        </p>
+                      </div>
+                    </label>
+                    <span className={`w-fit rounded-full px-2 py-1 text-[10px] font-medium ${(row.consents||[]).some((c:any)=>c.status==='AUTHORIZED')?'bg-emerald-50 text-emerald-700':'bg-amber-50 text-amber-700'}`}>
+                      {(row.consents||[]).some((c:any)=>c.status==='AUTHORIZED')?'Autorização registrada':'Revisar autorização'}
+                    </span>
+                    <span className="w-fit rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600">Vínculo atual</span>
+                    <div className="flex flex-wrap gap-1">
+                      {onOpenPatient && <button type="button" onClick={()=>onOpenPatient(String(row.patient_id), row.patient?.name)} className="min-h-10 min-w-10 rounded-xl border border-slate-200 p-2 text-slate-600" aria-label={`Abrir paciente ${row.patient?.name || ''}`}><ExternalLink size={15} className="mx-auto"/></button>}
+                      <button type="button" onClick={()=>{setSelectedPatientIds([String(row.patient_id)]);setShowMeeting(true)}} className="min-h-10 min-w-10 rounded-xl border border-slate-200 p-2 text-slate-600" aria-label={`Criar reunião para ${row.patient?.name || 'paciente'}`}><CalendarDays size={15} className="mx-auto"/></button>
+                      {onScheduleSchoolSession && <button type="button" onClick={()=>onScheduleSchoolSession(row)} className="min-h-10 min-w-10 rounded-xl border border-emerald-200 p-2 text-emerald-700" aria-label={`Agendar sessão na escola para ${row.patient?.name || 'paciente'}`}><Plus size={15} className="mx-auto"/></button>}
+                      {canManage && <button type="button" onClick={()=>setEnrollmentDialog(row)} className="min-h-10 min-w-10 rounded-xl border border-violet-200 p-2 text-violet-700" aria-label={`Editar vínculo de ${row.patient?.name || 'paciente'}`}><Pencil size={15} className="mx-auto"/></button>}
+                      {canManage && <button type="button" onClick={()=>{setEndingEnrollment(row);setEndingReason('');setEndingIdempotencyKey(crypto.randomUUID())}} className="min-h-10 min-w-10 rounded-xl border border-rose-200 p-2 text-rose-600" aria-label={`Encerrar vínculo de ${row.patient?.name || 'paciente'}`}><Unlink size={15} className="mx-auto"/></button>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>}
           {activeDetailTab === 'contacts' && <div><div className="mb-3 flex justify-end">{canManage&&<button onClick={()=>{setEditingContact(null);setContactForm({name:'',role:'OTHER',schoolUnitId:'',email:'',phone:'',whatsapp:'',isPrimary:false,isActive:true,reason:''});setShowContactForm(true)}} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white"><Plus size={14} className="mr-1 inline"/>Contato</button>}</div><div className="grid grid-cols-1 gap-3 md:grid-cols-2">{(selectedSchool.contacts||[]).length ? selectedSchool.contacts.map((contact:any)=><button type="button" onClick={()=>{if(!canManage)return;setEditingContact(contact);setContactForm({name:contact.name||'',role:contact.role||'OTHER',schoolUnitId:contact.school_unit_id||'',email:contact.email||'',phone:contact.phone||'',whatsapp:contact.whatsapp||'',isPrimary:Boolean(contact.is_primary),isActive:contact.is_active!==false,reason:''});setShowContactForm(true)}} key={contact.id} className="rounded-2xl border border-slate-100 p-4 text-left"><div className="flex items-start justify-between"><div><p className="font-semibold text-slate-900">{contact.name}</p><p className="text-xs text-slate-500">{contact.role} · {contact.is_active?'Ativo':'Inativo'}</p></div>{contact.is_primary&&<span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] font-semibold text-violet-700">Principal</span>}</div><div className="mt-3 space-y-1 text-sm text-slate-600"><p>{contact.email||'E-mail não informado'}</p><p>{contact.whatsapp||contact.phone||'Telefone não informado'}</p></div></button>):<div className="md:col-span-2 rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">Nenhum contato cadastrado.</div>}</div></div>}
           {activeDetailTab === 'meetings' && <div className="space-y-3"><div className="flex justify-end"><button type="button" onClick={()=>{setActiveDetailTab('patients');setShowMeeting(true)}} className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white"><Plus size={16}/> Nova reunião em lote</button></div>{(selectedSchool.meetings||[]).map((meeting:any)=><button type="button" onClick={()=>setSelectedMeetingId(meeting.id)} key={meeting.id} className="w-full rounded-2xl border border-slate-100 p-4 text-left hover:border-violet-200"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-semibold text-slate-900">{meeting.title}</p><p className="mt-1 text-xs text-slate-500">{MEETING_TYPE_LABELS[meeting.meeting_type]||meeting.meeting_type} · {formatDateTime(meeting.scheduled_start)}</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">{STATUS_LABELS[meeting.status]||meeting.status}</span></div></button>)}</div>}
@@ -367,6 +464,22 @@ export function SchoolsManagement({ patients = [], professionals = [], userRole 
       {showUnitForm && <Modal title={editingUnit?'Editar unidade':'Nova unidade'} onClose={()=>setShowUnitForm(false)}><div className="grid gap-3 sm:grid-cols-2"><input value={unitForm.name} onChange={(e)=>setUnitForm((v)=>({...v,name:e.target.value}))} placeholder="Nome da unidade" className="rounded-xl border border-slate-200 p-3 sm:col-span-2"/><input value={unitForm.city} onChange={(e)=>setUnitForm((v)=>({...v,city:e.target.value}))} placeholder="Cidade" className="rounded-xl border border-slate-200 p-3"/><input value={unitForm.state} onChange={(e)=>setUnitForm((v)=>({...v,state:e.target.value.toUpperCase().slice(0,2)}))} placeholder="UF" className="rounded-xl border border-slate-200 p-3"/><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={unitForm.isActive} onChange={(e)=>setUnitForm((v)=>({...v,isActive:e.target.checked}))}/>Unidade ativa</label><input value={unitForm.reason} onChange={(e)=>setUnitForm((v)=>({...v,reason:e.target.value}))} placeholder="Motivo ao arquivar" className="rounded-xl border border-slate-200 p-3"/></div><div className="mt-5 flex justify-end"><button disabled={saving||!unitForm.name.trim()} onClick={()=>void saveUnit()} className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-40">Salvar unidade</button></div></Modal>}
       {showContactForm && <Modal title={editingContact?'Editar contato':'Novo contato'} onClose={()=>setShowContactForm(false)}><div className="grid gap-3 sm:grid-cols-2"><input value={contactForm.name} onChange={(e)=>setContactForm((v)=>({...v,name:e.target.value}))} placeholder="Nome" className="rounded-xl border border-slate-200 p-3 sm:col-span-2"/><select value={contactForm.role} onChange={(e)=>setContactForm((v)=>({...v,role:e.target.value}))} className="rounded-xl border border-slate-200 p-3"><option value="DIRECTOR">Direção</option><option value="PEDAGOGICAL_COORDINATOR">Coordenação</option><option value="TEACHER">Professor</option><option value="SCHOOL_MEDIATOR">Mediador</option><option value="SECRETARY">Secretaria</option><option value="OTHER">Outro</option></select><select value={contactForm.schoolUnitId} onChange={(e)=>setContactForm((v)=>({...v,schoolUnitId:e.target.value}))} className="rounded-xl border border-slate-200 p-3"><option value="">Instituição geral</option>{(selectedSchool?.units||[]).map((u:any)=><option key={u.id} value={u.id}>{u.name}</option>)}</select><input value={contactForm.email} onChange={(e)=>setContactForm((v)=>({...v,email:e.target.value}))} placeholder="E-mail" className="rounded-xl border border-slate-200 p-3"/><input value={contactForm.phone} onChange={(e)=>setContactForm((v)=>({...v,phone:e.target.value}))} placeholder="Telefone" className="rounded-xl border border-slate-200 p-3"/><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={contactForm.isPrimary} onChange={(e)=>setContactForm((v)=>({...v,isPrimary:e.target.checked}))}/>Contato principal</label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={contactForm.isActive} onChange={(e)=>setContactForm((v)=>({...v,isActive:e.target.checked}))}/>Contato ativo</label></div><div className="mt-5 flex justify-end"><button disabled={saving||!contactForm.name.trim()} onClick={()=>void saveContact()} className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-40">Salvar contato</button></div></Modal>}
       {reviewOpen && <Modal title="Revisão de escolas migradas" onClose={()=>setReviewOpen(false)} wide><div className="mb-4 flex flex-wrap gap-2">{Object.entries(reviewCounts).map(([status,count])=><span key={status} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">{status}: {count}</span>)}</div>{reviewLoading?<div className="py-12 text-center"><Loader2 className="mx-auto animate-spin"/></div>:<div className="space-y-2">{reviewRows.map((row:any)=><div key={row.id} className="rounded-2xl border border-slate-100 p-4"><p className="font-semibold text-slate-900">{row.patients?.name||'Paciente'}</p><p className="mt-1 text-sm text-slate-600">Texto original: “{row.original_value}”</p><p className="text-xs text-slate-400">{row.source_field||'Campo legado'} · {row.status}</p>{['PENDING','AMBIGUOUS','DEFERRED'].includes(row.status)&&<div className="mt-3 flex flex-wrap gap-2"><select id={`review-school-${row.id}`} className="rounded-xl border border-slate-200 p-2 text-sm"><option value="">Selecionar escola</option>{schools.map((sc:any)=><option key={sc.id} value={sc.id}>{sc.display_name}</option>)}</select><button onClick={()=>{const el=document.getElementById(`review-school-${row.id}`) as HTMLSelectElement; if(el?.value)void resolveReview(row,'ASSOCIATE',el.value)}} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white">Associar</button><button onClick={()=>startSchoolFromReview(row)} className="rounded-xl border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700">Criar nova escola</button><button onClick={()=>void resolveReview(row,'IGNORE')} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold">Ignorar</button><button onClick={()=>void resolveReview(row,'NOT_SCHOOL')} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold">Não é escola</button><button onClick={()=>void resolveReview(row,'DEFER')} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold">Adiar</button></div>}</div>)}{!reviewRows.length&&<div className="rounded-2xl border border-dashed border-slate-200 p-10 text-center text-sm text-slate-500">Nenhum item pendente.</div>}</div>}</Modal>}
+      <SchoolEnrollmentDialog
+        open={enrollmentDialog !== undefined && Boolean(selectedSchool)}
+        fixedSchool={selectedSchool}
+        fixedPatient={enrollmentDialog?.patient ? { ...enrollmentDialog.patient } : null}
+        enrollment={enrollmentDialog || null}
+        onClose={() => setEnrollmentDialog(undefined)}
+        onSaved={async () => {
+          setNotice(enrollmentDialog?.id ? 'Vínculo escolar atualizado e persistido.' : 'Paciente vinculado à escola com sucesso.');
+          await Promise.all([refreshSelectedSchool(), loadSchoolPatients()]);
+        }}
+      />
+      {endingEnrollment && <Modal title="Encerrar vínculo escolar" onClose={()=>setEndingEnrollment(null)}>
+        <p className="text-sm text-slate-600">O vínculo de <strong className="font-medium text-slate-800">{endingEnrollment.patient?.name || 'paciente'}</strong> deixará de ser atual. O histórico permanecerá disponível.</p>
+        <label className="mt-4 block"><span className="mb-1 block text-sm font-medium text-slate-700">Motivo do encerramento *</span><textarea value={endingReason} onChange={(event)=>setEndingReason(event.target.value)} className="min-h-24 w-full rounded-xl border border-slate-200 p-3 text-sm outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"/></label>
+        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><button type="button" onClick={()=>setEndingEnrollment(null)} className="min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-medium text-slate-600">Cancelar</button><button type="button" disabled={saving||!endingReason.trim()} onClick={()=>void endSchoolEnrollment()} className="min-h-11 rounded-xl bg-rose-600 px-4 text-sm font-medium text-white disabled:opacity-50">{saving?'Encerrando…':'Encerrar vínculo'}</button></div>
+      </Modal>}
       {selectedMeetingId && <SchoolMeetingWorkspace meetingId={selectedMeetingId} school={selectedSchool} professionals={professionals} userRole={userRole} onClose={()=>setSelectedMeetingId('')} onChanged={()=>void refreshSelectedSchool()}/>}
     </section>
   );
