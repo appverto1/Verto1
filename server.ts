@@ -23225,14 +23225,14 @@ async function startServer() {
       return res.status(400).json({ success: false, error: 'Nenhum agendamento enviado.' });
     }
 
-    const existingRows = params.requireExisting
+    const existingRowsForPreparation = params.requireExisting
       ? await readPersistedAppointmentRows(
           rawAppointments.map((appointment: any) => sanitizeString(appointment?.id, 120)),
           clinicId,
         )
       : [];
     const existingById = new Map(
-      existingRows.map((appointment: any) => [sanitizeString(appointment?.id, 120), appointment]),
+      existingRowsForPreparation.map((appointment: any) => [sanitizeString(appointment?.id, 120), appointment]),
     );
     const preparedAppointments: any[] = [];
     for (const rawAppointment of rawAppointments) {
