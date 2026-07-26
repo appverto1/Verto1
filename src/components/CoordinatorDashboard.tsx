@@ -774,6 +774,23 @@ export function CoordinatorDashboard({
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
   const [patientTherapistFilter, setPatientTherapistFilter] = useState<string>("all");
   const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
+  const [patientSchoolFilter, setPatientSchoolFilter] = useState("");
+  const [patientSchoolUnitFilter, setPatientSchoolUnitFilter] = useState("");
+  const [patientSchoolGradeFilter, setPatientSchoolGradeFilter] = useState("");
+  const [patientSchoolClassFilter, setPatientSchoolClassFilter] = useState("");
+  const [patientSchoolShiftFilter, setPatientSchoolShiftFilter] = useState("");
+  const [patientSchoolConsentFilter, setPatientSchoolConsentFilter] = useState("");
+  const [patientSchoolIncludeHistorical, setPatientSchoolIncludeHistorical] = useState(false);
+  const [patientSchoolPage, setPatientSchoolPage] = useState(1);
+  const [patientSchoolPagination, setPatientSchoolPagination] = useState<any>(null);
+  const [patientSchoolOptions, setPatientSchoolOptions] = useState<any[]>([]);
+  const [schoolFilteredPatientRows, setSchoolFilteredPatientRows] = useState<any[]>([]);
+  const [schoolPatientFilterLoading, setSchoolPatientFilterLoading] = useState(false);
+  const [selectedSchoolPatientIds, setSelectedSchoolPatientIds] = useState<string[]>([]);
+  const [schoolBatchMeetingOpen, setSchoolBatchMeetingOpen] = useState(false);
+  const [schoolBatchMeetingSaving, setSchoolBatchMeetingSaving] = useState(false);
+  const [schoolBatchMeetingNotice, setSchoolBatchMeetingNotice] = useState("");
+  const [schoolBatchMeetingForm, setSchoolBatchMeetingForm] = useState({ title: "Reunião escolar", scheduledStart: "", scheduledEnd: "", meetingType: "SCHOOL_MEETING", responsibleProfessionalId: "", agenda: "" });
 
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
     if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };
@@ -985,6 +1002,74 @@ export function CoordinatorDashboard({
     return birthDate?.day === today.getDate() && birthDate?.month === today.getMonth() + 1;
   };
 
+  useEffect(() => {
+    let active = true;
+    dataService.getSchools({ page: 1, pageSize: 100 })
+      .then((result: any) => { if (active && result?.success) setPatientSchoolOptions(result.data || []); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    setPatientSchoolPage(1);
+  }, [patientSchoolFilter, patientSchoolUnitFilter, patientSchoolGradeFilter, patientSchoolClassFilter, patientSchoolShiftFilter, patientSchoolConsentFilter, patientSchoolIncludeHistorical, patientTherapistFilter]);
+
+  useEffect(() => {
+    if (!patientSchoolFilter) {
+      setSchoolFilteredPatientRows([]);
+      setPatientSchoolPagination(null);
+      setSelectedSchoolPatientIds([]);
+      return;
+    }
+    let active = true;
+    setSchoolPatientFilterLoading(true);
+    dataService.searchSchoolPatients({
+      schoolId: patientSchoolFilter,
+      unitId: patientSchoolUnitFilter,
+      gradeLevel: patientSchoolGradeFilter,
+      className: patientSchoolClassFilter,
+      shift: patientSchoolShiftFilter,
+      consentStatus: patientSchoolConsentFilter,
+      includeHistorical: patientSchoolIncludeHistorical,
+      professionalId: patientTherapistFilter !== "all" && patientTherapistFilter !== "unassigned" ? patientTherapistFilter : "",
+      page: patientSchoolPage,
+      pageSize: 50
+    }).then((result: any) => {
+      if (!active) return;
+      setSchoolFilteredPatientRows(result?.success ? result.data || [] : []);
+      setPatientSchoolPagination(result?.success ? result.pagination || null : null);
+      setSchoolPatientFilterLoading(false);
+    }).catch(() => {
+      if (active) { setSchoolFilteredPatientRows([]); setPatientSchoolPagination(null); setSchoolPatientFilterLoading(false); }
+    });
+    return () => { active = false; };
+  }, [patientSchoolFilter, patientSchoolUnitFilter, patientSchoolGradeFilter, patientSchoolClassFilter, patientSchoolShiftFilter, patientSchoolConsentFilter, patientSchoolIncludeHistorical, patientSchoolPage, patientTherapistFilter]);
+
+  const createSchoolBatchMeetingFromPatients = async () => {
+    if (!patientSchoolFilter || selectedSchoolPatientIds.length === 0) return;
+    setSchoolBatchMeetingSaving(true);
+    setSchoolBatchMeetingNotice("");
+    const result = await dataService.createSchoolMeetingBatch({
+      ...schoolBatchMeetingForm,
+      schoolId: patientSchoolFilter,
+      schoolUnitId: patientSchoolUnitFilter || null,
+      patientIds: selectedSchoolPatientIds,
+      status: "SCHEDULED",
+      timezone: "America/Sao_Paulo",
+      locationType: "SCHOOL",
+      idempotencyKey: crypto.randomUUID()
+    });
+    if (result?.success) {
+      setSchoolBatchMeetingOpen(false);
+      setSelectedSchoolPatientIds([]);
+      setSchoolBatchMeetingNotice("Reunião escolar criada e adicionada à agenda.");
+      window.dispatchEvent(new CustomEvent("verto:school-meeting-event", { detail: result.meeting || result.data }));
+    } else {
+      setSchoolBatchMeetingNotice(result?.message || "Não foi possível criar a reunião escolar.");
+    }
+    setSchoolBatchMeetingSaving(false);
+  };
+
   const roleScopedPatients = useMemo(() => {
     const currentTherapistId = String(user?.id || "").trim();
     return isTherapist
@@ -1001,7 +1086,17 @@ export function CoordinatorDashboard({
   );
 
   const visiblePatients = useMemo(() => {
-    const patientsAllowedForRole = roleScopedPatients;
+    const patientsAllowedForRole = patientSchoolFilter
+      ? schoolFilteredPatientRows.map((row: any) => ({
+          ...(row.patient || {}),
+          schoolEnrollment: row,
+          school: row.schools || null,
+          schoolUnit: row.school_units || null,
+          schoolConsent: Array.isArray(row.consents) ? row.consents[0] || null : null,
+          lastSchoolMeeting: row.lastMeeting || null,
+          nextSchoolMeeting: row.nextMeeting || null
+        }))
+      : roleScopedPatients;
 
     let filteredPatients = patientsAllowedForRole;
     if (patientTherapistFilter !== "all" && !isTherapist) {
@@ -1023,7 +1118,7 @@ export function CoordinatorDashboard({
     }
 
     return filteredPatients;
-  }, [isTherapist, patientQuickFilter, patientTherapistFilter, roleScopedPatients]);
+  }, [isTherapist, patientQuickFilter, patientTherapistFilter, roleScopedPatients, patientSchoolFilter, schoolFilteredPatientRows]);
 
   const visiblePatientsWithoutQuickFilter = useMemo(() => {
     if (patientTherapistFilter === "all" || isTherapist) return roleScopedPatients;
@@ -11209,6 +11304,23 @@ export function CoordinatorDashboard({
                       </select>
                     </div>
                   )}
+                  <div className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Escola</span><select value={patientSchoolFilter} onChange={(event) => { setPatientSchoolFilter(event.target.value); setPatientSchoolUnitFilter(""); setSelectedSchoolPatientIds([]); }} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none"><option value="">Todas as escolas</option>{patientSchoolOptions.map((school: any) => <option key={school.id} value={school.id}>{school.display_name}</option>)}</select></label>
+                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Unidade</span><select value={patientSchoolUnitFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolUnitFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50"><option value="">Todas as unidades</option>{(patientSchoolOptions.find((school: any) => String(school.id) === patientSchoolFilter)?.units || []).map((unit: any) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
+                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Série/ano</span><input value={patientSchoolGradeFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolGradeFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50" /></label>
+                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Turma</span><input value={patientSchoolClassFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolClassFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50" /></label>
+                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Turno</span><select value={patientSchoolShiftFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolShiftFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50"><option value="">Todos</option><option value="MORNING">Manhã</option><option value="AFTERNOON">Tarde</option><option value="EVENING">Noite</option><option value="FULL_TIME">Integral</option></select></label>
+                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Autorização</span><select value={patientSchoolConsentFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolConsentFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50"><option value="">Todos os estados</option><option value="AUTHORIZED">Autorizada</option><option value="PENDING">Pendente</option><option value="EXPIRED">Expirada</option><option value="REVOKED">Revogada</option></select></label>
+                    <label className="flex items-end"><span className="flex min-h-[46px] w-full items-center gap-2 rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700"><input type="checkbox" checked={patientSchoolIncludeHistorical} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolIncludeHistorical(event.target.checked)} />Incluir vínculos históricos</span></label>
+                  </div>
+                  {patientSchoolFilter && (
+                    <div className="flex flex-col gap-3 rounded-2xl border border-violet-100 bg-violet-50/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-violet-800"><GraduationCap size={18}/><span>Filtro escolar ativo</span><span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-black uppercase">{patientSchoolPagination?.total ?? visiblePatients.length} paciente(s)</span>{schoolPatientFilterLoading && <span className="text-xs font-medium">Atualizando…</span>}</div>
+                      <div className="flex flex-wrap gap-2"><button type="button" onClick={() => { setPatientSchoolFilter(""); setPatientSchoolUnitFilter(""); setPatientSchoolGradeFilter(""); setPatientSchoolClassFilter(""); setPatientSchoolShiftFilter(""); setPatientSchoolConsentFilter(""); setPatientSchoolIncludeHistorical(false); setPatientSchoolPage(1); }} className="rounded-xl bg-white px-3 py-2 text-xs font-black uppercase text-slate-600">Limpar</button><button type="button" disabled={selectedSchoolPatientIds.length===0} onClick={() => setSchoolBatchMeetingOpen(true)} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-black uppercase text-white disabled:opacity-40">Criar reunião ({selectedSchoolPatientIds.length})</button></div>
+                    </div>
+                  )}
+                  {schoolBatchMeetingNotice && <div className="rounded-2xl border border-slate-100 bg-white p-3 text-sm font-semibold text-slate-600">{schoolBatchMeetingNotice}</div>}
+                  {patientSchoolFilter && patientSchoolPagination && patientSchoolPagination.totalPages > 1 && <div className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white p-3 text-sm text-slate-600"><span>Página {patientSchoolPagination.page} de {patientSchoolPagination.totalPages}</span><div className="flex gap-2"><button type="button" disabled={patientSchoolPage <= 1 || schoolPatientFilterLoading} onClick={() => setPatientSchoolPage((page) => Math.max(1, page - 1))} className="rounded-xl border border-slate-200 px-3 py-2 disabled:opacity-40">Anterior</button><button type="button" disabled={!patientSchoolPagination.hasNextPage || schoolPatientFilterLoading} onClick={() => setPatientSchoolPage((page) => page + 1)} className="rounded-xl border border-slate-200 px-3 py-2 disabled:opacity-40">Próxima</button></div></div>}
                   {patientQuickFilter === "birthdaysToday" && (
                     <div className="flex flex-col gap-3 rounded-2xl border border-pink-100 bg-pink-50/70 p-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex items-center gap-2 text-sm font-bold text-pink-700">
@@ -11263,6 +11375,7 @@ export function CoordinatorDashboard({
                           : "border-slate-100 bg-slate-50 hover:border-blue-500/30"
                       }`}
                     >
+                      {patientSchoolFilter && <button type="button" onClick={(event) => { event.stopPropagation(); setSelectedSchoolPatientIds((ids) => ids.includes(String(patient.id)) ? ids.filter((id) => id !== String(patient.id)) : [...ids, String(patient.id)]); }} className={`absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-lg border ${selectedSchoolPatientIds.includes(String(patient.id)) ? "border-violet-500 bg-violet-600 text-white" : "border-slate-200 bg-white text-slate-400"}`} aria-label={selectedSchoolPatientIds.includes(String(patient.id)) ? "Remover paciente da seleção" : "Selecionar paciente para reunião"}>{selectedSchoolPatientIds.includes(String(patient.id)) ? <CheckCircle2 size={15}/> : <Plus size={15}/>}</button>}
                       <div className="flex items-center gap-4 mb-4">
                         <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white rounded-2xl overflow-hidden flex items-center justify-center font-bold text-slate-900 shadow-sm group-hover:scale-110 transition-transform">
                           <SecureImage
@@ -13351,6 +13464,16 @@ export function CoordinatorDashboard({
                 Cadastrar Paciente
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {schoolBatchMeetingOpen && (
+        <div className="fixed inset-0 z-[180] flex items-end justify-center bg-slate-950/45 p-0 sm:items-center sm:p-4" onClick={() => setSchoolBatchMeetingOpen(false)}>
+          <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] bg-white p-5 shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-violet-600">Reunião escolar em lote</p><h3 className="mt-1 text-xl font-bold text-slate-900">{selectedSchoolPatientIds.length} paciente(s)</h3></div><button type="button" onClick={() => setSchoolBatchMeetingOpen(false)} className="rounded-xl border border-slate-200 p-2" aria-label="Fechar"><X size={18}/></button></div>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2"><label className="sm:col-span-2"><span className="mb-1 block text-xs font-bold text-slate-500">Título</span><input value={schoolBatchMeetingForm.title} onChange={(e)=>setSchoolBatchMeetingForm((f)=>({...f,title:e.target.value}))} className="w-full rounded-xl border border-slate-200 p-3"/></label><label><span className="mb-1 block text-xs font-bold text-slate-500">Início</span><input type="datetime-local" value={schoolBatchMeetingForm.scheduledStart} onChange={(e)=>setSchoolBatchMeetingForm((f)=>({...f,scheduledStart:e.target.value}))} className="w-full rounded-xl border border-slate-200 p-3"/></label><label><span className="mb-1 block text-xs font-bold text-slate-500">Término</span><input type="datetime-local" value={schoolBatchMeetingForm.scheduledEnd} onChange={(e)=>setSchoolBatchMeetingForm((f)=>({...f,scheduledEnd:e.target.value}))} className="w-full rounded-xl border border-slate-200 p-3"/></label><label><span className="mb-1 block text-xs font-bold text-slate-500">Responsável</span><select value={schoolBatchMeetingForm.responsibleProfessionalId} onChange={(e)=>setSchoolBatchMeetingForm((f)=>({...f,responsibleProfessionalId:e.target.value}))} className="w-full rounded-xl border border-slate-200 p-3"><option value="">Selecionar</option>{therapistFilterOptions.map((t:any)=><option key={t.id} value={t.id}>{t.label}</option>)}</select></label><label><span className="mb-1 block text-xs font-bold text-slate-500">Tipo</span><select value={schoolBatchMeetingForm.meetingType} onChange={(e)=>setSchoolBatchMeetingForm((f)=>({...f,meetingType:e.target.value}))} className="w-full rounded-xl border border-slate-200 p-3"><option value="SCHOOL_MEETING">Reunião escolar</option><option value="SCHOOL_VISIT">Visita escolar</option><option value="SCHOOL_OBSERVATION">Observação escolar</option><option value="STAFF_TRAINING">Treinamento escolar</option></select></label><label className="sm:col-span-2"><span className="mb-1 block text-xs font-bold text-slate-500">Pauta geral</span><textarea value={schoolBatchMeetingForm.agenda} onChange={(e)=>setSchoolBatchMeetingForm((f)=>({...f,agenda:e.target.value}))} className="min-h-28 w-full rounded-xl border border-slate-200 p-3"/></label></div>
+            <div className="mt-6 flex justify-end gap-2"><button type="button" onClick={()=>setSchoolBatchMeetingOpen(false)} className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-slate-600">Cancelar</button><button type="button" disabled={schoolBatchMeetingSaving||!schoolBatchMeetingForm.scheduledStart||!schoolBatchMeetingForm.scheduledEnd} onClick={()=>void createSchoolBatchMeetingFromPatients()} className="rounded-xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white disabled:opacity-40">{schoolBatchMeetingSaving?"Criando…":"Agendar reunião"}</button></div>
           </div>
         </div>
       )}

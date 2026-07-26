@@ -32,6 +32,7 @@ import {
   Zap
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { SchoolMeetingWorkspace } from './SchoolMeetingWorkspace';
 import { formatDisplayDate, formatDisplayDateTime, formatDisplayMonthYear } from '../utils/dateFormatting';
 import { formatRescheduleOptionLabel, parseRescheduleRequestPayload } from '../services/portalRescheduleAvailability';
 import { formatMinutesHuman, getActualDurationMinutes, getAppointmentDurationMinutes } from '../utils/scheduling';
@@ -1426,6 +1427,10 @@ export const ClinicalAgendaBoard = ({
   const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [selectedSchoolIds, setSelectedSchoolIds] = useState<string[]>([]);
+  const [selectedSchoolUnitIds, setSelectedSchoolUnitIds] = useState<string[]>([]);
+  const [selectedSchoolEventTypes, setSelectedSchoolEventTypes] = useState<string[]>([]);
+  const [schoolOptions, setSchoolOptions] = useState<any[]>([]);
   const [patientSearch, setPatientSearch] = useState('');
   const [significantOnly, setSignificantOnly] = useState(false);
   const [improvementOnly, setImprovementOnly] = useState(false);
@@ -1438,6 +1443,7 @@ export const ClinicalAgendaBoard = ({
       calendar: true,
       team: true,
       patients: true,
+      school: false,
       location: false,
       type: false,
       status: false
@@ -1460,6 +1466,7 @@ export const ClinicalAgendaBoard = ({
   });
   const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
+  const [selectedSchoolMeetingId, setSelectedSchoolMeetingId] = useState('');
   const [statusActionEvent, setStatusActionEvent] = useState<any>(null);
   const [eventDetail, setEventDetail] = useState<any>(null);
   const [detailState, setDetailState] = useState<{ loading: boolean; error: string }>({ loading: false, error: '' });
@@ -1755,6 +1762,14 @@ export const ClinicalAgendaBoard = ({
   }, [agendaVersion, roomLookup]);
 
   useEffect(() => {
+    let active = true;
+    dataService.getSchools({ page: 1, pageSize: 100 })
+      .then((result: any) => { if (active && result?.success) setSchoolOptions(result.data || []); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     const selectedRoomIds = selectedLocations.filter((item) => item.startsWith('room:')).map((item) => item.slice(5)).filter(Boolean);
     const selectedLocationTypes = selectedLocations.filter((item) => !item.startsWith('room:'));
@@ -1768,6 +1783,9 @@ export const ClinicalAgendaBoard = ({
       status: selectedStatuses.join(','),
       roomId: selectedRoomIds.join(','),
       locationType: selectedLocationTypes.join(','),
+      schoolId: selectedSchoolIds.join(','),
+      unitId: selectedSchoolUnitIds.join(','),
+      schoolMeetingType: selectedSchoolEventTypes.join(','),
       limit: 180
     };
     const key = JSON.stringify(params);
@@ -1785,21 +1803,41 @@ export const ClinicalAgendaBoard = ({
     inFlightRequestRef.current = { key, controller };
 
     setRemoteState((prev) => ({ ...prev, loading: !prev.loaded, refreshing: prev.loaded, error: '' }));
-    dataService.getCalendarEvents({ ...params, signal: controller?.signal })
-      .then((result: any) => {
-        if (cancelled || inFlightRequestRef.current?.key !== key || result?.aborted) return;
-        if (result?.success && Array.isArray(result?.data)) {
+    Promise.allSettled([
+      dataService.getCalendarEvents({ ...params, signal: controller?.signal }),
+      dataService.getSchoolCalendarEvents({
+        from: params.from,
+        to: params.to,
+        schoolId: selectedSchoolIds.join(','),
+        unitId: selectedSchoolUnitIds.join(','),
+        meetingType: selectedSchoolEventTypes.join(','),
+        professionalId: selectedTherapistIds.join(','),
+        patientId: selectedPatientIds.join(',')
+      })
+    ])
+      .then(([clinicalSettled, schoolSettled]: PromiseSettledResult<any>[]) => {
+        const clinicalResult = clinicalSettled.status === 'fulfilled' ? clinicalSettled.value : null;
+        const schoolResult = schoolSettled.status === 'fulfilled' ? schoolSettled.value : null;
+        if (cancelled || inFlightRequestRef.current?.key !== key || clinicalResult?.aborted) return;
+        if (clinicalResult?.success && Array.isArray(clinicalResult?.data)) {
+          const schoolEvents = schoolResult?.success && Array.isArray(schoolResult?.data) ? schoolResult.data : [];
+          const combined = [...clinicalResult.data, ...schoolEvents];
           const fetchedAt = Date.now();
           lastSuccessfulFetchAtRef.current = fetchedAt;
-          cacheRef.current.set(key, { data: result.data, fetchedAt });
-          setRemoteEvents(result.data);
-          setRemoteState({ loading: false, refreshing: false, error: '', loaded: true });
+          cacheRef.current.set(key, { data: combined, fetchedAt });
+          setRemoteEvents(combined);
+          setRemoteState({
+            loading: false,
+            refreshing: false,
+            error: schoolResult?.success ? '' : 'As consultas foram carregadas, mas os compromissos escolares estão temporariamente indisponíveis.',
+            loaded: true
+          });
           return;
         }
         setRemoteState((prev) => ({
           loading: false,
           refreshing: false,
-          error: result?.error || 'Não foi possível carregar a agenda agora.',
+          error: clinicalResult?.error || schoolResult?.error || 'Não foi possível carregar a agenda agora.',
           loaded: prev.loaded
         }));
       })
@@ -1831,6 +1869,9 @@ export const ClinicalAgendaBoard = ({
     selectedTypes.join(','),
     selectedStatuses.join(','),
     selectedLocations.join(','),
+    selectedSchoolIds.join(','),
+    selectedSchoolUnitIds.join(','),
+    selectedSchoolEventTypes.join(','),
     remoteRefreshNonce
   ]);
 
@@ -1865,10 +1906,12 @@ export const ClinicalAgendaBoard = ({
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     window.addEventListener('verto:appointment-domain-event', requestRefresh as EventListener);
+    window.addEventListener('verto:school-meeting-event', requestRefresh as EventListener);
     return () => {
       window.removeEventListener('focus', refreshWhenVisible);
       document.removeEventListener('visibilitychange', refreshWhenVisible);
       window.removeEventListener('verto:appointment-domain-event', requestRefresh as EventListener);
+      window.removeEventListener('verto:school-meeting-event', requestRefresh as EventListener);
       if (refreshDebounceTimerRef.current) {
         window.clearTimeout(refreshDebounceTimerRef.current);
         refreshDebounceTimerRef.current = null;
@@ -1907,8 +1950,17 @@ export const ClinicalAgendaBoard = ({
         const startTime = getCalendarEventStartTimestamp(event);
         if (!Number.isFinite(startTime)) return false;
         if (startTime < fromTime || startTime > toTime) return false;
-        if (selectedTherapistIds.length > 0 && !selectedTherapistIds.includes(String(event.therapist_id || ''))) return false;
-        if (selectedPatientIds.length > 0 && !selectedPatientIds.includes(String(event.patient_id || ''))) return false;
+        if (selectedTherapistIds.length > 0) {
+          const eventProfessionalIds = Array.isArray(event.professionalIds) ? event.professionalIds.map(String) : [String(event.therapist_id || '')];
+          if (!selectedTherapistIds.some((id) => eventProfessionalIds.includes(String(id)))) return false;
+        }
+        if (selectedSchoolIds.length > 0 && !selectedSchoolIds.includes(String(event.schoolId || event.school_id || ''))) return false;
+        if (selectedSchoolUnitIds.length > 0 && !selectedSchoolUnitIds.includes(String(event.schoolUnitId || event.school_unit_id || ''))) return false;
+        if (selectedSchoolEventTypes.length > 0 && event.source === 'school_meeting' && !selectedSchoolEventTypes.includes(String(event.eventType || event.type || ''))) return false;
+        if (selectedPatientIds.length > 0) {
+          const eventPatientIds = Array.isArray(event.patientIds) ? event.patientIds.map(String) : [String(event.patient_id || '')];
+          if (!selectedPatientIds.some((id) => eventPatientIds.includes(String(id)))) return false;
+        }
         if (selectedTypes.length > 0 && !selectedTypes.some((type) => removeDiacritics(event.type) === removeDiacritics(type))) return false;
         if (selectedLocations.length > 0) {
           const roomFilter = event.roomId ? `room:${event.roomId}` : '';
@@ -1942,6 +1994,9 @@ export const ClinicalAgendaBoard = ({
     selectedTypes,
     selectedLocations,
     selectedStatuses,
+    selectedSchoolIds,
+    selectedSchoolUnitIds,
+    selectedSchoolEventTypes,
     significantOnly,
     improvementOnly,
     worseningOnly,
@@ -2021,6 +2076,11 @@ export const ClinicalAgendaBoard = ({
 
   const openEventDetail = (event: any) => {
     const normalized = normalizeClinicalEvent(event);
+    if (normalized.source === 'school_meeting' || normalized.schoolMeetingId) {
+      setSelectedEvent(null);
+      setSelectedSchoolMeetingId(String(normalized.schoolMeetingId || normalized.id).replace(/^school-/, ''));
+      return;
+    }
     setSelectedEvent(normalized);
     setEventDetail(null);
     setDetailState({ loading: true, error: '' });
@@ -2849,6 +2909,29 @@ export const ClinicalAgendaBoard = ({
           </div>
         </div>
       ))}
+      {renderSection('school', 'Escola', selectedSchoolIds.length + selectedSchoolUnitIds.length + selectedSchoolEventTypes.length, (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {schoolOptions.map((school: any) => (
+              <button key={school.id} type="button" onClick={() => { setSelectedSchoolIds((prev) => toggleArrayValue(prev, String(school.id))); setSelectedSchoolUnitIds([]); }} className={chipClass(selectedSchoolIds.includes(String(school.id)))}>
+                <School size={13} />
+                <span className="max-w-[180px] truncate">{school.display_name}</span>
+              </button>
+            ))}
+            {schoolOptions.length === 0 && <p className="text-xs text-slate-400">Nenhuma escola disponível.</p>}
+          </div>
+          {selectedSchoolIds.length === 1 && (
+            <div>
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Unidade</p>
+              <div className="flex flex-wrap gap-2">{(schoolOptions.find((item: any) => String(item.id) === selectedSchoolIds[0])?.units || []).map((unit: any) => <button key={unit.id} type="button" onClick={() => setSelectedSchoolUnitIds((prev) => toggleArrayValue(prev, String(unit.id)))} className={chipClass(selectedSchoolUnitIds.includes(String(unit.id)))}>{unit.name}</button>)}</div>
+            </div>
+          )}
+          <div>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Evento escolar</p>
+            <div className="flex flex-wrap gap-2">{[['SCHOOL_MEETING','Reunião'],['SCHOOL_VISIT','Visita'],['SCHOOL_OBSERVATION','Observação'],['STAFF_TRAINING','Treinamento']].map(([value,label]) => <button key={value} type="button" onClick={() => setSelectedSchoolEventTypes((prev) => toggleArrayValue(prev, value))} className={chipClass(selectedSchoolEventTypes.includes(value))}>{label}</button>)}</div>
+          </div>
+        </div>
+      ))}
       {renderSection('location', 'Local/Sala', selectedLocations.length, (
         <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
@@ -3517,7 +3600,7 @@ export const ClinicalAgendaBoard = ({
             <div className={`rounded-3xl border border-dashed px-6 py-10 text-center ${isDark ? 'border-slate-700 bg-slate-900 text-slate-400' : 'border-slate-200 bg-white text-slate-400'}`}>
               <Stethoscope className="mx-auto mb-3" size={24} />
               <p className="text-sm font-semibold">
-                {selectedTherapistIds.length || selectedPatientIds.length || selectedTypes.length || selectedStatuses.length || selectedLocations.length || significantOnly || alertsOnly
+                {selectedTherapistIds.length || selectedPatientIds.length || selectedTypes.length || selectedStatuses.length || selectedLocations.length || selectedSchoolIds.length || selectedSchoolUnitIds.length || selectedSchoolEventTypes.length || significantOnly || alertsOnly
                   ? 'Nenhum resultado para os filtros selecionados.'
                   : 'Nenhuma sessão neste período.'}
               </p>
@@ -4157,9 +4240,31 @@ export const ClinicalAgendaBoard = ({
         </div>
       )}
 
+      {selectedSchoolMeetingId && (
+        <SchoolMeetingWorkspace
+          meetingId={selectedSchoolMeetingId}
+          professionals={teamMembers}
+          userRole={String(currentUser?.role || '')}
+          onClose={() => setSelectedSchoolMeetingId('')}
+          onChanged={(meeting: any) => {
+            setRemoteEvents((events) => events.map((event: any) => {
+              const eventMeetingId = String(event.schoolMeetingId || event.id || '').replace(/^school-/, '');
+              if (eventMeetingId !== selectedSchoolMeetingId) return event;
+              return normalizeClinicalEvent({ ...event, ...meeting, schoolMeetingId: selectedSchoolMeetingId, source: 'school_meeting' });
+            }));
+          }}
+        />
+      )}
+
       {selectedEvent && (
         <div className="fixed inset-0 z-[140] flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setSelectedEvent(null)}>
           <div className={`max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-[28px] p-5 pb-[calc(env(safe-area-inset-bottom)+1.5rem)] shadow-2xl sm:rounded-[28px] sm:p-6 ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
+            {(selectedEvent.source === 'school_meeting' || selectedEvent.schoolMeetingId) ? (
+              <div>
+                <div className="flex items-start justify-between gap-4"><div><span className="rounded-full bg-violet-100 px-3 py-1 text-[10px] font-bold uppercase text-violet-700">Evento escolar</span><h3 className="mt-3 text-xl font-bold">{eventDetail?.schoolMeeting?.title || selectedEvent.title}</h3><p className={`mt-1 text-sm ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>{selectedEvent.schoolName || 'Escola'}{selectedEvent.schoolUnitName ? ` · ${selectedEvent.schoolUnitName}` : ''}</p></div><button type="button" onClick={() => setSelectedEvent(null)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar detalhes"><X size={18}/></button></div>
+                {detailState.loading ? <div className="mt-5 flex items-center gap-2"><Loader2 size={16} className="animate-spin"/> Carregando reunião...</div> : detailState.error ? <div className="mt-5 rounded-2xl bg-amber-50 p-4 text-sm text-amber-800">{detailState.error}</div> : <div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-2xl border border-slate-100 p-4"><p className="text-xs font-bold text-slate-400">Horário</p><p className="mt-1 font-semibold">{formatLongDate(selectedEvent.start)} · {selectedEvent.time} - {selectedEvent.endTime}</p></div><div className="rounded-2xl border border-slate-100 p-4"><p className="text-xs font-bold text-slate-400">Participantes</p><p className="mt-1 font-semibold">{eventDetail?.schoolMeeting?.patients?.filter((p:any)=>p.participation_status!=='REMOVED').length || selectedEvent.patientCount || 0} paciente(s) · {eventDetail?.schoolMeeting?.participants?.filter((p:any)=>!p.removed_at).length || 0} convidado(s)</p></div><div className="rounded-2xl border border-slate-100 p-4 sm:col-span-2"><p className="text-xs font-bold text-slate-400">Local</p><p className="mt-1 font-semibold">{selectedEvent.location || 'Não informado'}</p></div></div>}
+              </div>
+            ) : (<>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -4890,6 +4995,7 @@ export const ClinicalAgendaBoard = ({
                 </div>
               )}
             </div>
+            </>) }
           </div>
         </div>
       )}

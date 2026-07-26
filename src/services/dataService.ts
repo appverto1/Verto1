@@ -7291,6 +7291,11 @@ export const dataService = {
     const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
   },
 
+  async endPatientSchoolEnrollment(patientId: string, enrollmentId: string, payload: any) {
+    const response = await fetchClinical(`/api/patients/${encodeURIComponent(patientId)}/school-enrollments/${encodeURIComponent(enrollmentId)}/end`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'endPatientSchoolEnrollment', operation: 'write', table: 'patient_school_enrollments,school_audit_events', hasExplicitColumns: true, requiresPatientOrSession: true });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
   async savePatientSchoolConsent(patientId: string, payload: any) {
     const response = await fetchClinical(`/api/patients/${encodeURIComponent(patientId)}/school-consents`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'savePatientSchoolConsent', operation: 'write', table: 'school_consents', hasExplicitColumns: true, requiresPatientOrSession: true });
     const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
@@ -7325,5 +7330,81 @@ export const dataService = {
 
   async getSchoolIndicators(schoolId: string) {
     return await fetchNoStoreJsonWithRetry(`/api/schools/${encodeURIComponent(schoolId)}/indicators`, { credentials: 'include' }, { helperName: 'getSchoolIndicators', operation: 'detail', table: 'schools,patient_school_enrollments,school_meetings,school_consents', hasExplicitColumns: true, requiresPatientOrSession: false }, 'Os indicadores escolares ficaram desatualizados.');
+  },
+
+
+  async updateSchoolUnit(schoolId: string, unitId: string, payload: any) {
+    const response = await fetchClinical(`/api/schools/${encodeURIComponent(schoolId)}/units/${encodeURIComponent(unitId)}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'updateSchoolUnit', operation: 'write', table: 'school_units', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async updateSchoolContact(schoolId: string, contactId: string, payload: any) {
+    const response = await fetchClinical(`/api/schools/${encodeURIComponent(schoolId)}/contacts/${encodeURIComponent(contactId)}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'updateSchoolContact', operation: 'write', table: 'school_contacts', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async getPatientSchoolConsents(patientId: string) {
+    return await fetchNoStoreJsonWithRetry(`/api/patients/${encodeURIComponent(patientId)}/school-consents`, { credentials: 'include' }, { helperName: 'getPatientSchoolConsents', operation: 'list', table: 'school_consents', hasExplicitColumns: true, requiresPatientOrSession: true }, 'As autorizações escolares ficaram desatualizadas.');
+  },
+
+  async getSchoolMeetingDetail(meetingId: string) {
+    return await fetchNoStoreJsonWithRetry(`/api/school-meetings/${encodeURIComponent(meetingId)}`, { credentials: 'include' }, { helperName: 'getSchoolMeetingDetail', operation: 'detail', table: 'school_meetings,school_meeting_patients,school_meeting_participants,school_meeting_minutes,school_document_links', hasExplicitColumns: true, requiresPatientOrSession: false }, 'O detalhe da reunião ficou desatualizado.');
+  },
+
+  async addSchoolMeetingPatients(meetingId: string, payload: any) {
+    const response = await fetchClinical(`/api/school-meetings/${encodeURIComponent(meetingId)}/patients`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'addSchoolMeetingPatients', operation: 'write', table: 'school_meeting_patients', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async removeSchoolMeetingPatients(meetingId: string, payload: any) {
+    const response = await fetchClinical(`/api/school-meetings/${encodeURIComponent(meetingId)}/patients`, { method: 'DELETE', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'removeSchoolMeetingPatients', operation: 'write', table: 'school_meeting_patients', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async addSchoolMeetingParticipant(meetingId: string, payload: any) {
+    const response = await fetchClinical(`/api/school-meetings/${encodeURIComponent(meetingId)}/participants`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'addSchoolMeetingParticipant', operation: 'write', table: 'school_meeting_participants', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async updateSchoolMeetingParticipant(meetingId: string, participantId: string, payload: any) {
+    const response = await fetchClinical(`/api/school-meetings/${encodeURIComponent(meetingId)}/participants/${encodeURIComponent(participantId)}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'updateSchoolMeetingParticipant', operation: 'write', table: 'school_meeting_participants', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async removeSchoolMeetingParticipant(meetingId: string, participantId: string, payload: any) {
+    const response = await fetchClinical(`/api/school-meetings/${encodeURIComponent(meetingId)}/participants/${encodeURIComponent(participantId)}`, { method: 'DELETE', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'removeSchoolMeetingParticipant', operation: 'write', table: 'school_meeting_participants', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async updateSchoolMeetingAttendance(meetingId: string, payload: any) {
+    const response = await fetchClinical(`/api/school-meetings/${encodeURIComponent(meetingId)}/attendance`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'updateSchoolMeetingAttendance', operation: 'write', table: 'school_meeting_patients,school_meeting_participants', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async getSchoolMeetingPatientNotes(meetingId: string, params: Record<string, any> = {}) {
+    return await fetchNoStoreJsonWithRetry(endpointWithQuery(`/api/school-meetings/${encodeURIComponent(meetingId)}/patient-notes`, params), { credentials: 'include' }, { helperName: 'getSchoolMeetingPatientNotes', operation: 'list', table: 'school_meeting_patient_notes', hasExplicitColumns: true, requiresPatientOrSession: false }, 'As notas individuais ficaram desatualizadas.');
+  },
+
+  async getSchoolDocuments(params: Record<string, any> = {}) {
+    return await fetchNoStoreJsonWithRetry(endpointWithQuery('/api/school-documents', params), { credentials: 'include' }, { helperName: 'getSchoolDocuments', operation: 'list', table: 'school_document_links,patient_files', hasExplicitColumns: true, requiresPatientOrSession: false }, 'Os documentos escolares ficaram desatualizados.');
+  },
+
+  async linkSchoolDocument(payload: any) {
+    const response = await fetchClinical('/api/school-documents', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'linkSchoolDocument', operation: 'write', table: 'school_document_links,patient_files', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async updateSchoolDocumentLink(linkId: string, payload: any) {
+    const response = await fetchClinical(`/api/school-documents/${encodeURIComponent(linkId)}`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'updateSchoolDocumentLink', operation: 'write', table: 'school_document_links', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async getSchoolMigrationReview(params: Record<string, any> = {}) {
+    return await fetchNoStoreJsonWithRetry(endpointWithQuery('/api/school-migration-review', params), { credentials: 'include' }, { helperName: 'getSchoolMigrationReview', operation: 'list', table: 'school_migration_review_queue', hasExplicitColumns: true, requiresPatientOrSession: false }, 'A fila de revisão escolar ficou desatualizada.');
+  },
+
+  async resolveSchoolMigrationReview(payload: any) {
+    const response = await fetchClinical('/api/school-migration-review/resolve', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'resolveSchoolMigrationReview', operation: 'write', table: 'school_migration_review_queue,patient_school_enrollments,school_audit_events', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
   },
 };
