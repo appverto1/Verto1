@@ -21,6 +21,7 @@ import {
   X
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { PrivatePricingManagement } from './PrivatePricingManagement';
 import { formatDisplayDate, formatDisplayDateTime } from '../utils/dateFormatting';
 import { normalizePatientFinancialPlans } from '../utils/patientFinancialPlan';
 import {
@@ -69,6 +70,7 @@ const emptyLedger = {
   transactions: [],
   events: [],
   appointments: [],
+  privateSnapshots: [],
   billingContexts: [],
   policy: null
 };
@@ -237,6 +239,7 @@ export function PatientFinanceWorkspace({
   const [patientFilter, setPatientFilter] = useState('all');
   const [professionalFilter, setProfessionalFilter] = useState('all');
   const [serviceFilter, setServiceFilter] = useState('all');
+  const [payerFilter, setPayerFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [methodFilter, setMethodFilter] = useState('all');
   const [onlyCompleted, setOnlyCompleted] = useState(false);
@@ -277,9 +280,10 @@ export function PatientFinanceWorkspace({
     charges: ledger.charges,
     items: ledger.items,
     billingContexts: ledger.billingContexts,
+    privateSnapshots: ledger.privateSnapshots,
     patients,
     professionals
-  }), [ledger.appointments, ledger.billingContexts, ledger.charges, ledger.items, patients, professionals]);
+  }), [ledger.appointments, ledger.billingContexts, ledger.charges, ledger.items, ledger.privateSnapshots, patients, professionals]);
 
   const chargeRows = useMemo(
     () => buildPatientFinancialChargeRows(ledger, patients),
@@ -321,6 +325,7 @@ export function PatientFinanceWorkspace({
       if (patientFilter !== 'all' && row.patientId !== patientFilter) return false;
       if (professionalFilter !== 'all' && row.professionalId !== professionalFilter) return false;
       if (serviceFilter !== 'all' && row.serviceType !== serviceFilter) return false;
+      if (payerFilter !== 'all' && row.payerName !== payerFilter) return false;
       if (statusFilter !== 'all' && row.status !== statusFilter) return false;
       if (methodFilter !== 'all' && String(row.method || '').toLowerCase() !== methodFilter) return false;
       if (onlyCompleted && !isCompletedAppointment(row.clinicalStatus)) return false;
@@ -329,7 +334,7 @@ export function PatientFinanceWorkspace({
       if (onlyPartial && row.status !== 'partial') return false;
       return true;
     });
-  }, [appointmentRows, methodFilter, month, onlyCompleted, onlyPartial, onlyUncharged, onlyUnpaid, patientFilter, professionalFilter, search, serviceFilter, statusFilter]);
+  }, [appointmentRows, methodFilter, month, onlyCompleted, onlyPartial, onlyUncharged, onlyUnpaid, patientFilter, payerFilter, professionalFilter, search, serviceFilter, statusFilter]);
 
   const openOperation = (nextOperation: FinanceOperation, source?: any) => {
     const sourceRow = source?.appointment || source?.charge ? source : null;
@@ -620,6 +625,7 @@ export function PatientFinanceWorkspace({
     if (methodFilter !== 'all' && String(charge.method || '').toLowerCase() !== methodFilter) return false;
     if (professionalFilter !== 'all' && !charge.items.some((item: any) => String(item.professional_id || '') === professionalFilter)) return false;
     if (serviceFilter !== 'all' && !charge.items.some((item: any) => String(item.service_type_snapshot || '') === serviceFilter)) return false;
+    if (payerFilter !== 'all' && String(charge.payerName || '') !== payerFilter) return false;
     if (onlyCompleted && !charge.items.some((item: any) => isCompletedAppointment(appointmentsById.get(String(item.appointment_id || ''))?.status))) return false;
     if (onlyUncharged) return false;
     if (onlyUnpaid && !['pending', 'partial', 'overdue'].includes(charge.status)) return false;
@@ -638,6 +644,7 @@ export function PatientFinanceWorkspace({
     if (patientFilter !== 'all' && charge.patientId !== patientFilter) return false;
     if (professionalFilter !== 'all' && !charge.items.some((item: any) => String(item.professional_id || '') === professionalFilter)) return false;
     if (serviceFilter !== 'all' && !charge.items.some((item: any) => String(item.service_type_snapshot || '') === serviceFilter)) return false;
+    if (payerFilter !== 'all' && String(charge.payerName || '') !== payerFilter) return false;
     if (methodFilter !== 'all' && String(transaction?.method || charge.method || '').toLowerCase() !== methodFilter) return false;
     if (statusFilter !== 'all' && charge.status !== statusFilter) return false;
     if (onlyUncharged) return false;
@@ -690,6 +697,11 @@ export function PatientFinanceWorkspace({
 
   return (
     <div className="space-y-4" data-patient-finance-workspace>
+      <PrivatePricingManagement
+        patients={patients}
+        currentUser={currentUser}
+        onToast={onToast}
+      />
       <div className="flex flex-col gap-3 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h3 className="text-base font-semibold text-slate-900">Financeiro por consulta</h3>
@@ -701,7 +713,7 @@ export function PatientFinanceWorkspace({
       </div>
 
       <div className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
           <label className="relative xl:col-span-2">
             <Search size={16} className="absolute left-3 top-3 text-slate-400" />
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Paciente, serviço ou profissional" className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-violet-400" />
@@ -717,6 +729,10 @@ export function PatientFinanceWorkspace({
           <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-600">
             <option value="all">Todos os serviços</option>
             {Array.from(new Set(appointmentRows.map((row: any) => row.serviceType))).filter(Boolean).map((service) => <option key={String(service)} value={String(service)}>{String(service)}</option>)}
+          </select>
+          <select value={payerFilter} onChange={(event) => setPayerFilter(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-600">
+            <option value="all">Todos os pagadores</option>
+            {Array.from(new Set(chargeRows.map((row: any) => String(row.payerName || '')).filter(Boolean))).map((payer) => <option key={payer} value={payer}>{payer}</option>)}
           </select>
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-600">
             <option value="all">Todos os status</option>
@@ -858,6 +874,12 @@ export function PatientFinanceWorkspace({
           <div className="mt-4 grid gap-3 sm:grid-cols-5">
             {[['Original', charge.original], ['Adicional', charge.additional], ['Desconto', charge.discount], ['Pago', charge.paid], ['Saldo', charge.balance]].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 font-semibold text-slate-900">{currency(value)}</p></div>)}
           </div>
+          {charge.snapshot && <div className="mt-4 grid gap-3 rounded-2xl border border-violet-100 bg-violet-50/50 p-4 text-xs text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
+            <div><p className="text-slate-400">Origem congelada</p><p className="mt-1 font-medium text-slate-800">{charge.priceSourceLabel || charge.priceSource}</p></div>
+            <div><p className="text-slate-400">Pagador</p><p className="mt-1 font-medium text-slate-800">{charge.payerName || 'Paciente/responsável'}</p></div>
+            <div><p className="text-slate-400">Cancelamento gratuito até</p><p className="mt-1 font-medium text-slate-800">{formatDisplayDateTime(charge.snapshot.cancellation_free_until, { separator: ', ' })}</p></div>
+            <div><p className="text-slate-400">Snapshot</p><p className="mt-1 font-medium text-slate-800">versão {charge.snapshot.snapshot_version} · {charge.snapshot.snapshot_event}</p></div>
+          </div>}
           <div className="mt-4 grid gap-4 lg:grid-cols-2"><div><p className="text-xs font-medium text-slate-500">Consultas incluídas</p><div className="mt-2 space-y-2">{charge.items.map((item: any) => <div key={item.id} className="rounded-xl border border-slate-100 p-3 text-sm"><p className="font-medium text-slate-800">{item.service_type_snapshot || 'Consulta'}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(item.appointment_scheduled_at, { separator: ', ' })} · {currency(item.subtotal)}</p></div>)}{!charge.items.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Cobrança por competência, sem consulta específica vinculada.</p>}</div></div><div><p className="text-xs font-medium text-slate-500">Trilha financeira</p><div className="mt-2 space-y-2">{charge.events.map((event: any) => <div key={event.id} className="rounded-xl border border-slate-100 p-3 text-sm"><p className="font-medium text-slate-800">{auditEventLabel(event.event_type)}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(event.created_at, { separator: ', ' })} · {auditActorLabel(event.created_by)}{event.notes ? ` · ${event.notes}` : ''}</p></div>)}{!charge.events.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Nenhum evento auditável registrado.</p>}</div></div></div>
         </div>;
       })()}
@@ -869,7 +891,7 @@ export function PatientFinanceWorkspace({
           <label className="text-xs text-slate-500">Cancelamento<select disabled={!canManagePolicy} value={policy.cancellation_policy || 'NO_CHARGE'} onChange={(event) => setPolicy({ ...policy, cancellation_policy: event.target.value })} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2.5 text-sm text-slate-700"><option value="NO_CHARGE">Sem cobrança</option><option value="FULL_CHARGE">Cobrança integral</option><option value="PARTIAL_CHARGE">Cobrança parcial</option></select></label>
           <label className="text-xs text-slate-500">Percentual na cobrança parcial<input disabled={!canManagePolicy} type="number" min="0" max="100" value={policy.cancellation_percentage || 0} onChange={(event) => setPolicy({ ...policy, cancellation_percentage: Number(event.target.value) })} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2.5 text-sm text-slate-700" /></label>
           <label className="text-xs text-slate-500">Tolerância em horas<input disabled={!canManagePolicy} type="number" min="0" max="720" value={policy.cancellation_tolerance_hours || 0} onChange={(event) => setPolicy({ ...policy, cancellation_tolerance_hours: Number(event.target.value) })} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2.5 text-sm text-slate-700" /></label>
-          <label className="flex items-start gap-3 rounded-xl border border-slate-100 p-3 text-sm text-slate-600"><input disabled={!canManagePolicy} type="checkbox" checked={policy.create_forecast_on_schedule !== false} onChange={(event) => setPolicy({ ...policy, create_forecast_on_schedule: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600" /><span>Criar previsão ao agendar<span className="mt-1 block text-xs text-slate-400">Usa somente preço explícito por sessão. Não cria pagamento.</span></span></label>
+          <label className="flex items-start gap-3 rounded-xl border border-slate-100 p-3 text-sm text-slate-600"><input disabled={!canManagePolicy} type="checkbox" checked={policy.create_forecast_on_schedule !== false} onChange={(event) => setPolicy({ ...policy, create_forecast_on_schedule: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600" /><span>Criar previsão ao agendar<span className="mt-1 block text-xs text-slate-400">Resolve acordo, serviço, especialidade ou padrão da clínica e não registra pagamento.</span></span></label>
           <label className="flex items-start gap-3 rounded-xl border border-slate-100 p-3 text-sm text-slate-600"><input disabled={!canManagePolicy} type="checkbox" checked={Boolean(policy.charge_no_show)} onChange={(event) => setPolicy({ ...policy, charge_no_show: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600" /><span>Cobrar falta<span className="mt-1 block text-xs text-slate-400">Efetiva a cobrança prevista quando a consulta vira falta.</span></span></label>
           <label className="flex items-start gap-3 rounded-xl border border-slate-100 p-3 text-sm text-slate-600"><input disabled={!canManagePolicy} type="checkbox" checked={policy.reschedule_keeps_charge !== false} onChange={(event) => setPolicy({ ...policy, reschedule_keeps_charge: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600" /><span>Remarcação mantém a cobrança<span className="mt-1 block text-xs text-slate-400">Preserva a mesma obrigação financeira quando apenas o horário muda.</span></span></label>
           {canManagePolicy && <button type="button" disabled={policySaving} onClick={savePolicy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60">{policySaving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Salvar política</button>}

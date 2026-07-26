@@ -4126,6 +4126,10 @@ export default function App() {
           note,
           source: details?.source || 'agenda_management',
           recurrenceScope,
+          privatePolicyDecisionAmount:
+            details?.privatePolicyDecisionAmount ??
+            details?.private_policy_decision_amount ??
+            undefined,
         })
       });
       const result = await response.json().catch(() => ({}));
@@ -5659,6 +5663,18 @@ export default function App() {
           payer_id: usesInsuranceContext ? effectivePayerId || null : null,
           payerName: usesInsuranceContext ? effectivePayerName || '' : '',
           payer_name_snapshot: usesInsuranceContext ? effectivePayerName || '' : '',
+          privateServiceCatalogId: financialContextType === 'PRIVATE' ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
+          private_service_catalog_id: financialContextType === 'PRIVATE' ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
+          privateManualAmount: financialContextType === 'PRIVATE' ? sess.privateManualAmount ?? sess.private_manual_amount ?? null : null,
+          private_manual_amount: financialContextType === 'PRIVATE' ? sess.privateManualAmount ?? sess.private_manual_amount ?? null : null,
+          privateDiscountAmount: financialContextType === 'PRIVATE' ? sess.privateDiscountAmount ?? sess.private_discount_amount ?? null : null,
+          private_discount_amount: financialContextType === 'PRIVATE' ? sess.privateDiscountAmount ?? sess.private_discount_amount ?? null : null,
+          privateZeroClassification: financialContextType === 'PRIVATE' ? sess.privateZeroClassification || sess.private_zero_classification || null : null,
+          private_zero_classification: financialContextType === 'PRIVATE' ? sess.privateZeroClassification || sess.private_zero_classification || null : null,
+          privatePricingReason: financialContextType === 'PRIVATE' ? sess.privatePricingReason || sess.private_pricing_reason || null : null,
+          private_pricing_reason: financialContextType === 'PRIVATE' ? sess.privatePricingReason || sess.private_pricing_reason || null : null,
+          privateRescheduleFinancialDecision: financialContextType === 'PRIVATE' ? sess.privateRescheduleFinancialDecision || sess.private_reschedule_financial_decision || null : null,
+          private_reschedule_financial_decision: financialContextType === 'PRIVATE' ? sess.privateRescheduleFinancialDecision || sess.private_reschedule_financial_decision || null : null,
           insurancePlanName: effectiveInsurancePlanName,
           insurance_plan_name: effectiveInsurancePlanName,
           insuranceCardNumber: effectiveInsuranceCardNumber,

@@ -189,7 +189,7 @@ test('RLS e endpoints preservam tenant e papeis operacionais', () => {
   assert.match(ledgerEndpoint, /readLedgerAppointments\(PATIENT_FINANCE_APPOINTMENT_SELECT\)/);
   assert.match(ledgerEndpoint, /extractMissingColumnName\(appointmentsResult\.error\) === 'source_payload'/);
   assert.match(ledgerEndpoint, /readLedgerAppointments\(PATIENT_FINANCE_APPOINTMENT_LEGACY_SELECT\)/);
-  assert.match(ledgerEndpoint, /queryCount: 5 \+ appointmentQueryCount \+ \(appointmentIds\.length > 0 \? 1 : 0\)/);
+  assert.match(ledgerEndpoint, /queryCount: 6 \+ appointmentQueryCount \+ \(appointmentIds\.length > 0 \? 1 : 0\)/);
 });
 
 test('ledger financeiro tolera appointments legados sem source_payload sem abrir o escopo do tenant', () => {

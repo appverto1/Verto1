@@ -1356,6 +1356,24 @@ export function CoordinatorDashboard({
     error: string;
     suggestion: any | null;
   }>({ loading: false, error: "", suggestion: null });
+  const [sessionPrivateServiceCatalogId, setSessionPrivateServiceCatalogId] = useState("");
+  const [sessionPrivateManualAmount, setSessionPrivateManualAmount] = useState("");
+  const [sessionPrivateDiscountAmount, setSessionPrivateDiscountAmount] = useState("");
+  const [sessionPrivateZeroClassification, setSessionPrivateZeroClassification] = useState("");
+  const [sessionPrivatePricingReason, setSessionPrivatePricingReason] = useState("");
+  const [sessionPrivateRescheduleFinancialDecision, setSessionPrivateRescheduleFinancialDecision] =
+    useState("");
+  const [sessionPrivatePricingCatalog, setSessionPrivatePricingCatalog] = useState<any>({
+    services: [],
+    rules: [],
+    agreements: [],
+    payers: [],
+  });
+  const [sessionPrivatePricingState, setSessionPrivatePricingState] = useState<{
+    loading: boolean;
+    error: string;
+    quote: any | null;
+  }>({ loading: false, error: "", quote: null });
   const [clinicPayers, setClinicPayers] = useState<any[]>([]);
   const lastAutoPayerPatientKeyRef = useRef("");
   const sessionSubmitInFlightRef = useRef(false);
@@ -1396,6 +1414,14 @@ export function CoordinatorDashboard({
   const [selectedPatientProfileAuthorizationsLoading, setSelectedPatientProfileAuthorizationsLoading] = useState(false);
   const [selectedAgendaAppointment, setSelectedAgendaAppointment] =
     useState<any>(null);
+  const [agendaPrivateFinancialSnapshotState, setAgendaPrivateFinancialSnapshotState] =
+    useState<{ loading: boolean; data: any | null; error: string }>({
+      loading: false,
+      data: null,
+      error: "",
+    });
+  const [agendaPrivatePolicyDecisionAmount, setAgendaPrivatePolicyDecisionAmount] =
+    useState("");
   const [scheduledSessionContext, setScheduledSessionContext] =
     useState<any>(null);
   const [scheduledSessionStartKey, setScheduledSessionStartKey] =
@@ -1407,6 +1433,7 @@ export function CoordinatorDashboard({
       appointment: any;
       note: string;
       source: string;
+      privatePolicyDecisionAmount?: number;
     } | null>(null);
   const [pendingRecurringDeletion, setPendingRecurringDeletion] =
     useState<{
@@ -3428,6 +3455,14 @@ export function CoordinatorDashboard({
     setSessionAuthorizationCode("");
     setSessionPatientTissAuthorizationId("");
     setSessionBillingSuggestionState({ loading: false, error: "", suggestion: null });
+    setSessionPrivateServiceCatalogId("");
+    setSessionPrivateManualAmount("");
+    setSessionPrivateDiscountAmount("");
+    setSessionPrivateZeroClassification("");
+    setSessionPrivatePricingReason("");
+    setSessionPrivateRescheduleFinancialDecision("");
+    setSessionPrivatePricingCatalog({ services: [], rules: [], agreements: [], payers: [] });
+    setSessionPrivatePricingState({ loading: false, error: "", quote: null });
     setFilteredPatients([]);
   };
 
@@ -3926,6 +3961,17 @@ export function CoordinatorDashboard({
           ) || null,
     [editingAppointmentId, therapistAgenda],
   );
+  const editingAppointmentPrivateCharge = useMemo(
+    () =>
+      editingAppointmentId === null
+        ? null
+        : (payments || []).find(
+            (payment: any) =>
+              String(payment?.appointment_id || payment?.appointmentId || "") ===
+              String(editingAppointmentId),
+          ) || null,
+    [editingAppointmentId, payments],
+  );
 
   const sessionRecurrenceDates = useMemo(
     () =>
@@ -3947,6 +3993,119 @@ export function CoordinatorDashboard({
           : sessionLocationType === "escola"
             ? "SCHOOL"
             : "OTHER";
+  const canManagePrivateSessionAmount = ["owner", "admin"].includes(
+    String(user?.role || "").toLowerCase(),
+  );
+  const canOperatePrivateSessionAmount = ["coordinator", "receptionist"].includes(
+    String(user?.role || "").toLowerCase(),
+  );
+  const canOverridePrivateSessionAmount =
+    canManagePrivateSessionAmount ||
+    (canOperatePrivateSessionAmount && sessionPrivatePricingState.quote?.allow_manual_override === true);
+  const canDiscountPrivateSessionAmount =
+    canManagePrivateSessionAmount ||
+    (
+      canOperatePrivateSessionAmount &&
+      sessionPrivatePricingState.quote &&
+      sessionPrivatePricingState.quote.discount_approval_required === false
+    );
+  const sessionPrivateServices = useMemo(() => {
+    const approachKey = normalizeUtf8Text(sessionApproach).trim().toLowerCase();
+    const services = Array.isArray(sessionPrivatePricingCatalog.services)
+      ? sessionPrivatePricingCatalog.services
+      : [];
+    return services.filter((service: any) => {
+      if (!approachKey) return true;
+      const specialty = normalizeUtf8Text(service?.specialty || service?.service_type || "").trim().toLowerCase();
+      return !specialty || specialty === approachKey || specialty.includes(approachKey) || approachKey.includes(specialty);
+    });
+  }, [sessionApproach, sessionPrivatePricingCatalog.services]);
+
+  useEffect(() => {
+    if (!isAddSessionModalOpen || sessionFinancialContextType !== "PRIVATE") {
+      setSessionPrivatePricingState({ loading: false, error: "", quote: null });
+      return;
+    }
+    let cancelled = false;
+    void dataService.getPrivatePricingCatalog().then((result: any) => {
+      if (cancelled) return;
+      if (result?.success) {
+        setSessionPrivatePricingCatalog({
+          services: result.data?.services || [],
+          rules: result.data?.rules || [],
+          agreements: result.data?.agreements || [],
+          payers: result.data?.payers || [],
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAddSessionModalOpen, sessionFinancialContextType]);
+
+  useEffect(() => {
+    if (
+      !isAddSessionModalOpen ||
+      sessionFinancialContextType !== "PRIVATE" ||
+      !selectedSessionPatient?.id ||
+      !sessionDate ||
+      !sessionTime ||
+      !sessionApproach
+    ) {
+      if (sessionFinancialContextType === "PRIVATE") {
+        setSessionPrivatePricingState({ loading: false, error: "", quote: null });
+      }
+      return;
+    }
+    const scheduledAt = new Date(`${sessionDate}T${sessionTime}:00`);
+    if (Number.isNaN(scheduledAt.getTime())) {
+      setSessionPrivatePricingState({ loading: false, error: "Informe data e horário válidos.", quote: null });
+      return;
+    }
+    let cancelled = false;
+    setSessionPrivatePricingState((current) => ({ ...current, loading: true, error: "" }));
+    const timer = window.setTimeout(() => {
+      void dataService.resolvePrivateSessionPrice({
+        patientId: selectedSessionPatient.id,
+        specialty: sessionApproach,
+        serviceCatalogId: sessionPrivateServiceCatalogId || null,
+        scheduledAt: scheduledAt.toISOString(),
+        careSetting: sessionCareSetting,
+        manualAmount: sessionPrivateManualAmount === "" ? null : Number(sessionPrivateManualAmount),
+        discountAmount: sessionPrivateDiscountAmount === "" ? null : Number(sessionPrivateDiscountAmount),
+        zeroClassification: sessionPrivateZeroClassification || null,
+        overrideReason: sessionPrivatePricingReason.trim() || null,
+      }).then((result: any) => {
+        if (cancelled) return;
+        if (result?.success && result.data?.valid) {
+          setSessionPrivatePricingState({ loading: false, error: "", quote: result.data });
+        } else {
+          setSessionPrivatePricingState({
+            loading: false,
+            error: result?.error || "Não foi possível calcular o valor particular.",
+            quote: null,
+          });
+        }
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    isAddSessionModalOpen,
+    selectedSessionPatient?.id,
+    sessionApproach,
+    sessionCareSetting,
+    sessionDate,
+    sessionFinancialContextType,
+    sessionPrivateDiscountAmount,
+    sessionPrivateManualAmount,
+    sessionPrivatePricingReason,
+    sessionPrivateServiceCatalogId,
+    sessionPrivateZeroClassification,
+    sessionTime,
+  ]);
   const selectedSessionSchoolLocation = sessionCareLocations.schools.find(
     (row: any) => String(row.school_id || row.schools?.id || "") === sessionSchoolId,
   );
@@ -4016,12 +4175,41 @@ export function CoordinatorDashboard({
     (option) => option.value === sessionFinancialContextType,
   );
   const sessionNeedsFinancialContext = Boolean(sessionApproach.trim());
+  const sessionScheduleWasChanged = Boolean(
+    editingAppointmentId &&
+      (
+        String(editingAppointment?.date || "") !== String(sessionDate || "") ||
+        String(editingAppointment?.time || "").slice(0, 5) !== String(sessionTime || "").slice(0, 5) ||
+        String(editingAppointmentActionRequest?.type || "").toUpperCase() === "RESCHEDULE"
+      ),
+  );
+  const sessionHasLateCancellationCharge =
+    String(
+      editingAppointmentPrivateCharge?.private_financial_classification ||
+        editingAppointmentPrivateCharge?.financial_status ||
+        "",
+    ).toUpperCase() === "LATE_CANCELLATION_CHARGE";
+  const sessionRequiresPrivateRescheduleDecision = Boolean(
+    sessionFinancialContextType === "PRIVATE" &&
+      sessionScheduleWasChanged &&
+      sessionHasLateCancellationCharge,
+  );
   const sessionFinancialContextError =
     !isTherapist && sessionNeedsFinancialContext && !sessionFinancialContextType
       ? APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE
+      : sessionRequiresPrivateRescheduleDecision && !sessionPrivateRescheduleFinancialDecision
+        ? "Escolha como tratar a cobrança do cancelamento tardio antes de reagendar."
+        : sessionRequiresPrivateRescheduleDecision && !sessionPrivatePricingReason.trim()
+          ? "Informe o motivo da decisão financeira deste reagendamento."
       : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && !sessionPayerId
         ? "Selecione um pagador/convênio cadastrado ou escolha outro contexto financeiro válido."
-        : "";
+        : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "PRIVATE" && sessionPrivatePricingState.loading
+          ? "Aguarde a confirmação do valor particular."
+          : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "PRIVATE" && sessionPrivatePricingState.error
+            ? sessionPrivatePricingState.error
+            : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "PRIVATE" && !sessionPrivatePricingState.quote
+              ? "Esta especialidade ou serviço não possui valor particular configurado."
+              : "";
   const canSubmitSession =
     requiredSessionFieldsReady &&
     !scheduleConflictState.blocking &&
@@ -4358,6 +4546,18 @@ export function CoordinatorDashboard({
         payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
         payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
         payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+        privateServiceCatalogId: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
+        private_service_catalog_id: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
+        privateManualAmount: sessionFinancialContextType === "PRIVATE" && sessionPrivateManualAmount !== "" ? Number(sessionPrivateManualAmount) : null,
+        private_manual_amount: sessionFinancialContextType === "PRIVATE" && sessionPrivateManualAmount !== "" ? Number(sessionPrivateManualAmount) : null,
+        privateDiscountAmount: sessionFinancialContextType === "PRIVATE" && sessionPrivateDiscountAmount !== "" ? Number(sessionPrivateDiscountAmount) : null,
+        private_discount_amount: sessionFinancialContextType === "PRIVATE" && sessionPrivateDiscountAmount !== "" ? Number(sessionPrivateDiscountAmount) : null,
+        privateZeroClassification: sessionFinancialContextType === "PRIVATE" ? sessionPrivateZeroClassification || null : null,
+        private_zero_classification: sessionFinancialContextType === "PRIVATE" ? sessionPrivateZeroClassification || null : null,
+        privatePricingReason: sessionFinancialContextType === "PRIVATE" ? sessionPrivatePricingReason.trim() || null : null,
+        private_pricing_reason: sessionFinancialContextType === "PRIVATE" ? sessionPrivatePricingReason.trim() || null : null,
+        privateRescheduleFinancialDecision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
+        private_reschedule_financial_decision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
         insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
         insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
         insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
@@ -4499,6 +4699,18 @@ export function CoordinatorDashboard({
       payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
       payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
       payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+      privateServiceCatalogId: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
+      private_service_catalog_id: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
+      privateManualAmount: sessionFinancialContextType === "PRIVATE" && sessionPrivateManualAmount !== "" ? Number(sessionPrivateManualAmount) : null,
+      private_manual_amount: sessionFinancialContextType === "PRIVATE" && sessionPrivateManualAmount !== "" ? Number(sessionPrivateManualAmount) : null,
+      privateDiscountAmount: sessionFinancialContextType === "PRIVATE" && sessionPrivateDiscountAmount !== "" ? Number(sessionPrivateDiscountAmount) : null,
+      private_discount_amount: sessionFinancialContextType === "PRIVATE" && sessionPrivateDiscountAmount !== "" ? Number(sessionPrivateDiscountAmount) : null,
+      privateZeroClassification: sessionFinancialContextType === "PRIVATE" ? sessionPrivateZeroClassification || null : null,
+      private_zero_classification: sessionFinancialContextType === "PRIVATE" ? sessionPrivateZeroClassification || null : null,
+      privatePricingReason: sessionFinancialContextType === "PRIVATE" ? sessionPrivatePricingReason.trim() || null : null,
+      private_pricing_reason: sessionFinancialContextType === "PRIVATE" ? sessionPrivatePricingReason.trim() || null : null,
+      privateRescheduleFinancialDecision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
+      private_reschedule_financial_decision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
       insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
       insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
       insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
@@ -4790,6 +5002,10 @@ export function CoordinatorDashboard({
           details?.note ?? details?.notes ?? details?.observation ?? "",
         ).trim(),
         source: String(details?.source || "agenda_management"),
+        privatePolicyDecisionAmount:
+          details?.privatePolicyDecisionAmount === undefined
+            ? undefined
+            : Number(details.privatePolicyDecisionAmount),
       };
       if (canCancelRecurringAppointments && isRecurringAppointment(appointment)) {
         setPendingRecurringCancellation({
@@ -4816,6 +5032,7 @@ export function CoordinatorDashboard({
           note: pendingRecurringCancellation.note,
           source: pendingRecurringCancellation.source,
           recurrenceScope: scope,
+          privatePolicyDecisionAmount: pendingRecurringCancellation.privatePolicyDecisionAmount,
         },
       );
       setPendingRecurringCancellation(null);
@@ -5718,6 +5935,12 @@ export function CoordinatorDashboard({
     setSessionGuideNumber(String(appointment.guideNumber || appointment.guide_number || ""));
     setSessionAuthorizationCode(String(appointment.authorizationCode || appointment.authorization_code || ""));
     setSessionPatientTissAuthorizationId(String(appointment.patientTissAuthorizationId || appointment.patient_tiss_authorization_id || ""));
+    setSessionPrivateServiceCatalogId(String(appointment.privateServiceCatalogId || appointment.private_service_catalog_id || appointment.serviceCatalogId || appointment.service_catalog_id || ""));
+    setSessionPrivateManualAmount(String(appointment.privateManualAmount || appointment.private_manual_amount || ""));
+    setSessionPrivateDiscountAmount(String(appointment.privateDiscountAmount || appointment.private_discount_amount || ""));
+    setSessionPrivateZeroClassification(String(appointment.privateZeroClassification || appointment.private_zero_classification || ""));
+    setSessionPrivatePricingReason(String(appointment.privatePricingReason || appointment.private_pricing_reason || appointment.financialEventReason || appointment.financial_event_reason || ""));
+    setSessionPrivateRescheduleFinancialDecision(String(appointment.privateRescheduleFinancialDecision || appointment.private_reschedule_financial_decision || ""));
     if (appointment.id && !isTherapist) {
       dataService.getAppointmentBillingContext(String(appointment.id)).then((result: any) => {
         if (!result?.success || !result.data) return;
@@ -5957,6 +6180,8 @@ export function CoordinatorDashboard({
   const closeAgendaActionModal = useCallback(() => {
     setSelectedAgendaAppointment(null);
     setAgendaAppointmentObservation("");
+    setAgendaPrivatePolicyDecisionAmount("");
+    setAgendaPrivateFinancialSnapshotState({ loading: false, data: null, error: "" });
   }, []);
 
   const openAgendaActionModal = useCallback((appointment: any) => {
@@ -6011,9 +6236,73 @@ export function CoordinatorDashboard({
           appointment?.appointmentObservation ||
           appointment?.appointment_observation ||
           "",
-      ),
+        ),
     );
+    setAgendaPrivatePolicyDecisionAmount("");
   }, [formatAgendaRoomDisplayName, rooms, therapistMembersById]);
+
+  useEffect(() => {
+    const appointmentId = resolvePersistedAppointmentId(selectedAgendaAppointment);
+    if (!appointmentId || isTherapist) {
+      setAgendaPrivateFinancialSnapshotState({ loading: false, data: null, error: "" });
+      return;
+    }
+
+    let active = true;
+    setAgendaPrivateFinancialSnapshotState({ loading: true, data: null, error: "" });
+    void dataService.getPrivateAppointmentFinancialSnapshot(appointmentId)
+      .then((result: any) => {
+        if (!active) return;
+        setAgendaPrivateFinancialSnapshotState({
+          loading: false,
+          data: result?.success ? result?.data || null : null,
+          error: result?.success ? "" : String(result?.error || "Não foi possível carregar a política financeira."),
+        });
+      })
+      .catch(() => {
+        if (!active) return;
+        setAgendaPrivateFinancialSnapshotState({
+          loading: false,
+          data: null,
+          error: "Não foi possível carregar a política financeira.",
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [isTherapist, resolvePersistedAppointmentId, selectedAgendaAppointment]);
+
+  const agendaPrivatePolicyState = useMemo(() => {
+    const snapshot = agendaPrivateFinancialSnapshotState.data;
+    const finalAmount = Number(snapshot?.final_amount || 0);
+    const cancellationType = String(snapshot?.late_cancellation_rule?.type || "NO_CHARGE").toUpperCase();
+    const noShowType = String(snapshot?.no_show_rule?.type || "NO_CHARGE").toUpperCase();
+    const cancellationFreeUntil = new Date(snapshot?.cancellation_free_until || "").getTime();
+    const cancellationRequiresManualDecision =
+      cancellationType === "MANUAL" &&
+      (!Number.isFinite(cancellationFreeUntil) || Date.now() > cancellationFreeUntil);
+    const noShowRequiresManualDecision = noShowType === "MANUAL";
+    const parsedDecisionAmount =
+      agendaPrivatePolicyDecisionAmount.trim() === ""
+        ? null
+        : Number(agendaPrivatePolicyDecisionAmount.replace(",", "."));
+    const validDecisionAmount =
+      parsedDecisionAmount !== null &&
+      Number.isFinite(parsedDecisionAmount) &&
+      parsedDecisionAmount >= 0 &&
+      parsedDecisionAmount <= finalAmount;
+    return {
+      snapshot,
+      finalAmount,
+      cancellationType,
+      noShowType,
+      cancellationRequiresManualDecision,
+      noShowRequiresManualDecision,
+      parsedDecisionAmount,
+      validDecisionAmount,
+      canDecide: ["owner", "admin", "coordinator", "receptionist"].includes(role.toLowerCase()),
+    };
+  }, [agendaPrivateFinancialSnapshotState.data, agendaPrivatePolicyDecisionAmount, role]);
 
   const openAppointmentProfileFromAgenda = useCallback(
     (appointment: any) => {
@@ -6095,15 +6384,105 @@ export function CoordinatorDashboard({
     [closeAgendaActionModal, handleEditAppointment],
   );
 
+  const resolveAgendaManualPolicyDecision = useCallback(
+    (event: "cancellation" | "no_show") => {
+      if (agendaPrivateFinancialSnapshotState.loading) {
+        showToast("Aguarde a leitura da política financeira congelada desta consulta.", "error");
+        return { ok: false as const, amount: undefined };
+      }
+      if (agendaPrivateFinancialSnapshotState.error) {
+        showToast(agendaPrivateFinancialSnapshotState.error, "error");
+        return { ok: false as const, amount: undefined };
+      }
+      const requiresManualDecision =
+        event === "cancellation"
+          ? agendaPrivatePolicyState.cancellationRequiresManualDecision
+          : agendaPrivatePolicyState.noShowRequiresManualDecision;
+      if (!requiresManualDecision) {
+        return { ok: true as const, amount: undefined };
+      }
+      if (!agendaPrivatePolicyState.canDecide) {
+        showToast(
+          "Seu perfil não possui permissão para decidir a cobrança manual deste evento.",
+          "error",
+        );
+        return { ok: false as const, amount: undefined };
+      }
+      if (!agendaPrivatePolicyState.validDecisionAmount) {
+        showToast(
+          `Informe um valor entre R$ 0,00 e ${agendaPrivatePolicyState.finalAmount.toLocaleString("pt-BR", {
+            style: "currency",
+            currency: "BRL",
+          })}.`,
+          "error",
+        );
+        return { ok: false as const, amount: undefined };
+      }
+      if (!agendaAppointmentObservation.trim()) {
+        showToast("Informe o motivo da decisão financeira na observação da consulta.", "error");
+        return { ok: false as const, amount: undefined };
+      }
+      return {
+        ok: true as const,
+        amount: agendaPrivatePolicyState.parsedDecisionAmount as number,
+      };
+    },
+    [
+      agendaAppointmentObservation,
+      agendaPrivateFinancialSnapshotState.error,
+      agendaPrivateFinancialSnapshotState.loading,
+      agendaPrivatePolicyState,
+      showToast,
+    ],
+  );
+
   const handleCancelAppointmentFromAgenda = useCallback(
     (appointment: any) => {
+      if (!agendaAppointmentObservation.trim()) {
+        showToast("Informe o motivo do cancelamento na observação da consulta.", "error");
+        return;
+      }
+      const decision = resolveAgendaManualPolicyDecision("cancellation");
+      if (!decision.ok) return;
       closeAgendaActionModal();
       requestAppointmentCancellation(appointment, {
         note: agendaAppointmentObservation,
         source: "agenda_modal",
+        privatePolicyDecisionAmount: decision.amount,
       });
     },
-    [agendaAppointmentObservation, closeAgendaActionModal, requestAppointmentCancellation],
+    [
+      agendaAppointmentObservation,
+      closeAgendaActionModal,
+      requestAppointmentCancellation,
+      resolveAgendaManualPolicyDecision,
+      showToast,
+    ],
+  );
+
+  const handleNoShowAppointmentFromAgenda = useCallback(
+    (appointment: any) => {
+      if (!agendaAppointmentObservation.trim()) {
+        showToast("Informe o motivo da falta na observação da consulta.", "error");
+        return;
+      }
+      const decision = resolveAgendaManualPolicyDecision("no_show");
+      if (!decision.ok) return;
+      closeAgendaActionModal();
+      void handleStatusUpdate(appointment?.id, "no_show", {
+        note: agendaAppointmentObservation,
+        source: "agenda_modal",
+        recurrenceScope: "single",
+        privatePolicyDecisionAmount: decision.amount,
+      });
+    },
+    [
+      agendaAppointmentObservation,
+      closeAgendaActionModal,
+      handleStatusUpdate,
+      resolveAgendaManualPolicyDecision,
+      showToast,
+    ],
   );
 
   const handleDeleteAppointmentFromAgenda = useCallback(
@@ -6127,6 +6506,18 @@ export function CoordinatorDashboard({
     },
     [agendaAppointmentObservation, closeAgendaActionModal, handleStatusUpdate],
   );
+
+  const patientFinanceByAppointmentId = useMemo(() => {
+    const map = new Map<string, any>();
+    (payments || []).forEach((payment: any) => {
+      const appointmentId = String(payment?.appointment_id || payment?.appointmentId || "").trim();
+      if (appointmentId) map.set(appointmentId, {
+        ...payment,
+        payment_id: payment?.payment_id || payment?.id,
+      });
+    });
+    return map;
+  }, [payments]);
 
   const normalizedAgenda = useMemo(
     () =>
@@ -6186,6 +6577,10 @@ export function CoordinatorDashboard({
         const roomDisplayName = formatAgendaRoomDisplayName(
           roomMatch?.name || item?.roomName || item?.room || "",
         );
+        const patientFinance =
+          patientFinanceByAppointmentId.get(String(item?.id || "")) ||
+          item?.patientFinance ||
+          null;
 
         return {
           ...item,
@@ -6195,9 +6590,10 @@ export function CoordinatorDashboard({
           roomDisplayName,
           type: normalizeUtf8Text(item.type || item.approach || "Sessão"),
           anamnesisPending: isPatientPendingAnamnesis(resolvedPatient),
+          patientFinance,
         };
       }),
-    [therapistAgenda, allPatients, rooms, therapistMembersById, formatAgendaRoomDisplayName],
+    [therapistAgenda, allPatients, rooms, therapistMembersById, formatAgendaRoomDisplayName, patientFinanceByAppointmentId],
   );
 
   const todayAgendaKey = useMemo(() => {
@@ -13501,8 +13897,111 @@ export function CoordinatorDashboard({
                         </label>
                       </>
                     ) : sessionFinancialContextType === "PRIVATE" ? (
-                      <div className="sm:col-span-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-                        Atendimento particular, sem pagador de convênio.
+                      <div className="sm:col-span-2 space-y-3 rounded-2xl border border-emerald-100 bg-emerald-50/60 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800">Composição particular</p>
+                            <p className="mt-1 text-xs font-normal text-slate-500">Atendimento particular, sem pagador de convênio. O backend recalcula e congela estes dados ao confirmar o agendamento.</p>
+                          </div>
+                          {sessionPrivatePricingState.loading && <Loader2 size={16} className="animate-spin text-emerald-600" />}
+                        </div>
+                        {sessionPrivateServices.length > 0 && (
+                          <label className={sessionModalLabelClass}>
+                            Serviço ou procedimento (opcional)
+                            <select className={sessionModalSelectClass} value={sessionPrivateServiceCatalogId} onChange={(event) => setSessionPrivateServiceCatalogId(event.target.value)}>
+                              <option value="">Usar regra da especialidade</option>
+                              {sessionPrivateServices.map((service: any) => <option key={service.id} value={service.id}>{service.name}</option>)}
+                            </select>
+                          </label>
+                        )}
+                        {sessionPrivatePricingState.quote ? (
+                          <>
+                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                              {[
+                                ["Valor base", sessionPrivatePricingState.quote.base_amount],
+                                ["Adicional", sessionPrivatePricingState.quote.location_surcharge],
+                                ["Desconto", sessionPrivatePricingState.quote.discount_amount],
+                                ["Total", sessionPrivatePricingState.quote.final_amount],
+                              ].map(([label, value]) => (
+                                <div key={String(label)} className="rounded-xl border border-white bg-white p-2.5">
+                                  <p className="text-[11px] font-medium text-slate-400">{label}</p>
+                                  <p className="mt-1 text-sm font-semibold text-slate-800">{formatCurrency(value)}</p>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="grid gap-2 text-xs text-slate-600 sm:grid-cols-2">
+                              <p><span className="text-slate-400">Origem:</span> {sessionPrivatePricingState.quote.price_source_label}</p>
+                              <p><span className="text-slate-400">Pagador:</span> {sessionPrivatePricingState.quote.payer_name}</p>
+                              <p><span className="text-slate-400">Vencimento:</span> {String(sessionPrivatePricingState.quote.due_date || "").split("-").reverse().join("/")}</p>
+                              <p><span className="text-slate-400">Cancelamento gratuito até:</span> {sessionPrivatePricingState.quote.cancellation_free_until ? new Date(sessionPrivatePricingState.quote.cancellation_free_until).toLocaleString("pt-BR") : "não configurado"}</p>
+                              <p><span className="text-slate-400">Cancelamento tardio:</span> {sessionPrivatePricingState.quote.late_cancellation_rule?.type || "NO_CHARGE"} · {sessionPrivatePricingState.quote.late_cancellation_rule?.value || 0}</p>
+                              <p><span className="text-slate-400">Falta:</span> {sessionPrivatePricingState.quote.no_show_rule?.type || "NO_CHARGE"} · {sessionPrivatePricingState.quote.no_show_rule?.value || 0}</p>
+                            </div>
+                          </>
+                        ) : sessionPrivatePricingState.error ? (
+                          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                            <p className="font-semibold">{sessionPrivatePricingState.error}</p>
+                            <p className="mt-1 font-normal">Configure o preço no Financeiro, informe um valor autorizado ou volte ao agendamento.</p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-500">Selecione paciente, especialidade, data, horário e local para calcular.</p>
+                        )}
+                        {sessionRequiresPrivateRescheduleDecision && (
+                          <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                            <div>
+                              <p className="text-sm font-semibold text-amber-900">Cobrança tardia já registrada</p>
+                              <p className="mt-1 text-xs font-normal text-amber-800">
+                                Defina explicitamente o destino financeiro antes de salvar. A escolha e o motivo ficam no histórico de auditoria.
+                              </p>
+                            </div>
+                            <label className={sessionModalLabelClass}>
+                              Tratamento da cobrança anterior
+                              <select
+                                className={sessionModalSelectClass}
+                                value={sessionPrivateRescheduleFinancialDecision}
+                                onChange={(event) => setSessionPrivateRescheduleFinancialDecision(event.target.value)}
+                              >
+                                <option value="">Selecione uma decisão</option>
+                                <option value="KEEP_PREVIOUS_CHARGE">Manter cobrança anterior</option>
+                                <option value="CONVERT_TO_CREDIT">Transformar em crédito para esta nova sessão</option>
+                                <option value="EXEMPT_PREVIOUS_CHARGE">Isentar cobrança anterior e criar a nova</option>
+                                <option value="CREATE_NEW_CHARGE">Manter anterior e criar nova cobrança</option>
+                                <option value="TRANSFER_TO_RESCHEDULED_SESSION">Transferir a cobrança para a sessão reagendada</option>
+                              </select>
+                            </label>
+                            <p className="text-[11px] font-normal text-amber-700">
+                              Nenhuma opção apaga histórico. Crédito, isenção e nova cobrança geram eventos e snapshots próprios.
+                            </p>
+                          </div>
+                        )}
+                        {(canOverridePrivateSessionAmount || canDiscountPrivateSessionAmount || canManagePrivateSessionAmount) && (
+                          <div className="grid gap-3 border-t border-emerald-100 pt-3 sm:grid-cols-2">
+                            {canOverridePrivateSessionAmount && (
+                              <label className={sessionModalLabelClass}>Valor manual autorizado
+                                <input type="number" min="0" step="0.01" className={sessionModalInputClass} value={sessionPrivateManualAmount} onChange={(event) => setSessionPrivateManualAmount(event.target.value)} placeholder="Manter regra automática" />
+                              </label>
+                            )}
+                            {canDiscountPrivateSessionAmount && (
+                              <label className={sessionModalLabelClass}>Desconto autorizado
+                                <input type="number" min="0" step="0.01" className={sessionModalInputClass} value={sessionPrivateDiscountAmount} onChange={(event) => setSessionPrivateDiscountAmount(event.target.value)} placeholder="0,00" />
+                              </label>
+                            )}
+                            {canManagePrivateSessionAmount && (
+                              <label className={sessionModalLabelClass}>Valor zero
+                                <select className={sessionModalSelectClass} value={sessionPrivateZeroClassification} onChange={(event) => setSessionPrivateZeroClassification(event.target.value)}>
+                                  <option value="">Não se aplica</option>
+                                  <option value="COURTESY">Cortesia</option>
+                                  <option value="EXEMPT">Isenção</option>
+                                  <option value="CONTRACTUAL_FREE">Gratuidade contratual</option>
+                                  <option value="OTHER_AUTHORIZED">Outro motivo autorizado</option>
+                                </select>
+                              </label>
+                            )}
+                            <label className={sessionModalLabelClass}>Motivo da alteração
+                              <input className={sessionModalInputClass} value={sessionPrivatePricingReason} onChange={(event) => setSessionPrivatePricingReason(event.target.value)} placeholder="Obrigatório em desconto ou valor zero" />
+                            </label>
+                          </div>
+                        )}
                       </div>
                     ) : null}
                     {sessionFinancialContextType === "INSURANCE" && sessionPayerId && selectedSessionPatient && (
@@ -13604,7 +14103,7 @@ export function CoordinatorDashboard({
                   </div>
                   {sessionFinancialContextError && (
                     <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
-                      {APPOINTMENT_FINANCIAL_CONTEXT_REQUIRED_MESSAGE}
+                      {sessionFinancialContextError}
                     </div>
                   )}
                 </div>
@@ -14116,6 +14615,76 @@ export function CoordinatorDashboard({
               </div>
             )}
 
+            {agendaPrivateFinancialSnapshotState.loading && (
+              <div className="mb-5 flex items-center gap-2 rounded-2xl border border-violet-100 bg-violet-50/70 px-4 py-3 text-sm text-violet-700">
+                <Loader2 size={16} className="animate-spin" />
+                Lendo política financeira congelada…
+              </div>
+            )}
+
+            {!agendaPrivateFinancialSnapshotState.loading &&
+              agendaPrivateFinancialSnapshotState.data && (
+                <div className="mb-5 rounded-2xl border border-violet-100 bg-violet-50/70 px-4 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-violet-900">
+                        Política particular desta consulta
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-violet-700">
+                        Valor congelado: {formatCurrency(agendaPrivatePolicyState.finalAmount)}
+                        {" · "}Cancelamento: {agendaPrivatePolicyState.cancellationType}
+                        {" · "}Falta: {agendaPrivatePolicyState.noShowType}
+                      </p>
+                    </div>
+                    <ShieldCheck size={18} className="shrink-0 text-violet-600" />
+                  </div>
+
+                  {(agendaPrivatePolicyState.cancellationRequiresManualDecision ||
+                    agendaPrivatePolicyState.noShowRequiresManualDecision) && (
+                    <div className="mt-3 border-t border-violet-100 pt-3">
+                      <label
+                        htmlFor="agenda-private-policy-amount"
+                        className="block text-xs font-semibold text-violet-900"
+                      >
+                        Valor a cobrar no evento escolhido
+                      </label>
+                      <p className="mt-1 text-xs leading-5 text-violet-700">
+                        A política manual exige valor e motivo. Use a observação abaixo para registrar a justificativa.
+                      </p>
+                      <div className="relative mt-2">
+                        <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-slate-500">
+                          R$
+                        </span>
+                        <input
+                          id="agenda-private-policy-amount"
+                          type="number"
+                          min="0"
+                          max={agendaPrivatePolicyState.finalAmount}
+                          step="0.01"
+                          inputMode="decimal"
+                          value={agendaPrivatePolicyDecisionAmount}
+                          onChange={(event) => setAgendaPrivatePolicyDecisionAmount(event.target.value)}
+                          disabled={!agendaPrivatePolicyState.canDecide}
+                          placeholder="0,00"
+                          className="w-full rounded-xl border border-violet-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-500/10 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        />
+                      </div>
+                      {!agendaPrivatePolicyState.canDecide && (
+                        <p className="mt-2 text-xs text-rose-700">
+                          Seu perfil pode consultar a política, mas não decidir manualmente a cobrança.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+            {agendaPrivateFinancialSnapshotState.error && (
+              <div className="mb-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs leading-5 text-rose-700">
+                {agendaPrivateFinancialSnapshotState.error}
+              </div>
+            )}
+
             <div className="mb-5">
               <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
                 Observação da consulta
@@ -14157,6 +14726,15 @@ export function CoordinatorDashboard({
               >
                 <XCircle size={16} />
                 Cancelar
+              </button>
+              <button
+                onClick={() =>
+                  handleNoShowAppointmentFromAgenda(selectedAgendaAppointment)
+                }
+                className="flex items-center gap-2 rounded-2xl border border-amber-200 px-4 py-3 text-sm font-semibold text-amber-700 hover:bg-amber-50 transition-all"
+              >
+                <AlertCircle size={16} />
+                Marcar falta
               </button>
               <button
                 onClick={() =>

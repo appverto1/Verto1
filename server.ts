@@ -10020,6 +10020,262 @@ async function validateAppointmentFinancialContextForWrite(appointment: any, cli
   return { ok: true };
 }
 
+const privateSessionPricingErrorResponse = (error: any) => {
+  const raw = sanitizeString(error?.message || error?.details || String(error || ''), 500);
+  if (raw.includes('PRIVATE_SESSION_PRICE_REQUIRED')) {
+    return {
+      status: 409,
+      error: 'Esta especialidade ou serviço não possui valor particular configurado. Configure um preço, informe um valor manual autorizado ou marque explicitamente como cortesia ou isenção.'
+    };
+  }
+  if (raw.includes('PRIVATE_SESSION_ZERO_JUSTIFICATION_REQUIRED')) {
+    return { status: 409, error: 'Uma sessão particular com valor zero exige cortesia, isenção ou outra classificação autorizada, com motivo.' };
+  }
+  if (raw.includes('PRIVATE_SESSION_ZERO_REASON_REQUIRED') || raw.includes('PRIVATE_SESSION_OVERRIDE_REASON_REQUIRED') || raw.includes('PRIVATE_SESSION_DISCOUNT_REASON_REQUIRED')) {
+    return { status: 400, error: 'Informe o motivo da alteração financeira para manter a auditoria do atendimento.' };
+  }
+  if (raw.includes('PRIVATE_SESSION_ZERO_OVERRIDE_FORBIDDEN') || raw.includes('PRIVATE_SESSION_MANUAL_OVERRIDE_FORBIDDEN') || raw.includes('PRIVATE_SESSION_DISCOUNT_FORBIDDEN')) {
+    return { status: 403, error: 'Seu perfil não possui permissão para alterar o valor particular desta sessão.' };
+  }
+  if (raw.includes('PRIVATE_SESSION_DISCOUNT_APPROVAL_REQUIRED')) {
+    return { status: 403, error: 'Este desconto exige aprovação de owner ou administrador.' };
+  }
+  if (
+    raw.includes('PRIVATE_SESSION_MANUAL_CANCELLATION_DECISION_REQUIRED') ||
+    raw.includes('PRIVATE_SESSION_MANUAL_NO_SHOW_DECISION_REQUIRED')
+  ) {
+    return {
+      status: 409,
+      error: 'A política congelada desta consulta exige uma decisão financeira explícita, com valor e motivo, antes de cancelar ou registrar falta.'
+    };
+  }
+  if (raw.includes('PRIVATE_SESSION_MANUAL_POLICY_DECISION_FORBIDDEN')) {
+    return {
+      status: 403,
+      error: 'Seu perfil não possui permissão para decidir manualmente a cobrança de cancelamento ou falta.'
+    };
+  }
+  if (raw.includes('PRIVATE_SESSION_MANUAL_POLICY_AMOUNT_INVALID')) {
+    return {
+      status: 400,
+      error: 'O valor decidido para cancelamento ou falta deve estar entre zero e o valor congelado da consulta.'
+    };
+  }
+  if (raw.includes('PRIVATE_SESSION_CANCEL_REQUIRES_REFUND_OR_CREDIT')) {
+    return {
+      status: 409,
+      error: 'Esta consulta possui valor recebido. Registre estorno ou crédito antes de concluir o cancelamento.'
+    };
+  }
+  if (raw.includes('PRIVATE_SESSION_NO_SHOW_PAID_REVIEW_REQUIRED')) {
+    return {
+      status: 409,
+      error: 'Esta consulta possui valor recebido. Revise o pagamento antes de registrar a falta.'
+    };
+  }
+  if (raw.includes('PRIVATE_SESSION_PATIENT_SCOPE_INVALID') || raw.includes('PRIVATE_SESSION_SERVICE_SCOPE_INVALID') || raw.includes('PRIVATE_SESSION_PAYER_SCOPE_INVALID')) {
+    return { status: 403, error: 'Paciente, serviço ou pagador não pertence à clínica atual.' };
+  }
+  if (raw.includes('PRIVATE_SESSION_MANUAL_AMOUNT_INVALID') || raw.includes('PRIVATE_SESSION_ZERO_CLASSIFICATION_INVALID')) {
+    return { status: 400, error: 'A alteração manual do valor particular é inválida.' };
+  }
+  if (raw.includes('IDEMPOTENCY_CONFLICT')) {
+    return { status: 409, error: 'Esta chave de idempotência já foi usada com outro conteúdo. Salve novamente como uma nova versão.' };
+  }
+  if (raw.includes('WRITE_FORBIDDEN')) {
+    return { status: 403, error: 'Somente owner ou administrador pode criar versões de preços e acordos particulares.' };
+  }
+  if (
+    hasMissingFinancialSchema(error) ||
+    isMissingRelationError(error) ||
+    raw.includes('resolve_private_session_price')
+  ) {
+    return { status: 503, error: 'A precificação particular ainda não está disponível neste ambiente. Nenhum agendamento foi alterado.' };
+  }
+  return { status: 400, error: 'Não foi possível resolver o valor particular. Revise a configuração e tente novamente.' };
+};
+
+function buildPrivateSessionPricingRequest(appointment: any) {
+  return cleanObject({
+    appointmentId: sanitizeString(appointment?.id, 120),
+    patientId: sanitizeString(appointment?.patient_id || appointment?.patientId, 120),
+    specialty: sanitizeString(
+      appointment?.specialty ||
+        appointment?.specialtyName ||
+        appointment?.specialty_name ||
+        appointment?.approach ||
+        appointment?.service_type ||
+        appointment?.serviceType ||
+        appointment?.type,
+      160
+    ),
+    serviceCatalogId: sanitizeString(
+      appointment?.privateServiceCatalogId ||
+        appointment?.private_service_catalog_id ||
+        appointment?.serviceCatalogId ||
+        appointment?.service_catalog_id,
+      120
+    ) || null,
+    scheduledAt: buildAppointmentScheduledAt(appointment),
+    careSetting: sanitizeString(
+      appointment?.care_setting || appointment?.careSetting || appointment?.location_type || appointment?.locationType,
+      80
+    ) || 'CLINIC',
+    manualAmount: asSafeNumber(
+      appointment?.privateManualAmount ?? appointment?.private_manual_amount,
+      0,
+      1_000_000
+    ),
+    discountAmount: asSafeNumber(
+      appointment?.privateDiscountAmount ?? appointment?.private_discount_amount,
+      0,
+      1_000_000
+    ),
+    zeroClassification: sanitizeString(
+      appointment?.privateZeroClassification || appointment?.private_zero_classification,
+      80
+    ) || null,
+    overrideReason: sanitizeString(
+      appointment?.privatePricingReason ||
+        appointment?.private_pricing_reason ||
+        appointment?.financialEventReason ||
+        appointment?.financial_event_reason,
+      1200
+    ) || null,
+    recurrenceGroupId: sanitizeString(
+      appointment?.recurrenceGroupId || appointment?.recurrence_group_id,
+      120
+    ) || null
+  });
+}
+
+async function validatePrivateAppointmentPricingBatch(
+  appointments: any[],
+  clinicId: string,
+  actorId: string
+) {
+  const requests = (appointments || [])
+    .filter((appointment: any) => readAppointmentFinancialContextType(mergeAppointmentBillingPayload(appointment)) === 'PRIVATE')
+    .map(buildPrivateSessionPricingRequest);
+  if (requests.length === 0) return { ok: true as const, resolutions: [] as any[] };
+
+  const result = await supabase.rpc('resolve_private_session_prices_v1', {
+    p_organization_id: clinicId,
+    p_requests: requests,
+    p_actor_id: actorId
+  });
+  if (result.error) {
+    const safe = privateSessionPricingErrorResponse(result.error);
+    return { ok: false as const, ...safe };
+  }
+  const resolutions = Array.isArray(result.data) ? result.data : [];
+  if (resolutions.length !== requests.length || resolutions.some((resolution: any) => resolution?.valid !== true)) {
+    return {
+      ok: false as const,
+      status: 409,
+      error: 'Não foi possível confirmar o valor de todas as sessões particulares. Nenhum agendamento foi alterado.'
+    };
+  }
+  return { ok: true as const, resolutions };
+}
+
+const PRIVATE_LATE_CANCELLATION_RESCHEDULE_DECISIONS = new Set([
+  'KEEP_PREVIOUS_CHARGE',
+  'CONVERT_TO_CREDIT',
+  'EXEMPT_PREVIOUS_CHARGE',
+  'CREATE_NEW_CHARGE',
+  'TRANSFER_TO_RESCHEDULED_SESSION'
+]);
+
+async function validatePrivateLateCancellationRescheduleBatch(params: {
+  appointments: any[];
+  existingById: Map<string, any>;
+  clinicId: string;
+  actorRole: string;
+}) {
+  const rescheduled = (params.appointments || []).filter((appointment: any) => {
+    if (readAppointmentFinancialContextType(mergeAppointmentBillingPayload(appointment)) !== 'PRIVATE') return false;
+    const appointmentId = sanitizeString(appointment?.id, 120);
+    const existing = params.existingById.get(appointmentId);
+    if (!existing) return false;
+    const previousTime = new Date(buildAppointmentScheduledAt(existing) || 0).getTime();
+    const nextTime = new Date(buildAppointmentScheduledAt(appointment) || 0).getTime();
+    return Number.isFinite(previousTime) && Number.isFinite(nextTime) && previousTime !== nextTime;
+  });
+  if (rescheduled.length === 0) return { ok: true as const };
+
+  const appointmentIds = rescheduled
+    .map((appointment: any) => sanitizeString(appointment?.id, 120))
+    .filter((appointmentId: string) => isUuid(appointmentId));
+  const result = await supabase
+    .from('payments')
+    .select('appointment_id, private_financial_classification, financial_status, paid_amount, refunded_amount')
+    .eq('organization_id', params.clinicId)
+    .in('appointment_id', appointmentIds);
+  if (result.error) {
+    const safe = privateSessionPricingErrorResponse(result.error);
+    return { ok: false as const, ...safe };
+  }
+  const lateByAppointmentId = new Map(
+    (result.data || [])
+      .filter((payment: any) =>
+        sanitizeString(
+          payment?.private_financial_classification || payment?.financial_status,
+          100
+        ).toUpperCase() === 'LATE_CANCELLATION_CHARGE'
+      )
+      .map((payment: any) => [sanitizeString(payment?.appointment_id, 120), payment])
+  );
+  if (lateByAppointmentId.size === 0) return { ok: true as const };
+
+  if (!['owner', 'admin', 'coordinator', 'receptionist'].includes(sanitizeString(params.actorRole, 80).toLowerCase())) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: 'Seu perfil não pode decidir o destino de uma cobrança por cancelamento tardio.'
+    };
+  }
+  for (const appointment of rescheduled) {
+    const payment = lateByAppointmentId.get(sanitizeString(appointment?.id, 120));
+    if (!payment) continue;
+    const decision = sanitizeString(
+      appointment?.privateRescheduleFinancialDecision ||
+        appointment?.private_reschedule_financial_decision,
+      100
+    ).toUpperCase();
+    const reason = sanitizeString(
+      appointment?.privatePricingReason ||
+        appointment?.private_pricing_reason ||
+        appointment?.financialEventReason ||
+        appointment?.financial_event_reason,
+      1200
+    );
+    if (!PRIVATE_LATE_CANCELLATION_RESCHEDULE_DECISIONS.has(decision)) {
+      return {
+        ok: false as const,
+        status: 409,
+        error: 'Escolha como tratar a cobrança do cancelamento tardio antes de reagendar.'
+      };
+    }
+    if (!reason) {
+      return {
+        ok: false as const,
+        status: 400,
+        error: 'Informe o motivo da decisão financeira deste reagendamento.'
+      };
+    }
+    const paidNet = Math.max(Number(payment?.paid_amount || 0) - Number(payment?.refunded_amount || 0), 0);
+    if (paidNet > 0) {
+      return {
+        ok: false as const,
+        status: 409,
+        error: 'A cobrança tardia possui pagamento. Registre o estorno ou o crédito no financeiro antes de reagendar.'
+      };
+    }
+  }
+  return { ok: true as const };
+}
+
 function appointmentDateKeyForAuthorization(value: any): string {
   const safe = sanitizeString(value, 80).slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(safe) ? safe : new Date().toISOString().slice(0, 10);
@@ -11616,6 +11872,14 @@ async function syncAppointmentsTableFromClinicState(params: {
       location_timezone: sanitizeString(appointment?.location_timezone || appointment?.locationTimezone, 80) || 'America/Sao_Paulo',
       location_notes: sanitizeString(appointment?.location_notes || appointment?.locationNotes || appointment?.addressNote, 1000) || null,
       call_link: sanitizeString(appointment?.call_link || appointment?.callLink, 500) || null,
+      financial_event_actor_id: isUuid(actorId) ? actorId : null,
+      financial_event_reason: sanitizeString(
+        appointment?.privatePricingReason ||
+          appointment?.private_pricing_reason ||
+          appointment?.financialEventReason ||
+          appointment?.financial_event_reason,
+        1200
+      ) || null,
       recurrence_group_id: sanitizeString(appointment?.recurrenceGroupId || appointment?.recurrence_group_id, 120) || null,
       recurrence_index: Number.isFinite(Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index))
         ? Math.max(0, Math.round(Number(appointment?.recurrenceIndex ?? appointment?.recurrence_index)))
@@ -22804,6 +23068,22 @@ async function startServer() {
         locationSource: location.locationSource,
         location_timezone: location.locationTimezone,
         locationTimezone: location.locationTimezone,
+        financial_event_actor_id: isUuid(sanitizeString(actor?.id, 120)) ? sanitizeString(actor?.id, 120) : null,
+        financialEventActorId: isUuid(sanitizeString(actor?.id, 120)) ? sanitizeString(actor?.id, 120) : null,
+        financial_event_reason: sanitizeString(
+          rawAppointment?.privatePricingReason ||
+            rawAppointment?.private_pricing_reason ||
+            rawAppointment?.financialEventReason ||
+            rawAppointment?.financial_event_reason,
+          1200
+        ) || null,
+        financialEventReason: sanitizeString(
+          rawAppointment?.privatePricingReason ||
+            rawAppointment?.private_pricing_reason ||
+            rawAppointment?.financialEventReason ||
+            rawAppointment?.financial_event_reason,
+          1200
+        ) || null,
         scheduled_at: scheduledAt,
         scheduledAt,
         scheduled_start_at: scheduledAt,
@@ -23256,6 +23536,43 @@ async function startServer() {
       preparedAppointments.push(preparedAppointment);
     }
 
+    const privatePricingValidation = await validatePrivateAppointmentPricingBatch(
+      preparedAppointments,
+      clinicId,
+      actorId
+    );
+    if (!privatePricingValidation.ok) {
+      return res.status(privatePricingValidation.status).json({
+        success: false,
+        error: privatePricingValidation.error
+      });
+    }
+    const privateRescheduleValidation = await validatePrivateLateCancellationRescheduleBatch({
+      appointments: preparedAppointments,
+      existingById,
+      clinicId,
+      actorRole: sanitizeString(actor?.role, 80)
+    });
+    if (!privateRescheduleValidation.ok) {
+      return res.status(privateRescheduleValidation.status).json({
+        success: false,
+        error: privateRescheduleValidation.error
+      });
+    }
+    const privateResolutionByAppointmentId = new Map(
+      privatePricingValidation.resolutions.map((resolution: any) => [
+        sanitizeString(resolution?.appointment_id, 120),
+        resolution
+      ])
+    );
+    for (const appointment of preparedAppointments) {
+      if (readAppointmentFinancialContextType(mergeAppointmentBillingPayload(appointment)) !== 'PRIVATE') continue;
+      const resolution = privateResolutionByAppointmentId.get(sanitizeString(appointment?.id, 120));
+      if (!resolution) continue;
+      appointment.privatePricingResolution = resolution;
+      appointment.private_pricing_resolution = resolution;
+    }
+
     const appointmentIds = preparedAppointments.map((appointment) => sanitizeString(appointment?.id, 120));
     const pathAppointmentId = sanitizeString(params.pathAppointmentId, 120);
     if (pathAppointmentId && !appointmentIds.includes(pathAppointmentId)) {
@@ -23266,12 +23583,26 @@ async function startServer() {
       req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'] || `${params.eventType}:${crypto.randomUUID()}`,
       240
     );
+    const appointmentRequestHash = stableHashPayload(
+      preparedAppointments.map((appointment: any) => ({
+        ...appointment,
+        privatePricingResolution: undefined,
+        private_pricing_resolution: undefined
+      }))
+    );
     const previousAction = await fetchPersistedAppointmentActionByIdempotencyKey({
       clinicId,
       eventType: params.eventType,
       idempotencyKey
     });
     if (previousAction?.appointments?.length) {
+      const previousRequestHash = sanitizeString(previousAction.events?.[0]?.payload?.requestHash, 128);
+      if (previousRequestHash && previousRequestHash !== appointmentRequestHash) {
+        return res.status(409).json({
+          success: false,
+          error: 'Esta chave de idempotência já foi usada com outro conteúdo. Gere uma nova tentativa sem alterar o payload anterior.'
+        });
+      }
       const action = params.eventType === 'appointment.created' ? 'created' : 'updated';
       return res.json({
         success: true,
@@ -23387,7 +23718,7 @@ async function startServer() {
       actor,
       clinicId,
       idempotencyKey,
-      payload: { appointmentIds }
+      payload: { appointmentIds, requestHash: appointmentRequestHash }
     });
     if (scheduleChangedAppointmentIds.size > 0) {
       try {
@@ -24593,7 +24924,18 @@ async function startServer() {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
       const normalizedResponseStatus = normalizeAppointmentResponseAction(requestedStatus);
-      const allowedStatuses = new Set(['pending', 'scheduled', 'confirmed', 'reschedule', 'rescheduled', 'cancelled', 'canceled']);
+      const allowedStatuses = new Set([
+        'pending',
+        'scheduled',
+        'confirmed',
+        'reschedule',
+        'rescheduled',
+        'cancelled',
+        'canceled',
+        'no_show',
+        'missed',
+        'faltou'
+      ]);
       if (!appointmentId || (!allowedStatuses.has(requestedStatus) && !normalizedResponseStatus)) {
         return res.status(400).json({ success: false, error: 'Status de consulta inválido.' });
       }
@@ -24626,6 +24968,20 @@ async function startServer() {
         req.body?.note || req.body?.notes || req.body?.observation || req.body?.appointmentObservation,
         1200
       );
+      const requestedPolicyDecisionAmountRaw =
+        req.body?.privatePolicyDecisionAmount ??
+        req.body?.private_policy_decision_amount ??
+        req.body?.financialPolicyDecisionAmount ??
+        req.body?.financial_policy_decision_amount;
+      const hasRequestedPolicyDecisionAmount =
+        requestedPolicyDecisionAmountRaw !== undefined &&
+        requestedPolicyDecisionAmountRaw !== null &&
+        String(requestedPolicyDecisionAmountRaw).trim() !== '';
+      const requestedPolicyDecisionAmount = hasRequestedPolicyDecisionAmount
+        ? Number(requestedPolicyDecisionAmountRaw)
+        : null;
+      let verifiedPolicyDecisionAmount: number | null = null;
+      let verifiedPolicyDecisionEvent: 'CANCELED' | 'NO_SHOW' | null = null;
       const notificationAction = sanitizeString(req.body?.notificationAction || req.body?.action, 80).toLowerCase();
       const isPushNotificationAction = safeSource === 'push_notification_action';
       const isFutureRecurringCancellation =
@@ -24633,6 +24989,17 @@ async function startServer() {
 
       if (isPatientActor && !['confirmed', 'reschedule', 'canceled'].includes(normalizedStatus)) {
         return res.status(403).json({ success: false, error: 'Resposta de consulta não permitida.' });
+      }
+
+      if (
+        isProfessionalActor &&
+        (normalizedStatus === 'canceled' || normalizedStatus === 'no_show') &&
+        !appointmentNote
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: 'Informe o motivo do cancelamento ou da falta para preservar a auditoria da consulta.'
+        });
       }
 
       const canCancelFutureRecurrence = isProfessionalActor;
@@ -24661,8 +25028,14 @@ async function startServer() {
         if (validAppointmentIds.length === 0) return new Map<string, any>();
         const patchWithConfirmation: any = {
           status: tableStatus,
+          financial_event_actor_id: isUuid(actorId) ? actorId : null,
+          financial_event_reason: appointmentNote || null,
           updated_at: now
         };
+        if (verifiedPolicyDecisionEvent && verifiedPolicyDecisionAmount !== null) {
+          patchWithConfirmation.financial_policy_decision_event = verifiedPolicyDecisionEvent;
+          patchWithConfirmation.financial_policy_decision_amount = verifiedPolicyDecisionAmount;
+        }
         if (appointmentNote) {
           patchWithConfirmation.notes = appointmentNote;
         }
@@ -24704,6 +25077,10 @@ async function startServer() {
               if (rowId) updatedAppointments.set(rowId, row);
             }
             return updatedAppointments;
+          }
+
+          if (String(tableUpdateError.message || '').includes('PRIVATE_SESSION_')) {
+            throw tableUpdateError;
           }
 
           const missingColumn = extractMissingColumnName(tableUpdateError);
@@ -24812,6 +25189,87 @@ async function startServer() {
         .map((appointment: any) => sanitizeString(appointment?.id, 120))
         .filter(Boolean);
       const affectedAppointmentIdSet = new Set(affectedAppointmentIds);
+      const isCancellationPolicyEvent = normalizedStatus === 'canceled';
+      const isNoShowPolicyEvent = normalizedStatus === 'no_show';
+      const isFinancialPolicyEvent = isCancellationPolicyEvent || isNoShowPolicyEvent;
+
+      if (hasRequestedPolicyDecisionAmount && !isFinancialPolicyEvent) {
+        return res.status(400).json({
+          success: false,
+          error: 'Uma decisão financeira manual só pode ser informada ao cancelar a consulta ou registrar falta.'
+        });
+      }
+
+      if (isFinancialPolicyEvent) {
+        const scopedOrganizationId = sanitizeString(
+          foundAppointment?.organization_id ||
+            foundAppointment?.organizationId ||
+            foundAppointment?.clinic_id ||
+            foundAppointment?.clinicId ||
+            foundClinicId ||
+            clinicId,
+          120
+        );
+        const persistedAppointmentIds = affectedAppointmentIds.filter((value) => isUuid(value));
+        const latestSnapshots = new Map<string, any>();
+
+        if (isUuid(scopedOrganizationId) && persistedAppointmentIds.length > 0) {
+          const snapshotResult = await supabase
+            .from('appointment_private_financial_snapshots')
+            .select('appointment_id,snapshot_version,final_amount,cancellation_free_until,late_cancellation_rule,no_show_rule')
+            .eq('organization_id', scopedOrganizationId)
+            .in('appointment_id', persistedAppointmentIds)
+            .order('snapshot_version', { ascending: false });
+          if (snapshotResult.error) throw snapshotResult.error;
+          for (const snapshot of Array.isArray(snapshotResult.data) ? snapshotResult.data : []) {
+            const snapshotAppointmentId = sanitizeString(snapshot?.appointment_id, 120);
+            if (snapshotAppointmentId && !latestSnapshots.has(snapshotAppointmentId)) {
+              latestSnapshots.set(snapshotAppointmentId, snapshot);
+            }
+          }
+        }
+
+        const manualSnapshots = Array.from(latestSnapshots.values()).filter((snapshot: any) => {
+          if (isNoShowPolicyEvent) {
+            return sanitizeString(snapshot?.no_show_rule?.type, 40).toUpperCase() === 'MANUAL';
+          }
+          const manualCancellation =
+            sanitizeString(snapshot?.late_cancellation_rule?.type, 40).toUpperCase() === 'MANUAL';
+          if (!manualCancellation) return false;
+          const freeUntil = new Date(snapshot?.cancellation_free_until || '').getTime();
+          return !Number.isFinite(freeUntil) || Date.now() > freeUntil;
+        });
+
+        if (manualSnapshots.length > 0) {
+          if (isPatientActor || !['owner', 'admin', 'coordinator', 'receptionist'].includes(actorRole)) {
+            throw new Error('PRIVATE_SESSION_MANUAL_POLICY_DECISION_FORBIDDEN');
+          }
+          if (
+            requestedPolicyDecisionAmount === null ||
+            !Number.isFinite(requestedPolicyDecisionAmount) ||
+            requestedPolicyDecisionAmount < 0 ||
+            manualSnapshots.some((snapshot: any) =>
+              requestedPolicyDecisionAmount > Number(snapshot?.final_amount || 0)
+            )
+          ) {
+            throw new Error('PRIVATE_SESSION_MANUAL_POLICY_AMOUNT_INVALID');
+          }
+          if (!appointmentNote) {
+            throw new Error(
+              isCancellationPolicyEvent
+                ? 'PRIVATE_SESSION_MANUAL_CANCELLATION_DECISION_REQUIRED'
+                : 'PRIVATE_SESSION_MANUAL_NO_SHOW_DECISION_REQUIRED'
+            );
+          }
+          verifiedPolicyDecisionAmount = Math.round(requestedPolicyDecisionAmount * 100) / 100;
+          verifiedPolicyDecisionEvent = isCancellationPolicyEvent ? 'CANCELED' : 'NO_SHOW';
+        } else if (hasRequestedPolicyDecisionAmount) {
+          return res.status(409).json({
+            success: false,
+            error: 'A polÃ­tica congelada desta consulta nÃ£o exige uma decisÃ£o financeira manual para este evento.'
+          });
+        }
+      }
 
       if (isPatientActor) {
         const actorEmail = sanitizeEmail(actor?.email);
@@ -24858,6 +25316,10 @@ async function startServer() {
         }
       }
 
+      // A tabela canônica e seu trigger financeiro são concluídos antes do espelho JSON.
+      // Se a política financeira rejeitar a mudança, nenhuma atualização de clinic_state ocorre.
+      const updatedTableAppointments = await updateAppointmentsTableStatuses(affectedAppointmentIds);
+
       let nextAppointments = appointments;
       let updatedClinicAppointments: any[] | null = null;
 
@@ -24875,6 +25337,10 @@ async function startServer() {
             observation: appointmentNote || appointment?.observation || null,
             appointmentObservation: appointmentNote || appointment?.appointmentObservation || null,
             appointment_observation: appointmentNote || appointment?.appointment_observation || null,
+            financialPolicyDecisionAmount: verifiedPolicyDecisionAmount,
+            financial_policy_decision_amount: verifiedPolicyDecisionAmount,
+            financialPolicyDecisionEvent: verifiedPolicyDecisionEvent,
+            financial_policy_decision_event: verifiedPolicyDecisionEvent,
             patientResponse: isPatientActor
               ? normalizedStatus
               : appointment?.patientResponse,
@@ -24956,7 +25422,6 @@ async function startServer() {
         }
       }
 
-      const updatedTableAppointments = await updateAppointmentsTableStatuses(affectedAppointmentIds);
       const rawUpdatedAppointment =
         nextAppointments.find((appointment: any) => String(appointment?.id) === appointmentId) ||
         updatedTableAppointments.get(appointmentId) ||
@@ -25119,6 +25584,15 @@ async function startServer() {
       }));
     } catch (error: any) {
       console.error('[Appointments] status update error:', error?.message || String(error));
+      const raw = sanitizeString(error?.message || error?.details || String(error || ''), 500);
+      if (
+        raw.includes('PRIVATE_SESSION_') ||
+        hasMissingFinancialSchema(error) ||
+        isMissingRelationError(error)
+      ) {
+        const safe = privateSessionPricingErrorResponse(error);
+        return res.status(safe.status).json({ success: false, error: safe.error });
+      }
       return res.status(500).json({ success: false, error: 'Erro ao atualizar status da consulta.' });
     }
   };
@@ -64472,7 +64946,11 @@ async function startServer() {
     'refunded_amount', 'balance_amount', 'payment_date', 'due_date', 'method', 'status',
     'financial_status', 'is_courtesy', 'source', 'last_payment_at', 'receipt_url',
     'receipt_file_name', 'receipt_content_type', 'notes', 'created_by', 'created_at', 'updated_at',
-    'canceled_at', 'canceled_by'
+    'canceled_at', 'canceled_by', 'payer_id', 'service_catalog_id',
+    'private_price_rule_id', 'patient_pricing_agreement_id', 'financial_snapshot_id',
+    'private_price_source', 'private_price_source_label',
+    'private_financial_classification', 'cancellation_free_until',
+    'pricing_override_reason'
   ].join(',');
   const PATIENT_FINANCE_ITEM_SELECT = [
     'id', 'organization_id', 'clinic_id', 'payment_id', 'appointment_id', 'patient_id',
@@ -64494,7 +64972,8 @@ async function startServer() {
   const PATIENT_FINANCE_APPOINTMENT_SELECT = [
     'id', 'organization_id', 'clinic_id', 'patient_id', 'therapist_id', 'therapist_name',
     'scheduled_at', 'scheduled_start_at', 'scheduled_end_at', 'duration_minutes', 'service_type',
-    'approach', 'status', 'room_id', 'room_name', 'location_type', 'source_payload'
+    'approach', 'status', 'room_id', 'room_name', 'location_type', 'care_setting',
+    'source_payload'
   ].join(',');
   const PATIENT_FINANCE_APPOINTMENT_LEGACY_SELECT = PATIENT_FINANCE_APPOINTMENT_SELECT
     .split(',')
@@ -64563,22 +65042,241 @@ async function startServer() {
     if (raw.includes('PATIENT_FINANCE_RECEIPT_REQUIRES_PAYMENT')) {
       return { status: 409, error: 'O recibo só pode ser emitido depois que houver um pagamento confirmado.' };
     }
+    if (raw.includes('PRIVATE_FINANCIAL_OPERATION_IDEMPOTENCY_CONFLICT')) {
+      return { status: 409, error: 'Esta chave de idempotência já foi usada com outro conteúdo. Gere uma nova operação sem alterar a tentativa anterior.' };
+    }
+    if (raw.includes('PRIVATE_FINANCIAL_OPERATION_CHARGE_SCOPE_INVALID')) {
+      return { status: 403, error: 'A cobrança particular não pertence à clínica atual.' };
+    }
     if (
       hasMissingFinancialSchema(error) ||
       isMissingRelationError(error) ||
       raw.includes('create_patient_financial_charge') ||
       raw.includes('create_and_settle_patient_financial_charge') ||
-      raw.includes('apply_patient_financial_operation')
+      raw.includes('apply_patient_financial_operation') ||
+      raw.includes('apply_private_patient_financial_operation_v2')
     ) {
       return { status: 503, error: 'O financeiro por consulta ainda não está disponível neste ambiente. Nenhum lançamento foi alterado.' };
     }
     return { status: 400, error: 'Não foi possível concluir a operação financeira. Revise os campos e tente novamente.' };
   };
 
+  const PRIVATE_PRICE_RULE_SELECT = [
+    'id', 'organization_id', 'scope_type', 'specialty_key', 'specialty_name',
+    'service_catalog_id', 'service_name_snapshot', 'base_amount',
+    'default_duration_minutes', 'cancellation_free_value', 'cancellation_free_unit',
+    'late_cancellation_type', 'late_cancellation_value', 'no_show_type', 'no_show_value',
+    'due_rule', 'due_offset_days', 'due_day', 'expected_payment_method',
+    'allow_partial_payment', 'allowed_payment_methods', 'allow_manual_override',
+    'discount_approval_required', 'home_surcharge', 'school_surcharge', 'active',
+    'valid_from', 'valid_until', 'version', 'replaces_rule_id', 'created_by',
+    'created_at', 'updated_at'
+  ].join(',');
+  const PRIVATE_PATIENT_AGREEMENT_SELECT = [
+    'id', 'organization_id', 'patient_id', 'specialty_key', 'specialty_name',
+    'service_catalog_id', 'service_name_snapshot', 'payer_id', 'payer_name_snapshot',
+    'base_amount', 'discount_amount', 'home_surcharge', 'school_surcharge',
+    'policy_overrides', 'zero_classification', 'reason', 'notes', 'active',
+    'valid_from', 'valid_until', 'version', 'replaces_agreement_id', 'approved_by',
+    'approved_at', 'ended_by', 'ended_at', 'created_by', 'created_at', 'updated_at'
+  ].join(',');
+  const PRIVATE_FINANCIAL_SNAPSHOT_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'patient_id', 'appointment_id',
+    'payment_id', 'snapshot_version', 'snapshot_event', 'previous_snapshot_id',
+    'specialty_key', 'specialty_name', 'service_catalog_id', 'service_name',
+    'payer_id', 'payer_name', 'base_amount', 'location_surcharge', 'discount_amount',
+    'final_amount', 'price_source', 'price_source_label', 'price_rule_id',
+    'patient_pricing_agreement_id', 'legacy_patient_financial_plan_id',
+    'price_rule_version', 'due_date', 'due_rule', 'due_offset_days', 'due_day',
+    'cancellation_free_until', 'cancellation_free_value', 'cancellation_free_unit',
+    'late_cancellation_rule', 'no_show_rule', 'care_setting', 'location_type',
+    'scheduled_at', 'expected_payment_method', 'allow_partial_payment',
+    'allowed_payment_methods', 'allow_manual_override', 'discount_approval_required',
+    'financial_classification', 'created_by', 'override_reason', 'currency',
+    'timezone', 'created_at'
+  ].join(',');
+
+  app.get('/api/private-pricing/catalog', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = clinicId;
+      const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+      if (!isUuid(organizationId)) return res.status(400).json({ success: false, error: 'Clínica inválida.' });
+      if (patientId && !isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+
+      if (patientId) {
+        const patientScope = await supabase
+          .from('patients')
+          .select('id')
+          .eq('id', patientId)
+          .eq('clinic_id', organizationId)
+          .limit(1)
+          .maybeSingle();
+        if (patientScope.error) throw patientScope.error;
+        if (!patientScope.data?.id) return res.status(403).json({ success: false, error: 'Paciente não pertence à clínica atual.' });
+      }
+
+      let agreementQuery = supabase
+        .from('patient_private_pricing_agreements')
+        .select(PRIVATE_PATIENT_AGREEMENT_SELECT)
+        .eq('organization_id', organizationId)
+        .order('created_at', { ascending: false })
+        .limit(patientId ? 200 : 1000);
+      if (patientId) agreementQuery = agreementQuery.eq('patient_id', patientId);
+      const [rulesResult, agreementsResult, servicesResult, payersResult] = await Promise.all([
+        supabase
+          .from('private_session_price_rules')
+          .select(PRIVATE_PRICE_RULE_SELECT)
+          .eq('organization_id', organizationId)
+          .order('created_at', { ascending: false })
+          .limit(1000),
+        agreementQuery,
+        supabase
+          .from('tuss_service_catalog')
+          .select(TUSS_SERVICE_CATALOG_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('active', true)
+          .order('name', { ascending: true })
+          .limit(1000),
+        supabase
+          .from('clinic_payers')
+          .select(CLINIC_PAYER_SELECT)
+          .eq('organization_id', organizationId)
+          .eq('status', 'ACTIVE')
+          .order('name', { ascending: true })
+          .limit(500)
+      ]);
+      const primaryError = [rulesResult, agreementsResult, servicesResult, payersResult]
+        .map((result: any) => result.error)
+        .find(Boolean);
+      if (primaryError) throw primaryError;
+
+      return res.json({
+        success: true,
+        data: {
+          rules: rulesResult.data || [],
+          agreements: agreementsResult.data || [],
+          services: servicesResult.data || [],
+          payers: payersResult.data || []
+        },
+        meta: { queryCount: patientId ? 5 : 4 }
+      });
+    } catch (error: any) {
+      const safe = privateSessionPricingErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.post('/api/private-pricing/resolve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = clinicId;
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (!isUuid(organizationId) || !isUuid(actorId)) return res.status(400).json({ success: false, error: 'Clínica ou usuário inválido.' });
+      const request = buildPrivateSessionPricingRequest({
+        ...req.body,
+        id: req.body?.appointmentId || req.body?.appointment_id || crypto.randomUUID()
+      });
+      if (!isUuid(request.patientId) || !request.scheduledAt) {
+        return res.status(400).json({ success: false, error: 'Selecione paciente, data e horário para calcular o valor particular.' });
+      }
+      const result = await supabase.rpc('resolve_private_session_price_v1', {
+        p_organization_id: organizationId,
+        p_patient_id: request.patientId,
+        p_specialty: request.specialty || null,
+        p_service_catalog_id: isUuid(request.serviceCatalogId) ? request.serviceCatalogId : null,
+        p_scheduled_at: request.scheduledAt,
+        p_care_setting: request.careSetting,
+        p_manual_amount: request.manualAmount,
+        p_discount_amount: request.discountAmount,
+        p_zero_classification: request.zeroClassification,
+        p_override_reason: request.overrideReason,
+        p_actor_id: actorId
+      });
+      if (result.error) throw result.error;
+      return res.json({ success: true, data: result.data });
+    } catch (error: any) {
+      const safe = privateSessionPricingErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.get('/api/private-pricing/appointments/:appointmentId/snapshot', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = clinicId;
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      if (!isUuid(organizationId) || !isUuid(appointmentId)) {
+        return res.status(400).json({ success: false, error: 'Consulta inválida para leitura da política financeira.' });
+      }
+      const result = await supabase
+        .from('appointment_private_financial_snapshots')
+        .select(PRIVATE_FINANCIAL_SNAPSHOT_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .order('snapshot_version', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (result.error) throw result.error;
+      return res.json({ success: true, data: result.data || null });
+    } catch (error: any) {
+      const safe = privateSessionPricingErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.post('/api/private-pricing/rules', portalActionLimiter, checkAuth, requireRoles('admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = clinicId;
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'], 220);
+      if (!isUuid(organizationId) || !isUuid(actorId) || !idempotencyKey) {
+        return res.status(400).json({ success: false, error: 'Não foi possível identificar esta configuração com segurança.' });
+      }
+      const result = await supabase.rpc('save_private_session_price_rule_v1', {
+        p_organization_id: organizationId,
+        p_payload: req.body || {},
+        p_idempotency_key: idempotencyKey,
+        p_actor_id: actorId
+      });
+      if (result.error) throw result.error;
+      return res.json({ success: true, data: result.data });
+    } catch (error: any) {
+      const safe = privateSessionPricingErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.post('/api/private-pricing/patients/:patientId/agreements', portalActionLimiter, checkAuth, requireRoles('admin', 'owner'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = clinicId;
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const patientId = sanitizeString(req.params.patientId, 120);
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'], 220);
+      if (!isUuid(organizationId) || !isUuid(actorId) || !isUuid(patientId) || !idempotencyKey) {
+        return res.status(400).json({ success: false, error: 'Não foi possível identificar este acordo com segurança.' });
+      }
+      const result = await supabase.rpc('save_patient_private_pricing_agreement_v1', {
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_payload: req.body || {},
+        p_idempotency_key: idempotencyKey,
+        p_actor_id: actorId
+      });
+      if (result.error) throw result.error;
+      return res.json({ success: true, data: result.data });
+    } catch (error: any) {
+      const safe = privateSessionPricingErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
   app.get('/api/patient-finance/ledger', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const organizationId = clinicId;
       if (!isUuid(organizationId)) return res.status(400).json({ success: false, error: 'Clínica inválida para o financeiro de pacientes.' });
       const requestedMonth = sanitizeString(req.query?.month, 7);
       const monthMatch = requestedMonth.match(/^(\d{4})-(\d{2})$/);
@@ -64597,7 +65295,7 @@ async function startServer() {
         .order('scheduled_at', { ascending: false })
         .limit(1000);
 
-      const [chargesResult, itemsResult, transactionsResult, eventsResult, initialAppointmentsResult, policyResult] = await Promise.all([
+      const [chargesResult, itemsResult, transactionsResult, eventsResult, initialAppointmentsResult, policyResult, snapshotsResult] = await Promise.all([
         supabase
           .from('payments')
           .select(PATIENT_FINANCE_CHARGE_SELECT)
@@ -64627,7 +65325,15 @@ async function startServer() {
           .from('clinic_patient_finance_policies')
           .select(PATIENT_FINANCE_POLICY_SELECT)
           .eq('organization_id', organizationId)
-          .maybeSingle()
+          .maybeSingle(),
+        supabase
+          .from('appointment_private_financial_snapshots')
+          .select(PRIVATE_FINANCIAL_SNAPSHOT_SELECT)
+          .eq('organization_id', organizationId)
+          .gte('scheduled_at', rangeStart.toISOString())
+          .lte('scheduled_at', rangeEnd.toISOString())
+          .order('created_at', { ascending: false })
+          .limit(1500)
       ]);
       let appointmentsResult = initialAppointmentsResult;
       let appointmentQueryCount = 1;
@@ -64636,7 +65342,7 @@ async function startServer() {
         appointmentQueryCount += 1;
       }
 
-      const primaryError = [chargesResult, itemsResult, transactionsResult, eventsResult, appointmentsResult]
+      const primaryError = [chargesResult, itemsResult, transactionsResult, eventsResult, appointmentsResult, snapshotsResult]
         .map((result: any) => result.error)
         .find(Boolean);
       if (primaryError) {
@@ -64668,6 +65374,7 @@ async function startServer() {
           transactions: transactionsResult.data || [],
           events: eventsResult.data || [],
           appointments: appointmentsResult.data || [],
+          privateSnapshots: snapshotsResult.data || [],
           billingContexts,
           policy: policyResult.data || {
             organization_id: organizationId,
@@ -64681,7 +65388,7 @@ async function startServer() {
           }
         },
         meta: {
-          queryCount: 5 + appointmentQueryCount + (appointmentIds.length > 0 ? 1 : 0),
+          queryCount: 6 + appointmentQueryCount + (appointmentIds.length > 0 ? 1 : 0),
           rangeStart: rangeStart.toISOString(),
           rangeEnd: rangeEnd.toISOString()
         }
@@ -64695,7 +65402,7 @@ async function startServer() {
   app.post('/api/patient-finance/charges', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const organizationId = clinicId;
       const patientId = sanitizeString(req.body?.patientId || req.body?.patient_id, 120);
       const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'], 220);
       const rawItems = Array.isArray(req.body?.items) ? req.body.items.slice(0, 50) : [];
@@ -64782,7 +65489,7 @@ async function startServer() {
   app.post('/api/patient-finance/charges/:paymentId/operations', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const organizationId = clinicId;
       const paymentId = sanitizeString(req.params.paymentId, 120);
       const operation = sanitizeString(req.body?.operation, 40).toUpperCase();
       const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'], 220);
@@ -64792,26 +65499,78 @@ async function startServer() {
       if (!idempotencyKey) return res.status(400).json({ success: false, error: 'Não foi possível identificar esta operação com segurança. Tente novamente.' });
       const financeDocument = readPatientFinanceDocumentInput(req.body);
       if (!financeDocument.ok) return res.status(400).json({ success: false, error: financeDocument.error });
+      const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const privilegedFinancialRole = actorRole === 'owner' || actorRole === 'admin';
+      if (operation === 'REFUND' && !privilegedFinancialRole) {
+        return res.status(403).json({ success: false, error: 'Somente owner ou administrador pode estornar recebimentos.' });
+      }
 
-      const result = await supabase.rpc('apply_patient_financial_operation', {
-        p_organization_id: organizationId,
-        p_payment_id: paymentId,
-        p_operation: operation,
-        p_amount: asSafeNumber(req.body?.amount ?? 0, 0, 1_000_000) || 0,
-        p_due_date: sanitizeDate(req.body?.dueDate || req.body?.due_date),
-        p_method: sanitizeString(req.body?.method, 80) || null,
-        p_transaction_at: (() => {
-          const value = String(req.body?.transactionAt || req.body?.transaction_at || '').trim();
-          const parsed = value ? new Date(value) : new Date();
-          return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
-        })(),
-        p_proof_url: financeDocument.url,
-        p_proof_file_name: financeDocument.fileName,
-        p_proof_content_type: financeDocument.contentType,
-        p_notes: sanitizeString(req.body?.notes, 1200) || null,
-        p_idempotency_key: idempotencyKey,
-        p_actor_id: sanitizeString(req.session.user?.id, 120)
-      });
+      const snapshotResult = await supabase
+        .from('appointment_private_financial_snapshots')
+        .select('allow_partial_payment,allowed_payment_methods,discount_approval_required,financial_classification')
+        .eq('organization_id', organizationId)
+        .eq('payment_id', paymentId)
+        .order('snapshot_version', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (snapshotResult.error && !hasMissingFinancialSchema(snapshotResult.error) && !isMissingRelationError(snapshotResult.error)) {
+        throw snapshotResult.error;
+      }
+      const privateSnapshot = snapshotResult.data || null;
+      if (privateSnapshot) {
+        if (operation === 'COURTESY' && !privilegedFinancialRole) {
+          return res.status(403).json({ success: false, error: 'Somente owner ou administrador pode marcar uma cobrança como cortesia.' });
+        }
+        if (
+          operation === 'DISCOUNT' &&
+          privateSnapshot.discount_approval_required !== false &&
+          !privilegedFinancialRole
+        ) {
+          return res.status(403).json({ success: false, error: 'Este desconto exige aprovação de owner ou administrador.' });
+        }
+        if (operation === 'PARTIAL_PAYMENT' && privateSnapshot.allow_partial_payment === false) {
+          return res.status(409).json({ success: false, error: 'A política congelada desta sessão não permite pagamento parcial.' });
+        }
+        if (operation === 'PAYMENT' || operation === 'PARTIAL_PAYMENT') {
+          const method = sanitizeString(req.body?.method, 80).toLowerCase();
+          const allowedMethods = Array.isArray(privateSnapshot.allowed_payment_methods)
+            ? privateSnapshot.allowed_payment_methods.map((value: any) => sanitizeString(value, 80).toLowerCase())
+            : [];
+          if (method && allowedMethods.length > 0 && !allowedMethods.includes(method)) {
+            return res.status(409).json({ success: false, error: 'A forma de pagamento informada não é permitida pela política congelada desta sessão.' });
+          }
+        }
+        if (
+          ['DISCOUNT', 'COURTESY', 'REFUND', 'CANCEL'].includes(operation) &&
+          !sanitizeString(req.body?.notes, 1200)
+        ) {
+          return res.status(400).json({ success: false, error: 'Informe o motivo desta operação financeira para manter a auditoria.' });
+        }
+      }
+
+      const result = await supabase.rpc(
+        privateSnapshot ? 'apply_private_patient_financial_operation_v2' : 'apply_patient_financial_operation',
+        {
+          p_organization_id: organizationId,
+          p_payment_id: paymentId,
+          p_operation: operation,
+          p_amount: asSafeNumber(req.body?.amount ?? 0, 0, 1_000_000) || 0,
+          p_due_date: sanitizeDate(req.body?.dueDate || req.body?.due_date),
+          p_method: sanitizeString(req.body?.method, 80) || null,
+          p_transaction_at: (() => {
+            const value = String(req.body?.transactionAt || req.body?.transaction_at || '').trim();
+            if (!value) return null;
+            const parsed = new Date(value);
+            return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+          })(),
+          p_proof_url: financeDocument.url,
+          p_proof_file_name: financeDocument.fileName,
+          p_proof_content_type: financeDocument.contentType,
+          p_notes: sanitizeString(req.body?.notes, 1200) || null,
+          p_idempotency_key: idempotencyKey,
+          p_actor_id: sanitizeString(req.session.user?.id, 120)
+        }
+      );
       if (result.error) throw result.error;
 
       return res.json({ success: true, data: result.data });
@@ -64824,7 +65583,7 @@ async function startServer() {
   app.post('/api/patient-finance/charges/:paymentId/reminder', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const organizationId = clinicId;
       const paymentId = sanitizeString(req.params.paymentId, 120);
       if (!isUuid(organizationId) || !isUuid(paymentId)) {
         return res.status(400).json({ success: false, error: 'Cobrança inválida.' });
@@ -64963,7 +65722,7 @@ async function startServer() {
   app.get('/api/patient-finance/policy', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const organizationId = clinicId;
       if (!isUuid(organizationId)) return res.status(400).json({ success: false, error: 'Clínica inválida.' });
       const result = await supabase
         .from('clinic_patient_finance_policies')
@@ -64981,7 +65740,7 @@ async function startServer() {
   app.put('/api/patient-finance/policy', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const organizationId = clinicId;
       if (!isUuid(organizationId)) return res.status(400).json({ success: false, error: 'Clínica inválida.' });
       const receivableTrigger = sanitizeString(req.body?.receivableTrigger || req.body?.receivable_trigger, 40).toUpperCase();
       const cancellationPolicy = sanitizeString(req.body?.cancellationPolicy || req.body?.cancellation_policy, 40).toUpperCase();

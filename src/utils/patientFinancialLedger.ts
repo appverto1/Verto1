@@ -9,8 +9,13 @@ export type PatientFinancialStatus =
   | 'paid'
   | 'overdue'
   | 'courtesy'
+  | 'exempt'
+  | 'cancelled_no_charge'
+  | 'late_cancellation'
+  | 'no_show_charge'
   | 'canceled'
-  | 'refunded';
+  | 'refunded'
+  | 'voided';
 
 export const PATIENT_FINANCIAL_STATUS_LABELS: Record<PatientFinancialStatus, string> = {
   no_charge: 'Sem cobrança',
@@ -20,8 +25,13 @@ export const PATIENT_FINANCIAL_STATUS_LABELS: Record<PatientFinancialStatus, str
   paid: 'Pago',
   overdue: 'Vencido',
   courtesy: 'Cortesia',
+  exempt: 'Isento',
+  cancelled_no_charge: 'Cancelado sem cobrança',
+  late_cancellation: 'Cancelamento tardio',
+  no_show_charge: 'Falta com cobrança',
   canceled: 'Cancelado',
-  refunded: 'Estornado'
+  refunded: 'Estornado',
+  voided: 'Anulado'
 };
 
 export const PATIENT_FINANCIAL_STATUS_CLASSES: Record<PatientFinancialStatus, string> = {
@@ -32,8 +42,13 @@ export const PATIENT_FINANCIAL_STATUS_CLASSES: Record<PatientFinancialStatus, st
   paid: 'border-emerald-200 bg-emerald-50 text-emerald-700',
   overdue: 'border-rose-200 bg-rose-50 text-rose-700',
   courtesy: 'border-violet-200 bg-violet-50 text-violet-700',
+  exempt: 'border-slate-200 bg-slate-50 text-slate-600',
+  cancelled_no_charge: 'border-slate-200 bg-slate-50 text-slate-600',
+  late_cancellation: 'border-amber-200 bg-amber-50 text-amber-800',
+  no_show_charge: 'border-orange-200 bg-orange-50 text-orange-800',
   canceled: 'border-slate-200 bg-slate-100 text-slate-500',
-  refunded: 'border-rose-200 bg-rose-50 text-rose-700'
+  refunded: 'border-rose-200 bg-rose-50 text-rose-700',
+  voided: 'border-slate-200 bg-slate-100 text-slate-500'
 };
 
 const numberValue = (value: any) => {
@@ -63,6 +78,12 @@ export const currentLocalDateKey = (now = new Date()) => {
 export const resolvePatientFinancialStatus = (charge: any, now = new Date()): PatientFinancialStatus => {
   if (!charge) return 'no_charge';
   const raw = String(charge?.financial_status || charge?.financialStatus || charge?.status || 'pending').trim().toLowerCase();
+  const classification = String(charge?.private_financial_classification || charge?.privateFinancialClassification || '').trim().toLowerCase();
+  if (raw === 'cancelled_no_charge' || classification === 'cancelled_no_charge') return 'cancelled_no_charge';
+  if (raw === 'late_cancellation_charge' || classification === 'late_cancellation_charge') return 'late_cancellation';
+  if (raw === 'no_show_charge' || classification === 'no_show_charge') return 'no_show_charge';
+  if (['exempt', 'contractual_free', 'no_show_no_charge'].includes(raw) || ['exempt', 'contractual_free', 'no_show_no_charge'].includes(classification)) return 'exempt';
+  if (raw === 'voided' || classification === 'voided') return 'voided';
   if (charge?.canceled_at || charge?.canceledAt || ['canceled', 'cancelled', 'cancelado'].includes(raw)) return 'canceled';
   if (charge?.is_courtesy || charge?.isCourtesy || raw === 'courtesy') return 'courtesy';
   if (['refunded', 'estornado'].includes(raw)) return 'refunded';
@@ -141,6 +162,7 @@ export const buildPatientFinancialAppointmentRows = (params: {
   billingContexts?: any[];
   patients?: any[];
   professionals?: any[];
+  privateSnapshots?: any[];
   now?: Date;
 }) => {
   const charges = Array.isArray(params.charges) ? params.charges : [];
@@ -160,6 +182,14 @@ export const buildPatientFinancialAppointmentRows = (params: {
     if (appointmentId) itemByAppointmentId.set(appointmentId, item);
   });
   const billingByAppointmentId = new Map((params.billingContexts || []).map((context: any) => [String(context?.appointment_id || context?.appointmentId || ''), context]));
+  const snapshotByAppointmentId = new Map<string, any>();
+  (params.privateSnapshots || []).forEach((snapshot: any) => {
+    const appointmentId = String(snapshot?.appointment_id || snapshot?.appointmentId || '');
+    const current = snapshotByAppointmentId.get(appointmentId);
+    if (!current || Number(snapshot?.snapshot_version || 0) > Number(current?.snapshot_version || 0)) {
+      snapshotByAppointmentId.set(appointmentId, snapshot);
+    }
+  });
 
   return (params.appointments || [])
     .filter((appointment: any) => isPrivatePatientFinanceAppointment(appointment, billingByAppointmentId.get(String(appointment?.id || ''))))
@@ -167,6 +197,7 @@ export const buildPatientFinancialAppointmentRows = (params: {
       const appointmentId = String(appointment?.id || '').trim();
       const item = itemByAppointmentId.get(appointmentId);
       const charge = item ? chargesById.get(String(item?.payment_id || item?.paymentId || '')) : null;
+      const snapshot = snapshotByAppointmentId.get(appointmentId) || null;
       const patientId = String(appointment?.patient_id || appointment?.patientId || item?.patient_id || '').trim();
       const professionalId = String(appointment?.therapist_id || appointment?.therapistId || appointment?.professional_id || appointment?.professionalId || item?.professional_id || '').trim();
       const amounts = getPatientFinanceAmounts(charge);
@@ -180,7 +211,12 @@ export const buildPatientFinancialAppointmentRows = (params: {
         patientName: pickPatientName(patientsById.get(patientId), item?.patient_name_snapshot || appointment?.patient_name || appointment?.patientName),
         professionalName: pickProfessionalLabel(professionalsById.get(professionalId), item?.professional_name_snapshot || appointment?.therapist_name || appointment?.therapistName),
         serviceType: String(item?.service_type_snapshot || appointment?.service_type || appointment?.serviceType || appointment?.approach || 'Consulta'),
-        specialty: String(item?.specialty_snapshot || charge?.specialty || ''),
+        specialty: String(snapshot?.specialty_name || item?.specialty_snapshot || charge?.specialty || ''),
+        payerId: String(snapshot?.payer_id || charge?.payer_id || ''),
+        payerName: String(snapshot?.payer_name || charge?.payer_name || ''),
+        priceSource: snapshot?.price_source || charge?.private_price_source || null,
+        priceSourceLabel: snapshot?.price_source_label || charge?.private_price_source_label || null,
+        financialClassification: snapshot?.financial_classification || charge?.private_financial_classification || null,
         scheduledAt: start || item?.appointment_scheduled_at || null,
         appointmentDateLabel: formatDisplayDateTime(start || item?.appointment_scheduled_at, { separator: ', ' }),
         clinicalStatus: String(appointment?.status || 'scheduled'),
@@ -192,6 +228,7 @@ export const buildPatientFinancialAppointmentRows = (params: {
         statusLabel: PATIENT_FINANCIAL_STATUS_LABELS[status],
         ...amounts,
         charge,
+        snapshot,
         item,
         appointment
       };
@@ -222,11 +259,20 @@ export const buildPatientFinancialChargeRows = (ledger: any, patients: any[] = [
     current.push(event);
     eventsByChargeId.set(paymentId, current);
   });
+  const snapshotByChargeId = new Map<string, any>();
+  (ledger?.privateSnapshots || []).forEach((snapshot: any) => {
+    const paymentId = String(snapshot?.payment_id || snapshot?.paymentId || '');
+    const current = snapshotByChargeId.get(paymentId);
+    if (!current || Number(snapshot?.snapshot_version || 0) > Number(current?.snapshot_version || 0)) {
+      snapshotByChargeId.set(paymentId, snapshot);
+    }
+  });
 
   return (ledger?.charges || []).map((charge: any) => {
     const id = String(charge?.id || '');
     const patientId = String(charge?.patient_id || charge?.patientId || '');
     const status = resolvePatientFinancialStatus(charge);
+    const snapshot = snapshotByChargeId.get(id) || null;
     return {
       id,
       patientId,
@@ -238,9 +284,17 @@ export const buildPatientFinancialChargeRows = (ledger: any, patients: any[] = [
       competenceMonth: charge?.competence_month || charge?.competenceMonth || null,
       method: charge?.method || null,
       source: charge?.source || 'LEGACY',
+      specialty: snapshot?.specialty_name || charge?.specialty || null,
+      serviceName: snapshot?.service_name || charge?.service_type || null,
+      payerId: snapshot?.payer_id || charge?.payer_id || null,
+      payerName: snapshot?.payer_name || charge?.payer_name || null,
+      priceSource: snapshot?.price_source || charge?.private_price_source || null,
+      priceSourceLabel: snapshot?.price_source_label || charge?.private_price_source_label || null,
+      financialClassification: snapshot?.financial_classification || charge?.private_financial_classification || null,
       items: itemsByChargeId.get(id) || [],
       transactions: transactionsByChargeId.get(id) || [],
       events: eventsByChargeId.get(id) || [],
+      snapshot,
       ...getPatientFinanceAmounts(charge),
       charge
     };
@@ -269,4 +323,3 @@ export const privateAppointmentFinancialReadinessLabel = (summary: any) => {
   if (status === 'refunded') return 'Pagamento estornado';
   return 'Sem cobrança';
 };
-

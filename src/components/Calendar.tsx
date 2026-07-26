@@ -3083,7 +3083,19 @@ export const ClinicalAgendaBoard = ({
     const statusColor = getAppointmentPatientConfirmationVisualState(event);
     const StatusIcon = statusColor.icon;
     const eventTextClass = statusColor.canonical === 'RESCHEDULE_REQUESTED' ? 'text-amber-950' : 'text-white';
-    const accessibleLabel = `${event.time} a ${event.endTime}, ${event.patientName}. ${statusColor.label}.`;
+    const eventFinance = event?.patientFinance || null;
+    const eventFinanceStatus = resolvePatientFinancialStatus(eventFinance);
+    const eventFinanceAmounts = getPatientFinanceAmounts(eventFinance);
+    const isPrivateFinance = Boolean(
+      eventFinance?.private_price_source ||
+      eventFinance?.privatePriceSource ||
+      eventFinance?.financial_snapshot_id ||
+      eventFinance?.financialSnapshotId
+    );
+    const eventFinanceLabel = eventFinance && isPrivateFinance
+      ? `Particular • ${formatPatientFinanceCurrency(eventFinanceAmounts.total)} • ${PATIENT_FINANCIAL_STATUS_LABELS[eventFinanceStatus]}`
+      : '';
+    const accessibleLabel = `${event.time} a ${event.endTime}, ${event.patientName}. ${statusColor.label}.${eventFinanceLabel ? ` ${eventFinanceLabel}.` : ''}`;
     return (
       <button
         key={event.id}
@@ -3112,6 +3124,7 @@ export const ClinicalAgendaBoard = ({
             <span className="ml-1">{getRoomDisplayLine(event)}</span>
           </p>
           {!compact && <p className="mt-1 truncate text-[10px] opacity-80">{event.therapistName}</p>}
+          {!compact && eventFinanceLabel && <p className={`mt-1 truncate text-[10px] font-semibold ${eventTextClass}`}>{eventFinanceLabel}</p>}
           {!compact && renderIndicators(event)}
         </div>
       </button>
@@ -4462,6 +4475,9 @@ export const ClinicalAgendaBoard = ({
                       <div><span className="block text-xs text-slate-400">Vencimento</span><span className="mt-1 block font-medium">{patientFinance?.due_date ? formatDisplayDate(patientFinance.due_date) : 'Não definido'}</span></div>
                       <div><span className="block text-xs text-slate-400">Forma de pagamento</span><span className="mt-1 block font-medium">{patientFinance?.method || 'Não informada'}</span></div>
                       <div><span className="block text-xs text-slate-400">Último pagamento</span><span className="mt-1 block font-medium">{patientFinance?.last_payment_at ? formatDisplayDateTime(patientFinance.last_payment_at, { separator: ', ' }) : 'Não registrado'}</span></div>
+                      <div><span className="block text-xs text-slate-400">Origem do preço</span><span className="mt-1 block font-medium">{patientFinance?.private_price_source_label || patientFinance?.private_price_source || 'Histórico legado'}</span></div>
+                      <div><span className="block text-xs text-slate-400">Pagador</span><span className="mt-1 block font-medium">{patientFinance?.payer_name || 'Paciente/responsável'}</span></div>
+                      <div><span className="block text-xs text-slate-400">Cancelamento gratuito até</span><span className="mt-1 block font-medium">{patientFinance?.cancellation_free_until ? formatDisplayDateTime(patientFinance.cancellation_free_until, { separator: ', ' }) : 'Política não congelada'}</span></div>
                     </div>
                   </div>
                   <span className={`inline-flex w-fit rounded-full border px-3 py-1.5 text-xs font-medium ${PATIENT_FINANCIAL_STATUS_CLASSES[patientFinanceStatus]}`}>

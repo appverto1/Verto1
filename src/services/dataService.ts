@@ -5924,6 +5924,98 @@ export const dataService = {
     }
   },
 
+  async getPrivatePricingCatalog(patientId?: string) {
+    try {
+      const endpoint = endpointWithQuery('/api/private-pricing/catalog', {
+        patientId: patientId || undefined
+      });
+      const response = await fetchWithAuthRetry(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching private pricing catalog:', error);
+      return { success: false, data: null, error: 'Não foi possível carregar a configuração de preços particulares agora.' };
+    }
+  },
+
+  async resolvePrivateSessionPrice(payload: any) {
+    try {
+      const response = await fetchWithAuthRetry('/api/private-pricing/resolve', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error resolving private session price:', error);
+      return { success: false, data: null, error: 'Não foi possível calcular o valor particular agora.' };
+    }
+  },
+
+  async savePrivateSessionPriceRule(payload: any) {
+    try {
+      const idempotencyKey = String(payload?.idempotencyKey || generateId());
+      const response = await fetchWithAuthRetry('/api/private-pricing/rules', {
+        method: 'POST',
+        headers: {
+          ...(await getAuthHeaders()),
+          'X-Idempotency-Key': idempotencyKey
+        },
+        credentials: 'include',
+        body: JSON.stringify({ ...payload, idempotencyKey })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving private session price rule:', error);
+      return { success: false, error: 'Não foi possível salvar a regra de preço agora.' };
+    }
+  },
+
+  async savePatientPrivatePricingAgreement(patientId: string, payload: any) {
+    try {
+      const idempotencyKey = String(payload?.idempotencyKey || generateId());
+      const response = await fetchWithAuthRetry(
+        `/api/private-pricing/patients/${encodeURIComponent(String(patientId))}/agreements`,
+        {
+          method: 'POST',
+          headers: {
+            ...(await getAuthHeaders()),
+            'X-Idempotency-Key': idempotencyKey
+          },
+          credentials: 'include',
+          body: JSON.stringify({ ...payload, idempotencyKey })
+        }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving patient private pricing agreement:', error);
+      return { success: false, error: 'Não foi possível salvar o acordo particular agora.' };
+    }
+  },
+
+  async getPrivateAppointmentFinancialSnapshot(appointmentId: string) {
+    try {
+      const response = await fetchWithAuthRetry(
+        `/api/private-pricing/appointments/${encodeURIComponent(String(appointmentId))}/snapshot`,
+        {
+          headers: await getAuthHeaders(),
+          credentials: 'include'
+        }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching private appointment financial snapshot:', error);
+      return {
+        success: false,
+        data: null,
+        error: 'Não foi possível carregar a política financeira congelada desta consulta agora.'
+      };
+    }
+  },
+
   async createPatientFinancialCharge(payload: any) {
     try {
       const idempotencyKey = String(payload?.idempotencyKey || generateId());
