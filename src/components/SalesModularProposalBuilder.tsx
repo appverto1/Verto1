@@ -26,6 +26,12 @@ import {
   type SalesPricingCatalogSnapshot,
   type SalesPricingCatalogTier
 } from '../utils/salesModularProposal';
+import {
+  SALES_MODULAR_DRIVER_DEFINITIONS,
+  type SalesModularDriverKey,
+  type SalesModularDriverValue,
+  type SalesModularProfile
+} from '../utils/salesModularCostDrivers';
 import type {
   SalesAssumptionSnapshot,
   SalesUsageProfile
@@ -275,6 +281,7 @@ export const SalesModularProposalBuilder = ({
           offerValidityDays: 14,
           onboardingInstallments: 1,
           usageProfile: 'standard',
+          driverOverrides: {},
           internalNotes: '',
           publicNotes: ''
         };
@@ -313,6 +320,38 @@ export const SalesModularProposalBuilder = ({
     if (!input || !catalog || !assumptions) return null;
     try {
       return calculateSalesModularProposal(input, catalog, assumptions);
+    } catch {
+      return null;
+    }
+  }, [assumptions, catalog, input]);
+
+  const aggressivePreview = useMemo(() => {
+    if (!input || !catalog || !assumptions) return null;
+    const core = catalog.items.find(
+      (item) => item.itemKey === 'clinical_core'
+    );
+    const tier = core?.tiers.find(
+      (candidate) => candidate.id === input.basePackageTierId
+    );
+    const aggressivePatients =
+      tier?.maximumQuantity ?? input.expectedPatientQuantity12Months;
+    try {
+      return calculateSalesModularProposal(
+        {
+          ...input,
+          patientQuantity: aggressivePatients,
+          expectedPatientQuantity12Months: aggressivePatients,
+          usageProfile: 'intensive',
+          driverOverrides: {},
+          lines: input.lines.map((line) =>
+            line.itemKey === 'clinical_core'
+              ? { ...line, quantity: aggressivePatients }
+              : line
+          )
+        },
+        catalog,
+        assumptions
+      );
     } catch {
       return null;
     }
@@ -514,6 +553,97 @@ export const SalesModularProposalBuilder = ({
         line.itemKey === itemKey ? { ...line, ...patch } : line
       )
     });
+  };
+
+  const configuredDriverDatum = (
+    item: SalesPricingCatalogItem,
+    driverKey: SalesModularDriverKey
+  ): SalesModularDriverValue | null => {
+    if (!input || !catalog) return null;
+    const override = input.driverOverrides?.[item.itemKey]?.[driverKey];
+    if (override) return override;
+    if (input.usageProfile !== 'custom') {
+      const profile = input.usageProfile as SalesModularProfile;
+      if (driverKey === 'storageUtilizationBasisPoints') {
+        const value =
+          item.costModel?.driverConfig?.usageProfileOverrides?.[profile]
+            ?.storageUtilizationBasisPoints ??
+          catalog.modularCostSettings.usageProfiles[profile]
+            .storageUtilizationBasisPoints;
+        return {
+          value,
+          source: value == null ? 'unavailable' : 'estimated',
+          sourceDetail: `Perfil ${profile} versionado no catálogo.`,
+          effectiveAt: item.costModel?.effectiveAt || catalog.effectiveAt,
+          version: item.costModel?.version || catalog.version
+        };
+      }
+      if (driverKey === 'expectedEgressMultiplier') {
+        const value =
+          item.costModel?.driverConfig?.usageProfileOverrides?.[profile]
+            ?.expectedEgressMultiplier ??
+          catalog.modularCostSettings.usageProfiles[profile]
+            .expectedEgressMultiplier;
+        return {
+          value,
+          source: value == null ? 'unavailable' : 'estimated',
+          sourceDetail: `Perfil ${profile} versionado no catálogo.`,
+          effectiveAt: item.costModel?.effectiveAt || catalog.effectiveAt,
+          version: item.costModel?.version || catalog.version
+        };
+      }
+      const configured =
+        item.costModel?.driverConfig?.profiles?.[profile]?.[driverKey];
+      if (configured) return configured;
+    }
+    if (driverKey === 'tissGuides') {
+      const line = input.lines.find(
+        (candidate) => candidate.itemKey === item.itemKey
+      );
+      return {
+        value: line?.quantity ?? null,
+        source: line ? 'calculated' : 'unavailable',
+        sourceDetail: 'Quantidade de guias informada na proposta.',
+        effectiveAt: new Date().toISOString(),
+        version: catalog.version
+      };
+    }
+    return null;
+  };
+
+  const updateProposalDriver = (
+    item: SalesPricingCatalogItem,
+    driverKey: SalesModularDriverKey,
+    patch: Partial<SalesModularDriverValue>
+  ) => {
+    if (!input || !catalog) return;
+    const current = configuredDriverDatum(item, driverKey);
+    const next: SalesModularDriverValue = {
+      value: current?.value ?? null,
+      source:
+        current?.source && current.source !== 'unavailable'
+          ? current.source
+          : 'manual',
+      sourceDetail:
+        current?.sourceDetail || 'Premissa ajustada manualmente na proposta.',
+      effectiveAt: current?.effectiveAt || new Date().toISOString(),
+      version: current?.version || catalog.version,
+      ...patch
+    };
+    updateInput({
+      driverOverrides: {
+        ...(input.driverOverrides || {}),
+        [item.itemKey]: {
+          ...(input.driverOverrides?.[item.itemKey] || {}),
+          [driverKey]: next
+        }
+      }
+    });
+    if (driverKey === 'tissGuides' && next.value !== null) {
+      updateLine(item.itemKey, {
+        quantity: Math.max(1, Math.round(next.value))
+      });
+    }
   };
 
   const saveSimulation = async () => {
@@ -920,6 +1050,49 @@ export const SalesModularProposalBuilder = ({
                       MB
                     </span>
                     <span>
+                      GB incluídos:{' '}
+                      {preview.lines
+                        .find((line) => line.itemKey === 'clinical_core')
+                        ?.directCostBreakdown.includedStorageGb.toLocaleString(
+                          'pt-BR',
+                          { maximumFractionDigits: 3 }
+                        )}
+                    </span>
+                    <span>
+                      GB estimados em uso:{' '}
+                      {preview.lines
+                        .find((line) => line.itemKey === 'clinical_core')
+                        ?.directCostBreakdown.estimatedUsedStorageGb?.toLocaleString(
+                          'pt-BR',
+                          { maximumFractionDigits: 3 }
+                        ) || 'Dados insuficientes'}
+                    </span>
+                    <span>
+                      GB estimados de egress:{' '}
+                      {preview.lines
+                        .find((line) => line.itemKey === 'clinical_core')
+                        ?.directCostBreakdown.estimatedEgressGb?.toLocaleString(
+                          'pt-BR',
+                          { maximumFractionDigits: 3 }
+                        ) || 'Dados insuficientes'}
+                    </span>
+                    <span>
+                      Custo de armazenamento:{' '}
+                      {currency(
+                        preview.lines.find(
+                          (line) => line.itemKey === 'clinical_core'
+                        )?.directCostBreakdown.storageCostCents
+                      )}
+                    </span>
+                    <span>
+                      Custo de egress:{' '}
+                      {currency(
+                        preview.lines.find(
+                          (line) => line.itemKey === 'clinical_core'
+                        )?.directCostBreakdown.egressCostCents
+                      )}
+                    </span>
+                    <span>
                       Crescimento previsto:{' '}
                       {input.expectedPatientQuantity12Months.toLocaleString(
                         'pt-BR'
@@ -928,6 +1101,234 @@ export const SalesModularProposalBuilder = ({
                     </span>
                   </div>
                 ) : null}
+              </section>
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h2 className="text-base font-semibold text-slate-900">
+                      Previsão de uso por driver
+                    </h2>
+                    <p className="mt-1 text-sm font-normal leading-6 text-slate-500">
+                      Uso esperado, origem e critério ficam congelados no
+                      cenário. Dados ausentes aparecem como Dados insuficientes.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700">
+                    Perfil{' '}
+                    {input.usageProfile === 'light'
+                      ? 'leve'
+                      : input.usageProfile === 'standard'
+                        ? 'padrão'
+                        : input.usageProfile === 'intensive'
+                          ? 'intensivo'
+                          : 'personalizado'}
+                  </span>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ['Uso atual', `${input.patientQuantity} pacientes`],
+                    [
+                      'Uso esperado',
+                      `${input.expectedPatientQuantity12Months} pacientes`
+                    ],
+                    [
+                      'Limite comercial',
+                      selectedBaseTier?.maximumQuantity == null
+                        ? 'Personalizado'
+                        : `${selectedBaseTier.maximumQuantity} pacientes`
+                    ],
+                    [
+                      'Cenário agressivo',
+                      aggressivePreview
+                        ? `${aggressivePreview.forecast.aggressivePatients ?? input.expectedPatientQuantity12Months} pacientes · ${currency(
+                            aggressivePreview.promotional.totalEstimatedCostCents
+                          )} de custo`
+                        : 'Dados insuficientes'
+                    ]
+                  ].map(([label, value]) => (
+                    <div
+                      key={label}
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+                    >
+                      <p className="text-[11px] font-normal text-slate-500">
+                        {label}
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-slate-800">
+                        {value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-3 text-xs font-normal leading-5 text-slate-500">
+                  O cenário agressivo usa o limite integral do pacote e os
+                  parâmetros intensivos versionados; pacientes escolares não
+                  são substituídos pelo total da clínica.
+                </p>
+                <div className="mt-4 space-y-4">
+                  {input.lines.map((line) => {
+                    const item = catalog.items.find(
+                      (candidate) => candidate.itemKey === line.itemKey
+                    );
+                    if (!item) return null;
+                    const required = new Set<SalesModularDriverKey>(
+                      item.costModel?.driverConfig?.requiredDrivers || []
+                    );
+                    if (
+                      ['clinical_core', 'additional_storage'].includes(
+                        item.itemKey
+                      )
+                    ) {
+                      required.add('storageUtilizationBasisPoints');
+                    }
+                    if (
+                      [
+                        'clinical_core',
+                        'additional_storage',
+                        'insurance_tiss',
+                        'school_management'
+                      ].includes(item.itemKey)
+                    ) {
+                      required.add('expectedEgressMultiplier');
+                    }
+                    const definitions = SALES_MODULAR_DRIVER_DEFINITIONS.filter(
+                      (definition) =>
+                        definition.itemKeys.includes(item.itemKey) &&
+                        required.has(definition.key)
+                    );
+                    if (definitions.length === 0) return null;
+                    return (
+                      <fieldset
+                        key={`${item.itemKey}:${line.tierId || 'item'}`}
+                        className="rounded-xl border border-slate-200 p-3"
+                      >
+                        <legend className="px-1 text-sm font-medium text-slate-800">
+                          {item.publicName}
+                        </legend>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {definitions.map((definition) => {
+                            const datum = configuredDriverDatum(
+                              item,
+                              definition.key
+                            );
+                            const rawValue = datum?.value;
+                            const displayedValue =
+                              definition.key ===
+                                'storageUtilizationBasisPoints' &&
+                              rawValue !== null &&
+                              rawValue !== undefined
+                                ? rawValue / 100
+                                : definition.monetaryValue &&
+                                    rawValue !== null &&
+                                    rawValue !== undefined
+                                  ? rawValue / 100
+                                  : (rawValue ?? '');
+                            return (
+                              <div
+                                key={definition.key}
+                                className="rounded-xl bg-slate-50 p-3"
+                              >
+                                <label className="text-xs font-medium text-slate-700">
+                                  {definition.label}
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    step={definition.valueStep || 1}
+                                    placeholder="Dados insuficientes"
+                                    value={displayedValue}
+                                    onChange={(event) => {
+                                      const visibleValue =
+                                        event.target.value === ''
+                                          ? null
+                                          : Number(event.target.value);
+                                      const storedValue =
+                                        visibleValue === null
+                                          ? null
+                                          : definition.key ===
+                                                'storageUtilizationBasisPoints' ||
+                                              definition.monetaryValue
+                                            ? Math.round(visibleValue * 100)
+                                            : visibleValue;
+                                      updateProposalDriver(
+                                        item,
+                                        definition.key,
+                                        {
+                                          value: storedValue,
+                                          source:
+                                            storedValue === null
+                                              ? 'unavailable'
+                                              : 'manual',
+                                          sourceDetail:
+                                            'Valor informado pelo owner nesta proposta.',
+                                          effectiveAt: new Date().toISOString()
+                                        }
+                                      );
+                                    }}
+                                    className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal"
+                                  />
+                                  <span className="mt-1 block font-normal text-slate-500">
+                                    {definition.unit}
+                                  </span>
+                                </label>
+                                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                  <label className="text-[11px] text-slate-500">
+                                    Origem
+                                    <select
+                                      value={datum?.source || 'unavailable'}
+                                      onChange={(event) =>
+                                        updateProposalDriver(
+                                          item,
+                                          definition.key,
+                                          {
+                                            source: event.target
+                                              .value as SalesModularDriverValue['source']
+                                          }
+                                        )
+                                      }
+                                      className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-2 font-normal"
+                                    >
+                                      <option value="unavailable">Indisponível</option>
+                                      <option value="actual">Real</option>
+                                      <option value="calculated">Calculado</option>
+                                      <option value="estimated">Estimado</option>
+                                      <option value="manual">Manual</option>
+                                    </select>
+                                  </label>
+                                  <label className="text-[11px] text-slate-500">
+                                    Fonte e critério
+                                    <input
+                                      maxLength={500}
+                                      value={datum?.sourceDetail || ''}
+                                      onChange={(event) =>
+                                        updateProposalDriver(
+                                          item,
+                                          definition.key,
+                                          {
+                                            sourceDetail: event.target.value
+                                          }
+                                        )
+                                      }
+                                      className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-2 font-normal"
+                                    />
+                                  </label>
+                                </div>
+                                <p className="mt-2 text-[10px] font-normal text-slate-400">
+                                  Versão {datum?.version || catalog.version} ·
+                                  vigência{' '}
+                                  {datum?.effectiveAt
+                                    ? new Date(
+                                        datum.effectiveAt
+                                      ).toLocaleDateString('pt-BR')
+                                    : 'não informada'}
+                                </p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </fieldset>
+                    );
+                  })}
+                </div>
               </section>
 
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -1377,7 +1778,7 @@ export const SalesModularProposalBuilder = ({
                     </div>
                   </div>
                   <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
-                    <table className="min-w-[880px] w-full text-left text-xs">
+                    <table className="min-w-[1760px] w-full text-left text-xs">
                       <thead className="bg-slate-50 text-slate-500">
                         <tr>
                           <th className="px-3 py-2 font-medium">Horizonte</th>
@@ -1775,12 +2176,98 @@ export const SalesModularProposalBuilder = ({
                         </div>
                       ))}
                     </dl>
+                    <details className="mt-4 rounded-xl border border-slate-200 bg-white">
+                      <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
+                        Composição consolidada dos custos diretos
+                      </summary>
+                      <dl className="grid grid-cols-2 gap-2 border-t border-slate-100 p-3 text-xs">
+                        {[
+                          [
+                            'Fixo direto',
+                            preview.promotional.directCostBreakdown
+                              .fixedCostCents
+                          ],
+                          [
+                            'Por paciente',
+                            preview.promotional.directCostBreakdown
+                              .patientCostCents
+                          ],
+                          [
+                            'Uso',
+                            preview.promotional.directCostBreakdown
+                              .usageCostCents
+                          ],
+                          [
+                            'Armazenamento',
+                            preview.promotional.directCostBreakdown
+                              .storageCostCents
+                          ],
+                          [
+                            'Egress',
+                            preview.promotional.directCostBreakdown
+                              .egressCostCents
+                          ],
+                          [
+                            'Notificações',
+                            preview.promotional.directCostBreakdown
+                              .notificationCostCents
+                          ],
+                          [
+                            'Outros variáveis diretos',
+                            preview.promotional.directCostBreakdown
+                              .otherVariableCostCents
+                          ],
+                          [
+                            'Suporte',
+                            preview.promotional.directCostBreakdown
+                              .supportCostCents
+                          ],
+                          [
+                            'Operacional',
+                            preview.promotional.directCostBreakdown
+                              .operationalCostCents
+                          ]
+                        ].map(([label, amount]) => (
+                          <div key={String(label)}>
+                            <dt className="font-normal text-slate-500">
+                              {label}
+                            </dt>
+                            <dd className="mt-0.5 font-medium text-slate-800">
+                              {currency(amount as number | null)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </details>
                     {preview.missingCosts.length > 0 ? (
                       <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
                         <p className="font-medium">Custos ainda indisponíveis</p>
                         <p className="mt-1 font-normal">
                           {preview.missingCosts.join(', ')}. Valores ausentes não
                           são tratados como zero.
+                        </p>
+                      </div>
+                    ) : null}
+                    {preview.missingDrivers.length > 0 ? (
+                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                        <p className="font-medium">Dados insuficientes</p>
+                        <p className="mt-1 font-normal">
+                          {preview.missingDrivers
+                            .map(
+                              (missing) =>
+                                `${missing.itemName}: ${missing.driver}`
+                            )
+                            .join(' · ')}
+                        </p>
+                      </div>
+                    ) : null}
+                    {preview.possibleDuplicateCosts.length > 0 ? (
+                      <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs leading-5 text-rose-900">
+                        <p className="font-medium">Possível custo duplicado</p>
+                        <p className="mt-1 font-normal">
+                          {preview.possibleDuplicateCosts
+                            .map((duplicate) => duplicate.label)
+                            .join(', ')}
                         </p>
                       </div>
                     ) : null}
@@ -1800,17 +2287,24 @@ export const SalesModularProposalBuilder = ({
                     </h2>
                   </div>
                   <div className="max-h-[420px] overflow-auto">
-                    <table className="min-w-[880px] w-full text-left text-xs">
+                    <table className="min-w-[1120px] w-full text-left text-xs">
                       <thead className="sticky top-0 bg-slate-50 text-slate-500">
                         <tr>
                           <th className="px-3 py-2 font-medium">Item</th>
                           <th className="px-3 py-2 font-medium">Receita</th>
-                          <th className="px-3 py-2 font-medium">Direto</th>
+                          <th className="px-3 py-2 font-medium">Fixo direto</th>
+                          <th className="px-3 py-2 font-medium">Por paciente</th>
+                          <th className="px-3 py-2 font-medium">Uso</th>
+                          <th className="px-3 py-2 font-medium">Armazenamento</th>
+                          <th className="px-3 py-2 font-medium">Egress</th>
+                          <th className="px-3 py-2 font-medium">Notificações</th>
+                          <th className="px-3 py-2 font-medium">Outros variáveis</th>
+                          <th className="px-3 py-2 font-medium">Suporte</th>
+                          <th className="px-3 py-2 font-medium">Operacional</th>
                           <th className="px-3 py-2 font-medium">Taxas e tributos</th>
-                          <th className="px-3 py-2 font-medium">Plataforma</th>
+                          <th className="px-3 py-2 font-medium">Compartilhado alocado</th>
                           <th className="px-3 py-2 font-medium">Contribuição</th>
                           <th className="px-3 py-2 font-medium">EBITDA</th>
-                          <th className="px-3 py-2 font-medium">Margem</th>
                           <th className="px-3 py-2 font-medium">Lucro</th>
                         </tr>
                       </thead>
@@ -1824,7 +2318,31 @@ export const SalesModularProposalBuilder = ({
                               {currency(line.promotional.netRevenueCents)}
                             </td>
                             <td className="px-3 py-3">
-                              {currency(line.promotional.directCostCents)}
+                              {currency(line.directCostBreakdown.fixedCostCents)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(line.directCostBreakdown.patientCostCents)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(line.directCostBreakdown.usageCostCents)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(line.directCostBreakdown.storageCostCents)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(line.directCostBreakdown.egressCostCents)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(line.directCostBreakdown.notificationCostCents)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(line.directCostBreakdown.otherVariableCostCents)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(line.directCostBreakdown.supportCostCents)}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(line.directCostBreakdown.operationalCostCents)}
                             </td>
                             <td className="px-3 py-3">
                               {currency(
@@ -1842,9 +2360,6 @@ export const SalesModularProposalBuilder = ({
                             </td>
                             <td className="px-3 py-3">
                               {currency(line.promotional.ebitdaCents)}
-                            </td>
-                            <td className="px-3 py-3">
-                              {percent(line.promotional.ebitdaMarginBasisPoints)}
                             </td>
                             <td className="px-3 py-3">
                               {currency(line.promotional.netIncomeCents)}

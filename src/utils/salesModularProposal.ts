@@ -5,6 +5,22 @@ import type {
   SalesUsageProfile,
   SimulationValueSource
 } from './salesProfitability';
+import {
+  DEFAULT_REQUIRED_DRIVERS_BY_ITEM,
+  MODULAR_COST_OWNERSHIP_LABELS,
+  OWNERSHIP_ASSUMPTION_KEYS,
+  emptySalesModularDriverConfig,
+  findModularCostDuplicates,
+  modularCostCategoryApplies,
+  normalizeModularCostSettings,
+  type ModularCostOwnershipKey,
+  type SalesModularCostSettings,
+  type SalesModularDriverConfig,
+  type SalesModularDriverKey,
+  type SalesModularDriverOverrides,
+  type SalesModularDriverValue,
+  type SalesModularProfile
+} from './salesModularCostDrivers';
 
 export type SalesPricingMode =
   | 'package_limit'
@@ -49,6 +65,7 @@ export type SalesPricingCostModel = {
   egressCostPerGbCents: number | null;
   notificationCostPerUnitCents: number | null;
   processingCostPerUnitCents: number | null;
+  otherVariableCostCents: number | null;
   supportFixedMonthlyCostCents: number | null;
   supportCostPerPatientCents: number | null;
   operationalFixedMonthlyCostCents: number | null;
@@ -57,6 +74,7 @@ export type SalesPricingCostModel = {
   costSource: SimulationValueSource;
   sourceDetail: string;
   effectiveAt: string;
+  driverConfig: SalesModularDriverConfig;
 };
 
 export type SalesPricingCatalogItem = {
@@ -96,6 +114,7 @@ export type SalesPricingCatalogSnapshot = {
     sharedPlatformCosts: SalesSharedAllocationMethod;
     belowEbitda: SalesSharedAllocationMethod;
   };
+  modularCostSettings: SalesModularCostSettings;
   items: SalesPricingCatalogItem[];
 };
 
@@ -118,8 +137,24 @@ export type SalesModularProposalInput = {
   offerValidityDays: number;
   onboardingInstallments?: number;
   usageProfile: SalesUsageProfile;
+  driverOverrides?: SalesModularDriverOverrides;
   internalNotes?: string;
   publicNotes?: string;
+};
+
+export type SalesModularDirectCostBreakdown = {
+  fixedCostCents: number | null;
+  patientCostCents: number | null;
+  usageCostCents: number | null;
+  storageCostCents: number | null;
+  egressCostCents: number | null;
+  notificationCostCents: number | null;
+  otherVariableCostCents: number | null;
+  supportCostCents: number | null;
+  operationalCostCents: number | null;
+  includedStorageGb: number;
+  estimatedUsedStorageGb: number | null;
+  estimatedEgressGb: number | null;
 };
 
 export type SalesModularPeriodLineResult = {
@@ -164,6 +199,9 @@ export type SalesModularProposalLineResult = {
   costSource: SimulationValueSource;
   costSourceDetail: string;
   costModelSnapshot: SalesPricingCostModel | null;
+  resolvedDrivers: Partial<Record<SalesModularDriverKey, SalesModularDriverValue>>;
+  missingDrivers: SalesModularDriverKey[];
+  directCostBreakdown: SalesModularDirectCostBreakdown;
   minimumRecommendedRevenueCents: number | null;
   maximumRecommendedDiscountBasisPoints: number | null;
   breakEvenQuantity: number | null;
@@ -185,6 +223,7 @@ export type SalesModularConsolidatedPeriod = {
   profitTaxAllocatedCents: number | null;
   netIncomeCents: number | null;
   netMarginBasisPoints: number | null;
+  directCostBreakdown: SalesModularDirectCostBreakdown;
 };
 
 export type SalesModularProposalResult = {
@@ -218,6 +257,24 @@ export type SalesModularProposalResult = {
   rating: OfferProfitabilityRating;
   requiresJustification: boolean;
   missingCosts: string[];
+  missingDrivers: Array<{
+    itemKey: string;
+    itemName: string;
+    driver: SalesModularDriverKey;
+  }>;
+  possibleDuplicateCosts: Array<{
+    category: ModularCostOwnershipKey;
+    label: string;
+    justified: boolean;
+  }>;
+  costOwnership: SalesModularCostSettings;
+  totalsReconciled: boolean;
+  forecast: {
+    currentPatients: number;
+    expectedPatients: number;
+    commercialLimitPatients: number | null;
+    aggressivePatients: number | null;
+  };
   warnings: string[];
   horizons: Record<'12' | '24' | '36', {
     months: number;
@@ -231,7 +288,7 @@ export type SalesModularProposalResult = {
   }>;
 };
 
-export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-27-v1';
+export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-27-v2';
 
 const integer = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
@@ -240,6 +297,12 @@ const integer = (value: unknown, fallback = 0) => {
 
 const nonNegativeInteger = (value: unknown, fallback = 0) =>
   Math.max(0, integer(value, fallback));
+
+const nullableNonNegativeInteger = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+};
 
 const multiplyBasisPoints = (amountCents: number, basisPoints: number) =>
   Math.round((amountCents * basisPoints) / 10_000);
@@ -393,6 +456,40 @@ export function validateSalesModularProposalInput(
       }
     });
   }
+  if (
+    input.driverOverrides !== undefined &&
+    (input.driverOverrides === null ||
+      typeof input.driverOverrides !== 'object' ||
+      Array.isArray(input.driverOverrides))
+  ) {
+    errors.push('driverOverrides');
+  } else {
+    for (const [itemKey, drivers] of Object.entries(
+      input.driverOverrides || {}
+    )) {
+      if (!itemKey || !drivers || typeof drivers !== 'object') {
+        errors.push(`driverOverrides.${itemKey || 'item'}`);
+        continue;
+      }
+      for (const [driverKey, datum] of Object.entries(drivers)) {
+        const value = datum as SalesModularDriverValue;
+        if (
+          !value ||
+          (value.value !== null &&
+            (!Number.isFinite(value.value) || value.value < 0)) ||
+          !['actual', 'calculated', 'estimated', 'manual', 'unavailable'].includes(
+            value.source
+          ) ||
+          !Number.isInteger(value.version) ||
+          value.version < 1 ||
+          String(value.sourceDetail || '').trim().length < 2 ||
+          !Number.isFinite(new Date(value.effectiveAt).getTime())
+        ) {
+          errors.push(`driverOverrides.${itemKey}.${driverKey}`);
+        }
+      }
+    }
+  }
   return errors;
 }
 
@@ -479,133 +576,539 @@ const storageGigabytes = (
   return Math.max(0, perBlock) * quantity;
 };
 
+type DirectCostResolution = {
+  monthlyCostCents: number | null;
+  oneTimeCostCents: number | null;
+  breakdown: SalesModularDirectCostBreakdown;
+  resolvedDrivers: Partial<
+    Record<SalesModularDriverKey, SalesModularDriverValue>
+  >;
+  missingDrivers: SalesModularDriverKey[];
+};
+
+const unavailableDriver = (
+  detail: string,
+  effectiveAt: string,
+  version: number
+): SalesModularDriverValue => ({
+  value: null,
+  source: 'unavailable',
+  sourceDetail: detail,
+  effectiveAt,
+  version
+});
+
+const calculatedDriver = (
+  value: number,
+  detail: string,
+  effectiveAt: string,
+  version: number
+): SalesModularDriverValue => ({
+  value,
+  source: 'calculated',
+  sourceDetail: detail,
+  effectiveAt,
+  version
+});
+
+const estimatedDriver = (
+  value: number | null,
+  detail: string,
+  effectiveAt: string,
+  version: number
+): SalesModularDriverValue => ({
+  value,
+  source: value === null ? 'unavailable' : 'estimated',
+  sourceDetail: detail,
+  effectiveAt,
+  version
+});
+
+const validDriverDatum = (
+  value: SalesModularDriverValue | null | undefined
+): value is SalesModularDriverValue =>
+  Boolean(
+    value &&
+      value.source !== 'unavailable' &&
+      typeof value.value === 'number' &&
+      Number.isFinite(value.value) &&
+      value.value >= 0
+  );
+
 const directMonthlyCost = (
   item: SalesPricingCatalogItem,
   tier: SalesPricingCatalogTier | null,
   selectionQuantity: number,
-  patientQuantity: number
-): number | null => {
+  input: SalesModularProposalInput,
+  settings: SalesModularCostSettings
+): DirectCostResolution => {
   const model = item.costModel;
-  if (!model || !isSalesCostModelComplete(item)) return null;
-  if (item.billingInterval === 'one_time') return 0;
-  return (
-    nonNegativeInteger(model.directFixedMonthlyCostCents) +
-    nonNegativeInteger(model.directCostPerPatientCents) * patientQuantity +
-    nonNegativeInteger(model.directCostPerClinicCents) +
-    nonNegativeInteger(model.directCostPerUsageUnitCents) * selectionQuantity +
-    Math.round(
-      nonNegativeInteger(model.storageCostPerGbCents) *
-        storageGigabytes(item, tier, selectionQuantity)
-    ) +
-    Math.round(
-      nonNegativeInteger(model.egressCostPerGbCents) *
-        storageGigabytes(item, tier, selectionQuantity)
-    ) +
-    nonNegativeInteger(model.notificationCostPerUnitCents) *
-      selectionQuantity +
-    nonNegativeInteger(model.processingCostPerUnitCents) *
-      selectionQuantity +
-    nonNegativeInteger(model.supportFixedMonthlyCostCents) +
-    nonNegativeInteger(model.supportCostPerPatientCents) * patientQuantity +
-    nonNegativeInteger(model.operationalFixedMonthlyCostCents)
+  const emptyBreakdown: SalesModularDirectCostBreakdown = {
+    fixedCostCents: null,
+    patientCostCents: null,
+    usageCostCents: null,
+    storageCostCents: null,
+    egressCostCents: null,
+    notificationCostCents: null,
+    otherVariableCostCents: null,
+    supportCostCents: null,
+    operationalCostCents: null,
+    includedStorageGb: 0,
+    estimatedUsedStorageGb: null,
+    estimatedEgressGb: null
+  };
+  if (!model || model.costSource === 'unavailable') {
+    return {
+      monthlyCostCents: null,
+      oneTimeCostCents: null,
+      breakdown: emptyBreakdown,
+      resolvedDrivers: {},
+      missingDrivers: [
+        ...(DEFAULT_REQUIRED_DRIVERS_BY_ITEM[item.itemKey] || [])
+      ]
+    };
+  }
+
+  const config = model.driverConfig || emptySalesModularDriverConfig(item.itemKey);
+  const profile = input.usageProfile === 'custom'
+    ? null
+    : input.usageProfile as SalesModularProfile;
+  const overrides = input.driverOverrides?.[item.itemKey] || {};
+  const resolvedDrivers: Partial<
+    Record<SalesModularDriverKey, SalesModularDriverValue>
+  > = {};
+  const resolveDriver = (
+    key: SalesModularDriverKey,
+    calculated?: SalesModularDriverValue
+  ) => {
+    if (resolvedDrivers[key]) return resolvedDrivers[key]!;
+    const override = overrides[key];
+    const configured = profile ? config.profiles?.[profile]?.[key] : undefined;
+    const resolved = override || calculated || configured || unavailableDriver(
+      'Driver não informado para este perfil.',
+      model.effectiveAt,
+      model.version
+    );
+    resolvedDrivers[key] = resolved;
+    return resolved;
+  };
+  const requiredDrivers = config.requiredDrivers ||
+    DEFAULT_REQUIRED_DRIVERS_BY_ITEM[item.itemKey] || [];
+
+  if (item.itemKey === 'insurance_tiss') {
+    resolveDriver(
+      'tissGuides',
+      calculatedDriver(
+        selectionQuantity,
+        'Quantidade de guias informada na proposta.',
+        model.effectiveAt,
+        model.version
+      )
+    );
+  }
+
+  for (const key of requiredDrivers) resolveDriver(key);
+  for (const key of Object.keys(overrides) as SalesModularDriverKey[]) {
+    resolveDriver(key);
+  }
+
+  const profileSettings = profile
+    ? {
+        ...settings.usageProfiles[profile],
+        ...(config.usageProfileOverrides?.[profile] || {})
+      }
+    : null;
+  const storageUtilization = resolveDriver(
+    'storageUtilizationBasisPoints',
+    profileSettings
+      ? estimatedDriver(
+          profileSettings.storageUtilizationBasisPoints,
+          `Perfil ${profile}; percentual explícito e versionado no catálogo.`,
+          model.effectiveAt,
+          model.version
+        )
+      : undefined
   );
-};
+  const egressMultiplier = resolveDriver(
+    'expectedEgressMultiplier',
+    profileSettings
+      ? estimatedDriver(
+          profileSettings.expectedEgressMultiplier,
+          `Perfil ${profile}; multiplicador explícito e versionado no catálogo.`,
+          model.effectiveAt,
+          model.version
+        )
+      : undefined
+  );
 
-const requiredCostFieldsByItem: Record<
-  string,
-  Array<keyof SalesPricingCostModel>
-> = {
-  clinical_core: [
-    'directFixedMonthlyCostCents',
-    'directCostPerPatientCents',
-    'directCostPerClinicCents',
-    'supportFixedMonthlyCostCents',
-    'supportCostPerPatientCents',
-    'operationalFixedMonthlyCostCents'
-  ],
-  appointments_communication: [
-    'directFixedMonthlyCostCents',
-    'directCostPerPatientCents',
-    'directCostPerClinicCents',
-    'notificationCostPerUnitCents',
-    'supportFixedMonthlyCostCents',
-    'operationalFixedMonthlyCostCents'
-  ],
-  financial_management: [
-    'directFixedMonthlyCostCents',
-    'directCostPerClinicCents',
-    'supportFixedMonthlyCostCents',
-    'operationalFixedMonthlyCostCents'
-  ],
-  insurance_tiss: [
-    'directFixedMonthlyCostCents',
-    'directCostPerUsageUnitCents',
-    'processingCostPerUnitCents',
-    'supportFixedMonthlyCostCents',
-    'operationalFixedMonthlyCostCents'
-  ],
-  school_management: [
-    'directFixedMonthlyCostCents',
-    'directCostPerPatientCents',
-    'supportFixedMonthlyCostCents',
-    'operationalFixedMonthlyCostCents'
-  ],
-  additional_storage: [
-    'directFixedMonthlyCostCents',
-    'storageCostPerGbCents',
-    'egressCostPerGbCents',
-    'operationalFixedMonthlyCostCents'
-  ],
-  onboarding: ['onboardingCostCents']
-};
+  const missingDrivers = Array.from(new Set([
+    ...requiredDrivers,
+    ...(['clinical_core', 'additional_storage'].includes(item.itemKey)
+      ? ['storageUtilizationBasisPoints' as const]
+      : []),
+    ...(['clinical_core', 'additional_storage', 'insurance_tiss', 'school_management'].includes(item.itemKey)
+      ? ['expectedEgressMultiplier' as const]
+      : [])
+  ].filter((key) => !validDriverDatum(resolvedDrivers[key]))));
 
-const isSalesCostModelComplete = (item: SalesPricingCatalogItem) => {
-  const model = item.costModel;
-  if (!model || model.costSource === 'unavailable') return false;
-  const requiredFields = requiredCostFieldsByItem[item.itemKey] || [
+  const ownership = settings.ownership;
+  const ownedRate = (
+    field: keyof SalesPricingCostModel,
+    key: ModularCostOwnershipKey
+  ): number | null => {
+    if (!modularCostCategoryApplies(item.itemKey, key)) return 0;
+    if (ownership[key] !== 'item_direct') return 0;
+    const value = model[field];
+    if (value === null || value === undefined) {
+      return null;
+    }
+    return nullableNonNegativeInteger(value);
+  };
+  const fixedRate = ownedRate(
     'directFixedMonthlyCostCents',
-    'operationalFixedMonthlyCostCents'
-  ];
-  return requiredFields.every((field) => model[field] !== null);
-};
+    'fixedMonthlyEligibleCost'
+  );
+  const fixedCostCents = fixedRate;
+  const clinicRate = ownedRate('directCostPerClinicCents', 'variableClinicCost');
+  const patientCostApplicable = modularCostCategoryApplies(
+    item.itemKey,
+    'variablePatientCost'
+  );
+  const supportPatientApplicable = modularCostCategoryApplies(
+    item.itemKey,
+    'supportPatientCost'
+  );
+  const patientDriverApplicable =
+    patientCostApplicable || supportPatientApplicable;
+  const patientRate = patientCostApplicable
+    ? ownedRate('directCostPerPatientCents', 'variablePatientCost')
+    : 0;
+  const usageRate = nullableNonNegativeInteger(
+    model.directCostPerUsageUnitCents
+  );
+  const processingRate = ownedRate('processingCostPerUnitCents', 'processingCost');
+  const notificationApplicable = modularCostCategoryApplies(
+    item.itemKey,
+    'notificationCost'
+  );
+  const notificationRate = notificationApplicable
+    ? ownedRate('notificationCostPerUnitCents', 'notificationCost')
+    : 0;
+  const supportFixedRate = ownedRate('supportFixedMonthlyCostCents', 'supportClinicCost');
+  const supportPatientRate = supportPatientApplicable
+    ? ownedRate('supportCostPerPatientCents', 'supportPatientCost')
+    : 0;
+  const otherVariableRate = ownedRate(
+    'otherVariableCostCents',
+    'otherVariableCost'
+  );
+  const operationalRate = ownedRate('operationalFixedMonthlyCostCents', 'operationalCost');
+  const patientDriver = item.itemKey === 'school_management'
+    ? resolvedDrivers.schoolPatients
+    : patientDriverApplicable
+      ? calculatedDriver(
+        input.expectedPatientQuantity12Months,
+        'Previsão de pacientes informada na proposta.',
+        model.effectiveAt,
+        model.version
+      )
+      : calculatedDriver(
+          0,
+          'A funcionalidade não possui custo por paciente.',
+          model.effectiveAt,
+          model.version
+        );
+  const patientCount = validDriverDatum(patientDriver)
+    ? Number(patientDriver.value)
+    : null;
+  const patientCostCents = patientRate === null || patientCount === null
+    ? null
+    : patientRate * patientCount;
 
-const directOneTimeCost = (item: SalesPricingCatalogItem): number | null => {
-  if (item.billingInterval !== 'one_time') return 0;
-  if (!isSalesCostModelComplete(item)) return null;
-  return nonNegativeInteger(item.costModel?.onboardingCostCents);
+  const driverNumber = (key: SalesModularDriverKey) => {
+    const datum = resolvedDrivers[key] || resolveDriver(key);
+    return validDriverDatum(datum) ? Number(datum.value) : null;
+  };
+  const unitCost = (key: SalesModularDriverKey | 'onboardingHours') => {
+    const value = config.unitCostsCents?.[key];
+    return value === null || value === undefined
+      ? null
+      : nullableNonNegativeInteger(value);
+  };
+  const multiplyDriver = (
+    key: SalesModularDriverKey,
+    rate: number | null,
+    divisor = 1
+  ) => {
+    const value = driverNumber(key);
+    return value === null || rate === null
+      ? null
+      : Math.round((value * rate) / divisor);
+  };
+
+  let usageComponents: Array<number | null> = [];
+  let notificationCount: number | null = 0;
+  if (item.itemKey === 'clinical_core') {
+    usageComponents = [
+      multiplyDriver(
+        'monthlyClinicalSessions',
+        usageRate === null ? null : nonNegativeInteger(usageRate)
+      ),
+      multiplyDriver('monthlyAbaSessions', unitCost('monthlyAbaSessions')),
+      multiplyDriver('monthlyAbaRecords', unitCost('monthlyAbaRecords'), 1000),
+      multiplyDriver('generatedDocuments', unitCost('generatedDocuments'))
+    ];
+  } else if (item.itemKey === 'appointments_communication') {
+    usageComponents = [
+      multiplyDriver(
+        'monthlyAppointments',
+        usageRate === null ? null : nonNegativeInteger(usageRate)
+      )
+    ];
+    const appointments = driverNumber('monthlyAppointments');
+    const reminders = driverNumber('remindersPerAppointment');
+    const notificationParts = [
+      appointments === null || reminders === null
+        ? null
+        : appointments * reminders,
+      driverNumber('internalNotifications'),
+      driverNumber('emails'),
+      driverNumber('webPushNotifications'),
+      resolvedDrivers.futurePaidMessages
+        ? driverNumber('futurePaidMessages')
+        : 0
+    ];
+    notificationCount = notificationParts.every((value) => value !== null)
+      ? notificationParts.reduce((sum, value) => sum + Number(value), 0)
+      : null;
+  } else if (item.itemKey === 'financial_management') {
+    usageComponents = [
+      multiplyDriver(
+        'financialEntries',
+        usageRate === null ? null : nonNegativeInteger(usageRate)
+      ),
+      multiplyDriver('financialReports', unitCost('financialReports')),
+      multiplyDriver('recurringProcesses', unitCost('recurringProcesses')),
+      multiplyDriver('recurringProcesses', processingRate)
+    ];
+  } else if (item.itemKey === 'insurance_tiss') {
+    usageComponents = [
+      multiplyDriver(
+        'tissGuides',
+        usageRate === null ? null : nonNegativeInteger(usageRate)
+      ),
+      multiplyDriver('tissBatches', unitCost('tissBatches')),
+      multiplyDriver('tissXmlDocuments', unitCost('tissXmlDocuments')),
+      multiplyDriver('tissDocuments', unitCost('tissDocuments')),
+      processingRate === null
+        ? null
+        : nullableSum([
+            multiplyDriver('tissBatches', processingRate),
+            multiplyDriver('tissXmlDocuments', processingRate)
+          ])
+    ];
+  } else if (item.itemKey === 'school_management') {
+    usageComponents = [
+      multiplyDriver(
+        'schoolMeetings',
+        usageRate === null ? null : nonNegativeInteger(usageRate)
+      ),
+      multiplyDriver('schoolParticipants', unitCost('schoolParticipants')),
+      multiplyDriver('schoolDocuments', processingRate)
+    ];
+    notificationCount = driverNumber('schoolNotifications');
+  } else if (!['additional_storage', 'onboarding'].includes(item.itemKey)) {
+    usageComponents = [
+      usageRate === null
+        ? null
+        : nonNegativeInteger(usageRate) * selectionQuantity
+    ];
+  }
+  const usageCostCents = nullableSum(usageComponents);
+  const notificationCostCents = notificationCount === null || notificationRate === null
+    ? null
+    : Math.round(notificationCount * notificationRate);
+
+  let includedStorageGb = 0;
+  let usedStorageGb: number | null = 0;
+  if (item.itemKey === 'clinical_core') {
+    const explicitIncludedMb = Number(tier?.metadata?.includedStorageMb);
+    const includedMb = Number.isFinite(explicitIncludedMb) && explicitIncludedMb >= 0
+      ? explicitIncludedMb
+      : tier?.maximumQuantity === null || settings.includedStorageMbPerPatient === null
+        ? null
+        : tier.maximumQuantity * settings.includedStorageMbPerPatient;
+    includedStorageGb = includedMb === null ? 0 : includedMb / 1024;
+    const utilization = validDriverDatum(storageUtilization)
+      ? Number(storageUtilization.value)
+      : null;
+    usedStorageGb = includedMb === null || utilization === null
+      ? null
+      : includedStorageGb * utilization / 10_000;
+  } else if (item.itemKey === 'additional_storage') {
+    includedStorageGb = storageGigabytes(item, tier, selectionQuantity);
+    const utilization = validDriverDatum(storageUtilization)
+      ? Number(storageUtilization.value)
+      : null;
+    usedStorageGb = utilization === null
+      ? null
+      : includedStorageGb * utilization / 10_000;
+  } else if (['insurance_tiss', 'school_management'].includes(item.itemKey)) {
+    usedStorageGb = driverNumber('expectedStorageGb');
+  }
+  const storageApplies =
+    modularCostCategoryApplies(item.itemKey, 'storageCost') ||
+    modularCostCategoryApplies(item.itemKey, 'egressCost');
+  const storageRate = ownedRate('storageCostPerGbCents', 'storageCost');
+  const egressRate = ownedRate('egressCostPerGbCents', 'egressCost');
+  const estimatedEgressGb = storageApplies && usedStorageGb !== null && validDriverDatum(egressMultiplier)
+    ? usedStorageGb * Number(egressMultiplier.value)
+    : storageApplies
+      ? null
+      : 0;
+  const storageCostCents = !storageApplies
+    ? 0
+    : usedStorageGb === null || storageRate === null
+      ? null
+      : Math.round(usedStorageGb * storageRate);
+  const egressCostCents = !storageApplies
+    ? 0
+    : estimatedEgressGb === null || egressRate === null
+      ? null
+      : Math.round(estimatedEgressGb * egressRate);
+  const supportCostCents = supportFixedRate === null || supportPatientRate === null || patientCount === null
+    ? null
+    : supportFixedRate + supportPatientRate * patientCount;
+  const otherVariableCostCents = otherVariableRate;
+  const operationalCostCents = operationalRate;
+  const fixedAndClinic = fixedCostCents === null || clinicRate === null
+    ? null
+    : fixedCostCents + clinicRate;
+  const breakdown: SalesModularDirectCostBreakdown = {
+    fixedCostCents: fixedAndClinic,
+    patientCostCents,
+    usageCostCents,
+    storageCostCents,
+    egressCostCents,
+    notificationCostCents,
+    otherVariableCostCents,
+    supportCostCents,
+    operationalCostCents,
+    includedStorageGb,
+    estimatedUsedStorageGb: usedStorageGb,
+    estimatedEgressGb
+  };
+  const monthlyCostCents = item.billingInterval === 'one_time'
+    ? 0
+    : nullableSum([
+        breakdown.fixedCostCents,
+        breakdown.patientCostCents,
+        breakdown.usageCostCents,
+        breakdown.storageCostCents,
+        breakdown.egressCostCents,
+        breakdown.notificationCostCents,
+        breakdown.otherVariableCostCents,
+        breakdown.supportCostCents,
+        breakdown.operationalCostCents
+      ]);
+
+  let oneTimeCostCents: number | null = item.billingInterval === 'one_time'
+    ? null
+    : 0;
+  if (item.billingInterval === 'one_time') {
+    if (config.onboardingCalculationMode === 'manual') {
+      oneTimeCostCents = model.onboardingCostCents === null
+        ? null
+        : nullableNonNegativeInteger(model.onboardingCostCents);
+    } else {
+      const hourlyRate = unitCost('onboardingHours');
+      const hourCosts = nullableSum([
+        multiplyDriver('onboardingConfigurationHours', hourlyRate),
+        multiplyDriver('onboardingTrainingHours', hourlyRate),
+        multiplyDriver('onboardingImportHours', hourlyRate)
+      ]);
+      const extraordinary = resolvedDrivers.extraordinaryOnboardingCostCents
+        ? driverNumber('extraordinaryOnboardingCostCents')
+        : 0;
+      oneTimeCostCents = hourCosts === null || extraordinary === null
+        ? null
+        : hourCosts + Math.round(extraordinary);
+    }
+  }
+
+  return {
+    monthlyCostCents:
+      missingDrivers.length > 0 && item.billingInterval !== 'one_time'
+        ? null
+        : monthlyCostCents,
+    oneTimeCostCents:
+      missingDrivers.length > 0 && item.billingInterval === 'one_time'
+        ? null
+        : oneTimeCostCents,
+    breakdown,
+    resolvedDrivers,
+    missingDrivers
+  };
 };
 
 const sharedPlatformCosts = (
   values: SalesAssumptionValues,
-  patientQuantity: number
+  patientQuantity: number,
+  settings: SalesModularCostSettings,
+  selectedItemKeys: readonly string[]
 ): number | null => {
-  const variableKeys: Array<keyof SalesAssumptionValues> = [
-    'variablePatientCostCents',
-    'variableClinicCostCents',
-    'storageCostCents',
-    'egressCostCents',
-    'processingCostCents',
-    'notificationCostCents',
-    'otherVariableCostCents',
-    'monthlySupportClinicCostCents',
-    'supportPatientCostCents',
-    'monthlyOperationalCostCents'
-  ];
-  if (variableKeys.some((key) => values[key] === null)) return null;
-  const fixed = fixedAllocationCents(values, patientQuantity);
-  if (fixed === null) return null;
-  return (
-    patientQuantity * Number(values.variablePatientCostCents) +
-    Number(values.variableClinicCostCents) +
-    Number(values.storageCostCents) +
-    Number(values.egressCostCents) +
-    Number(values.processingCostCents) +
-    Number(values.notificationCostCents) +
-    Number(values.otherVariableCostCents) +
-    Number(values.monthlySupportClinicCostCents) +
-    patientQuantity * Number(values.supportPatientCostCents) +
-    Number(values.monthlyOperationalCostCents) +
+  const sharedValue = (
+    ownershipKey: ModularCostOwnershipKey
+  ): number | null => {
+    if (
+      settings.ownership[ownershipKey] !== 'shared' ||
+      !selectedItemKeys.some((itemKey) =>
+        modularCostCategoryApplies(itemKey, ownershipKey)
+      )
+    ) return 0;
+    const assumptionKey = OWNERSHIP_ASSUMPTION_KEYS[ownershipKey] as keyof SalesAssumptionValues;
+    const value = values[assumptionKey];
+    return value === null || value === undefined ? null : Number(value);
+  };
+  const variablePatient = sharedValue('variablePatientCost');
+  const variableClinic = sharedValue('variableClinicCost');
+  const storage = sharedValue('storageCost');
+  const egress = sharedValue('egressCost');
+  const processing = sharedValue('processingCost');
+  const notification = sharedValue('notificationCost');
+  const otherVariable = sharedValue('otherVariableCost');
+  const supportClinic = sharedValue('supportClinicCost');
+  const supportPatient = sharedValue('supportPatientCost');
+  const operational = sharedValue('operationalCost');
+  const fixed = settings.ownership.fixedMonthlyEligibleCost === 'shared'
+    ? fixedAllocationCents(values, patientQuantity)
+    : 0;
+  const parts = [
+    variablePatient,
+    variableClinic,
+    storage,
+    egress,
+    processing,
+    notification,
+    otherVariable,
+    supportClinic,
+    supportPatient,
+    operational,
     fixed
+  ];
+  if (parts.some((value) => value === null)) return null;
+  return (
+    patientQuantity * Number(variablePatient) +
+    Number(variableClinic) +
+    Number(storage) +
+    Number(egress) +
+    Number(processing) +
+    Number(notification) +
+    Number(otherVariable) +
+    Number(supportClinic) +
+    patientQuantity * Number(supportPatient) +
+    Number(operational) +
+    Number(fixed)
   );
 };
 
@@ -664,6 +1167,7 @@ const allocateByMethod = (
       );
 
 type MutablePeriodLine = {
+  itemKey: string;
   netRevenueCents: number;
   grossRevenueCents: number;
   directCostCents: number | null;
@@ -676,19 +1180,23 @@ type MutablePeriodLine = {
   belowEbitdaCostAllocatedCents: number | null;
   profitTaxAllocatedCents: number | null;
   netIncomeCents: number | null;
+  directCostBreakdown: SalesModularDirectCostBreakdown;
 };
 
 const calculatePeriod = (
   sourceLines: Array<{
+    itemKey: string;
     netRevenueCents: number;
     grossRevenueCents: number;
     directCostCents: number | null;
+    directCostBreakdown: SalesModularDirectCostBreakdown;
     weight: number;
     isBase: boolean;
   }>,
   values: SalesAssumptionValues,
   allocation: SalesPricingCatalogSnapshot['allocationSettings'],
-  patientQuantity: number
+  patientQuantity: number,
+  settings: SalesModularCostSettings
 ) => {
   const lines: MutablePeriodLine[] = sourceLines.map((line) => ({
     ...line,
@@ -751,7 +1259,12 @@ const calculatePeriod = (
     });
   }
 
-  const platformTotal = sharedPlatformCosts(values, patientQuantity);
+  const platformTotal = sharedPlatformCosts(
+    values,
+    patientQuantity,
+    settings,
+    lines.map((line) => line.itemKey)
+  );
   if (platformTotal === null) {
     lines.forEach((line) => {
       line.sharedPlatformCostAllocatedCents = null;
@@ -898,7 +1411,46 @@ const calculatePeriod = (
       mapped.map((line) => line.profitTaxAllocatedCents)
     ),
     netIncomeCents: nullableSum(mapped.map((line) => line.netIncomeCents)),
-    netMarginBasisPoints: null
+    netMarginBasisPoints: null,
+    directCostBreakdown: {
+      fixedCostCents: nullableSum(
+        lines.map((line) => line.directCostBreakdown.fixedCostCents)
+      ),
+      patientCostCents: nullableSum(
+        lines.map((line) => line.directCostBreakdown.patientCostCents)
+      ),
+      usageCostCents: nullableSum(
+        lines.map((line) => line.directCostBreakdown.usageCostCents)
+      ),
+      storageCostCents: nullableSum(
+        lines.map((line) => line.directCostBreakdown.storageCostCents)
+      ),
+      egressCostCents: nullableSum(
+        lines.map((line) => line.directCostBreakdown.egressCostCents)
+      ),
+      notificationCostCents: nullableSum(
+        lines.map((line) => line.directCostBreakdown.notificationCostCents)
+      ),
+      otherVariableCostCents: nullableSum(
+        lines.map((line) => line.directCostBreakdown.otherVariableCostCents)
+      ),
+      supportCostCents: nullableSum(
+        lines.map((line) => line.directCostBreakdown.supportCostCents)
+      ),
+      operationalCostCents: nullableSum(
+        lines.map((line) => line.directCostBreakdown.operationalCostCents)
+      ),
+      includedStorageGb: lines.reduce(
+        (sum, line) => sum + line.directCostBreakdown.includedStorageGb,
+        0
+      ),
+      estimatedUsedStorageGb: nullableSum(
+        lines.map((line) => line.directCostBreakdown.estimatedUsedStorageGb)
+      ),
+      estimatedEgressGb: nullableSum(
+        lines.map((line) => line.directCostBreakdown.estimatedEgressGb)
+      )
+    }
   };
   consolidated.totalEstimatedCostCents = nullableSum([
     consolidated.directCostCents,
@@ -967,6 +1519,9 @@ export function calculateSalesModularProposal(
   if (catalog.status !== 'active' && catalog.status !== 'draft') {
     throw new Error('PRICING_CATALOG_INACTIVE');
   }
+  const costSettings = normalizeModularCostSettings(
+    catalog.modularCostSettings
+  );
 
   const itemsByKey = new Map(
     catalog.items
@@ -1053,13 +1608,13 @@ export function calculateSalesModularProposal(
       amounts.oneTimeAmountCents,
       discountBasisPoints
     );
-    const directCost = directMonthlyCost(
+    const costResolution = directMonthlyCost(
       item,
       tier,
       amounts.quantity,
-      input.patientQuantity
+      input,
+      costSettings
     );
-    const oneTimeDirectCostCents = directOneTimeCost(item);
     return {
       item,
       tier,
@@ -1074,8 +1629,9 @@ export function calculateSalesModularProposal(
         amounts.recurringAmountCents - itemDiscountCents,
       oneTimeRevenueCents:
         amounts.oneTimeAmountCents - oneTimeDiscountCents,
-      directCostCents: directCost,
-      oneTimeDirectCostCents
+      directCostCents: costResolution.monthlyCostCents,
+      oneTimeDirectCostCents: costResolution.oneTimeCostCents,
+      costResolution
     };
   });
 
@@ -1129,29 +1685,35 @@ export function calculateSalesModularProposal(
 
   const promotionalPeriod = calculatePeriod(
     resolved.map((line, index) => ({
+      itemKey: line.item.itemKey,
       netRevenueCents:
         line.postPromotionRecurringRevenueCents -
         globalAllocations[index],
       grossRevenueCents: line.grossRecurringRevenueCents,
       directCostCents: line.directCostCents,
+      directCostBreakdown: line.costResolution.breakdown,
       weight: line.item.costModel?.sharedCostAllocationWeight || 0,
       isBase: line.item.itemKey === 'clinical_core'
     })),
     values,
     allocationSettings,
-    input.patientQuantity
+    input.expectedPatientQuantity12Months,
+    costSettings
   );
   const postPeriod = calculatePeriod(
     resolved.map((line) => ({
+      itemKey: line.item.itemKey,
       netRevenueCents: line.postPromotionRecurringRevenueCents,
       grossRevenueCents: line.grossRecurringRevenueCents,
       directCostCents: line.directCostCents,
+      directCostBreakdown: line.costResolution.breakdown,
       weight: line.item.costModel?.sharedCostAllocationWeight || 0,
       isBase: line.item.itemKey === 'clinical_core'
     })),
     values,
     allocationSettings,
-    input.patientQuantity
+    input.expectedPatientQuantity12Months,
+    costSettings
   );
 
   const missingCosts = resolved
@@ -1165,16 +1727,6 @@ export function calculateSalesModularProposal(
     'stripeFixedFeeCents',
     'revenueTaxBasisPoints',
     'estimatedDelinquencyBasisPoints',
-    'variablePatientCostCents',
-    'variableClinicCostCents',
-    'storageCostCents',
-    'egressCostCents',
-    'processingCostCents',
-    'notificationCostCents',
-    'otherVariableCostCents',
-    'monthlySupportClinicCostCents',
-    'supportPatientCostCents',
-    'monthlyOperationalCostCents',
     'depreciationAmortizationCents',
     'financialExpensesCents',
     'profitTaxBasisPoints',
@@ -1183,9 +1735,34 @@ export function calculateSalesModularProposal(
     'healthyMarginBasisPoints',
     'attentionMarginBasisPoints'
   ];
+  for (const ownershipKey of Object.keys(costSettings.ownership) as ModularCostOwnershipKey[]) {
+    if (costSettings.ownership[ownershipKey] === 'shared') {
+      requiredShared.push(
+        OWNERSHIP_ASSUMPTION_KEYS[ownershipKey] as keyof SalesAssumptionValues
+      );
+    }
+  }
   if (requiredShared.some((key) => values[key] === null)) {
     missingCosts.push('Custos compartilhados e premissas');
   }
+  const missingDrivers = resolved.flatMap((line) =>
+    line.costResolution.missingDrivers.map((driver) => ({
+      itemKey: line.item.itemKey,
+      itemName: line.item.publicName,
+      driver
+    }))
+  );
+  const possibleDuplicateCosts = findModularCostDuplicates(
+    costSettings,
+    catalog.items,
+    values as unknown as Record<string, any>
+  ).map((category) => ({
+    category,
+    label: MODULAR_COST_OWNERSHIP_LABELS[category],
+    justified:
+      String(costSettings.ownershipJustifications[category] || '').trim()
+        .length >= 12
+  }));
 
   const lines: SalesModularProposalLineResult[] = resolved.map(
     (line, index) => {
@@ -1238,6 +1815,11 @@ export function calculateSalesModularProposal(
       if (line.directCostCents === null) {
         warnings.push('Modelo de custo ainda não informado.');
       }
+      if (line.costResolution.missingDrivers.length > 0) {
+        warnings.push(
+          `Dados insuficientes: ${line.costResolution.missingDrivers.join(', ')}.`
+        );
+      }
       if (
         promotional.ebitdaCents !== null &&
         promotional.ebitdaCents < 0
@@ -1278,6 +1860,9 @@ export function calculateSalesModularProposal(
           line.item.costModel?.sourceDetail ||
           'Configure os custos por funcionalidade.',
         costModelSnapshot: line.item.costModel,
+        resolvedDrivers: line.costResolution.resolvedDrivers,
+        missingDrivers: line.costResolution.missingDrivers,
+        directCostBreakdown: line.costResolution.breakdown,
         minimumRecommendedRevenueCents,
         maximumRecommendedDiscountBasisPoints,
         breakEvenQuantity:
@@ -1452,6 +2037,13 @@ export function calculateSalesModularProposal(
       'A margem está abaixo do mínimo e exige justificativa administrativa.'
     );
   }
+  if (possibleDuplicateCosts.length > 0) {
+    warnings.push(
+      `Possível custo duplicado: ${possibleDuplicateCosts
+        .map((duplicate) => duplicate.label)
+        .join(', ')}.`
+    );
+  }
 
   const assertExactTotal = (
     field: string,
@@ -1506,6 +2098,38 @@ export function calculateSalesModularProposal(
         consolidated[field]
       );
     }
+    for (const field of [
+      'fixedCostCents',
+      'patientCostCents',
+      'usageCostCents',
+      'storageCostCents',
+      'egressCostCents',
+      'notificationCostCents',
+      'otherVariableCostCents',
+      'supportCostCents',
+      'operationalCostCents'
+    ] as const) {
+      assertExactTotal(
+        `${periodName}.directCostBreakdown.${field}`,
+        nullableSum(lines.map((line) => line.directCostBreakdown[field])),
+        consolidated.directCostBreakdown[field]
+      );
+    }
+    assertExactTotal(
+      `${periodName}.directCostBreakdown.total`,
+      nullableSum([
+        consolidated.directCostBreakdown.fixedCostCents,
+        consolidated.directCostBreakdown.patientCostCents,
+        consolidated.directCostBreakdown.usageCostCents,
+        consolidated.directCostBreakdown.storageCostCents,
+        consolidated.directCostBreakdown.egressCostCents,
+        consolidated.directCostBreakdown.notificationCostCents,
+        consolidated.directCostBreakdown.otherVariableCostCents,
+        consolidated.directCostBreakdown.supportCostCents,
+        consolidated.directCostBreakdown.operationalCostCents
+      ]),
+      consolidated.directCostCents
+    );
   }
 
   return {
@@ -1518,8 +2142,10 @@ export function calculateSalesModularProposal(
       tierId: baseTier.id,
       name: baseTier.publicName,
       limitQuantity: baseTier.maximumQuantity,
-      includedStorageMb: baseTier.maximumQuantity
-        ? baseTier.maximumQuantity * 100
+      includedStorageMb:
+        baseTier.maximumQuantity !== null &&
+        costSettings.includedStorageMbPerPatient !== null
+        ? baseTier.maximumQuantity * costSettings.includedStorageMbPerPatient
         : null,
       occupiedQuantity: input.patientQuantity,
       availableQuantity:
@@ -1552,6 +2178,16 @@ export function calculateSalesModularProposal(
     rating,
     requiresJustification,
     missingCosts: Array.from(new Set(missingCosts)),
+    missingDrivers,
+    possibleDuplicateCosts,
+    costOwnership: costSettings,
+    totalsReconciled: true,
+    forecast: {
+      currentPatients: input.patientQuantity,
+      expectedPatients: input.expectedPatientQuantity12Months,
+      commercialLimitPatients: baseTier.maximumQuantity,
+      aggressivePatients: baseTier.maximumQuantity
+    },
     warnings,
     horizons
   };

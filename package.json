@@ -110,6 +110,7 @@
     "stripe:create-active-patient-price": "node scripts/create-stripe-active-patient-price.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "test:patient-create-user-idempotency": "tsx tests/patientCreateUserIdempotency.test.ts"
   },
   "dependencies": {

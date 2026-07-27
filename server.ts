@@ -96,6 +96,13 @@ import {
   type SalesPricingCatalogItem
 } from './src/utils/salesModularProposal';
 import {
+  SALES_MODULAR_DRIVER_DEFINITIONS,
+  validateModularCatalogForPublication,
+  type SalesModularDriverKey,
+  type SalesModularDriverOverrides,
+  type SalesModularDriverValue
+} from './src/utils/salesModularCostDrivers';
+import {
   buildAbaPromptSnapshot,
   normalizeAbaPromptTypeConfig,
   resolveAbaPromptLevel,
@@ -2094,13 +2101,13 @@ function normalizeSalesSimulationRequest(raw: unknown): SalesSimulationInput {
 }
 
 const SALES_PRICING_CATALOG_VERSION_SELECT =
-  "id,version,name,status,effective_at,allocation_settings,admin_notes,catalog_snapshot,created_by,created_at,published_by,published_at,archived_at";
+  "id,version,name,status,effective_at,allocation_settings,modular_cost_settings,admin_notes,catalog_snapshot,created_by,created_at,published_by,published_at,archived_at";
 const SALES_PRICING_CATALOG_ITEM_SELECT =
   "id,catalog_version_id,item_key,public_name,internal_name,public_description,pricing_mode,billing_interval,unit_name,included_quantity,maximum_quantity,recurring_amount_cents,one_time_amount_cents,sort_order,is_required,is_public,is_active,compatible_base_packages,metadata";
 const SALES_PRICING_CATALOG_TIER_SELECT =
   "id,catalog_version_id,catalog_item_id,tier_key,public_name,minimum_quantity,maximum_quantity,included_quantity,recurring_amount_cents,one_time_amount_cents,sort_order,is_custom,metadata";
 const SALES_PRICING_COST_MODEL_SELECT =
-  "id,catalog_version_id,catalog_item_id,version,direct_fixed_monthly_cost_cents,direct_cost_per_patient_cents,direct_cost_per_clinic_cents,direct_cost_per_usage_unit_cents,storage_cost_per_gb_cents,egress_cost_per_gb_cents,notification_cost_per_unit_cents,processing_cost_per_unit_cents,support_fixed_monthly_cost_cents,support_cost_per_patient_cents,operational_fixed_monthly_cost_cents,onboarding_cost_cents,shared_cost_allocation_weight,cost_source,source_detail,effective_at";
+  "id,catalog_version_id,catalog_item_id,version,direct_fixed_monthly_cost_cents,direct_cost_per_patient_cents,direct_cost_per_clinic_cents,direct_cost_per_usage_unit_cents,storage_cost_per_gb_cents,egress_cost_per_gb_cents,notification_cost_per_unit_cents,processing_cost_per_unit_cents,other_variable_cost_cents,support_fixed_monthly_cost_cents,support_cost_per_patient_cents,operational_fixed_monthly_cost_cents,onboarding_cost_cents,shared_cost_allocation_weight,cost_source,source_detail,effective_at,driver_config";
 const SALES_MODULAR_SIMULATION_SELECT =
   `${SALES_OFFER_SIMULATION_SELECT},simulation_type,scenario_name,catalog_version_id,request_hash,modular_input_snapshot,public_notes`;
 const SALES_MODULAR_SIMULATION_ITEM_SELECT =
@@ -2140,6 +2147,9 @@ function mapSalesPricingCostModel(row: any): SalesPricingCostModel {
     processingCostPerUnitCents: nullableSalesNumber(
       row?.processing_cost_per_unit_cents,
     ),
+    otherVariableCostCents: nullableSalesNumber(
+      row?.other_variable_cost_cents,
+    ),
     supportFixedMonthlyCostCents: nullableSalesNumber(
       row?.support_fixed_monthly_cost_cents,
     ),
@@ -2159,6 +2169,10 @@ function mapSalesPricingCostModel(row: any): SalesPricingCostModel {
     ) as SimulationValueSource,
     sourceDetail: sanitizeString(row?.source_detail, 500),
     effectiveAt: String(row?.effective_at || ""),
+    driverConfig:
+      row?.driver_config && typeof row.driver_config === "object"
+        ? row.driver_config
+        : ({} as SalesPricingCostModel["driverConfig"]),
   };
 }
 
@@ -2243,9 +2257,11 @@ async function loadSalesPricingCatalog(
   const items: SalesPricingCatalogItem[] = (itemsResult.data || []).map(
     (row: any) => {
       const itemId = sanitizeString(row?.id, 120);
+      const itemKey = sanitizeString(row?.item_key, 80);
+      const mappedCost = costByItem.get(itemId) || null;
       return {
         id: itemId,
-        itemKey: sanitizeString(row?.item_key, 80),
+        itemKey,
         publicName: sanitizeString(row?.public_name, 120),
         internalName: sanitizeString(row?.internal_name, 160),
         description: sanitizeString(row?.public_description, 4000),
@@ -2274,7 +2290,7 @@ async function loadSalesPricingCatalog(
             ? row.metadata
             : {},
         tiers: tiersByItem.get(itemId) || [],
-        costModel: costByItem.get(itemId) || null,
+        costModel: mappedCost,
       };
     },
   );
@@ -2289,6 +2305,11 @@ async function loadSalesPricingCatalog(
       && typeof version.allocation_settings === "object"
         ? version.allocation_settings
         : {},
+    modularCostSettings:
+      version.modular_cost_settings
+      && typeof version.modular_cost_settings === "object"
+        ? version.modular_cost_settings
+        : null as any,
     items,
     metadata: {
       adminNotes: sanitizeString(version.admin_notes, 2000) || null,
@@ -2299,6 +2320,42 @@ async function loadSalesPricingCatalog(
       archivedAt: version.archived_at || null,
     },
   };
+}
+
+const SALES_MODULAR_DRIVER_KEYS = new Set<SalesModularDriverKey>(
+  SALES_MODULAR_DRIVER_DEFINITIONS.map((definition) => definition.key),
+);
+
+function normalizeSalesModularDriverOverrides(
+  raw: unknown,
+): SalesModularDriverOverrides {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const normalized: SalesModularDriverOverrides = {};
+  for (const [rawItemKey, rawDrivers] of Object.entries(raw).slice(0, 50)) {
+    const itemKey = sanitizeString(rawItemKey, 80);
+    if (!itemKey || !rawDrivers || typeof rawDrivers !== "object" || Array.isArray(rawDrivers)) {
+      continue;
+    }
+    const drivers: Partial<Record<SalesModularDriverKey, SalesModularDriverValue>> = {};
+    for (const [rawDriverKey, rawDatum] of Object.entries(rawDrivers).slice(0, 50)) {
+      const driverKey = sanitizeString(rawDriverKey, 80) as SalesModularDriverKey;
+      if (!SALES_MODULAR_DRIVER_KEYS.has(driverKey) || !rawDatum || typeof rawDatum !== "object" || Array.isArray(rawDatum)) {
+        continue;
+      }
+      const datum = rawDatum as Record<string, any>;
+      drivers[driverKey] = {
+        value: datum.value === null || datum.value === ""
+          ? null
+          : Number(datum.value),
+        source: sanitizeString(datum.source, 30) as SimulationValueSource,
+        sourceDetail: sanitizeString(datum.sourceDetail, 500),
+        effectiveAt: sanitizeString(datum.effectiveAt, 80),
+        version: Number(datum.version),
+      };
+    }
+    normalized[itemKey] = drivers;
+  }
+  return normalized;
 }
 
 function normalizeSalesModularProposalRequest(
@@ -2343,6 +2400,9 @@ function normalizeSalesModularProposalRequest(
       source.usageProfile || "standard",
       30,
     ) as SalesUsageProfile,
+    driverOverrides: normalizeSalesModularDriverOverrides(
+      source.driverOverrides,
+    ),
     internalNotes: sanitizeString(source.internalNotes, 2000),
     publicNotes: sanitizeString(source.publicNotes, 1500),
   };
@@ -69485,11 +69545,13 @@ async function startServer() {
           (result: any) => result.error,
         )?.error;
         if (error) throw error;
+        const publicationBlocks = validateModularCatalogForPublication(catalog);
         return res.json({
           success: true,
           catalog,
           versions: versionsResult.data || [],
           profitabilityByFeature: reportResult.data || [],
+          publicationBlocks,
           queries: {
             catalogVersion: 1,
             catalogItemsTiersAndCosts: 3,
@@ -69546,7 +69608,7 @@ async function startServer() {
       }
       try {
         const { data, error } = await supabase.rpc(
-          "clone_sales_pricing_catalog_version_v1",
+          "clone_sales_pricing_catalog_version_v2",
           {
             p_source_version_id: sourceVersionId,
             p_name: name,
@@ -69606,7 +69668,7 @@ async function startServer() {
       }
       try {
         const { data, error } = await supabase.rpc(
-          "save_sales_pricing_catalog_draft_v1",
+          "save_sales_pricing_catalog_draft_v2",
           {
             p_catalog_version_id: versionId,
             p_action: action,
@@ -69668,8 +69730,20 @@ async function startServer() {
         });
       }
       try {
+        const catalog = await loadSalesPricingCatalog(versionId, {
+          includeDraft: true,
+        });
+        const publicationBlocks = validateModularCatalogForPublication(catalog);
+        if (publicationBlocks.length > 0) {
+          return res.status(422).json({
+            success: false,
+            code: "PRICING_CATALOG_PUBLICATION_BLOCKED",
+            error: "Resolva os bloqueios de custos e drivers antes de publicar.",
+            blocks: publicationBlocks,
+          });
+        }
         const { data, error } = await supabase.rpc(
-          "publish_sales_pricing_catalog_version_v1",
+          "publish_sales_pricing_catalog_version_v2",
           {
             p_catalog_version_id: versionId,
             p_actor_user_id: actorUserId,
@@ -69688,10 +69762,14 @@ async function startServer() {
           success: false,
           code: immutable
             ? "PRICING_CATALOG_IMMUTABLE"
-            : "PRICING_CATALOG_INVALID",
+            : rawCode.includes("PUBLICATION_BLOCKED")
+              ? "PRICING_CATALOG_PUBLICATION_BLOCKED"
+              : "PRICING_CATALOG_INVALID",
           error: immutable
             ? "Esta versão já foi encerrada."
-            : "O catálogo precisa de pacote-base, faixas e modelos de custo para ser publicado.",
+            : rawCode.includes("PUBLICATION_BLOCKED")
+              ? "Resolva os bloqueios de custos, drivers, armazenamento, egress e duplicidade."
+              : "O catálogo precisa de pacote-base, faixas e modelos de custo para ser publicado.",
         });
       }
     },
