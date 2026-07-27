@@ -1,12 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  CheckCircle2,
+  Layers3,
+  Loader2,
+  ShieldCheck
+} from 'lucide-react';
 import { LogoVerto } from './Common';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
 } from '../constants/salesCommercial';
 
-type PublicOffer = {
+type LegacyPublicOffer = {
+  offerType: 'legacy';
   clinicName?: string | null;
   leadName?: string | null;
   baseUnitAmountCents: number;
@@ -23,6 +31,51 @@ type PublicOffer = {
   stripeReady: boolean;
 };
 
+type ModularOfferItem = {
+  itemKey: string;
+  publicName: string;
+  description: string;
+  pricingMode: string;
+  quantity: number;
+  limitQuantity: number | null;
+  includedQuantity: number | null;
+  grossRecurringAmountCents: number;
+  promotionalRecurringAmountCents: number;
+  postPromotionRecurringAmountCents: number;
+  oneTimeAmountCents: number;
+  itemDiscountBasisPoints: number;
+  publicMetadata: Record<string, any>;
+};
+
+export type ModularPublicOffer = {
+  offerType: 'modular';
+  proposalName: string;
+  clinicName?: string | null;
+  leadName?: string | null;
+  currency: string;
+  initialActivePatientQuantity: number;
+  basePackage?: {
+    name?: string;
+    limitQuantity?: number | null;
+    includedStorageMb?: number | null;
+  } | null;
+  items: ModularOfferItem[];
+  promotionalMonthlyAmountCents: number;
+  postDiscountMonthlyAmountCents: number;
+  oneTimeAmountCents: number;
+  globalDiscountCents: number;
+  globalDiscountPercentage: number;
+  discountDurationMonths: number;
+  onboardingInstallments: number;
+  publicNotes?: string | null;
+  expiresAt: string;
+  status: string;
+  modularCheckoutEnabled: false;
+  stripeReady: false;
+};
+
+type PublicOffer = LegacyPublicOffer | ModularPublicOffer;
+
 type PaymentReturnState =
   | 'idle'
   | 'confirming'
@@ -30,6 +83,196 @@ type PaymentReturnState =
   | 'activation_email_sent'
   | 'review_required'
   | 'unavailable';
+
+export const ModularOfferDetails = ({
+  offer
+}: {
+  offer: ModularPublicOffer;
+}) => {
+  const recurringItems = offer.items.filter(
+    (item) => item.pricingMode !== 'one_time'
+  );
+  const oneTimeItems = offer.items.filter(
+    (item) => item.oneTimeAmountCents > 0
+  );
+  const hasPromotion =
+    offer.promotionalMonthlyAmountCents !==
+    offer.postDiscountMonthlyAmountCents;
+
+  return (
+    <>
+      <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200">
+        <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+          <p className="text-xs font-medium text-slate-500">Estrutura escolhida</p>
+          <p className="mt-1 text-sm font-semibold text-slate-900">
+            {offer.basePackage?.name || 'Verto Clínica'}
+          </p>
+          <p className="mt-1 text-xs font-normal text-slate-500">
+            {offer.initialActivePatientQuantity} pacientes estimados
+            {offer.basePackage?.limitQuantity
+              ? ` · limite de ${offer.basePackage.limitQuantity}`
+              : ''}
+          </p>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {recurringItems.map((item) => (
+            <div
+              key={`${item.itemKey}:${item.publicMetadata?.tierName || 'item'}`}
+              className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:justify-between"
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Check size={15} className="shrink-0 text-emerald-600" />
+                  <p className="text-sm font-medium text-slate-900">{item.publicName}</p>
+                </div>
+                <p className="mt-1 pl-[23px] text-xs font-normal leading-5 text-slate-500">
+                  {item.description}
+                </p>
+                {Array.isArray(item.publicMetadata?.features) &&
+                item.publicMetadata.features.length > 0 ? (
+                  <ul className="mt-2 space-y-1 pl-[23px] text-xs font-normal leading-5 text-slate-600">
+                    {item.publicMetadata.features.map(
+                      (feature: string, featureIndex: number) => (
+                        <li
+                          key={`${item.itemKey}:feature:${featureIndex}`}
+                          className="flex items-start gap-2"
+                        >
+                          <span
+                            aria-hidden="true"
+                            className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-violet-400"
+                          />
+                          <span>{feature}</span>
+                        </li>
+                      )
+                    )}
+                  </ul>
+                ) : null}
+                {item.limitQuantity || item.includedQuantity ? (
+                  <p className="mt-1 pl-[23px] text-xs font-medium text-violet-700">
+                    {item.limitQuantity
+                      ? `Limite: ${item.limitQuantity.toLocaleString('pt-BR')} ${item.publicMetadata?.unitName || ''}`
+                      : `${item.includedQuantity?.toLocaleString('pt-BR')} ${item.publicMetadata?.unitName || ''} incluídos`}
+                  </p>
+                ) : null}
+                {item.itemDiscountBasisPoints > 0 ? (
+                  <p className="mt-1 pl-[23px] text-xs font-medium text-emerald-700">
+                    Desconto do módulo:{' '}
+                    {(item.itemDiscountBasisPoints / 100).toLocaleString(
+                      'pt-BR',
+                      { maximumFractionDigits: 2 }
+                    )}
+                    %
+                  </p>
+                ) : null}
+              </div>
+              <p className="shrink-0 pl-[23px] text-sm font-semibold text-slate-900 sm:pl-0">
+                {formatSalesCurrency(
+                  hasPromotion
+                    ? item.promotionalRecurringAmountCents
+                    : item.postPromotionRecurringAmountCents,
+                  offer.currency
+                )}
+                <span className="font-normal text-slate-500">/mês</span>
+              </p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {hasPromotion ? (
+          <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+            <p className="text-xs font-medium text-violet-700">
+              Durante a promoção
+            </p>
+            <p className="mt-1 text-xl font-semibold text-slate-900">
+              {formatSalesCurrency(
+                offer.promotionalMonthlyAmountCents,
+                offer.currency
+              )}
+              <span className="text-sm font-normal text-slate-500">/mês</span>
+            </p>
+            <p className="mt-1 text-xs font-normal text-slate-600">
+              {offer.globalDiscountPercentage.toLocaleString('pt-BR', {
+                maximumFractionDigits: 2
+              })}
+              % de desconto por {offer.discountDurationMonths} meses
+            </p>
+          </div>
+        ) : null}
+        <div
+          className={`rounded-2xl border border-emerald-200 bg-emerald-50 p-4 ${
+            hasPromotion ? '' : 'sm:col-span-2'
+          }`}
+        >
+          <p className="text-xs font-medium text-emerald-700">
+            {hasPromotion ? 'Após a promoção' : 'Total mensal'}
+          </p>
+          <p className="mt-1 text-xl font-semibold text-slate-900">
+            {formatSalesCurrency(
+              offer.postDiscountMonthlyAmountCents,
+              offer.currency
+            )}
+            <span className="text-sm font-normal text-slate-500">/mês</span>
+          </p>
+        </div>
+      </div>
+
+      {oneTimeItems.length > 0 ? (
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <p className="text-xs font-medium text-slate-500">Implantação</p>
+          {oneTimeItems.map((item) => (
+            <div
+              key={item.itemKey}
+              className="mt-2 flex items-center justify-between gap-4 text-sm"
+            >
+              <span className="font-normal text-slate-700">{item.publicName}</span>
+              <span className="font-semibold text-slate-900">
+                {formatSalesCurrency(item.oneTimeAmountCents, offer.currency)}
+              </span>
+            </div>
+          ))}
+          {offer.onboardingInstallments > 1 ? (
+            <p className="mt-2 text-xs font-normal text-slate-500">
+              Condição comercial: {offer.onboardingInstallments} parcelas,
+              sem criar cobrança na Stripe nesta etapa.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {offer.publicNotes ? (
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-normal leading-6 text-slate-700">
+          {offer.publicNotes}
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex items-start gap-3 rounded-2xl border border-violet-100 bg-violet-50 p-4">
+        <Layers3 size={18} className="mt-0.5 shrink-0 text-violet-700" />
+        <p className="text-sm font-normal leading-6 text-violet-950">
+          Comece com a estrutura que sua clínica precisa hoje e adicione novos
+          módulos conforme sua operação crescer. Toda a estrutura clínica e ABA
+          está incluída no Verto Clínica.
+        </p>
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm font-normal text-amber-900">
+        Proposta válida até{' '}
+        {new Date(offer.expiresAt).toLocaleString('pt-BR')}.
+      </div>
+
+      <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center">
+        <p className="text-sm font-medium text-slate-800">
+          Proposta comercial para análise
+        </p>
+        <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
+          O checkout modular será habilitado após a validação da nova estrutura
+          de pacotes. Fale com a equipe comercial para continuar.
+        </p>
+      </div>
+    </>
+  );
+};
 
 export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [offer, setOffer] = useState<PublicOffer | null>(null);
@@ -181,7 +424,11 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
               <div className="flex items-start gap-3">
                 <div className="rounded-2xl bg-violet-50 p-3 text-violet-700"><ShieldCheck size={22} /></div>
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.12em] text-violet-600">Proposta individual Verto</p>
+                  <p className="text-xs font-medium uppercase tracking-[0.12em] text-violet-600">
+                    {offer.offerType === 'modular'
+                      ? offer.proposalName
+                      : 'Proposta individual Verto'}
+                  </p>
                   <h1 className="mt-1 text-xl font-semibold text-slate-900">
                     {offer.clinicName || offer.leadName || 'Sua operação clínica'}
                   </h1>
@@ -191,6 +438,10 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 </div>
               </div>
 
+              {offer.offerType === 'modular' ? (
+                <ModularOfferDetails offer={offer} />
+              ) : (
+                <>
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <p className="text-xs font-medium text-slate-500">Preço oficial</p>
@@ -270,6 +521,8 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
               <p className="mt-3 text-center text-[11px] font-normal leading-5 text-slate-500">
                 Ao continuar, você confirma que revisou a proposta e seguirá para os termos e a política de privacidade aplicáveis.
               </p>
+                </>
+              )}
             </div>
           ) : null}
         </section>

@@ -25,6 +25,7 @@ import {
   type SalesSimulationInput,
   type SalesUsageProfile,
 } from '../utils/salesProfitability';
+import { SalesModularProposalBuilder } from './SalesModularProposalBuilder';
 
 type SalesProfitabilitySimulatorProps = {
   lead: any;
@@ -152,7 +153,7 @@ const simulationToInput = (simulation: SavedSimulation): SalesSimulationInput =>
   onboardingCostCents: Number(simulation.onboarding_cost_cents || 0),
 });
 
-export const SalesProfitabilitySimulator = ({
+const LegacySalesProfitabilitySimulator = ({
   lead,
   onClose,
   onOpenAssumptions,
@@ -1740,3 +1741,12 @@ export const SalesProfitabilitySimulator = ({
     </div>
   );
 };
+
+export const SalesProfitabilitySimulator = (
+  props: SalesProfitabilitySimulatorProps
+) => (
+  <SalesModularProposalBuilder
+    {...props}
+    legacyFallback={<LegacySalesProfitabilitySimulator {...props} />}
+  />
+);

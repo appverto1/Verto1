@@ -65,6 +65,8 @@
     "test:sales-checkout-provisioning": "tsx tests/salesCheckoutProvisioning.test.ts",
     "test:sales-profitability": "tsx tests/salesProfitability.test.ts",
     "test:sales-profitability-flow": "tsx tests/salesProfitabilityFlow.test.ts",
+    "test:sales-modular-proposal": "tsx tests/salesModularProposal.test.ts",
+    "test:sales-modular-flow": "tsx tests/salesModularProposalFlow.test.ts",
     "test:sales-financial-input": "tsx tests/salesFinancialAssumptionsInput.test.ts",
     "test:owner-mfa": "tsx tests/ownerMfaEnforcement.test.ts",
     "test:demo-sandbox": "tsx tests/demoSandbox.test.ts",

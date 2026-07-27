@@ -86,6 +86,16 @@ import {
   type SimulationValueSource
 } from './src/utils/salesProfitability';
 import {
+  calculateSalesModularProposal,
+  recommendSalesPackageTier,
+  validateSalesModularProposalInput,
+  type SalesModularProposalInput,
+  type SalesPricingCatalogSnapshot,
+  type SalesPricingCostModel,
+  type SalesPricingCatalogTier,
+  type SalesPricingCatalogItem
+} from './src/utils/salesModularProposal';
+import {
   buildAbaPromptSnapshot,
   normalizeAbaPromptTypeConfig,
   resolveAbaPromptLevel,
@@ -2081,6 +2091,309 @@ function normalizeSalesSimulationRequest(raw: unknown): SalesSimulationInput {
     input.usageProfile = "invalid" as SalesUsageProfile;
   }
   return input;
+}
+
+const SALES_PRICING_CATALOG_VERSION_SELECT =
+  "id,version,name,status,effective_at,allocation_settings,admin_notes,catalog_snapshot,created_by,created_at,published_by,published_at,archived_at";
+const SALES_PRICING_CATALOG_ITEM_SELECT =
+  "id,catalog_version_id,item_key,public_name,internal_name,public_description,pricing_mode,billing_interval,unit_name,included_quantity,maximum_quantity,recurring_amount_cents,one_time_amount_cents,sort_order,is_required,is_public,is_active,compatible_base_packages,metadata";
+const SALES_PRICING_CATALOG_TIER_SELECT =
+  "id,catalog_version_id,catalog_item_id,tier_key,public_name,minimum_quantity,maximum_quantity,included_quantity,recurring_amount_cents,one_time_amount_cents,sort_order,is_custom,metadata";
+const SALES_PRICING_COST_MODEL_SELECT =
+  "id,catalog_version_id,catalog_item_id,version,direct_fixed_monthly_cost_cents,direct_cost_per_patient_cents,direct_cost_per_clinic_cents,direct_cost_per_usage_unit_cents,storage_cost_per_gb_cents,egress_cost_per_gb_cents,notification_cost_per_unit_cents,processing_cost_per_unit_cents,support_fixed_monthly_cost_cents,support_cost_per_patient_cents,operational_fixed_monthly_cost_cents,onboarding_cost_cents,shared_cost_allocation_weight,cost_source,source_detail,effective_at";
+const SALES_MODULAR_SIMULATION_SELECT =
+  `${SALES_OFFER_SIMULATION_SELECT},simulation_type,scenario_name,catalog_version_id,request_hash,modular_input_snapshot,public_notes`;
+const SALES_MODULAR_SIMULATION_ITEM_SELECT =
+  "id,simulation_id,catalog_version_id,catalog_item_id,tier_id,item_key,public_name_snapshot,public_description_snapshot,pricing_mode_snapshot,quantity,limit_quantity,included_quantity,gross_recurring_amount_cents,recurring_amount_cents,post_promotion_recurring_amount_cents,one_time_amount_cents,item_discount_basis_points,item_discount_cents,allocated_global_discount_cents,direct_cost_cents,transaction_tax_cost_allocated_cents,shared_cost_allocated_cents,contribution_margin_cents,contribution_margin_basis_points,ebitda_cents,ebitda_margin_basis_points,below_ebitda_cost_allocated_cents,profit_tax_allocated_cents,net_income_cents,net_margin_basis_points,cost_source,cost_model_snapshot,result_snapshot,public_metadata,sort_order,created_at";
+const SALES_FEATURE_PROFITABILITY_SELECT =
+  "item_key,public_name,simulated_count,proposed_count,average_proposed_revenue_cents,average_item_discount_basis_points,average_direct_cost_cents,average_ebitda_cents,average_ebitda_margin_basis_points,minimum_ebitda_margin_basis_points,maximum_ebitda_margin_basis_points,average_ticket_cents,selected_basis_points,proposed_basis_points,has_insufficient_data,data_scope";
+
+const nullableSalesNumber = (value: unknown): number | null =>
+  value === null || value === undefined || value === ""
+    ? null
+    : Number(value);
+
+function mapSalesPricingCostModel(row: any): SalesPricingCostModel {
+  return {
+    id: sanitizeString(row?.id, 120),
+    itemId: sanitizeString(row?.catalog_item_id, 120),
+    version: Number(row?.version || 0),
+    directFixedMonthlyCostCents: nullableSalesNumber(
+      row?.direct_fixed_monthly_cost_cents,
+    ),
+    directCostPerPatientCents: nullableSalesNumber(
+      row?.direct_cost_per_patient_cents,
+    ),
+    directCostPerClinicCents: nullableSalesNumber(
+      row?.direct_cost_per_clinic_cents,
+    ),
+    directCostPerUsageUnitCents: nullableSalesNumber(
+      row?.direct_cost_per_usage_unit_cents,
+    ),
+    storageCostPerGbCents: nullableSalesNumber(
+      row?.storage_cost_per_gb_cents,
+    ),
+    egressCostPerGbCents: nullableSalesNumber(row?.egress_cost_per_gb_cents),
+    notificationCostPerUnitCents: nullableSalesNumber(
+      row?.notification_cost_per_unit_cents,
+    ),
+    processingCostPerUnitCents: nullableSalesNumber(
+      row?.processing_cost_per_unit_cents,
+    ),
+    supportFixedMonthlyCostCents: nullableSalesNumber(
+      row?.support_fixed_monthly_cost_cents,
+    ),
+    supportCostPerPatientCents: nullableSalesNumber(
+      row?.support_cost_per_patient_cents,
+    ),
+    operationalFixedMonthlyCostCents: nullableSalesNumber(
+      row?.operational_fixed_monthly_cost_cents,
+    ),
+    onboardingCostCents: nullableSalesNumber(row?.onboarding_cost_cents),
+    sharedCostAllocationWeight: Number(
+      row?.shared_cost_allocation_weight || 0,
+    ),
+    costSource: sanitizeString(
+      row?.cost_source,
+      30,
+    ) as SimulationValueSource,
+    sourceDetail: sanitizeString(row?.source_detail, 500),
+    effectiveAt: String(row?.effective_at || ""),
+  };
+}
+
+function mapSalesPricingTier(row: any): SalesPricingCatalogTier {
+  return {
+    id: sanitizeString(row?.id, 120),
+    itemId: sanitizeString(row?.catalog_item_id, 120),
+    tierKey: sanitizeString(row?.tier_key, 80),
+    publicName: sanitizeString(row?.public_name, 120),
+    minimumQuantity: Number(row?.minimum_quantity || 0),
+    maximumQuantity: nullableSalesNumber(row?.maximum_quantity),
+    includedQuantity: nullableSalesNumber(row?.included_quantity),
+    recurringAmountCents: nullableSalesNumber(row?.recurring_amount_cents),
+    oneTimeAmountCents: nullableSalesNumber(row?.one_time_amount_cents),
+    sortOrder: Number(row?.sort_order || 0),
+    isCustom: row?.is_custom === true,
+    metadata:
+      row?.metadata && typeof row.metadata === "object"
+        ? row.metadata
+        : {},
+  };
+}
+
+async function loadSalesPricingCatalog(
+  catalogVersionId?: string | null,
+  options: { includeDraft?: boolean } = {},
+): Promise<SalesPricingCatalogSnapshot & { metadata: Record<string, any> }> {
+  let versionQuery = supabase
+    .from("sales_pricing_catalog_versions")
+    .select(SALES_PRICING_CATALOG_VERSION_SELECT);
+  if (catalogVersionId) versionQuery = versionQuery.eq("id", catalogVersionId);
+  else versionQuery = versionQuery.eq("status", "active");
+  if (!options.includeDraft) {
+    versionQuery = versionQuery.in("status", ["active", "archived"]);
+  }
+  const { data: version, error: versionError } = await versionQuery
+    .order("version", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (versionError) throw versionError;
+  if (!version) {
+    const error = new Error("PRICING_CATALOG_VERSION_NOT_FOUND");
+    (error as any).code = "PRICING_CATALOG_VERSION_NOT_FOUND";
+    throw error;
+  }
+  const versionId = sanitizeString(version.id, 120);
+  const [itemsResult, tiersResult, costsResult] = await Promise.all([
+    supabase
+      .from("sales_pricing_catalog_items")
+      .select(SALES_PRICING_CATALOG_ITEM_SELECT)
+      .eq("catalog_version_id", versionId)
+      .order("sort_order", { ascending: true }),
+    supabase
+      .from("sales_pricing_catalog_tiers")
+      .select(SALES_PRICING_CATALOG_TIER_SELECT)
+      .eq("catalog_version_id", versionId)
+      .order("sort_order", { ascending: true }),
+    supabase
+      .from("sales_pricing_item_cost_models")
+      .select(SALES_PRICING_COST_MODEL_SELECT)
+      .eq("catalog_version_id", versionId)
+      .order("version", { ascending: false }),
+  ]);
+  const batchError = [itemsResult, tiersResult, costsResult].find(
+    (result: any) => result.error,
+  )?.error;
+  if (batchError) throw batchError;
+  const tiersByItem = new Map<string, SalesPricingCatalogTier[]>();
+  for (const row of tiersResult.data || []) {
+    const tier = mapSalesPricingTier(row);
+    const existing = tiersByItem.get(tier.itemId) || [];
+    existing.push(tier);
+    tiersByItem.set(tier.itemId, existing);
+  }
+  const costByItem = new Map<string, SalesPricingCostModel>();
+  for (const row of costsResult.data || []) {
+    const itemId = sanitizeString(row?.catalog_item_id, 120);
+    if (!costByItem.has(itemId)) {
+      costByItem.set(itemId, mapSalesPricingCostModel(row));
+    }
+  }
+  const items: SalesPricingCatalogItem[] = (itemsResult.data || []).map(
+    (row: any) => {
+      const itemId = sanitizeString(row?.id, 120);
+      return {
+        id: itemId,
+        itemKey: sanitizeString(row?.item_key, 80),
+        publicName: sanitizeString(row?.public_name, 120),
+        internalName: sanitizeString(row?.internal_name, 160),
+        description: sanitizeString(row?.public_description, 4000),
+        pricingMode: sanitizeString(row?.pricing_mode, 40) as any,
+        billingInterval: sanitizeString(row?.billing_interval, 30) as any,
+        unitName: sanitizeString(row?.unit_name, 80),
+        includedQuantity: nullableSalesNumber(row?.included_quantity),
+        maximumQuantity: nullableSalesNumber(row?.maximum_quantity),
+        recurringAmountCents: nullableSalesNumber(
+          row?.recurring_amount_cents,
+        ),
+        oneTimeAmountCents: nullableSalesNumber(row?.one_time_amount_cents),
+        sortOrder: Number(row?.sort_order || 0),
+        isRequired: row?.is_required === true,
+        isPublic: row?.is_public === true,
+        isActive: row?.is_active === true,
+        compatibleBasePackages: Array.isArray(
+          row?.compatible_base_packages,
+        )
+          ? row.compatible_base_packages.map((value: any) =>
+              sanitizeString(value, 80)
+            ).filter(Boolean)
+          : [],
+        metadata:
+          row?.metadata && typeof row.metadata === "object"
+            ? row.metadata
+            : {},
+        tiers: tiersByItem.get(itemId) || [],
+        costModel: costByItem.get(itemId) || null,
+      };
+    },
+  );
+  return {
+    id: versionId,
+    version: Number(version.version || 0),
+    name: sanitizeString(version.name, 120),
+    status: sanitizeString(version.status, 20) as any,
+    effectiveAt: String(version.effective_at || ""),
+    allocationSettings:
+      version.allocation_settings
+      && typeof version.allocation_settings === "object"
+        ? version.allocation_settings
+        : {},
+    items,
+    metadata: {
+      adminNotes: sanitizeString(version.admin_notes, 2000) || null,
+      createdBy: sanitizeString(version.created_by, 120) || null,
+      createdAt: version.created_at || null,
+      publishedBy: sanitizeString(version.published_by, 120) || null,
+      publishedAt: version.published_at || null,
+      archivedAt: version.archived_at || null,
+    },
+  };
+}
+
+function normalizeSalesModularProposalRequest(
+  raw: unknown,
+): SalesModularProposalInput {
+  const source =
+    raw && typeof raw === "object" ? raw as Record<string, any> : {};
+  const lines = Array.isArray(source.lines)
+    ? source.lines.slice(0, 50).map((line: any) => ({
+        itemKey: sanitizeString(line?.itemKey, 80),
+        tierId: sanitizeString(line?.tierId, 120) || null,
+        quantity: Number(line?.quantity),
+        itemDiscountBasisPoints: Number(
+          line?.itemDiscountBasisPoints || 0,
+        ),
+        customRecurringAmountCents:
+          line?.customRecurringAmountCents === null
+          || line?.customRecurringAmountCents === undefined
+            ? null
+            : Number(line.customRecurringAmountCents),
+        customOneTimeAmountCents:
+          line?.customOneTimeAmountCents === null
+          || line?.customOneTimeAmountCents === undefined
+            ? null
+            : Number(line.customOneTimeAmountCents),
+      }))
+    : [];
+  return {
+    patientQuantity: Number(source.patientQuantity),
+    expectedPatientQuantity12Months: Number(
+      source.expectedPatientQuantity12Months,
+    ),
+    basePackageTierId: sanitizeString(source.basePackageTierId, 120),
+    lines,
+    globalDiscountBasisPoints: Number(
+      source.globalDiscountBasisPoints || 0,
+    ),
+    discountDurationMonths: Number(source.discountDurationMonths || 0),
+    offerValidityDays: Number(source.offerValidityDays || 14),
+    onboardingInstallments: Number(source.onboardingInstallments || 1),
+    usageProfile: sanitizeString(
+      source.usageProfile || "standard",
+      30,
+    ) as SalesUsageProfile,
+    internalNotes: sanitizeString(source.internalNotes, 2000),
+    publicNotes: sanitizeString(source.publicNotes, 1500),
+  };
+}
+
+function salesModularResultMatches(
+  stored: any,
+  recalculated: ReturnType<typeof calculateSalesModularProposal>,
+) {
+  if (
+    !stored
+    || typeof stored !== "object"
+    || sanitizeString(stored.modelVersion, 80) !== recalculated.modelVersion
+    || sanitizeString(stored.catalogVersionId, 120)
+      !== recalculated.catalogVersionId
+    || Number(stored.promotionalRecurringRevenueCents)
+      !== recalculated.promotionalRecurringRevenueCents
+    || Number(stored.postPromotionRecurringRevenueCents)
+      !== recalculated.postPromotionRecurringRevenueCents
+    || Number(stored.oneTimeRevenueCents) !== recalculated.oneTimeRevenueCents
+    || !Array.isArray(stored.lines)
+    || stored.lines.length !== recalculated.lines.length
+  ) {
+    return false;
+  }
+  const storedByLine = new Map(
+    stored.lines.map((line: any) => [
+      `${sanitizeString(line.itemKey, 80)}:${sanitizeString(line.tierId, 120) || "item"}`,
+      line,
+    ]),
+  );
+  return recalculated.lines.every((line) => {
+    const storedLine = storedByLine.get(
+      `${line.itemKey}:${line.tierId || "item"}`,
+    );
+    return Boolean(
+      storedLine
+      && Number(storedLine.grossRecurringRevenueCents)
+        === line.grossRecurringRevenueCents
+      && Number(storedLine.promotionalRecurringRevenueCents)
+        === line.promotionalRecurringRevenueCents
+      && Number(storedLine.postPromotionRecurringRevenueCents)
+        === line.postPromotionRecurringRevenueCents
+      && Number(storedLine.oneTimeRevenueCents)
+        === line.oneTimeRevenueCents
+      && Number(storedLine.promotional?.ebitdaCents)
+        === Number(line.promotional.ebitdaCents)
+      && Number(storedLine.promotional?.netIncomeCents)
+        === Number(line.promotional.netIncomeCents),
+    );
+  });
 }
 
 function isCustomCouponDurationMonths(value: unknown): value is number {
@@ -17579,13 +17892,27 @@ async function startServer() {
     const safeToken = sanitizeString(token, 256);
     if (safeToken.length < 32) return { error: "invalid_token" as const };
     const tokenHash = hashSalesOfferToken(safeToken);
-    const { data: offer, error } = await supabase
+    const extendedOfferSelect =
+      "id,lead_id,status,base_unit_amount_cents,currency,initial_active_patient_quantity,discount_duration_months,discount_type,discount_percentage,stripe_coupon_id,promotional_unit_amount_cents,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,stripe_checkout_session_id,expires_at,revoked_at,accepted_at,offer_type,proposal_name,public_notes,modular_checkout_enabled,modular_snapshot,catalog_version_id";
+    const legacyOfferSelect =
+      "id,lead_id,status,base_unit_amount_cents,currency,initial_active_patient_quantity,discount_duration_months,discount_type,discount_percentage,stripe_coupon_id,promotional_unit_amount_cents,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,stripe_checkout_session_id,expires_at,revoked_at,accepted_at";
+    let offerResult = await supabase
       .from("sales_offers")
-      .select(
-        "id,lead_id,status,base_unit_amount_cents,currency,initial_active_patient_quantity,discount_duration_months,discount_type,discount_percentage,stripe_coupon_id,promotional_unit_amount_cents,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,stripe_checkout_session_id,expires_at,revoked_at,accepted_at",
-      )
+      .select(extendedOfferSelect)
       .eq("public_token_hash", tokenHash)
       .maybeSingle();
+    if (
+      offerResult.error
+      && (extractMissingColumnName(offerResult.error)
+        || isMissingRelationError(offerResult.error))
+    ) {
+      offerResult = await supabase
+        .from("sales_offers")
+        .select(legacyOfferSelect)
+        .eq("public_token_hash", tokenHash)
+        .maybeSingle();
+    }
+    const { data: offer, error } = offerResult;
     if (error || !offer) return { error: "not_found" as const };
     const expiresAt = new Date(String(offer.expires_at || "")).getTime();
     if (
@@ -17604,7 +17931,25 @@ async function startServer() {
       .is("deleted_at", null)
       .maybeSingle();
     if (!lead) return { error: "not_found" as const };
-    return { offer, lead, tokenHash, token: safeToken };
+    let modularItems: any[] = [];
+    if (sanitizeString((offer as any).offer_type, 30) === "modular") {
+      const { data: itemRows, error: itemError } = await supabase
+        .from("sales_offer_items")
+        .select(
+          "item_key,public_name_snapshot,public_description_snapshot,pricing_mode_snapshot,quantity,limit_quantity,included_quantity,gross_recurring_amount_cents,recurring_amount_cents,post_promotion_recurring_amount_cents,one_time_amount_cents,item_discount_basis_points,allocated_global_discount_cents,public_metadata,sort_order",
+        )
+        .eq("offer_id", offer.id)
+        .order("sort_order", { ascending: true });
+      if (itemError) return { error: "not_found" as const };
+      modularItems = itemRows || [];
+    }
+    return {
+      offer,
+      lead,
+      modularItems,
+      tokenHash,
+      token: safeToken,
+    };
   };
 
   app.get(
@@ -17620,7 +17965,121 @@ async function startServer() {
             message: "Esta oferta não está disponível ou expirou.",
           });
         }
-        const { offer, lead } = loaded;
+        const { offer, lead, modularItems } = loaded;
+        const offerType = sanitizeString(
+          (offer as any).offer_type,
+          30,
+        ) || "legacy";
+        if (offerType === "modular") {
+          const modularSnapshot =
+            (offer as any).modular_snapshot
+            && typeof (offer as any).modular_snapshot === "object"
+              ? (offer as any).modular_snapshot
+              : {};
+          if (
+            sanitizeString(offer.status, 40) === "ready"
+            || sanitizeString(offer.status, 40) === "sent"
+          ) {
+            await supabase
+              .from("sales_offers")
+              .update({
+                status: "opened",
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", offer.id)
+              .in("status", ["ready", "sent"]);
+          }
+          return res.json({
+            success: true,
+            offer: {
+              offerType: "modular",
+              proposalName:
+                sanitizeString((offer as any).proposal_name, 120)
+                || "Proposta Verto",
+              leadName: sanitizeString(lead.name, 180),
+              clinicName: sanitizeString(lead.clinic_name, 180) || null,
+              currency:
+                sanitizeString(offer.currency, 12)
+                || PUBLIC_ACTIVE_PATIENT_PRICE.currency,
+              initialActivePatientQuantity: Number(
+                offer.initial_active_patient_quantity || 1,
+              ),
+              basePackage: modularSnapshot.basePackage || null,
+              items: (modularItems || []).map((item: any) => ({
+                itemKey: sanitizeString(item.item_key, 80),
+                publicName: sanitizeString(
+                  item.public_name_snapshot,
+                  120,
+                ),
+                description: sanitizeString(
+                  item.public_description_snapshot,
+                  4000,
+                ),
+                pricingMode: sanitizeString(
+                  item.pricing_mode_snapshot,
+                  40,
+                ),
+                quantity: Number(item.quantity || 0),
+                limitQuantity:
+                  item.limit_quantity == null
+                    ? null
+                    : Number(item.limit_quantity),
+                includedQuantity:
+                  item.included_quantity == null
+                    ? null
+                    : Number(item.included_quantity),
+                grossRecurringAmountCents: Number(
+                  item.gross_recurring_amount_cents || 0,
+                ),
+                promotionalRecurringAmountCents: Number(
+                  item.recurring_amount_cents || 0,
+                ),
+                postPromotionRecurringAmountCents: Number(
+                  item.post_promotion_recurring_amount_cents || 0,
+                ),
+                oneTimeAmountCents: Number(
+                  item.one_time_amount_cents || 0,
+                ),
+                itemDiscountBasisPoints: Number(
+                  item.item_discount_basis_points || 0,
+                ),
+                publicMetadata:
+                  item.public_metadata
+                  && typeof item.public_metadata === "object"
+                    ? item.public_metadata
+                    : {},
+              })),
+              promotionalMonthlyAmountCents: Number(
+                modularSnapshot.promotionalRecurringRevenueCents || 0,
+              ),
+              postDiscountMonthlyAmountCents: Number(
+                modularSnapshot.postPromotionRecurringRevenueCents || 0,
+              ),
+              oneTimeAmountCents: Number(
+                modularSnapshot.oneTimeRevenueCents || 0,
+              ),
+              globalDiscountCents: Number(
+                modularSnapshot.globalDiscountCents || 0,
+              ),
+              globalDiscountPercentage:
+                offer.discount_percentage == null
+                  ? 0
+                  : Number(offer.discount_percentage),
+              discountDurationMonths: Number(
+                modularSnapshot.discountDurationMonths || 0,
+              ),
+              onboardingInstallments: Number(
+                modularSnapshot.onboardingInstallments || 1,
+              ),
+              publicNotes:
+                sanitizeString((offer as any).public_notes, 1500) || null,
+              expiresAt: offer.expires_at,
+              status: offer.status,
+              modularCheckoutEnabled: false,
+              stripeReady: false,
+            },
+          });
+        }
         const stripeConfig = resolveSalesStripeConfiguration();
         const duration = Number(offer.discount_duration_months || 0) || null;
         const baseUnitAmountCents = Number(
@@ -17678,6 +18137,7 @@ async function startServer() {
         return res.json({
           success: true,
           offer: {
+            offerType: "legacy",
             leadName: sanitizeString(lead.name, 180),
             clinicName: sanitizeString(lead.clinic_name, 180) || null,
             baseUnitAmountCents,
@@ -17734,6 +18194,16 @@ async function startServer() {
           });
         }
         const { offer, lead, token } = loaded;
+        if (
+          sanitizeString((offer as any).offer_type, 30) === "modular"
+        ) {
+          return res.status(409).json({
+            success: false,
+            error: "PROPOSAL_MODULAR_CHECKOUT_NOT_ENABLED",
+            message:
+              "Checkout modular será habilitado após a validação da nova estrutura de pacotes.",
+          });
+        }
         const duration = Number(offer.discount_duration_months || 0) || null;
         const stripeConfig = resolveSalesStripeConfiguration();
         if (!isSalesOfferStripeReady(offer, stripeConfig)) {
@@ -68968,6 +69438,266 @@ async function startServer() {
   );
 
   app.get(
+    "/api/owner/sales/pricing-catalogs",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const requestedVersionId = sanitizeString(req.query?.versionId, 120);
+      if (requestedVersionId && !isUuid(requestedVersionId)) {
+        return res.status(400).json({
+          success: false,
+          code: "PRICING_CATALOG_NOT_FOUND",
+          error: "Versão de catálogo inválida.",
+        });
+      }
+      try {
+        const compact = String(req.query?.compact || "") === "1";
+        if (compact) {
+          const catalog = await loadSalesPricingCatalog(
+            requestedVersionId || null,
+            { includeDraft: true },
+          );
+          return res.json({
+            success: true,
+            catalog,
+            queries: {
+              catalogVersion: 1,
+              catalogItemsTiersAndCosts: 3,
+              nPlusOne: false,
+            },
+          });
+        }
+        const [catalog, versionsResult, reportResult] = await Promise.all([
+          loadSalesPricingCatalog(requestedVersionId || null, {
+            includeDraft: true,
+          }),
+          supabase
+            .from("sales_pricing_catalog_versions")
+            .select(SALES_PRICING_CATALOG_VERSION_SELECT)
+            .order("version", { ascending: false })
+            .limit(50),
+          supabase
+            .from("sales_feature_profitability_summary_v1")
+            .select(SALES_FEATURE_PROFITABILITY_SELECT)
+            .order("item_key", { ascending: true }),
+        ]);
+        const error = [versionsResult, reportResult].find(
+          (result: any) => result.error,
+        )?.error;
+        if (error) throw error;
+        return res.json({
+          success: true,
+          catalog,
+          versions: versionsResult.data || [],
+          profitabilityByFeature: reportResult.data || [],
+          queries: {
+            catalogVersion: 1,
+            catalogItemsTiersAndCosts: 3,
+            catalogVersionsAndReport: 2,
+            nPlusOne: false,
+          },
+        });
+      } catch (error: any) {
+        const missingSchema = isMissingRelationError(error);
+        const code = sanitizeString(error?.code || error?.message, 160);
+        return res.status(missingSchema ? 503 : code.includes("NOT_FOUND") ? 404 : 500).json({
+          success: false,
+          code: missingSchema
+            ? "PRICING_CATALOG_NOT_FOUND"
+            : code.includes("NOT_FOUND")
+              ? "PRICING_CATALOG_NOT_FOUND"
+              : "PRICING_CATALOG_UNAVAILABLE",
+          error: missingSchema
+            ? "A migration do catálogo modular ainda não foi aplicada."
+            : code.includes("NOT_FOUND")
+              ? "Catálogo comercial não encontrado."
+              : "Não foi possível carregar o catálogo comercial.",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/pricing-catalogs/clone",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const sourceVersionId = sanitizeString(
+        req.body?.sourceVersionId,
+        120,
+      );
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const name = sanitizeString(req.body?.name, 120);
+      const idempotencyKey = sanitizeString(
+        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
+        240,
+      );
+      if (
+        !isUuid(sourceVersionId)
+        || !isUuid(actorUserId)
+        || name.length < 2
+        || idempotencyKey.length < 12
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "PRICING_CATALOG_INVALID",
+          error: "Informe a versão de origem e o nome do novo rascunho.",
+        });
+      }
+      try {
+        const { data, error } = await supabase.rpc(
+          "clone_sales_pricing_catalog_version_v1",
+          {
+            p_source_version_id: sourceVersionId,
+            p_name: name,
+            p_actor_user_id: actorUserId,
+            p_idempotency_key: idempotencyKey,
+          },
+        );
+        if (error) throw error;
+        return res.status(201).json({ success: true, catalogVersion: data });
+      } catch (error: any) {
+        const code = sanitizeString(error?.message || error?.code, 160);
+        return res.status(code.includes("NOT_FOUND") ? 404 : 500).json({
+          success: false,
+          code: code.includes("NOT_FOUND")
+            ? "PRICING_CATALOG_NOT_FOUND"
+            : "PRICING_CATALOG_PERSISTENCE_FAILED",
+          error: code.includes("NOT_FOUND")
+            ? "Catálogo de origem não encontrado."
+            : "Não foi possível criar o rascunho do catálogo.",
+        });
+      }
+    },
+  );
+
+  app.patch(
+    "/api/owner/sales/pricing-catalogs/:versionId",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const versionId = sanitizeString(req.params?.versionId, 120);
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const action = sanitizeString(req.body?.action, 40);
+      const idempotencyKey = sanitizeString(
+        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
+        240,
+      );
+      const allowedActions = new Set([
+        "version",
+        "item",
+        "tier",
+        "cost_model",
+      ]);
+      if (
+        !isUuid(versionId)
+        || !isUuid(actorUserId)
+        || !allowedActions.has(action)
+        || idempotencyKey.length < 12
+        || !req.body?.payload
+        || typeof req.body.payload !== "object"
+        || Array.isArray(req.body.payload)
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "PRICING_CATALOG_INVALID",
+          error: "Alteração de catálogo inválida.",
+        });
+      }
+      try {
+        const { data, error } = await supabase.rpc(
+          "save_sales_pricing_catalog_draft_v1",
+          {
+            p_catalog_version_id: versionId,
+            p_action: action,
+            p_payload: req.body.payload,
+            p_actor_user_id: actorUserId,
+            p_idempotency_key: idempotencyKey,
+          },
+        );
+        if (error) throw error;
+        return res.json({ success: true, data });
+      } catch (error: any) {
+        const rawCode = sanitizeString(
+          error?.message || error?.code,
+          180,
+        );
+        const immutable = rawCode.includes("PRICING_CATALOG_IMMUTABLE");
+        const notFound = rawCode.includes("NOT_FOUND");
+        return res.status(immutable ? 409 : notFound ? 404 : 422).json({
+          success: false,
+          code: immutable
+            ? "PRICING_CATALOG_IMMUTABLE"
+            : notFound
+              ? rawCode.includes("TIER")
+                ? "PRICING_TIER_NOT_FOUND"
+                : rawCode.includes("ITEM")
+                  ? "PRICING_ITEM_NOT_FOUND"
+                  : "PRICING_CATALOG_NOT_FOUND"
+              : "PRICING_CATALOG_INVALID",
+          error: immutable
+            ? "Versões publicadas são imutáveis. Crie um novo rascunho."
+            : notFound
+              ? "O registro do catálogo não foi encontrado."
+              : "Revise os valores informados.",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/pricing-catalogs/:versionId/publish",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const versionId = sanitizeString(req.params?.versionId, 120);
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const idempotencyKey = sanitizeString(
+        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
+        240,
+      );
+      if (
+        !isUuid(versionId)
+        || !isUuid(actorUserId)
+        || idempotencyKey.length < 12
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "PRICING_CATALOG_INVALID",
+          error: "Publicação de catálogo inválida.",
+        });
+      }
+      try {
+        const { data, error } = await supabase.rpc(
+          "publish_sales_pricing_catalog_version_v1",
+          {
+            p_catalog_version_id: versionId,
+            p_actor_user_id: actorUserId,
+            p_idempotency_key: idempotencyKey,
+          },
+        );
+        if (error) throw error;
+        return res.json({ success: true, catalogVersion: data });
+      } catch (error: any) {
+        const rawCode = sanitizeString(
+          error?.message || error?.code,
+          180,
+        );
+        const immutable = rawCode.includes("IMMUTABLE");
+        return res.status(immutable ? 409 : 422).json({
+          success: false,
+          code: immutable
+            ? "PRICING_CATALOG_IMMUTABLE"
+            : "PRICING_CATALOG_INVALID",
+          error: immutable
+            ? "Esta versão já foi encerrada."
+            : "O catálogo precisa de pacote-base, faixas e modelos de custo para ser publicado.",
+        });
+      }
+    },
+  );
+
+  app.get(
     "/api/owner/sales/profitability-assumptions",
     checkAuth,
     checkOwner,
@@ -69103,6 +69833,404 @@ async function startServer() {
           error: inputInvalid
             ? "Revise os valores e as faixas das premissas."
             : "Não foi possível criar a nova versão das premissas.",
+        });
+      }
+    },
+  );
+
+  app.get(
+    "/api/owner/sales/leads/:leadId/modular-simulations",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const leadId = sanitizeString(req.params?.leadId, 120);
+      const page = Math.max(1, Number(req.query?.page || 1));
+      const pageSize = Math.max(
+        1,
+        Math.min(50, Number(req.query?.pageSize || 20)),
+      );
+      if (!isUuid(leadId)) {
+        return res.status(400).json({
+          success: false,
+          code: "PROPOSAL_SIMULATION_INVALID",
+          error: "Lead inválido.",
+        });
+      }
+      try {
+        const offset = (page - 1) * pageSize;
+        const [leadResult, simulationsResult] = await Promise.all([
+          supabase
+            .from("sales_leads")
+            .select("id")
+            .eq("id", leadId)
+            .is("deleted_at", null)
+            .maybeSingle(),
+          supabase
+            .from("sales_offer_simulations")
+            .select(SALES_MODULAR_SIMULATION_SELECT, { count: "exact" })
+            .eq("lead_id", leadId)
+            .eq("simulation_type", "modular")
+            .is("deleted_at", null)
+            .order("created_at", { ascending: false })
+            .range(offset, offset + pageSize - 1),
+        ]);
+        if (leadResult.error) throw leadResult.error;
+        if (!leadResult.data) {
+          return res.status(404).json({
+            success: false,
+            code: "PROPOSAL_ACCESS_DENIED",
+            error: "Lead não encontrado.",
+          });
+        }
+        if (simulationsResult.error) throw simulationsResult.error;
+        const simulations = simulationsResult.data || [];
+        const simulationIds = simulations
+          .map((row: any) => sanitizeString(row.id, 120))
+          .filter(isUuid);
+        let items: any[] = [];
+        let offers: any[] = [];
+        if (simulationIds.length > 0) {
+          const [itemsResult, offersResult] = await Promise.all([
+            supabase
+              .from("sales_offer_simulation_items")
+              .select(SALES_MODULAR_SIMULATION_ITEM_SELECT)
+              .in("simulation_id", simulationIds)
+              .order("sort_order", { ascending: true }),
+            supabase
+              .from("sales_offers")
+              .select("id,simulation_id,status,expires_at,created_at")
+              .in("simulation_id", simulationIds),
+          ]);
+          const batchError = [itemsResult, offersResult].find(
+            (result: any) => result.error,
+          )?.error;
+          if (batchError) throw batchError;
+          items = itemsResult.data || [];
+          offers = offersResult.data || [];
+        }
+        const itemsBySimulation = new Map<string, any[]>();
+        for (const item of items) {
+          const simulationId = sanitizeString(item.simulation_id, 120);
+          const current = itemsBySimulation.get(simulationId) || [];
+          current.push(item);
+          itemsBySimulation.set(simulationId, current);
+        }
+        const offerBySimulation = new Map(
+          offers.map((offer: any) => [
+            sanitizeString(offer.simulation_id, 120),
+            offer,
+          ]),
+        );
+        return res.json({
+          success: true,
+          simulations: simulations.map((simulation: any) => ({
+            ...simulation,
+            items: itemsBySimulation.get(
+              sanitizeString(simulation.id, 120),
+            ) || [],
+            offer:
+              offerBySimulation.get(
+                sanitizeString(simulation.id, 120),
+              ) || null,
+          })),
+          pagination: {
+            page,
+            pageSize,
+            total: Number(simulationsResult.count || 0),
+            hasMore:
+              Number(simulationsResult.count || 0) > page * pageSize,
+          },
+          queries: {
+            leadAndSimulations: 2,
+            itemsAndOffers: simulationIds.length > 0 ? 2 : 0,
+            nPlusOne: false,
+          },
+        });
+      } catch (error: any) {
+        const missingSchema =
+          isMissingRelationError(error) || extractMissingColumnName(error);
+        return res.status(missingSchema ? 503 : 500).json({
+          success: false,
+          code: missingSchema
+            ? "PRICING_CATALOG_NOT_FOUND"
+            : "PROPOSAL_SIMULATION_LIST_FAILED",
+          error: missingSchema
+            ? "A migration do construtor modular ainda não foi aplicada."
+            : "Não foi possível carregar os cenários modulares.",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/leads/:leadId/modular-simulations",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const leadId = sanitizeString(req.params?.leadId, 120);
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const assumptionSetId = sanitizeString(
+        req.body?.assumptionSetId,
+        120,
+      );
+      const catalogVersionId = sanitizeString(
+        req.body?.catalogVersionId,
+        120,
+      );
+      const idempotencyKey = sanitizeString(
+        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
+        240,
+      );
+      if (
+        !isUuid(leadId)
+        || !isUuid(actorUserId)
+        || !isUuid(assumptionSetId)
+        || !isUuid(catalogVersionId)
+        || idempotencyKey.length < 12
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "PROPOSAL_SIMULATION_INVALID",
+          error: "Dados da simulação modular inválidos.",
+        });
+      }
+      try {
+        const input = normalizeSalesModularProposalRequest(
+          req.body?.input || req.body,
+        );
+        const invalidFields = validateSalesModularProposalInput(input);
+        if (invalidFields.length > 0) {
+          return res.status(422).json({
+            success: false,
+            code: "PROPOSAL_SIMULATION_INVALID",
+            fields: invalidFields,
+            error: "Revise os campos da proposta modular.",
+          });
+        }
+        const [leadResult, assumptionResult, catalog] = await Promise.all([
+          supabase
+            .from("sales_leads")
+            .select("id")
+            .eq("id", leadId)
+            .is("deleted_at", null)
+            .maybeSingle(),
+          supabase
+            .from("sales_financial_assumption_sets")
+            .select("id,version,name,effective_at,values,source_metadata")
+            .eq("id", assumptionSetId)
+            .maybeSingle(),
+          loadSalesPricingCatalog(catalogVersionId),
+        ]);
+        if (leadResult.error) throw leadResult.error;
+        if (!leadResult.data) {
+          return res.status(404).json({
+            success: false,
+            code: "PROPOSAL_ACCESS_DENIED",
+            error: "Lead não encontrado.",
+          });
+        }
+        if (assumptionResult.error) throw assumptionResult.error;
+        if (!assumptionResult.data) {
+          return res.status(422).json({
+            success: false,
+            code: "SIMULATION_ASSUMPTIONS_MISSING",
+            error: "Selecione uma versão válida das premissas.",
+          });
+        }
+        if (catalog.status !== "active") {
+          return res.status(409).json({
+            success: false,
+            code: "PRICING_CATALOG_INACTIVE",
+            error: "Salve cenários apenas com o catálogo ativo.",
+          });
+        }
+        const assumptions = mapSalesAssumptionSnapshot(
+          assumptionResult.data,
+        );
+        const results = calculateSalesModularProposal(
+          input,
+          catalog,
+          assumptions,
+        );
+        const justification = sanitizeString(
+          req.body?.internalJustification,
+          1500,
+        );
+        if (results.requiresJustification && justification.length < 12) {
+          return res.status(422).json({
+            success: false,
+            code: "PROPOSAL_MARGIN_JUSTIFICATION_REQUIRED",
+            error:
+              "Informe uma justificativa administrativa para a margem abaixo do mínimo.",
+          });
+        }
+        const requestHash = crypto
+          .createHash("sha256")
+          .update(
+            JSON.stringify({
+              leadId,
+              actorUserId,
+              assumptionSetId,
+              catalogVersionId,
+              input,
+              justification,
+              scenarioName: sanitizeString(req.body?.scenarioName, 120),
+            }),
+          )
+          .digest("hex");
+        const baseLine = results.lines.find(
+          (line) => line.itemKey === "clinical_core",
+        );
+        if (!baseLine) throw new Error("PRICING_ITEM_NOT_FOUND");
+        const discountType =
+          input.globalDiscountBasisPoints > 0 ? "coupon" : "none";
+        const catalogSortOrder = new Map(
+          catalog.items.map((item) => [item.itemKey, item.sortOrder]),
+        );
+        const { data, error } = await supabase.rpc(
+          "save_sales_modular_simulation_v1",
+          {
+            p_simulation: {
+              leadId,
+              createdBy: actorUserId,
+              assumptionSetId,
+              catalogVersionId,
+              modelVersion: results.modelVersion,
+              patientQuantity: input.patientQuantity,
+              baseAmountCents: baseLine.grossRecurringRevenueCents,
+              discountType,
+              discountPercentage: input.globalDiscountBasisPoints / 100,
+              discountDurationMonths:
+                discountType === "coupon"
+                  ? input.discountDurationMonths
+                  : null,
+              offerValidityDays: input.offerValidityDays,
+              usageProfile: input.usageProfile,
+              assumptionsSnapshot: assumptions,
+              resultsSnapshot: results,
+              profitabilityRating: results.rating,
+              internalJustification: justification || null,
+              internalNotes:
+                sanitizeString(req.body?.internalNotes, 2000)
+                || input.internalNotes
+                || null,
+              publicNotes:
+                sanitizeString(req.body?.publicNotes, 1500)
+                || input.publicNotes
+                || null,
+              scenarioName:
+                sanitizeString(req.body?.scenarioName, 120)
+                || `Cenário ${input.patientQuantity} pacientes`,
+              idempotencyKey,
+              requestHash,
+              inputSnapshot: input,
+            },
+            p_items: results.lines.map((line) => ({
+              ...line,
+              sortOrder: catalogSortOrder.get(line.itemKey) || 0,
+            })),
+          },
+        );
+        if (error) throw error;
+        return res.status(data?.idempotent ? 200 : 201).json({
+          success: true,
+          ...data,
+        });
+      } catch (error: any) {
+        const rawCode = sanitizeString(
+          error?.message || error?.code,
+          220,
+        );
+        const conflict = rawCode.includes("PROPOSAL_SNAPSHOT_CONFLICT");
+        const knownCode = [
+          "PRICING_CATALOG_NOT_FOUND",
+          "PRICING_CATALOG_INACTIVE",
+          "PRICING_ITEM_NOT_FOUND",
+          "PRICING_TIER_NOT_FOUND",
+          "PRICING_PACKAGE_LIMIT_EXCEEDED",
+          "PRICING_COST_MODEL_MISSING",
+          "PRICING_INVALID_DISCOUNT",
+          "PRICING_INVALID_ALLOCATION",
+          "PRICING_TOTAL_MISMATCH",
+          "PROPOSAL_SIMULATION_INVALID",
+        ].find((code) => rawCode.includes(code));
+        return res.status(conflict ? 409 : knownCode ? 422 : 500).json({
+          success: false,
+          code: conflict
+            ? "PROPOSAL_SNAPSHOT_CONFLICT"
+            : knownCode || "PROPOSAL_SIMULATION_PERSISTENCE_FAILED",
+          error: conflict
+            ? "Esta chave já foi usada para outro cenário."
+            : knownCode
+              ? "Revise catálogo, faixa, quantidade e descontos."
+              : "Não foi possível salvar o cenário modular.",
+        });
+      }
+    },
+  );
+
+  app.patch(
+    "/api/owner/sales/leads/:leadId/modular-simulations/:simulationId",
+    checkAuth,
+    checkOwner,
+    async (req: any, res) => {
+      const leadId = sanitizeString(req.params?.leadId, 120);
+      const simulationId = sanitizeString(
+        req.params?.simulationId,
+        120,
+      );
+      const action = sanitizeString(req.body?.action, 30);
+      if (
+        !isUuid(leadId)
+        || !isUuid(simulationId)
+        || !["rename", "archive"].includes(action)
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "PROPOSAL_SIMULATION_INVALID",
+          error: "Alteração de cenário inválida.",
+        });
+      }
+      const patch: Record<string, any> = {
+        updated_at: new Date().toISOString(),
+      };
+      if (action === "rename") {
+        const scenarioName = sanitizeString(req.body?.scenarioName, 120);
+        if (scenarioName.length < 2) {
+          return res.status(422).json({
+            success: false,
+            code: "PROPOSAL_SIMULATION_INVALID",
+            error: "Informe um nome para o cenário.",
+          });
+        }
+        patch.scenario_name = scenarioName;
+      } else {
+        patch.status = "archived";
+      }
+      try {
+        const { data, error } = await supabase
+          .from("sales_offer_simulations")
+          .update(patch)
+          .eq("id", simulationId)
+          .eq("lead_id", leadId)
+          .eq("simulation_type", "modular")
+          .is("deleted_at", null)
+          .select(SALES_MODULAR_SIMULATION_SELECT)
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) {
+          return res.status(404).json({
+            success: false,
+            code: "PROPOSAL_ACCESS_DENIED",
+            error: "Cenário não encontrado para este lead.",
+          });
+        }
+        return res.json({ success: true, simulation: data });
+      } catch {
+        return res.status(500).json({
+          success: false,
+          code: "PROPOSAL_SIMULATION_PERSISTENCE_FAILED",
+          error: "Não foi possível atualizar o cenário.",
         });
       }
     },
@@ -69494,6 +70622,214 @@ async function startServer() {
       }
     },
   );
+
+  const prepareSalesModularOffer = async (
+    req: any,
+    res: any,
+    params: {
+      leadId: string;
+      simulationId: string;
+      actorUserId: string;
+      idempotencyKey: string;
+    },
+  ) => {
+    const { leadId, simulationId, actorUserId, idempotencyKey } = params;
+    if (
+      req.session?.user?.role !== "owner"
+      || !hasVerifiedOwnerMfaSession(req.session?.user)
+    ) {
+      return res.status(403).json({
+        success: false,
+        code: "PROPOSAL_ACCESS_DENIED",
+        error: "Esta ação exige acesso owner com MFA validado.",
+      });
+    }
+    if (
+      !isUuid(leadId)
+      || !isUuid(simulationId)
+      || !isUuid(actorUserId)
+      || idempotencyKey.length < 12
+    ) {
+      return res.status(400).json({
+        success: false,
+        code: "PROPOSAL_SIMULATION_INVALID",
+        error: "Selecione um cenário modular salvo.",
+      });
+    }
+    try {
+      const [leadResult, simulationResult] = await Promise.all([
+        supabase
+          .from("sales_leads")
+          .select("id")
+          .eq("id", leadId)
+          .is("deleted_at", null)
+          .maybeSingle(),
+        supabase
+          .from("sales_offer_simulations")
+          .select(SALES_MODULAR_SIMULATION_SELECT)
+          .eq("id", simulationId)
+          .eq("lead_id", leadId)
+          .eq("simulation_type", "modular")
+          .is("deleted_at", null)
+          .maybeSingle(),
+      ]);
+      if (leadResult.error) throw leadResult.error;
+      if (!leadResult.data) {
+        return res.status(404).json({
+          success: false,
+          code: "PROPOSAL_ACCESS_DENIED",
+          error: "Lead não encontrado.",
+        });
+      }
+      if (simulationResult.error) throw simulationResult.error;
+      const simulation = simulationResult.data;
+      if (!simulation) {
+        return res.status(404).json({
+          success: false,
+          code: "PROPOSAL_SIMULATION_INVALID",
+          error: "Cenário modular não encontrado.",
+        });
+      }
+      if (!["selected", "offered"].includes(
+        sanitizeString(simulation.status, 30),
+      )) {
+        return res.status(409).json({
+          success: false,
+          code: "PROPOSAL_SIMULATION_INVALID",
+          error: "Selecione o cenário antes de gerar a proposta pública.",
+        });
+      }
+      const [catalog, assumptionResult] = await Promise.all([
+        loadSalesPricingCatalog(
+          sanitizeString(simulation.catalog_version_id, 120),
+        ),
+        supabase
+          .from("sales_financial_assumption_sets")
+          .select("id,version,name,effective_at,values,source_metadata")
+          .eq("id", simulation.assumption_set_id)
+          .maybeSingle(),
+      ]);
+      if (assumptionResult.error) throw assumptionResult.error;
+      if (!assumptionResult.data) {
+        return res.status(409).json({
+          success: false,
+          code: "PROPOSAL_SNAPSHOT_CONFLICT",
+          error: "As premissas congeladas não estão disponíveis.",
+        });
+      }
+      const input = normalizeSalesModularProposalRequest(
+        simulation.modular_input_snapshot,
+      );
+      const assumptions = mapSalesAssumptionSnapshot(
+        assumptionResult.data,
+      );
+      const recalculated = calculateSalesModularProposal(
+        input,
+        catalog,
+        assumptions,
+      );
+      if (
+        sanitizeString(simulation.model_version, 80)
+          !== recalculated.modelVersion
+        || !salesModularResultMatches(
+          simulation.results_snapshot,
+          recalculated,
+        )
+      ) {
+        return res.status(409).json({
+          success: false,
+          code: "PROPOSAL_SNAPSHOT_CONFLICT",
+          error:
+            "O cenário divergiu do catálogo congelado. Duplique e salve uma nova versão.",
+        });
+      }
+      if (recalculated.missingCosts.length > 0) {
+        return res.status(422).json({
+          success: false,
+          code: "PRICING_COST_MODEL_MISSING",
+          error:
+            "Complete os custos das funcionalidades antes de gerar a proposta.",
+        });
+      }
+      if (
+        recalculated.requiresJustification
+        && sanitizeString(
+          simulation.internal_justification,
+          1500,
+        ).length < 12
+      ) {
+        return res.status(422).json({
+          success: false,
+          code: "PROPOSAL_MARGIN_JUSTIFICATION_REQUIRED",
+          error:
+            "Esta margem exige justificativa administrativa antes da proposta.",
+        });
+      }
+      const requestHash = crypto
+        .createHash("sha256")
+        .update(
+          JSON.stringify({
+            leadId,
+            simulationId,
+            catalogVersionId: catalog.id,
+            resultModelVersion: recalculated.modelVersion,
+          }),
+        )
+        .digest("hex");
+      const provisionalToken = deriveSalesOfferPublicToken(
+        actorUserId,
+        idempotencyKey,
+      );
+      const expiresAt = new Date(
+        Date.now()
+          + input.offerValidityDays * 24 * 60 * 60 * 1000,
+      ).toISOString();
+      const { data, error } = await supabase.rpc(
+        "create_sales_modular_offer_v1",
+        {
+          p_simulation_id: simulationId,
+          p_lead_id: leadId,
+          p_actor_user_id: actorUserId,
+          p_idempotency_key: idempotencyKey,
+          p_request_hash: requestHash,
+          p_public_token_hash: hashSalesOfferToken(provisionalToken),
+          p_expires_at: expiresAt,
+        },
+      );
+      if (error) throw error;
+      const offer = data?.offer || data;
+      const publicToken = deriveSalesOfferPublicToken(
+        sanitizeString(offer?.created_by, 120) || actorUserId,
+        sanitizeString(offer?.idempotency_key, 240) || idempotencyKey,
+      );
+      return res.status(data?.idempotent ? 200 : 201).json({
+        success: true,
+        offer,
+        publicUrl: buildSalesOfferPublicUrl(req, publicToken),
+        stripeReady: false,
+        modularCheckoutEnabled: false,
+        idempotent: data?.idempotent === true,
+        message: data?.idempotent
+          ? "A proposta modular já existia; o mesmo link foi recuperado."
+          : "Proposta pública modular criada sem acessar a Stripe.",
+      });
+    } catch (error: any) {
+      const rawCode = sanitizeString(
+        error?.message || error?.code,
+        220,
+      );
+      const conflict = rawCode.includes("PROPOSAL_SNAPSHOT_CONFLICT");
+      return res.status(conflict ? 409 : 500).json({
+        success: false,
+        code: conflict
+          ? "PROPOSAL_SNAPSHOT_CONFLICT"
+          : "PROPOSAL_PREPARATION_FAILED",
+        error: conflict
+          ? "A chave ou o snapshot diverge da proposta já criada."
+          : "Não foi possível gerar a proposta modular.",
+      });
+    }
+  };
 
   const prepareSalesOfferFromSimulation = async (
     req: any,
@@ -70087,6 +71423,35 @@ async function startServer() {
         });
       }
       if (simulationId) {
+        const { data: simulationKind, error: simulationKindError } =
+          await supabase
+            .from("sales_offer_simulations")
+            .select("simulation_type")
+            .eq("id", simulationId)
+            .eq("lead_id", leadId)
+            .is("deleted_at", null)
+            .maybeSingle();
+        if (
+          simulationKindError
+          && !extractMissingColumnName(simulationKindError)
+        ) {
+          return res.status(500).json({
+            success: false,
+            code: "PROPOSAL_PREPARATION_FAILED",
+            error: "Não foi possível validar o tipo da simulação.",
+          });
+        }
+        if (
+          sanitizeString(simulationKind?.simulation_type, 30)
+            === "modular"
+        ) {
+          return prepareSalesModularOffer(req, res, {
+            leadId,
+            simulationId,
+            actorUserId,
+            idempotencyKey: requestIdempotencyKey,
+          });
+        }
         return prepareSalesOfferFromSimulation(req, res, {
           leadId,
           simulationId,
