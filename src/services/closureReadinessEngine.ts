@@ -385,8 +385,8 @@ function buildPhaseSummary(
     };
   }
   return {
-    title: 'Consulta cancelada',
-    message: 'Esta consulta foi cancelada e não segue para fechamento ou faturamento.',
+    title: 'Sessão cancelada',
+    message: 'Esta sessão foi cancelada e não segue para fechamento ou faturamento.',
     status: 'info',
     actionableCount: 0
   };
@@ -725,7 +725,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   });
   payerEvaluation.checklistItems.forEach((payerItem) => {
     if (payerItem.key === 'payer_authorization_required' && payerItem.status === 'FAILED') {
-      payerItem.message = 'Autorização do convênio pendente para esta consulta.';
+      payerItem.message = 'Autorização do convênio pendente para esta sessão.';
     }
     if (payerItem.key === 'payer_guide_required' && payerItem.status === 'FAILED') {
       payerItem.message = requirements.requireGuideBeforeSession
@@ -765,7 +765,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     notBillable ? 'FAILED' : concluded ? 'PASSED' : futureOrOpen ? 'NOT_APPLICABLE' : 'WARNING',
     true,
     notBillable ? 'CRITICAL' : 'MEDIUM',
-    notBillable ? 'Sessão cancelada ou falta: não faturável.' : concluded ? 'Status compatível com conferência.' : futureOrOpen ? 'Sessão em aberto.' : 'Status da consulta exige conferência.',
+    notBillable ? 'Sessão cancelada ou falta: não faturável.' : concluded ? 'Status compatível com conferência.' : futureOrOpen ? 'Sessão em aberto.' : 'Status da sessão exige conferência.',
     { status }
   ));
   checklist.push(buildCheck(

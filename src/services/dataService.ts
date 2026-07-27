@@ -2105,7 +2105,7 @@ export const dataService = {
       });
       return await safeJson(response);
     } catch {
-      return { success: false, data: [], error: 'Não foi possível carregar suas consultas agora.' };
+      return { success: false, data: [], error: 'Não foi possível carregar suas sessões agora.' };
     }
   },
 
@@ -2171,7 +2171,7 @@ export const dataService = {
       });
       return await safeJson(response);
     } catch {
-      return { success: false, data: null, error: 'Não foi possível carregar a consulta agora.' };
+      return { success: false, data: null, error: 'Não foi possível carregar a sessão agora.' };
     }
   },
 
@@ -2192,7 +2192,7 @@ export const dataService = {
       });
       return await safeJson(response);
     } catch {
-      return { success: false, error: 'Não foi possível confirmar a consulta agora.' };
+      return { success: false, error: 'Não foi possível confirmar a sessão agora.' };
     }
   },
 
@@ -2890,7 +2890,7 @@ export const dataService = {
       });
       return await safeJson(response);
     } catch {
-      return { success: false, data: null, error: 'Não foi possível carregar pagador da consulta agora.' };
+      return { success: false, data: null, error: 'Não foi possível carregar pagador da sessão agora.' };
     }
   },
 
@@ -2941,12 +2941,12 @@ export const dataService = {
         return {
           ...result,
           status: response.status,
-          error: result?.error || 'Não foi possível salvar o pagador da consulta agora.'
+          error: result?.error || 'Não foi possível salvar o pagador da sessão agora.'
         };
       }
       return result;
     } catch {
-      return { success: false, error: 'Não foi possível salvar o pagador da consulta agora.' };
+      return { success: false, error: 'Não foi possível salvar o pagador da sessão agora.' };
     }
   },
 
@@ -4596,7 +4596,7 @@ export const dataService = {
     }
     const appointmentId = payload?.appointmentId || payload?.appointment_id;
     if (appointmentId !== undefined && appointmentId !== null && appointmentId !== '' && !isPersistedUuid(appointmentId)) {
-      return invalidClinicalIdResponse('Escolha uma consulta real para vincular a sondagem.');
+      return invalidClinicalIdResponse('Escolha uma sessão real para vincular a sondagem.');
     }
     const endpoint = `/api/aba/maintenance-schedules/${encodeURIComponent(String(scheduleId))}`;
     try {
@@ -4762,9 +4762,9 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify(payload || {})
       }, { helperName: 'scheduleMaintenanceForNextSession', operation: 'write', table: 'aba_maintenance_schedules', hasExplicitColumns: true });
-      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível aguardar futura consulta agora.');
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível aguardar futura sessão agora.');
     } catch (error) {
-      const message = getApiErrorMessage(error, 'Não foi possível aguardar futura consulta agora.');
+      const message = getApiErrorMessage(error, 'Não foi possível aguardar futura sessão agora.');
       return { success: false, error: message, message };
     }
   },
@@ -6011,7 +6011,7 @@ export const dataService = {
       return {
         success: false,
         data: null,
-        error: 'Não foi possível carregar a política financeira congelada desta consulta agora.'
+        error: 'Não foi possível carregar a política financeira congelada desta sessão agora.'
       };
     }
   },

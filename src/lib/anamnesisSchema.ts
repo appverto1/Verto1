@@ -78,7 +78,7 @@ const COMMON_QUESTIONS: AnamnesisQuestion[] = [
 ];
 
 const ADULT_SECTIONS: AnamnesisSection[] = [
-  { id: 'historia_clinica', title: 'Historia Atual e Motivo da Consulta', order: 10, active: true },
+  { id: 'historia_clinica', title: 'Historia Atual e Motivo da Sessão', order: 10, active: true },
   { id: 'familia_ambiente', title: 'Familia e Ambiente', order: 11, active: true },
   { id: 'saude_rotina', title: 'Saude, Habitos e Rotina', order: 12, active: true },
   { id: 'processos_previos', title: 'Processos Terapeuticos Previos', order: 13, active: true }
@@ -87,7 +87,7 @@ const ADULT_SECTIONS: AnamnesisSection[] = [
 const ADULT_QUESTIONS: AnamnesisQuestion[] = [
   { id: 'estadoCivil', sectionId: 'historia_clinica', label: 'Estado civil', type: 'multipla_escolha', options: ['Solteiro(a)', 'Casado(a)', 'Divorciado(a)', 'Uniao estavel', 'Outro'], required: false, active: true, order: 1 },
   { id: 'profissao', sectionId: 'historia_clinica', label: 'Profissao', type: 'dissertativa', required: false, active: true, order: 2 },
-  { id: 'motivoConsulta', sectionId: 'historia_clinica', label: 'Motivo da consulta', type: 'dissertativa', required: true, active: true, order: 3 },
+  { id: 'motivoConsulta', sectionId: 'historia_clinica', label: 'Motivo da sessão', type: 'dissertativa', required: true, active: true, order: 3 },
   { id: 'iniciativaTratamento', sectionId: 'historia_clinica', label: 'Iniciativa do tratamento', type: 'dissertativa', required: false, active: true, order: 4 },
   { id: 'expectativa', sectionId: 'historia_clinica', label: 'Expectativa com o processo terapeutico', type: 'dissertativa', required: false, active: true, order: 5 },
   { id: 'familiaConstituicao', sectionId: 'familia_ambiente', label: 'Constituicao familiar', type: 'dissertativa', required: false, active: true, order: 1 },
@@ -100,7 +100,7 @@ const ADULT_QUESTIONS: AnamnesisQuestion[] = [
   { id: 'habitosNocivos', sectionId: 'saude_rotina', label: 'Habitos nocivos', type: 'dissertativa', required: false, active: true, order: 4 },
   { id: 'previoTipo', sectionId: 'processos_previos', label: 'Tipo de tratamento anterior', type: 'dissertativa', required: false, active: true, order: 1 },
   { id: 'previoDuracao', sectionId: 'processos_previos', label: 'Duracao do tratamento anterior', type: 'dissertativa', required: false, active: true, order: 2 },
-  { id: 'previoMotivo', sectionId: 'processos_previos', label: 'Motivo da consulta anterior', type: 'dissertativa', required: false, active: true, order: 3 },
+  { id: 'previoMotivo', sectionId: 'processos_previos', label: 'Motivo da sessão anterior', type: 'dissertativa', required: false, active: true, order: 3 },
   { id: 'previoInterrupcao', sectionId: 'processos_previos', label: 'Motivo da interrupcao anterior', type: 'dissertativa', required: false, active: true, order: 4 }
 ];
 

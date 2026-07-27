@@ -467,7 +467,7 @@ export function BillingTissSettingsPanel({
               Tipo de guia padrão
               <select value={payerForm.defaultGuideType || "sp_sadt"} onChange={(event) => updatePayer("defaultGuideType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
                 <option value="sp_sadt">SP/SADT</option>
-                <option value="consulta">Consulta</option>
+                <option value="consulta">Sessão</option>
                 <option value="other">Outro</option>
               </select>
             </label>

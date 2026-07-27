@@ -1595,7 +1595,7 @@ export const ReceptionistDashboard = ({
                         >
                           <option value="">Selecione...</option>
                           <option value="Consulta Padrão">
-                            Consulta Padrão
+                            Sessão Padrão
                           </option>
                           <option value="TCC">TCC</option>
                           <option value="ABA">ABA</option>

@@ -410,7 +410,7 @@ export const formatMaintenanceScheduleDueLabel = (schedule: any, now = new Date(
   const appointmentId = schedule?.appointment_id || schedule?.appointmentId;
   const status = deriveMaintenanceScheduleStatus(schedule, now);
   if (!schedule) return 'Sem sondagem agendada';
-  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura consulta';
+  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura sessão';
   if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmacao';
   if ((status === 'PENDING_LINK' || status === 'PENDING_SCHEDULING' || status === 'UNSCHEDULED') && !scheduledFor && targetDueDate) return 'Sem sessao vinculada';
   if (status === 'DUE_TODAY') return 'Proxima sondagem: hoje';
@@ -426,7 +426,7 @@ export const formatMaintenanceScheduleDueLabel = (schedule: any, now = new Date(
     const reference = scheduledFor || targetDueDate;
     if (reference && dateKey(reference) === dateKey(now.toISOString())) return 'Proxima sondagem: hoje';
     if (String(schedule?.schedule_mode || schedule?.scheduleMode || '').toUpperCase() === 'NEXT_PATIENT_SESSION') {
-      return reference ? `Agendada para futura consulta: ${new Date(reference).toLocaleDateString('pt-BR')}` : 'Agendada para futura consulta';
+      return reference ? `Agendada para futura sessão: ${new Date(reference).toLocaleDateString('pt-BR')}` : 'Agendada para futura sessão';
     }
   }
   const reference = scheduledFor || targetDueDate;

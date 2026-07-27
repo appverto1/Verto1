@@ -1102,7 +1102,7 @@ export const AnamnesisModal = ({
                 <div className="rounded-2xl border border-slate-200 p-4">
                   <label className="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-3">
                     <input type="checkbox" checked={scheduleImmediate} onChange={() => setScheduleImmediate((prev) => !prev)} />
-                    Agendar primeira consulta agora
+                    Agendar primeira sessão agora
                   </label>
                   {scheduleImmediate && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

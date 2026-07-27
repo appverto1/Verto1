@@ -240,7 +240,7 @@ const normalizeAppointmentPatientConfirmationStatus = (appointment: any) => {
     appointment?.patient_confirmation;
   const explicit = canonicalAppointmentStatus(raw);
   if (explicit === 'CONFIRMED') return 'CONFIRMED';
-  // Uma consulta remarcada ja foi resolvida pela clinica. Apenas a solicitacao
+  // Uma sessão remarcada ja foi resolvida pela clinica. Apenas a solicitacao
   // pendente deve manter o badge de remarcacao solicitada.
   if (explicit === 'RESCHEDULE_REQUESTED' && !rescheduleWasExplicitlyResolved) return 'RESCHEDULE_REQUESTED';
   if (explicit === 'CANCEL_REQUESTED') return 'CANCEL_REQUESTED';
@@ -759,8 +759,8 @@ export const getAppointmentClosureOperationalView = (event: any, detail: any = n
     prefacturing_ready: { title: 'Faturamento TISS', message: 'Pronto para Pré-guia TISS.', status: 'ready' },
     closed_ready_for_prefacturing: { title: 'Faturamento TISS', message: 'Pronto para Pré-guia TISS.', status: 'ready' },
     cancelled: {
-      title: 'Consulta cancelada',
-      message: cancellationState.message || 'Esta consulta foi cancelada.',
+      title: 'Sessão cancelada',
+      message: cancellationState.message || 'Esta sessão foi cancelada.',
       status: 'info'
     }
   };
@@ -1858,7 +1858,7 @@ export const ClinicalAgendaBoard = ({
           setRemoteState({
             loading: false,
             refreshing: false,
-            error: schoolResult?.success ? '' : 'As consultas foram carregadas, mas os compromissos escolares estão temporariamente indisponíveis.',
+            error: schoolResult?.success ? '' : 'As sessões foram carregadas, mas os compromissos escolares estão temporariamente indisponíveis.',
             loaded: true
           });
           return;
@@ -2521,7 +2521,7 @@ export const ClinicalAgendaBoard = ({
         setBillingEditorState((prev) => ({
           ...prev,
           saving: false,
-          error: result?.error || 'Não foi possível atualizar pagador da consulta.',
+          error: result?.error || 'Não foi possível atualizar pagador da sessão.',
           success: ''
         }));
         return false;
@@ -2540,7 +2540,7 @@ export const ClinicalAgendaBoard = ({
       setBillingEditorState((prev) => ({
         ...prev,
         saving: false,
-        error: 'Não foi possível atualizar pagador da consulta. Os dados preenchidos foram preservados para uma nova tentativa.',
+        error: 'Não foi possível atualizar pagador da sessão. Os dados preenchidos foram preservados para uma nova tentativa.',
         success: ''
       }));
       return false;
@@ -2714,7 +2714,7 @@ export const ClinicalAgendaBoard = ({
       error: '',
       message: decision === 'approve'
         ? isRescheduleRequest
-          ? 'Consulta remarcada e agenda atualizada.'
+          ? 'Sessão remarcada e agenda atualizada.'
           : 'Cancelamento de sessão aprovado.'
         : isRescheduleRequest
           ? 'Remarcação recusada. O horário atual foi mantido.'
@@ -2736,7 +2736,7 @@ export const ClinicalAgendaBoard = ({
       return;
     }
     if (!isPersistedUuid(appointmentId)) {
-      setActionRequestState({ loadingId: '', error: 'Consulta inválida para confirmar esta sondagem.' });
+      setActionRequestState({ loadingId: '', error: 'Sessão inválida para confirmar esta sondagem.' });
       return;
     }
     const loadingId = `${decision}:${scheduleId}`;
@@ -3457,7 +3457,7 @@ export const ClinicalAgendaBoard = ({
       ? billingSnapshotSelectValue
       : '';
   const billingEditorBadge = billingContext.hasContext
-    ? 'Dados desta consulta'
+    ? 'Dados desta sessão'
     : billingSuggestion?.payerName || billingSuggestion?.payerId
       ? 'Pagador sugerido pelo plano financeiro, não aplicado ao atendimento'
       : String(billingForm.source || '').toUpperCase() === 'PATIENT_DEFAULT'
@@ -3469,7 +3469,7 @@ export const ClinicalAgendaBoard = ({
       ok: billingDetailIsNonInsuranceContext || Boolean(billingContext.payerName || billingContext.payerId || billingSuggestion?.payerName),
       message: billingDetailIsNonInsuranceContext
         ? `Contexto ${getAppointmentFinancialContextLabel(billingFinancialContextType).toLowerCase()} definido.`
-        : 'Selecione o convenio/pagador da consulta.'
+        : 'Selecione o convenio/pagador da sessão.'
     },
     {
       label: 'Plano/carteirinha',
@@ -3500,7 +3500,7 @@ export const ClinicalAgendaBoard = ({
       label: 'Anti-glosa',
       ok: Number(detailEvent.closure_blocking_count || 0) === 0,
       warning: Number(detailEvent.closure_warning_count || 0) > 0,
-      message: Number(detailEvent.closure_warning_count || 0) > 0 ? 'Ha alertas operacionais. Revise antes do XML.' : 'Sem bloqueios anti-glosa carregados nesta consulta.'
+      message: Number(detailEvent.closure_warning_count || 0) > 0 ? 'Ha alertas operacionais. Revise antes do XML.' : 'Sem bloqueios anti-glosa carregados nesta sessão.'
     }
   ];
   const financialBlockingCount = financialValidationItems.filter((item: any) => !item.ok).length;
@@ -3700,11 +3700,11 @@ export const ClinicalAgendaBoard = ({
           <div className="w-full max-w-md rounded-t-[28px] bg-white p-5 text-slate-900 shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Ações da consulta</p>
-                <h3 className="text-lg font-bold">{statusActionEvent.patientName || statusActionEvent.patient_name || 'Consulta'}</h3>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Ações da sessão</p>
+                <h3 className="text-lg font-bold">{statusActionEvent.patientName || statusActionEvent.patient_name || 'Sessão'}</h3>
                 <p className="mt-1 text-xs text-slate-500">{statusActionEvent.time} · {getAppointmentPatientConfirmationVisualState(statusActionEvent).label}</p>
               </div>
-              <button type="button" onClick={() => setStatusActionEvent(null)} className="rounded-2xl border border-violet-100 p-2 text-violet-700 hover:bg-violet-50" aria-label="Fechar ações da consulta">
+              <button type="button" onClick={() => setStatusActionEvent(null)} className="rounded-2xl border border-violet-100 p-2 text-violet-700 hover:bg-violet-50" aria-label="Fechar ações da sessão">
                 <X size={18} />
               </button>
             </div>
@@ -3749,7 +3749,7 @@ export const ClinicalAgendaBoard = ({
           <div className={`max-h-[88vh] w-full max-w-xl overflow-y-auto rounded-t-[28px] p-5 shadow-2xl sm:rounded-[28px] ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Pagador da consulta</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7a32fc]">Pagador da sessão</p>
                 <h3 className="text-lg font-bold">Editar pagador</h3>
               </div>
               <button type="button" disabled={billingEditorState.saving} onClick={() => setBillingEditorOpen(false)} className={`rounded-2xl border p-2 disabled:opacity-50 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar pagador">
@@ -4050,7 +4050,7 @@ export const ClinicalAgendaBoard = ({
               >
                 <summary className="cursor-pointer text-sm font-bold text-slate-700">Ajuste manual avancado</summary>
                 <p className="mt-2 text-xs font-semibold leading-relaxed text-amber-700">
-                  Use apenas se a operadora orientou preencher dados diferentes do cadastro/autorizacao. Esses dados serao salvos apenas para esta consulta.
+                  Use apenas se a operadora orientou preencher dados diferentes do cadastro/autorizacao. Esses dados serao salvos apenas para esta sessão.
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">
@@ -4109,7 +4109,7 @@ export const ClinicalAgendaBoard = ({
                 Cancelar
               </button>
               <button type="button" disabled={billingEditorState.saving || Boolean(billingEditorFinancialContextError)} onClick={submitBillingEditor} className="rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-violet-500/20 disabled:opacity-60">
-                {billingEditorState.saving ? 'Salvando...' : billingContext.hasContext ? 'Salvar pagador' : 'Salvar na consulta'}
+                {billingEditorState.saving ? 'Salvando...' : billingContext.hasContext ? 'Salvar pagador' : 'Salvar na sessão'}
               </button>
             </div>
           </div>
@@ -4356,7 +4356,7 @@ export const ClinicalAgendaBoard = ({
             )}
             {detailAppointmentConfirmed && (
               <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
-                Consulta confirmada pelo responsável.
+                Sessão confirmada pelo responsável.
               </div>
             )}
 
@@ -4412,7 +4412,7 @@ export const ClinicalAgendaBoard = ({
                 <div className="flex flex-wrap gap-2">
                   {canEditBillingContext && billingSuggestion?.payerName && !hasSavedBillingContext && (
                     <button type="button" onClick={applyBillingSuggestion} disabled={billingEditorState.saving} className="rounded-2xl bg-[#7a32fc] px-3 py-2 text-xs font-bold text-white disabled:opacity-60">
-                      Aplicar a consulta
+                      Aplicar a sessão
                     </button>
                   )}
                   {canEditBillingContext && (
@@ -4421,7 +4421,7 @@ export const ClinicalAgendaBoard = ({
                     </button>
                   )}
                   <button type="button" onClick={() => setFinancialValidationOpen((value) => !value)} className={`rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200' : 'border-violet-200 bg-white text-[#7a32fc]'}`}>
-                    Validar financeiro da consulta
+                    Validar financeiro da sessão
                   </button>
                 </div>
               </div>
@@ -4429,7 +4429,7 @@ export const ClinicalAgendaBoard = ({
                 <div className={`mt-4 rounded-2xl border p-4 ${isDark ? 'border-slate-700 bg-[#101827]' : 'border-white bg-white'}`}>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Validacao financeira da consulta</p>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Validacao financeira da sessão</p>
                       <h4 className={`mt-1 text-base font-bold ${financialBlockingCount > 0 ? 'text-rose-700' : financialWarningCount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
                         {financialValidationStatus}
                       </h4>
@@ -4467,7 +4467,7 @@ export const ClinicalAgendaBoard = ({
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-white'}`} data-appointment-patient-finance>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">Financeiro da consulta</p>
+                    <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">Financeiro da sessão</p>
                     <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
                       <div><span className="block text-xs text-slate-400">Valor</span><span className="mt-1 block font-medium">{formatPatientFinanceCurrency(patientFinanceAmounts.total)}</span></div>
                       <div><span className="block text-xs text-slate-400">Pago</span><span className="mt-1 block font-medium text-emerald-600">{formatPatientFinanceCurrency(patientFinanceAmounts.paid)}</span></div>
@@ -4691,7 +4691,7 @@ export const ClinicalAgendaBoard = ({
                           <div className="flex flex-wrap gap-2">
                             {!isCancel && rescheduleOptions.length === 0 && (
                               <button type="button" onClick={() => openAppointmentEditor(requestAppointment)} className="min-h-10 rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white">
-                                Remarcar consulta
+                                Remarcar sessão
                               </button>
                             )}
                             {!isCancel && (
@@ -4964,7 +4964,7 @@ export const ClinicalAgendaBoard = ({
                   )}
                   {maintenanceProbes.some((probe: any) => String(probe?.status || '').toUpperCase() === 'PENDING_CONFIRMATION') && (
                     <p className="mt-2 rounded-2xl border border-amber-200 bg-white/80 px-3 py-2 text-xs font-semibold text-amber-800">
-                      Ha sondagem de manutencao pendente para esta consulta. Confirme antes de vincular.
+                      Ha sondagem de manutencao pendente para esta sessão. Confirme antes de vincular.
                     </p>
                   )}
                   <div className="mt-3 space-y-2">

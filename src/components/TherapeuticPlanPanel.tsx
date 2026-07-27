@@ -1018,7 +1018,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], userRole, isDark
         return;
       }
       setRecommendationNotice(response?.message || (action === 'schedule_maintenance'
-        ? 'Manutenção agendada para uma próxima consulta.'
+        ? 'Manutenção agendada para uma próxima sessão.'
         : 'Recomendação adicionada ao planejamento da próxima sessão.'));
       await loadRecommendations(true);
     } catch (error: any) {

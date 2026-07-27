@@ -7368,15 +7368,15 @@ export const SessionMode = ({
             <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-4 sm:p-5 shadow-xl shadow-amber-900/5">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Sondagens da consulta</p>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Sondagens da sessão</p>
                   <h2 className="text-lg font-bold text-gray-900">Nenhuma sondagem encontrada para esta sessão.</h2>
-                  <p className="mt-1 text-xs font-semibold text-gray-500">A sessão está vinculada à consulta, mas nenhuma sondagem ativa foi carregada para este vínculo.</p>
+                  <p className="mt-1 text-xs font-semibold text-gray-500">A Sessão ABA está vinculada ao agendamento clínico, mas nenhuma sondagem ativa foi carregada para este vínculo.</p>
                   <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-bold uppercase tracking-widest text-amber-700">
                     <span className="rounded-full bg-amber-50 px-2 py-1">Sessão vinculada: sim</span>
-                    <span className="rounded-full bg-amber-50 px-2 py-1">Consulta vinculada: sim</span>
+                    <span className="rounded-full bg-amber-50 px-2 py-1">Sessão vinculada: sim</span>
                     {sessionClinicalDate && <span className="rounded-full bg-amber-50 px-2 py-1">Data clínica: {String(sessionClinicalDate).slice(0, 10)}</span>}
                     {sessionMaintenanceProbeDiagnostics?.appointmentScheduleCount !== undefined && (
-                      <span className="rounded-full bg-amber-50 px-2 py-1">Sondagens da consulta na busca: {sessionMaintenanceProbeDiagnostics.appointmentScheduleCount}</span>
+                      <span className="rounded-full bg-amber-50 px-2 py-1">Sondagens da sessão na busca: {sessionMaintenanceProbeDiagnostics.appointmentScheduleCount}</span>
                     )}
                   </div>
                 </div>
@@ -7391,8 +7391,8 @@ export const SessionMode = ({
             <section className="rounded-[24px] sm:rounded-[28px] border border-amber-100 bg-white p-3 sm:p-4 shadow-xl shadow-amber-900/5" data-maintenance-probe-queue>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Sondagens da consulta</p>
-                  <h2 className="text-lg font-bold text-gray-900">Sondagens de manutenção desta consulta</h2>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-amber-600">Sondagens da sessão</p>
+                  <h2 className="text-lg font-bold text-gray-900">Sondagens de manutenção desta sessão</h2>
                   <p className="mt-1 text-xs font-semibold text-gray-500">
                     {maintenanceProbeRegisteredCount}/{maintenanceProbeQueueItems.length} registradas · Pendentes: {maintenanceProbePendingCount}
                   </p>
@@ -7547,7 +7547,7 @@ export const SessionMode = ({
             {maintenanceProbeQueueItems.length > 0 && (
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-100 bg-amber-50 px-3 py-1.5">
                 <p className="text-xs font-black text-amber-800">
-                  Manutenções desta consulta · {maintenanceProbePendingCount} pendente(s)
+                  Manutenções desta sessão · {maintenanceProbePendingCount} pendente(s)
                 </p>
                 <span className="rounded-full bg-white px-2 py-1 text-[9px] font-bold uppercase tracking-widest text-amber-700">
                   {maintenanceProbeRegisteredCount}/{maintenanceProbeQueueItems.length} registradas
@@ -7846,7 +7846,7 @@ export const SessionMode = ({
                           <p className="mt-1 text-xs font-bold text-amber-900">
                             {maintenanceProbeCanRunNow
                               ? `Tipo atual da proxima tentativa: ${getAbaCollectionLabel(collectionType)}`
-                              : 'Sondagem agendada para outra data ou consulta.'}
+                              : 'Sondagem agendada para outra data ou sessão.'}
                           </p>
                           {maintenanceDisplay?.contextLabel && (
                             <p className="mt-1 text-xs font-semibold text-amber-800">{maintenanceDisplay.contextLabel}</p>
@@ -7859,7 +7859,7 @@ export const SessionMode = ({
                           <p className="mt-1 text-xs font-semibold text-amber-800">
                             {maintenanceProbeCanRunNow
                               ? 'Para avaliar manutencao, use a sondagem.'
-                              : 'Disponivel somente na data ou consulta vinculada.'}
+                              : 'Disponivel somente na data ou sessão vinculada.'}
                           </p>
                           <p className="text-xs font-semibold text-amber-800">
                             {maintenanceInfo.nextSchedule ? formatMaintenanceDueLabel(maintenanceInfo.nextSchedule) : 'Sem sondagem agendada'}

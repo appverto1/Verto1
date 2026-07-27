@@ -1010,7 +1010,7 @@ export function MonthlyConferenceCenter({
             </select>
           </label>
           <label className="text-xs font-medium text-slate-600">
-            Consulta
+            Sessão
             <select value={appointmentStatus} onChange={(event) => { setAppointmentStatus(event.target.value); setPage(1); }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
               <option value="">Todas</option>
               <option value="completed">Realizada</option>
@@ -1245,7 +1245,7 @@ export function MonthlyConferenceCenter({
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-2">
                           <button type="button" onClick={() => openDetail(row)} title="Abrir conferência da sessão" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><ClipboardCheck size={16} /></button>
-                          <button type="button" onClick={() => onOpenAppointment?.(row)} title="Abrir consulta" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><Stethoscope size={16} /></button>
+                          <button type="button" onClick={() => onOpenAppointment?.(row)} title="Abrir sessão" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><Stethoscope size={16} /></button>
                           <button type="button" onClick={() => onOpenReport?.(row)} title="Abrir relatório" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white"><FileText size={16} /></button>
                           {viewModel.canReopen ? (
                             <button type="button" onClick={() => setReopenTarget(row)} disabled={isBusy} title="Reabrir conferência" className="rounded-md border border-slate-200 p-2 text-slate-600 hover:bg-white disabled:opacity-60">

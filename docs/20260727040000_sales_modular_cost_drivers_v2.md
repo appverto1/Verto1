@@ -1,7 +1,7 @@
 # Motor modular de custos por drivers e propriedade
 
 Versão técnica: `20260727040000`  
-Modelo de cálculo: `2026-07-27-v2`
+Modelo de cálculo atual: `2026-07-27-v3`
 
 ## Escopo
 
@@ -82,11 +82,24 @@ O parâmetro inicial versionado é 100 MB/paciente. O limite da faixa, e não os
 pacientes atualmente usados, reserva a capacidade. Logo, até 10 pacientes
 representa 1.000 MB e até 25 representa 2.500 MB.
 
+Na faixa personalizada, `limite_de_pacientes_da_faixa` é substituído pelo
+`customBasePackageLimit` informado pelo owner. Esse limite é inteiro, nunca
+inferior à maior quantidade entre pacientes atuais e previsão em 12 meses, e
+fica congelado junto com o preço em `inputSnapshot` e `resultsSnapshot`.
+
+```text
+demanda = max(pacientes_atuais, previsao_12_meses)
+faixa_recomendada = menor_faixa_convencional_que_comporta(demanda)
+                     ou faixa_personalizada
+
+storage_personalizado_mb = customBasePackageLimit × includedStorageMbPerPatient
+```
+
 Para notificações da Agenda:
 
 ```text
 notificacoes =
-  consultas × lembretes_por_consulta
+  sessoes × lembretes_por_sessao
   + notificacoes_internas
   + emails
   + web_push
@@ -170,7 +183,7 @@ convertida em zero.
 | Funcionalidade | Drivers versionados |
 |---|---|
 | Verto Clínica | sessões clínicas, sessões ABA, registros/tentativas ABA, documentos, capacidade de storage, utilização e egress |
-| Agenda e Comunicação | consultas, lembretes/consulta, notificações internas, e-mails, web push e mensagens pagas futuras |
+| Agenda e Comunicação | sessões, lembretes/sessão, notificações internas, e-mails, web push e mensagens pagas futuras |
 | Financeiro e Gestão | lançamentos, relatórios financeiros e processamentos recorrentes; custos fixos por clínica continuam possíveis |
 | Convênios e TISS | guias, lotes, XML, documentos, processamento, storage e egress |
 | Gestão Escolar | pacientes com vínculo escolar, reuniões, participantes, documentos, notificações, storage e egress |

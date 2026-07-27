@@ -496,7 +496,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
     setPortalAppointmentsLoaded(true);
     setPortalAppointmentsRangeKey(rangeKey);
-    setPortalAppointmentsState({ loading: false, error: result?.error || 'Não foi possível carregar suas consultas agora.', message: '' });
+    setPortalAppointmentsState({ loading: false, error: result?.error || 'Não foi possível carregar suas sessões agora.', message: '' });
   };
 
   useEffect(() => {
@@ -657,7 +657,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setPortalAppointmentDetail(result.data || null);
       return;
     }
-    setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível carregar a consulta agora.' }));
+    setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível carregar a sessão agora.' }));
   };
 
   const openPortalNotification = async (notification: any) => {
@@ -723,17 +723,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const result = await dataService.confirmPortalAppointment(String(appointment?.id || ''));
     setPortalActionSaving(false);
     if (!result?.success) {
-      setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível confirmar a consulta agora.' }));
+      setPortalAppointmentsState((prev) => ({ ...prev, error: result?.error || 'Não foi possível confirmar a sessão agora.' }));
       return;
     }
     const confirmedAppointment = result?.item || result?.appointment;
     if (confirmedAppointment) updatePortalAppointmentInList(confirmedAppointment);
-    setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: result?.message || 'Consulta confirmada com sucesso.' }));
+    setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: result?.message || 'Sessão confirmada com sucesso.' }));
   };
 
   const loadPortalRescheduleSlots = async (appointmentId: string, dateFrom?: string) => {
     if (!appointmentId) {
-      setPortalRescheduleAvailability({ loading: false, error: 'Consulta não encontrada.', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
+      setPortalRescheduleAvailability({ loading: false, error: 'Sessão não encontrada.', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
       return;
     }
     const requestId = ++portalRescheduleAvailabilityRequestRef.current;
@@ -2375,7 +2375,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const portalMenuItems = [
     { id: 'home', label: 'Início', icon: Smile },
-    { id: 'appointments', label: isKidsProfile ? 'Calendário' : 'Consultas', icon: CalendarDays },
+    { id: 'appointments', label: isKidsProfile ? 'Calendário' : 'Sessões', icon: CalendarDays },
     { id: 'anamnesis', label: 'Anamnese', icon: FileSignature },
     { id: 'notes', label: 'Anotações', icon: MessageCircle },
     { id: 'documents', label: 'Documentos', icon: BookOpen },
@@ -2493,7 +2493,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const canRequestReschedule = metadata?.allowedActions?.canRequestReschedule !== false;
     const notificationType = normalizePortalLower(notification?.type).replace(/_(24h|12h)$/i, '');
     if (notificationType && notificationType !== 'appointment_reminder') {
-      return firstPortalText(notification?.message) || 'Atualização da sua consulta disponível.';
+      return firstPortalText(notification?.message) || 'Atualização da sua sessão disponível.';
     }
     const scheduledAt = firstPortalText(
       metadata.scheduledAt,
@@ -2519,9 +2519,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       ? 'Toque aqui para confirmar, cancelar ou solicitar reagendamento.'
       : 'Toque aqui para confirmar ou cancelar a sessão.';
     if (whenText) {
-      return `Lembrete de consulta de ${patientName} ${whenText}. ${actionCopy}`;
+      return `Lembrete de sessão de ${patientName} ${whenText}. ${actionCopy}`;
     }
-    return firstPortalText(notification?.message) || `Lembrete de consulta de ${patientName}. ${actionCopy}`;
+    return firstPortalText(notification?.message) || `Lembrete de sessão de ${patientName}. ${actionCopy}`;
   };
 
   const portalNotificationsSummary = !portalNotificationsLoaded ? (
@@ -2901,7 +2901,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Relatório</p>
-          <h2 className="text-lg font-black text-slate-900">Tempo em consulta</h2>
+          <h2 className="text-lg font-black text-slate-900">Tempo em sessão</h2>
         </div>
         <span className="rounded-full bg-purple-50 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-[#7a32fc]">
           Total {formatPortalDuration(portalReportTotalMinutes)}
@@ -2911,7 +2911,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">Carregando relatório...</div>
       ) : portalReportRows.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
-          Nenhuma consulta realizada com duração registrada no período.
+          Nenhuma sessão realizada com duração registrada no período.
         </div>
       ) : (
         <div className="space-y-2">
@@ -2923,7 +2923,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   <div className="min-w-0">
                     <p className="text-sm font-black text-slate-900">{formatPortalDate(appointment?.scheduledAt)} · {formatPortalTime(appointment?.scheduledAt)}</p>
                     <p className="mt-1 text-xs font-semibold text-slate-500">
-                      {appointment?.serviceType || 'Consulta'} · {appointment?.professionalName || 'Equipe'}
+                      {appointment?.serviceType || 'Sessão'} · {appointment?.professionalName || 'Equipe'}
                     </p>
                     <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">{row.statusLabel}</p>
                   </div>
@@ -3075,10 +3075,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-slate-500">Mini calendário</p>
-          <h2 className="text-lg font-black text-slate-900">Minhas consultas</h2>
-          <p className="mt-1 text-xs font-semibold text-slate-500">Toque em um dia marcado para abrir a consulta.</p>
+          <h2 className="text-lg font-black text-slate-900">Minhas sessões</h2>
+          <p className="mt-1 text-xs font-semibold text-slate-500">Toque em um dia marcado para abrir a sessão.</p>
         </div>
-        <button type="button" onClick={() => void loadPortalAppointments(getPortalCalendarMonthRange(portalCalendarMonth))} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]" aria-label="Atualizar consultas">
+        <button type="button" onClick={() => void loadPortalAppointments(getPortalCalendarMonthRange(portalCalendarMonth))} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]" aria-label="Atualizar sessões">
           Atualizar
         </button>
       </div>
@@ -3100,12 +3100,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         </div>
       )}
       {portalAppointmentsState.loading || !portalAppointmentsLoaded ? (
-        <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">Carregando consultas...</div>
+        <div className="rounded-2xl bg-purple-50 px-4 py-3 text-sm font-semibold text-purple-700">Carregando sessões...</div>
       ) : portalAppointmentsState.error ? (
         <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{portalAppointmentsState.error}</div>
       ) : portalMonthAppointments.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-5 text-center text-sm font-semibold text-purple-700">
-          Nenhuma consulta encontrada neste mês.
+          Nenhuma sessão encontrada neste mês.
         </div>
       ) : (
         <div className="space-y-4">
@@ -3132,7 +3132,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             ? 'text-slate-800 hover:bg-purple-50'
                             : 'text-slate-600'
                     }`}
-                    aria-label={cell.appointments.length > 0 ? `Abrir consulta de ${cell.day}` : `Dia ${cell.day} sem consulta`}
+                    aria-label={cell.appointments.length > 0 ? `Abrir sessão de ${cell.day}` : `Dia ${cell.day} sem sessão`}
                   >
                     {cell.day}
                     {cell.appointments.length > 0 && (
@@ -3145,7 +3145,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           </div>
           {selectedPortalCalendarDateKey && selectedPortalCalendarAppointments.length > 1 && (
             <div className="rounded-3xl border border-purple-100 bg-purple-50/60 p-3">
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Consultas de {selectedPortalCalendarLabel}</p>
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">Sessões de {selectedPortalCalendarLabel}</p>
               <div className="space-y-2">
                 {selectedPortalCalendarAppointments.map((appointment: any) => (
                   <button
@@ -3156,7 +3156,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                   >
                     <span className="min-w-0">
                       <span className="block text-sm font-semibold text-slate-900">{formatPortalTime(appointment.scheduledAt)}</span>
-                      <span className="block truncate text-xs font-semibold text-slate-500">{appointment.serviceType || 'Consulta'}</span>
+                      <span className="block truncate text-xs font-semibold text-slate-500">{appointment.serviceType || 'Sessão'}</span>
                     </span>
                     <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${getPortalStatusPillClass(resolveAppointmentPatientDisplayStatus(appointment))}`}>
                       {getPortalStatusShortLabel(resolveAppointmentPatientDisplayStatus(appointment))}
@@ -3168,7 +3168,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           )}
           {selectedPortalCalendarDateKey && selectedPortalCalendarAppointments.length === 0 && (
             <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/60 px-4 py-4 text-center text-sm font-semibold text-purple-700">
-              Nenhuma consulta neste dia.
+              Nenhuma sessão neste dia.
             </div>
           )}
         </div>
@@ -3186,7 +3186,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             </div>
             <div className="min-w-0">
             <p className="truncate text-sm font-medium text-slate-700">{activePortalClinicName}</p>
-            <p className="text-xs font-medium text-[#7a32fc]">Detalhes da consulta</p>
+            <p className="text-xs font-medium text-[#7a32fc]">Detalhes da sessão</p>
             <h3 className="mt-1 text-xl font-semibold text-slate-900">{firstPortalPatientName(activePortalAppointment?.patientName)}</h3>
             <p className="mt-1 text-sm font-medium text-slate-500">{formatPortalDateTime(activePortalAppointment?.scheduledAt)}</p>
             </div>
@@ -3204,7 +3204,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         {activePortalConfirmed && (
           <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
             <p className="text-sm font-semibold text-emerald-800">Presença confirmada</p>
-            <p className="mt-1 text-xs font-medium text-emerald-700">A clínica já recebeu sua confirmação desta consulta.</p>
+            <p className="mt-1 text-xs font-medium text-emerald-700">A clínica já recebeu sua confirmação desta sessão.</p>
           </div>
         )}
         {portalAppointmentsState.message && (
@@ -3291,7 +3291,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     <p className="mt-2 text-xs font-semibold text-slate-700">Profissional responsável: {activePortalProfessionalName}</p>
                   )}
                   {activePortalAppointment?.scheduledAt && (
-                    <p className="mt-2 text-xs font-semibold text-purple-700">Consulta atual: {formatPortalDateTime(activePortalAppointment.scheduledAt)}</p>
+                    <p className="mt-2 text-xs font-semibold text-purple-700">Sessão atual: {formatPortalDateTime(activePortalAppointment.scheduledAt)}</p>
                   )}
                 </div>
                 <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-600">

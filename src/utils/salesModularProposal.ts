@@ -131,6 +131,8 @@ export type SalesModularProposalInput = {
   patientQuantity: number;
   expectedPatientQuantity12Months: number;
   basePackageTierId: string;
+  basePackageSelectionMode?: 'automatic' | 'manual';
+  customBasePackageLimit?: number | null;
   lines: SalesModularLineSelection[];
   globalDiscountBasisPoints: number;
   discountDurationMonths: number;
@@ -288,7 +290,7 @@ export type SalesModularProposalResult = {
   }>;
 };
 
-export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-27-v2';
+export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-27-v3';
 
 const integer = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
@@ -366,6 +368,113 @@ export function recommendSalesPackageTier(
   );
 }
 
+export const salesPackageDemand = (
+  patientQuantity: number,
+  expectedPatientQuantity12Months: number
+) => Math.max(
+  1,
+  integer(patientQuantity, 1),
+  integer(expectedPatientQuantity12Months, 1)
+);
+
+export function isSalesPackageTierCompatible(
+  catalog: SalesPricingCatalogSnapshot,
+  tierId: string | null | undefined,
+  demand: number
+): boolean {
+  if (!tierId) return false;
+  const clinicalCore = catalog.items.find(
+    (item) => item.itemKey === 'clinical_core' && item.isActive
+  );
+  const tier = clinicalCore?.tiers.find((candidate) => candidate.id === tierId);
+  if (!tier) return false;
+  const recommended = recommendSalesPackageTier(catalog, demand);
+  if (tier.isCustom || tier.maximumQuantity === null) {
+    return Boolean(
+      recommended &&
+      (recommended.isCustom || recommended.maximumQuantity === null)
+    );
+  }
+  return demand <= tier.maximumQuantity;
+}
+
+export type SalesPackageTierSelectionResolution = {
+  demand: number;
+  recommendedTier: SalesPricingCatalogTier | null;
+  selectedTier: SalesPricingCatalogTier | null;
+  mode: 'automatic' | 'manual';
+  manualOverrideRemoved: boolean;
+};
+
+export function resolveSalesPackageTierSelection(
+  catalog: SalesPricingCatalogSnapshot,
+  input: Pick<
+    SalesModularProposalInput,
+    | 'patientQuantity'
+    | 'expectedPatientQuantity12Months'
+    | 'basePackageTierId'
+    | 'basePackageSelectionMode'
+  >
+): SalesPackageTierSelectionResolution {
+  const demand = salesPackageDemand(
+    input.patientQuantity,
+    input.expectedPatientQuantity12Months
+  );
+  const recommendedTier = recommendSalesPackageTier(catalog, demand);
+  const requestedMode = input.basePackageSelectionMode === 'manual'
+    ? 'manual'
+    : 'automatic';
+  const currentTier = catalog.items
+    .find((item) => item.itemKey === 'clinical_core' && item.isActive)
+    ?.tiers.find((tier) => tier.id === input.basePackageTierId) || null;
+  const manualCompatible =
+    requestedMode === 'manual' &&
+    currentTier !== null &&
+    isSalesPackageTierCompatible(catalog, currentTier.id, demand);
+
+  return {
+    demand,
+    recommendedTier,
+    selectedTier: manualCompatible ? currentTier : recommendedTier,
+    mode: manualCompatible ? 'manual' : 'automatic',
+    manualOverrideRemoved: requestedMode === 'manual' && !manualCompatible
+  };
+}
+
+export function applySalesPackageTierSelection(
+  input: SalesModularProposalInput,
+  tier: SalesPricingCatalogTier,
+  mode: 'automatic' | 'manual'
+): SalesModularProposalInput {
+  const demand = salesPackageDemand(
+    input.patientQuantity,
+    input.expectedPatientQuantity12Months
+  );
+  const customBasePackageLimit = tier.isCustom || tier.maximumQuantity === null
+    ? Math.max(
+        demand,
+        Number.isInteger(input.customBasePackageLimit)
+          ? Number(input.customBasePackageLimit)
+          : demand
+      )
+    : null;
+  return {
+    ...input,
+    basePackageTierId: tier.id,
+    basePackageSelectionMode: mode,
+    customBasePackageLimit,
+    lines: input.lines.map((line) =>
+      line.itemKey === 'clinical_core'
+        ? {
+            ...line,
+            tierId: tier.id,
+            quantity: input.patientQuantity
+          }
+        : line
+    )
+  };
+}
+
 export function validateSalesModularProposalInput(
   input: SalesModularProposalInput
 ): string[] {
@@ -379,12 +488,27 @@ export function validateSalesModularProposalInput(
   }
   if (
     !Number.isInteger(input.expectedPatientQuantity12Months) ||
-    input.expectedPatientQuantity12Months < input.patientQuantity ||
+    input.expectedPatientQuantity12Months < 1 ||
     input.expectedPatientQuantity12Months > 100_000
   ) {
     errors.push('expectedPatientQuantity12Months');
   }
   if (!input.basePackageTierId) errors.push('basePackageTierId');
+  if (
+    input.basePackageSelectionMode !== undefined &&
+    !['automatic', 'manual'].includes(input.basePackageSelectionMode)
+  ) {
+    errors.push('basePackageSelectionMode');
+  }
+  if (
+    input.customBasePackageLimit !== undefined &&
+    input.customBasePackageLimit !== null &&
+    (!Number.isInteger(input.customBasePackageLimit) ||
+      input.customBasePackageLimit < 1 ||
+      input.customBasePackageLimit > 100_000)
+  ) {
+    errors.push('customBasePackageLimit');
+  }
   if (
     !Number.isInteger(input.globalDiscountBasisPoints) ||
     input.globalDiscountBasisPoints < 0 ||
@@ -640,7 +764,8 @@ const directMonthlyCost = (
   tier: SalesPricingCatalogTier | null,
   selectionQuantity: number,
   input: SalesModularProposalInput,
-  settings: SalesModularCostSettings
+  settings: SalesModularCostSettings,
+  basePackageContractedLimit: number
 ): DirectCostResolution => {
   const model = item.costModel;
   const emptyBreakdown: SalesModularDirectCostBreakdown = {
@@ -933,11 +1058,12 @@ const directMonthlyCost = (
   let usedStorageGb: number | null = 0;
   if (item.itemKey === 'clinical_core') {
     const explicitIncludedMb = Number(tier?.metadata?.includedStorageMb);
-    const includedMb = Number.isFinite(explicitIncludedMb) && explicitIncludedMb >= 0
+    const isCustomTier = Boolean(tier?.isCustom || tier?.maximumQuantity === null);
+    const includedMb = !isCustomTier && Number.isFinite(explicitIncludedMb) && explicitIncludedMb >= 0
       ? explicitIncludedMb
-      : tier?.maximumQuantity === null || settings.includedStorageMbPerPatient === null
+      : settings.includedStorageMbPerPatient === null
         ? null
-        : tier.maximumQuantity * settings.includedStorageMbPerPatient;
+        : basePackageContractedLimit * settings.includedStorageMbPerPatient;
     includedStorageGb = includedMb === null ? 0 : includedMb / 1024;
     const utilization = validDriverDatum(storageUtilization)
       ? Number(storageUtilization.value)
@@ -1534,9 +1660,26 @@ export function calculateSalesModularProposal(
     (tier) => tier.id === input.basePackageTierId
   );
   if (!baseTier) throw new Error('PRICING_TIER_NOT_FOUND:clinical_core');
+  const demand = salesPackageDemand(
+    input.patientQuantity,
+    input.expectedPatientQuantity12Months
+  );
+  const isCustomBaseTier = baseTier.isCustom || baseTier.maximumQuantity === null;
+  const basePackageContractedLimit = isCustomBaseTier
+    ? input.customBasePackageLimit
+    : baseTier.maximumQuantity;
   if (
-    baseTier.maximumQuantity !== null &&
-    input.patientQuantity > baseTier.maximumQuantity
+    basePackageContractedLimit === null ||
+    basePackageContractedLimit === undefined ||
+    !Number.isInteger(basePackageContractedLimit) ||
+    basePackageContractedLimit < demand ||
+    basePackageContractedLimit > 100_000
+  ) {
+    throw new Error('PROPOSAL_SIMULATION_INVALID:customBasePackageLimit');
+  }
+  if (
+    !isCustomBaseTier &&
+    demand > basePackageContractedLimit
   ) {
     throw new Error('PRICING_PACKAGE_LIMIT_EXCEEDED');
   }
@@ -1547,6 +1690,13 @@ export function calculateSalesModularProposal(
   );
   if (coreSelections.length !== 1) {
     throw new Error('PROPOSAL_SIMULATION_INVALID:clinical_core');
+  }
+  if (
+    isCustomBaseTier &&
+    (!Number.isInteger(coreSelections[0].customRecurringAmountCents) ||
+      Number(coreSelections[0].customRecurringAmountCents) <= 0)
+  ) {
+    throw new Error('PROPOSAL_SIMULATION_INVALID:customRecurringAmountCents');
   }
   coreSelections[0] = {
     ...coreSelections[0],
@@ -1613,7 +1763,8 @@ export function calculateSalesModularProposal(
       tier,
       amounts.quantity,
       input,
-      costSettings
+      costSettings,
+      basePackageContractedLimit
     );
     return {
       item,
@@ -1835,7 +1986,9 @@ export function calculateSalesModularProposal(
         description: line.item.description,
         pricingMode: line.item.pricingMode,
         quantity: line.quantity,
-        limitQuantity: line.tier?.maximumQuantity ?? line.item.maximumQuantity,
+        limitQuantity: line.item.itemKey === 'clinical_core'
+          ? basePackageContractedLimit
+          : line.tier?.maximumQuantity ?? line.item.maximumQuantity,
         includedQuantity:
           line.tier?.includedQuantity ?? line.item.includedQuantity,
         grossRecurringRevenueCents: line.grossRecurringRevenueCents,
@@ -1883,7 +2036,9 @@ export function calculateSalesModularProposal(
           includedQuantity:
             line.tier?.includedQuantity ?? line.item.includedQuantity,
           maximumQuantity:
-            line.tier?.maximumQuantity ?? line.item.maximumQuantity,
+            line.item.itemKey === 'clinical_core'
+              ? basePackageContractedLimit
+              : line.tier?.maximumQuantity ?? line.item.maximumQuantity,
           features: Array.isArray(line.item.metadata?.features)
             ? line.item.metadata.features
                 .filter(
@@ -2141,17 +2296,16 @@ export function calculateSalesModularProposal(
       itemKey: 'clinical_core',
       tierId: baseTier.id,
       name: baseTier.publicName,
-      limitQuantity: baseTier.maximumQuantity,
+      limitQuantity: basePackageContractedLimit,
       includedStorageMb:
-        baseTier.maximumQuantity !== null &&
         costSettings.includedStorageMbPerPatient !== null
-        ? baseTier.maximumQuantity * costSettings.includedStorageMbPerPatient
+        ? basePackageContractedLimit * costSettings.includedStorageMbPerPatient
         : null,
       occupiedQuantity: input.patientQuantity,
-      availableQuantity:
-        baseTier.maximumQuantity === null
-          ? null
-          : Math.max(0, baseTier.maximumQuantity - input.patientQuantity)
+      availableQuantity: Math.max(
+        0,
+        basePackageContractedLimit - input.patientQuantity
+      )
     },
     lines,
     promotional: promotionalPeriod.consolidated,
@@ -2185,8 +2339,8 @@ export function calculateSalesModularProposal(
     forecast: {
       currentPatients: input.patientQuantity,
       expectedPatients: input.expectedPatientQuantity12Months,
-      commercialLimitPatients: baseTier.maximumQuantity,
-      aggressivePatients: baseTier.maximumQuantity
+      commercialLimitPatients: basePackageContractedLimit,
+      aggressivePatients: basePackageContractedLimit
     },
     warnings,
     horizons

@@ -377,7 +377,7 @@ const statusLabelForMaintenance = (scheduleOrProbe: any, now = new Date()) => {
   if (status === 'REGRESSION_RISK') return 'Risco de regressao';
   if (status === 'WATCH') return 'Atencao';
   if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmacao';
-  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura consulta';
+  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura sessão';
   if (status === 'PENDING_LINK' || status === 'PENDING_SCHEDULING' || status === 'UNSCHEDULED') return 'Sem sessao vinculada';
   if (status === 'COMPLETED') return 'Concluida';
   if (status === 'SCHEDULED') return 'Agendada';
@@ -544,7 +544,7 @@ export const formatPeiMaintenanceAppointmentLabel = (appointment: any) => {
 export const formatPeiMaintenanceScheduleLabel = (schedule: any, now = new Date()) => {
   if (!schedule) return 'Sem sondagem agendada';
   const status = deriveMaintenanceScheduleStatus(schedule, now);
-  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura consulta';
+  if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura sessão';
   if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmacao';
   if (status === 'OVERDUE') {
     const reference = getScheduleReferenceDate(schedule);
@@ -557,7 +557,7 @@ export const formatPeiMaintenanceScheduleLabel = (schedule: any, now = new Date(
   if (status === 'DUE_TODAY') return 'Para hoje';
   if (schedule?.appointment_id || schedule?.appointmentId) {
     const when = formatShortDateTime(schedule?.scheduled_for || schedule?.scheduledFor || schedule?.due_date || schedule?.dueDate);
-    return when ? `Vinculada a consulta de ${when}` : 'Vinculada a consulta';
+    return when ? `Vinculada à sessão agendada de ${when}` : 'Vinculada à sessão agendada';
   }
   return formatMaintenanceScheduleDueLabel(schedule, now);
 };

@@ -2383,12 +2383,24 @@ function normalizeSalesModularProposalRequest(
             : Number(line.customOneTimeAmountCents),
       }))
     : [];
+  const basePackageSelectionMode = sanitizeString(
+    source.basePackageSelectionMode || "automatic",
+    20,
+  );
   return {
     patientQuantity: Number(source.patientQuantity),
     expectedPatientQuantity12Months: Number(
       source.expectedPatientQuantity12Months,
     ),
     basePackageTierId: sanitizeString(source.basePackageTierId, 120),
+    basePackageSelectionMode:
+      basePackageSelectionMode === "manual" ? "manual" : "automatic",
+    customBasePackageLimit:
+      source.customBasePackageLimit === null
+      || source.customBasePackageLimit === undefined
+      || source.customBasePackageLimit === ""
+        ? null
+        : Number(source.customBasePackageLimit),
     lines,
     globalDiscountBasisPoints: Number(
       source.globalDiscountBasisPoints || 0,
@@ -2423,6 +2435,10 @@ function salesModularResultMatches(
     || Number(stored.postPromotionRecurringRevenueCents)
       !== recalculated.postPromotionRecurringRevenueCents
     || Number(stored.oneTimeRevenueCents) !== recalculated.oneTimeRevenueCents
+    || stored.basePackage?.limitQuantity
+      !== recalculated.basePackage.limitQuantity
+    || stored.basePackage?.includedStorageMb
+      !== recalculated.basePackage.includedStorageMb
     || !Array.isArray(stored.lines)
     || stored.lines.length !== recalculated.lines.length
   ) {
@@ -7201,7 +7217,7 @@ function getDefaultAnamnesisTemplate() {
   ];
 
   const adultSections = [
-    { id: 'historia_clinica', title: 'Historia Atual e Motivo da Consulta', order: 10, active: true },
+    { id: 'historia_clinica', title: 'Historia Atual e Motivo da Sessão', order: 10, active: true },
     { id: 'familia_ambiente', title: 'Familia e Ambiente', order: 11, active: true },
     { id: 'saude_rotina', title: 'Saude, Habitos e Rotina', order: 12, active: true },
     { id: 'processos_previos', title: 'Processos Terapeuticos Previos', order: 13, active: true }
@@ -7210,7 +7226,7 @@ function getDefaultAnamnesisTemplate() {
   const adultQuestions = [
     { id: 'estadoCivil', sectionId: 'historia_clinica', label: 'Estado civil', type: 'multipla_escolha', options: ['Solteiro(a)', 'Casado(a)', 'Divorciado(a)', 'Uniao estavel', 'Outro'], required: false, active: true, order: 1 },
     { id: 'profissao', sectionId: 'historia_clinica', label: 'Profissao', type: 'dissertativa', required: false, active: true, order: 2 },
-    { id: 'motivoConsulta', sectionId: 'historia_clinica', label: 'Motivo da consulta', type: 'dissertativa', required: true, active: true, order: 3 },
+    { id: 'motivoConsulta', sectionId: 'historia_clinica', label: 'Motivo da sessão', type: 'dissertativa', required: true, active: true, order: 3 },
     { id: 'iniciativaTratamento', sectionId: 'historia_clinica', label: 'Iniciativa do tratamento', type: 'dissertativa', required: false, active: true, order: 4 },
     { id: 'expectativa', sectionId: 'historia_clinica', label: 'Expectativa com o processo terapeutico', type: 'dissertativa', required: false, active: true, order: 5 },
     { id: 'familiaConstituicao', sectionId: 'familia_ambiente', label: 'Constituicao familiar', type: 'dissertativa', required: false, active: true, order: 1 },
@@ -7223,7 +7239,7 @@ function getDefaultAnamnesisTemplate() {
     { id: 'habitosNocivos', sectionId: 'saude_rotina', label: 'Habitos nocivos', type: 'dissertativa', required: false, active: true, order: 4 },
     { id: 'previoTipo', sectionId: 'processos_previos', label: 'Tipo de tratamento anterior', type: 'dissertativa', required: false, active: true, order: 1 },
     { id: 'previoDuracao', sectionId: 'processos_previos', label: 'Duracao do tratamento anterior', type: 'dissertativa', required: false, active: true, order: 2 },
-    { id: 'previoMotivo', sectionId: 'processos_previos', label: 'Motivo da consulta anterior', type: 'dissertativa', required: false, active: true, order: 3 },
+    { id: 'previoMotivo', sectionId: 'processos_previos', label: 'Motivo da sessão anterior', type: 'dissertativa', required: false, active: true, order: 3 },
     { id: 'previoInterrupcao', sectionId: 'processos_previos', label: 'Motivo da interrupcao anterior', type: 'dissertativa', required: false, active: true, order: 4 }
   ];
 
@@ -9877,10 +9893,10 @@ function buildAppointmentLogWhen(appointment: any) {
 
 function appointmentStatusLabelForLog(status: unknown) {
   const normalized = normalizeAppointmentStatusForUi(status);
-  if (normalized === 'confirmed') return { title: 'Consulta confirmada', verb: 'confirmou', actionType: 'appointment_confirmed' };
-  if (normalized === 'reschedule') return { title: 'Consulta marcada para remarcação', verb: 'solicitou remarcação da', actionType: 'appointment_reschedule_requested' };
-  if (normalized === 'canceled') return { title: 'Consulta cancelada', verb: 'cancelou', actionType: 'appointment_cancelled' };
-  return { title: 'Consulta atualizada', verb: 'atualizou', actionType: 'appointment_status_updated' };
+  if (normalized === 'confirmed') return { title: 'Sessão confirmada', verb: 'confirmou', actionType: 'appointment_confirmed' };
+  if (normalized === 'reschedule') return { title: 'Sessão marcada para remarcação', verb: 'solicitou remarcação da', actionType: 'appointment_reschedule_requested' };
+  if (normalized === 'canceled') return { title: 'Sessão cancelada', verb: 'cancelou', actionType: 'appointment_cancelled' };
+  return { title: 'Sessão atualizada', verb: 'atualizou', actionType: 'appointment_status_updated' };
 }
 
 function buildAppointmentStatusLogContent(params: {
@@ -9897,8 +9913,8 @@ function buildAppointmentStatusLogContent(params: {
   const note = sanitizeString(params.note, 800);
   const actorName = sanitizeString(params.actorName, 180);
   const content = params.isPatientActor
-    ? `Paciente ${patientName} ${statusInfo.verb} consulta${when ? ` ${when}` : ''}.`
-    : `${actorName || 'Equipe'} ${statusInfo.verb} a consulta de ${patientName}${when ? ` ${when}` : ''}.`;
+    ? `Paciente ${patientName} ${statusInfo.verb} sessão${when ? ` ${when}` : ''}.`
+    : `${actorName || 'Equipe'} ${statusInfo.verb} a sessão de ${patientName}${when ? ` ${when}` : ''}.`;
   return note ? `${content} Observação: ${note}` : content;
 }
 
@@ -10419,7 +10435,7 @@ const privateSessionPricingErrorResponse = (error: any) => {
   ) {
     return {
       status: 409,
-      error: 'A política congelada desta consulta exige uma decisão financeira explícita, com valor e motivo, antes de cancelar ou registrar falta.'
+      error: 'A política congelada desta sessão exige uma decisão financeira explícita, com valor e motivo, antes de cancelar ou registrar falta.'
     };
   }
   if (raw.includes('PRIVATE_SESSION_MANUAL_POLICY_DECISION_FORBIDDEN')) {
@@ -10431,19 +10447,19 @@ const privateSessionPricingErrorResponse = (error: any) => {
   if (raw.includes('PRIVATE_SESSION_MANUAL_POLICY_AMOUNT_INVALID')) {
     return {
       status: 400,
-      error: 'O valor decidido para cancelamento ou falta deve estar entre zero e o valor congelado da consulta.'
+      error: 'O valor decidido para cancelamento ou falta deve estar entre zero e o valor congelado da sessão.'
     };
   }
   if (raw.includes('PRIVATE_SESSION_CANCEL_REQUIRES_REFUND_OR_CREDIT')) {
     return {
       status: 409,
-      error: 'Esta consulta possui valor recebido. Registre estorno ou crédito antes de concluir o cancelamento.'
+      error: 'Esta sessão possui valor recebido. Registre estorno ou crédito antes de concluir o cancelamento.'
     };
   }
   if (raw.includes('PRIVATE_SESSION_NO_SHOW_PAID_REVIEW_REQUIRED')) {
     return {
       status: 409,
-      error: 'Esta consulta possui valor recebido. Revise o pagamento antes de registrar a falta.'
+      error: 'Esta sessão possui valor recebido. Revise o pagamento antes de registrar a falta.'
     };
   }
   if (raw.includes('PRIVATE_SESSION_PATIENT_SCOPE_INVALID') || raw.includes('PRIVATE_SESSION_SERVICE_SCOPE_INVALID') || raw.includes('PRIVATE_SESSION_PAYER_SCOPE_INVALID')) {
@@ -11411,8 +11427,8 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
         availabilityGroup = validFrom && referenceDateKey < validFrom ? 'future' : 'expired';
         availabilityLabel = availabilityGroup === 'future' ? 'Futura' : 'Vencida';
         unavailableReason = availabilityGroup === 'future'
-          ? 'Autorizacao ainda nao vigente na data da consulta.'
-          : 'Autorizacao vencida para a data da consulta.';
+          ? 'Autorizacao ainda nao vigente na data da sessão.'
+          : 'Autorizacao vencida para a data da sessão.';
       } else if (
         serialized.balance !== null &&
         serialized.balance <= 0 &&
@@ -11420,7 +11436,7 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
       ) {
         availabilityGroup = 'no_balance';
         availabilityLabel = 'Sem saldo';
-        unavailableReason = 'Autorizacao sem saldo disponivel para esta consulta.';
+        unavailableReason = 'Autorizacao sem saldo disponivel para esta sessão.';
       } else if (!sameService || !sameMapping || !sameTussCode) {
         availabilityGroup = 'other_service';
         availabilityLabel = 'Outro servico/procedimento';
@@ -12322,7 +12338,7 @@ async function syncAppointmentsTableFromClinicState(params: {
           actorId
         });
       } catch (error: any) {
-        console.warn('[Appointments] Sugestao de Maintenance Probe ignorada ao criar consulta.', {
+        console.warn('[Appointments] Sugestao de Maintenance Probe ignorada ao criar sessão.', {
           appointmentId,
           message: sanitizeString(error?.message || String(error), 240)
         });
@@ -23777,7 +23793,7 @@ async function startServer() {
         return {
           ok: false,
           status: 409,
-          error: 'Esta autorização não está disponível para a data, convênio ou procedimento da consulta.'
+          error: 'Esta autorização não está disponível para a data, convênio ou procedimento da sessão.'
         };
       }
       if (!match?.canUseForAppointment && !match?.isEligibleForAppointment) {
@@ -23786,7 +23802,7 @@ async function startServer() {
           status: 409,
           error: match?.availabilityGroup === 'no_balance'
             ? 'Esta autorização não possui saldo disponível.'
-            : match?.unavailableReason || 'Esta autorização não está disponível para a data, convênio ou procedimento da consulta.'
+            : match?.unavailableReason || 'Esta autorização não está disponível para a data, convênio ou procedimento da sessão.'
         };
       }
       const availableValue = match?.quantityAvailable ?? match?.availableQuantity ?? match?.balance;
@@ -23809,7 +23825,7 @@ async function startServer() {
         return {
           ok: false,
           status: 409,
-          error: 'Esta autorização não possui saldo disponível para todas as consultas selecionadas.'
+          error: 'Esta autorização não possui saldo disponível para todas as sessões selecionadas.'
         };
       }
     }
@@ -23933,7 +23949,7 @@ async function startServer() {
         clinicId: params.clinicId,
         actorName: sanitizeString(params.actor?.name || params.actor?.email || 'Equipe', 180),
         title: 'Evento de agenda',
-        content: `Evento ${row.event_type} confirmado para consulta.`,
+        content: `Evento ${row.event_type} confirmado para sessão.`,
         type: 'management',
         actionType: row.event_type,
         payloadDetails: JSON.stringify({
@@ -24106,7 +24122,7 @@ async function startServer() {
     const appointmentIds = preparedAppointments.map((appointment) => sanitizeString(appointment?.id, 120));
     const pathAppointmentId = sanitizeString(params.pathAppointmentId, 120);
     if (pathAppointmentId && !appointmentIds.includes(pathAppointmentId)) {
-      return res.status(400).json({ success: false, error: 'A consulta editada não foi enviada para persistência.' });
+      return res.status(400).json({ success: false, error: 'A sessão editada não foi enviada para persistência.' });
     }
 
     const idempotencyKey = sanitizeString(
@@ -24158,7 +24174,7 @@ async function startServer() {
       const existingTableIds = new Set(existingRows.map((row: any) => sanitizeString(row?.id, 120)));
       const missingExisting = appointmentIds.some((appointmentId) => !existingStateIds.has(appointmentId) && !existingTableIds.has(appointmentId));
       if (missingExisting) {
-        return res.status(404).json({ success: false, error: 'Consulta não encontrada para edição.' });
+        return res.status(404).json({ success: false, error: 'Sessão não encontrada para edição.' });
       }
     }
     const previousAppointmentsById = new Map<string, any>();
@@ -24199,7 +24215,7 @@ async function startServer() {
     if (!authorizationValidation.ok) {
       return res.status(authorizationValidation.status || 409).json({
         success: false,
-        error: authorizationValidation.error || 'Esta autorização não está disponível para esta consulta.',
+        error: authorizationValidation.error || 'Esta autorização não está disponível para esta sessão.',
         conflict: true,
         conflictType: 'authorization'
       });
@@ -24391,7 +24407,7 @@ async function startServer() {
       if (role !== 'patient') {
         return res.status(403).json({
           success: false,
-          error: 'Notificações push de consulta são exclusivas do login do paciente.'
+          error: 'Notificações push de sessão são exclusivas do login do paciente.'
         });
       }
 
@@ -25337,7 +25353,7 @@ async function startServer() {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       if (!appointmentId) {
-        return res.status(400).json({ success: false, error: 'Consulta inválida.' });
+        return res.status(400).json({ success: false, error: 'Sessão inválida.' });
       }
 
       const actor = req.session.user;
@@ -25376,7 +25392,7 @@ async function startServer() {
       }
 
       if (!foundAppointment) {
-        return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+        return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
       }
 
       const appointmentClinicId = sanitizeString(
@@ -25414,7 +25430,7 @@ async function startServer() {
           !actorPatientIds.includes(appointmentPatientId) &&
           (!actorEmail || appointmentPatientEmail !== actorEmail)
         ) {
-          return res.status(403).json({ success: false, error: 'Consulta não pertence a este paciente.' });
+          return res.status(403).json({ success: false, error: 'Sessão não pertence a este paciente.' });
         }
       }
 
@@ -25445,7 +25461,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('[Appointments] confirmation read error:', error?.message || String(error));
-      return res.status(500).json({ success: false, error: 'Erro ao carregar dados da consulta.' });
+      return res.status(500).json({ success: false, error: 'Erro ao carregar dados da sessão.' });
     }
   });
 
@@ -25467,7 +25483,7 @@ async function startServer() {
         'faltou'
       ]);
       if (!appointmentId || (!allowedStatuses.has(requestedStatus) && !normalizedResponseStatus)) {
-        return res.status(400).json({ success: false, error: 'Status de consulta inválido.' });
+        return res.status(400).json({ success: false, error: 'Status de sessão inválido.' });
       }
 
       const normalizedStatus = normalizedResponseStatus || normalizeAppointmentStatusForUi(requestedStatus);
@@ -25518,7 +25534,7 @@ async function startServer() {
         normalizedStatus === 'canceled' && recurrenceScope === 'future';
 
       if (isPatientActor && !['confirmed', 'reschedule', 'canceled'].includes(normalizedStatus)) {
-        return res.status(403).json({ success: false, error: 'Resposta de consulta não permitida.' });
+        return res.status(403).json({ success: false, error: 'Resposta de sessão não permitida.' });
       }
 
       if (
@@ -25528,7 +25544,7 @@ async function startServer() {
       ) {
         return res.status(400).json({
           success: false,
-          error: 'Informe o motivo do cancelamento ou da falta para preservar a auditoria da consulta.'
+          error: 'Informe o motivo do cancelamento ou da falta para preservar a auditoria da sessão.'
         });
       }
 
@@ -25536,7 +25552,7 @@ async function startServer() {
       if (isFutureRecurringCancellation && !canCancelFutureRecurrence) {
         return res.status(403).json({
           success: false,
-          error: 'Perfil sem permissão para cancelar esta e as próximas consultas da recorrência.'
+          error: 'Perfil sem permissão para cancelar esta e as próximas sessões da recorrência.'
         });
       }
 
@@ -25668,7 +25684,7 @@ async function startServer() {
       }
 
       if (!foundAppointment) {
-        return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+        return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
       }
 
       if (isPatientActor && normalizedStatus === 'reschedule') {
@@ -25726,7 +25742,7 @@ async function startServer() {
       if (hasRequestedPolicyDecisionAmount && !isFinancialPolicyEvent) {
         return res.status(400).json({
           success: false,
-          error: 'Uma decisão financeira manual só pode ser informada ao cancelar a consulta ou registrar falta.'
+          error: 'Uma decisão financeira manual só pode ser informada ao cancelar a sessão ou registrar falta.'
         });
       }
 
@@ -25796,7 +25812,7 @@ async function startServer() {
         } else if (hasRequestedPolicyDecisionAmount) {
           return res.status(409).json({
             success: false,
-            error: 'A polÃ­tica congelada desta consulta nÃ£o exige uma decisÃ£o financeira manual para este evento.'
+            error: 'A polÃ­tica congelada desta sessão nÃ£o exige uma decisÃ£o financeira manual para este evento.'
           });
         }
       }
@@ -25816,7 +25832,7 @@ async function startServer() {
           !actorPatientIds.includes(appointmentPatientId) &&
           (!actorEmail || appointmentPatientEmail !== actorEmail)
         ) {
-          return res.status(403).json({ success: false, error: 'Consulta não pertence a este paciente.' });
+          return res.status(403).json({ success: false, error: 'Sessão não pertence a este paciente.' });
         }
 
         const currentStatus = sanitizeString(foundAppointment?.status || 'pending', 40).toLowerCase() || 'pending';
@@ -26123,7 +26139,7 @@ async function startServer() {
         const safe = privateSessionPricingErrorResponse(error);
         return res.status(safe.status).json({ success: false, error: safe.error });
       }
-      return res.status(500).json({ success: false, error: 'Erro ao atualizar status da consulta.' });
+      return res.status(500).json({ success: false, error: 'Erro ao atualizar status da sessão.' });
     }
   };
 
@@ -26132,7 +26148,7 @@ async function startServer() {
   app.delete('/api/appointments/:appointmentId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
-      if (!appointmentId) return res.status(400).json({ success: false, error: 'Consulta inválida.' });
+      if (!appointmentId) return res.status(400).json({ success: false, error: 'Sessão inválida.' });
 
       const actor = req.session.user;
       const actorId = sanitizeString(actor?.id, 120);
@@ -26188,7 +26204,7 @@ async function startServer() {
       }
 
       if (!foundAppointment) {
-        return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+        return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
       }
 
       const appointments = Array.isArray(ownerState?.appointments) ? ownerState.appointments : [];
@@ -26344,9 +26360,9 @@ async function startServer() {
         clinicId: sanitizeString(foundClinicId || clinicId || foundAppointment?.clinic_id, 120),
         actorName: sanitizeString(actor?.name || actor?.email || 'Equipe', 180),
         title: recurrenceScope === 'future' && affectedAppointmentIds.length > 1
-          ? 'Consultas recorrentes excluídas'
-          : 'Consulta excluída',
-        content: `${actor?.name || actor?.email || 'Equipe'} excluiu ${affectedAppointmentIds.length} consulta(s) de ${patientName} da agenda.`,
+          ? 'Sessões recorrentes excluídas'
+          : 'Sessão excluída',
+        content: `${actor?.name || actor?.email || 'Equipe'} excluiu ${affectedAppointmentIds.length} sessão(s) de ${patientName} da agenda.`,
         type: 'management',
         actionType: 'appointment_deleted',
         payloadDetails: JSON.stringify({
@@ -26404,7 +26420,7 @@ async function startServer() {
       }));
     } catch (error: any) {
       console.error('[Appointments] delete error:', error?.message || String(error));
-      return res.status(500).json({ success: false, error: 'Erro ao excluir consulta.' });
+      return res.status(500).json({ success: false, error: 'Erro ao excluir sessão.' });
     }
   });
 
@@ -38242,9 +38258,9 @@ async function startServer() {
       status === 400
         ? 'Dados inválidos para esta ação.'
         : status === 403 || status === 404
-          ? 'Consulta não encontrada para este acesso.'
+          ? 'Sessão não encontrada para este acesso.'
           : status === 409
-            ? 'Esta ação não está disponível para a consulta atual.'
+            ? 'Esta ação não está disponível para a sessão atual.'
             : 'Não foi possível concluir a ação agora.'
   });
 
@@ -38626,7 +38642,7 @@ async function startServer() {
     persistedScope?: { patientId?: unknown; organizationId?: unknown }
   ) => {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
-    if (!isUuid(safeAppointmentId)) return { ok: false, status: 400, error: 'Consulta inválida.' };
+    if (!isUuid(safeAppointmentId)) return { ok: false, status: 400, error: 'Sessão inválida.' };
     const { data, error } = await queryPortalAppointmentsWithSchemaFallback(
       (selectColumns) =>
         supabase
@@ -38641,7 +38657,7 @@ async function startServer() {
       if (hasMissingFinancialSchema(error)) return { ok: false, status: 503, error: 'Agenda indisponível.' };
       throw error;
     }
-    if (!data?.id) return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+    if (!data?.id) return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     const source = parseAppointmentSourcePayloadForFamilyView(data?.source_payload || data?.sourcePayload);
     const appointmentPatientId = sanitizeString(data.patient_id || source?.patient_id || source?.patientId, 120);
     const trustedPatientId = sanitizeString(persistedScope?.patientId, 120);
@@ -38654,7 +38670,7 @@ async function startServer() {
       (appointmentPatientId && trustedPatientId && appointmentPatientId !== trustedPatientId) ||
       (appointmentOrganizationId && trustedOrganizationId && appointmentOrganizationId !== trustedOrganizationId)
     ) {
-      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+      return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     }
     const patientId = appointmentPatientId || trustedPatientId;
     const organizationId = appointmentOrganizationId || trustedOrganizationId;
@@ -38669,7 +38685,7 @@ async function startServer() {
       clinic_id: clinicId || data.clinic_id
     };
     if (!(await canPortalUserAccessPatient(patientId, scopedAppointment, user))) {
-      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+      return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     }
     return { ok: true, appointment: scopedAppointment };
   };
@@ -38813,7 +38829,7 @@ async function startServer() {
           ? 'Toque aqui para confirmar, cancelar ou solicitar reagendamento.'
           : 'Toque aqui para confirmar ou cancelar a sessão.';
         if (Number.isNaN(date.getTime())) {
-          return `Lembrete de consulta de ${patientName}. ${actionCopy}`;
+          return `Lembrete de sessão de ${patientName}. ${actionCopy}`;
         }
         const shortDate = date.toLocaleDateString('pt-BR', {
           timeZone: 'America/Sao_Paulo',
@@ -38841,7 +38857,7 @@ async function startServer() {
           hour: '2-digit',
           minute: '2-digit'
         });
-        return `Lembrete de consulta de ${patientName} dia ${shortDate}${relative} às ${time}. ${actionCopy}`;
+        return `Lembrete de sessão de ${patientName} dia ${shortDate}${relative} às ${time}. ${actionCopy}`;
       };
 
       const normalizedRows: any[] = [];
@@ -38902,7 +38918,7 @@ async function startServer() {
           title: branding.displayName,
           message: normalizePortalNotificationType(row?.type) === 'appointment_reminder'
             ? formatPortalReminderMessage({ ...row, scheduled_for: scheduledAt, metadata: normalizedMetadata }, patientName, canRequestReschedule)
-            : sanitizeTextField(row?.message, 1000) || 'Atualização da sua consulta disponível.',
+            : sanitizeTextField(row?.message, 1000) || 'Atualização da sua sessão disponível.',
           metadata: normalizedMetadata
         });
       }
@@ -40196,7 +40212,7 @@ async function startServer() {
           windowDays: maxDays,
           maxSelectable: 3,
           professionalName: sanitizeString(appointment?.therapist_name || appointment?.therapistName || appointment?.professionalName, 180),
-          message: 'Esta consulta precisa de sala/local confirmado pela clínica para sugerir horários.'
+          message: 'Esta sessão precisa de sala/local confirmado pela clínica para sugerir horários.'
         }
       };
     }
@@ -40330,7 +40346,7 @@ async function startServer() {
         appointment?.patient_name || appointment?.patientName
       );
       const clinicName = clinicBranding.displayName || 'Clínica';
-      const message = `Consulta de ${patientName} remarcada para ${dateLabel} às ${timeLabel}.`;
+      const message = `Sessão de ${patientName} remarcada para ${dateLabel} às ${timeLabel}.`;
       const recipientUserId = sanitizeString(patient?.responsible_user_id, 120);
       const recipientEmail = sanitizeEmail(patient?.responsible_email || patient?.email);
       const sentAt = new Date().toISOString();
@@ -40435,14 +40451,14 @@ async function startServer() {
         return 'Solicitação de cancelamento encerrada após a remarcação';
       }
       const labels: Record<string, string> = {
-        CONFIRMED_BY_RESPONSIBLE: 'Responsável confirmou a consulta',
+        CONFIRMED_BY_RESPONSIBLE: 'Responsável confirmou a sessão',
         RESCHEDULE_REQUESTED: 'Responsável solicitou remarcação',
         RESCHEDULE_APPROVED: 'Remarcação aprovada pela clínica',
         RESCHEDULE_REJECTED: 'Remarcação recusada pela clínica',
-        CANCEL_REQUESTED: 'Responsável solicitou cancelamento da consulta',
+        CANCEL_REQUESTED: 'Responsável solicitou cancelamento da sessão',
         CANCEL_APPROVED: 'Clínica aprovou o cancelamento solicitado pelo responsável',
         CANCEL_REJECTED: 'Cancelamento de sessão recusado pela clínica',
-        CANCELLED: 'Consulta cancelada pela clínica',
+        CANCELLED: 'Sessão cancelada pela clínica',
         SIGNATURE_CREATED: 'Sessão assinada',
         SIGNATURE_REVOKED: 'Assinatura revogada'
       };
@@ -40803,7 +40819,7 @@ async function startServer() {
 
   app.post('/api/portal/appointments/:appointmentId/confirm', portalActionLimiter, checkAuth, async (req: any, res) => {
     try {
-      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Payload de confirmação de consulta')) return;
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Payload de confirmação de sessão')) return;
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
       const appointment = (context as any).appointment;
@@ -40869,7 +40885,7 @@ async function startServer() {
       return res.json(buildPortalAppointmentActionResult({
         action: 'confirmed_by_family',
         appointment: serializedAppointment,
-        message: 'Consulta confirmada.',
+        message: 'Sessão confirmada.',
         user: req.session.user,
         notificationIds: notificationUpdate.notificationIds
       }));
@@ -41403,7 +41419,7 @@ async function startServer() {
         const startDate = new Date(requestedStart);
         const resolvedEndDate = calculateAppointmentEnd(startDate, durationMinutes);
         if (!resolvedEndDate) {
-          return res.status(400).json({ success: false, error: 'Não foi possível calcular o término desta consulta.' });
+          return res.status(400).json({ success: false, error: 'Não foi possível calcular o término desta sessão.' });
         }
         const resolvedEnd = resolvedEndDate.toISOString();
         const approvalIdempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 260);
@@ -41510,7 +41526,7 @@ async function startServer() {
             return res.status(409).json({
               success: false,
               code: 'RESCHEDULE_APPOINTMENT_CHANGED',
-              error: 'Esta consulta foi alterada ou cancelada enquanto a remarcação aguardava aprovação. Atualize os detalhes antes de decidir.'
+              error: 'Esta sessão foi alterada ou cancelada enquanto a remarcação aguardava aprovação. Atualize os detalhes antes de decidir.'
             });
           }
           if (errorCode === '23503') {
@@ -45998,7 +46014,7 @@ async function startServer() {
   const fetchAppointmentForBillingContext = async (appointmentId: string, user: any) => {
     const safeAppointmentId = sanitizeString(appointmentId, 120);
     const organizationId = sanitizeString(currentClinicId(user), 120);
-    if (!isUuid(safeAppointmentId) || !isUuid(organizationId)) return { ok: false, status: 400, error: 'Consulta inválida.' };
+    if (!isUuid(safeAppointmentId) || !isUuid(organizationId)) return { ok: false, status: 400, error: 'Sessão inválida.' };
     const buildClinicStateAppointment = async () => {
       const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId: organizationId, logger: console });
       if (stateResult.error) {
@@ -46086,9 +46102,9 @@ async function startServer() {
       throw result.error;
     }
     const data = result.data || await buildClinicStateAppointment();
-    if (!data?.id) return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+    if (!data?.id) return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     if (!(await canAccessPatientInCurrentClinic(sanitizeString(data.patient_id, 120), user))) {
-      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+      return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     }
     return { ok: true, organizationId, appointment: data };
   };
@@ -47831,7 +47847,7 @@ async function startServer() {
     const appointmentId = sanitizeString(params.appointmentId, 120);
     const organizationId = sanitizeString(currentClinicId(params.user), 120);
     if (!isUuid(appointmentId) || !isUuid(organizationId)) {
-      return { ok: false, status: 400, error: 'Consulta inválida.' };
+      return { ok: false, status: 400, error: 'Sessão inválida.' };
     }
 
     let appointment = params.scopedAppointment || null;
@@ -47842,13 +47858,13 @@ async function startServer() {
     }
     const appointmentOrganizationId = sanitizeString(appointment?.organization_id || appointment?.clinic_id || organizationId, 120);
     if (isUuid(appointmentOrganizationId) && appointmentOrganizationId !== organizationId) {
-      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+      return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     }
     const billingAppointment = mergeAppointmentBillingPayload(appointment);
     const patientId = sanitizeString(billingAppointment?.patient_id || billingAppointment?.patientId, 120);
-    if (!isUuid(patientId)) return { ok: false, status: 404, error: 'Consulta sem paciente válido.' };
+    if (!isUuid(patientId)) return { ok: false, status: 404, error: 'Sessão sem paciente válido.' };
     if (!(await canAccessPatientInCurrentClinic(patientId, params.user))) {
-      return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+      return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     }
 
     await upsertInitialBillingContextFromAppointment({
@@ -48036,7 +48052,7 @@ async function startServer() {
           if (isUuid(appointmentId)) ids.add(appointmentId);
         }
       } else if (!hasMissingFinancialSchema(professionalAppointmentsResult.error) && !isMissingRelationError(professionalAppointmentsResult.error)) {
-        console.warn('[TISS Pipeline] não foi possível localizar consultas futuras do profissional:', {
+        console.warn('[TISS Pipeline] não foi possível localizar sessões futuras do profissional:', {
           organizationId,
           professionalId,
           code: sanitizeString(professionalAppointmentsResult.error?.code, 40) || null
@@ -53453,7 +53469,7 @@ async function startServer() {
             return res.status(503).json({
               success: false,
               code: 'TISS_AUTHORIZATION_RESERVATION_SCHEMA_UNAVAILABLE',
-              error: 'Não foi possível reservar esta autorização porque a estrutura necessária ainda não está disponível. Nenhum dado da consulta foi alterado.'
+              error: 'Não foi possível reservar esta autorização porque a estrutura necessária ainda não está disponível. Nenhum dado da sessão foi alterado.'
             });
           }
           throw authorizationScopeResult.error;
@@ -53485,7 +53501,7 @@ async function startServer() {
         user: req.session.user
       });
       if (!hasAppointmentMirror) {
-        console.warn('[PayerRequirements] consulta sem espelho em appointments para salvar pagador.', {
+        console.warn('[PayerRequirements] sessão sem espelho em appointments para salvar pagador.', {
           appointmentId: appointment.id,
           organizationId
         });
@@ -53558,7 +53574,7 @@ async function startServer() {
             success: false,
             error: appliedTissAuthorization?.availabilityGroup === 'no_balance'
               ? 'Esta autorização não possui saldo disponível.'
-              : appliedTissAuthorization?.unavailableReason || 'Esta autorização não está disponível para a data, convênio ou procedimento da consulta.'
+              : appliedTissAuthorization?.unavailableReason || 'Esta autorização não está disponível para a data, convênio ou procedimento da sessão.'
           });
         }
       }
@@ -53674,23 +53690,23 @@ async function startServer() {
             return res.status(409).json({ success: false, code: 'AUTHORIZATION_INACTIVE', error: 'Esta autorização não está ativa.' });
           }
           if (reservationMessage.includes('TISS_AUTHORIZATION_EXPIRED') || reservationMessage.includes('TISS_AUTHORIZATION_NOT_YET_VALID')) {
-            return res.status(409).json({ success: false, code: 'AUTHORIZATION_OUTSIDE_VALIDITY', error: 'Esta autorização não está vigente na data da consulta.' });
+            return res.status(409).json({ success: false, code: 'AUTHORIZATION_OUTSIDE_VALIDITY', error: 'Esta autorização não está vigente na data da sessão.' });
           }
           if (reservationMessage.includes('TISS_AUTHORIZATION_PROCEDURE_MISMATCH')) {
-            return res.status(409).json({ success: false, code: 'AUTHORIZATION_PROCEDURE_MISMATCH', error: 'O procedimento/TUSS da autorização não é compatível com esta consulta.' });
+            return res.status(409).json({ success: false, code: 'AUTHORIZATION_PROCEDURE_MISMATCH', error: 'O procedimento/TUSS da autorização não é compatível com esta sessão.' });
           }
           if (reservationMessage.includes('TISS_AUTHORIZATION_CONTEXT_CHANGED')) {
-            return res.status(409).json({ success: false, code: 'AUTHORIZATION_CONTEXT_CHANGED', error: 'O contexto financeiro desta consulta foi alterado em outra tela. Recarregue os dados antes de tentar novamente.' });
+            return res.status(409).json({ success: false, code: 'AUTHORIZATION_CONTEXT_CHANGED', error: 'O contexto financeiro desta sessão foi alterado em outra tela. Recarregue os dados antes de tentar novamente.' });
           }
           if (reservationMessage.includes('TISS_APPOINTMENT_NOT_RESERVABLE') || reservationMessage.includes('TISS_APPOINTMENT_DATE_MISSING')) {
-            return res.status(409).json({ success: false, code: 'APPOINTMENT_NOT_RESERVABLE', error: 'Esta consulta não está em um estado válido para reservar autorização.' });
+            return res.status(409).json({ success: false, code: 'APPOINTMENT_NOT_RESERVABLE', error: 'Esta sessão não está em um estado válido para reservar autorização.' });
           }
           const schemaProbe = classifyReservationSchemaProbe(reservationResult.error);
           if (['rpc_missing_or_signature_mismatch', 'rpc_legacy_version', 'rpc_permission_mismatch'].includes(schemaProbe.reason)) {
             return res.status(503).json({
               success: false,
               code: 'TISS_AUTHORIZATION_RESERVATION_SCHEMA_UNAVAILABLE',
-              error: 'Não foi possível reservar esta autorização porque a estrutura necessária ainda não está disponível. Nenhum dado da consulta foi alterado.'
+              error: 'Não foi possível reservar esta autorização porque a estrutura necessária ainda não está disponível. Nenhum dado da sessão foi alterado.'
             });
           }
           throw reservationResult.error;
@@ -53703,7 +53719,7 @@ async function startServer() {
           return res.status(503).json({
             success: false,
             code: 'TISS_AUTHORIZATION_RESERVATION_SCHEMA_UNAVAILABLE',
-            error: 'Não foi possível reservar esta autorização porque a estrutura necessária ainda não está disponível. Nenhum dado da consulta foi alterado.'
+            error: 'Não foi possível reservar esta autorização porque a estrutura necessária ainda não está disponível. Nenhum dado da sessão foi alterado.'
           });
         }
         data = mergeBillingContextMetadata(persistedReservationContext);
@@ -53812,7 +53828,7 @@ async function startServer() {
       };
       return sendNoStoreJson(res, {
         success: true,
-        message: appliedTissAuthorization?.authorizationId ? 'Autorização aplicada.' : 'Pagador salvo na consulta.',
+        message: appliedTissAuthorization?.authorizationId ? 'Autorização aplicada.' : 'Pagador salvo na sessão.',
         data: serialized,
         billingContext: serialized,
         authorizationBalance,
@@ -53831,7 +53847,7 @@ async function startServer() {
           : 500;
       return res.status(status).json({
         success: false,
-        error: 'Não foi possível salvar o pagador da consulta agora.'
+        error: 'Não foi possível salvar o pagador da sessão agora.'
       });
     }
   });
@@ -56104,8 +56120,8 @@ async function startServer() {
           userId: createdBy || '',
           clinicId,
           actorName: 'Equipe',
-          title: 'Sondagem aguardando futura consulta',
-          content: 'Maintenance Schedule existente foi colocado para aguardar futura consulta.',
+          title: 'Sondagem aguardando futura sessão',
+          content: 'Maintenance Schedule existente foi colocado para aguardar futura sessão.',
           type: 'clinical',
           actionType: 'MAINTENANCE_SCHEDULE_UPDATED',
           payload: { scheduleId: existingSchedule.id, targetId, patientId }
@@ -56128,7 +56144,7 @@ async function startServer() {
         ? await fetchMaintenanceAppointmentById({ appointmentId, patientId, clinicId, organizationId })
         : null;
       if (appointmentId && !appointment?.id) {
-        return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+        return { ok: false, status: 404, error: 'Sessão não encontrada.' };
       }
       const scheduledFor = appointment?.scheduled_at || null;
       const dueDate = scheduledFor
@@ -56325,7 +56341,7 @@ async function startServer() {
           targetName: target?.name || null,
           scheduledForNextSession: true,
           nextSessionPolicy: true,
-          humanMessage: 'A sondagem ficou aguardando futura consulta e sera sugerida quando uma consulta real estiver disponivel.',
+          humanMessage: 'A sondagem ficou aguardando futura sessão e sera sugerida quando uma sessão real estiver disponivel.',
           noAutomaticClinicalMutation: true
         }),
         created_at: now,
@@ -56337,7 +56353,7 @@ async function startServer() {
         ? await fetchMaintenanceAppointmentById({ appointmentId, patientId, clinicId, organizationId })
         : null;
       if (appointmentId && !appointment?.id) {
-        return { ok: false, status: 404, error: 'Consulta não encontrada.' };
+        return { ok: false, status: 404, error: 'Sessão não encontrada.' };
       }
       const scheduledFor = appointment?.scheduled_at || null;
       const dueDate = scheduledFor
@@ -56478,9 +56494,9 @@ async function startServer() {
         userId: createdBy || '',
         clinicId,
         actorName: 'Equipe',
-        title: isNextSessionSchedule ? 'Sondagem aguardando futura consulta' : 'Sondagem de manutencao criada',
+        title: isNextSessionSchedule ? 'Sondagem aguardando futura sessão' : 'Sondagem de manutencao criada',
         content: isNextSessionSchedule
-          ? 'Maintenance Schedule foi criado para aguardar futura consulta.'
+          ? 'Maintenance Schedule foi criado para aguardar futura sessão.'
           : 'Maintenance Schedule foi criado para uma habilidade real do PEI.',
         type: 'clinical',
         actionType,
@@ -56701,7 +56717,7 @@ async function startServer() {
           clinicId: scheduleClinicId,
           actorName: actorName || 'Equipe',
           title: 'Falha ao mover sondagem de manutencao',
-          content: 'Maintenance Probe vinculada a consulta cancelada nao pode ser realocada automaticamente.',
+          content: 'Maintenance Probe vinculada a sessão cancelada nao pode ser realocada automaticamente.',
           type: 'clinical',
           actionType: 'MAINTENANCE_SCHEDULE_REASSIGNMENT_FAILED',
           payload: { scheduleId, previousAppointmentId, patientId, source: params.source }
@@ -56715,10 +56731,10 @@ async function startServer() {
         userId: actorId || '',
         clinicId: scheduleClinicId,
         actorName: actorName || 'Equipe',
-        title: nextAppointmentId ? 'Sondagem movida para proxima consulta' : 'Sondagem aguardando futura consulta',
+        title: nextAppointmentId ? 'Sondagem movida para proxima sessão' : 'Sondagem aguardando futura sessão',
         content: nextAppointmentId
-          ? 'Maintenance Probe vinculada a consulta cancelada foi movida automaticamente para a proxima consulta valida do paciente.'
-          : 'Maintenance Probe vinculada a consulta cancelada ficou aguardando a proxima consulta valida do paciente.',
+          ? 'Maintenance Probe vinculada a sessão cancelada foi movida automaticamente para a proxima sessão valida do paciente.'
+          : 'Maintenance Probe vinculada a sessão cancelada ficou aguardando a proxima sessão valida do paciente.',
         type: 'clinical',
         actionType: auditAction,
         payload: { scheduleId, previousAppointmentId, reassignedAppointmentId: nextAppointmentId, patientId, source: params.source }
@@ -56730,8 +56746,8 @@ async function startServer() {
         userId: actorId || '',
         clinicId,
         actorName: actorName || 'Equipe',
-        title: 'Consultas canceladas com Maintenance Probe',
-        content: `${schedules.length} sondagem(ns) de manutencao vinculada(s) a consulta cancelada foram revisadas automaticamente.`,
+        title: 'Sessões canceladas com Maintenance Probe',
+        content: `${schedules.length} sondagem(ns) de manutencao vinculada(s) a sessão cancelada foram revisadas automaticamente.`,
         type: 'clinical',
         actionType: 'APPOINTMENT_CANCELLED_WITH_MAINTENANCE',
         payload: { appointmentIds, moved, waiting, failed, source: params.source }
@@ -56808,7 +56824,7 @@ async function startServer() {
           candidateAppointmentId: appointmentId,
           candidateScheduledAt: scheduledAt,
           pendingConfirmationPreviousStatus: status,
-          humanMessage: 'Ha sondagem de manutencao pendente para esta consulta. Confirme antes de vincular.',
+          humanMessage: 'Ha sondagem de manutencao pendente para esta sessão. Confirme antes de vincular.',
           noSilentLink: true
         }),
         updated_at: new Date().toISOString()
@@ -56827,7 +56843,7 @@ async function startServer() {
           clinicId,
           actorName: 'Sistema',
           title: 'Sondagem pendente de confirmacao',
-          content: 'Maintenance Probe pendente foi sugerida para uma nova consulta, sem vinculo automatico.',
+          content: 'Maintenance Probe pendente foi sugerida para uma nova sessão, sem vinculo automatico.',
           type: 'clinical',
           actionType: 'MAINTENANCE_PROBE_PENDING_CONFIRMATION',
           payload: { scheduleId: row?.id, appointmentId, patientId }
@@ -60300,7 +60316,7 @@ async function startServer() {
           const effectiveTargetId = safeSchedule.targetId || safeSchedule.target_id || skill?.targetId || skill?.target_id || null;
           return cleanObject({
             ...skill,
-            key: `${label === 'Aguardando futura consulta' ? 'waiting' : 'scheduled'}-${effectiveTargetId || skill?.key}`,
+            key: `${label === 'Aguardando futura sessão' ? 'waiting' : 'scheduled'}-${effectiveTargetId || skill?.key}`,
             targetId: effectiveTargetId,
             target_id: effectiveTargetId,
             statusLabel: label,
@@ -60341,7 +60357,7 @@ async function startServer() {
           if (
             isMaintenanceScheduleLinklessForPanel(schedule, status, derivedStatusText, rawPendingRestoredAsOperational)
           ) {
-            waitingNextSession.push(buildScheduledPanelRow(skill, schedule, 'Aguardando futura consulta'));
+            waitingNextSession.push(buildScheduledPanelRow(skill, schedule, 'Aguardando futura sessão'));
           } else if (status === 'OVERDUE' || derivedStatusText === 'OVERDUE') {
             overdueProbes.push(buildScheduledPanelRow(skill, schedule, 'Sondagem atrasada'));
           } else {
@@ -60842,7 +60858,7 @@ async function startServer() {
         if (derived === 'OVERDUE') return 'Atrasada';
         if (derived === 'DUE_TODAY') return 'Para hoje';
         const status = sanitizeString(derived || schedule?.status, 80).toUpperCase();
-        if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura consulta';
+        if (status === 'PENDING_NEXT_SESSION') return 'Aguardando futura sessão';
         if (status === 'PENDING_CONFIRMATION') return 'Pendente de confirmação';
         if (status === 'PENDING_LINK' || status === 'PENDING_SCHEDULING' || status === 'UNSCHEDULED') return 'Sem sessão vinculada';
         if (status === 'PENDING' && fallbackMaintenanceScheduleHasTimingContext(schedule)) return 'Agendada';
@@ -61354,7 +61370,7 @@ async function startServer() {
       const data = appointments.map((appointment: any) => {
         const rawId = sanitizeString(appointment?.id, 180);
         const id = isUuid(rawId) ? rawId : null;
-        const unavailableReason = id ? null : 'Esta recorrência ainda não foi salva como consulta real. Salve a consulta antes de vincular manutenção.';
+        const unavailableReason = id ? null : 'Esta recorrência ainda não foi salva como agendamento real. Salve o agendamento antes de vincular manutenção.';
         const countInfo = id ? counts.get(id) : null;
         const totalProbeCount = typeof countInfo === 'object'
           ? Number(countInfo.total || 0)
@@ -61395,7 +61411,7 @@ async function startServer() {
       });
       return res.json({ success: true, data });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar próximas consultas agora.' });
+      return res.status(500).json({ success: false, error: error?.message || 'Não foi possível carregar próximas sessões agora.' });
     }
   });
 
@@ -61503,7 +61519,7 @@ async function startServer() {
       const dueDate = req.body?.dueDate || req.body?.due_date || null;
       const appointmentIdFromPayload = req.body?.appointmentId || req.body?.appointment_id || null;
       if (requestedMode === 'APPOINTMENT' && !sanitizeString(appointmentIdFromPayload, 180)) {
-        return res.status(400).json({ success: false, error: 'MISSING_APPOINTMENT_ID', message: 'Escolha uma consulta para vincular a sondagem.' });
+        return res.status(400).json({ success: false, error: 'MISSING_APPOINTMENT_ID', message: 'Escolha uma sessão para vincular a sondagem.' });
       }
       const customDateOrAppointmentMode = requestedMode === 'DATE' || requestedMode === 'APPOINTMENT' || sanitizeString(scheduleModeFromPayload, 80).toUpperCase() === 'CUSTOM_DATE';
       if (customDateOrAppointmentMode && !sanitizeString(dueDate, 80) && !sanitizeString(appointmentIdFromPayload, 180)) {
@@ -61531,7 +61547,7 @@ async function startServer() {
       });
       if (!result.ok) {
         const resultMessage = sanitizeString((result as any).error, 240);
-        const errorCode = resultMessage.includes('Consulta')
+        const errorCode = resultMessage.includes('Sessão') || resultMessage.includes('Consulta')
           ? 'APPOINTMENT_NOT_FOUND'
           : (result as any).status === 404
             ? 'TARGET_NOT_FOUND'
@@ -61610,7 +61626,7 @@ async function startServer() {
 
   app.post('/api/aba/targets/:targetId/maintenance-schedules/next-session', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
-      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de agendamento para futura consulta')) return;
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de agendamento para futura sessão')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const patientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
@@ -61633,11 +61649,11 @@ async function startServer() {
         skillId: req.body?.skillId || req.body?.skill_id,
         localTargetRef: req.body?.localTargetRef || req.body?.local_target_ref
       });
-      if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível aguardar futura consulta.', data: (result as any).data || [] });
+      if (!result.ok) return res.status((result as any).status || 400).json({ success: false, error: (result as any).status === 404 ? 'TARGET_NOT_FOUND' : (result as any).status === 400 ? 'ID_INVALIDO' : 'UNEXPECTED_ERROR', message: (result as any).error || 'Não foi possível aguardar futura sessão.', data: (result as any).data || [] });
       const schedules = Array.isArray(result.data) ? result.data : [];
-      return res.json({ success: true, message: 'Sondagem aguardando futura consulta.', schedule: schedules[0] || null, data: schedules });
+      return res.json({ success: true, message: 'Sondagem aguardando futura sessão.', schedule: schedules[0] || null, data: schedules });
     } catch {
-      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível aguardar futura consulta.' });
+      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: 'Não foi possível aguardar futura sessão.' });
     }
   });
 
@@ -61697,7 +61713,7 @@ async function startServer() {
       if (mode === 'APPOINTMENT') {
         const appointmentId = sanitizeString(req.body?.appointmentId || req.body?.appointment_id, 180);
         if (!isUuid(appointmentId)) {
-          return res.status(400).json({ success: false, error: 'MISSING_APPOINTMENT_ID', message: 'Escolha uma consulta para vincular a sondagem.' });
+          return res.status(400).json({ success: false, error: 'MISSING_APPOINTMENT_ID', message: 'Escolha uma sessão para vincular a sondagem.' });
         }
         const appointment = await fetchMaintenanceAppointmentById({
           appointmentId,
@@ -61706,7 +61722,7 @@ async function startServer() {
           organizationId: sanitizeString(schedule.organization_id || organizationId, 120)
         });
         if (!appointment?.id) {
-          return res.status(404).json({ success: false, error: 'APPOINTMENT_NOT_FOUND', message: 'Consulta não encontrada.' });
+          return res.status(404).json({ success: false, error: 'APPOINTMENT_NOT_FOUND', message: 'Sessão não encontrada.' });
         }
         const scheduledFor = sanitizeIsoDateTime(appointment.scheduled_at || appointment.scheduled_start_at || appointment.scheduledStartAt || now);
         patch = cleanObject({
@@ -61734,7 +61750,7 @@ async function startServer() {
         });
       } else if (mode === 'NEXT_SESSION') {
         actionType = 'MAINTENANCE_SCHEDULE_MOVED_TO_NEXT_SESSION';
-        message = 'Sondagem aguardando futura consulta.';
+        message = 'Sondagem aguardando futura sessão.';
         patch = cleanObject({
           status: 'PENDING_NEXT_SESSION',
           appointment_id: null,
@@ -61797,9 +61813,9 @@ async function startServer() {
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(schedule.clinic_id || clinicId, 120),
         actorName: 'Equipe',
-        title: mode === 'NEXT_SESSION' ? 'Sondagem aguardando futura consulta' : 'Agendamento de manutencao atualizado',
+        title: mode === 'NEXT_SESSION' ? 'Sondagem aguardando futura sessão' : 'Agendamento de manutencao atualizado',
         content: mode === 'NEXT_SESSION'
-          ? 'Maintenance Schedule foi movido para aguardar futura consulta.'
+          ? 'Maintenance Schedule foi movido para aguardar futura sessão.'
           : 'Maintenance Schedule foi atualizado sem criar duplicidade.',
         type: 'clinical',
         actionType,
@@ -62028,7 +62044,7 @@ async function startServer() {
         clinicId: schedule.clinic_id || clinicId,
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email, 180) || 'Equipe',
         title: 'Vinculo de sondagem confirmado',
-        content: 'Maintenance Probe foi vinculada a consulta apos confirmacao humana.',
+        content: 'Maintenance Probe foi vinculada a sessão apos confirmacao humana.',
         type: 'clinical',
         actionType: 'MAINTENANCE_PROBE_LINK_CONFIRMED',
         payload: { scheduleId, appointmentId, patientId: schedule.patient_id }
@@ -62129,7 +62145,7 @@ async function startServer() {
         clinicId: schedule.clinic_id || clinicId,
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email, 180) || 'Equipe',
         title: 'Sondagem atribuida a sessao',
-        content: 'Maintenance Probe foi vinculada a uma consulta escolhida pela equipe.',
+        content: 'Maintenance Probe foi vinculada a uma sessão escolhida pela equipe.',
         type: 'clinical',
         actionType: 'MAINTENANCE_SCHEDULE_ASSIGNED',
         payload: { scheduleId, appointmentId, patientId: schedule.patient_id }
@@ -63902,7 +63918,7 @@ async function startServer() {
           organizationMatched: false,
           reasonCode: 'MISSING_APPOINTMENT_ID'
         });
-        return res.status(400).json({ success: false, error: 'Consulta não informada.' });
+        return res.status(400).json({ success: false, error: 'Sessão não informada.' });
       }
       if (rawAppointmentId && !isUuid(rawAppointmentId)) {
         logAbaSessionStartDebug({
@@ -63914,7 +63930,7 @@ async function startServer() {
         return res.status(400).json({
           success: false,
           code: 'INVALID_APPOINTMENT_ID',
-          error: 'Consulta inválida.'
+          error: 'Sessão inválida.'
         });
       }
       const appointmentId = rawAppointmentId || null;
@@ -63956,7 +63972,7 @@ async function startServer() {
             organizationMatched: false,
             reasonCode: 'APPOINTMENT_NOT_FOUND'
           });
-          return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+          return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
         }
         if (sanitizeString(linkedAppointment.patient_id, 120) !== patientId) {
           logAbaSessionStartDebug({
@@ -63966,7 +63982,7 @@ async function startServer() {
             organizationMatched: true,
             reasonCode: 'PATIENT_MISMATCH'
           });
-          return res.status(409).json({ success: false, error: 'Os dados da consulta não conferem com o paciente selecionado.' });
+          return res.status(409).json({ success: false, error: 'Os dados da sessão não conferem com o paciente selecionado.' });
         }
         const appointmentStatus = normalizeOperationalAppointmentStatus(linkedAppointment.status);
         if (appointmentStatus === 'DELETED') {
@@ -63977,7 +63993,7 @@ async function startServer() {
             organizationMatched: true,
             reasonCode: 'APPOINTMENT_DELETED'
           });
-          return res.status(404).json({ success: false, error: 'Consulta não encontrada.' });
+          return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
         }
         if (appointmentStatus === 'CANCELLED' || appointmentStatus === 'CANCEL_REQUESTED') {
           logAbaSessionStartDebug({
@@ -63987,7 +64003,7 @@ async function startServer() {
             organizationMatched: true,
             reasonCode: 'APPOINTMENT_CANCELLED'
           });
-          return res.status(409).json({ success: false, error: 'Esta consulta está cancelada e não pode ser iniciada.' });
+          return res.status(409).json({ success: false, error: 'Esta sessão está cancelada e não pode ser iniciada.' });
         }
         if (appointmentStatus === 'COMPLETED') {
           logAbaSessionStartDebug({
@@ -63997,7 +64013,7 @@ async function startServer() {
             organizationMatched: true,
             reasonCode: 'APPOINTMENT_COMPLETED'
           });
-          return res.status(409).json({ success: false, error: 'Esta consulta já possui sessão encerrada.' });
+          return res.status(409).json({ success: false, error: 'Esta sessão agendada já possui uma Sessão ABA encerrada.' });
         }
         if (!ABA_SESSION_STARTABLE_APPOINTMENT_STATUSES.has(appointmentStatus)) {
           logAbaSessionStartDebug({
@@ -64007,7 +64023,7 @@ async function startServer() {
             organizationMatched: true,
             reasonCode: 'APPOINTMENT_STATUS_NOT_STARTABLE'
           });
-          return res.status(409).json({ success: false, error: 'Esta consulta não pode ser iniciada neste status.' });
+          return res.status(409).json({ success: false, error: 'Esta sessão não pode ser iniciada neste status.' });
         }
         const appointmentProfessionalId = resolveAppointmentProfessionalId(linkedAppointment);
         professionalScopeIds = collectAbaSessionProfessionalScopeIds({
@@ -64035,7 +64051,7 @@ async function startServer() {
             organizationMatched: true,
             reasonCode: 'PROFESSIONAL_MISMATCH'
           });
-          return res.status(409).json({ success: false, error: 'Consulta vinculada a outro profissional.' });
+          return res.status(409).json({ success: false, error: 'Sessão vinculada a outro profissional.' });
         }
         resolvedProfessionalId = appointmentProfessionalId || explicitProfessionalId || resolvedProfessionalId;
         existingInProgressSession = await fetchInProgressAbaSessionForAppointment({
@@ -64061,7 +64077,7 @@ async function startServer() {
               organizationMatched: true,
               reasonCode: 'SESSION_ALREADY_COMPLETED'
             });
-            return res.status(409).json({ success: false, error: 'Esta consulta já possui sessão encerrada.' });
+            return res.status(409).json({ success: false, error: 'Esta sessão agendada já possui uma Sessão ABA encerrada.' });
           }
           const conflictingInProgressSession = await fetchConflictingInProgressAbaSessionForAppointment({
             appointmentId,
@@ -65546,7 +65562,7 @@ async function startServer() {
   const patientFinanceErrorResponse = (error: any) => {
     const raw = sanitizeString(error?.message || error?.details || String(error || ''), 500);
     if (raw.includes('PATIENT_FINANCE_APPOINTMENT_ALREADY_CHARGED')) {
-      return { status: 409, error: 'Uma das consultas selecionadas já possui cobrança ativa. Abra a cobrança existente para continuar.' };
+      return { status: 409, error: 'Uma das sessões selecionadas já possui cobrança ativa. Abra a cobrança existente para continuar.' };
     }
     if (raw.includes('PATIENT_FINANCE_PAYMENT_EXCEEDS_BALANCE')) {
       return { status: 409, error: 'O pagamento informado é maior que o saldo da cobrança. Confirme o valor antes de continuar.' };
@@ -65558,7 +65574,7 @@ async function startServer() {
       return { status: 409, error: 'O desconto não pode ser maior que o saldo atual da cobrança.' };
     }
     if (raw.includes('PATIENT_FINANCE_APPOINTMENT_SCOPE_INVALID') || raw.includes('PATIENT_FINANCE_PATIENT_NOT_FOUND')) {
-      return { status: 403, error: 'Paciente ou consulta não pertence à clínica atual.' };
+      return { status: 403, error: 'Paciente ou sessão não pertence à clínica atual.' };
     }
     if (raw.includes('PATIENT_FINANCIAL_CHARGE_NOT_FOUND')) {
       return { status: 404, error: 'Cobrança não encontrada nesta clínica.' };
@@ -65586,7 +65602,7 @@ async function startServer() {
       raw.includes('apply_patient_financial_operation') ||
       raw.includes('apply_private_patient_financial_operation_v2')
     ) {
-      return { status: 503, error: 'O financeiro por consulta ainda não está disponível neste ambiente. Nenhum lançamento foi alterado.' };
+      return { status: 503, error: 'O financeiro por sessão ainda não está disponível neste ambiente. Nenhum lançamento foi alterado.' };
     }
     return { status: 400, error: 'Não foi possível concluir a operação financeira. Revise os campos e tente novamente.' };
   };
@@ -65737,7 +65753,7 @@ async function startServer() {
       const organizationId = clinicId;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       if (!isUuid(organizationId) || !isUuid(appointmentId)) {
-        return res.status(400).json({ success: false, error: 'Consulta inválida para leitura da política financeira.' });
+        return res.status(400).json({ success: false, error: 'Sessão inválida para leitura da política financeira.' });
       }
       const result = await supabase
         .from('appointment_private_financial_snapshots')
@@ -65942,7 +65958,7 @@ async function startServer() {
         .map((item: any) => sanitizeString(item?.appointmentId || item?.appointment_id, 120))
         .filter((id: string) => isUuid(id))));
       if (rawItems.length > 0 && appointmentIds.length !== rawItems.length) {
-        return res.status(400).json({ success: false, error: 'Selecione consultas válidas para compor a cobrança.' });
+        return res.status(400).json({ success: false, error: 'Selecione sessões válidas para compor a cobrança.' });
       }
 
       if (appointmentIds.length > 0) {
@@ -65956,7 +65972,7 @@ async function startServer() {
           .limit(appointmentIds.length);
         if (appointmentsResult.error) throw appointmentsResult.error;
         if ((appointmentsResult.data || []).length !== appointmentIds.length) {
-          return res.status(403).json({ success: false, error: 'Uma das consultas não pertence a este paciente ou à clínica atual.' });
+          return res.status(403).json({ success: false, error: 'Uma das sessões não pertence a este paciente ou à clínica atual.' });
         }
       }
 

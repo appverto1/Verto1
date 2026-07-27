@@ -237,7 +237,7 @@ function appointmentRow({ id, patientId, patientName, status, day, hour, duratio
 
 function closureChecklist({ signature = true, report = true, duration = true, guide = true, authorization = true }) {
   return [
-    { key: 'appointment_completed', label: 'Consulta concluida', status: 'PASSED' },
+    { key: 'appointment_completed', label: 'Sessão concluida', status: 'PASSED' },
     { key: 'signature_present', label: 'Assinatura do responsavel', status: signature ? 'PASSED' : 'FAILED' },
     { key: 'report_present', label: 'Relatorio da sessao', status: report ? 'PASSED' : 'FAILED' },
     { key: 'actual_duration_present', label: 'Duracao realizada', status: duration ? 'PASSED' : 'WARNING' },
@@ -445,7 +445,7 @@ async function seedDemoData() {
     appointmentRow({ id: IDS.apptReportPending, patientId: IDS.patientPedro, patientName: 'Pedro Almeida', status: 'COMPLETED', day: 6, hour: 12, duration: 45, actualDuration: 45, roomId: IDS.roomAba, roomName: 'Sala 1 - ABA', notes: 'sessao com relatorio pendente' }),
     appointmentRow({ id: IDS.apptDurationWarning, patientId: IDS.patientLia, patientName: 'Lia Martins', status: 'COMPLETED', day: 7, hour: 14, duration: 60, actualDuration: 35, roomId: IDS.roomMulti, roomName: 'Sala 2 - Multidisciplinar', notes: 'sessao com duracao divergente' }),
     appointmentRow({ id: IDS.apptReschedule, patientId: IDS.patientPedro, patientName: 'Pedro Almeida', status: 'RESCHEDULE_REQUESTED', day: 8, hour: 12, duration: 45, actualDuration: null, roomId: IDS.roomAba, roomName: 'Sala 1 - ABA', notes: 'responsavel solicitou remarcacao' }),
-    appointmentRow({ id: IDS.apptCancelled, patientId: IDS.patientLia, patientName: 'Lia Martins', status: 'CANCELLED', day: 9, hour: 14, duration: 60, actualDuration: null, roomId: IDS.roomMulti, roomName: 'Sala 2 - Multidisciplinar', notes: 'consulta cancelada demo' })
+    appointmentRow({ id: IDS.apptCancelled, patientId: IDS.patientLia, patientName: 'Lia Martins', status: 'CANCELLED', day: 9, hour: 14, duration: 60, actualDuration: null, roomId: IDS.roomMulti, roomName: 'Sala 2 - Multidisciplinar', notes: 'sessão cancelada demo' })
   ];
   await upsertRows('appointments', appointments);
 
@@ -604,7 +604,7 @@ async function seedDemoData() {
     closureRow({ appointmentId: IDS.apptSignaturePending, sessionId: SESSION_IDS.signaturePending, patientId: IDS.patientPedro, status: 'PENDING', scheduledStart: at(5, 13), minutes: 45, actualMinutes: 45, issues: ['Assinatura pendente para fechamento da sessao.', 'Guia obrigatoria pendente.'], checklist: closureChecklist({ signature: false, guide: false }), docs: 1 }),
     closureRow({ appointmentId: IDS.apptReportPending, sessionId: SESSION_IDS.reportPending, patientId: IDS.patientPedro, status: 'PENDING', scheduledStart: at(6, 12), minutes: 45, actualMinutes: 45, issues: ['Relatorio da sessao ainda nao foi preenchido.', 'Autorizacao obrigatoria pendente.'], checklist: closureChecklist({ report: false, authorization: false }), docs: 1 }),
     closureRow({ appointmentId: IDS.apptDurationWarning, sessionId: SESSION_IDS.durationWarning, patientId: IDS.patientLia, status: 'WARNING', scheduledStart: at(7, 14), minutes: 60, actualMinutes: 35, issues: ['Duracao real divergente do planejado.'], checklist: closureChecklist({ duration: false }) }),
-    closureRow({ appointmentId: IDS.apptCancelled, sessionId: null, patientId: IDS.patientLia, status: 'NOT_BILLABLE', scheduledStart: at(9, 14), minutes: 60, actualMinutes: null, issues: ['Consulta cancelada.'], checklist: [{ key: 'appointment_cancelled', label: 'Consulta cancelada', status: 'NOT_APPLICABLE' }] })
+    closureRow({ appointmentId: IDS.apptCancelled, sessionId: null, patientId: IDS.patientLia, status: 'NOT_BILLABLE', scheduledStart: at(9, 14), minutes: 60, actualMinutes: null, issues: ['Sessão cancelada.'], checklist: [{ key: 'appointment_cancelled', label: 'Sessão cancelada', status: 'NOT_APPLICABLE' }] })
   ];
   await upsertRows('appointment_closure_checks', closureRows, { onConflict: 'organization_id,appointment_id' });
 

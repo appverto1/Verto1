@@ -245,8 +245,8 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
   const canRequestReschedule = input.canRequestReschedule !== false;
   const responseCopy = appointmentResponseCopy(canRequestReschedule);
   const body = patientName
-    ? `Lembrete de consulta de ${patientName}${whenText ? ` ${whenText}` : ""}. ${responseCopy}`
-    : `Lembrete de consulta${whenText ? ` ${whenText}` : ""}. ${responseCopy}`;
+    ? `Lembrete de sessão de ${patientName}${whenText ? ` ${whenText}` : ""}. ${responseCopy}`
+    : `Lembrete de sessão${whenText ? ` ${whenText}` : ""}. ${responseCopy}`;
   const fallbackUrl = appointmentId ? `/?appointment_id=${encodeURIComponent(appointmentId)}` : "/";
   const url = sanitizeText(input.url, 2000) || fallbackUrl;
   const clinicLogoUrl = firstUrl(input.branding.logoUrl) || null;
@@ -324,7 +324,7 @@ export function friendlyPatientNotificationError(raw: unknown) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
   if (/sessao|session|unauthorized|login|autentic/.test(normalized)) {
-    return "Acesse novamente sua conta para gerenciar esta consulta.";
+    return "Acesse novamente sua conta para gerenciar esta sessão.";
   }
   if (/internal|servidor|server|stack|supabase|postgrest|token|jwt|exception|erro interno/i.test(text)) {
     return FRIENDLY_ERROR_COPY;

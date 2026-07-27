@@ -2078,7 +2078,7 @@ export default function App() {
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result?.success) {
-          throw new Error(result?.error || 'Não foi possível carregar os dados da consulta.');
+          throw new Error(result?.error || 'Não foi possível carregar os dados da sessão.');
         }
         const labels = formatAppointmentConfirmationDateTime(result.appointment || {});
         if (!cancelled) {
@@ -4142,7 +4142,7 @@ export default function App() {
           ? [result.appointment]
           : [];
       if (persistedAppointments.length === 0) {
-        throw new Error('O servidor não devolveu a consulta confirmada.');
+        throw new Error('O servidor não devolveu a sessão confirmada.');
       }
       const applied = applyAppointmentResultToAgenda(result, { action: normalizedStatus, items: persistedAppointments }, actionSequence);
       if (!applied.ok) {
@@ -4150,7 +4150,7 @@ export default function App() {
       }
       return { success: true, appointments: persistedAppointments };
     } catch (error: any) {
-      console.warn('Falha ao persistir status da consulta imediatamente:', error);
+      console.warn('Falha ao persistir status da sessão imediatamente:', error);
       return { success: false, error: error?.message || 'Não foi possível atualizar o status.' };
     }
   };
@@ -4286,7 +4286,7 @@ export default function App() {
       const appointmentLabel = formatPatientLabel({
         name: currentAppointment?.patientName || currentAppointment?.name,
         id: currentAppointment?.patientId
-      }, 'consulta selecionada');
+      }, 'sessão selecionada');
       onAddActivityLog(
         "Exclusão de Agendamento",
         recurrenceScope === 'future'
@@ -4612,7 +4612,7 @@ export default function App() {
     const appointmentLabel = formatPatientLabel({
       name: appointmentsToUpdate[0]?.patientName || appointmentsToUpdate[0]?.name,
       id: appointmentsToUpdate[0]?.patientId
-    }, 'consulta selecionada');
+    }, 'sessão selecionada');
     onAddActivityLog(
       "Edição de Agendamento",
       shouldUpdateFutureRecurrence
@@ -6785,7 +6785,7 @@ export default function App() {
             ? await dataService.requestPortalAppointmentReschedule(appointmentConfirmation.appointmentId, { note: 'Solicitado pelo lembrete dentro do app.' })
             : await dataService.requestPortalAppointmentCancel(appointmentConfirmation.appointmentId, { note: 'Solicitado pelo lembrete dentro do app.' });
       if (!result?.success) {
-        throw new Error(result?.error || 'Não foi possível atualizar a consulta.');
+        throw new Error(result?.error || 'Não foi possível atualizar a sessão.');
       }
       const resultAppointment = result?.item || result?.appointment || null;
       const serverStatus = normalizeConfirmationResultStatus(
@@ -6812,10 +6812,10 @@ export default function App() {
         ? serverStatus === 'confirmed'
           ? 'Essa presença já estava confirmada.'
           : serverStatus === 'reschedule'
-            ? 'Essa consulta já estava marcada para remarcação.'
+            ? 'Essa sessão já estava marcada para remarcação.'
             : serverStatus === 'canceled'
               ? 'Esse agendamento já estava cancelado.'
-              : 'Essa consulta já tinha uma resposta registrada.'
+              : 'Essa sessão já tinha uma resposta registrada.'
         : feedback;
       setAppointmentConfirmation((prev) => prev ? {
         ...prev,
@@ -6924,14 +6924,14 @@ export default function App() {
                   )}
                 </div>
                 <div className="min-w-0">
-                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Lembrete de consulta</p>
+                  <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500">Lembrete de sessão</p>
                   <h2 className="truncate text-xl font-black tracking-tight">
                     {appointmentConfirmationViewModel?.brandName || 'Clínica'}
                   </h2>
                 </div>
               </div>
               <p className="text-sm font-semibold text-slate-600">
-                {appointmentConfirmationViewModel?.appointmentSummaryText || 'Como deseja responder à consulta agendada?'}
+                {appointmentConfirmationViewModel?.appointmentSummaryText || 'Como deseja responder à sessão agendada?'}
               </p>
               {appointmentConfirmation.status ? (
                 <p className="mt-2 text-xs font-bold uppercase tracking-[0.14em] text-slate-400">
@@ -6942,7 +6942,7 @@ export default function App() {
             <div className="space-y-3 p-5">
               {appointmentConfirmation.isLoading && !appointmentConfirmation.dateLabel && (
                 <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-500">
-                  Carregando dados da consulta...
+                  Carregando dados da sessão...
                 </div>
               )}
               {appointmentConfirmation.message && (

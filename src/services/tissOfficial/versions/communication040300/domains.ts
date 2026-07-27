@@ -8,7 +8,7 @@ export const attendanceTypes040300: TissDomainOption[] = [
   { code: "01", label: "Remoção" },
   { code: "02", label: "Pequena cirurgia" },
   { code: "03", label: "Outras terapias" },
-  { code: "04", label: "Consulta" },
+  { code: "04", label: "Sessão" },
   { code: "08", label: "Quimioterapia" },
   { code: "09", label: "Radioterapia" },
   { code: "10", label: "Terapia renal substitutiva" },

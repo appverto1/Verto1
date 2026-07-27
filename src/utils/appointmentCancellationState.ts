@@ -111,7 +111,7 @@ export function resolveAppointmentCancellationState(appointment: any): Appointme
       origin: 'patient',
       status: 'declined',
       label: 'CANCELADO PELO PACIENTE',
-      message: 'Consulta cancelada pelo paciente/responsável.',
+      message: 'Sessão cancelada pelo paciente/responsável.',
       source: source ? String(source) : 'patient'
     };
   }
@@ -126,7 +126,7 @@ export function resolveAppointmentCancellationState(appointment: any): Appointme
       origin: 'clinic',
       status: 'cancelled_by_clinic',
       label: 'CANCELADO PELA CLÍNICA',
-      message: 'Esta consulta foi cancelada pela clínica.',
+      message: 'Esta sessão foi cancelada pela clínica.',
       source: source ? String(source) : 'clinic'
     };
   }
@@ -136,7 +136,7 @@ export function resolveAppointmentCancellationState(appointment: any): Appointme
     origin: 'unknown',
     status: 'cancelled',
     label: 'CANCELADO',
-    message: 'Esta consulta foi cancelada.',
+    message: 'Esta sessão foi cancelada.',
     source: source ? String(source) : null
   };
 }

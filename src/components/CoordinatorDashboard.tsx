@@ -3591,7 +3591,7 @@ export function CoordinatorDashboard({
 
   const sessionProfessionalNotice = selectedSessionPatient
     ? !selectedSessionPatientResponsibleProfessionalId
-      ? "Este paciente ainda não possui profissional responsável atribuído. Selecione um profissional para esta consulta ou defina no prontuário."
+      ? "Este paciente ainda não possui profissional responsável atribuído. Selecione um profissional para esta sessão ou defina no prontuário."
       : !selectedSessionPatientResponsibleProfessionalOption
         ? "O profissional responsável deste paciente não está disponível na lista da clínica. Revise o cadastro da equipe antes de agendar."
         : ""
@@ -3737,7 +3737,7 @@ export function CoordinatorDashboard({
           : hasTussMismatch
             ? "Há autorização cadastrada, mas o procedimento/TUSS não é compatível com esta sessão."
             : hasNoBalance
-              ? "Há autorização cadastrada, mas sem saldo disponível para esta consulta."
+              ? "Há autorização cadastrada, mas sem saldo disponível para esta sessão."
               : "Verifique autorização ativa, validade, saldo, TUSS/procedimento e convênio correto.",
     };
   }, [selectedSessionPayerName, sessionUnavailableTissAuthorizations]);
@@ -3813,7 +3813,7 @@ export function CoordinatorDashboard({
               {authorization?.procedureName || authorization?.tussDescription || "Procedimento"} {authorization?.tussCode ? `· TUSS ${authorization.tussCode}` : ""}
             </p>
             <p className="mt-1 text-[11px] font-semibold text-slate-400">
-              {canUse ? "Utilizável para esta consulta" : authorization?.availabilityLabel || authorization?.status || "Status não informado"}
+              {canUse ? "Utilizável para esta sessão" : authorization?.availabilityLabel || authorization?.status || "Status não informado"}
               {validity ? ` · Validade ${validity}` : ""}
             </p>
             <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] font-medium text-slate-500 sm:grid-cols-4">
@@ -4635,7 +4635,7 @@ export function CoordinatorDashboard({
           scheduledStart: buildEditedAppointmentIso(sessionTime),
           scheduledEnd: buildEditedAppointmentIso(sessionEndTime),
           resolutionNote: editingAppointmentActionRequest.type === "RESCHEDULE"
-            ? "Consulta remarcada pela clínica após solicitação do responsável."
+            ? "Sessão remarcada pela clínica após solicitação do responsável."
             : "",
         });
         if (!actionResult?.success) {
@@ -4652,9 +4652,9 @@ export function CoordinatorDashboard({
       showToast(
         appointmentWasRescheduled
           ? Number(result?.scheduleChangedCount || 0) > 1
-            ? "Consultas remarcadas com sucesso!"
-            : "Consulta remarcada com sucesso!"
-          : "Consulta atualizada com sucesso!",
+            ? "Sessões remarcadas com sucesso!"
+            : "Sessão remarcada com sucesso!"
+          : "Sessão atualizada com sucesso!",
       );
       return;
     }
@@ -4835,7 +4835,7 @@ export function CoordinatorDashboard({
     }
     onAddActivityLog(
       "Status de agenda atualizado",
-      `Agendamento ${id} atualizado para ${status}${details?.recurrenceScope === "future" ? " para esta e as próximas consultas da série" : ""}.${details?.note ? ` Observação: ${details.note}` : ""}`,
+      `Agendamento ${id} atualizado para ${status}${details?.recurrenceScope === "future" ? " para esta e as próximas sessões da série" : ""}.${details?.note ? ` Observação: ${details.note}` : ""}`,
       "management",
     );
   };
@@ -5718,7 +5718,7 @@ export function CoordinatorDashboard({
     const shouldDelete = window.confirm(
       isUnlinkOnly
         ? `Deseja desvincular o paciente ${patientName} da clínica?`
-        : `Deseja arquivar o paciente ${patientName}? Ele deixará de aparecer na lista ativa, mas o histórico da clínica será preservado para consulta caso o paciente retorne.`,
+        : `Deseja arquivar o paciente ${patientName}? Ele deixará de aparecer na lista ativa, mas o histórico da clínica será preservado para acesso caso o paciente retorne.`,
     );
     if (!shouldDelete) return;
     showProcessing(isUnlinkOnly ? "Desvinculando paciente..." : "Arquivando paciente...");
@@ -5749,7 +5749,7 @@ export function CoordinatorDashboard({
         title: isUnlinkOnly ? "Paciente desvinculado" : "Paciente arquivado",
         message: isUnlinkOnly
           ? `O paciente ${patientName} foi desvinculado da clínica.`
-          : `O paciente ${patientName} foi arquivado com sucesso. O histórico da clínica permanece preservado para consulta.`,
+          : `O paciente ${patientName} foi arquivado com sucesso. O histórico da clínica permanece preservado para acesso.`,
       });
       if (!showGrowthMilestone(updateResult)) {
         showToast(isUnlinkOnly ? "Paciente desvinculado da clínica." : "Paciente arquivado com sucesso.");
@@ -6387,7 +6387,7 @@ export function CoordinatorDashboard({
   const resolveAgendaManualPolicyDecision = useCallback(
     (event: "cancellation" | "no_show") => {
       if (agendaPrivateFinancialSnapshotState.loading) {
-        showToast("Aguarde a leitura da política financeira congelada desta consulta.", "error");
+        showToast("Aguarde a leitura da política financeira congelada desta sessão.", "error");
         return { ok: false as const, amount: undefined };
       }
       if (agendaPrivateFinancialSnapshotState.error) {
@@ -6419,7 +6419,7 @@ export function CoordinatorDashboard({
         return { ok: false as const, amount: undefined };
       }
       if (!agendaAppointmentObservation.trim()) {
-        showToast("Informe o motivo da decisão financeira na observação da consulta.", "error");
+        showToast("Informe o motivo da decisão financeira na observação da sessão.", "error");
         return { ok: false as const, amount: undefined };
       }
       return {
@@ -6439,7 +6439,7 @@ export function CoordinatorDashboard({
   const handleCancelAppointmentFromAgenda = useCallback(
     (appointment: any) => {
       if (!agendaAppointmentObservation.trim()) {
-        showToast("Informe o motivo do cancelamento na observação da consulta.", "error");
+        showToast("Informe o motivo do cancelamento na observação da sessão.", "error");
         return;
       }
       const decision = resolveAgendaManualPolicyDecision("cancellation");
@@ -6463,7 +6463,7 @@ export function CoordinatorDashboard({
   const handleNoShowAppointmentFromAgenda = useCallback(
     (appointment: any) => {
       if (!agendaAppointmentObservation.trim()) {
-        showToast("Informe o motivo da falta na observação da consulta.", "error");
+        showToast("Informe o motivo da falta na observação da sessão.", "error");
         return;
       }
       const decision = resolveAgendaManualPolicyDecision("no_show");
@@ -6788,7 +6788,7 @@ export function CoordinatorDashboard({
     const stats = [
       {
         id: "agenda",
-        label: "Consultas hoje",
+        label: "Sessões hoje",
         value: confirmedTodayCount,
         hint: "confirmadas",
         icon: Calendar,
@@ -8080,7 +8080,7 @@ export function CoordinatorDashboard({
   const isBillingReportSection = activeFinancialSection === "Relatórios de Faturamento";
   const patientFinanceSections = [
     "Financeiro de pacientes",
-    "Por consulta",
+    "Por sessão",
     "Recebimentos de pacientes",
     "Cobranças",
     "Pendências de pacientes",
@@ -8088,7 +8088,7 @@ export function CoordinatorDashboard({
   ];
   const isPatientReceivablesSection = patientFinanceSections.includes(activeFinancialSection);
   const patientFinanceActiveSection = activeFinancialSection === "Financeiro de pacientes"
-    ? "Por consulta"
+    ? "Por sessão"
     : activeFinancialSection;
   const productionReportRows = useMemo(() => {
     const monthAppointments = (therapistAgenda || []).filter((appointment: any) => {
@@ -8413,7 +8413,7 @@ export function CoordinatorDashboard({
           appointment?.appointmentId || appointment?.appointment_id || appointment?.id || "",
         ).trim();
         if (!appointmentId) {
-          showToast("Esta consulta ainda não possui um identificador financeiro válido.", "error");
+          showToast("Esta sessão ainda não possui um identificador financeiro válido.", "error");
           return;
         }
         setPatientFinanceLaunchRequest({
@@ -8427,7 +8427,7 @@ export function CoordinatorDashboard({
         {
           const sessionAppointment = buildAppointmentSessionContext(appointment);
           if (!sessionAppointment?.appointmentId) {
-            showToast("Esta consulta ainda não foi salva no servidor. Atualize a agenda e tente novamente.", "error");
+            showToast("Esta sessão ainda não foi salva no servidor. Atualize a agenda e tente novamente.", "error");
             return;
           }
           setScheduledSessionContext(sessionAppointment);
@@ -8521,7 +8521,7 @@ export function CoordinatorDashboard({
                   <span>
                     <span className="block text-xs font-bold text-slate-800">Impedir sobreposição nesta sala</span>
                     <span className="mt-1 block text-[10px] font-medium leading-relaxed text-slate-400">
-                      Quando ativo, a agenda bloqueia mais de uma consulta no mesmo horário usando esta sala.
+                      Quando ativo, a agenda bloqueia mais de uma sessão no mesmo horário usando esta sala.
                     </span>
                   </span>
                 </label>
@@ -9763,6 +9763,8 @@ export function CoordinatorDashboard({
                     ? financialNavigationContext.breadcrumb.join(" > ")
                     : activeTab === "rooms" && !isEditingRooms
                     ? "Salas"
+                    : activeTab === "schools"
+                      ? "Relacionamentos"
                     : activeTab === "dashboard"
                       ? "Painel"
                       : `Páginas / ${tabLabels[activeTab] || "Painel"}`}
@@ -9773,6 +9775,8 @@ export function CoordinatorDashboard({
                   ? financialNavigationContext.breadcrumb[financialNavigationContext.breadcrumb.length - 1] || tabLabels[activeTab]
                   : activeTab === "rooms" && !isEditingRooms
                   ? "Reservas de Sala"
+                  : activeTab === "schools"
+                    ? "Rede escolar"
                   : activeTab === "dashboard"
                     ? "Visão geral"
                     : tabLabels[activeTab] || "Painel"}
@@ -10788,7 +10792,7 @@ export function CoordinatorDashboard({
                 {(isPatientReceivablesSection || isReceptionist) && (
                   <div data-patient-finance-internal-nav className="flex flex-wrap gap-2">
                     {[
-                      ["Por consulta", "Por consulta"],
+                      ["Por sessão", "Por sessão"],
                       ["Recebimentos de pacientes", "Recebimentos"],
                       ["Cobranças", "Cobranças"],
                       ["Pendências de pacientes", "Pendências"],
@@ -10992,7 +10996,7 @@ export function CoordinatorDashboard({
                     <div className="grid gap-3 md:grid-cols-3">
                       {[
                         ["Sessões agendadas", productionReportRows.scheduledCount, "Atendimentos no período selecionado"],
-                        ["Sessões realizadas", productionReportRows.completedCount, "Consultas concluídas no período"],
+                        ["Sessões realizadas", productionReportRows.completedCount, "Sessões concluídas no período"],
                         ["Cancelamentos/faltas", productionReportRows.cancelledCount, "Sessões canceladas ou não realizadas"],
                       ].map(([label, value, hint]) => (
                         <div key={label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
@@ -11072,7 +11076,7 @@ export function CoordinatorDashboard({
                         <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">Controle interno</p>
                         <h4 className="mt-1 text-xl font-semibold text-slate-900">Demonstrativo e revisão de repasses</h4>
                         <p className="mt-1 max-w-2xl text-sm text-slate-500">
-                          Itens de repasse são acompanhados por período, profissional, status, origem, valor base, ajustes e valor líquido. Consultas canceladas não devem gerar repasse; convênios ainda não recebidos permanecem em revisão/aguardando recebimento.
+                          Itens de repasse são acompanhados por período, profissional, status, origem, valor base, ajustes e valor líquido. Sessões canceladas não devem gerar repasse; convênios ainda não recebidos permanecem em revisão/aguardando recebimento.
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -13625,7 +13629,7 @@ export function CoordinatorDashboard({
                   )}
                   {selectedSessionSchoolLocation?.requiresUnit && (
                     <p role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                      Esta escola possui unidades, mas o vínculo atual não informa uma unidade. Edite o vínculo escolar do paciente antes de salvar a consulta.
+                      Esta escola possui unidades, mas o vínculo atual não informa uma unidade. Edite o vínculo escolar do paciente antes de salvar a sessão.
                     </p>
                   )}
                   {editingAppointmentId && editingLocationAddressSnapshot && (
@@ -14095,7 +14099,7 @@ export function CoordinatorDashboard({
                         </label>
                         {!sessionReuseGuideAcrossRecurrence && (
                           <p className="text-[11px] font-medium text-slate-500">
-                            A primeira consulta mantém a guia informada. As demais ficam com guia pendente por ocorrência.
+                            A primeira sessão mantém a guia informada. As demais ficam com guia pendente por ocorrência.
                           </p>
                         )}
                       </div>
@@ -14143,7 +14147,7 @@ export function CoordinatorDashboard({
                     Este agendamento faz parte de uma recorrência.
                   </p>
                   <p className="mt-1 text-xs font-medium text-slate-500">
-                    Escolha se a remarcação vale só para esta data ou para esta e as próximas consultas da série.
+                    Escolha se a remarcação vale só para esta data ou para esta e as próximas sessões da série.
                   </p>
                   <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-white p-1">
                     <button
@@ -14185,7 +14189,7 @@ export function CoordinatorDashboard({
                         Reservar semanalmente este dia e horário
                       </span>
                       <span className="mt-1 block text-xs font-medium text-slate-500">
-                        Cria consultas recorrentes para o mesmo paciente, sala, profissional e horário. Os lembretes seguem separados para cada data.
+                        Cria sessões recorrentes para o mesmo paciente, sala, profissional e horário. Os lembretes seguem separados para cada data.
                       </span>
                     </span>
                   </label>
@@ -14505,7 +14509,7 @@ export function CoordinatorDashboard({
                   Como deseja cancelar?
                 </h3>
                 <p className="mt-2 text-sm text-slate-500">
-                  Esta consulta faz parte de uma série recorrente. O cancelamento pode valer só para esta data ou para esta e as próximas consultas.
+                  Esta sessão faz parte de uma série recorrente. O cancelamento pode valer só para esta data ou para esta e as próximas sessões.
                 </p>
               </div>
               <button
@@ -14533,7 +14537,7 @@ export function CoordinatorDashboard({
                 onClick={() => submitRecurringCancellation("single")}
                 className="rounded-2xl border border-rose-200 px-4 py-3 text-left text-sm font-semibold text-rose-600 transition-all hover:bg-rose-50"
               >
-                Cancelar só esta consulta
+                Cancelar só esta sessão
               </button>
               <button
                 onClick={() => submitRecurringCancellation("future")}
@@ -14628,7 +14632,7 @@ export function CoordinatorDashboard({
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-semibold text-violet-900">
-                        Política particular desta consulta
+                        Política particular desta sessão
                       </p>
                       <p className="mt-1 text-xs leading-5 text-violet-700">
                         Valor congelado: {formatCurrency(agendaPrivatePolicyState.finalAmount)}
@@ -14687,7 +14691,7 @@ export function CoordinatorDashboard({
 
             <div className="mb-5">
               <label className="mb-2 block text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
-                Observação da consulta
+                Observação da sessão
               </label>
               <textarea
                 value={agendaAppointmentObservation}
@@ -15732,7 +15736,7 @@ export function CoordinatorDashboard({
                   Como deseja excluir?
                 </h3>
                 <p className="mt-2 text-sm text-slate-500">
-                  Esta consulta faz parte de uma série recorrente. A exclusão remove o agendamento da agenda só nesta data ou nesta e nas próximas consultas.
+                  Esta sessão faz parte de uma série recorrente. A exclusão remove o agendamento da agenda só nesta data ou nesta e nas próximas sessões.
                 </p>
               </div>
               <button
@@ -15760,7 +15764,7 @@ export function CoordinatorDashboard({
                 onClick={() => submitRecurringDeletion("single")}
                 className="rounded-2xl border border-rose-200 px-4 py-3 text-left text-sm font-semibold text-rose-600 transition-all hover:bg-rose-50"
               >
-                Excluir só esta consulta
+                Excluir só esta sessão
               </button>
               <button
                 onClick={() => submitRecurringDeletion("future")}

@@ -68,7 +68,7 @@ export async function runTissPipelineForAppointment(input: {
       mode,
       source,
       status: 400,
-      error: 'Consulta inválida para pipeline TISS.',
+      error: 'Sessão inválida para pipeline TISS.',
     };
   }
 

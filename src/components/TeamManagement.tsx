@@ -1071,7 +1071,7 @@ export function TeamManagement({
                     <aside className="space-y-4">
                       <section className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
                         <h3 className="text-base font-semibold text-slate-900">Exceções e bloqueios</h3>
-                        <p className="mt-1 text-sm text-slate-500">Folgas, reuniões e bloqueios removem disponibilidade sem apagar consultas.</p>
+                        <p className="mt-1 text-sm text-slate-500">Folgas, reuniões e bloqueios removem disponibilidade sem apagar sessões.</p>
                         <div className="mt-4 space-y-3">
                           <label className="block text-sm font-medium text-slate-600">
                             Data

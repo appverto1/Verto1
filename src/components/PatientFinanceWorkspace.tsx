@@ -183,7 +183,7 @@ const auditEventLabel = (value: any) => ({
   RECEIPT_ISSUED: 'Recibo emitido',
   DUE_DATE_CHANGED: 'Vencimento alterado',
   CHARGE_CANCELED: 'Cobrança cancelada',
-  CHARGE_ACTIVATED_BY_APPOINTMENT: 'Cobrança efetivada pela consulta',
+  CHARGE_ACTIVATED_BY_APPOINTMENT: 'Cobrança efetivada pela sessão',
   CHARGE_CANCELED_BY_APPOINTMENT: 'Cobrança cancelada pela política da clínica',
   CHARGE_CANCELED_BY_RESCHEDULE: 'Cobrança anterior encerrada após remarcação',
   CHARGE_RECREATED_AFTER_RESCHEDULE: 'Cobrança recriada após remarcação'
@@ -440,7 +440,7 @@ export function PatientFinanceWorkspace({
       return;
     }
     if (['charge', 'payment'].includes(operation) && !selectedChargeId && selectedAppointmentIds.length === 0 && !manualCompetence) {
-      setOperationError('Selecione pelo menos uma consulta ou marque o lançamento por competência.');
+      setOperationError('Selecione pelo menos uma sessão ou marque o lançamento por competência.');
       return;
     }
     if (!selectedPatientId && !selectedChargeId) {
@@ -533,7 +533,7 @@ export function PatientFinanceWorkspace({
           document.text(`Paciente: ${selectedCharge?.patientName || 'Paciente'}`, 20, 49);
           document.text(`Valor recebido: ${currency(selectedCharge?.paid || 0)}`, 20, 58);
           document.text(`Data de emissão: ${formatDisplayDateTime(new Date(), { separator: ', ' })}`, 20, 67);
-          document.text(`Referência: ${selectedCharge?.items?.length || 0} consulta(s) vinculada(s)`, 20, 76);
+          document.text(`Referência: ${selectedCharge?.items?.length || 0} sessão(s) vinculada(s)`, 20, 76);
           document.setFontSize(9);
           document.text('Documento emitido a partir do histórico financeiro registrado na Verto.', 20, 92);
           receiptUrl = normalizePdfDataUri(document.output('datauristring'));
@@ -682,7 +682,7 @@ export function PatientFinanceWorkspace({
   if (loading) {
     return (
       <div className="flex min-h-48 items-center justify-center rounded-3xl border border-slate-100 bg-white p-8 text-sm text-slate-500">
-        <Loader2 size={18} className="mr-2 animate-spin text-violet-600" /> Carregando financeiro por consulta...
+        <Loader2 size={18} className="mr-2 animate-spin text-violet-600" /> Carregando financeiro por sessão...
       </div>
     );
   }
@@ -704,7 +704,7 @@ export function PatientFinanceWorkspace({
       />
       <div className="flex flex-col gap-3 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h3 className="text-base font-semibold text-slate-900">Financeiro por consulta</h3>
+          <h3 className="text-base font-semibold text-slate-900">Financeiro por sessão</h3>
           <p className="mt-1 text-sm text-slate-500">Cobranças, pagamentos e documentos ligados ao atendimento que originou o valor.</p>
         </div>
         <button type="button" onClick={() => openOperation('charge')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-violet-700">
@@ -742,7 +742,7 @@ export function PatientFinanceWorkspace({
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
           <span className="inline-flex items-center gap-1 text-slate-400"><Filter size={14} /> Filtros rápidos:</span>
           {[
-            [onlyCompleted, setOnlyCompleted, 'Consultas realizadas'],
+            [onlyCompleted, setOnlyCompleted, 'Sessões realizadas'],
             [onlyUncharged, setOnlyUncharged, 'Sem cobrança'],
             [onlyUnpaid, setOnlyUnpaid, 'Sem pagamento'],
             [onlyPartial, setOnlyPartial, 'Pagamento parcial']
@@ -760,7 +760,7 @@ export function PatientFinanceWorkspace({
       {activeView === 'appointments' && (
         <div className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
           <div className="hidden grid-cols-[150px_minmax(170px,1.2fr)_minmax(130px,1fr)_minmax(130px,1fr)_110px_110px_110px_130px_80px] gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3 text-[11px] font-medium text-slate-500 xl:grid">
-            <span>Consulta</span><span>Paciente / serviço</span><span>Profissional</span><span>Valores</span><span>Vencimento</span><span>Status</span><span>Método</span><span>Saldo</span><span>Ações</span>
+            <span>Sessão</span><span>Paciente / serviço</span><span>Profissional</span><span>Valores</span><span>Vencimento</span><span>Status</span><span>Método</span><span>Saldo</span><span>Ações</span>
           </div>
           <div className="divide-y divide-slate-100">
             {filteredAppointments.map((row: any) => (
@@ -791,7 +791,7 @@ export function PatientFinanceWorkspace({
                 </div>
               </div>
             ))}
-            {!filteredAppointments.length && <p className="p-6 text-sm text-slate-500">Nenhuma consulta corresponde aos filtros selecionados.</p>}
+            {!filteredAppointments.length && <p className="p-6 text-sm text-slate-500">Nenhuma sessão corresponde aos filtros selecionados.</p>}
           </div>
         </div>
       )}
@@ -803,15 +803,15 @@ export function PatientFinanceWorkspace({
           </div>
           <div className="divide-y divide-slate-100">
             {visibleChargeRows.map((charge: any) => {
-              const services = Array.from(new Set(charge.items.map((item: any) => String(item.service_type_snapshot || 'Consulta'))));
+              const services = Array.from(new Set(charge.items.map((item: any) => String(item.service_type_snapshot || 'Sessão'))));
               const origin = charge.items.length
-                ? `${charge.items.length} consulta${charge.items.length === 1 ? '' : 's'} vinculada${charge.items.length === 1 ? '' : 's'}`
+                ? `${charge.items.length} sessão${charge.items.length === 1 ? '' : 's'} vinculada${charge.items.length === 1 ? '' : 's'}`
                 : charge.competenceMonth
                   ? `Competência ${formatDisplayDate(charge.competenceMonth)}`
                   : 'Lançamento legado';
               return <div key={charge.id} className="grid gap-3 px-4 py-4 text-sm xl:grid-cols-[minmax(180px,1.2fr)_minmax(180px,1.3fr)_minmax(180px,1.2fr)_115px_120px_120px_80px] xl:items-center">
                 <div><p className="font-medium text-slate-900">{charge.patientName}</p><p className="mt-1 text-xs text-slate-500">{origin}</p></div>
-                <div><p className="text-slate-700">{services.join(', ') || 'Sem consulta vinculada'}</p><p className="mt-1 text-xs text-slate-400">{charge.items.length ? charge.items.map((item: any) => formatDisplayDateTime(item.appointment_scheduled_at, { separator: ', ' })).join(' · ') : 'Histórico preservado sem associação inferida'}</p></div>
+                <div><p className="text-slate-700">{services.join(', ') || 'Sem sessão vinculada'}</p><p className="mt-1 text-xs text-slate-400">{charge.items.length ? charge.items.map((item: any) => formatDisplayDateTime(item.appointment_scheduled_at, { separator: ', ' })).join(' · ') : 'Histórico preservado sem associação inferida'}</p></div>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500"><span>Original</span><span className="text-right text-slate-800">{currency(charge.original)}</span><span>Desconto</span><span className="text-right">{currency(charge.discount)}</span><span>Pago</span><span className="text-right text-emerald-700">{currency(charge.paid)}</span></div>
                 <p className="text-slate-600">{charge.dueDateLabel}</p>
                 <StatusBadge status={charge.status} />
@@ -844,7 +844,7 @@ export function PatientFinanceWorkspace({
             const charge = chargesById.get(String(transaction.payment_id || transaction.paymentId));
             return <div key={transaction.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-medium text-slate-900">{charge?.patientName || 'Paciente'}</p><p className="mt-1 text-xs text-slate-500">{patientFinancialTransactionLabel(transaction)} · {formatDisplayDateTime(transaction.transaction_at, { separator: ', ' })}</p></div><p className={String(transaction.transaction_type).toUpperCase() === 'REFUND' ? 'font-semibold text-rose-600' : 'font-semibold text-emerald-600'}>{currency(transaction.amount)}</p></div>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500"><span>{methodLabel(transaction.method)}</span><span>•</span><span>{charge?.items?.length || 0} consulta(s)</span><span>•</span><span>{transaction.proof_url ? 'Comprovante anexado' : 'Comprovante pendente'}</span></div>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500"><span>{methodLabel(transaction.method)}</span><span>•</span><span>{charge?.items?.length || 0} sessão(s)</span><span>•</span><span>{transaction.proof_url ? 'Comprovante anexado' : 'Comprovante pendente'}</span></div>
               <div className="mt-3 flex flex-wrap gap-2">{transaction.proof_url && <a href={transaction.proof_url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:border-violet-200 hover:text-violet-700">Abrir comprovante</a>}{charge?.paid > 0 && !transaction.receipt_url && <button type="button" onClick={() => openOperation('receipt', charge)} className="rounded-lg border border-violet-200 px-3 py-1.5 text-xs text-violet-700 hover:bg-violet-50">Emitir recibo</button>}{transaction.receipt_url && <a href={transaction.receipt_url} target="_blank" rel="noreferrer" className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50">Abrir recibo</a>}</div>
             </div>;
           })}
@@ -880,7 +880,7 @@ export function PatientFinanceWorkspace({
             <div><p className="text-slate-400">Cancelamento gratuito até</p><p className="mt-1 font-medium text-slate-800">{formatDisplayDateTime(charge.snapshot.cancellation_free_until, { separator: ', ' })}</p></div>
             <div><p className="text-slate-400">Snapshot</p><p className="mt-1 font-medium text-slate-800">versão {charge.snapshot.snapshot_version} · {charge.snapshot.snapshot_event}</p></div>
           </div>}
-          <div className="mt-4 grid gap-4 lg:grid-cols-2"><div><p className="text-xs font-medium text-slate-500">Consultas incluídas</p><div className="mt-2 space-y-2">{charge.items.map((item: any) => <div key={item.id} className="rounded-xl border border-slate-100 p-3 text-sm"><p className="font-medium text-slate-800">{item.service_type_snapshot || 'Consulta'}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(item.appointment_scheduled_at, { separator: ', ' })} · {currency(item.subtotal)}</p></div>)}{!charge.items.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Cobrança por competência, sem consulta específica vinculada.</p>}</div></div><div><p className="text-xs font-medium text-slate-500">Trilha financeira</p><div className="mt-2 space-y-2">{charge.events.map((event: any) => <div key={event.id} className="rounded-xl border border-slate-100 p-3 text-sm"><p className="font-medium text-slate-800">{auditEventLabel(event.event_type)}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(event.created_at, { separator: ', ' })} · {auditActorLabel(event.created_by)}{event.notes ? ` · ${event.notes}` : ''}</p></div>)}{!charge.events.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Nenhum evento auditável registrado.</p>}</div></div></div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2"><div><p className="text-xs font-medium text-slate-500">Sessões incluídas</p><div className="mt-2 space-y-2">{charge.items.map((item: any) => <div key={item.id} className="rounded-xl border border-slate-100 p-3 text-sm"><p className="font-medium text-slate-800">{item.service_type_snapshot || 'Sessão'}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(item.appointment_scheduled_at, { separator: ', ' })} · {currency(item.subtotal)}</p></div>)}{!charge.items.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Cobrança por competência, sem sessão específica vinculada.</p>}</div></div><div><p className="text-xs font-medium text-slate-500">Trilha financeira</p><div className="mt-2 space-y-2">{charge.events.map((event: any) => <div key={event.id} className="rounded-xl border border-slate-100 p-3 text-sm"><p className="font-medium text-slate-800">{auditEventLabel(event.event_type)}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(event.created_at, { separator: ', ' })} · {auditActorLabel(event.created_by)}{event.notes ? ` · ${event.notes}` : ''}</p></div>)}{!charge.events.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Nenhum evento auditável registrado.</p>}</div></div></div>
         </div>;
       })()}
 
@@ -892,7 +892,7 @@ export function PatientFinanceWorkspace({
           <label className="text-xs text-slate-500">Percentual na cobrança parcial<input disabled={!canManagePolicy} type="number" min="0" max="100" value={policy.cancellation_percentage || 0} onChange={(event) => setPolicy({ ...policy, cancellation_percentage: Number(event.target.value) })} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2.5 text-sm text-slate-700" /></label>
           <label className="text-xs text-slate-500">Tolerância em horas<input disabled={!canManagePolicy} type="number" min="0" max="720" value={policy.cancellation_tolerance_hours || 0} onChange={(event) => setPolicy({ ...policy, cancellation_tolerance_hours: Number(event.target.value) })} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-2.5 text-sm text-slate-700" /></label>
           <label className="flex items-start gap-3 rounded-xl border border-slate-100 p-3 text-sm text-slate-600"><input disabled={!canManagePolicy} type="checkbox" checked={policy.create_forecast_on_schedule !== false} onChange={(event) => setPolicy({ ...policy, create_forecast_on_schedule: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600" /><span>Criar previsão ao agendar<span className="mt-1 block text-xs text-slate-400">Resolve acordo, serviço, especialidade ou padrão da clínica e não registra pagamento.</span></span></label>
-          <label className="flex items-start gap-3 rounded-xl border border-slate-100 p-3 text-sm text-slate-600"><input disabled={!canManagePolicy} type="checkbox" checked={Boolean(policy.charge_no_show)} onChange={(event) => setPolicy({ ...policy, charge_no_show: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600" /><span>Cobrar falta<span className="mt-1 block text-xs text-slate-400">Efetiva a cobrança prevista quando a consulta vira falta.</span></span></label>
+          <label className="flex items-start gap-3 rounded-xl border border-slate-100 p-3 text-sm text-slate-600"><input disabled={!canManagePolicy} type="checkbox" checked={Boolean(policy.charge_no_show)} onChange={(event) => setPolicy({ ...policy, charge_no_show: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600" /><span>Cobrar falta<span className="mt-1 block text-xs text-slate-400">Efetiva a cobrança prevista quando a sessão vira falta.</span></span></label>
           <label className="flex items-start gap-3 rounded-xl border border-slate-100 p-3 text-sm text-slate-600"><input disabled={!canManagePolicy} type="checkbox" checked={policy.reschedule_keeps_charge !== false} onChange={(event) => setPolicy({ ...policy, reschedule_keeps_charge: event.target.checked })} className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600" /><span>Remarcação mantém a cobrança<span className="mt-1 block text-xs text-slate-400">Preserva a mesma obrigação financeira quando apenas o horário muda.</span></span></label>
           {canManagePolicy && <button type="button" disabled={policySaving} onClick={savePolicy} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60">{policySaving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Salvar política</button>}
         </div>}
@@ -921,13 +921,13 @@ export function PatientFinanceWorkspace({
                 />
                 <span>
                   Lançamento por competência
-                  <span className="mt-1 block text-xs text-slate-400">Use somente para uma cobrança mensal ou agrupada que não possa ser ligada a consultas específicas.</span>
+                  <span className="mt-1 block text-xs text-slate-400">Use somente para uma cobrança mensal ou agrupada que não possa ser ligada a sessões específicas.</span>
                 </span>
               </label>
               {!manualCompetence ? <>
-                <div className="flex items-center justify-between"><p className="text-sm font-medium text-slate-800">Consultas</p><span className="text-xs text-slate-400">Selecione uma ou várias</span></div>
-                <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 p-2">{operationAppointments.map((row: any) => { const disabled = Boolean(row.chargeId); const selected = selectedAppointmentIds.includes(row.appointmentId); return <label key={row.appointmentId} className={`flex items-start gap-3 rounded-lg p-3 ${disabled ? 'cursor-not-allowed bg-slate-50 opacity-60' : 'cursor-pointer hover:bg-slate-50'}`}><input type="checkbox" disabled={disabled} checked={selected} onChange={(event) => setSelectedAppointmentIds((current) => event.target.checked ? [...current, row.appointmentId] : current.filter((id) => id !== row.appointmentId))} className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600" /><span className="min-w-0"><span className="block text-sm font-medium text-slate-800">{row.appointmentDateLabel} · {row.serviceType}</span><span className="mt-1 block text-xs text-slate-500">{row.professionalName}{disabled ? ` · ${row.statusLabel}` : ''}</span></span></label>; })}{selectedPatientId && !operationAppointments.length && <p className="p-3 text-sm text-slate-500">Nenhuma consulta particular encontrada para este paciente no intervalo carregado.</p>}</div>
-              </> : <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-4 text-sm text-violet-800">Competência: {formatDisplayDate(`${month}-01`)}. O lançamento ficará identificado como mensal e não será apresentado como pagamento de uma consulta específica.</div>}
+                <div className="flex items-center justify-between"><p className="text-sm font-medium text-slate-800">Sessões</p><span className="text-xs text-slate-400">Selecione uma ou várias</span></div>
+                <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 p-2">{operationAppointments.map((row: any) => { const disabled = Boolean(row.chargeId); const selected = selectedAppointmentIds.includes(row.appointmentId); return <label key={row.appointmentId} className={`flex items-start gap-3 rounded-lg p-3 ${disabled ? 'cursor-not-allowed bg-slate-50 opacity-60' : 'cursor-pointer hover:bg-slate-50'}`}><input type="checkbox" disabled={disabled} checked={selected} onChange={(event) => setSelectedAppointmentIds((current) => event.target.checked ? [...current, row.appointmentId] : current.filter((id) => id !== row.appointmentId))} className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600" /><span className="min-w-0"><span className="block text-sm font-medium text-slate-800">{row.appointmentDateLabel} · {row.serviceType}</span><span className="mt-1 block text-xs text-slate-500">{row.professionalName}{disabled ? ` · ${row.statusLabel}` : ''}</span></span></label>; })}{selectedPatientId && !operationAppointments.length && <p className="p-3 text-sm text-slate-500">Nenhuma sessão particular encontrada para este paciente no intervalo carregado.</p>}</div>
+              </> : <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-4 text-sm text-violet-800">Competência: {formatDisplayDate(`${month}-01`)}. O lançamento ficará identificado como mensal e não será apresentado como pagamento de uma sessão específica.</div>}
             </div>}
 
             {operation !== 'charge' && operationCharges.length > 0 && <label className="block text-sm text-slate-600">Cobrança existente<select value={selectedChargeId} onChange={(event) => { const next = chargesById.get(event.target.value); setSelectedChargeId(event.target.value); if (next) { setSelectedPatientId(next.patientId); setAmount(moneyInput(operation === 'refund' ? next.paidGross : next.balance)); setDueDate(String(next.dueDate || '').slice(0, 10)); } }} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="">Selecione a cobrança</option>{operationCharges.map((charge: any) => <option key={charge.id} value={charge.id}>{charge.patientName} · {charge.dueDateLabel} · saldo {currency(charge.balance)}</option>)}</select></label>}

@@ -17,8 +17,12 @@ import {
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import {
+  applySalesPackageTierSelection,
   calculateSalesModularProposal,
+  isSalesPackageTierCompatible,
   recommendSalesPackageTier,
+  resolveSalesPackageTierSelection,
+  salesPackageDemand,
   type SalesModularLineSelection,
   type SalesModularProposalInput,
   type SalesModularProposalResult,
@@ -275,6 +279,11 @@ export const SalesModularProposalBuilder = ({
           patientQuantity,
           expectedPatientQuantity12Months: patientQuantity,
           basePackageTierId: recommendedTier.id,
+          basePackageSelectionMode: 'automatic',
+          customBasePackageLimit:
+            recommendedTier.isCustom || recommendedTier.maximumQuantity === null
+              ? patientQuantity
+              : null,
           lines: [selectionForItem(core, patientQuantity, recommendedTier)],
           globalDiscountBasisPoints: 0,
           discountDurationMonths: 0,
@@ -316,6 +325,48 @@ export const SalesModularProposalBuilder = ({
     };
   }, [lead?.id]);
 
+  useEffect(() => {
+    if (!catalog || !input) return;
+    const resolution = resolveSalesPackageTierSelection(catalog, input);
+    if (!resolution.selectedTier) return;
+    const currentMode = input.basePackageSelectionMode === 'manual'
+      ? 'manual'
+      : 'automatic';
+    const customLimitNeedsInitialization =
+      (resolution.selectedTier.isCustom ||
+        resolution.selectedTier.maximumQuantity === null) &&
+      (!Number.isInteger(input.customBasePackageLimit) ||
+        Number(input.customBasePackageLimit) < resolution.demand);
+    if (
+      input.basePackageTierId === resolution.selectedTier.id &&
+      currentMode === resolution.mode &&
+      !customLimitNeedsInitialization
+    ) {
+      return;
+    }
+    setInput(
+      applySalesPackageTierSelection(
+        input,
+        resolution.selectedTier,
+        resolution.mode
+      )
+    );
+    setPreparedOffer(null);
+    if (resolution.manualOverrideRemoved) {
+      setNotice(
+        `A faixa escolhida manualmente deixou de comportar a demanda de ${resolution.demand} pacientes. Aplicamos ${resolution.selectedTier.publicName}.`
+      );
+    } else if (
+      customLimitNeedsInitialization &&
+      Number.isInteger(input.customBasePackageLimit) &&
+      Number(input.customBasePackageLimit) < resolution.demand
+    ) {
+      setNotice(
+        `O limite contratado foi ajustado para ${resolution.demand} pacientes para acompanhar a nova demanda.`
+      );
+    }
+  }, [catalog, input]);
+
   const preview = useMemo(() => {
     if (!input || !catalog || !assumptions) return null;
     try {
@@ -327,14 +378,13 @@ export const SalesModularProposalBuilder = ({
 
   const aggressivePreview = useMemo(() => {
     if (!input || !catalog || !assumptions) return null;
-    const core = catalog.items.find(
-      (item) => item.itemKey === 'clinical_core'
-    );
-    const tier = core?.tiers.find(
-      (candidate) => candidate.id === input.basePackageTierId
-    );
     const aggressivePatients =
-      tier?.maximumQuantity ?? input.expectedPatientQuantity12Months;
+      input.customBasePackageLimit ??
+      catalog.items
+        .find((item) => item.itemKey === 'clinical_core')
+        ?.tiers.find((candidate) => candidate.id === input.basePackageTierId)
+        ?.maximumQuantity ??
+      input.expectedPatientQuantity12Months;
     try {
       return calculateSalesModularProposal(
         {
@@ -432,18 +482,6 @@ export const SalesModularProposalBuilder = ({
   const changePatientQuantity = (patientQuantity: number) => {
     if (!catalog || !input) return;
     const safeQuantity = Math.max(1, Math.min(100000, patientQuantity || 1));
-    const currentCore = catalog.items.find(
-      (item) => item.itemKey === 'clinical_core'
-    );
-    const currentTier = currentCore?.tiers.find(
-      (tier) => tier.id === input.basePackageTierId
-    );
-    const recommended =
-      currentTier?.maximumQuantity != null &&
-      safeQuantity > currentTier.maximumQuantity
-        ? recommendSalesPackageTier(catalog, safeQuantity)
-        : currentTier || recommendSalesPackageTier(catalog, safeQuantity);
-    if (!recommended || !currentCore) return;
     const lines = input.lines.map((line) => {
       const item = catalog.items.find(
         (catalogItem) => catalogItem.itemKey === line.itemKey
@@ -452,7 +490,6 @@ export const SalesModularProposalBuilder = ({
       if (item.itemKey === 'clinical_core') {
         return {
           ...line,
-          tierId: recommended.id,
           quantity: safeQuantity
         };
       }
@@ -471,11 +508,6 @@ export const SalesModularProposalBuilder = ({
     });
     updateInput({
       patientQuantity: safeQuantity,
-      expectedPatientQuantity12Months: Math.max(
-        safeQuantity,
-        input.expectedPatientQuantity12Months
-      ),
-      basePackageTierId: recommended.id,
       lines
     });
   };
@@ -487,28 +519,36 @@ export const SalesModularProposalBuilder = ({
     );
     const tier = core?.tiers.find((candidate) => candidate.id === tierId);
     if (!core || !tier) return;
-    if (
-      tier.maximumQuantity !== null &&
-      input.patientQuantity > tier.maximumQuantity
-    ) {
+    const demand = salesPackageDemand(
+      input.patientQuantity,
+      input.expectedPatientQuantity12Months
+    );
+    if (!isSalesPackageTierCompatible(catalog, tier.id, demand)) {
       setError(
-        `Este pacote comporta até ${tier.maximumQuantity} pacientes. Selecione uma faixa compatível ou personalizada.`
+        `Esta faixa não é compatível com a demanda de ${demand} pacientes. Use uma faixa convencional maior ou a recomendação automática.`
       );
-    } else {
-      setError('');
+      return;
     }
-    updateInput({
-      basePackageTierId: tier.id,
-      lines: input.lines.map((line) =>
-        line.itemKey === 'clinical_core'
-          ? {
-              ...line,
-              tierId: tier.id,
-              quantity: input.patientQuantity
-            }
-          : line
+    setError('');
+    setInput(applySalesPackageTierSelection(input, tier, 'manual'));
+    setPreparedOffer(null);
+    setNotice('Faixa escolhida manualmente. Ela será mantida enquanto comportar a demanda.');
+  };
+
+  const useRecommendedBaseTier = () => {
+    if (!catalog || !input) return;
+    const recommended = recommendSalesPackageTier(
+      catalog,
+      salesPackageDemand(
+        input.patientQuantity,
+        input.expectedPatientQuantity12Months
       )
-    });
+    );
+    if (!recommended) return;
+    setInput(applySalesPackageTierSelection(input, recommended, 'automatic'));
+    setPreparedOffer(null);
+    setError('');
+    setNotice(`Faixa recomendada aplicada: ${recommended.publicName}.`);
   };
 
   const toggleItem = (item: SalesPricingCatalogItem) => {
@@ -773,7 +813,31 @@ export const SalesModularProposalBuilder = ({
   };
 
   const duplicateSimulation = (simulation: SavedModularSimulation) => {
-    setInput(simulation.modular_input_snapshot);
+    const snapshotInput = simulation.modular_input_snapshot;
+    const snapshotDemand = salesPackageDemand(
+      snapshotInput.patientQuantity,
+      snapshotInput.expectedPatientQuantity12Months
+    );
+    const snapshotRecommended = catalog
+      ? recommendSalesPackageTier(catalog, snapshotDemand)
+      : null;
+    const snapshotTier = catalog?.items
+      .find((item) => item.itemKey === 'clinical_core')
+      ?.tiers.find((tier) => tier.id === snapshotInput.basePackageTierId);
+    const inferredMode = snapshotInput.basePackageSelectionMode ||
+      (snapshotRecommended?.id === snapshotInput.basePackageTierId
+        ? 'automatic'
+        : 'manual');
+    setInput({
+      ...snapshotInput,
+      basePackageSelectionMode: inferredMode,
+      customBasePackageLimit:
+        snapshotTier?.isCustom || snapshotTier?.maximumQuantity === null
+          ? snapshotInput.customBasePackageLimit ??
+            simulation.results_snapshot?.basePackage?.limitQuantity ??
+            snapshotDemand
+          : null
+    });
     setScenarioName(
       `Cópia de ${simulation.scenario_name || 'cenário modular'}`
     );
@@ -840,6 +904,15 @@ export const SalesModularProposalBuilder = ({
   const selectedBaseTier = coreItem?.tiers.find(
     (tier) => tier.id === input?.basePackageTierId
   );
+  const currentPackageDemand = input
+    ? salesPackageDemand(
+        input.patientQuantity,
+        input.expectedPatientQuantity12Months
+      )
+    : 1;
+  const recommendedBaseTier = catalog && input
+    ? recommendSalesPackageTier(catalog, currentPackageDemand)
+    : null;
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-slate-950/45 backdrop-blur-[2px]">
@@ -923,14 +996,14 @@ export const SalesModularProposalBuilder = ({
                     Previsão em 12 meses
                     <input
                       type="number"
-                      min={input.patientQuantity}
+                      min={1}
                       max={100000}
                       value={input.expectedPatientQuantity12Months}
                       onChange={(event) =>
                         updateInput({
                           expectedPatientQuantity12Months: Math.max(
-                            input.patientQuantity,
-                            Number(event.target.value)
+                            1,
+                            Math.min(100000, Number(event.target.value) || 1)
                           )
                         })
                       }
@@ -961,38 +1034,110 @@ export const SalesModularProposalBuilder = ({
                     </span>
                   </label>
                 </div>
-                {selectedBaseTier?.isCustom ? (
-                  <label className="mt-4 block max-w-sm text-sm font-medium text-slate-700">
-                    Valor mensal personalizado do pacote-base
-                    <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={
-                        Number(
-                          input.lines.find(
-                            (line) => line.itemKey === 'clinical_core'
-                          )?.customRecurringAmountCents || 0
-                        ) / 100
-                      }
-                      onChange={(event) =>
-                        updateLine('clinical_core', {
-                          customRecurringAmountCents: Math.round(
-                            Number(event.target.value) * 100
-                          )
-                        })
-                      }
-                      className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                    />
-                  </label>
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">
+                    {input.basePackageSelectionMode === 'manual'
+                      ? 'Seleção manual'
+                      : 'Seleção automática'}
+                  </span>
+                  <span className="text-slate-500">
+                    Demanda considerada: {currentPackageDemand} pacientes
+                  </span>
+                  {input.basePackageSelectionMode === 'manual' ? (
+                    <button
+                      type="button"
+                      onClick={useRecommendedBaseTier}
+                      className="min-h-9 rounded-lg border border-violet-200 bg-violet-50 px-3 font-medium text-violet-700 hover:bg-violet-100"
+                    >
+                      Usar faixa recomendada
+                    </button>
+                  ) : recommendedBaseTier ? (
+                    <span className="text-violet-700">
+                      Recomendada: {recommendedBaseTier.publicName}
+                    </span>
+                  ) : null}
+                </div>
+                {selectedBaseTier &&
+                (selectedBaseTier.isCustom ||
+                  selectedBaseTier.maximumQuantity === null) ? (
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <label className="text-sm font-medium text-slate-700">
+                      Limite contratado do pacote-base
+                      <input
+                        type="number"
+                        min={currentPackageDemand}
+                        max={100000}
+                        step={1}
+                        required
+                        value={input.customBasePackageLimit ?? ''}
+                        onChange={(event) =>
+                          updateInput({
+                            customBasePackageLimit:
+                              event.target.value === ''
+                                ? null
+                                : Math.max(
+                                    currentPackageDemand,
+                                    Math.min(
+                                      100000,
+                                      Math.trunc(Number(event.target.value) || 0)
+                                    )
+                                  )
+                          })
+                        }
+                        aria-describedby="custom-base-limit-help"
+                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                      />
+                      <span
+                        id="custom-base-limit-help"
+                        className="mt-1 block font-normal leading-5 text-slate-500"
+                      >
+                        Mínimo de {currentPackageDemand}; pode ser maior para reservar crescimento.
+                      </span>
+                    </label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Valor mensal personalizado do pacote-base
+                      <input
+                        type="number"
+                        min={0.01}
+                        step="0.01"
+                        required
+                        placeholder="0,00"
+                        value={
+                          Number(
+                            input.lines.find(
+                              (line) => line.itemKey === 'clinical_core'
+                            )?.customRecurringAmountCents || 0
+                          ) > 0
+                            ? Number(
+                                input.lines.find(
+                                  (line) => line.itemKey === 'clinical_core'
+                                )?.customRecurringAmountCents
+                              ) / 100
+                            : ''
+                        }
+                        onChange={(event) =>
+                          updateLine('clinical_core', {
+                            customRecurringAmountCents:
+                              event.target.value === ''
+                                ? null
+                                : Math.round(Number(event.target.value) * 100)
+                          })
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                      />
+                      <span className="mt-1 block font-normal leading-5 text-slate-500">
+                        Obrigatório para calcular e salvar a faixa personalizada.
+                      </span>
+                    </label>
+                  </div>
                 ) : null}
                 {selectedBaseTier?.maximumQuantity != null &&
-                input.patientQuantity > selectedBaseTier.maximumQuantity ? (
+                currentPackageDemand > selectedBaseTier.maximumQuantity ? (
                   <p className="mt-3 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
                     <AlertTriangle size={17} className="mt-0.5 shrink-0" />
                     O pacote escolhido comporta até{' '}
                     {selectedBaseTier.maximumQuantity} pacientes e não atende a
-                    quantidade informada.
+                    demanda informada.
                   </p>
                 ) : preview ? (
                   <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs text-emerald-900">
@@ -1134,8 +1279,8 @@ export const SalesModularProposalBuilder = ({
                     ],
                     [
                       'Limite comercial',
-                      selectedBaseTier?.maximumQuantity == null
-                        ? 'Personalizado'
+                       selectedBaseTier?.maximumQuantity == null
+                        ? `${input.customBasePackageLimit ?? 'Dados insuficientes'} pacientes`
                         : `${selectedBaseTier.maximumQuantity} pacientes`
                     ],
                     [

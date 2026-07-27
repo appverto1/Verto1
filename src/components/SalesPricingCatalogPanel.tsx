@@ -138,7 +138,7 @@ const profileLabels: Record<SalesModularProfile, string> = {
 
 const primaryUsageUnitByItem: Record<string, string> = {
   clinical_core: 'R$/sessão clínica',
-  appointments_communication: 'R$/consulta',
+  appointments_communication: 'R$/sessão',
   financial_management: 'R$/lançamento',
   insurance_tiss: 'R$/guia',
   school_management: 'R$/reunião escolar',

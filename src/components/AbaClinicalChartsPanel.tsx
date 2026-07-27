@@ -629,7 +629,7 @@ const maintenanceStatusLabel: Record<string, string> = {
   PENDING_NEXT_SESSION: 'Aguardando próxima sessão',
   PENDING_LINK: 'Aguardando vínculo',
   PENDING_SCHEDULING: 'Aguardando agendamento',
-  UNSCHEDULED: 'Sem consulta vinculada',
+  UNSCHEDULED: 'Sem sessão vinculada',
   DUE_TODAY: 'Sondagem para hoje',
   OVERDUE: 'Sondagem atrasada',
   IN_MAINTENANCE: 'Em manutenção',

@@ -79,7 +79,7 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     self.registration.showNotification(title, {
-      body: payload.body || `Você tem uma consulta agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
+      body: payload.body || `Você tem uma sessão agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
       ...(iconUrl ? { icon: iconUrl } : {}),
       ...(badgeUrl ? { badge: badgeUrl } : {}),
       tag: payload.tag || (appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined),

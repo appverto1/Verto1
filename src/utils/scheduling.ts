@@ -655,7 +655,7 @@ export function checkLocalScheduleConflicts(input: {
       ) {
         addConflict({
           conflictType: 'patient',
-          humanMessage: `${patientName || existingPatientName || 'Paciente'} ja possui consulta das ${existingStart} as ${existingEnd}.`,
+          humanMessage: `${patientName || existingPatientName || 'Paciente'} ja possui sessão das ${existingStart} as ${existingEnd}.`,
           blocking: true,
           date: dateKey,
           startTime: existingStart,
@@ -699,7 +699,7 @@ export function checkLocalScheduleConflicts(input: {
           'Profissional';
         addConflict({
           conflictType: existingProfessionalIds.length > 1 ? 'team' : 'professional',
-          humanMessage: `${professionalName} ja possui consulta das ${existingStart} as ${existingEnd}.`,
+          humanMessage: `${professionalName} ja possui sessão das ${existingStart} as ${existingEnd}.`,
           blocking: true,
           date: dateKey,
           startTime: existingStart,

@@ -72,7 +72,7 @@ export const ROLE_CAPABILITY_SECTIONS: RoleCapabilitySection[] = [
       {
         key: 'medical-records',
         label: 'Acesso a prontuários',
-        description: 'Consulta clínica detalhada com histórico do paciente.',
+        description: 'Visualização clínica detalhada com histórico do paciente.',
         coordinator: 'full',
         receptionist: 'none',
         therapist: 'full',
@@ -95,7 +95,7 @@ export const ROLE_CAPABILITY_SECTIONS: RoleCapabilitySection[] = [
       {
         key: 'protocol-library',
         label: 'Biblioteca de protocolos',
-        description: 'Consulta e manutenção de protocolos e materiais clínicos.',
+        description: 'Acesso e manutenção de protocolos e materiais clínicos.',
         coordinator: 'full',
         receptionist: 'none',
         therapist: 'limited',
@@ -126,7 +126,7 @@ export const ROLE_CAPABILITY_SECTIONS: RoleCapabilitySection[] = [
       {
         key: 'payment-proof',
         label: 'Comprovantes e histórico de pagamento',
-        description: 'Recebimento com anexo e consulta do histórico por data e método.',
+        description: 'Recebimento com anexo e visualização do histórico por data e método.',
         coordinator: 'full',
         receptionist: 'limited',
         therapist: 'none',

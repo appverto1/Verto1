@@ -210,7 +210,7 @@ export const buildPatientFinancialAppointmentRows = (params: {
         professionalId,
         patientName: pickPatientName(patientsById.get(patientId), item?.patient_name_snapshot || appointment?.patient_name || appointment?.patientName),
         professionalName: pickProfessionalLabel(professionalsById.get(professionalId), item?.professional_name_snapshot || appointment?.therapist_name || appointment?.therapistName),
-        serviceType: String(item?.service_type_snapshot || appointment?.service_type || appointment?.serviceType || appointment?.approach || 'Consulta'),
+        serviceType: String(item?.service_type_snapshot || appointment?.service_type || appointment?.serviceType || appointment?.approach || 'Sessão'),
         specialty: String(snapshot?.specialty_name || item?.specialty_snapshot || charge?.specialty || ''),
         payerId: String(snapshot?.payer_id || charge?.payer_id || ''),
         payerName: String(snapshot?.payer_name || charge?.payer_name || ''),

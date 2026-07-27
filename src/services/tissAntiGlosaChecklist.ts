@@ -208,7 +208,7 @@ const ISSUE_ACTIONS: Record<string, string> = {
   MISSING_CARD_NUMBER: "Corrija a carteirinha na aba Convênio e elegibilidade do paciente.",
   MISSING_AUTHORIZATION: "Abra Autorizações TISS do paciente e cadastre uma autorização vigente.",
   MISSING_AUTHORIZATION_PASSWORD: "Informe a senha/autorização na autorização TISS do paciente.",
-  MISSING_OPERATOR_GUIDE: "Informe o número da guia na autorização ou no pagador da consulta.",
+  MISSING_OPERATOR_GUIDE: "Informe o número da guia na autorização ou no pagador da sessão.",
   AUTHORIZATION_EXPIRED: "Atualize a validade ou cadastre uma nova autorização vigente.",
   AUTHORIZATION_NOT_STARTED: "Use uma autorização vigente na data da sessão.",
   AUTHORIZATION_INSUFFICIENT_BALANCE: "Atualize o saldo ou cadastre nova autorização antes do XML.",
