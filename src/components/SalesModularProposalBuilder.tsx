@@ -8,7 +8,9 @@ import {
   ExternalLink,
   GitCompareArrows,
   Layers3,
+  Link2,
   Loader2,
+  Mail,
   PackageCheck,
   Pencil,
   Save,
@@ -36,6 +38,11 @@ import {
   type SalesModularDriverValue,
   type SalesModularProfile
 } from '../utils/salesModularCostDrivers';
+import {
+  calculateCustomCapacity,
+  validateCustomCapacityPolicy,
+  type OfferItemDiscountType
+} from '../utils/salesCommercialEvolution';
 import type {
   SalesAssumptionSnapshot,
   SalesUsageProfile
@@ -184,6 +191,8 @@ export const SalesModularProposalBuilder = ({
   const [editingScenarioId, setEditingScenarioId] = useState('');
   const [editingScenarioName, setEditingScenarioName] = useState('');
   const [preparedOffer, setPreparedOffer] = useState<any>(null);
+  const [checkoutLink, setCheckoutLink] = useState<any>(null);
+  const [offerAccepted, setOfferAccepted] = useState(false);
 
   const authenticatedFetch = async (
     url: string,
@@ -282,8 +291,10 @@ export const SalesModularProposalBuilder = ({
           basePackageSelectionMode: 'automatic',
           customBasePackageLimit:
             recommendedTier.isCustom || recommendedTier.maximumQuantity === null
-              ? patientQuantity
+              ? 150
               : null,
+          customCapacityBlocks: null,
+          customCapacitySelectionMode: 'automatic',
           lines: [selectionForItem(core, patientQuantity, recommendedTier)],
           globalDiscountBasisPoints: 0,
           discountDurationMonths: 0,
@@ -293,6 +304,7 @@ export const SalesModularProposalBuilder = ({
           driverOverrides: {},
           internalNotes: '',
           publicNotes: ''
+          ,offerStartsAt: new Date().toISOString()
         };
         setCatalog(activeCatalog);
         setAssumptions(assumptionData.assumptionSet || null);
@@ -336,7 +348,7 @@ export const SalesModularProposalBuilder = ({
       (resolution.selectedTier.isCustom ||
         resolution.selectedTier.maximumQuantity === null) &&
       (!Number.isInteger(input.customBasePackageLimit) ||
-        Number(input.customBasePackageLimit) < resolution.demand);
+        Number(input.customBasePackageLimit) < 1);
     if (
       input.basePackageTierId === resolution.selectedTier.id &&
       currentMode === resolution.mode &&
@@ -356,13 +368,58 @@ export const SalesModularProposalBuilder = ({
       setNotice(
         `A faixa escolhida manualmente deixou de comportar a demanda de ${resolution.demand} pacientes. Aplicamos ${resolution.selectedTier.publicName}.`
       );
-    } else if (
-      customLimitNeedsInitialization &&
-      Number.isInteger(input.customBasePackageLimit) &&
-      Number(input.customBasePackageLimit) < resolution.demand
+    }
+  }, [catalog, input]);
+
+  useEffect(() => {
+    if (!catalog || !input) return;
+    const selectedTier = catalog.items
+      .find((item) => item.itemKey === 'clinical_core')
+      ?.tiers.find((tier) => tier.id === input.basePackageTierId);
+    if (!selectedTier || (!selectedTier.isCustom && selectedTier.maximumQuantity !== null)) {
+      return;
+    }
+    const coreLine = input.lines.find((line) => line.itemKey === 'clinical_core');
+    if (
+      !Number.isInteger(input.customBasePackageLimit) ||
+      Number(input.customBasePackageLimit) < 1 ||
+      !Number.isInteger(coreLine?.customRecurringAmountCents) ||
+      Number(coreLine?.customRecurringAmountCents) <= 0 ||
+      catalog.status !== 'active' ||
+      !validateCustomCapacityPolicy(catalog.customCapacityPolicy)
     ) {
+      return;
+    }
+    const capacity = calculateCustomCapacity(
+      {
+        currentPatients: input.patientQuantity,
+        expectedPatients: input.expectedPatientQuantity12Months,
+        baseLimitPatients: Number(input.customBasePackageLimit),
+        basePriceCents: Number(coreLine?.customRecurringAmountCents),
+        selection: {
+          mode: input.customCapacitySelectionMode === 'manual' ? 'manual' : 'automatic',
+          selectedBlocks: input.customCapacityBlocks
+        }
+      },
+      catalog.customCapacityPolicy
+    );
+    if (
+      input.customCapacityBlocks === capacity.selectedBlocks &&
+      input.customCapacitySelectionMode === capacity.selectionMode
+    ) {
+      return;
+    }
+    setInput((current) => current
+      ? {
+          ...current,
+          customCapacityBlocks: capacity.selectedBlocks,
+          customCapacitySelectionMode: capacity.selectionMode
+        }
+      : current);
+    setPreparedOffer(null);
+    if (capacity.manualOverrideRemoved) {
       setNotice(
-        `O limite contratado foi ajustado para ${resolution.demand} pacientes para acompanhar a nova demanda.`
+        `A reserva foi ajustada para ${capacity.selectedBlocks} bloco(s), o mínimo necessário para ${capacity.demandPatients} pacientes.`
       );
     }
   }, [catalog, input]);
@@ -379,7 +436,7 @@ export const SalesModularProposalBuilder = ({
   const aggressivePreview = useMemo(() => {
     if (!input || !catalog || !assumptions) return null;
     const aggressivePatients =
-      input.customBasePackageLimit ??
+      preview?.basePackage.limitQuantity ??
       catalog.items
         .find((item) => item.itemKey === 'clinical_core')
         ?.tiers.find((candidate) => candidate.id === input.basePackageTierId)
@@ -405,7 +462,7 @@ export const SalesModularProposalBuilder = ({
     } catch {
       return null;
     }
-  }, [assumptions, catalog, input]);
+  }, [assumptions, catalog, input, preview?.basePackage.limitQuantity]);
 
   const selectedSimulation = useMemo(
     () =>
@@ -433,7 +490,8 @@ export const SalesModularProposalBuilder = ({
       basePackage: {
         name: preview.basePackage.name,
         limitQuantity: preview.basePackage.limitQuantity,
-        includedStorageMb: preview.basePackage.includedStorageMb
+        includedStorageMb: preview.basePackage.includedStorageMb,
+        capacity: preview.basePackage.capacity
       },
       items: preview.lines.map((line) => ({
         itemKey: line.itemKey,
@@ -450,6 +508,7 @@ export const SalesModularProposalBuilder = ({
           line.postPromotionRecurringRevenueCents,
         oneTimeAmountCents: line.oneTimeRevenueCents,
         itemDiscountBasisPoints: line.itemDiscountBasisPoints,
+        offerDiscount: line.offerDiscount,
         publicMetadata: line.publicMetadata
       })),
       promotionalMonthlyAmountCents:
@@ -467,7 +526,8 @@ export const SalesModularProposalBuilder = ({
       ).toISOString(),
       status: 'preview',
       modularCheckoutEnabled: false,
-      stripeReady: false
+      stripeReady: false,
+      commercialPhases: preview.commercialPhases
     };
   }, [input, lead?.clinicName, lead?.name, preview, publicNotes, scenarioName]);
 
@@ -898,6 +958,129 @@ export const SalesModularProposalBuilder = ({
     }
   };
 
+  const activeOfferId =
+    preparedOffer?.offer?.id || selectedSimulation?.offer?.id || '';
+
+  useEffect(() => {
+    if (!activeOfferId) {
+      setCheckoutLink(null);
+      setOfferAccepted(false);
+      return;
+    }
+    let cancelled = false;
+    void authenticatedFetch(
+      `/api/owner/sales/offers/${encodeURIComponent(activeOfferId)}/modular-checkout`
+    ).then((data) => {
+      if (!cancelled) {
+        setCheckoutLink(data.links?.[0] || null);
+        setOfferAccepted(Boolean(data.acceptedAt));
+      }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [activeOfferId]);
+
+  const registerOfferAcceptance = async () => {
+    if (!activeOfferId) return;
+    const confirmed = window.confirm(
+      'Confirma que o cliente aceitou a proposta e declarou ciência dos valores promocionais e posteriores?'
+    );
+    if (!confirmed) return;
+    setBusy('offer-accept');
+    setError('');
+    try {
+      await authenticatedFetch(
+        `/api/owner/sales/offers/${encodeURIComponent(activeOfferId)}/accept`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ commercialValuesConsent: true })
+        }
+      );
+      setOfferAccepted(true);
+      setNotice('Aceite comercial registrado com ciência dos valores futuros.');
+    } catch (acceptError: any) {
+      setError(acceptError?.message || 'Não foi possível registrar o aceite.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const generateCheckoutLink = async (regenerate = false) => {
+    if (!activeOfferId) return;
+    setBusy(regenerate ? 'checkout-regenerate' : 'checkout-create');
+    setError('');
+    try {
+      const data = await authenticatedFetch(
+        `/api/owner/sales/offers/${encodeURIComponent(activeOfferId)}/modular-checkout`,
+        {
+          method: 'POST',
+          headers: { 'X-Idempotency-Key': requestKey('modular-checkout') },
+          body: JSON.stringify({ regenerate })
+        }
+      );
+      setCheckoutLink(data.link);
+      setNotice(
+        data.idempotent
+          ? 'Link ativo recuperado sem nova chamada à Stripe.'
+          : 'Link de pagamento de teste criado com os valores congelados.'
+      );
+    } catch (checkoutError: any) {
+      setError(checkoutError?.message || 'Não foi possível gerar o link de pagamento.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const expireCheckoutLink = async () => {
+    if (!activeOfferId || !checkoutLink?.id) return;
+    setBusy('checkout-expire');
+    try {
+      await authenticatedFetch(
+        `/api/owner/sales/offers/${encodeURIComponent(activeOfferId)}/modular-checkout/expire`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ linkId: checkoutLink.id })
+        }
+      );
+      setCheckoutLink((current: any) => current ? { ...current, status: 'expired' } : current);
+      setNotice('Link expirado. O histórico foi preservado.');
+    } catch (expireError: any) {
+      setError(expireError?.message || 'Não foi possível expirar o link.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const emailCheckoutLink = async () => {
+    if (!activeOfferId || !checkoutLink?.id) return;
+    setBusy('checkout-email');
+    try {
+      await authenticatedFetch(
+        `/api/owner/sales/offers/${encodeURIComponent(activeOfferId)}/modular-checkout/email`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ linkId: checkoutLink.id })
+        }
+      );
+      setCheckoutLink((current: any) => current ? { ...current, status: 'sent' } : current);
+      setNotice('Link enviado ao contato comercial, sem conteúdo clínico.');
+    } catch (emailError: any) {
+      setError(emailError?.message || 'Não foi possível enviar o link.');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const copyCheckoutLink = async () => {
+    const url = checkoutLink?.publicCheckoutUrl || checkoutLink?.checkout_url;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setNotice('Link copiado para a área de transferência.');
+    } catch {
+      setError('Não foi possível copiar automaticamente. Abra o Checkout e copie o endereço do navegador.');
+    }
+  };
+
   const coreItem = catalog?.items.find(
     (item) => item.itemKey === 'clinical_core'
   );
@@ -913,6 +1096,9 @@ export const SalesModularProposalBuilder = ({
   const recommendedBaseTier = catalog && input
     ? recommendSalesPackageTier(catalog, currentPackageDemand)
     : null;
+  const hasVersionedCustomCapacityPolicy =
+    catalog?.status === 'active' &&
+    validateCustomCapacityPolicy(catalog.customCapacityPolicy);
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-slate-950/45 backdrop-blur-[2px]">
@@ -1065,7 +1251,7 @@ export const SalesModularProposalBuilder = ({
                       Limite contratado do pacote-base
                       <input
                         type="number"
-                        min={currentPackageDemand}
+                        min={1}
                         max={100000}
                         step={1}
                         required
@@ -1076,7 +1262,7 @@ export const SalesModularProposalBuilder = ({
                               event.target.value === ''
                                 ? null
                                 : Math.max(
-                                    currentPackageDemand,
+                                    1,
                                     Math.min(
                                       100000,
                                       Math.trunc(Number(event.target.value) || 0)
@@ -1091,7 +1277,9 @@ export const SalesModularProposalBuilder = ({
                         id="custom-base-limit-help"
                         className="mt-1 block font-normal leading-5 text-slate-500"
                       >
-                        Mínimo de {currentPackageDemand}; pode ser maior para reservar crescimento.
+                        {hasVersionedCustomCapacityPolicy
+                          ? 'Capacidade incluída no preço-base. Blocos cobrem a demanda acima deste limite.'
+                          : 'Capacidade contratada congelada nesta proposta. Este catálogo não possui blocos versionados.'}
                       </span>
                     </label>
                     <label className="text-sm font-medium text-slate-700">
@@ -1129,6 +1317,79 @@ export const SalesModularProposalBuilder = ({
                         Obrigatório para calcular e salvar a faixa personalizada.
                       </span>
                     </label>
+                    {hasVersionedCustomCapacityPolicy ? (
+                    <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-3 sm:col-span-2">
+                      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,0.45fr)] sm:items-end">
+                        <div>
+                          <p className="text-sm font-medium text-slate-800">
+                            Blocos adicionais de capacidade
+                          </p>
+                          <p className="mt-1 text-xs font-normal leading-5 text-slate-600">
+                            Cada bloco reserva {catalog.customCapacityPolicy.blockSizePatients} pacientes e custa {currency(catalog.customCapacityPolicy.blockPriceCents)}/mês. O acesso clínico nunca é bloqueado.
+                          </p>
+                        </div>
+                        <label className="text-xs font-medium text-slate-700">
+                          Quantidade selecionada
+                          <input
+                            type="number"
+                            min={preview?.basePackage.capacity?.minimumBlocks ?? 0}
+                            max={10000}
+                            step={1}
+                            value={input.customCapacityBlocks ?? 0}
+                            onChange={(event) => updateInput({
+                              customCapacityBlocks: Math.max(
+                                preview?.basePackage.capacity?.minimumBlocks ?? 0,
+                                Math.trunc(Number(event.target.value) || 0)
+                              ),
+                              customCapacitySelectionMode: 'manual'
+                            })}
+                            className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                          />
+                        </label>
+                      </div>
+                      {preview?.basePackage.capacity ? (
+                        <dl className="mt-4 grid gap-px overflow-hidden rounded-xl border border-violet-100 bg-violet-100 text-xs sm:grid-cols-2 lg:grid-cols-4">
+                          {[
+                            ['Limite-base', `${preview.basePackage.capacity.baseLimitPatients} pacientes`],
+                            ['Preço-base', `${currency(preview.basePackage.capacity.basePriceCents)}/mês`],
+                            ['Tamanho do bloco', `${preview.basePackage.capacity.policy.blockSizePatients} pacientes`],
+                            ['Preço por bloco', `${currency(preview.basePackage.capacity.policy.blockPriceCents)}/mês`],
+                            ['Quantidade mínima', `${preview.basePackage.capacity.minimumBlocks}`],
+                            ['Quantidade selecionada', `${preview.basePackage.capacity.selectedBlocks}`],
+                            ['Capacidade adicionada', `${preview.basePackage.capacity.addedCapacityPatients} pacientes`],
+                            ['Limite total', `${preview.basePackage.capacity.totalContractedLimitPatients} pacientes`],
+                            ['Armazenamento incluído', `${preview.basePackage.capacity.includedStorageMb.toLocaleString('pt-BR')} MB`],
+                            ['Receita dos blocos', `${currency(preview.basePackage.capacity.blocksMonthlyRevenueCents)}/mês`],
+                            ['Mensalidade Verto Clínica', `${currency(preview.basePackage.capacity.clinicalCoreMonthlyRevenueCents)}/mês`],
+                            ['Ajuste de capacidade', `${preview.basePackage.capacity.policy.gracePeriodDays} dias · próximo ciclo`]
+                          ].map(([label, value]) => (
+                            <div key={label} className="bg-white/90 px-3 py-2.5">
+                              <dt className="font-normal text-slate-500">{label}</dt>
+                              <dd className="mt-0.5 font-medium text-slate-800">{value}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      ) : null}
+                      {input.customCapacitySelectionMode === 'manual' ? (
+                        <button
+                          type="button"
+                          onClick={() => updateInput({
+                            customCapacityBlocks: preview?.basePackage.capacity?.minimumBlocks ?? 0,
+                            customCapacitySelectionMode: 'automatic'
+                          })}
+                          className="mt-3 min-h-9 rounded-lg border border-violet-200 bg-white px-3 text-xs font-medium text-violet-700 hover:bg-violet-100"
+                        >
+                          Usar quantidade recomendada
+                        </button>
+                      ) : null}
+                    </div>
+                    ) : (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-normal leading-5 text-slate-600 sm:col-span-2">
+                        O catálogo selecionado não possui política versionada de
+                        blocos. O limite e o preço personalizados continuam
+                        válidos, sem acréscimo automático de capacidade.
+                      </div>
+                    )}
                   </div>
                 ) : null}
                 {selectedBaseTier?.maximumQuantity != null &&
@@ -1673,33 +1934,163 @@ export const SalesModularProposalBuilder = ({
                                     </label>
                                   </>
                                 ) : null}
-                                <label className="text-xs font-medium text-slate-600">
-                                  Desconto do item
-                                  <div className="relative mt-1">
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      max={100}
-                                      step="0.01"
-                                      value={
-                                        Number(
-                                          line.itemDiscountBasisPoints || 0
-                                        ) / 100
-                                      }
-                                      onChange={(event) =>
-                                        updateLine(item.itemKey, {
-                                          itemDiscountBasisPoints: Math.round(
-                                            Number(event.target.value) * 100
-                                          )
-                                        })
-                                      }
-                                      className="min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 pr-8 font-normal text-slate-800"
-                                    />
-                                    <span className="absolute right-3 top-2.5 text-slate-400">
-                                      %
-                                    </span>
+                                {enabled ? (
+                                  <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 sm:col-span-3 sm:grid-cols-4">
+                                    <label className="text-xs font-medium text-slate-600">
+                                      Tipo de benefício
+                                      <select
+                                        value={line.offerDiscount?.type || 'none'}
+                                        onChange={(event) => {
+                                          const type = event.target.value as OfferItemDiscountType | 'none';
+                                          if (type === 'none') {
+                                            updateLine(item.itemKey, {
+                                              offerDiscount: null,
+                                              itemDiscountBasisPoints: 0
+                                            });
+                                            return;
+                                          }
+                                          const normalPrice = item.billingInterval === 'one_time'
+                                            ? resultLine?.grossOneTimeRevenueCents || 0
+                                            : resultLine?.grossRecurringRevenueCents || 0;
+                                          updateLine(item.itemKey, {
+                                            itemDiscountBasisPoints: 0,
+                                            offerDiscount: {
+                                              type,
+                                              percentageBasisPoints: type === 'percentage' ? 1000 : undefined,
+                                              amountOffCents: type === 'fixed_amount' ? 0 : undefined,
+                                              startsAt: input.offerStartsAt || new Date().toISOString(),
+                                              endsAt: null,
+                                              durationCount: 6,
+                                              durationUnit: 'months',
+                                              priceBeforeDiscountCents: normalPrice,
+                                              discountedPriceCents: type === 'free' ? 0 : normalPrice,
+                                              priceAfterExpirationCents: normalPrice,
+                                              reason: 'Condição comercial temporária',
+                                              status: 'active'
+                                            }
+                                          });
+                                        }}
+                                        className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                      >
+                                        <option value="none">Sem desconto</option>
+                                        <option value="percentage">Percentual</option>
+                                        <option value="fixed_amount">Valor fixo</option>
+                                        <option value="free">Gratuito temporariamente</option>
+                                      </select>
+                                    </label>
+                                    {line.offerDiscount?.type === 'percentage' ? (
+                                      <label className="text-xs font-medium text-slate-600">
+                                        Desconto (%)
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          max={100}
+                                          step="0.01"
+                                          value={Number(line.offerDiscount.percentageBasisPoints || 0) / 100}
+                                          onChange={(event) => updateLine(item.itemKey, {
+                                            offerDiscount: {
+                                              ...line.offerDiscount!,
+                                              percentageBasisPoints: Math.round(Number(event.target.value) * 100)
+                                            }
+                                          })}
+                                          className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                        />
+                                      </label>
+                                    ) : line.offerDiscount?.type === 'fixed_amount' ? (
+                                      <label className="text-xs font-medium text-slate-600">
+                                        Valor do desconto
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          step="0.01"
+                                          value={Number(line.offerDiscount.amountOffCents || 0) / 100}
+                                          onChange={(event) => updateLine(item.itemKey, {
+                                            offerDiscount: {
+                                              ...line.offerDiscount!,
+                                              amountOffCents: Math.round(Number(event.target.value) * 100)
+                                            }
+                                          })}
+                                          className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                        />
+                                      </label>
+                                    ) : null}
+                                    {line.offerDiscount ? (
+                                      <>
+                                        <label className="text-xs font-medium text-slate-600">
+                                          Início
+                                          <input
+                                            type="date"
+                                            value={line.offerDiscount.startsAt.slice(0, 10)}
+                                            onChange={(event) => updateLine(item.itemKey, {
+                                              offerDiscount: {
+                                                ...line.offerDiscount!,
+                                                startsAt: `${event.target.value}T00:00:00.000Z`
+                                              }
+                                            })}
+                                            className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                          />
+                                        </label>
+                                        <label className="text-xs font-medium text-slate-600">
+                                          Duração (meses)
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            max={36}
+                                            value={line.offerDiscount.durationCount || 1}
+                                            onChange={(event) => updateLine(item.itemKey, {
+                                              offerDiscount: {
+                                                ...line.offerDiscount!,
+                                                endsAt: null,
+                                                durationCount: Math.max(1, Math.min(36, Math.trunc(Number(event.target.value) || 1))),
+                                                durationUnit: 'months'
+                                              }
+                                            })}
+                                            className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                          />
+                                        </label>
+                                        <label className="text-xs font-medium text-slate-600 sm:col-span-4">
+                                          Motivo
+                                          <input
+                                            value={line.offerDiscount.reason}
+                                            maxLength={300}
+                                            onChange={(event) => updateLine(item.itemKey, {
+                                              offerDiscount: {
+                                                ...line.offerDiscount!,
+                                                reason: event.target.value
+                                              }
+                                            })}
+                                            className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                          />
+                                        </label>
+                                        <label className="text-xs font-medium text-slate-600 sm:col-span-4">
+                                          Nota interna do benefício <span className="font-normal text-slate-400">(opcional)</span>
+                                          <input
+                                            value={line.offerDiscount.internalNotes || ''}
+                                            maxLength={500}
+                                            onChange={(event) => updateLine(item.itemKey, {
+                                              offerDiscount: {
+                                                ...line.offerDiscount!,
+                                                internalNotes: event.target.value
+                                              }
+                                            })}
+                                            className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                          />
+                                        </label>
+                                        {resultLine?.offerDiscount ? (
+                                          <dl className="grid gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 text-xs sm:col-span-4 sm:grid-cols-3 lg:grid-cols-4">
+                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Preço de tabela</dt><dd className="mt-0.5 font-medium text-slate-800">{currency(resultLine.offerDiscount.priceBeforeDiscountCents)}</dd></div>
+                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Durante o benefício</dt><dd className="mt-0.5 font-medium text-emerald-700">{currency(resultLine.offerDiscount.discountedPriceCents)}</dd></div>
+                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Depois</dt><dd className="mt-0.5 font-medium text-slate-800">{currency(resultLine.offerDiscount.priceAfterExpirationCents)}</dd></div>
+                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Encerramento</dt><dd className="mt-0.5 font-medium text-slate-800">{resultLine.offerDiscount.endsAt ? new Date(resultLine.offerDiscount.endsAt).toLocaleDateString('pt-BR') : 'Sem término'}</dd></div>
+                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Impacto mensal</dt><dd className="mt-0.5 font-medium text-amber-700">− {currency(resultLine.offerDiscount.priceBeforeDiscountCents - resultLine.offerDiscount.discountedPriceCents)}</dd></div>
+                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Impacto no primeiro ano</dt><dd className="mt-0.5 font-medium text-amber-700">− {currency((resultLine.offerDiscount.priceBeforeDiscountCents - resultLine.offerDiscount.discountedPriceCents) * Math.min(12, resultLine.offerDiscount.durationUnit === 'days' ? Math.ceil(Number(resultLine.offerDiscount.durationCount || 0) / 30) : Number(resultLine.offerDiscount.durationCount || 12)))}</dd></div>
+                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Margem promoção / depois</dt><dd className="mt-0.5 font-medium text-slate-800">{percent(resultLine.promotional.ebitdaMarginBasisPoints)} / {percent(resultLine.postPromotion.ebitdaMarginBasisPoints)}</dd></div>
+                                          </dl>
+                                        ) : null}
+                                      </>
+                                    ) : null}
                                   </div>
-                                </label>
+                                ) : null}
                               </div>
                             ) : null}
                             {enabled && resultLine ? (
@@ -1848,6 +2239,22 @@ export const SalesModularProposalBuilder = ({
                     />
                   </label>
                 </div>
+                {input.globalDiscountBasisPoints > 0 && input.lines.some((line) => Boolean(line.offerDiscount)) ? (
+                  <label className="mt-4 block rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-900">
+                    Empilhamento de descontos
+                    <span className="mt-1 block text-xs font-normal leading-5 text-amber-800">
+                      O desconto do módulo é aplicado primeiro; o desconto global incide depois sobre o saldo. Registre a autorização para continuar.
+                    </span>
+                    <textarea
+                      rows={2}
+                      maxLength={1000}
+                      value={input.discountStackingJustification || ''}
+                      onChange={(event) => updateInput({ discountStackingJustification: event.target.value })}
+                      className="mt-2 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 font-normal text-slate-900 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                      placeholder="Justificativa e responsável pela autorização"
+                    />
+                  </label>
+                ) : null}
                 <label className="mt-4 block text-sm font-medium text-slate-700">
                   Observação pública
                   <textarea
@@ -1999,6 +2406,46 @@ export const SalesModularProposalBuilder = ({
                       </dd>
                     </div>
                   </dl>
+                </section>
+              ) : null}
+
+              {preview?.commercialPhases?.length ? (
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                  <div>
+                    <p className="text-xs font-medium text-violet-700">Evolução da cobrança</p>
+                    <h2 className="mt-1 text-base font-semibold text-slate-900">Fases da proposta</h2>
+                    <p className="mt-1 text-sm font-normal text-slate-500">
+                      Cada mudança de benefício gera uma fase própria. O módulo continua ativo e retorna ao valor congelado ao final do desconto.
+                    </p>
+                  </div>
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    {preview.commercialPhases.map((phase) => (
+                      <article key={`${phase.phaseNumber}:${phase.startsAt}`} className="rounded-xl border border-slate-200 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-medium text-slate-900">Fase {phase.phaseNumber}</p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              {new Date(phase.startsAt).toLocaleDateString('pt-BR')} — {phase.endsAt ? new Date(phase.endsAt).toLocaleDateString('pt-BR') : 'condição permanente'}
+                            </p>
+                          </div>
+                          <p className="text-sm font-semibold text-slate-900">{currency(phase.invoiceAmountCents)}</p>
+                        </div>
+                        <div className="mt-3 space-y-1 border-t border-slate-100 pt-3 text-xs text-slate-600">
+                          {phase.lines.map((line) => (
+                            <div key={line.itemKey} className="flex justify-between gap-3">
+                              <span>{line.publicName}</span>
+                              <span className="shrink-0">{currency(line.activePriceCents)}{line.discount ? ` · benefício de ${currency(line.discountCents)}` : ''}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg bg-slate-50 p-2 text-xs">
+                          <span>Receita<br /><strong>{currency(phase.recurringRevenueCents)}</strong></span>
+                          <span>EBITDA<br /><strong>{currency(phase.ebitdaCents)}</strong></span>
+                          <span>Margem<br /><strong>{percent(phase.marginBasisPoints)}</strong></span>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 </section>
               ) : null}
 
@@ -2542,6 +2989,72 @@ export const SalesModularProposalBuilder = ({
                 >
                   <ExternalLink size={16} /> Abrir proposta pública
                 </a>
+              ) : null}
+              {activeOfferId ? (
+                <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium text-violet-700">Cobrança assistida</p>
+                      <h2 className="mt-1 text-sm font-semibold text-slate-900">Link de pagamento</h2>
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        Disponível somente após o aceite. Valores são reconstruídos do snapshot pelo backend e a validação começa em ambiente de teste.
+                      </p>
+                    </div>
+                    {checkoutLink ? (
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${checkoutLink.environment === 'test' ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>
+                        {checkoutLink.environment === 'test' ? 'Teste' : 'Produção'} · {checkoutLink.status}
+                      </span>
+                    ) : null}
+                  </div>
+                  {checkoutLink ? (
+                    <div className="mt-3 grid gap-2 rounded-xl bg-slate-50 p-3 text-xs text-slate-700 sm:grid-cols-2">
+                      <span>Inicial: {currency(checkoutLink.initial_amount_cents)}</span>
+                      <span>Promocional: {currency(checkoutLink.promotional_monthly_cents)}/mês</span>
+                      <span>Futura: {currency(checkoutLink.future_monthly_cents)}/mês</span>
+                      <span>Implantação: {currency(checkoutLink.one_time_cents)}</span>
+                      <span>Criado em: {new Date(checkoutLink.created_at).toLocaleString('pt-BR')}</span>
+                      <span>Expira em: {checkoutLink.expires_at ? new Date(checkoutLink.expires_at).toLocaleString('pt-BR') : 'sem data'}</span>
+                      <span>Cliente: {lead?.clinicName || lead?.name || 'não informado'}</span>
+                      <span>Última abertura: {checkoutLink.last_opened_at ? new Date(checkoutLink.last_opened_at).toLocaleString('pt-BR') : 'ainda não aberto'}</span>
+                      <span>Pagamento: {checkoutLink.payment_completed_at ? `confirmado em ${new Date(checkoutLink.payment_completed_at).toLocaleString('pt-BR')}` : 'aguardando confirmação'}</span>
+                      <span className="sm:col-span-2">Módulos: {(checkoutLink.checkout_plan_snapshot?.initialLineItems || []).map((item: any) => item.description).join(', ') || 'snapshot indisponível'}</span>
+                    </div>
+                  ) : null}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {!offerAccepted ? (
+                      <button type="button" onClick={() => void registerOfferAcceptance()} disabled={Boolean(busy)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 text-xs font-medium text-violet-800 disabled:opacity-50">
+                        <Check size={15} /> Registrar aceite comercial
+                      </button>
+                    ) : !checkoutLink || checkoutLink.status === 'expired' ? (
+                      <button type="button" onClick={() => void generateCheckoutLink(Boolean(checkoutLink))} disabled={Boolean(busy)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-violet-600 px-3 text-xs font-medium text-white disabled:opacity-50">
+                        {busy.startsWith('checkout-') ? <Loader2 size={15} className="animate-spin" /> : <Link2 size={15} />}
+                        {checkoutLink ? 'Gerar novo link' : 'Gerar link de pagamento'}
+                      </button>
+                    ) : checkoutLink.status === 'failed' ? (
+                      <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800">
+                        A assinatura já foi criada e a cobrança falhou. Regularize a fatura na Stripe; um novo Checkout não é gerado para evitar assinatura duplicada.
+                      </p>
+                    ) : (
+                      <>
+                        <button type="button" onClick={() => void copyCheckoutLink()} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700">
+                          <Copy size={15} /> Copiar link
+                        </button>
+                        <button type="button" onClick={() => void emailCheckoutLink()} disabled={Boolean(busy)} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 disabled:opacity-50">
+                          <Mail size={15} /> Enviar por e-mail
+                        </button>
+                        <a href={checkoutLink.publicCheckoutUrl || checkoutLink.checkout_url} target="_blank" rel="noreferrer" className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700">
+                          <ExternalLink size={15} /> Abrir Checkout
+                        </a>
+                        <button type="button" onClick={() => void expireCheckoutLink()} disabled={Boolean(busy)} className="min-h-10 rounded-xl border border-rose-200 bg-white px-3 text-xs font-medium text-rose-700 disabled:opacity-50">
+                          Expirar link
+                        </button>
+                        <button type="button" onClick={() => void generateCheckoutLink(true)} disabled={Boolean(busy)} className="min-h-10 rounded-xl border border-violet-200 bg-white px-3 text-xs font-medium text-violet-700 disabled:opacity-50">
+                          Gerar novo link
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </section>
               ) : null}
             </aside>
           </div>

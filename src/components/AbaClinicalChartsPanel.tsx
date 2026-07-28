@@ -48,6 +48,7 @@ import {
 } from '../utils/abaClinicalCharts';
 import { formatDisplayDate, formatDisplayDateTime } from '../utils/dateFormatting';
 import { formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
+import { aggregateAbaPointsBySpecialty } from '../utils/abaSpecialtyAnalytics';
 
 type AbaClinicalChartsPanelProps = {
   patientId: string;
@@ -87,6 +88,9 @@ type ChartPoint = {
   trialType?: string | null;
   date?: string;
   metadata?: Record<string, any>;
+  professionalId?: string | null;
+  specialty?: string | null;
+  specialtySource?: string | null;
 };
 
 type ChangeCategoryFilter = AbaClinicalChangeCategory | 'all';
@@ -913,6 +917,9 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const [detailSignificantOnly, setDetailSignificantOnly] = useState(false);
   const [collapsedChangeCategories, setCollapsedChangeCategories] = useState<Partial<Record<AbaClinicalChangeCategory, boolean>>>({});
   const [significantOnly, setSignificantOnly] = useState(false);
+  const [specialty, setSpecialty] = useState('');
+  const [professionalId, setProfessionalId] = useState('');
+  const [professionalNames, setProfessionalNames] = useState<Record<string, string>>({});
   const [filterOpen, setFilterOpen] = useState(false);
   const [dataByTab, setDataByTab] = useState<Record<string, any>>({});
   const [loadingTab, setLoadingTab] = useState('');
@@ -935,6 +942,8 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         targetId,
         behaviorId,
         metricType,
+        specialty,
+        professionalId,
         significantOnly,
         limit: 120
       });
@@ -959,6 +968,8 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         category: lineCategory,
         itemId: lineItemId,
         metric: lineMetric,
+        specialty,
+        professionalId,
         days: periodDays,
         groupBy: lineGroupBy,
         limit: 120
@@ -974,15 +985,28 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
 
   useEffect(() => {
     void loadChart('overview');
-  }, [patientId, periodDays, targetId, behaviorId, metricType, significantOnly]);
+  }, [patientId, periodDays, targetId, behaviorId, metricType, significantOnly, specialty, professionalId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void dataService.getPatientProfessionalLinks(patientId).then((response: any) => {
+      if (cancelled || response?.success === false) return;
+      const names = Object.fromEntries((response?.links || []).map((link: any) => [
+        String(link.professional_id || ''),
+        String(link.professional?.name || link.professional?.email || 'Profissional')
+      ]).filter(([id]: [string, string]) => Boolean(id)));
+      setProfessionalNames(names);
+    });
+    return () => { cancelled = true; };
+  }, [patientId]);
 
   useEffect(() => {
     if (activeTab !== 'overview') void loadChart(activeTab);
-  }, [activeTab, patientId, periodDays, targetId, behaviorId, metricType, significantOnly]);
+  }, [activeTab, patientId, periodDays, targetId, behaviorId, metricType, significantOnly, specialty, professionalId]);
 
   useEffect(() => {
     if (viewMode === 'line') void loadLineChart();
-  }, [viewMode, patientId, periodDays, lineCategory, lineItemId, lineMetric, lineGroupBy]);
+  }, [viewMode, patientId, periodDays, lineCategory, lineItemId, lineMetric, lineGroupBy, specialty, professionalId]);
 
   useEffect(() => {
     const options = ABA_CLINICAL_LINE_METRICS[lineCategory] || ABA_CLINICAL_LINE_METRICS.general;
@@ -1007,6 +1031,8 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const activePoints: ChartPoint[] = Array.isArray(activeData.points) ? activeData.points : [];
   const overviewPoints: ChartPoint[] = Array.isArray(overview.points) ? overview.points : [];
   const allKnownPoints = useMemo(() => [...overviewPoints, ...activePoints], [activePoints, overviewPoints]);
+  const specialtyOptions = useMemo(() => Array.from(new Set([specialty, ...allKnownPoints.map((point) => String(point.specialty || '').trim())].filter(Boolean))).sort((left, right) => left.localeCompare(right, 'pt-BR')), [allKnownPoints, specialty]);
+  const professionalOptions = useMemo(() => Array.from(new Set([professionalId, ...allKnownPoints.map((point) => String(point.professionalId || '').trim())].filter(Boolean))).sort(), [allKnownPoints, professionalId]);
 
   useEffect(() => {
     if (groupByTouched) return;
@@ -1076,6 +1102,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     if (activeTab === 'maintenance') return 'MAINTENANCE_STATUS';
     return metricType || '';
   }, [activePoints, activeTab, availableMetrics, metricType]);
+  const specialtyComparison = useMemo(() => aggregateAbaPointsBySpecialty(allKnownPoints).filter((row) => row.metricType === effectiveMetricType), [allKnownPoints, effectiveMetricType]);
 
   const focusedTargetId = useMemo(() => {
     if (targetId) return targetId;
@@ -1321,6 +1348,8 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     setTargetId('');
     setBehaviorId('');
     setMetricType('');
+    setSpecialty('');
+    setProfessionalId('');
     setSignificantOnly(false);
   };
 
@@ -1768,6 +1797,13 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       </div>
 
       <div className="hidden md:block">{viewMode === 'line' ? LineFilters : Filters}</div>
+
+      <div className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:grid-cols-2" data-aba-specialty-filters>
+        <label className="text-xs font-medium text-slate-500">Especialidade<select value={specialty} onChange={(event) => setSpecialty(event.target.value)} className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal text-slate-700 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"><option value="">Visão consolidada</option>{specialtyOptions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label className="text-xs font-medium text-slate-500">Profissional<select value={professionalId} onChange={(event) => setProfessionalId(event.target.value)} className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-normal text-slate-700 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"><option value="">Todos os profissionais</option>{professionalOptions.map((value) => <option key={value} value={value}>{professionalNames[value] || `Profissional ${value.slice(0, 8)}`}</option>)}</select></label>
+        <p className="text-xs leading-5 text-slate-500 sm:col-span-2">Os filtros usam a especialidade congelada no momento do registro. Dados antigos ambíguos permanecem como “Especialidade não informada”.</p>
+      </div>
+      {!specialty && specialtyComparison.length > 1 && <section className="rounded-xl border border-violet-100 bg-violet-50/40 p-3" data-aba-specialty-comparison><div className="flex items-center justify-between gap-3"><div><p className="text-xs font-medium text-violet-900">Comparação por especialidade</p><p className="mt-0.5 text-[11px] text-violet-700">Mesma métrica, agregada conforme sua natureza; o consolidado permanece preservado.</p></div></div><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{specialtyComparison.map((row) => <article key={`${row.specialty}:${row.metricType}`} className="rounded-xl border border-violet-100 bg-white p-3"><p className="truncate text-xs font-medium text-slate-800">{row.specialty}</p><p className="mt-1 text-lg font-semibold text-violet-700">{Math.round(row.value * 10) / 10}</p><p className="text-[10px] text-slate-500">{row.recordCount} registro(s) · {row.aggregation === 'sum' ? 'soma' : row.aggregation === 'latest' ? 'estado mais recente' : row.aggregation === 'weighted_average' ? 'média ponderada' : 'média'}</p></article>)}</div></section>}
 
       {filterOpen && (
         <div className="fixed inset-0 z-[140] flex items-end bg-black/30 p-3 md:hidden">

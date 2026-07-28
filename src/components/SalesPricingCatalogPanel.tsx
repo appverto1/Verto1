@@ -31,6 +31,11 @@ import {
   type SalesModularDriverValue,
   type SalesModularProfile
 } from '../utils/salesModularCostDrivers';
+import {
+  DEFAULT_CUSTOM_CAPACITY_POLICY,
+  validateCustomCapacityPolicy,
+  type CustomCapacityPolicy
+} from '../utils/salesCommercialEvolution';
 
 type CatalogVersion = {
   id: string;
@@ -196,6 +201,8 @@ export const SalesPricingCatalogPanel = () => {
   >(null);
   const [modularCostDraft, setModularCostDraft] =
     useState<SalesModularCostSettings | null>(null);
+  const [customCapacityPolicyDraft, setCustomCapacityPolicyDraft] =
+    useState<CustomCapacityPolicy | null>(null);
   const [publicationBlocks, setPublicationBlocks] = useState<
     SalesCatalogPublicationBlock[]
   >([]);
@@ -261,6 +268,15 @@ export const SalesPricingCatalogPanel = () => {
       loadedCatalog
         ? normalizeModularCostSettings(loadedCatalog.modularCostSettings)
         : null
+    );
+    setCustomCapacityPolicyDraft(
+      loadedCatalog?.status === 'draft'
+        ? validateCustomCapacityPolicy(loadedCatalog.customCapacityPolicy)
+          ? { ...loadedCatalog.customCapacityPolicy }
+          : { ...DEFAULT_CUSTOM_CAPACITY_POLICY }
+        : validateCustomCapacityPolicy(loadedCatalog?.customCapacityPolicy)
+          ? { ...loadedCatalog.customCapacityPolicy }
+          : null
     );
     const nextCosts: Record<string, Record<string, any>> = {};
     for (const item of loadedCatalog?.items || []) {
@@ -356,7 +372,7 @@ export const SalesPricingCatalogPanel = () => {
             name: `Catálogo comercial v${Math.max(
               1,
               ...versions.map((version) => version.version + 1)
-            )}`
+            )} — blocos de capacidade`
           })
         }
       );
@@ -700,6 +716,11 @@ export const SalesPricingCatalogPanel = () => {
           <span className="text-xs font-normal text-slate-500">
             {catalog.items.length} itens carregados em lote
           </span>
+          <span className="text-xs font-normal text-slate-500">
+            {catalog.hasVersionedCustomCapacityPolicy
+              ? 'Política de blocos versionada'
+              : 'Sem política de blocos nesta versão'}
+          </span>
         </div>
 
         {error ? (
@@ -743,12 +764,17 @@ export const SalesPricingCatalogPanel = () => {
                     {
                       name: draftName,
                       allocationSettings: allocationDraft,
-                      modularCostSettings: modularCostDraft
+                      modularCostSettings: modularCostDraft,
+                      customCapacityPolicy: customCapacityPolicyDraft
                     },
                     'version'
                   )
                 }
-                disabled={Boolean(busy) || draftName.trim().length < 2}
+                disabled={
+                  Boolean(busy) ||
+                  draftName.trim().length < 2 ||
+                  !validateCustomCapacityPolicy(customCapacityPolicyDraft)
+                }
                 className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 disabled:opacity-50"
               >
                 <Database size={16} /> Salvar versão
@@ -800,6 +826,167 @@ export const SalesPricingCatalogPanel = () => {
                 </div>
               </div>
             </div>
+          ) : null}
+          {customCapacityPolicyDraft ? (
+            <fieldset className="mt-4 border-t border-amber-200 pt-4">
+              <legend className="text-sm font-medium text-slate-800">
+                Blocos adicionais de capacidade
+              </legend>
+              <p className="mt-1 max-w-3xl text-xs font-normal leading-5 text-slate-600">
+                Esta política pertence somente ao novo rascunho. A versão ativa
+                permanece sem alterações até a publicação.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <label className="rounded-xl border border-slate-200 bg-white p-3 text-xs font-medium text-slate-700">
+                  <span className="flex items-center justify-between gap-3">
+                    Habilitar blocos
+                    <input
+                      type="checkbox"
+                      checked={customCapacityPolicyDraft.enabled}
+                      onChange={(event) =>
+                        setCustomCapacityPolicyDraft((current) =>
+                          current
+                            ? { ...current, enabled: event.target.checked }
+                            : current
+                        )
+                      }
+                      className="h-5 w-5 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                    />
+                  </span>
+                  <span className="mt-2 block font-normal leading-5 text-slate-500">
+                    Controla a oferta comercial de capacidade adicional.
+                  </span>
+                </label>
+                <label className="text-xs font-medium text-slate-700">
+                  Pacientes por bloco
+                  <span className="mt-1 flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
+                    <input
+                      type="number"
+                      min={1}
+                      max={10000}
+                      step={1}
+                      value={customCapacityPolicyDraft.blockSizePatients}
+                      onChange={(event) =>
+                        setCustomCapacityPolicyDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                blockSizePatients: Math.trunc(
+                                  Number(event.target.value)
+                                )
+                              }
+                            : current
+                        )
+                      }
+                      className="min-w-0 flex-1 bg-transparent font-normal outline-none"
+                    />
+                    <span className="text-slate-400">pacientes</span>
+                  </span>
+                </label>
+                <label className="text-xs font-medium text-slate-700">
+                  Preço mensal por bloco
+                  <span className="mt-1 flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
+                    <span className="mr-2 text-slate-400">R$</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={10000000}
+                      step="0.01"
+                      value={customCapacityPolicyDraft.blockPriceCents / 100}
+                      onChange={(event) =>
+                        setCustomCapacityPolicyDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                blockPriceCents: Math.round(
+                                  Number(event.target.value) * 100
+                                )
+                              }
+                            : current
+                        )
+                      }
+                      className="min-w-0 flex-1 bg-transparent font-normal outline-none"
+                    />
+                    <span className="text-slate-400">/mês</span>
+                  </span>
+                </label>
+                <label className="text-xs font-medium text-slate-700">
+                  Armazenamento por paciente
+                  <span className="mt-1 flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000000}
+                      step={1}
+                      value={
+                        customCapacityPolicyDraft.includedStorageMbPerPatient
+                      }
+                      onChange={(event) =>
+                        setCustomCapacityPolicyDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                includedStorageMbPerPatient: Math.trunc(
+                                  Number(event.target.value)
+                                )
+                              }
+                            : current
+                        )
+                      }
+                      className="min-w-0 flex-1 bg-transparent font-normal outline-none"
+                    />
+                    <span className="text-slate-400">MB</span>
+                  </span>
+                </label>
+                <label className="text-xs font-medium text-slate-700">
+                  Tolerância após exceder
+                  <span className="mt-1 flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
+                    <input
+                      type="number"
+                      min={0}
+                      max={365}
+                      step={1}
+                      value={customCapacityPolicyDraft.gracePeriodDays}
+                      onChange={(event) =>
+                        setCustomCapacityPolicyDraft((current) =>
+                          current
+                            ? {
+                                ...current,
+                                gracePeriodDays: Math.trunc(
+                                  Number(event.target.value)
+                                )
+                              }
+                            : current
+                        )
+                      }
+                      className="min-w-0 flex-1 bg-transparent font-normal outline-none"
+                    />
+                    <span className="text-slate-400">dias</span>
+                  </span>
+                </label>
+                <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs">
+                  <p className="font-medium text-slate-700">Ajuste comercial</p>
+                  <p className="mt-2 font-normal leading-5 text-slate-500">
+                    Aplicado no próximo ciclo de cobrança.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-xs sm:col-span-2">
+                  <p className="font-medium text-emerald-900">
+                    Acesso clínico preservado
+                  </p>
+                  <p className="mt-2 font-normal leading-5 text-emerald-800">
+                    A política é fixa em não bloquear cadastro, prontuário,
+                    agenda, Sessão ou atendimento.
+                  </p>
+                </div>
+              </div>
+              {!validateCustomCapacityPolicy(customCapacityPolicyDraft) ? (
+                <p role="alert" className="mt-3 text-xs text-rose-700">
+                  Revise os valores da política. O tamanho do bloco e o
+                  armazenamento devem ser maiores que zero.
+                </p>
+              ) : null}
+            </fieldset>
           ) : null}
           {allocationDraft ? (
             <fieldset className="mt-4">

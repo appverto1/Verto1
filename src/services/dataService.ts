@@ -4223,6 +4223,69 @@ export const dataService = {
     }
   },
 
+  async createPatientTherapeuticPlanScope(patientId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'createPatientTherapeuticPlanScope',
+        operation: 'write',
+        table: 'patient_therapeutic_plans,patient_professional_links',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível criar o escopo do Plano terapêutico.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível criar o escopo do Plano terapêutico.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async getPatientProfessionalLinks(patientId: string) {
+    const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/professional-links`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPatientProfessionalLinks',
+        operation: 'list',
+        table: 'patient_professional_links,users',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalTextRecord(await safeJson(response));
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar os profissionais vinculados.');
+      return { success: false, links: [], error: message, message };
+    }
+  },
+
+  async updatePatientTherapeuticPlanScope(patientId: string, planId: string, payload: any = {}) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'updatePatientTherapeuticPlanScope',
+        operation: 'write',
+        table: 'patient_therapeutic_plans,patient_therapeutic_plan_versions,patient_professional_links',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível atualizar o escopo do Plano terapêutico.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar o escopo do Plano terapêutico.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async createTherapeuticProgram(patientId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-programs`;
@@ -4981,6 +5044,8 @@ export const dataService = {
       targetId: options.targetId,
       behaviorId: options.behaviorId,
       metricType: options.metricType,
+      specialty: options.specialty,
+      professionalId: options.professionalId,
       significantOnly: options.significantOnly,
       limit
     });
@@ -5005,6 +5070,8 @@ export const dataService = {
       category: options.category,
       itemId: options.itemId,
       metric: options.metric,
+      specialty: options.specialty,
+      professionalId: options.professionalId,
       period: options.period,
       days: options.days,
       groupBy: options.groupBy,

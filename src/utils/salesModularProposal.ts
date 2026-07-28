@@ -21,6 +21,19 @@ import {
   type SalesModularDriverValue,
   type SalesModularProfile
 } from './salesModularCostDrivers';
+import {
+  addCommercialDuration,
+  buildOfferCommercialPhases,
+  calculateCustomCapacity,
+  discountAppliesAt,
+  normalizeOfferItemDiscount,
+  validateCustomCapacityPolicy,
+  validateDiscountStacking,
+  type CustomCapacityPolicy,
+  type CustomCapacitySnapshot,
+  type OfferCommercialPhase,
+  type OfferItemDiscount
+} from './salesCommercialEvolution';
 
 export type SalesPricingMode =
   | 'package_limit'
@@ -115,6 +128,8 @@ export type SalesPricingCatalogSnapshot = {
     belowEbitda: SalesSharedAllocationMethod;
   };
   modularCostSettings: SalesModularCostSettings;
+  customCapacityPolicy: CustomCapacityPolicy | null;
+  hasVersionedCustomCapacityPolicy: boolean;
   items: SalesPricingCatalogItem[];
 };
 
@@ -125,6 +140,7 @@ export type SalesModularLineSelection = {
   itemDiscountBasisPoints?: number;
   customRecurringAmountCents?: number | null;
   customOneTimeAmountCents?: number | null;
+  offerDiscount?: OfferItemDiscount | null;
 };
 
 export type SalesModularProposalInput = {
@@ -133,6 +149,8 @@ export type SalesModularProposalInput = {
   basePackageTierId: string;
   basePackageSelectionMode?: 'automatic' | 'manual';
   customBasePackageLimit?: number | null;
+  customCapacityBlocks?: number | null;
+  customCapacitySelectionMode?: 'automatic' | 'manual';
   lines: SalesModularLineSelection[];
   globalDiscountBasisPoints: number;
   discountDurationMonths: number;
@@ -142,6 +160,8 @@ export type SalesModularProposalInput = {
   driverOverrides?: SalesModularDriverOverrides;
   internalNotes?: string;
   publicNotes?: string;
+  offerStartsAt?: string;
+  discountStackingJustification?: string;
 };
 
 export type SalesModularDirectCostBreakdown = {
@@ -188,6 +208,7 @@ export type SalesModularProposalLineResult = {
   grossRecurringRevenueCents: number;
   grossOneTimeRevenueCents: number;
   itemDiscountBasisPoints: number;
+  offerDiscount: OfferItemDiscount | null;
   itemDiscountCents: number;
   oneTimeDiscountCents: number;
   allocatedGlobalDiscountCents: number;
@@ -241,6 +262,7 @@ export type SalesModularProposalResult = {
     includedStorageMb: number | null;
     occupiedQuantity: number;
     availableQuantity: number | null;
+    capacity: CustomCapacitySnapshot | null;
   };
   lines: SalesModularProposalLineResult[];
   promotional: SalesModularConsolidatedPeriod;
@@ -288,9 +310,10 @@ export type SalesModularProposalResult = {
     netIncomeCents: number | null;
     discountImpactCents: number;
   }>;
+  commercialPhases: OfferCommercialPhase[];
 };
 
-export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-27-v3';
+export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-28-v4';
 
 const integer = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
@@ -451,18 +474,23 @@ export function applySalesPackageTierSelection(
     input.expectedPatientQuantity12Months
   );
   const customBasePackageLimit = tier.isCustom || tier.maximumQuantity === null
-    ? Math.max(
-        demand,
-        Number.isInteger(input.customBasePackageLimit)
-          ? Number(input.customBasePackageLimit)
-          : demand
-      )
+    ? Number.isInteger(input.customBasePackageLimit)
+      ? Number(input.customBasePackageLimit)
+      : 150
     : null;
   return {
     ...input,
     basePackageTierId: tier.id,
     basePackageSelectionMode: mode,
     customBasePackageLimit,
+    customCapacityBlocks:
+      tier.isCustom || tier.maximumQuantity === null
+        ? input.customCapacityBlocks ?? null
+        : null,
+    customCapacitySelectionMode:
+      tier.isCustom || tier.maximumQuantity === null
+        ? input.customCapacitySelectionMode || 'automatic'
+        : 'automatic',
     lines: input.lines.map((line) =>
       line.itemKey === 'clinical_core'
         ? {
@@ -508,6 +536,21 @@ export function validateSalesModularProposalInput(
       input.customBasePackageLimit > 100_000)
   ) {
     errors.push('customBasePackageLimit');
+  }
+  if (
+    input.customCapacityBlocks !== undefined &&
+    input.customCapacityBlocks !== null &&
+    (!Number.isInteger(input.customCapacityBlocks) ||
+      input.customCapacityBlocks < 0 ||
+      input.customCapacityBlocks > 10_000)
+  ) {
+    errors.push('customCapacityBlocks');
+  }
+  if (
+    input.customCapacitySelectionMode !== undefined &&
+    !['automatic', 'manual'].includes(input.customCapacitySelectionMode)
+  ) {
+    errors.push('customCapacitySelectionMode');
   }
   if (
     !Number.isInteger(input.globalDiscountBasisPoints) ||
@@ -566,6 +609,13 @@ export function validateSalesModularProposalInput(
       ) {
         errors.push(`lines.${index}.itemDiscountBasisPoints`);
       }
+      if (line.offerDiscount) {
+        try {
+          normalizeOfferItemDiscount(line.offerDiscount);
+        } catch {
+          errors.push(`lines.${index}.offerDiscount`);
+        }
+      }
       for (const [field, amount] of [
         ['customRecurringAmountCents', line.customRecurringAmountCents],
         ['customOneTimeAmountCents', line.customOneTimeAmountCents]
@@ -579,6 +629,15 @@ export function validateSalesModularProposalInput(
         }
       }
     });
+  }
+  try {
+    validateDiscountStacking({
+      globalDiscountBasisPoints: input.globalDiscountBasisPoints,
+      itemDiscounts: input.lines?.map((line) => line.offerDiscount),
+      justification: input.discountStackingJustification
+    });
+  } catch {
+    errors.push('discountStackingJustification');
   }
   if (
     input.driverOverrides !== undefined &&
@@ -1648,6 +1707,7 @@ export function calculateSalesModularProposal(
   const costSettings = normalizeModularCostSettings(
     catalog.modularCostSettings
   );
+  const commercialStartsAt = input.offerStartsAt || assumptionSnapshot.effectiveAt;
 
   const itemsByKey = new Map(
     catalog.items
@@ -1665,25 +1725,6 @@ export function calculateSalesModularProposal(
     input.expectedPatientQuantity12Months
   );
   const isCustomBaseTier = baseTier.isCustom || baseTier.maximumQuantity === null;
-  const basePackageContractedLimit = isCustomBaseTier
-    ? input.customBasePackageLimit
-    : baseTier.maximumQuantity;
-  if (
-    basePackageContractedLimit === null ||
-    basePackageContractedLimit === undefined ||
-    !Number.isInteger(basePackageContractedLimit) ||
-    basePackageContractedLimit < demand ||
-    basePackageContractedLimit > 100_000
-  ) {
-    throw new Error('PROPOSAL_SIMULATION_INVALID:customBasePackageLimit');
-  }
-  if (
-    !isCustomBaseTier &&
-    demand > basePackageContractedLimit
-  ) {
-    throw new Error('PRICING_PACKAGE_LIMIT_EXCEEDED');
-  }
-
   const selections = [...input.lines];
   const coreSelections = selections.filter(
     (selection) => selection.itemKey === 'clinical_core'
@@ -1697,6 +1738,54 @@ export function calculateSalesModularProposal(
       Number(coreSelections[0].customRecurringAmountCents) <= 0)
   ) {
     throw new Error('PROPOSAL_SIMULATION_INVALID:customRecurringAmountCents');
+  }
+  if (
+    isCustomBaseTier &&
+    (!Number.isInteger(input.customBasePackageLimit) ||
+      Number(input.customBasePackageLimit) < 1)
+  ) {
+    throw new Error('PROPOSAL_SIMULATION_INVALID:customBasePackageLimit');
+  }
+  const hasVersionedCustomCapacityPolicy =
+    catalog.status === 'active' &&
+    validateCustomCapacityPolicy(catalog.customCapacityPolicy);
+  const customCapacityPolicy = hasVersionedCustomCapacityPolicy
+    ? catalog.customCapacityPolicy
+    : null;
+  const capacity = isCustomBaseTier && customCapacityPolicy
+    ? calculateCustomCapacity(
+        {
+          currentPatients: input.patientQuantity,
+          expectedPatients: input.expectedPatientQuantity12Months,
+          baseLimitPatients: Number(input.customBasePackageLimit),
+          basePriceCents: Number(coreSelections[0].customRecurringAmountCents),
+          selection: {
+            mode:
+              input.customCapacitySelectionMode === 'manual'
+                ? 'manual'
+                : 'automatic',
+            selectedBlocks: input.customCapacityBlocks
+          }
+        },
+        customCapacityPolicy
+      )
+    : null;
+  const basePackageContractedLimit = capacity
+    ? capacity.totalContractedLimitPatients
+    : isCustomBaseTier
+      ? input.customBasePackageLimit
+      : baseTier.maximumQuantity;
+  if (
+    basePackageContractedLimit === null ||
+    basePackageContractedLimit === undefined ||
+    !Number.isInteger(basePackageContractedLimit) ||
+    basePackageContractedLimit < demand ||
+    basePackageContractedLimit > 100_000
+  ) {
+    throw new Error('PROPOSAL_SIMULATION_INVALID:customBasePackageLimit');
+  }
+  if (!isCustomBaseTier && demand > basePackageContractedLimit) {
+    throw new Error('PRICING_PACKAGE_LIMIT_EXCEEDED');
   }
   coreSelections[0] = {
     ...coreSelections[0],
@@ -1737,27 +1826,66 @@ export function calculateSalesModularProposal(
     ) {
       throw new Error(`PRICING_PACKAGE_LIMIT_EXCEEDED:${item.itemKey}`);
     }
-    const amounts = resolveGrossAmounts(item, tier, effectiveSelection);
+    const resolvedAmounts = resolveGrossAmounts(item, tier, effectiveSelection);
+    const amounts = {
+      ...resolvedAmounts,
+      recurringAmountCents:
+        item.itemKey === 'clinical_core' && capacity
+          ? capacity.clinicalCoreMonthlyRevenueCents
+          : resolvedAmounts.recurringAmountCents
+    };
     if (
       item.billingInterval !== 'one_time' &&
       amounts.recurringAmountCents <= 0
     ) {
       throw new Error(`PRICING_TIER_NOT_FOUND:${item.itemKey}`);
     }
-    const discountBasisPoints = nonNegativeInteger(
+    const offerDiscount = effectiveSelection.offerDiscount
+      ? normalizeOfferItemDiscount({
+          ...effectiveSelection.offerDiscount,
+          priceBeforeDiscountCents:
+            item.billingInterval === 'one_time'
+              ? amounts.oneTimeAmountCents
+              : item.itemKey === 'clinical_core' && capacity
+              ? capacity.basePriceCents
+              : amounts.recurringAmountCents,
+          priceAfterExpirationCents:
+            item.billingInterval === 'one_time'
+              ? amounts.oneTimeAmountCents
+              : item.itemKey === 'clinical_core' && capacity
+              ? capacity.basePriceCents
+              : amounts.recurringAmountCents
+        })
+      : null;
+    const legacyDiscountBasisPoints = nonNegativeInteger(
       effectiveSelection.itemDiscountBasisPoints
     );
+    const discountBasisPoints = offerDiscount
+      ? offerDiscount.priceBeforeDiscountCents > 0
+        ? Math.round(
+            ((offerDiscount.priceBeforeDiscountCents -
+              offerDiscount.discountedPriceCents) *
+              10_000) /
+              offerDiscount.priceBeforeDiscountCents
+          )
+        : 0
+      : legacyDiscountBasisPoints;
     if (discountBasisPoints > 10_000) {
       throw new Error(`PRICING_INVALID_DISCOUNT:${item.itemKey}`);
     }
-    const itemDiscountCents = multiplyBasisPoints(
-      amounts.recurringAmountCents,
-      discountBasisPoints
-    );
-    const oneTimeDiscountCents = multiplyBasisPoints(
-      amounts.oneTimeAmountCents,
-      discountBasisPoints
-    );
+    const offerDiscountAppliesInitially = offerDiscount
+      ? discountAppliesAt(offerDiscount, commercialStartsAt)
+      : false;
+    const itemDiscountCents = offerDiscount
+      ? offerDiscountAppliesInitially && item.billingInterval !== 'one_time'
+        ? offerDiscount.priceBeforeDiscountCents - offerDiscount.discountedPriceCents
+        : 0
+      : multiplyBasisPoints(amounts.recurringAmountCents, discountBasisPoints);
+    const oneTimeDiscountCents = offerDiscount
+      ? offerDiscountAppliesInitially && item.billingInterval === 'one_time'
+        ? offerDiscount.priceBeforeDiscountCents - offerDiscount.discountedPriceCents
+        : 0
+      : multiplyBasisPoints(amounts.oneTimeAmountCents, discountBasisPoints);
     const costResolution = directMonthlyCost(
       item,
       tier,
@@ -1774,10 +1902,15 @@ export function calculateSalesModularProposal(
       grossRecurringRevenueCents: amounts.recurringAmountCents,
       grossOneTimeRevenueCents: amounts.oneTimeAmountCents,
       itemDiscountBasisPoints: discountBasisPoints,
+      offerDiscount,
       itemDiscountCents,
       oneTimeDiscountCents,
-      postPromotionRecurringRevenueCents:
+      promotionalItemRevenueCents:
         amounts.recurringAmountCents - itemDiscountCents,
+      postPromotionRecurringRevenueCents:
+        offerDiscount
+          ? amounts.recurringAmountCents
+          : amounts.recurringAmountCents - itemDiscountCents,
       oneTimeRevenueCents:
         amounts.oneTimeAmountCents - oneTimeDiscountCents,
       directCostCents: costResolution.monthlyCostCents,
@@ -1791,7 +1924,7 @@ export function calculateSalesModularProposal(
     resolved.findIndex((line) => line.item.itemKey === 'clinical_core')
   );
   const globalDiscountBase = resolved.reduce(
-    (sum, line) => sum + line.postPromotionRecurringRevenueCents,
+    (sum, line) => sum + line.promotionalItemRevenueCents,
     0
   );
   const globalDiscountTotal = multiplyBasisPoints(
@@ -1800,7 +1933,7 @@ export function calculateSalesModularProposal(
   );
   const globalAllocations = allocateSalesCents(
     globalDiscountTotal,
-    resolved.map((line) => line.postPromotionRecurringRevenueCents),
+    resolved.map((line) => line.promotionalItemRevenueCents),
     baseIndex
   );
   const values = resolveProfileAssumptions(
@@ -1838,7 +1971,7 @@ export function calculateSalesModularProposal(
     resolved.map((line, index) => ({
       itemKey: line.item.itemKey,
       netRevenueCents:
-        line.postPromotionRecurringRevenueCents -
+        line.promotionalItemRevenueCents -
         globalAllocations[index],
       grossRevenueCents: line.grossRecurringRevenueCents,
       directCostCents: line.directCostCents,
@@ -1994,6 +2127,7 @@ export function calculateSalesModularProposal(
         grossRecurringRevenueCents: line.grossRecurringRevenueCents,
         grossOneTimeRevenueCents: line.grossOneTimeRevenueCents,
         itemDiscountBasisPoints: line.itemDiscountBasisPoints,
+        offerDiscount: line.offerDiscount,
         itemDiscountCents: line.itemDiscountCents,
         oneTimeDiscountCents: line.oneTimeDiscountCents,
         allocatedGlobalDiscountCents: globalAllocations[index],
@@ -2031,6 +2165,7 @@ export function calculateSalesModularProposal(
               ),
         warnings,
         publicMetadata: {
+          offerDiscount: line.offerDiscount,
           tierName: line.tier?.publicName || null,
           unitName: line.item.unitName,
           includedQuantity:
@@ -2085,17 +2220,6 @@ export function calculateSalesModularProposal(
   const ratingMargin =
     promotionalPeriod.consolidated.ebitdaMarginBasisPoints ??
     promotionalPeriod.consolidated.contributionMarginBasisPoints;
-  const rating: OfferProfitabilityRating =
-    missingCosts.length > 0 ||
-    ratingMargin === null ||
-    values.healthyMarginBasisPoints === null ||
-    values.attentionMarginBasisPoints === null
-      ? 'insufficient_data'
-      : ratingMargin >= values.healthyMarginBasisPoints
-        ? 'healthy'
-        : ratingMargin >= values.attentionMarginBasisPoints
-          ? 'attention'
-          : 'not_recommended';
   const requiresJustification =
     ratingMargin !== null &&
     values.minimumMarginBasisPoints !== null &&
@@ -2287,6 +2411,106 @@ export function calculateSalesModularProposal(
     );
   }
 
+  const initialCommercialPhases = buildOfferCommercialPhases({
+    startsAt: commercialStartsAt,
+    globalDiscountBasisPoints: input.globalDiscountBasisPoints,
+    globalDiscountBaseItemKey: 'clinical_core',
+    globalDiscountStartsAt: input.globalDiscountBasisPoints > 0 ? commercialStartsAt : null,
+    globalDiscountEndsAt:
+      input.globalDiscountBasisPoints > 0 && input.discountDurationMonths > 0
+        ? addCommercialDuration(commercialStartsAt, input.discountDurationMonths, 'months')
+        : null,
+    lines: lines.map((line) => ({
+      itemKey: line.itemKey,
+      publicName: line.publicName,
+      billingInterval:
+        line.pricingMode === 'one_time' ? 'one_time' : 'monthly',
+      normalPriceCents:
+        line.pricingMode === 'one_time'
+          ? line.grossOneTimeRevenueCents
+          : line.grossRecurringRevenueCents,
+      directCostCents:
+        line.pricingMode === 'one_time'
+          ? line.oneTimeDirectCostCents
+          : line.promotional.directCostCents,
+      discount: line.offerDiscount
+    }))
+  });
+  const commercialPhases = initialCommercialPhases.map((phase) => {
+    const recalculated = calculatePeriod(
+      resolved.map((line, index) => {
+        const isRecurring = line.item.billingInterval !== 'one_time';
+        return {
+          itemKey: line.item.itemKey,
+          netRevenueCents: isRecurring
+            ? phase.lines[index].activePriceCents
+            : 0,
+          grossRevenueCents: isRecurring
+            ? line.grossRecurringRevenueCents
+            : 0,
+          directCostCents: isRecurring ? line.directCostCents : 0,
+          directCostBreakdown: line.costResolution.breakdown,
+          weight: isRecurring
+            ? line.item.costModel?.sharedCostAllocationWeight || 0
+            : 0,
+          isBase: line.item.itemKey === 'clinical_core'
+        };
+      }),
+      values,
+      allocationSettings,
+      input.expectedPatientQuantity12Months,
+      costSettings
+    );
+    return {
+      ...phase,
+      lines: phase.lines.map((line, index) => ({
+        ...line,
+        directCostCents:
+          line.billingInterval === 'one_time'
+            ? line.directCostCents
+            : nullableSum([
+                recalculated.lines[index].directCostCents,
+                recalculated.lines[index].transactionAndTaxCostAllocatedCents,
+                recalculated.lines[index].sharedPlatformCostAllocatedCents
+              ])
+      })),
+      recurringCostCents: recalculated.consolidated.totalEstimatedCostCents,
+      contributionCents: recalculated.consolidated.contributionMarginCents,
+      ebitdaCents: recalculated.consolidated.ebitdaCents,
+      marginBasisPoints: recalculated.consolidated.ebitdaMarginBasisPoints
+    };
+  });
+  const phaseMargins = commercialPhases.map((phase) => phase.marginBasisPoints);
+  const allPhaseMarginsKnown = phaseMargins.every((margin) => margin !== null);
+  const minimumPhaseMargin = allPhaseMarginsKnown
+    ? Math.min(...phaseMargins.map(Number))
+    : null;
+  const phaseRating: OfferProfitabilityRating =
+    missingCosts.length > 0 ||
+    minimumPhaseMargin === null ||
+    values.healthyMarginBasisPoints === null ||
+    values.attentionMarginBasisPoints === null
+      ? 'insufficient_data'
+      : minimumPhaseMargin >= values.healthyMarginBasisPoints
+        ? 'healthy'
+        : minimumPhaseMargin >= values.attentionMarginBasisPoints
+          ? 'attention'
+          : 'not_recommended';
+  const anyPhaseRequiresJustification =
+    minimumPhaseMargin !== null &&
+    values.minimumMarginBasisPoints !== null &&
+    minimumPhaseMargin < values.minimumMarginBasisPoints;
+  const finalRequiresJustification =
+    requiresJustification || anyPhaseRequiresJustification;
+  if (
+    anyPhaseRequiresJustification &&
+    !warnings.some((warning) => warning.includes('margem está abaixo'))
+  ) {
+    warnings.push(
+      'Ao menos uma fase comercial está abaixo da margem mínima e exige justificativa administrativa.'
+    );
+  }
+
   return {
     modelVersion: SALES_MODULAR_PROPOSAL_MODEL_VERSION,
     catalogVersionId: catalog.id,
@@ -2298,14 +2522,16 @@ export function calculateSalesModularProposal(
       name: baseTier.publicName,
       limitQuantity: basePackageContractedLimit,
       includedStorageMb:
-        costSettings.includedStorageMbPerPatient !== null
-        ? basePackageContractedLimit * costSettings.includedStorageMbPerPatient
-        : null,
+        capacity?.includedStorageMb ??
+        (costSettings.includedStorageMbPerPatient !== null
+          ? basePackageContractedLimit * costSettings.includedStorageMbPerPatient
+          : null),
       occupiedQuantity: input.patientQuantity,
       availableQuantity: Math.max(
         0,
         basePackageContractedLimit - input.patientQuantity
-      )
+      ),
+      capacity
     },
     lines,
     promotional: promotionalPeriod.consolidated,
@@ -2329,8 +2555,8 @@ export function calculateSalesModularProposal(
     oneTimeContributionMarginCents,
     minimumRecommendedRecurringRevenueCents,
     maximumRecommendedDiscountBasisPoints,
-    rating,
-    requiresJustification,
+    rating: phaseRating,
+    requiresJustification: finalRequiresJustification,
     missingCosts: Array.from(new Set(missingCosts)),
     missingDrivers,
     possibleDuplicateCosts,
@@ -2343,6 +2569,7 @@ export function calculateSalesModularProposal(
       aggressivePatients: basePackageContractedLimit
     },
     warnings,
-    horizons
+    horizons,
+    commercialPhases
   };
 }

@@ -12,6 +12,7 @@ import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { AbaClinicalChartsPanel } from './AbaClinicalChartsPanel';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
+import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
@@ -9078,6 +9079,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     </select>
                   </div>
                 )}
+                {patient?.id ? (
+                  <PatientProfessionalLinksPanel
+                    patientId={String(patient.id)}
+                    professionals={clinicTherapists}
+                    canManage={canManageTherapistAssignment}
+                    dark={isPanelDark}
+                  />
+                ) : null}
             </div> 
           </div> 
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
@@ -9995,6 +10004,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   <TherapeuticPlanPanel
                     patient={patient}
                     protocols={planProtocolCatalog}
+                    professionals={clinicTherapists}
                     userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                     isDark={isPanelDark}
                     onStartSession={() => requestSessionStart('fullscreen')}

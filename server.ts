@@ -103,6 +103,13 @@ import {
   type SalesModularDriverValue
 } from './src/utils/salesModularCostDrivers';
 import {
+  buildDiscountNotificationPlan,
+  buildFrozenStripeCheckoutPlan,
+  normalizeOfferItemDiscount,
+  validateCustomCapacityPolicy,
+  type OfferItemDiscount
+} from './src/utils/salesCommercialEvolution';
+import {
   buildAbaPromptSnapshot,
   normalizeAbaPromptTypeConfig,
   resolveAbaPromptLevel,
@@ -126,6 +133,7 @@ import {
   normalizePlanningFocusType
 } from './src/utils/abaPlanningEngine';
 import { decodeClinicalTextEntities } from './src/utils/clinicalText';
+import { sanitizeTherapeuticTemplateContent } from './src/utils/therapeuticTemplatePrivacy';
 import {
   aggregateAbaClinicalLinePoints,
   analyzeBehaviorContextPatterns,
@@ -376,6 +384,9 @@ function validateRequiredEnvForDeploy(): void {
 validateRequiredEnvForDeploy();
 
 // Initialize Stripe lazily to prevent crash on startup if key is missing
+// Matches stripe-node 21.0.1's generated API contract; this makes the
+// already-used version explicit without upgrading the Stripe API.
+const STRIPE_API_VERSION: Stripe.LatestApiVersion = '2026-03-25.dahlia';
 let stripeClient: Stripe | null = null;
 function hasStripeSecretConfigured() {
   return Boolean(process.env.STRIPE_SECRET_KEY);
@@ -387,7 +398,7 @@ function getStripe() {
     if (!key) {
       throw new Error('STRIPE_SECRET_KEY environment variable is required');
     }
-    stripeClient = new Stripe(key);
+    stripeClient = new Stripe(key, { apiVersion: STRIPE_API_VERSION });
   }
   return stripeClient;
 }
@@ -1660,6 +1671,9 @@ const SALES_PREFERRED_CONTACT_PERIODS = new Set([
 const SALES_PUBLIC_PAYLOAD_MAX_BYTES = 24 * 1024;
 const SALES_ESTIMATED_ACTIVE_PATIENTS_MAX = 100000;
 const SALES_ESTIMATED_PROFESSIONALS_MAX = 10000;
+const MODULAR_COMMERCIAL_CONSENT_VERSION = "modular-commercial-v1";
+const MODULAR_COMMERCIAL_CONSENT_TEXT =
+  "Declaro estar ciente dos valores promocionais e dos valores aplicáveis após o término de cada benefício.";
 
 function normalizeSalesPhone(value: unknown): string | null {
   const digits = sanitizeString(value, 40).replace(/\D/g, "");
@@ -1711,6 +1725,37 @@ function deriveSalesOfferPublicToken(
     .createHmac("sha256", secret)
     .update(`sales-offer:${actorUserId}:${idempotencyKey}`)
     .digest("base64url");
+}
+
+function deriveSalesCheckoutPublicToken(
+  offerId: string,
+  requestHash: string,
+): string {
+  const secret = sanitizeString(process.env.SESSION_SECRET, 1000);
+  if (!secret) throw new Error("SESSION_SECRET_REQUIRED_FOR_SALES_CHECKOUT");
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`sales-modular-checkout:${offerId}:${requestHash}`)
+    .digest("base64url");
+}
+
+function salesApplicationOrigin(req: any): string {
+  return sanitizeString(
+    process.env.VERTO_APP_BASE_URL || `${req.protocol}://${req.get("host")}`,
+    500,
+  ).replace(/\/+$/, "");
+}
+
+function serializeSalesCheckoutLink(req: any, link: any) {
+  if (!link?.offer_id || !link?.request_hash || !link?.idempotency_key) return link;
+  const token = deriveSalesCheckoutPublicToken(
+    link.offer_id,
+    `${link.request_hash}:${link.idempotency_key}`,
+  );
+  return {
+    ...link,
+    publicCheckoutUrl: `${salesApplicationOrigin(req)}/api/public/sales-checkouts/${encodeURIComponent(token)}`,
+  };
 }
 
 function resolveSalesStripeConfiguration() {
@@ -2101,7 +2146,7 @@ function normalizeSalesSimulationRequest(raw: unknown): SalesSimulationInput {
 }
 
 const SALES_PRICING_CATALOG_VERSION_SELECT =
-  "id,version,name,status,effective_at,allocation_settings,modular_cost_settings,admin_notes,catalog_snapshot,created_by,created_at,published_by,published_at,archived_at";
+  "id,version,name,status,effective_at,allocation_settings,modular_cost_settings,custom_capacity_policy,admin_notes,catalog_snapshot,created_by,created_at,published_by,published_at,archived_at";
 const SALES_PRICING_CATALOG_ITEM_SELECT =
   "id,catalog_version_id,item_key,public_name,internal_name,public_description,pricing_mode,billing_interval,unit_name,included_quantity,maximum_quantity,recurring_amount_cents,one_time_amount_cents,sort_order,is_required,is_public,is_active,compatible_base_packages,metadata";
 const SALES_PRICING_CATALOG_TIER_SELECT =
@@ -2310,6 +2355,14 @@ async function loadSalesPricingCatalog(
       && typeof version.modular_cost_settings === "object"
         ? version.modular_cost_settings
         : null as any,
+    customCapacityPolicy: validateCustomCapacityPolicy(
+      version.custom_capacity_policy,
+    )
+      ? version.custom_capacity_policy
+      : null,
+    hasVersionedCustomCapacityPolicy: validateCustomCapacityPolicy(
+      version.custom_capacity_policy,
+    ),
     items,
     metadata: {
       adminNotes: sanitizeString(version.admin_notes, 2000) || null,
@@ -2381,6 +2434,45 @@ function normalizeSalesModularProposalRequest(
           || line?.customOneTimeAmountCents === undefined
             ? null
             : Number(line.customOneTimeAmountCents),
+        offerDiscount:
+          line?.offerDiscount && typeof line.offerDiscount === "object"
+            ? {
+                type: sanitizeString(line.offerDiscount.type, 30),
+                percentageBasisPoints:
+                  line.offerDiscount.percentageBasisPoints == null
+                    ? undefined
+                    : Number(line.offerDiscount.percentageBasisPoints),
+                amountOffCents:
+                  line.offerDiscount.amountOffCents == null
+                    ? undefined
+                    : Number(line.offerDiscount.amountOffCents),
+                startsAt: sanitizeString(line.offerDiscount.startsAt, 80),
+                endsAt:
+                  sanitizeString(line.offerDiscount.endsAt, 80) || null,
+                durationCount:
+                  line.offerDiscount.durationCount == null
+                    ? undefined
+                    : Number(line.offerDiscount.durationCount),
+                durationUnit: sanitizeString(
+                  line.offerDiscount.durationUnit,
+                  30,
+                ),
+                priceBeforeDiscountCents: Number(
+                  line.offerDiscount.priceBeforeDiscountCents,
+                ),
+                discountedPriceCents: Number(
+                  line.offerDiscount.discountedPriceCents,
+                ),
+                priceAfterExpirationCents: Number(
+                  line.offerDiscount.priceAfterExpirationCents,
+                ),
+                reason: sanitizeString(line.offerDiscount.reason, 300),
+                internalNotes:
+                  sanitizeString(line.offerDiscount.internalNotes, 1000)
+                    || undefined,
+                status: sanitizeString(line.offerDiscount.status, 30),
+              } as OfferItemDiscount
+            : null,
       }))
     : [];
   const basePackageSelectionMode = sanitizeString(
@@ -2401,6 +2493,16 @@ function normalizeSalesModularProposalRequest(
       || source.customBasePackageLimit === ""
         ? null
         : Number(source.customBasePackageLimit),
+    customCapacityBlocks:
+      source.customCapacityBlocks === null
+      || source.customCapacityBlocks === undefined
+      || source.customCapacityBlocks === ""
+        ? null
+        : Number(source.customCapacityBlocks),
+    customCapacitySelectionMode:
+      sanitizeString(source.customCapacitySelectionMode, 20) === "manual"
+        ? "manual"
+        : "automatic",
     lines,
     globalDiscountBasisPoints: Number(
       source.globalDiscountBasisPoints || 0,
@@ -2417,6 +2519,11 @@ function normalizeSalesModularProposalRequest(
     ),
     internalNotes: sanitizeString(source.internalNotes, 2000),
     publicNotes: sanitizeString(source.publicNotes, 1500),
+    offerStartsAt: sanitizeString(source.offerStartsAt, 80),
+    discountStackingJustification: sanitizeString(
+      source.discountStackingJustification,
+      1500,
+    ),
   };
 }
 
@@ -14954,6 +15061,18 @@ async function startServer() {
     message: { success: false, error: 'Limite de reenvios atingido. Tente novamente mais tarde.' }
   });
 
+  const modularCheckoutLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 12,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: {
+      success: false,
+      error: 'Limite de operações de Checkout atingido. Aguarde alguns minutos.'
+    }
+  });
+
   const resendRecoveryLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     max: 5,
@@ -15516,6 +15635,153 @@ async function startServer() {
       200,
     );
 
+  const salesAssistedFlowType = (value: unknown) => {
+    const flow = sanitizeString(value, 80);
+    return flow === "sales_assisted_signup" || flow === "sales_modular_assisted";
+  };
+
+  const ensureModularSubscriptionSchedule = async (
+    stripe: Stripe,
+    session: Stripe.Checkout.Session,
+  ) => {
+    const metadata = (session.metadata || {}) as Record<string, string>;
+    if (sanitizeString(metadata.flowType, 80) !== "sales_modular_assisted") {
+      return null;
+    }
+    const subscriptionId = sanitizeString(String(session.subscription || ""), 200);
+    if (!subscriptionId) throw new Error("MODULAR_SUBSCRIPTION_MISSING");
+    const { data: link, error: linkError } = await supabase
+      .from("sales_checkout_links")
+      .select("id,offer_id,lead_id,status,stripe_schedule_id,checkout_plan_snapshot")
+      .eq("stripe_checkout_session_id", session.id)
+      .maybeSingle();
+    if (linkError || !link) throw linkError || new Error("MODULAR_CHECKOUT_LINK_MISSING");
+    if (link.stripe_schedule_id) return link.stripe_schedule_id;
+    const plan = link.checkout_plan_snapshot || {};
+    const phases = Array.isArray(plan.schedulePhases) ? plan.schedulePhases : [];
+    if (phases.length <= 1) {
+      const { error } = await supabase
+        .from("sales_checkout_links")
+        .update({
+          stripe_subscription_id: subscriptionId,
+          stripe_customer_id: sanitizeString(String(session.customer || ""), 200) || null,
+          status: "payment_pending",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", link.id);
+      if (error) throw error;
+      return null;
+    }
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ["items.data.price.product"],
+    } as any);
+    const currentByItem = new Map<string, { priceId: string; productId: string; amount: number }>();
+    for (const subscriptionItem of subscription.items.data) {
+      const product = subscriptionItem.price.product as Stripe.Product;
+      const itemKey = sanitizeString(product?.metadata?.revenue_line, 80);
+      const extension = sanitizeString(product?.metadata?.extension, 80);
+      const normalizedKey = extension === "capacity_blocks"
+        ? "clinical_core_capacity"
+        : itemKey;
+      if (normalizedKey) {
+        currentByItem.set(normalizedKey, {
+          priceId: subscriptionItem.price.id,
+          productId: sanitizeString(product?.id || subscriptionItem.price.product, 200),
+          amount: Number(subscriptionItem.price.unit_amount || 0),
+        });
+      }
+    }
+    const requestedPrices = new Map<string, Promise<string>>();
+    const resolvePhasePrice = (itemKey: string, amount: number) => {
+      const current = currentByItem.get(itemKey);
+      if (!current?.productId) throw new Error(`MODULAR_PHASE_PRODUCT_MISSING:${itemKey}`);
+      if (current.amount === amount) return Promise.resolve(current.priceId);
+      const priceKey = `${itemKey}:${amount}`;
+      if (!requestedPrices.has(priceKey)) {
+        requestedPrices.set(
+          priceKey,
+          stripe.prices.create(
+            {
+              currency: sanitizeString(plan.currency, 12) || "brl",
+              unit_amount: amount,
+              recurring: { interval: "month" },
+              product: current.productId,
+              metadata: {
+                flowType: "sales_modular_assisted",
+                offerId: link.offer_id,
+                revenueLine: itemKey,
+              },
+            },
+            {
+              idempotencyKey: crypto
+                .createHash("sha256")
+                .update(`modular-phase-price:${link.offer_id}:${itemKey}:${amount}`)
+                .digest("hex"),
+            },
+          ).then((price) => price.id),
+        );
+      }
+      return requestedPrices.get(priceKey)!;
+    };
+    const stripePhases = await Promise.all(phases.map(async (phase: any, index: number) => ({
+      ...(index === 0 ? { start_date: "now" as const } : {}),
+      ...(phase.endsAt
+        ? { end_date: Math.floor(Date.parse(phase.endsAt) / 1000) }
+        : {}),
+      items: await Promise.all((phase.items || []).map(async (item: any) => ({
+        price: await resolvePhasePrice(
+          sanitizeString(item.itemKey, 80),
+          Number(item.unitAmountCents || 0),
+        ),
+        quantity: 1,
+      }))),
+      metadata: {
+        flowType: "sales_modular_assisted",
+        offerId: link.offer_id,
+        phase: String(index + 1),
+      },
+    })));
+    const schedule = await stripe.subscriptionSchedules.create(
+      {
+        from_subscription: subscriptionId,
+        metadata: {
+          flowType: "sales_modular_assisted",
+          offerId: link.offer_id,
+          leadId: link.lead_id,
+          checkoutLinkId: link.id,
+        },
+      },
+      {
+        idempotencyKey: crypto
+          .createHash("sha256")
+          .update(`modular-schedule:${link.id}:${subscriptionId}`)
+          .digest("hex"),
+      },
+    );
+    await stripe.subscriptionSchedules.update(schedule.id, {
+      end_behavior: "release",
+      phases: stripePhases,
+      metadata: {
+        flowType: "sales_modular_assisted",
+        offerId: link.offer_id,
+        leadId: link.lead_id,
+        checkoutLinkId: link.id,
+      },
+    } as Stripe.SubscriptionScheduleUpdateParams);
+    const { error: persistError } = await supabase
+      .from("sales_checkout_links")
+      .update({
+        stripe_subscription_id: subscriptionId,
+        stripe_schedule_id: schedule.id,
+        stripe_customer_id: sanitizeString(String(session.customer || ""), 200) || null,
+        status: "payment_pending",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", link.id);
+    if (persistError) throw persistError;
+    return schedule.id;
+  };
+
   const isSalesAssistedStripeEvent = async (
     stripe: Stripe,
     event: Stripe.Event,
@@ -15526,18 +15792,17 @@ async function startServer() {
     ) {
       const session = event.data.object as Stripe.Checkout.Session;
       return (
-        sanitizeString((session.metadata as any)?.flowType, 80) ===
-        "sales_assisted_signup"
+        salesAssistedFlowType((session.metadata as any)?.flowType)
       );
     }
     if (
+      event.type === "customer.subscription.created" ||
       event.type === "customer.subscription.updated" ||
       event.type === "customer.subscription.deleted"
     ) {
       const subscription = event.data.object as Stripe.Subscription;
       return (
-        sanitizeString((subscription.metadata as any)?.flowType, 80) ===
-        "sales_assisted_signup"
+        salesAssistedFlowType((subscription.metadata as any)?.flowType)
       );
     }
     if (
@@ -15551,9 +15816,12 @@ async function startServer() {
       if (!subscriptionId) return false;
       const subscription = await stripe.subscriptions.retrieve(subscriptionId);
       return (
-        sanitizeString((subscription.metadata as any)?.flowType, 80) ===
-        "sales_assisted_signup"
+        salesAssistedFlowType((subscription.metadata as any)?.flowType)
       );
+    }
+    if (event.type.startsWith("subscription_schedule.")) {
+      const schedule = event.data.object as Stripe.SubscriptionSchedule;
+      return salesAssistedFlowType((schedule.metadata as any)?.flowType);
     }
     return false;
   };
@@ -15567,24 +15835,89 @@ async function startServer() {
     }
 
     if (event.type === "checkout.session.completed") {
+      const completedSession = event.data.object as Stripe.Checkout.Session;
+      await ensureModularSubscriptionSchedule(
+        stripe,
+        completedSession,
+      );
       const result = await processSalesAssistedCheckoutCompleted(
         stripe,
-        event.data.object as Stripe.Checkout.Session,
+        completedSession,
       );
+      if (
+        sanitizeString((completedSession.metadata as any)?.flowType, 80)
+          === "sales_modular_assisted"
+      ) {
+        const completedAt = new Date().toISOString();
+        const { error } = await supabase
+          .from("sales_checkout_links")
+          .update({
+            status: result.paymentConfirmed ? "completed" : "payment_pending",
+            payment_completed_at: result.paymentConfirmed ? completedAt : null,
+            updated_at: completedAt,
+          })
+          .eq("stripe_checkout_session_id", completedSession.id);
+        if (error) throw error;
+      }
       return { handled: true, result };
+    }
+
+    if (event.type.startsWith("subscription_schedule.")) {
+      const schedule = event.data.object as Stripe.SubscriptionSchedule;
+      const offerId = sanitizeString((schedule.metadata as any)?.offerId, 120);
+      const leadId = sanitizeString((schedule.metadata as any)?.leadId, 120);
+      if (!isUuid(offerId) || !isUuid(leadId)) {
+        throw new Error("MODULAR_SCHEDULE_METADATA_INVALID");
+      }
+      const terminal = [
+        "subscription_schedule.completed",
+        "subscription_schedule.canceled",
+      ].includes(event.type);
+      const [linkResult, eventResult] = await Promise.all([
+        supabase
+          .from("sales_checkout_links")
+          .update({
+            stripe_schedule_id: schedule.id,
+            ...(terminal ? { updated_at: new Date().toISOString() } : {}),
+          })
+          .eq("offer_id", offerId),
+        supabase.from("sales_lead_events").upsert(
+          [{
+            lead_id: leadId,
+            event_type: "lead_updated",
+            metadata: {
+              action: "subscription_schedule_lifecycle",
+              offer_id: offerId,
+              stripe_event_type: event.type,
+              schedule_status: schedule.status,
+            },
+            idempotency_key: `modular-schedule-event:${event.id}`,
+          }],
+          { onConflict: "idempotency_key", ignoreDuplicates: true },
+        ),
+      ]);
+      if (linkResult.error || eventResult.error) {
+        throw linkResult.error || eventResult.error;
+      }
+      return { handled: true };
     }
 
     if (event.type === "checkout.session.expired") {
       const session = event.data.object as Stripe.Checkout.Session;
       const offerId = sanitizeString((session.metadata as any)?.offerId, 120);
       const leadId = sanitizeString((session.metadata as any)?.leadId, 120);
+      const modularFlow = sanitizeString((session.metadata as any)?.flowType, 80)
+        === "sales_modular_assisted";
       if (!isUuid(offerId) || !isUuid(leadId)) {
         throw new Error("SALES_CHECKOUT_METADATA_INVALID");
       }
-      const [offerResult, eventResult] = await Promise.all([
+      const [offerResult, eventResult, checkoutLinkResult] = await Promise.all([
         supabase
           .from("sales_offers")
-          .update({ status: "expired", updated_at: new Date().toISOString() })
+          .update({
+            status: modularFlow ? "opened" : "expired",
+            updated_at: new Date().toISOString(),
+          })
           .eq("id", offerId)
           .eq("lead_id", leadId)
           .eq("stripe_checkout_session_id", session.id)
@@ -15603,8 +15936,17 @@ async function startServer() {
           ],
           { onConflict: "idempotency_key", ignoreDuplicates: true },
         ),
+        supabase
+          .from("sales_checkout_links")
+          .update({
+            status: "expired",
+            logically_expired_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("stripe_checkout_session_id", session.id)
+          .neq("status", "completed"),
       ]);
-      const error = offerResult.error || eventResult.error;
+      const error = offerResult.error || eventResult.error || checkoutLinkResult.error;
       if (error) throw error;
       return { handled: true };
     }
@@ -15612,6 +15954,7 @@ async function startServer() {
     let subscription: Stripe.Subscription;
     let invoice: Stripe.Invoice | null = null;
     if (
+      event.type === "customer.subscription.created" ||
       event.type === "customer.subscription.updated" ||
       event.type === "customer.subscription.deleted"
     ) {
@@ -15674,6 +16017,28 @@ async function startServer() {
 
     if (event.type !== "invoice.payment_failed") {
       await syncSalesSubscriptionDiscount(subscription);
+    }
+
+    if (sanitizeString(metadata.flowType, 80) === "sales_modular_assisted") {
+      const linkStatus = event.type === "invoice.payment_failed"
+        ? "failed"
+        : event.type === "invoice.paid" || event.type === "invoice.payment_succeeded"
+          ? "completed"
+          : event.type === "customer.subscription.deleted"
+            ? "expired"
+            : "payment_pending";
+      const { error: linkLifecycleError } = await supabase
+        .from("sales_checkout_links")
+        .update({
+          status: linkStatus,
+          ...(linkStatus === "completed"
+            ? { payment_completed_at: new Date().toISOString() }
+            : {}),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("offer_id", offerId)
+        .eq("stripe_subscription_id", subscription.id);
+      if (linkLifecycleError) throw linkLifecycleError;
     }
 
     const lifecycleEvent = await supabase.from("sales_lead_events").upsert(
@@ -17990,11 +18355,13 @@ async function startServer() {
     }
     const { data: offer, error } = offerResult;
     if (error || !offer) return { error: "not_found" as const };
+    const isModularOffer =
+      sanitizeString((offer as any).offer_type, 30) === "modular";
     const expiresAt = new Date(String(offer.expires_at || "")).getTime();
     if (
       !salesOfferPublicStatusAllowed(offer.status) ||
       offer.revoked_at ||
-      offer.accepted_at ||
+      (offer.accepted_at && !isModularOffer) ||
       !Number.isFinite(expiresAt) ||
       expiresAt <= Date.now()
     ) {
@@ -18119,6 +18486,11 @@ async function startServer() {
                 itemDiscountBasisPoints: Number(
                   item.item_discount_basis_points || 0,
                 ),
+                offerDiscount:
+                  item.public_metadata?.offerDiscount
+                  && typeof item.public_metadata.offerDiscount === "object"
+                    ? item.public_metadata.offerDiscount
+                    : null,
                 publicMetadata:
                   item.public_metadata
                   && typeof item.public_metadata === "object"
@@ -18151,6 +18523,12 @@ async function startServer() {
                 sanitizeString((offer as any).public_notes, 1500) || null,
               expiresAt: offer.expires_at,
               status: offer.status,
+              acceptedAt: offer.accepted_at || null,
+              commercialPhases: Array.isArray(
+                modularSnapshot.commercialPhases,
+              )
+                ? modularSnapshot.commercialPhases
+                : [],
               modularCheckoutEnabled: false,
               stripeReady: false,
             },
@@ -18244,6 +18622,89 @@ async function startServer() {
           success: false,
           error: "OFFER_UNAVAILABLE",
           message: "Esta oferta não está disponível.",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/public/sales-offers/:token/accept",
+    publicSalesLeadIpLimiter,
+    async (req: any, res) => {
+      try {
+        if (req.body?.commercialValuesConsent !== true) {
+          return res.status(400).json({
+            success: false,
+            error: "COMMERCIAL_VALUES_CONSENT_REQUIRED",
+            message:
+              "Confirme os valores promocionais e os valores posteriores.",
+          });
+        }
+        const loaded = await loadPublicSalesOffer(req.params?.token);
+        if ("error" in loaded) {
+          return res.status(404).json({
+            success: false,
+            error: "OFFER_UNAVAILABLE",
+            message: "Esta proposta não está disponível ou expirou.",
+          });
+        }
+        const { offer, lead } = loaded;
+        if (sanitizeString((offer as any).offer_type, 30) !== "modular") {
+          return res.status(409).json({
+            success: false,
+            error: "OFFER_ACCEPTANCE_FLOW_MISMATCH",
+            message: "Esta proposta utiliza o fluxo de aceite legado.",
+          });
+        }
+        const acceptedAt = offer.accepted_at || new Date().toISOString();
+        const [offerResult, eventResult] = await Promise.all([
+          supabase
+            .from("sales_offers")
+            .update({
+              accepted_at: acceptedAt,
+              accepted_terms_at: acceptedAt,
+              accepted_terms_snapshot: {
+                version: MODULAR_COMMERCIAL_CONSENT_VERSION,
+                statement: MODULAR_COMMERCIAL_CONSENT_TEXT,
+                source: "public_offer",
+                capturedAt: acceptedAt,
+              },
+              updated_at: acceptedAt,
+            })
+            .eq("id", offer.id)
+            .eq("lead_id", lead.id)
+            .is("revoked_at", null)
+            .select("id,accepted_at")
+            .maybeSingle(),
+          supabase.from("sales_lead_events").upsert(
+            [{
+              lead_id: lead.id,
+              event_type: "lead_updated",
+              metadata: {
+                action: "modular_offer_accepted",
+                offer_id: offer.id,
+                commercial_values_consent: true,
+              },
+              idempotency_key: `modular-offer-accepted:${offer.id}`,
+            }],
+            { onConflict: "idempotency_key", ignoreDuplicates: true },
+          ),
+        ]);
+        const persistenceError = offerResult.error || eventResult.error;
+        if (persistenceError || !offerResult.data) throw persistenceError;
+        return res.json({
+          success: true,
+          acceptedAt: offerResult.data.accepted_at || acceptedAt,
+          message: "Aceite comercial registrado.",
+        });
+      } catch (error: any) {
+        console.warn("[Sales Modular] Falha ao registrar aceite.", {
+          message: sanitizeString(error?.message || String(error), 200),
+        });
+        return res.status(500).json({
+          success: false,
+          error: "OFFER_ACCEPTANCE_FAILED",
+          message: "Não foi possível registrar o aceite agora.",
         });
       }
     },
@@ -19118,6 +19579,51 @@ async function startServer() {
         return next();
       }
 
+      if (
+        userRole === 'therapist' &&
+        patient.clinic_id === currentClinicId(user)
+      ) {
+        const { data: activeProfessionalLink, error: linkError } = await supabase
+          .from('patient_professional_links')
+          .select('id,permissions')
+          .eq('organization_id', sanitizeString(patient.clinic_id, 120))
+          .eq('patient_id', resolvedPatientId)
+          .eq('professional_id', userId)
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle();
+        if (!linkError && activeProfessionalLink?.permissions?.read !== false) {
+          req.patientProfessionalLink = activeProfessionalLink;
+          return next();
+        }
+        if (linkError && !isMissingRelationError(linkError)) throw linkError;
+        const isTherapeuticPlanHistoryRead =
+          String(req.method || '').toUpperCase() === 'GET'
+          && /^\/api\/aba\/patients\/[^/]+\/therapeutic-plan\/?$/.test(String(req.path || ''));
+        if (!linkError && isTherapeuticPlanHistoryRead) {
+          const { data: historicalLinks, error: historicalLinkError } = await supabase
+            .from('patient_professional_links')
+            .select('id,permissions,ends_at,updated_at')
+            .eq('organization_id', sanitizeString(patient.clinic_id, 120))
+            .eq('patient_id', resolvedPatientId)
+            .eq('professional_id', userId)
+            .eq('status', 'ended')
+            .order('ends_at', { ascending: false })
+            .limit(5);
+          if (historicalLinkError && !isMissingRelationError(historicalLinkError)) {
+            throw historicalLinkError;
+          }
+          const historicalAccess = (historicalLinks || []).find(
+            (link: any) => link?.permissions?.historicalRead === true,
+          );
+          if (historicalAccess) {
+            req.patientProfessionalLink = historicalAccess;
+            req.patientProfessionalHistoricalReadOnly = true;
+            return next();
+          }
+        }
+      }
+
       // Same-clinic access is reserved for clinic coordination.
       if (
         patient.clinic_id &&
@@ -19191,10 +19697,10 @@ async function startServer() {
       "/stripe/create-checkout-registration",
       "/public/sales-leads",
     ]);
-    const isPublicSalesOfferCheckout =
+    const isPublicSalesOfferMutation =
       req.path.startsWith("/public/sales-offers/") &&
-      req.path.endsWith("/checkout");
-    if (publicStateChangingPaths.has(req.path) || isPublicSalesOfferCheckout) {
+      (req.path.endsWith("/checkout") || req.path.endsWith("/accept"));
+    if (publicStateChangingPaths.has(req.path) || isPublicSalesOfferMutation) {
       return next();
     }
 
@@ -24537,6 +25043,184 @@ async function startServer() {
   app.delete('/api/push/subscribe', checkAuth, handlePushUnsubscribe);
   app.delete('/api/notifications/subscribe', checkAuth, handlePushUnsubscribe);
 
+  const processOfferItemDiscountNotifications = async (now: Date) => {
+    const { data: dueRows, error: dueError } = await supabase
+      .from("sales_discount_notifications")
+      .select("id,offer_id,offer_item_discount_id,notification_window_days,notification_type,idempotency_key")
+      .not("offer_item_discount_id", "is", null)
+      .in("status", ["pending", "failed"])
+      .lte("scheduled_for", now.toISOString())
+      .order("scheduled_for", { ascending: true })
+      .limit(250);
+    if (dueError) throw dueError;
+    if (!dueRows?.length) return { scanned: 0, sent: 0, failed: 0 };
+
+    const discountIds = Array.from(new Set(dueRows.map((row: any) => row.offer_item_discount_id)));
+    const { data: discounts, error: discountError } = await supabase
+      .from("sales_offer_item_discounts")
+      .select("id,offer_id,offer_item_id,item_key,ends_at,price_after_expiration_cents,status")
+      .in("id", discountIds);
+    if (discountError) throw discountError;
+    const discountById = new Map((discounts || []).map((row: any) => [row.id, row]));
+    const offerIds = Array.from(new Set((discounts || []).map((row: any) => row.offer_id)));
+    const itemIds = Array.from(new Set((discounts || []).map((row: any) => row.offer_item_id).filter(Boolean)));
+    const [offerResult, itemResult] = await Promise.all([
+      supabase
+        .from("sales_offers")
+        .select("id,lead_id,created_by,status,accepted_at,expires_at,revoked_at")
+        .in("id", offerIds),
+      itemIds.length
+        ? supabase
+            .from("sales_offer_items")
+            .select("id,public_name_snapshot")
+            .in("id", itemIds)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (offerResult.error || itemResult.error) throw offerResult.error || itemResult.error;
+    const offerById = new Map((offerResult.data || []).map((row: any) => [row.id, row]));
+    const itemById = new Map((itemResult.data || []).map((row: any) => [row.id, row]));
+    const leadIds = Array.from(new Set((offerResult.data || []).map((row: any) => row.lead_id)));
+    const { data: leads, error: leadError } = await supabase
+      .from("sales_leads")
+      .select("id,name,email,normalized_email,assigned_owner_id")
+      .in("id", leadIds)
+      .is("deleted_at", null);
+    if (leadError) throw leadError;
+    const leadById = new Map((leads || []).map((row: any) => [row.id, row]));
+    const ownerIds = Array.from(new Set([
+      sanitizeString(process.env.SALES_OWNER_USER_ID, 120),
+      ...(offerResult.data || []).map((row: any) => sanitizeString(row.created_by, 120)),
+      ...(leads || []).map((row: any) => sanitizeString(row.assigned_owner_id, 120)),
+    ].filter(isUuid)));
+    const { data: owners, error: ownerError } = ownerIds.length
+      ? await supabase.from("users").select("id,name,email").in("id", ownerIds)
+      : { data: [], error: null };
+    if (ownerError) throw ownerError;
+    const ownerById = new Map((owners || []).map((row: any) => [row.id, row]));
+
+    let sent = 0;
+    let failed = 0;
+    for (const due of dueRows) {
+      const pendingDiscount: any = discountById.get(due.offer_item_discount_id);
+      const pendingOffer: any = pendingDiscount ? offerById.get(pendingDiscount.offer_id) : null;
+      if (!pendingOffer || sanitizeString(pendingOffer.status, 40) !== "paid") {
+        await supabase
+          .from("sales_discount_notifications")
+          .update({ status: "cancelled", updated_at: new Date().toISOString() })
+          .eq("id", due.id)
+          .in("status", ["pending", "failed"]);
+        continue;
+      }
+      const { data: claimed } = await supabase
+        .from("sales_discount_notifications")
+        .update({ status: "processing", updated_at: new Date().toISOString() })
+        .eq("id", due.id)
+        .in("status", ["pending", "failed"])
+        .select("id")
+        .maybeSingle();
+      if (!claimed) continue;
+      const discount: any = discountById.get(due.offer_item_discount_id);
+      const offer: any = discount ? offerById.get(discount.offer_id) : null;
+      const lead: any = offer ? leadById.get(offer.lead_id) : null;
+      if (!discount || !offer || !lead) {
+        failed += 1;
+        await supabase.from("sales_discount_notifications").update({
+          status: "failed",
+          email_error: "DISCOUNT_NOTIFICATION_CONTEXT_MISSING",
+          updated_at: new Date().toISOString(),
+        }).eq("id", due.id);
+        continue;
+      }
+      const itemName = sanitizeString(
+        itemById.get(discount.offer_item_id)?.public_name_snapshot,
+        180,
+      ) || "módulo contratado";
+      const endLabel = new Date(discount.ends_at).toLocaleDateString("pt-BR");
+      const priceLabel = new Intl.NumberFormat("pt-BR", {
+        style: "currency",
+        currency: "BRL",
+      }).format(Number(discount.price_after_expiration_cents || 0) / 100);
+      const windowDays = Number(due.notification_window_days);
+      const timingText = windowDays > 0
+        ? `termina em ${windowDays} dias, em ${endLabel}`
+        : windowDays === 0
+          ? `termina hoje, ${endLabel}`
+          : `terminou em ${endLabel}; o preço normal já está vigente`;
+      const recipientIds = Array.from(new Set([
+        sanitizeString(offer.created_by, 120),
+        sanitizeString(lead.assigned_owner_id, 120),
+        sanitizeString(process.env.SALES_OWNER_USER_ID, 120),
+      ].filter(isUuid)));
+      try {
+        const internalRecipients = recipientIds
+          .map((id) => ownerById.get(id))
+          .filter((owner: any) => sanitizeEmail(owner?.email));
+        await Promise.all(internalRecipients.map((owner: any) =>
+          sendTransactionalEmailSafe({
+            to: sanitizeEmail(owner.email),
+            subject: `Condição comercial de ${itemName}: ${timingText}`,
+            html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#1e293b"><h2>Condição comercial programada</h2><p>O benefício de <strong>${escapeHtml(itemName)}</strong> para ${escapeHtml(sanitizeString(lead.name, 180) || "o cliente")} ${escapeHtml(timingText)}.</p><p>Preço posterior: <strong>${escapeHtml(priceLabel)} por mês</strong>.</p><p>Esta comunicação contém somente dados comerciais.</p></div>`,
+            context: "offer_item_discount_internal_notification",
+            from: OFFICIAL_FROM_CONTACT,
+            replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+            metadata: { idempotencyKey: `${due.idempotency_key}:internal:${owner.id}` },
+          })
+        ));
+        const customerEmail = sanitizeEmail(lead.normalized_email || lead.email);
+        const customerSent = customerEmail
+          ? await sendTransactionalEmailSafe({
+              to: customerEmail,
+              subject: `Condição de ${itemName}: lembrete de encerramento`,
+              html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#1e293b"><h2>Sua condição comercial Verto</h2><p>O benefício do módulo <strong>${escapeHtml(itemName)}</strong> ${escapeHtml(timingText)}.</p><p>Depois do benefício, o valor contratado será <strong>${escapeHtml(priceLabel)} por mês</strong>. Se não quiser manter o módulo antes da primeira cobrança, fale com nossa equipe comercial.</p><p>Esta mensagem contém somente informações comerciais.</p></div>`,
+              context: "offer_item_discount_customer_notification",
+              from: OFFICIAL_FROM_CONTACT,
+              replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+              metadata: { idempotencyKey: `${due.idempotency_key}:customer` },
+            })
+          : false;
+        const completedAt = new Date().toISOString();
+        await Promise.all([
+          supabase.from("sales_lead_events").upsert(
+            [{
+              lead_id: lead.id,
+              event_type: "lead_updated",
+              metadata: {
+                action: "offer_item_discount_notification_sent",
+                offer_id: offer.id,
+                item_key: discount.item_key,
+                notification_window_days: windowDays,
+              },
+              idempotency_key: `offer-item-discount-notification:${due.id}`,
+            }],
+            { onConflict: "idempotency_key", ignoreDuplicates: true },
+          ),
+          supabase.from("sales_discount_notifications").update({
+            status: "sent",
+            internal_notification_sent_at: completedAt,
+            email_sent_at: customerSent ? completedAt : null,
+            email_error: customerEmail && !customerSent ? "CUSTOMER_EMAIL_NOT_SENT" : null,
+            updated_at: completedAt,
+          }).eq("id", due.id),
+          windowDays < 0
+            ? supabase.from("sales_offer_item_discounts").update({
+                status: "expired",
+                updated_at: completedAt,
+              }).eq("id", discount.id).neq("status", "revoked")
+            : Promise.resolve({ error: null }),
+        ]);
+        sent += 1;
+      } catch (notificationError: any) {
+        failed += 1;
+        await supabase.from("sales_discount_notifications").update({
+          status: "failed",
+          email_error: sanitizeString(notificationError?.message || String(notificationError), 500),
+          updated_at: new Date().toISOString(),
+        }).eq("id", due.id);
+      }
+    }
+    return { scanned: dueRows.length, sent, failed };
+  };
+
   app.post('/api/internal/notifications/run-appointment-reminders', appointmentReminderCronLimiter, async (req: any, res) => {
     const configuredSecret = sanitizeString(
       process.env.APPOINTMENT_REMINDER_CRON_SECRET || process.env.CRON_SECRET || '',
@@ -24648,6 +25332,7 @@ async function startServer() {
           });
         }
 
+        const modularNotifications = await processOfferItemDiscountNotifications(now);
         if (candidateRows.length === 0) {
           return res.json({
             success: true,
@@ -24657,6 +25342,7 @@ async function startServer() {
               sent: 0,
               skipped: 0,
               failed: 0,
+              modular: modularNotifications,
             },
           });
         }
@@ -24774,6 +25460,7 @@ async function startServer() {
             sent,
             skipped: candidateRows.length - (pendingRows || []).length,
             failed,
+            modular: modularNotifications,
           },
         });
       } catch (error: any) {
@@ -26559,6 +27246,133 @@ async function startServer() {
       return res.status(500).json({ success: false, error: 'Erro ao enviar push.' });
     }
   });
+
+  app.get(
+    '/api/patients/:patientId/professional-links',
+    checkAuth,
+    checkPatientAccess,
+    requireRoles('coordinator', 'therapist', 'admin', 'owner'),
+    async (req: any, res) => {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+      try {
+        const { data: links, error } = await supabase
+          .from('patient_professional_links')
+          .select('id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,starts_at,ends_at,status,permissions,created_by,ended_by,created_at,updated_at')
+          .eq('organization_id', clinicId)
+          .eq('patient_id', patientId)
+          .order('status', { ascending: true })
+          .order('created_at', { ascending: true });
+        if (error) throw error;
+        const professionalIds = Array.from(new Set(
+          (links || []).map((link: any) => sanitizeString(link.professional_id, 120)).filter(isUuid),
+        ));
+        const professionalsResult = professionalIds.length > 0
+          ? await supabase
+              .from('users')
+              .select('id,name,email,metadata,role,clinic_id')
+              .eq('clinic_id', clinicId)
+              .in('id', professionalIds)
+          : { data: [], error: null };
+        if (professionalsResult.error) throw professionalsResult.error;
+        const professionalById = new Map(
+          (professionalsResult.data || []).map((professional: any) => [professional.id, professional]),
+        );
+        return res.json({
+          success: true,
+          links: (links || []).map((link: any) => ({
+            ...link,
+            professional: professionalById.get(link.professional_id) || null,
+          })),
+          activeCount: (links || []).filter((link: any) => link.status === 'active').length,
+          activeLimit: 5,
+        });
+      } catch (error: any) {
+        return res.status(500).json({
+          success: false,
+          error: isMissingRelationError(error)
+            ? 'MULTIDISCIPLINARY_SCHEMA_PENDING'
+            : 'PATIENT_PROFESSIONAL_LINKS_UNAVAILABLE',
+        });
+      }
+    },
+  );
+
+  app.post(
+    '/api/patients/:patientId/professional-links',
+    checkAuth,
+    checkPatientAccess,
+    requireRoles('coordinator', 'admin', 'owner'),
+    async (req: any, res) => {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const actorId = sanitizeString(req.session.user.id, 120);
+      const professionalId = sanitizeString(req.body?.professionalId, 120);
+      const specialty = sanitizeString(req.body?.specialty, 120);
+      const caseRole = sanitizeString(req.body?.caseRole, 160);
+      const relationshipType = sanitizeString(req.body?.relationshipType, 30);
+      const startsAt = sanitizeIsoDateOnly(req.body?.startsAt) || new Date().toISOString().slice(0, 10);
+      if (
+        !isUuid(patientId) || !isUuid(actorId) || !isUuid(professionalId)
+        || specialty.length < 2 || caseRole.length < 2
+        || !['primary', 'collaborator'].includes(relationshipType)
+      ) {
+        return res.status(400).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_INVALID' });
+      }
+      const { data, error } = await supabase.rpc('upsert_patient_professional_link_v1', {
+        p_actor_id: actorId,
+        p_patient_id: patientId,
+        p_professional_id: professionalId,
+        p_specialty: specialty,
+        p_case_role: caseRole,
+        p_relationship_type: relationshipType,
+        p_starts_at: startsAt,
+        p_permissions: req.body?.permissions && typeof req.body.permissions === 'object'
+          ? {
+              read: req.body.permissions.read !== false,
+              write: req.body.permissions.write !== false,
+              historicalRead: req.body.permissions.historicalRead !== false,
+            }
+          : { read: true, write: true, historicalRead: true },
+        p_replace_primary: req.body?.replacePrimary === true,
+      });
+      if (error) {
+        const message = sanitizeString(error.message, 200);
+        const conflict = message.includes('DUPLICATE') || message.includes('LIMIT') || message.includes('one_primary');
+        return res.status(conflict ? 409 : 500).json({
+          success: false,
+          error: message.includes('LIMIT')
+            ? 'PATIENT_PROFESSIONAL_LINK_LIMIT_REACHED'
+            : message.includes('DUPLICATE')
+              ? 'PATIENT_PROFESSIONAL_LINK_DUPLICATE'
+              : 'PATIENT_PROFESSIONAL_LINK_FAILED',
+        });
+      }
+      return res.status(201).json({ success: true, link: data });
+    },
+  );
+
+  app.patch(
+    '/api/patients/:patientId/professional-links/:linkId/end',
+    checkAuth,
+    checkPatientAccess,
+    requireRoles('coordinator', 'admin', 'owner'),
+    async (req: any, res) => {
+      const actorId = sanitizeString(req.session.user.id, 120);
+      const linkId = sanitizeString(req.params.linkId, 120);
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      if (!isUuid(actorId) || !isUuid(linkId) || !isUuid(patientId)) {
+        return res.status(400).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_INVALID' });
+      }
+      const { data, error } = await supabase.rpc('end_patient_professional_link_v1', {
+        p_actor_id: actorId,
+        p_link_id: linkId,
+        p_patient_id: patientId,
+        p_ends_at: sanitizeIsoDateOnly(req.body?.endsAt) || new Date().toISOString().slice(0, 10),
+      });
+      if (error) return res.status(404).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_NOT_FOUND' });
+      return res.json({ success: true, link: data });
+    },
+  );
 
   app.post('/api/patient-anamnesis/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
@@ -35993,6 +36807,10 @@ async function startServer() {
     'metric_direction',
     'changed_at',
     'source_summary_id',
+    'professional_id_snapshot',
+    'specialty_snapshot',
+    'specialty_source',
+    'aggregation_weight_snapshot',
     'created_at'
   ].join(',');
   const ABA_GRAPH_ANNOTATION_SELECT = [
@@ -36295,6 +37113,8 @@ async function startServer() {
       targetId: sanitizeString(query?.targetId || query?.target_id, 180),
       behaviorId: sanitizeString(query?.behaviorId || query?.behavior_id, 180),
       metricType: sanitizeString(query?.metricType || query?.metric_type, 80).toUpperCase(),
+      specialty: sanitizeTextField(query?.specialty, 120),
+      professionalId: sanitizeString(query?.professionalId || query?.professional_id, 120),
       significantOnly: String(query?.significantOnly || query?.significant_only || '').toLowerCase() === 'true'
     };
   };
@@ -36347,7 +37167,13 @@ async function startServer() {
     statusLabel: row?.status_label,
     metricDirection: row?.metric_direction,
     changedAt: row?.changed_at,
-    sourceSummaryId: row?.source_summary_id
+    sourceSummaryId: row?.source_summary_id,
+    professionalId: row?.professional_id_snapshot || null,
+    specialty: row?.specialty_snapshot || 'Especialidade não informada',
+    specialtySource: row?.specialty_source || 'unavailable',
+    attemptsCount: Number(row?.aggregation_weight_snapshot) > 0
+      ? Number(row.aggregation_weight_snapshot)
+      : null
   });
 
   const formatAbaInsightNumber = (value: any) => {
@@ -36453,6 +37279,8 @@ async function startServer() {
     limit: number;
     significantOnly?: boolean;
     ascending?: boolean;
+    specialty?: string;
+    professionalId?: string;
   }) => {
     let query = supabase
       .from('aba_session_metric_snapshots')
@@ -36467,6 +37295,8 @@ async function startServer() {
     if (params.targetId) query = query.eq('target_id', params.targetId);
     if (params.behaviorId) query = query.eq('behavior_id', params.behaviorId);
     if (params.metricType) query = query.eq('metric_type', params.metricType);
+    if (params.specialty) query = query.eq('specialty_snapshot', params.specialty);
+    if (params.professionalId) query = query.eq('professional_id_snapshot', params.professionalId);
     const { data, error } = await query;
     if (error) {
       if (hasMissingFinancialSchema(error)) return [];
@@ -57849,6 +58679,7 @@ async function startServer() {
     'name', 'description', 'objective', 'category', 'program_type', 'status',
     'measurement_type', 'mastery_criteria', 'advanced_settings', 'origin_type',
     'origin_id', 'protocol_id', 'protocol_title', 'domain_id', 'domain_name',
+    'therapeutic_plan_id', 'source_template_id', 'source_template_version',
     'review_due_date', 'responsible_professional_ids', 'version', 'activated_at',
     'approved_at', 'completed_at', 'created_by', 'created_at', 'updated_at'
   ].join(',');
@@ -57863,6 +58694,9 @@ async function startServer() {
     'id', 'organization_id', 'clinic_id', 'source_scope', 'owner_user_id',
     'name', 'description', 'category', 'objective', 'suggested_targets',
     'measurement_type', 'mastery_criteria', 'advanced_settings', 'status',
+    'specialty', 'tags', 'structure_snapshot', 'template_version',
+    'parent_template_id', 'visibility', 'archived_at',
+    'contains_identifiable_content', 'privacy_warning_acknowledged_at',
     'approved_by', 'approved_at', 'created_by', 'created_at', 'updated_at'
   ].join(',');
 
@@ -58147,7 +58981,44 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      const [programResult, targetResult, objectiveResult, auditResult, trialResult] = await Promise.all([
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      if (req.patientProfessionalHistoricalReadOnly === true) {
+        const accessEndedAt = sanitizeString(
+          req.patientProfessionalLink?.updated_at || req.patientProfessionalLink?.ends_at,
+          80,
+        );
+        const { data: historicalVersions, error: historyError } = await supabase
+          .from('patient_therapeutic_plan_versions')
+          .select('id,plan_id,version,snapshot,authored_by,created_at')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .contains('authorized_reader_ids', [actorId])
+          .lte('created_at', accessEndedAt)
+          .order('created_at', { ascending: false })
+          .limit(100);
+        if (historyError) throw historyError;
+        return res.json({
+          success: true,
+          data: {
+            programs: [],
+            objectives: [],
+            targets: [],
+            planScopes: [],
+            professionalLinks: [],
+            historicalPlanVersions: historicalVersions || [],
+            readOnlyHistory: true,
+            accessEndedAt,
+          },
+          meta: {
+            queryCount: 1,
+            batched: true,
+            historicalSnapshotOnly: true,
+            patientId,
+            organizationId,
+          },
+        });
+      }
+      const [programResult, targetResult, objectiveResult, auditResult, trialResult, planScopeResult, professionalLinkResult] = await Promise.all([
         supabase
           .from('aba_programs')
           .select(THERAPEUTIC_PROGRAM_SELECT)
@@ -58183,9 +59054,24 @@ async function startServer() {
           .eq('patient_id', patientId)
           .not('program_id', 'is', null)
           .order('occurred_at', { ascending: false })
-          .limit(500)
+          .limit(500),
+        supabase
+          .from('patient_therapeutic_plans')
+          .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,scope_snapshot,source_template_id,source_template_version,status,edit_version,created_by,updated_by,created_at,updated_at')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .order('updated_at', { ascending: false })
+          .limit(50),
+        supabase
+          .from('patient_professional_links')
+          .select('id,professional_id,specialty,case_role,relationship_type,permissions,status')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('status', 'active')
+          .order('relationship_type', { ascending: false })
+          .limit(5)
       ]);
-      const firstError = [programResult.error, targetResult.error, objectiveResult.error, auditResult.error, trialResult.error].find(Boolean);
+      const firstError = [programResult.error, targetResult.error, objectiveResult.error, auditResult.error, trialResult.error, planScopeResult.error, professionalLinkResult.error].find(Boolean);
       if (firstError) {
         if (hasMissingFinancialSchema(firstError) || isMissingRelationError(firstError)) {
           return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_UNAVAILABLE', message: 'A estrutura do Plano terapêutico ainda não foi aplicada.' });
@@ -58226,13 +59112,193 @@ async function startServer() {
         data: {
           programs,
           objectives: objectiveResult.data || [],
-          targets: targetResult.data || []
+          targets: targetResult.data || [],
+          planScopes: planScopeResult.data || [],
+          professionalLinks: professionalLinkResult.data || []
         },
-        meta: { queryCount: 5, batched: true, patientId, organizationId }
+        meta: { queryCount: 7, batched: true, patientId, organizationId }
       });
     } catch (error) {
       return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plan [GET]', error, {
         fallbackMessage: 'Não foi possível carregar o Plano terapêutico agora.'
+      });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/therapeutic-plans', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Escopo do Plano terapêutico')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const mode = sanitizeString(req.body?.mode, 40).toLowerCase();
+      const specialty = mode === 'specialty' ? sanitizeTextField(req.body?.specialty, 120) : null;
+      const responsibleProfessionalId = sanitizeString(req.body?.responsibleProfessionalId || req.body?.responsible_professional_id, 120);
+      const requestedParticipants = Array.from(new Set(
+        (Array.isArray(req.body?.participantProfessionalIds || req.body?.participant_professional_ids)
+          ? req.body?.participantProfessionalIds || req.body?.participant_professional_ids
+          : [])
+          .slice(0, 5)
+          .map((value: any) => sanitizeString(value, 120))
+          .filter(Boolean)
+      ));
+      const participantProfessionalIds = Array.from(new Set([responsibleProfessionalId, ...requestedParticipants])).filter(Boolean);
+      if (!['specialty', 'interdisciplinary'].includes(mode) || (mode === 'specialty' && !specialty) || !responsibleProfessionalId) {
+        return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_INVALID', message: 'Informe o modo, a especialidade quando aplicável e o profissional responsável.' });
+      }
+      if (participantProfessionalIds.length > 5 || (mode === 'interdisciplinary' && participantProfessionalIds.length < 2)) {
+        return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_PARTICIPANTS_INVALID', message: 'Um plano interdisciplinar requer ao menos dois e no máximo cinco profissionais vinculados.' });
+      }
+      const { data: activeLinks, error: activeLinksError } = await supabase
+        .from('patient_professional_links')
+        .select('professional_id,specialty,permissions')
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('status', 'active')
+        .in('professional_id', participantProfessionalIds)
+        .limit(5);
+      if (activeLinksError) throw activeLinksError;
+      const activeByProfessional = new Map((activeLinks || []).map((link: any) => [String(link.professional_id), link]));
+      if (participantProfessionalIds.some((id) => !activeByProfessional.has(id))) {
+        return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_PROFESSIONAL_NOT_LINKED', message: 'Todos os participantes precisam possuir vínculo ativo com este paciente.' });
+      }
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      if (!['owner', 'admin', 'coordinator'].includes(role)) {
+        const actorLink: any = activeByProfessional.get(actorId);
+        if (!actorLink || actorLink?.permissions?.write === false) {
+          return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_EDIT_DENIED' });
+        }
+      }
+      const now = new Date().toISOString();
+      const payload = {
+        organization_id: organizationId,
+        clinic_id: clinicId,
+        patient_id: patientId,
+        mode,
+        specialty,
+        responsible_professional_id: responsibleProfessionalId,
+        participant_professional_ids: participantProfessionalIds,
+        participant_specialties: participantProfessionalIds.map((id) => String((activeByProfessional.get(id) as any)?.specialty || 'Especialidade não informada')),
+        common_objectives: sanitizeClinicalPayload(req.body?.commonObjectives || req.body?.common_objectives || []),
+        specialty_objectives: sanitizeClinicalPayload(req.body?.specialtyObjectives || req.body?.specialty_objectives || {}),
+        scope_snapshot: sanitizeClinicalPayload({
+          mode,
+          specialty,
+          responsibleProfessionalId,
+          participantProfessionalIds,
+          participantSpecialties: participantProfessionalIds.map((id) => String((activeByProfessional.get(id) as any)?.specialty || 'Especialidade não informada')),
+          capturedAt: now
+        }),
+        source_template_id: sanitizeString(req.body?.sourceTemplateId || req.body?.source_template_id, 180) || null,
+        source_template_version: Number.isSafeInteger(Number(req.body?.sourceTemplateVersion || req.body?.source_template_version)) ? Number(req.body?.sourceTemplateVersion || req.body?.source_template_version) : null,
+        status: 'draft',
+        edit_version: 1,
+        created_by: actorId,
+        updated_by: actorId,
+        created_at: now,
+        updated_at: now
+      };
+      const { data, error } = await supabase
+        .from('patient_therapeutic_plans')
+        .insert(payload)
+        .select('*')
+        .single();
+      if (error) {
+        if (String(error.code || '') === '23505') return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_EXISTS', message: 'Já existe um plano ativo para esta especialidade.' });
+        throw error;
+      }
+      return res.status(201).json({ success: true, data, message: 'Escopo do Plano terapêutico criado com histórico independente.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans [POST]', error, {
+        fallbackMessage: 'Não foi possível criar o escopo do Plano terapêutico.'
+      });
+    }
+  });
+
+  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Escopo do Plano terapêutico')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const planId = sanitizeString(req.params.planId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const { data: existing, error: existingError } = await supabase
+        .from('patient_therapeutic_plans')
+        .select('*')
+        .eq('id', planId)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .limit(1)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing) return res.status(404).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });
+      const canManageAny = ['owner', 'admin', 'coordinator'].includes(role);
+      const permittedIds = new Set([String(existing.responsible_professional_id), ...(existing.participant_professional_ids || []).map(String)]);
+      if (!canManageAny && !permittedIds.has(actorId)) {
+        return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_EDIT_DENIED' });
+      }
+      if (!canManageAny) {
+        const { data: actorLink, error: actorLinkError } = await supabase
+          .from('patient_professional_links')
+          .select('permissions,status')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('professional_id', actorId)
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle();
+        if (actorLinkError) throw actorLinkError;
+        if (!actorLink || (actorLink as any)?.permissions?.write === false) {
+          return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_EDIT_DENIED' });
+        }
+      }
+      const expectedVersion = Number(req.body?.expectedVersion ?? req.body?.expected_version);
+      if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== Number(existing.edit_version)) {
+        return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_VERSION_CONFLICT', message: 'Este plano foi atualizado por outra pessoa. Recarregue antes de salvar.' });
+      }
+      const nextStatus = sanitizeString(req.body?.status ?? existing.status, 40).toLowerCase();
+      if (!['draft', 'active', 'paused', 'completed', 'archived'].includes(nextStatus)) {
+        return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_STATUS_INVALID' });
+      }
+      const now = new Date().toISOString();
+      const { error: versionError } = await supabase.from('patient_therapeutic_plan_versions').upsert({
+        plan_id: planId,
+        organization_id: organizationId,
+        patient_id: patientId,
+        version: Number(existing.edit_version),
+        snapshot: existing,
+        authored_by: actorId,
+        authorized_reader_ids: Array.from(new Set([
+          String(existing.responsible_professional_id || ''),
+          ...(existing.participant_professional_ids || []).map(String)
+        ])).filter(Boolean),
+        created_at: now
+      }, { onConflict: 'plan_id,version', ignoreDuplicates: true });
+      if (versionError) throw versionError;
+      const { data, error } = await supabase
+        .from('patient_therapeutic_plans')
+        .update({
+          common_objectives: sanitizeClinicalPayload(req.body?.commonObjectives ?? req.body?.common_objectives ?? existing.common_objectives),
+          specialty_objectives: sanitizeClinicalPayload(req.body?.specialtyObjectives ?? req.body?.specialty_objectives ?? existing.specialty_objectives),
+          status: nextStatus,
+          edit_version: expectedVersion + 1,
+          updated_by: actorId,
+          updated_at: now
+        })
+        .eq('id', planId)
+        .eq('organization_id', organizationId)
+        .eq('edit_version', expectedVersion)
+        .select('*')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_VERSION_CONFLICT', message: 'Este plano foi atualizado por outra pessoa. Recarregue antes de salvar.' });
+      return res.json({ success: true, data, message: 'Plano versionado sem alterar versões anteriores.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId [PATCH]', error, {
+        fallbackMessage: 'Não foi possível atualizar o escopo do Plano terapêutico.'
       });
     }
   });
@@ -58270,6 +59336,21 @@ async function startServer() {
         }
         throw firstError;
       }
+      const authorIds = Array.from(new Set(
+        (templateResult.data || [])
+          .map((template: any) => sanitizeString(template.created_by, 120))
+          .filter(isUuid)
+      ));
+      const { data: authors, error: authorError } = authorIds.length
+        ? await supabase
+            .from('users')
+            .select('id,name')
+            .eq('clinic_id', clinicId)
+            .in('id', authorIds)
+            .limit(300)
+        : { data: [], error: null };
+      if (authorError) throw authorError;
+      const authorById = new Map((authors || []).map((author: any) => [String(author.id), sanitizeString(author.name, 180) || 'Profissional']));
       const usageByTemplate = new Map<string, number>();
       for (const row of usageResult.data || []) {
         const templateId = sanitizeString((row as any)?.origin_id, 180);
@@ -58279,11 +59360,18 @@ async function startServer() {
         .filter((template: any) => {
           const scope = String(template.source_scope || '').toUpperCase();
           const status = String(template.status || '').toUpperCase();
-          if (scope === 'PERSONAL') return String(template.owner_user_id || '') === actorId;
+          const visibility = sanitizeString(template.visibility, 20) === 'private' ? 'private' : 'clinic';
+          if (scope === 'PERSONAL' || visibility === 'private') {
+            return String(template.owner_user_id || '') === actorId;
+          }
           return canManageLibrary || status === 'PUBLISHED';
         })
-        .map((template: any) => ({ ...template, patient_usage_count: usageByTemplate.get(String(template.id)) || 0 }));
-      return res.json({ success: true, data: visible, meta: { queryCount: 2, batched: true } });
+        .map((template: any) => ({
+          ...template,
+          author_name: authorById.get(String(template.created_by)) || (String(template.source_scope).toUpperCase() === 'VERTO' ? 'Verto' : 'Profissional'),
+          patient_usage_count: usageByTemplate.get(String(template.id)) || 0
+        }));
+      return res.json({ success: true, data: visible, meta: { queryCount: authorIds.length ? 3 : 2, batched: true } });
     } catch (error) {
       return sendRouteDbError(res, '/api/aba/program-templates [GET]', error, {
         fallbackMessage: 'Não foi possível carregar a biblioteca de programas.'
@@ -58299,6 +59387,49 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const role = sanitizeString(req.session.user?.role, 80).toLowerCase();
+      const therapeuticPlanId = sanitizeString(req.body?.therapeuticPlanId || req.body?.therapeutic_plan_id, 120);
+      let therapeuticPlanScope: any = null;
+      if (therapeuticPlanId) {
+        if (!isUuid(therapeuticPlanId)) {
+          return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_INVALID' });
+        }
+        const { data: planScope, error: planScopeError } = await supabase
+          .from('patient_therapeutic_plans')
+          .select('id,responsible_professional_id,participant_professional_ids,status')
+          .eq('id', therapeuticPlanId)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .neq('status', 'archived')
+          .limit(1)
+          .maybeSingle();
+        if (planScopeError) throw planScopeError;
+        if (!planScope) {
+          return res.status(404).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_NOT_FOUND' });
+        }
+        const scopeParticipantIds = new Set([
+          String(planScope.responsible_professional_id || ''),
+          ...(planScope.participant_professional_ids || []).map(String),
+        ]);
+        if (!['owner', 'admin', 'coordinator'].includes(role) && !scopeParticipantIds.has(actorId)) {
+          return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_EDIT_DENIED' });
+        }
+        if (!['owner', 'admin', 'coordinator'].includes(role)) {
+          const { data: activeLink, error: activeLinkError } = await supabase
+            .from('patient_professional_links')
+            .select('permissions')
+            .eq('organization_id', organizationId)
+            .eq('patient_id', patientId)
+            .eq('professional_id', actorId)
+            .eq('status', 'active')
+            .limit(1)
+            .maybeSingle();
+          if (activeLinkError) throw activeLinkError;
+          if (!activeLink || activeLink.permissions?.write === false) {
+            return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_EDIT_DENIED' });
+          }
+        }
+        therapeuticPlanScope = planScope;
+      }
       const canApprove = ['owner', 'admin', 'coordinator'].includes(role);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
       const status = canApprove
@@ -58445,7 +59576,12 @@ async function startServer() {
         p_measurement_type: sanitizeString(req.body?.measurementType || req.body?.measurement_type || 'independent_prompted_no_response', 80),
         p_mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria || req.body?.mastery_criteria || {}),
         p_targets: sanitizeClinicalPayload(targets),
-        p_advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+        p_advanced_settings: sanitizeClinicalPayload({
+          ...(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+          ...(therapeuticPlanScope?.id
+            ? { therapeuticPlanId: therapeuticPlanScope.id }
+            : {}),
+        }),
         p_origin_type: originType,
         p_origin_id: originId,
         p_protocol_id: resolvedProtocolId,
@@ -58605,12 +59741,14 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const role = sanitizeString(req.session.user?.role, 80).toLowerCase();
-      const sourceScope = ['owner', 'admin', 'coordinator'].includes(role) ? 'CLINIC' : 'PERSONAL';
+      const canShareWithClinic = ['owner', 'admin', 'coordinator'].includes(role);
+      const requestedVisibility = sanitizeString(req.body?.visibility, 20) === 'private'
+        ? 'private'
+        : 'clinic';
+      const visibility = canShareWithClinic ? requestedVisibility : 'private';
+      const sourceScope = visibility === 'private' ? 'PERSONAL' : 'CLINIC';
       const programId = sanitizeString(req.body?.programId || req.body?.program_id, 180);
       if (!programId) {
-        if (!['owner', 'admin', 'coordinator'].includes(role)) {
-          return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode publicar modelos da clínica.' });
-        }
         const name = sanitizeTextField(req.body?.name, 240);
         const objective = sanitizeTextField(req.body?.objective, 1000);
         const targets = (Array.isArray(req.body?.suggestedTargets || req.body?.suggested_targets) ? req.body?.suggestedTargets || req.body?.suggested_targets : [])
@@ -58619,6 +59757,22 @@ async function startServer() {
           .filter(Boolean);
         if (!name || !objective || targets.length === 0) {
           return res.status(400).json({ success: false, error: 'Informe nome, objetivo e ao menos um alvo sugerido.' });
+        }
+        const directPrivacy = sanitizeTherapeuticTemplateContent({
+          name,
+          description: sanitizeTextField(req.body?.description || objective, 1000),
+          objective,
+          targets,
+          masteryCriteria: req.body?.masteryCriteria || req.body?.mastery_criteria || {},
+          advancedSettings: req.body?.advancedSettings || req.body?.advanced_settings || {},
+        });
+        if (directPrivacy.redacted && req.body?.privacyAcknowledged !== true) {
+          return res.status(422).json({
+            success: false,
+            error: 'TEMPLATE_PRIVACY_REVIEW_REQUIRED',
+            message: `Revise conteúdo potencialmente identificável: ${directPrivacy.warnings.join(', ')}. Os dados serão removidos do modelo.`,
+            privacyWarnings: directPrivacy.warnings,
+          });
         }
         const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `program-template-direct:${organizationId}:${crypto.randomUUID()}`;
         const status = ['DRAFT', 'PENDING_APPROVAL', 'PUBLISHED'].includes(String(req.body?.status || '').toUpperCase())
@@ -58629,19 +59783,26 @@ async function startServer() {
           id: `template-${crypto.createHash('sha256').update(`${organizationId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`,
           organization_id: organizationId,
           clinic_id: clinicId,
-          source_scope: 'CLINIC',
-          owner_user_id: null,
-          name,
-          description: sanitizeTextField(req.body?.description || objective, 1000),
+          source_scope: sourceScope,
+          owner_user_id: sourceScope === 'PERSONAL' ? actorId : null,
+          name: sanitizeTextField(directPrivacy.sanitized.name, 240),
+          description: sanitizeTextField(directPrivacy.sanitized.description, 1000),
           category: sanitizeString(req.body?.category || 'OUTRO', 120),
-          objective,
-          suggested_targets: sanitizeClinicalPayload(targets),
+          objective: sanitizeTextField(directPrivacy.sanitized.objective, 1000),
+          suggested_targets: sanitizeClinicalPayload(directPrivacy.sanitized.targets),
           measurement_type: sanitizeString(req.body?.measurementType || req.body?.measurement_type || 'independent_prompted_no_response', 80),
           mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria || req.body?.mastery_criteria || {}),
           advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings || req.body?.advanced_settings || {}),
-          status,
-          approved_by: status === 'PUBLISHED' ? actorId : null,
-          approved_at: status === 'PUBLISHED' ? now : null,
+          specialty: sanitizeString(req.body?.specialty, 120) || null,
+          tags: (Array.isArray(req.body?.tags) ? req.body.tags : []).slice(0, 30).map((tag: any) => sanitizeString(tag, 60)).filter(Boolean),
+          structure_snapshot: sanitizeClinicalPayload(directPrivacy.sanitized),
+          template_version: 1,
+          visibility,
+          contains_identifiable_content: false,
+          privacy_warning_acknowledged_at: directPrivacy.redacted ? now : null,
+          status: canShareWithClinic ? status : 'DRAFT',
+          approved_by: canShareWithClinic && status === 'PUBLISHED' ? actorId : null,
+          approved_at: canShareWithClinic && status === 'PUBLISHED' ? now : null,
           idempotency_key: idempotencyKey,
           created_by: actorId,
           created_at: now,
@@ -58649,7 +59810,7 @@ async function startServer() {
         };
         const { data, error } = await supabase.from('aba_program_templates').upsert(directPayload, { onConflict: 'id' }).select(THERAPEUTIC_TEMPLATE_SELECT).single();
         if (error) throw error;
-        return res.status(201).json({ success: true, data, message: status === 'PUBLISHED' ? 'Modelo publicado na biblioteca da clínica.' : 'Rascunho de modelo salvo.' });
+        return res.status(201).json({ success: true, data, message: sourceScope === 'CLINIC' && status === 'PUBLISHED' ? 'Modelo publicado na biblioteca da clínica.' : 'Modelo privado salvo.' });
       }
       const [programResult, targetsResult] = await Promise.all([
         supabase.from('aba_programs').select(THERAPEUTIC_PROGRAM_SELECT).eq('id', programId).eq('organization_id', organizationId).limit(1).maybeSingle(),
@@ -58657,6 +59818,33 @@ async function startServer() {
       ]);
       if (programResult.error || !programResult.data || targetsResult.error) return res.status(404).json({ success: false, error: 'Programa não encontrado nesta clínica.' });
       const program: any = programResult.data;
+      const { data: templatePatient } = await supabase
+        .from('patients')
+        .select('name')
+        .eq('id', program.patient_id)
+        .eq('clinic_id', clinicId)
+        .limit(1)
+        .maybeSingle();
+      const patientName = templatePatient?.name || null;
+      const templatePrivacy = sanitizeTherapeuticTemplateContent({
+        name: req.body?.name || program.name,
+        description: program.description || program.objective,
+        objective: program.objective || program.description,
+        suggestedTargets: (targetsResult.data || []).map((target: any) => ({
+          name: target.name,
+          description: target.description,
+        })),
+        masteryCriteria: program.mastery_criteria || {},
+        advancedSettings: program.advanced_settings || {},
+      }, patientName);
+      if (templatePrivacy.redacted && req.body?.privacyAcknowledged !== true) {
+        return res.status(422).json({
+          success: false,
+          error: 'TEMPLATE_PRIVACY_REVIEW_REQUIRED',
+          message: `Revise conteúdo potencialmente identificável: ${templatePrivacy.warnings.join(', ')}. Os dados serão removidos do modelo.`,
+          privacyWarnings: templatePrivacy.warnings,
+        });
+      }
       const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `program-template:${programId}:${sourceScope}:${actorId}`;
       const templatePayload = {
         id: `template-${crypto.createHash('sha256').update(`${organizationId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`,
@@ -58664,14 +59852,23 @@ async function startServer() {
         clinic_id: clinicId,
         source_scope: sourceScope,
         owner_user_id: sourceScope === 'PERSONAL' ? actorId : null,
-        name: sanitizeTextField(req.body?.name || program.name, 240),
-        description: sanitizeTextField(program.description || program.objective, 1000),
+        name: sanitizeTextField(templatePrivacy.sanitized.name, 240),
+        description: sanitizeTextField(templatePrivacy.sanitized.description, 1000),
         category: sanitizeString(program.category || 'OUTRO', 120),
-        objective: sanitizeTextField(program.objective || program.description, 1000),
-        suggested_targets: sanitizeClinicalPayload((targetsResult.data || []).map((target: any) => target.name)),
+        objective: sanitizeTextField(templatePrivacy.sanitized.objective, 1000),
+        suggested_targets: sanitizeClinicalPayload(
+          (templatePrivacy.sanitized.suggestedTargets as any[] || []).map((target: any) => target.name)
+        ),
         measurement_type: sanitizeString(program.measurement_type || 'independent_prompted_no_response', 80),
         mastery_criteria: sanitizeClinicalPayload(program.mastery_criteria || {}),
         advanced_settings: sanitizeClinicalPayload(program.advanced_settings || {}),
+        specialty: sanitizeString(req.body?.specialty, 120) || null,
+        tags: (Array.isArray(req.body?.tags) ? req.body.tags : []).slice(0, 30).map((tag: any) => sanitizeString(tag, 60)).filter(Boolean),
+        structure_snapshot: sanitizeClinicalPayload(templatePrivacy.sanitized),
+        template_version: 1,
+        visibility,
+        contains_identifiable_content: false,
+        privacy_warning_acknowledged_at: templatePrivacy.redacted ? new Date().toISOString() : null,
         status: sourceScope === 'CLINIC' ? 'PUBLISHED' : 'DRAFT',
         approved_by: sourceScope === 'CLINIC' ? actorId : null,
         approved_at: sourceScope === 'CLINIC' ? new Date().toISOString() : null,
@@ -58690,12 +59887,13 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/program-templates/:templateId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/aba/program-templates/:templateId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Modelo de programa')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const templateId = sanitizeString(req.params.templateId, 180);
       const existingResult = await supabase
         .from('aba_program_templates')
@@ -58707,6 +59905,24 @@ async function startServer() {
         .maybeSingle();
       if (existingResult.error || !existingResult.data) return res.status(404).json({ success: false, error: 'Modelo não encontrado nesta clínica.' });
       const existing: any = existingResult.data;
+      if (
+        actorRole === 'therapist'
+        && (existing.source_scope !== 'PERSONAL' || existing.owner_user_id !== actorId)
+      ) {
+        return res.status(403).json({ success: false, error: 'TEMPLATE_ACCESS_DENIED' });
+      }
+      const saveNewVersion = sanitizeString(req.body?.action, 40) === 'new_version';
+      const expectedVersion = Number(req.body?.expectedVersion ?? existing.template_version ?? 1);
+      if (
+        saveNewVersion
+        && (!Number.isInteger(expectedVersion) || expectedVersion !== Number(existing.template_version || 1))
+      ) {
+        return res.status(409).json({
+          success: false,
+          error: 'TEMPLATE_VERSION_CONFLICT',
+          message: 'O modelo foi atualizado por outra pessoa. Recarregue antes de salvar uma nova versão.'
+        });
+      }
       const requestedStatus = String(req.body?.status || existing.status || 'DRAFT').toUpperCase();
       if (!['DRAFT', 'PENDING_APPROVAL', 'PUBLISHED', 'ARCHIVED'].includes(requestedStatus)) {
         return res.status(400).json({ success: false, error: 'Status de modelo inválido.' });
@@ -58715,28 +59931,76 @@ async function startServer() {
       const targets = Array.isArray(targetsInput)
         ? targetsInput.slice(0, 50).map((target: any) => sanitizeTextField(typeof target === 'string' ? target : target?.name, 240)).filter(Boolean)
         : existing.suggested_targets;
+      const privacyReview = sanitizeTherapeuticTemplateContent({
+        name: req.body?.name ?? existing.name,
+        description: req.body?.description ?? existing.description,
+        objective: req.body?.objective ?? existing.objective,
+        suggestedTargets: targets,
+        masteryCriteria: req.body?.masteryCriteria ?? req.body?.mastery_criteria ?? existing.mastery_criteria ?? {},
+        advancedSettings: req.body?.advancedSettings ?? req.body?.advanced_settings ?? existing.advanced_settings ?? {},
+      });
+      if (privacyReview.redacted && req.body?.privacyAcknowledged !== true) {
+        return res.status(422).json({
+          success: false,
+          error: 'TEMPLATE_PRIVACY_REVIEW_REQUIRED',
+          message: `Revise conteúdo potencialmente identificável: ${privacyReview.warnings.join(', ')}. Os dados serão removidos do modelo.`,
+          privacyWarnings: privacyReview.warnings,
+        });
+      }
+      const requestedVisibility = sanitizeString(req.body?.visibility ?? existing.visibility, 20) === 'private'
+        ? 'private'
+        : 'clinic';
+      const canShareWithClinic = ['owner', 'admin', 'coordinator'].includes(actorRole);
+      const visibility = canShareWithClinic ? requestedVisibility : 'private';
       const patch = {
-        name: sanitizeTextField(req.body?.name ?? existing.name, 240),
-        description: sanitizeTextField(req.body?.description ?? existing.description, 1000),
+        name: sanitizeTextField(privacyReview.sanitized.name, 240),
+        description: sanitizeTextField(privacyReview.sanitized.description, 1000),
         category: sanitizeString(req.body?.category ?? existing.category, 120),
-        objective: sanitizeTextField(req.body?.objective ?? existing.objective, 1000),
-        suggested_targets: sanitizeClinicalPayload(targets),
+        objective: sanitizeTextField(privacyReview.sanitized.objective, 1000),
+        suggested_targets: sanitizeClinicalPayload(privacyReview.sanitized.suggestedTargets),
         measurement_type: sanitizeString(req.body?.measurementType ?? req.body?.measurement_type ?? existing.measurement_type, 80),
-        mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria ?? req.body?.mastery_criteria ?? existing.mastery_criteria ?? {}),
-        advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings ?? req.body?.advanced_settings ?? existing.advanced_settings ?? {}),
+        mastery_criteria: sanitizeClinicalPayload(privacyReview.sanitized.masteryCriteria),
+        advanced_settings: sanitizeClinicalPayload(privacyReview.sanitized.advancedSettings),
+        specialty: sanitizeString(req.body?.specialty ?? existing.specialty, 120) || null,
+        tags: (Array.isArray(req.body?.tags) ? req.body.tags : existing.tags || []).slice(0, 30).map((tag: any) => sanitizeString(tag, 60)).filter(Boolean),
+        visibility,
+        source_scope: visibility === 'private' ? 'PERSONAL' : 'CLINIC',
+        owner_user_id: visibility === 'private' ? actorId : null,
+        contains_identifiable_content: false,
+        privacy_warning_acknowledged_at: privacyReview.redacted ? new Date().toISOString() : existing.privacy_warning_acknowledged_at,
         status: requestedStatus,
         approved_by: requestedStatus === 'PUBLISHED' ? actorId : existing.approved_by,
         approved_at: requestedStatus === 'PUBLISHED' ? new Date().toISOString() : existing.approved_at,
+        template_version: saveNewVersion
+          ? Number(existing.template_version || 1) + 1
+          : Number(existing.template_version || 1),
+        archived_at: requestedStatus === 'ARCHIVED' ? new Date().toISOString() : null,
         updated_at: new Date().toISOString()
       };
       if (!patch.name || !patch.objective || !Array.isArray(targets) || targets.length === 0) {
         return res.status(400).json({ success: false, error: 'Informe nome, objetivo e ao menos um alvo sugerido.' });
       }
-      const { data, error } = await supabase
+      if (saveNewVersion) {
+        const { error: versionError } = await supabase
+          .from('aba_program_template_versions')
+          .upsert([{
+            template_id: templateId,
+            organization_id: organizationId,
+            clinic_id: clinicId,
+            version: Number(existing.template_version || 1),
+            snapshot: existing,
+            change_reason: sanitizeTextField(req.body?.changeReason, 500) || 'Nova versão do modelo',
+            created_by: actorId
+          }], { onConflict: 'template_id,version', ignoreDuplicates: true });
+        if (versionError) throw versionError;
+      }
+      let updateQuery = supabase
         .from('aba_program_templates')
         .update(patch)
         .eq('id', templateId)
-        .eq('organization_id', organizationId)
+        .eq('organization_id', organizationId);
+      if (saveNewVersion) updateQuery = updateQuery.eq('template_version', expectedVersion);
+      const { data, error } = await updateQuery
         .select(THERAPEUTIC_TEMPLATE_SELECT)
         .single();
       if (error) throw error;
@@ -62823,7 +64087,7 @@ async function startServer() {
         });
         availableItems = uniqueLineItems(targetRows, 'target');
         if (params.itemId) {
-          points = buildAbaClinicalLinePointsFromTargetSummaries(targetRows, { metric: params.metric, groupBy: params.groupBy });
+          points = params.specialty || params.professionalId ? [] : buildAbaClinicalLinePointsFromTargetSummaries(targetRows, { metric: params.metric, groupBy: params.groupBy });
           source = 'aba_target_live_summaries';
           if (points.length === 0 || ['TARGET_ACCURACY', 'TARGET_INDEPENDENCE', 'TARGET_TRIAL_COUNT', 'TARGET_COMPARE_RESPONSES'].includes(params.metric)) {
             const snapshotRows = await fetchAbaSnapshotRows({
@@ -62837,9 +64101,11 @@ async function startServer() {
               dateFromIso: params.dateFromIso,
               dateToIso: params.dateToIso,
               limit: params.limit,
-              significantOnly: false
+              significantOnly: false,
+              specialty: params.specialty,
+              professionalId: params.professionalId
             });
-            if (points.length === 0 && snapshotRows.length > 0) {
+            if (snapshotRows.length > 0 || params.specialty || params.professionalId) {
               points = buildAbaClinicalLinePointsFromSnapshots(snapshotRows, { category: 'target', metric: params.metric, groupBy: params.groupBy });
               source = 'aba_session_metric_snapshots';
             }
@@ -62873,11 +64139,13 @@ async function startServer() {
             dateFromIso: params.dateFromIso,
             dateToIso: params.dateToIso,
             limit: params.limit,
-            significantOnly: false
+            significantOnly: false,
+            specialty: params.specialty,
+            professionalId: params.professionalId
           });
           points = snapshotRows.length > 0
             ? buildAbaClinicalLinePointsFromSnapshots(snapshotRows, { category: 'behavior', metric: params.metric, groupBy: params.groupBy })
-            : buildBehaviorDailyLinePoints(dailyRows, params.metric, params.groupBy);
+            : params.specialty || params.professionalId ? [] : buildBehaviorDailyLinePoints(dailyRows, params.metric, params.groupBy);
           source = snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_behavior_daily_summaries';
         }
       } else if (params.category === 'mastery') {
@@ -62895,8 +64163,12 @@ async function startServer() {
         if (evaluationResult.error && !hasMissingFinancialSchema(evaluationResult.error)) throw evaluationResult.error;
         const evaluationRows = evaluationResult.error ? [] : evaluationResult.data || [];
         availableItems = uniqueLineItems(evaluationRows, 'target');
-        if (params.itemId) points = buildMasteryLinePoints(evaluationRows, params.metric, params.groupBy);
-        source = 'aba_mastery_evaluations';
+        if (params.itemId && (params.specialty || params.professionalId)) {
+          const scopedRows = await fetchAbaSnapshotRows({ patientId, clinicId, organizationId, user: req.session.user, metricTypes: ['MASTERY_STATUS'], targetId: params.itemId, dateFromIso: params.dateFromIso, dateToIso: params.dateToIso, limit: params.limit, specialty: params.specialty, professionalId: params.professionalId });
+          points = buildAbaClinicalLinePointsFromSnapshots(scopedRows, { category: 'mastery', metric: params.metric, groupBy: params.groupBy });
+          source = 'aba_session_metric_snapshots';
+        } else if (params.itemId) points = buildMasteryLinePoints(evaluationRows, params.metric, params.groupBy);
+        if (!(params.specialty || params.professionalId)) source = 'aba_mastery_evaluations';
       } else if (params.category === 'maintenance') {
         let probeQuery = supabase
           .from('aba_maintenance_probe_results')
@@ -62912,8 +64184,12 @@ async function startServer() {
         if (probeResult.error && !hasMissingFinancialSchema(probeResult.error)) throw probeResult.error;
         const probeRows = await enrichMaintenanceRowsWithTargetDisplay(probeResult.error ? [] : probeResult.data || [], clinicId, organizationId, req.session.user);
         availableItems = uniqueLineItems(probeRows, 'target');
-        if (params.itemId) points = buildMaintenanceLinePoints(probeRows, params.metric, params.groupBy);
-        source = 'aba_maintenance_probe_results';
+        if (params.itemId && (params.specialty || params.professionalId)) {
+          const scopedRows = await fetchAbaSnapshotRows({ patientId, clinicId, organizationId, user: req.session.user, metricTypes: ['MAINTENANCE_STATUS', 'REGRESSION_RISK'], targetId: params.itemId, dateFromIso: params.dateFromIso, dateToIso: params.dateToIso, limit: params.limit, specialty: params.specialty, professionalId: params.professionalId });
+          points = buildAbaClinicalLinePointsFromSnapshots(scopedRows, { category: 'maintenance', metric: params.metric, groupBy: params.groupBy });
+          source = 'aba_session_metric_snapshots';
+        } else if (params.itemId) points = buildMaintenanceLinePoints(probeRows, params.metric, params.groupBy);
+        if (!(params.specialty || params.professionalId)) source = 'aba_maintenance_probe_results';
       } else {
         const rows = await fetchAbaSnapshotRows({
           patientId,
@@ -62924,7 +64200,9 @@ async function startServer() {
           dateFromIso: params.dateFromIso,
           dateToIso: params.dateToIso,
           limit: params.limit,
-          significantOnly: false
+          significantOnly: false,
+          specialty: params.specialty,
+          professionalId: params.professionalId
         });
         points = buildAbaClinicalLinePointsFromSnapshots(rows, { category: 'general', metric: params.metric, groupBy: params.groupBy });
         availableItems = uniqueLineItems(rows, 'target');
@@ -62992,7 +64270,9 @@ async function startServer() {
         dateFromIso: params.dateFromIso,
         dateToIso: params.dateToIso,
         limit: params.limit,
-        significantOnly: params.significantOnly
+        significantOnly: params.significantOnly,
+        specialty: params.specialty,
+        professionalId: params.professionalId
       });
       const annotations = await fetchAbaGraphAnnotations({
         patientId,
@@ -63040,7 +64320,9 @@ async function startServer() {
         dateFromIso: params.dateFromIso,
         dateToIso: params.dateToIso,
         limit: params.limit,
-        significantOnly: params.significantOnly
+        significantOnly: params.significantOnly,
+        specialty: params.specialty,
+        professionalId: params.professionalId
       });
 
       const dailyPoints = ((dailyResult.error ? [] : dailyResult.data) || []).flatMap((row: any) => {
@@ -63109,7 +64391,7 @@ async function startServer() {
         const contextPattern = (behaviorKey && patternById.get(behaviorKey)) || patternByName.get(nameKey) || null;
         return contextPattern ? { ...point, contextPattern } : point;
       };
-      const points = (snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : dailyPoints.slice(0, params.limit)).map(attachContextPattern);
+      const points = (snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : params.specialty || params.professionalId ? [] : dailyPoints.slice(0, params.limit)).map(attachContextPattern);
       return res.json({ success: true, data: { points, dailySummaries: dailyResult.error ? [] : dailyResult.data || [], annotations, contextPatterns }, source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_behavior_daily_summaries' });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
@@ -63143,7 +64425,9 @@ async function startServer() {
         dateFromIso: params.dateFromIso,
         dateToIso: params.dateToIso,
         limit: params.limit,
-        significantOnly: params.significantOnly
+        significantOnly: params.significantOnly,
+        specialty: params.specialty,
+        professionalId: params.professionalId
       });
       const fallbackPoints = ((evaluationResult.error ? [] : evaluationResult.data) || []).map((row: any) => ({
         id: row.id,
@@ -63173,7 +64457,7 @@ async function startServer() {
         dateToIso: params.dateToIso,
         targetId: params.targetId
       });
-      return res.json({ success: true, data: { points: snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : fallbackPoints, evaluations: evaluationResult.error ? [] : evaluationResult.data || [], annotations }, source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_mastery_evaluations' });
+      return res.json({ success: true, data: { points: snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : params.specialty || params.professionalId ? [] : fallbackPoints, evaluations: evaluationResult.error ? [] : evaluationResult.data || [], annotations }, source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : params.specialty || params.professionalId ? 'aba_session_metric_snapshots' : 'aba_mastery_evaluations' });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
@@ -63229,7 +64513,9 @@ async function startServer() {
         dateFromIso: params.dateFromIso,
         dateToIso: params.dateToIso,
         limit: params.limit,
-        significantOnly: params.significantOnly
+        significantOnly: params.significantOnly,
+        specialty: params.specialty,
+        professionalId: params.professionalId
       });
       const [schedules, probeResults, alerts] = await Promise.all([
         enrichMaintenanceRowsWithTargetDisplay((scheduleResult as any).error ? [] : (scheduleResult as any).data || [], clinicId, organizationId, req.session.user),
@@ -63267,13 +64553,13 @@ async function startServer() {
       return res.json({
         success: true,
         data: {
-          points: snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : fallbackPoints,
+          points: snapshotRows.length > 0 ? snapshotRows.map(normalizeAbaSnapshotPoint) : params.specialty || params.professionalId ? [] : fallbackPoints,
           schedules,
           probeResults,
           alerts,
           annotations
         },
-        source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_maintenance_probe_results'
+        source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : params.specialty || params.professionalId ? 'aba_session_metric_snapshots' : 'aba_maintenance_probe_results'
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
@@ -63296,7 +64582,9 @@ async function startServer() {
         dateFromIso: params.dateFromIso,
         dateToIso: params.dateToIso,
         limit: params.limit,
-        significantOnly: params.significantOnly
+        significantOnly: params.significantOnly,
+        specialty: params.specialty,
+        professionalId: params.professionalId
       });
       const annotations = await fetchAbaGraphAnnotations({
         patientId,
@@ -63337,7 +64625,9 @@ async function startServer() {
         dateToIso: params.dateToIso,
         limit: Math.min(params.limit, 40),
         significantOnly: false,
-        ascending: false
+        ascending: false,
+        specialty: params.specialty,
+        professionalId: params.professionalId
       });
       const insightRows = rows
         .filter((row: any) => isAbaSignificantChange(row?.change_status, row?.trend_direction) || row?.change_status === 'FIRST_MEASUREMENT')
@@ -69702,6 +70992,9 @@ async function startServer() {
         );
         const immutable = rawCode.includes("PRICING_CATALOG_IMMUTABLE");
         const notFound = rawCode.includes("NOT_FOUND");
+        const capacityPolicyInvalid = rawCode.includes(
+          "PRICING_CUSTOM_CAPACITY_POLICY_INVALID",
+        );
         return res.status(immutable ? 409 : notFound ? 404 : 422).json({
           success: false,
           code: immutable
@@ -69712,12 +71005,16 @@ async function startServer() {
                 : rawCode.includes("ITEM")
                   ? "PRICING_ITEM_NOT_FOUND"
                   : "PRICING_CATALOG_NOT_FOUND"
-              : "PRICING_CATALOG_INVALID",
+              : capacityPolicyInvalid
+                ? "PRICING_CUSTOM_CAPACITY_POLICY_INVALID"
+                : "PRICING_CATALOG_INVALID",
           error: immutable
             ? "Versões publicadas são imutáveis. Crie um novo rascunho."
             : notFound
               ? "O registro do catálogo não foi encontrado."
-              : "Revise os valores informados.",
+              : capacityPolicyInvalid
+                ? "Revise a política de blocos: informe valores válidos, ajuste no próximo ciclo e acesso clínico sempre preservado."
+                : "Revise os valores informados.",
         });
       }
     },
@@ -71704,6 +73001,793 @@ async function startServer() {
         return res
           .status(500)
           .json({ success: false, error: "Não foi possível criar a oferta." });
+      }
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/offers/:offerId/accept",
+    checkAuth,
+    requireRoles("owner"),
+    modularCheckoutLimiter,
+    async (req: any, res) => {
+      const offerId = sanitizeString(req.params?.offerId, 120);
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      if (
+        !isUuid(offerId)
+        || !isUuid(actorUserId)
+        || !hasVerifiedOwnerMfaSession(req.session?.user)
+      ) {
+        return res.status(403).json({ success: false, error: "OWNER_MFA_REQUIRED" });
+      }
+      if (req.body?.commercialValuesConsent !== true) {
+        return res.status(400).json({
+          success: false,
+          error: "COMMERCIAL_VALUES_CONSENT_REQUIRED",
+          message: "Confirme que o aceite incluiu valores promocionais e posteriores.",
+        });
+      }
+      const now = new Date().toISOString();
+      const { data: currentOffer, error: currentError } = await supabase
+        .from("sales_offers")
+        .select("id,lead_id,accepted_at,accepted_terms_at,accepted_terms_snapshot,status,expires_at,revoked_at,offer_type")
+        .eq("id", offerId)
+        .maybeSingle();
+      if (
+        currentError
+        || !currentOffer
+        || currentOffer.offer_type !== "modular"
+        || currentOffer.revoked_at
+        || Date.parse(String(currentOffer.expires_at || "")) <= Date.now()
+      ) {
+        return res.status(409).json({
+          success: false,
+          error: "MODULAR_OFFER_ACCEPTANCE_BLOCKED",
+          message: "A proposta está vencida, revogada ou indisponível para aceite.",
+        });
+      }
+      if (
+        currentOffer.accepted_at
+        && currentOffer.accepted_terms_at
+        && currentOffer.accepted_terms_snapshot?.version === MODULAR_COMMERCIAL_CONSENT_VERSION
+        && currentOffer.accepted_terms_snapshot?.statement === MODULAR_COMMERCIAL_CONSENT_TEXT
+      ) {
+        return res.json({
+          success: true,
+          acceptedAt: currentOffer.accepted_at,
+          idempotent: true,
+        });
+      }
+      if (currentOffer.accepted_at) {
+        const { error: termsError } = await supabase
+          .from("sales_offers")
+          .update({
+            accepted_terms_at: now,
+            accepted_terms_snapshot: {
+              version: MODULAR_COMMERCIAL_CONSENT_VERSION,
+              statement: MODULAR_COMMERCIAL_CONSENT_TEXT,
+              source: "owner_assisted",
+              capturedAt: now,
+            },
+            updated_at: now,
+          })
+          .eq("id", offerId)
+          .eq("accepted_at", currentOffer.accepted_at);
+        if (termsError) {
+          return res.status(500).json({
+            success: false,
+            error: "MODULAR_OFFER_ACCEPTANCE_FAILED",
+          });
+        }
+        return res.json({
+          success: true,
+          acceptedAt: currentOffer.accepted_at,
+          idempotent: false,
+        });
+      }
+      const { data: offer, error } = await supabase
+        .from("sales_offers")
+        .update({
+          accepted_at: now,
+          accepted_terms_at: now,
+          accepted_terms_snapshot: {
+            version: MODULAR_COMMERCIAL_CONSENT_VERSION,
+            statement: MODULAR_COMMERCIAL_CONSENT_TEXT,
+            source: "owner_assisted",
+            capturedAt: now,
+          },
+          updated_at: now,
+        })
+        .eq("id", offerId)
+        .eq("offer_type", "modular")
+        .is("revoked_at", null)
+        .gt("expires_at", now)
+        .in("status", ["ready", "sent", "opened", "checkout_created"])
+        .is("accepted_at", null)
+        .select("id,lead_id,accepted_at")
+        .maybeSingle();
+      if (error || !offer) {
+        return res.status(409).json({
+          success: false,
+          error: "MODULAR_OFFER_ACCEPTANCE_BLOCKED",
+          message: "A proposta está vencida, revogada ou indisponível para aceite.",
+        });
+      }
+      await supabase.from("sales_lead_events").upsert(
+        [{
+          lead_id: offer.lead_id,
+          event_type: "lead_updated",
+          actor_user_id: actorUserId,
+          metadata: {
+            action: "modular_offer_acceptance_recorded_by_owner",
+            offer_id: offer.id,
+            commercial_values_consent: true,
+          },
+          idempotency_key: `modular-offer-owner-accepted:${offer.id}`,
+        }],
+        { onConflict: "idempotency_key", ignoreDuplicates: true },
+      );
+      return res.json({ success: true, acceptedAt: offer.accepted_at || now });
+    },
+  );
+
+  app.get(
+    "/api/public/sales-checkouts/:token",
+    publicSalesLeadIpLimiter,
+    async (req: any, res) => {
+      const token = sanitizeString(req.params?.token, 300);
+      if (token.length < 32) {
+        return res.status(404).send("Link de pagamento indisponível.");
+      }
+      const { data: link, error } = await supabase
+        .from("sales_checkout_links")
+        .select("id,offer_id,lead_id,checkout_url,status,expires_at,logically_expired_at")
+        .eq("public_token_hash", hashSalesOfferToken(token))
+        .maybeSingle();
+      const expired = !link?.expires_at
+        || !Number.isFinite(Date.parse(String(link.expires_at)))
+        || Date.parse(String(link.expires_at)) <= Date.now();
+      if (
+        error
+        || !link?.checkout_url
+        || expired
+        || link.logically_expired_at
+        || !["active", "sent", "opened", "payment_pending"].includes(link.status)
+      ) {
+        return res.status(404).send("Link de pagamento indisponível ou expirado.");
+      }
+      const now = new Date().toISOString();
+      await Promise.all([
+        supabase
+          .from("sales_checkout_links")
+          .update({
+            status: link.status === "payment_pending" ? link.status : "opened",
+            last_opened_at: now,
+            updated_at: now,
+          })
+          .eq("id", link.id)
+          .in("status", ["active", "sent", "opened", "payment_pending"]),
+        supabase.from("sales_lead_events").upsert(
+          [{
+            lead_id: link.lead_id,
+            event_type: "checkout_opened",
+            metadata: { offer_id: link.offer_id, checkout_link_id: link.id },
+            idempotency_key: `modular-checkout-opened:${link.id}`,
+          }],
+          { onConflict: "idempotency_key", ignoreDuplicates: true },
+        ),
+        supabase
+          .from("sales_leads")
+          .update({ status: "checkout_opened", updated_at: now })
+          .eq("id", link.lead_id)
+          .in("status", ["proposal_sent", "checkout_sent", "checkout_opened"])
+          .is("deleted_at", null),
+      ]);
+      return res.redirect(303, link.checkout_url);
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/offers/:offerId/modular-checkout",
+    checkAuth,
+    requireRoles("owner"),
+    modularCheckoutLimiter,
+    async (req: any, res) => {
+      const offerId = sanitizeString(req.params?.offerId, 120);
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const idempotencyKey = sanitizeString(
+        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
+        180,
+      );
+      const regenerate = req.body?.regenerate === true;
+      if (
+        !isUuid(offerId)
+        || !isUuid(actorUserId)
+        || idempotencyKey.length < 12
+        || !hasVerifiedOwnerMfaSession(req.session?.user)
+      ) {
+        return res.status(403).json({
+          success: false,
+          code: "MODULAR_CHECKOUT_OWNER_MFA_REQUIRED",
+          error: "Esta ação exige owner com MFA validado.",
+        });
+      }
+      if (
+        req.body?.amount
+        || req.body?.price
+        || req.body?.prices
+        || req.body?.discount
+        || req.body?.lineItems
+        || req.body?.organizationId
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "MODULAR_CHECKOUT_BROWSER_VALUES_REJECTED",
+          error: "Valores e tenant são reconstruídos no servidor.",
+        });
+      }
+      try {
+        const [offerResult, itemResult] = await Promise.all([
+          supabase
+            .from("sales_offers")
+            .select(
+              "id,lead_id,offer_type,status,accepted_at,accepted_terms_at,accepted_terms_snapshot,expires_at,revoked_at,currency,catalog_version_id,simulation_snapshot,modular_snapshot,internal_justification",
+            )
+            .eq("id", offerId)
+            .maybeSingle(),
+          supabase
+            .from("sales_offer_items")
+            .select(
+              "id,item_key,public_name_snapshot,pricing_mode_snapshot,gross_recurring_amount_cents,recurring_amount_cents,post_promotion_recurring_amount_cents,one_time_amount_cents,internal_result_snapshot,sort_order",
+            )
+            .eq("offer_id", offerId)
+            .order("sort_order", { ascending: true }),
+        ]);
+        if (offerResult.error || itemResult.error) {
+          throw offerResult.error || itemResult.error;
+        }
+        const offer = offerResult.data;
+        if (!offer || sanitizeString(offer.offer_type, 30) !== "modular") {
+          return res.status(404).json({
+            success: false,
+            code: "MODULAR_OFFER_NOT_FOUND",
+            error: "Proposta modular não encontrada.",
+          });
+        }
+        if (!["ready", "sent", "opened", "checkout_created", "payment_pending"].includes(
+          sanitizeString(offer.status, 40),
+        )) {
+          return res.status(409).json({
+            success: false,
+            code: "MODULAR_OFFER_STATE_INVALID",
+            error: "O estado atual da proposta não permite gerar Checkout.",
+          });
+        }
+        if (
+          !offer.accepted_at
+          || !offer.accepted_terms_at
+          || offer.accepted_terms_snapshot?.version !== MODULAR_COMMERCIAL_CONSENT_VERSION
+          || offer.accepted_terms_snapshot?.statement !== MODULAR_COMMERCIAL_CONSENT_TEXT
+        ) {
+          return res.status(409).json({
+            success: false,
+            code: "MODULAR_OFFER_ACCEPTANCE_REQUIRED",
+            error: "Registre o aceite explícito antes de gerar o link.",
+          });
+        }
+        if (
+          offer.revoked_at
+          || !Number.isFinite(Date.parse(String(offer.expires_at || "")))
+          || Date.parse(String(offer.expires_at)) <= Date.now()
+        ) {
+          return res.status(409).json({
+            success: false,
+            code: "MODULAR_OFFER_EXPIRED",
+            error: "A proposta está vencida ou revogada.",
+          });
+        }
+        const snapshot =
+          offer.modular_snapshot && typeof offer.modular_snapshot === "object"
+            ? offer.modular_snapshot
+            : {};
+        const frozenResults =
+          offer.simulation_snapshot?.results
+          && typeof offer.simulation_snapshot.results === "object"
+            ? offer.simulation_snapshot.results
+            : {};
+        const phases = Array.isArray(snapshot.commercialPhases)
+          ? snapshot.commercialPhases
+          : Array.isArray(frozenResults.commercialPhases)
+            ? frozenResults.commercialPhases
+            : [];
+        if (phases.length < 1 || !Array.isArray(itemResult.data) || itemResult.data.length < 1) {
+          return res.status(422).json({
+            success: false,
+            code: "MODULAR_CHECKOUT_SNAPSHOT_INCOMPLETE",
+            error: "O snapshot congelado não contém fases reconciliáveis.",
+          });
+        }
+        if (
+          frozenResults.requiresJustification === true
+          && sanitizeString(offer.internal_justification, 2000).length < 12
+        ) {
+          return res.status(409).json({
+            success: false,
+            code: "MODULAR_CHECKOUT_MARGIN_JUSTIFICATION_REQUIRED",
+            error: "A margem desta proposta exige justificativa comercial antes do Checkout.",
+          });
+        }
+        const firstPhase = phases[0];
+        const lastPhase = phases[phases.length - 1];
+        const frozenItemsByKey = new Map(
+          (itemResult.data || []).map((item: any) => [sanitizeString(item.item_key, 80), item]),
+        );
+        const phaseIsReconciled = (phase: any, phaseKind: "promotional" | "future") => {
+          if (!phase || !Array.isArray(phase.lines)) return false;
+          let recurringTotal = 0;
+          let oneTimeTotal = 0;
+          for (const line of phase.lines) {
+            const itemKey = sanitizeString(line?.itemKey, 80);
+            const stored: any = frozenItemsByKey.get(itemKey);
+            const amount = Number(line?.activePriceCents);
+            if (!stored || !Number.isSafeInteger(amount) || amount < 0) return false;
+            if (sanitizeString(line?.billingInterval, 30) === "one_time") {
+              if (phaseKind === "promotional") {
+                oneTimeTotal += amount;
+                if (amount !== Number(stored.one_time_amount_cents || 0)) return false;
+              }
+              continue;
+            }
+            recurringTotal += amount;
+            const storedAmount = phaseKind === "promotional"
+              ? Number(stored.recurring_amount_cents || 0)
+              : Number(stored.post_promotion_recurring_amount_cents || stored.gross_recurring_amount_cents || 0);
+            if (amount !== storedAmount) return false;
+          }
+          return recurringTotal === Number(phase.recurringRevenueCents)
+            && (phaseKind !== "promotional" || recurringTotal + oneTimeTotal === Number(phase.invoiceAmountCents));
+        };
+        const everyPhaseIsInternallyReconciled = phases.every((phase: any, phaseIndex: number) => {
+          if (!phase || !Array.isArray(phase.lines) || phase.lines.length < 1) return false;
+          const itemKeys = new Set<string>();
+          let recurringTotal = 0;
+          let oneTimeTotal = 0;
+          for (const line of phase.lines) {
+            const itemKey = sanitizeString(line?.itemKey, 80);
+            const amount = Number(line?.activePriceCents);
+            if (
+              !itemKey
+              || itemKeys.has(itemKey)
+              || !frozenItemsByKey.has(itemKey)
+              || !Number.isSafeInteger(amount)
+              || amount < 0
+            ) {
+              return false;
+            }
+            itemKeys.add(itemKey);
+            if (sanitizeString(line?.billingInterval, 30) === "one_time") {
+              const stored: any = frozenItemsByKey.get(itemKey);
+              if (amount !== Number(stored?.one_time_amount_cents || 0)) return false;
+              if (phaseIndex === 0) oneTimeTotal += amount;
+            } else {
+              recurringTotal += amount;
+            }
+          }
+          return recurringTotal === Number(phase.recurringRevenueCents)
+            && recurringTotal + oneTimeTotal === Number(phase.invoiceAmountCents);
+        });
+        if (
+          !everyPhaseIsInternallyReconciled
+          || !phaseIsReconciled(firstPhase, "promotional")
+          || !phaseIsReconciled(lastPhase, "future")
+        ) {
+          return res.status(422).json({
+            success: false,
+            code: "MODULAR_CHECKOUT_RECONCILIATION_FAILED",
+            error: "Os valores congelados da proposta não reconciliam com seus itens.",
+          });
+        }
+        const capacity =
+          snapshot.capacity
+          || snapshot.basePackage?.capacity
+          || frozenResults.basePackage?.capacity
+          || null;
+        const checkoutPlan = buildFrozenStripeCheckoutPlan({
+          currency: sanitizeString(offer.currency, 12) || "brl",
+          phases,
+          capacity,
+          effectiveAt: new Date().toISOString(),
+        });
+        const requestHash = crypto
+          .createHash("sha256")
+          .update(JSON.stringify({
+            offerId,
+            environment: "test",
+            checkoutPlan: checkoutPlan.reconciliationHashInput,
+          }))
+          .digest("hex");
+        const checkoutPublicToken = deriveSalesCheckoutPublicToken(
+          offerId,
+          `${requestHash}:${idempotencyKey}`,
+        );
+        const { data: sameKey, error: sameKeyError } = await supabase
+          .from("sales_checkout_links")
+          .select("*")
+          .eq("created_by", actorUserId)
+          .eq("idempotency_key", idempotencyKey)
+          .maybeSingle();
+        if (sameKeyError) throw sameKeyError;
+        if (sameKey) {
+          if (sameKey.request_hash !== requestHash || sameKey.offer_id !== offerId) {
+            return res.status(409).json({
+              success: false,
+              code: "MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT",
+              error: "A chave já foi usada com outro payload.",
+            });
+          }
+          return res.json({
+            success: true,
+            link: serializeSalesCheckoutLink(req, sameKey),
+            idempotent: true,
+          });
+        }
+        const { data: activeLink, error: activeLinkError } = await supabase
+          .from("sales_checkout_links")
+          .select("*")
+          .eq("offer_id", offerId)
+          .eq("environment", "test")
+          .in("status", ["active", "sent", "opened", "payment_pending"])
+          .maybeSingle();
+        if (activeLinkError) throw activeLinkError;
+        if (activeLink && !regenerate) {
+          return res.json({
+            success: true,
+            link: serializeSalesCheckoutLink(req, activeLink),
+            idempotent: true,
+          });
+        }
+        if (!activeLink) {
+          const { data: failedSubscriptionLink, error: failedSubscriptionError } = await supabase
+            .from("sales_checkout_links")
+            .select("id,stripe_subscription_id,status")
+            .eq("offer_id", offerId)
+            .eq("environment", "test")
+            .eq("status", "failed")
+            .not("stripe_subscription_id", "is", null)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (failedSubscriptionError) throw failedSubscriptionError;
+          if (failedSubscriptionLink?.stripe_subscription_id) {
+            return res.status(409).json({
+              success: false,
+              code: "MODULAR_CHECKOUT_PAYMENT_RECOVERY_REQUIRED",
+              error: "A assinatura já existe e possui falha de cobrança. Regularize-a na Stripe sem criar outra assinatura.",
+            });
+          }
+        }
+        const stripeSecret = sanitizeString(process.env.STRIPE_SECRET_KEY, 300);
+        if (!stripeSecret.startsWith("sk_test_")) {
+          return res.status(503).json({
+            success: false,
+            code: "MODULAR_CHECKOUT_TEST_CONFIGURATION_REQUIRED",
+            error: "Configure credenciais Stripe de teste para validar este fluxo.",
+          });
+        }
+        if (activeLink && regenerate) {
+          await supabase
+            .from("sales_checkout_links")
+            .update({
+              status: "expired",
+              logically_expired_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", activeLink.id)
+            .in("status", ["active", "sent", "opened", "payment_pending"]);
+          if (activeLink.stripe_checkout_session_id) {
+            await getStripe().checkout.sessions.expire(
+              activeLink.stripe_checkout_session_id,
+            ).catch(() => undefined);
+          }
+        }
+        const { data: lead, error: leadError } = await supabase
+          .from("sales_leads")
+          .select("id,email,normalized_email")
+          .eq("id", offer.lead_id)
+          .is("deleted_at", null)
+          .maybeSingle();
+        if (leadError || !lead) throw leadError || new Error("SALES_LEAD_NOT_FOUND");
+        const origin = salesApplicationOrigin(req);
+        const stripeMetadata: Record<string, string> = {
+          flowType: "sales_modular_assisted",
+          offerId,
+          leadId: offer.lead_id,
+          requestHash,
+          catalogVersion: sanitizeString(
+            snapshot.catalogVersion || offer.catalog_version_id,
+            100,
+          ),
+          assumptionsVersion: sanitizeString(
+            snapshot.assumptionsSnapshotVersion
+              || offer.simulation_snapshot?.assumptionSetId,
+            100,
+          ),
+          environment: "test",
+        };
+        const session = await getStripe().checkout.sessions.create(
+          {
+            mode: "subscription",
+            client_reference_id: offerId,
+            customer_email:
+              sanitizeEmail(lead.normalized_email || lead.email) || undefined,
+            success_url: `${origin}/oferta/pagamento?payment=success&session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${origin}/oferta/pagamento?payment=cancelled`,
+            expires_at: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
+            metadata: stripeMetadata,
+            subscription_data: { metadata: stripeMetadata },
+            line_items: checkoutPlan.initialLineItems.map((line) => ({
+              quantity: 1,
+              price_data: {
+                currency: checkoutPlan.currency,
+                unit_amount: line.unitAmountCents,
+                product_data: {
+                  name: line.description,
+                  metadata: line.metadata,
+                },
+                ...(line.recurring
+                  ? { recurring: { interval: "month" as const } }
+                  : {}),
+              },
+            })),
+          },
+          {
+            idempotencyKey: crypto
+              .createHash("sha256")
+              .update(`modular-checkout:${offerId}:${requestHash}:${idempotencyKey}`)
+              .digest("hex"),
+          },
+        );
+        if (!session.url) throw new Error("STRIPE_CHECKOUT_URL_MISSING");
+        const linkPayload = {
+          offer_id: offerId,
+          lead_id: offer.lead_id,
+          environment: "test",
+          status: "active",
+          request_hash: requestHash,
+          idempotency_key: idempotencyKey,
+          stripe_checkout_session_id: session.id,
+          checkout_url: session.url,
+          public_token_hash: hashSalesOfferToken(checkoutPublicToken),
+          catalog_snapshot_version: sanitizeString(
+            snapshot.catalogVersion || offer.catalog_version_id,
+            100,
+          ),
+          assumptions_snapshot_version: sanitizeString(
+            snapshot.assumptionsSnapshotVersion
+              || offer.simulation_snapshot?.assumptionSetId,
+            100,
+          ),
+          checkout_plan_snapshot: checkoutPlan,
+          initial_amount_cents: checkoutPlan.initialAmountCents,
+          promotional_monthly_cents: checkoutPlan.promotionalMonthlyCents,
+          future_monthly_cents: checkoutPlan.futureMonthlyCents,
+          one_time_cents: checkoutPlan.oneTimeCents,
+          expires_at: new Date(Number(session.expires_at) * 1000).toISOString(),
+          created_by: actorUserId,
+        };
+        const { data: storedLink, error: storeError } = await supabase
+          .from("sales_checkout_links")
+          .insert([linkPayload])
+          .select("*")
+          .single();
+        if (storeError) {
+          await getStripe().checkout.sessions.expire(session.id).catch(() => undefined);
+          if (String(storeError.code || "") === "23505") {
+            const { data: racedLink, error: racedLinkError } = await supabase
+              .from("sales_checkout_links")
+              .select("*")
+              .eq("offer_id", offerId)
+              .eq("environment", "test")
+              .in("status", ["active", "sent", "opened", "payment_pending"])
+              .maybeSingle();
+            if (racedLinkError) throw racedLinkError;
+            if (racedLink) {
+              return res.json({
+                success: true,
+                link: serializeSalesCheckoutLink(req, racedLink),
+                idempotent: true,
+              });
+            }
+          }
+          throw storeError;
+        }
+        await Promise.all([
+          supabase.from("sales_lead_events").upsert(
+            [{
+              lead_id: offer.lead_id,
+              event_type: "checkout_created",
+              actor_user_id: actorUserId,
+              metadata: {
+                offer_id: offerId,
+                checkout_link_id: storedLink.id,
+                environment: "test",
+              },
+              idempotency_key: `modular-checkout-created:${storedLink.id}`,
+            }],
+            { onConflict: "idempotency_key", ignoreDuplicates: true },
+          ),
+          supabase
+            .from("sales_offers")
+            .update({
+              status: "checkout_created",
+              stripe_checkout_session_id: session.id,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", offerId)
+            .eq("lead_id", offer.lead_id)
+            .in("status", ["ready", "sent", "opened", "checkout_created"]),
+        ]);
+        return res.status(201).json({
+          success: true,
+          link: serializeSalesCheckoutLink(req, storedLink),
+          idempotent: false,
+        });
+      } catch (error: any) {
+        console.error("[Sales Modular Checkout] Falha ao gerar link.", {
+          offerId,
+          actorUserId,
+          code: sanitizeString(error?.code, 100),
+          message: sanitizeString(error?.message || String(error), 220),
+        });
+        return res.status(500).json({
+          success: false,
+          code: "MODULAR_CHECKOUT_CREATION_FAILED",
+          error: "Não foi possível gerar o link de pagamento.",
+        });
+      }
+    },
+  );
+
+  app.get(
+    "/api/owner/sales/offers/:offerId/modular-checkout",
+    checkAuth,
+    requireRoles("owner"),
+    async (req: any, res) => {
+      const offerId = sanitizeString(req.params?.offerId, 120);
+      if (!isUuid(offerId)) return res.status(400).json({ success: false, error: "OFFER_INVALID" });
+      const { data, error } = await supabase
+        .from("sales_checkout_links")
+        .select("*")
+        .eq("offer_id", offerId)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (error) return res.status(500).json({ success: false, error: "CHECKOUT_LINKS_UNAVAILABLE" });
+      const { data: offer } = await supabase
+        .from("sales_offers")
+        .select("accepted_at,accepted_terms_at")
+        .eq("id", offerId)
+        .eq("offer_type", "modular")
+        .maybeSingle();
+      return res.json({
+        success: true,
+        acceptedAt: offer?.accepted_at && offer?.accepted_terms_at
+          ? offer.accepted_at
+          : null,
+        links: (data || []).map((link: any) => serializeSalesCheckoutLink(req, link)),
+      });
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/offers/:offerId/modular-checkout/expire",
+    checkAuth,
+    requireRoles("owner"),
+    modularCheckoutLimiter,
+    async (req: any, res) => {
+      const offerId = sanitizeString(req.params?.offerId, 120);
+      const linkId = sanitizeString(req.body?.linkId, 120);
+      if (!isUuid(offerId) || !isUuid(linkId) || !hasVerifiedOwnerMfaSession(req.session?.user)) {
+        return res.status(403).json({ success: false, error: "OWNER_MFA_REQUIRED" });
+      }
+      const { data: link, error } = await supabase
+        .from("sales_checkout_links")
+        .select("id,lead_id,stripe_checkout_session_id,status")
+        .eq("id", linkId)
+        .eq("offer_id", offerId)
+        .maybeSingle();
+      if (error || !link) return res.status(404).json({ success: false, error: "CHECKOUT_LINK_NOT_FOUND" });
+      if (link.stripe_checkout_session_id && link.status !== "expired") {
+        await getStripe().checkout.sessions.expire(link.stripe_checkout_session_id).catch(() => undefined);
+      }
+      const now = new Date().toISOString();
+      await Promise.all([
+        supabase.from("sales_checkout_links").update({ status: "expired", logically_expired_at: now, updated_at: now }).eq("id", linkId),
+        supabase.from("sales_lead_events").upsert(
+          [{
+            lead_id: link.lead_id,
+            event_type: "checkout_expired",
+            actor_user_id: req.session.user.id,
+            metadata: { offer_id: offerId, checkout_link_id: linkId },
+            idempotency_key: `modular-checkout-expired:${linkId}`,
+          }],
+          { onConflict: "idempotency_key", ignoreDuplicates: true },
+        ),
+      ]);
+      return res.json({ success: true, expiredAt: now });
+    },
+  );
+
+  app.post(
+    "/api/owner/sales/offers/:offerId/modular-checkout/email",
+    checkAuth,
+    requireRoles("owner"),
+    modularCheckoutLimiter,
+    async (req: any, res) => {
+      const offerId = sanitizeString(req.params?.offerId, 120);
+      const linkId = sanitizeString(req.body?.linkId, 120);
+      if (!isUuid(offerId) || !isUuid(linkId) || !hasVerifiedOwnerMfaSession(req.session?.user)) {
+        return res.status(403).json({ success: false, error: "OWNER_MFA_REQUIRED" });
+      }
+      const { data: link, error: linkError } = await supabase
+        .from("sales_checkout_links")
+        .select("id,offer_id,lead_id,checkout_url,request_hash,status,environment")
+        .eq("id", linkId)
+        .eq("offer_id", offerId)
+        .in("status", ["active", "sent", "opened", "payment_pending"])
+        .maybeSingle();
+      if (linkError || !link?.checkout_url) {
+        return res.status(404).json({ success: false, error: "ACTIVE_CHECKOUT_LINK_NOT_FOUND" });
+      }
+      const { data: lead, error: leadError } = await supabase
+        .from("sales_leads")
+        .select("email,normalized_email")
+        .eq("id", link.lead_id)
+        .is("deleted_at", null)
+        .maybeSingle();
+      const recipient = sanitizeEmail(lead?.normalized_email || lead?.email);
+      if (leadError || !recipient) {
+        return res.status(422).json({ success: false, error: "LEAD_EMAIL_REQUIRED" });
+      }
+      try {
+        const publicCheckoutUrl = serializeSalesCheckoutLink(req, link).publicCheckoutUrl;
+        const email = await getResend().emails.send(
+          {
+            from: sanitizeString(process.env.RESEND_FROM_EMAIL, 320) || OFFICIAL_FROM_NOREPLY,
+            to: recipient,
+            subject: "Seu link individual de pagamento Verto",
+            html: `<div style="font-family:Arial,sans-serif;color:#1e293b;line-height:1.6"><h1 style="font-size:20px">Pagamento da proposta Verto</h1><p>O aceite comercial foi registrado. Use o link individual abaixo para concluir o pagamento em ambiente ${link.environment === "test" ? "de teste" : "de produção"}.</p><p><a href="${escapeHtml(publicCheckoutUrl)}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#7c3aed;color:#fff;text-decoration:none">Abrir Checkout seguro</a></p><p style="font-size:12px;color:#64748b">Esta mensagem contém apenas informações comerciais e não inclui dados clínicos.</p></div>`,
+          },
+          { idempotencyKey: `modular-checkout-email:${linkId}` },
+        );
+        if (email.error) throw email.error;
+        const now = new Date().toISOString();
+        await Promise.all([
+          supabase.from("sales_checkout_links").update({ status: "sent", updated_at: now }).eq("id", linkId),
+          supabase
+            .from("sales_leads")
+            .update({ status: "checkout_sent", updated_at: now })
+            .eq("id", link.lead_id)
+            .in("status", ["proposal_sent", "checkout_sent", "checkout_opened"])
+            .is("deleted_at", null),
+          supabase.from("sales_lead_events").upsert(
+            [{
+              lead_id: link.lead_id,
+              event_type: "checkout_sent",
+              actor_user_id: req.session.user.id,
+              metadata: { offer_id: offerId, checkout_link_id: linkId },
+              idempotency_key: `modular-checkout-sent:${linkId}`,
+            }],
+            { onConflict: "idempotency_key", ignoreDuplicates: true },
+          ),
+        ]);
+        return res.json({ success: true, sentAt: now });
+      } catch (error: any) {
+        console.warn("[Sales Modular Checkout] Envio de link falhou.", {
+          offerId,
+          linkId,
+          message: sanitizeString(error?.message || String(error), 180),
+        });
+        return res.status(502).json({ success: false, error: "CHECKOUT_EMAIL_FAILED" });
       }
     },
   );

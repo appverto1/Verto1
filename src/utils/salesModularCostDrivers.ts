@@ -2,6 +2,7 @@ import type {
   SalesUsageProfile,
   SimulationValueSource
 } from './salesProfitability';
+import { validateCustomCapacityPolicy } from './salesCommercialEvolution';
 
 export type ModularCostOwnershipValue =
   | 'shared'
@@ -393,6 +394,7 @@ export type SalesCatalogPublicationBlock = {
     | 'POSSIBLE_DUPLICATE_COST'
     | 'INCLUDED_STORAGE_MODEL_MISSING'
     | 'EGRESS_CRITERION_MISSING'
+    | 'CUSTOM_CAPACITY_POLICY_INVALID'
     | 'COST_SETTINGS_INVALID'
     | 'DRIVER_CONFIG_INVALID'
     | 'NEGATIVE_COST'
@@ -596,6 +598,7 @@ export const findModularCostDuplicates = (
 export const validateModularCatalogForPublication = (
   catalog: {
     modularCostSettings?: Partial<SalesModularCostSettings> | null;
+    customCapacityPolicy?: unknown;
     items: Array<{
       itemKey: string;
       publicName: string;
@@ -611,6 +614,15 @@ export const validateModularCatalogForPublication = (
   const settings = normalizeModularCostSettings(catalog.modularCostSettings);
   const blocks: SalesCatalogPublicationBlock[] = [];
   const activeItems = catalog.items.filter((item) => item.isActive);
+
+  if (!validateCustomCapacityPolicy(catalog.customCapacityPolicy)) {
+    blocks.push({
+      code: 'CUSTOM_CAPACITY_POLICY_INVALID',
+      field: 'customCapacityPolicy',
+      message:
+        'Defina e salve uma política versionada válida para os blocos de capacidade antes de publicar.'
+    });
+  }
 
   if (!isValidModularCostSettings(rawSettings)) {
     blocks.push({

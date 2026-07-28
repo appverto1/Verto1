@@ -12,6 +12,11 @@ import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
 } from '../constants/salesCommercial';
+import type {
+  CustomCapacitySnapshot,
+  OfferCommercialPhase,
+  OfferItemDiscount
+} from '../utils/salesCommercialEvolution';
 
 type LegacyPublicOffer = {
   offerType: 'legacy';
@@ -44,6 +49,7 @@ type ModularOfferItem = {
   postPromotionRecurringAmountCents: number;
   oneTimeAmountCents: number;
   itemDiscountBasisPoints: number;
+  offerDiscount?: OfferItemDiscount | null;
   publicMetadata: Record<string, any>;
 };
 
@@ -58,6 +64,7 @@ export type ModularPublicOffer = {
     name?: string;
     limitQuantity?: number | null;
     includedStorageMb?: number | null;
+    capacity?: CustomCapacitySnapshot | null;
   } | null;
   items: ModularOfferItem[];
   promotionalMonthlyAmountCents: number;
@@ -72,6 +79,8 @@ export type ModularPublicOffer = {
   status: string;
   modularCheckoutEnabled: false;
   stripeReady: false;
+  acceptedAt?: string | null;
+  commercialPhases?: OfferCommercialPhase[];
 };
 
 type PublicOffer = LegacyPublicOffer | ModularPublicOffer;
@@ -165,19 +174,59 @@ export const ModularOfferDetails = ({
                   </p>
                 ) : null}
               </div>
-              <p className="shrink-0 pl-[23px] text-sm font-semibold text-slate-900 sm:pl-0">
-                {formatSalesCurrency(
-                  hasPromotion
-                    ? item.promotionalRecurringAmountCents
-                    : item.postPromotionRecurringAmountCents,
-                  offer.currency
+              <div className="shrink-0 pl-[23px] text-left sm:min-w-44 sm:pl-0 sm:text-right">
+                {item.offerDiscount ? (
+                  <>
+                    <p className="text-xs text-slate-500">
+                      Preço de tabela: {formatSalesCurrency(item.offerDiscount.priceBeforeDiscountCents, offer.currency)}/mês
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-violet-800">
+                      {formatSalesCurrency(item.offerDiscount.discountedPriceCents, offer.currency)}/mês
+                    </p>
+                    <p className="mt-1 text-xs font-medium text-slate-700">
+                      {item.offerDiscount.durationCount
+                        ? `durante ${item.offerDiscount.durationCount} ${item.offerDiscount.durationUnit === 'days' ? 'dias' : 'meses'}`
+                        : item.offerDiscount.endsAt
+                          ? `até ${new Date(item.offerDiscount.endsAt).toLocaleDateString('pt-BR')}`
+                          : 'condição vigente'}
+                    </p>
+                    <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-900">
+                      Depois: {formatSalesCurrency(item.offerDiscount.priceAfterExpirationCents, offer.currency)}/mês
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-sm font-semibold text-slate-900">
+                    {formatSalesCurrency(
+                      hasPromotion
+                        ? item.promotionalRecurringAmountCents
+                        : item.postPromotionRecurringAmountCents,
+                      offer.currency
+                    )}
+                    <span className="font-normal text-slate-500">/mês</span>
+                  </p>
                 )}
-                <span className="font-normal text-slate-500">/mês</span>
-              </p>
+              </div>
             </div>
           ))}
         </div>
       </div>
+
+      {offer.basePackage?.capacity ? (
+        <div className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/70 p-4">
+          <p className="text-sm font-medium text-violet-950">Capacidade contratada do Verto Clínica</p>
+          <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-3">
+            <span>Limite-base: {offer.basePackage.capacity.baseLimitPatients} pacientes</span>
+            <span>Quantidade reservada: {offer.basePackage.capacity.selectedBlocks} bloco(s)</span>
+            <span>Limite total: {offer.basePackage.capacity.totalContractedLimitPatients} pacientes</span>
+            <span>Armazenamento: {offer.basePackage.capacity.includedStorageMb.toLocaleString('pt-BR')} MB</span>
+            <span>Receita adicional: {formatSalesCurrency(offer.basePackage.capacity.blocksMonthlyRevenueCents, offer.currency)}/mês</span>
+            <span>Total Verto Clínica: {formatSalesCurrency(offer.basePackage.capacity.clinicalCoreMonthlyRevenueCents, offer.currency)}/mês</span>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-slate-600">
+            Há {offer.basePackage.capacity.policy.gracePeriodDays} dias de tolerância para ajuste no próximo ciclo. O atendimento clínico nunca é bloqueado.
+          </p>
+        </div>
+      ) : null}
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         {hasPromotion ? (
@@ -263,11 +312,11 @@ export const ModularOfferDetails = ({
 
       <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center">
         <p className="text-sm font-medium text-slate-800">
-          Proposta comercial para análise
+          Venda assistida pela equipe Verto
         </p>
         <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
-          O checkout modular será habilitado após a validação da nova estrutura
-          de pacotes. Fale com a equipe comercial para continuar.
+          Após seu aceite, um owner com MFA gera o link de pagamento individual; o checkout modular será habilitado somente por esse fluxo assistido.
+          Esta página não cria cadastro público nem ativa a clínica.
         </p>
       </div>
     </>
@@ -278,6 +327,9 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [offer, setOffer] = useState<PublicOffer | null>(null);
   const [loading, setLoading] = useState(true);
   const [continuing, setContinuing] = useState(false);
+  const [accepting, setAccepting] = useState(false);
+  const [commercialConsent, setCommercialConsent] = useState(false);
+  const [acceptedAt, setAcceptedAt] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [paymentReturnState, setPaymentReturnState] = useState<PaymentReturnState>('idle');
 
@@ -336,7 +388,10 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         if (!response.ok || data?.success === false) {
           throw new Error(data?.message || data?.error || 'Oferta indisponível.');
         }
-        if (!cancelled) setOffer(data.offer);
+        if (!cancelled) {
+          setOffer(data.offer);
+          setAcceptedAt(data.offer?.acceptedAt || null);
+        }
       } catch (loadError: any) {
         if (!cancelled) setError(loadError?.message || 'Não foi possível carregar esta oferta.');
       } finally {
@@ -371,6 +426,34 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       setError(checkoutError?.message || 'Não foi possível continuar.');
     } finally {
       setContinuing(false);
+    }
+  };
+
+  const acceptModularOffer = async () => {
+    if (!commercialConsent) return;
+    setAccepting(true);
+    setError('');
+    try {
+      const response = await fetch(
+        `/api/public/sales-offers/${encodeURIComponent(token)}/accept`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'omit',
+          body: JSON.stringify({
+            commercialValuesConsent: true
+          })
+        }
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.success === false) {
+        throw new Error(data?.error || 'Não foi possível registrar o aceite.');
+      }
+      setAcceptedAt(data.acceptedAt || new Date().toISOString());
+    } catch (acceptError: any) {
+      setError(acceptError?.message || 'Não foi possível registrar o aceite.');
+    } finally {
+      setAccepting(false);
     }
   };
 
@@ -439,7 +522,46 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
               </div>
 
               {offer.offerType === 'modular' ? (
-                <ModularOfferDetails offer={offer} />
+                <>
+                  <ModularOfferDetails offer={offer} />
+                  <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
+                    {acceptedAt ? (
+                      <div className="flex items-start gap-3 text-sm text-emerald-800">
+                        <CheckCircle2 size={19} className="mt-0.5 shrink-0" />
+                        <div>
+                          <p className="font-medium">Proposta aceita</p>
+                          <p className="mt-1 font-normal leading-5 text-slate-600">
+                            Aceite registrado em {new Date(acceptedAt).toLocaleString('pt-BR')}. A equipe comercial poderá gerar o link de pagamento assistido.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <label className="flex cursor-pointer items-start gap-3 text-sm leading-6 text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={commercialConsent}
+                            onChange={(event) => setCommercialConsent(event.target.checked)}
+                            className="mt-1 h-5 w-5 shrink-0 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                          />
+                          <span>
+                            Declaro estar ciente dos valores promocionais e dos valores aplicáveis após o término de cada benefício.
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => void acceptModularOffer()}
+                          disabled={!commercialConsent || accepting}
+                          className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {accepting ? <Loader2 size={17} className="animate-spin" /> : <CheckCircle2 size={17} />}
+                          {accepting ? 'Registrando aceite...' : 'Aceitar proposta'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {error ? <p role="alert" className="mt-4 rounded-xl border border-rose-100 bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
+                </>
               ) : (
                 <>
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
