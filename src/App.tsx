@@ -52,6 +52,7 @@ import {
 import { VERTO_BRAND_ASSETS } from './constants/vertoBranding';
 import { SALES_CONTACT_REQUIRED_ERROR } from './constants/salesCommercial';
 import { decodeClinicalTextEntities } from './utils/clinicalText';
+import { patientMatchesProfessionalFilter } from './utils/patientList';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -3173,6 +3174,9 @@ export default function App() {
 
   const [protocols, setProtocols] = useState<any[]>([]);
   const [allPatients, setAllPatients] = useState<any[]>([]);
+  const [patientListError, setPatientListError] = useState('');
+  const hydratedPatientDetailIdsRef = useRef<Set<string>>(new Set());
+  const patientDetailRequestsRef = useRef<Map<string, Promise<any>>>(new Map());
 
   useEffect(() => {
     historyRef.current = Array.isArray(history) ? history : [];
@@ -3188,6 +3192,9 @@ export default function App() {
     setTherapistAgenda([]);
     setProtocols([]);
     setAllPatients([]);
+    setPatientListError('');
+    hydratedPatientDetailIdsRef.current.clear();
+    patientDetailRequestsRef.current.clear();
     setSpecialtySettings({});
   };
 
@@ -3220,10 +3227,16 @@ export default function App() {
       const result = await withTimeout(
         dataService.hydrateWorkspaceState(workspaceId),
         12000,
-        { success: false } as any,
+        {
+          success: false,
+          error: 'A lista de pacientes excedeu o tempo de carregamento. Tente novamente.',
+        } as any,
       );
 
       if (!result?.success || !result?.data) {
+        setPatientListError(
+          String(result?.error || 'Não foi possível carregar a lista de pacientes. Tente novamente.'),
+        );
         return;
       }
 
@@ -3254,9 +3267,12 @@ export default function App() {
         ? hydratedPatients
         : hydratedPatients.map(stripPatientFinancialFields);
       const scopedPatients = nextUser?.role === 'therapist'
-        ? visiblePatients.filter((p: any) => String(p?.therapist_id || p?.professional_id || '').trim() === String(nextUser?.id || '').trim())
+        ? visiblePatients.filter((patient: any) =>
+            patientMatchesProfessionalFilter(patient, nextUser?.id),
+          )
         : visiblePatients;
       setAllPatients(scopedPatients);
+      setPatientListError('');
       setTherapistNotes(normalizeAndDecorateNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []));
       const hydratedHistory = Array.isArray(hydrated.history) ? hydrated.history : [];
       historyRef.current = hydratedHistory;
@@ -3269,6 +3285,72 @@ export default function App() {
     } finally {
       setClinicStateHydrated(true);
       setClinicStateSyncReady(hydratedSuccessfully);
+    }
+  };
+
+  const loadPatientDetailsOnOpen = async (patientId: any) => {
+    const normalizedPatientId = String(patientId || '').trim();
+    if (!normalizedPatientId || hydratedPatientDetailIdsRef.current.has(normalizedPatientId)) return;
+
+    const pendingRequest = patientDetailRequestsRef.current.get(normalizedPatientId);
+    if (pendingRequest) {
+      await pendingRequest;
+      return;
+    }
+
+    const patient = allPatients.find(
+      (candidate: any) => String(candidate?.id || '').trim() === normalizedPatientId,
+    );
+    if (!patient) return;
+
+    const request = Promise.all([
+      dataService.getPatientDetailSnapshot(patient),
+      dataService.getNotes(normalizedPatientId),
+      dataService.getTasks(normalizedPatientId),
+    ]).then(([patientResult, notesResult, tasksResult]) => ({
+      patientResult,
+      notesResult,
+      tasksResult,
+    }));
+    patientDetailRequestsRef.current.set(normalizedPatientId, request);
+    try {
+      const result = await request;
+      if (!result?.patientResult?.success || !result?.patientResult?.data) return;
+      setAllPatients((current) =>
+        current.map((candidate: any) =>
+          String(candidate?.id || '').trim() === normalizedPatientId
+            ? { ...candidate, ...result.patientResult.data }
+            : candidate,
+        ),
+      );
+      if (result?.notesResult?.success && Array.isArray(result.notesResult.data)) {
+        setTherapistNotes((current) =>
+          normalizeAndDecorateNotes([
+            ...current.filter(
+              (note: any) =>
+                String(note?.patientId ?? note?.patient_id ?? '').trim() !==
+                normalizedPatientId,
+            ),
+            ...result.notesResult.data,
+          ]),
+        );
+      }
+      if (result?.tasksResult?.success && Array.isArray(result.tasksResult.data)) {
+        setTasks((current) => [
+          ...current.filter(
+            (task: any) =>
+              String(task?.patientId ?? task?.patient_id ?? '').trim() !==
+              normalizedPatientId,
+          ),
+          ...result.tasksResult.data.map((task: any) => ({
+            ...task,
+            patientId: task?.patientId || task?.patient_id || normalizedPatientId,
+          })),
+        ]);
+      }
+      hydratedPatientDetailIdsRef.current.add(normalizedPatientId);
+    } finally {
+      patientDetailRequestsRef.current.delete(normalizedPatientId);
     }
   };
 
@@ -7145,6 +7227,8 @@ export default function App() {
             user={{ ...user, profilePicture, crp }}
             onLogout={handleLogout}
             allPatients={allPatients} 
+            patientListError={patientListError}
+            onOpenPatientDetails={loadPatientDetailsOnOpen}
             therapistAgenda={therapistAgenda} 
             onOpenOnboarding={() => setShowOnboarding(true)}
             rooms={rooms}

@@ -30604,7 +30604,48 @@ async function startServer() {
       const patients = isExplicitDemoUser(req.session.user)
         ? (result.data || []).filter((patient: any) => patient?.is_demo === true)
         : result.data || [];
-      res.json({ success: true, data: patients.map(serializePatientMediaForClient) });
+      const patientIds = patients
+        .map((patient: any) => sanitizeString(patient?.id, 120))
+        .filter(Boolean);
+      let activeProfessionalLinksByPatient: Map<string, any[]> | null = null;
+      if (scopedClinicId && patientIds.length > 0) {
+        const professionalLinkResult = await supabase
+          .from('patient_professional_links')
+          .select('patient_id,professional_id,relationship_type,status')
+          .eq('organization_id', scopedClinicId)
+          .eq('status', 'active')
+          .in('patient_id', patientIds);
+        if (professionalLinkResult.error) {
+          if (!isMissingRelationError(professionalLinkResult.error)) {
+            console.warn('[Patients] active professional link summary unavailable; using legacy identifiers.');
+          }
+        } else {
+          activeProfessionalLinksByPatient = new Map<string, any[]>();
+          for (const link of professionalLinkResult.data || []) {
+            const patientId = sanitizeString(link?.patient_id, 120);
+            if (!patientId) continue;
+            const current = activeProfessionalLinksByPatient.get(patientId) || [];
+            current.push({
+              professional_id: sanitizeString(link?.professional_id, 120),
+              relationship_type: sanitizeString(link?.relationship_type, 40),
+              status: 'active',
+            });
+            activeProfessionalLinksByPatient.set(patientId, current);
+          }
+        }
+      }
+      res.json({
+        success: true,
+        data: patients.map((patient: any) => {
+          const serialized = serializePatientMediaForClient(patient);
+          if (!activeProfessionalLinksByPatient) return serialized;
+          return {
+            ...serialized,
+            professional_links:
+              activeProfessionalLinksByPatient.get(sanitizeString(patient?.id, 120)) || [],
+          };
+        }),
+      });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients [GET]', error, {
         userId: sanitizeString(req.session?.user?.id, 120),

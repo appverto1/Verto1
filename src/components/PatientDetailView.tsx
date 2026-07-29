@@ -1154,8 +1154,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           setPatientFiles(result.data.map(normalizeFileRecord));
           return;
         }
-        const fallbackRecord = await dataService.getPatientRecord(String(patient.id));
-        const persistedFiles = Array.isArray(fallbackRecord?.data?.payload?.files) ? fallbackRecord.data.payload.files : [];
+        const persistedFiles = Array.isArray(patient?.patientRecordPayload?.files)
+          ? patient.patientRecordPayload.files
+          : Array.isArray(patient?.files)
+            ? patient.files
+            : [];
         setPatientFiles(persistedFiles.map(normalizeFileRecord));
       } catch (error) {
         console.error('Erro ao carregar arquivos persistidos do paciente:', error);

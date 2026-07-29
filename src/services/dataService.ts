@@ -25,6 +25,10 @@ import {
   normalizePatientInsuranceEligibility,
 } from '../utils/patientInsuranceEligibility';
 import { normalizeClinicalTextRecord } from '../utils/clinicalText';
+import {
+  normalizePatientListResponse,
+  PATIENT_LIST_INVALID_RESPONSE_CODE,
+} from '../utils/patientList';
 
 enum OperationType {
   CREATE = 'create',
@@ -1128,7 +1132,14 @@ export const dataService = {
       }
       if (response.ok) {
         const result = await response.json();
-        const normalizedPatients = (result.data || []).map((p: any) =>
+        const patientList = normalizePatientListResponse(result);
+        if (!patientList.success) {
+          console.error('[PatientList] Invalid API response contract.', {
+            code: PATIENT_LIST_INVALID_RESPONSE_CODE,
+          });
+          return patientList;
+        }
+        const normalizedPatients = patientList.data.map((p: any) =>
           mirrorPatientInsuranceEligibilityAliases(p || {}, { useResponsibleFallback: true })
         );
         let latest = 0;
@@ -1148,7 +1159,27 @@ export const dataService = {
         await cacheResponseMetadata(endpoint, response, latest || null);
         return { ...result, data: normalizedPatients };
       }
+      const errorPayload = await safeJson(response);
+      return {
+        success: false,
+        status: response.status,
+        error:
+          errorPayload?.error ||
+          errorPayload?.message ||
+          `Não foi possível carregar os pacientes (HTTP ${response.status}).`,
+      };
     } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        (error as any).code === PATIENT_LIST_INVALID_RESPONSE_CODE
+      ) {
+        return {
+          success: false,
+          code: PATIENT_LIST_INVALID_RESPONSE_CODE,
+          error: 'A resposta da lista de pacientes possui formato inválido.',
+        };
+      }
       console.log('Fetching patients from local storage...');
     }
     const local = await getRecordsByType('patient');
@@ -1220,6 +1251,134 @@ export const dataService = {
       console.error('Error fetching patient record:', error);
       return { success: false, error: String(error) };
     }
+  },
+
+  async getPatientDetailSnapshot(patient: any) {
+    const patientId = String(patient?.id || '').trim();
+    if (!patientId) {
+      return { success: false, error: 'Paciente não resolvido para este acesso.' };
+    }
+    const recordResult = await dataService.getPatientRecord(patientId);
+    if (!recordResult?.success || !recordResult?.data) return recordResult;
+
+    const recordPayload = parseJsonObject(recordResult.data.payload) || {};
+    const anamnesisData = parseJsonObject(recordPayload?.anamnese) || null;
+    const insuranceEligibility = normalizePatientInsuranceEligibility(
+      { ...patient, payload: recordPayload, anamnesisData },
+      { useResponsibleFallback: true },
+    );
+    const hydratedPatient = {
+      ...patient,
+      socialName: recordPayload?.nomeSocial || patient?.social_name || patient?.socialName || null,
+      birthDate: recordPayload?.dataNascimento || patient?.birth_date || patient?.birthDate || null,
+      gender: recordPayload?.genero || patient?.gender || null,
+      insuranceType: insuranceEligibility.insuranceType,
+      insuranceName: insuranceEligibility.insuranceName || null,
+      cardNumber: insuranceEligibility.insuranceCardNumber || null,
+      insuranceCardNumber: insuranceEligibility.insuranceCardNumber || null,
+      insurance_card_number: insuranceEligibility.insuranceCardNumber || null,
+      insuranceCardValidUntil: insuranceEligibility.insuranceCardValidUntil || null,
+      insurance_card_valid_until: insuranceEligibility.insuranceCardValidUntil || null,
+      insurancePlanCategory: insuranceEligibility.insurancePlanCategory || null,
+      insurance_plan_category: insuranceEligibility.insurancePlanCategory || null,
+      insuranceHolderName: insuranceEligibility.insuranceHolderName || null,
+      insurance_holder_name: insuranceEligibility.insuranceHolderName || null,
+      insuranceHolderCpf: insuranceEligibility.insuranceHolderCpf || null,
+      insurance_holder_cpf: insuranceEligibility.insuranceHolderCpf || null,
+      insuranceHolderRelationship: insuranceEligibility.insuranceHolderRelationship || null,
+      insurance_holder_relationship: insuranceEligibility.insuranceHolderRelationship || null,
+      eligibilityNotes: insuranceEligibility.insuranceEligibilityNotes || null,
+      eligibility_notes: insuranceEligibility.insuranceEligibilityNotes || null,
+      convenioTipo: insuranceEligibility.convenioTipo,
+      convenioNome: insuranceEligibility.convenioNome,
+      convenioCarteirinha: insuranceEligibility.convenioCarteirinha,
+      convenioCarteirinhaValidade: insuranceEligibility.convenioCarteirinhaValidade,
+      convenioPlanoCategoria: insuranceEligibility.convenioPlanoCategoria,
+      convenioTitularNome: insuranceEligibility.convenioTitularNome,
+      convenioTitularCpf: insuranceEligibility.convenioTitularCpf,
+      convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao,
+      convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs,
+      group: recordPayload?.grupo || patient?.patient_group || patient?.group || null,
+      source: recordPayload?.comoConheceu || patient?.lead_source || patient?.source || null,
+      rg: recordPayload?.rg || patient?.rg || null,
+      cep: recordPayload?.cep || patient?.cep || null,
+      address: recordPayload
+        ? {
+            cep: recordPayload?.cep || patient?.cep || null,
+            logradouro: recordPayload?.logradouro || patient?.address?.logradouro || null,
+            numero: recordPayload?.numero || patient?.address?.numero || null,
+            complemento: recordPayload?.complemento || patient?.address?.complemento || null,
+            bairro: recordPayload?.bairro || patient?.address?.bairro || null,
+            cidade: recordPayload?.cidade || patient?.address?.cidade || null,
+          }
+        : patient?.address || null,
+      notes: recordPayload?.outrasInformacoes || patient?.notes || null,
+      isMinor:
+        typeof recordPayload?.menorDeIdade === 'boolean'
+          ? recordPayload.menorDeIdade
+          : Boolean(patient?.is_minor || patient?.isMinor),
+      guardian: {
+        nome: recordPayload?.responsavelNome || patient?.responsible_name || patient?.guardian?.nome || null,
+        dataNascimento:
+          recordPayload?.responsavelDataNascimento ||
+          patient?.responsible_birth_date ||
+          patient?.guardian?.dataNascimento ||
+          null,
+        cpf: recordPayload?.responsavelCpf || patient?.responsible_cpf || patient?.guardian?.cpf || null,
+        telefone:
+          recordPayload?.responsavelTelefone ||
+          patient?.responsible_phone ||
+          patient?.guardian?.telefone ||
+          null,
+        email: recordPayload?.responsavelEmail || patient?.responsible_email || patient?.guardian?.email || null,
+        relacao:
+          recordPayload?.responsavelRelacao ||
+          patient?.responsible_relationship ||
+          patient?.metadata?.responsibleRelationship ||
+          patient?.guardian?.relacao ||
+          null,
+      },
+      patientProfileType: normalizePatientProfileType(
+        recordPayload?.patientProfileType ||
+          recordPayload?.panelType ||
+          patient?.patient_profile_type ||
+          patient?.panel_type ||
+          patient?.profile_type ||
+          patient?.type,
+      ),
+      panelType: normalizePatientProfileType(
+        recordPayload?.panelType ||
+          recordPayload?.patientProfileType ||
+          patient?.panel_type ||
+          patient?.patient_profile_type ||
+          patient?.profile_type ||
+          patient?.type,
+      ),
+      anamnesisData,
+      pei: normalizePeiGoals(recordPayload, patient),
+      evaluationLinks:
+        recordPayload?.evaluationLinks && typeof recordPayload.evaluationLinks === 'object'
+          ? recordPayload.evaluationLinks
+          : patient?.evaluationLinks || {},
+      interventionTaskLinks:
+        recordPayload?.interventionTaskLinks &&
+        typeof recordPayload.interventionTaskLinks === 'object'
+          ? recordPayload.interventionTaskLinks
+          : patient?.interventionTaskLinks || {},
+      lastAnamnesisAt: recordPayload?.lastAnamnesisAt || patient?.lastAnamnesisAt || null,
+      financialPlans: Array.isArray(recordPayload?.financialPlans)
+        ? recordPayload.financialPlans
+        : Array.isArray(patient?.financialPlans)
+          ? patient.financialPlans
+          : [],
+      monthlyTreatmentValue:
+        Number(recordPayload?.monthlyTreatmentValue ?? patient?.monthlyTreatmentValue ?? 0) || 0,
+      billingDueDay: recordPayload?.billingDueDay || patient?.billingDueDay || null,
+      billingMethod: recordPayload?.billingMethod || patient?.billingMethod || null,
+      patientRecordPayload: recordPayload,
+      patientRecordLoaded: true,
+    };
+    return { success: true, data: hydratedPatient };
   },
 
   async getPatientFinancialPlans(patientId: string) {
@@ -7117,6 +7276,7 @@ export const dataService = {
     const clinicStateRes = await safeJson(clinicStateResponse);
     const clinicTemplateRes = await safeJson(clinicTemplateResponse);
     const patientsRes = await safeJson(patientsResponse);
+    const patientList = normalizePatientListResponse(patientsRes);
 
     if (!clinicStateResponse.ok || clinicStateRes?.success === false) {
       return {
@@ -7125,245 +7285,27 @@ export const dataService = {
       };
     }
 
-    if (!patientsResponse.ok || !patientsRes?.success) {
+    if (!patientsResponse.ok || !patientList.success) {
       return {
         success: false,
-        error: patientsRes?.error || `Falha ao carregar pacientes do workspace (HTTP ${patientsResponse.status}).`
+        code: patientList.success ? undefined : PATIENT_LIST_INVALID_RESPONSE_CODE,
+        error:
+          patientsRes?.error ||
+          (patientList.success
+            ? ''
+            : 'A resposta da lista de pacientes não contém uma coleção válida.') ||
+          `Falha ao carregar pacientes do workspace (HTTP ${patientsResponse.status}).`
       };
     }
 
-    const patients = ensureArray(patientsRes?.data);
+    const patients = patientList.data.map((patient: any) =>
+      mirrorPatientInsuranceEligibilityAliases(patient || {}, { useResponsibleFallback: true }),
+    );
     const notes: any[] = [];
     const history: any[] = [];
     const tasks: any[] = [];
     const clinicalRecords: any[] = [];
-    const hydratedPatients: any[] = [];
-
-    for (const patient of patients) {
-      const patientId = String(patient?.id || '').trim();
-      if (!patientId) continue;
-
-      const [notesResponse, historyResponse, tasksResponse, assignedTasksResponse, recordResponse, submissionsResponse] = await Promise.all([
-        fetch(endpointWithLimit(`/api/notes/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch(endpointWithLimit(`/api/history/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch(endpointWithLimit(`/api/tasks/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch(endpointWithLimit(`/api/assigned-tasks/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch(`/api/patient-records/${patientId}`, { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch(endpointWithLimit(`/api/patient-anamnesis/${patientId}`, 20), { headers: headersWithWorkspace, credentials: 'include' })
-      ]);
-      const [notesRes, historyRes, tasksRes, assignedTasksRes, patientRecordRes, submissionsRes] = await Promise.all([
-        safeJson(notesResponse),
-        safeJson(historyResponse),
-        safeJson(tasksResponse),
-        safeJson(assignedTasksResponse),
-        safeJson(recordResponse),
-        safeJson(submissionsResponse)
-      ]);
-
-      const patientNotes = ensureArray(notesRes?.data).map((n: any) => ({
-        ...n,
-        patientId: n?.patient_id || patientId,
-        visibility: normalizeNoteVisibility(n?.visibility || n?.type),
-        date: n?.created_at ? new Date(n.created_at).toLocaleString() : new Date().toLocaleString()
-      }));
-      const patientHistory = ensureArray(historyRes?.data).map((h: any) => ({
-        ...h,
-        patientId: h?.patient_id || patientId,
-        time: h?.created_at
-          ? new Date(h.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : '',
-        dateGroup:
-          h?.date_group ||
-          h?.dateGroup ||
-          (h?.created_at && new Date(h.created_at).toDateString() === new Date().toDateString()
-            ? 'Hoje'
-            : h?.created_at
-              ? new Date(h.created_at).toLocaleDateString()
-              : '')
-      }));
-      const patientTasks = ensureArray(tasksRes?.data).map((t: any) => ({
-        ...t,
-        patientId: t?.patient_id || patientId
-      }));
-      const patientAssignedTasks = ensureArray(assignedTasksRes?.data).map((t: any) => {
-        const taskData = t?.task_data && typeof t.task_data === 'object' ? t.task_data : {};
-        return {
-          id: String(t?.id || ''),
-          assignedTaskId: String(t?.id || ''),
-          patientId: t?.patient_id || patientId,
-          patient_id: t?.patient_id || patientId,
-          patient_email: t?.patient_email || patient?.email || null,
-          title: taskData?.title || 'Tarefa agendada',
-          description: taskData?.description || '',
-          icon: taskData?.icon || '🎯',
-          color: taskData?.color || 'bg-blue-100 text-blue-600',
-          type: t?.task_type || 'task',
-          maxScore: Number(taskData?.maxScore || taskData?.max_score || 4),
-          scheduledAt: t?.scheduled_at || null,
-          scheduled_at: t?.scheduled_at || null,
-          status: t?.status || 'pending',
-          completed: String(t?.status || '').toLowerCase() === 'completed',
-          completed_at: t?.completed_at || null,
-          reviewed_at: t?.reviewed_at || null,
-          patient_effort: t?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? null,
-          patientEffort: t?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? null,
-          patient_effort_emoji: t?.patient_effort_emoji ?? taskData?.patientEffortEmoji ?? taskData?.patient_effort_emoji ?? null,
-          patientEffortEmoji: t?.patient_effort_emoji ?? taskData?.patientEffortEmoji ?? taskData?.patient_effort_emoji ?? null,
-          patient_effort_label: t?.patient_effort_label ?? taskData?.patientEffortLabel ?? taskData?.patient_effort_label ?? null,
-          patientEffortLabel: t?.patient_effort_label ?? taskData?.patientEffortLabel ?? taskData?.patient_effort_label ?? null,
-          patient_comment: t?.patient_comment ?? '',
-          pro_score: t?.pro_score ?? taskData?.pro_score ?? taskData?.proScore ?? null,
-          professionalScore: t?.pro_score ?? taskData?.pro_score ?? taskData?.proScore ?? null,
-          max_score: t?.max_score ?? taskData?.max_score ?? taskData?.maxScore ?? null,
-          pro_review_note: t?.pro_review_note ?? taskData?.pro_review_note ?? taskData?.proReviewNote ?? '',
-          consecutive_successes: t?.consecutive_successes ?? taskData?.consecutive_successes ?? null,
-          task_data: taskData,
-          taskData,
-          created_at: t?.created_at || t?.scheduled_at || null
-        };
-      });
-
-      notes.push(...patientNotes);
-      history.push(...patientHistory);
-      tasks.push(...patientTasks);
-      tasks.push(...patientAssignedTasks);
-
-      const recordPayload = parseJsonObject(patientRecordRes?.data?.payload) || {};
-      const anamnesisData = parseJsonObject(recordPayload?.anamnese) || null;
-      const insuranceEligibility = normalizePatientInsuranceEligibility(
-        { ...patient, payload: recordPayload, anamnesisData },
-        { useResponsibleFallback: true },
-      );
-      const submissions = ensureArray(submissionsRes?.data);
-      const peiGoals = normalizePeiGoals(recordPayload, patient);
-
-      hydratedPatients.push({
-        ...patient,
-        socialName: recordPayload?.nomeSocial || patient?.social_name || patient?.socialName || null,
-        birthDate: recordPayload?.dataNascimento || patient?.birth_date || patient?.birthDate || null,
-        gender: recordPayload?.genero || patient?.gender || null,
-        insuranceType: insuranceEligibility.insuranceType,
-        insuranceName: insuranceEligibility.insuranceName || null,
-        cardNumber: insuranceEligibility.insuranceCardNumber || null,
-        insuranceCardNumber: insuranceEligibility.insuranceCardNumber || null,
-        insurance_card_number: insuranceEligibility.insuranceCardNumber || null,
-        insuranceCardValidUntil: insuranceEligibility.insuranceCardValidUntil || null,
-        insurance_card_valid_until: insuranceEligibility.insuranceCardValidUntil || null,
-        insurancePlanCategory: insuranceEligibility.insurancePlanCategory || null,
-        insurance_plan_category: insuranceEligibility.insurancePlanCategory || null,
-        insuranceHolderName: insuranceEligibility.insuranceHolderName || null,
-        insurance_holder_name: insuranceEligibility.insuranceHolderName || null,
-        insuranceHolderCpf: insuranceEligibility.insuranceHolderCpf || null,
-        insurance_holder_cpf: insuranceEligibility.insuranceHolderCpf || null,
-        insuranceHolderRelationship: insuranceEligibility.insuranceHolderRelationship || null,
-        insurance_holder_relationship: insuranceEligibility.insuranceHolderRelationship || null,
-        eligibilityNotes: insuranceEligibility.insuranceEligibilityNotes || null,
-        eligibility_notes: insuranceEligibility.insuranceEligibilityNotes || null,
-        convenioTipo: insuranceEligibility.convenioTipo,
-        convenioNome: insuranceEligibility.convenioNome,
-        convenioCarteirinha: insuranceEligibility.convenioCarteirinha,
-        convenioCarteirinhaValidade: insuranceEligibility.convenioCarteirinhaValidade,
-        convenioPlanoCategoria: insuranceEligibility.convenioPlanoCategoria,
-        convenioTitularNome: insuranceEligibility.convenioTitularNome,
-        convenioTitularCpf: insuranceEligibility.convenioTitularCpf,
-        convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao,
-        convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs,
-        group: recordPayload?.grupo || patient?.patient_group || patient?.group || null,
-        source: recordPayload?.comoConheceu || patient?.lead_source || patient?.source || null,
-        rg: recordPayload?.rg || patient?.rg || null,
-        cep: recordPayload?.cep || patient?.cep || null,
-        address: recordPayload
-          ? {
-              cep: recordPayload?.cep || patient?.cep || null,
-              logradouro: recordPayload?.logradouro || patient?.address?.logradouro || null,
-              numero: recordPayload?.numero || patient?.address?.numero || null,
-              complemento: recordPayload?.complemento || patient?.address?.complemento || null,
-              bairro: recordPayload?.bairro || patient?.address?.bairro || null,
-              cidade: recordPayload?.cidade || patient?.address?.cidade || null,
-            }
-          : patient?.address || null,
-        notes: recordPayload?.outrasInformacoes || patient?.notes || null,
-        isMinor:
-          typeof recordPayload?.menorDeIdade === 'boolean'
-            ? recordPayload.menorDeIdade
-            : Boolean(patient?.is_minor || patient?.isMinor),
-        guardian: {
-          nome: recordPayload?.responsavelNome || patient?.responsible_name || patient?.guardian?.nome || null,
-          dataNascimento:
-            recordPayload?.responsavelDataNascimento ||
-            patient?.responsible_birth_date ||
-            patient?.guardian?.dataNascimento ||
-            null,
-          cpf: recordPayload?.responsavelCpf || patient?.responsible_cpf || patient?.guardian?.cpf || null,
-          telefone: recordPayload?.responsavelTelefone || patient?.responsible_phone || patient?.guardian?.telefone || null,
-          email: recordPayload?.responsavelEmail || patient?.responsible_email || patient?.guardian?.email || null,
-          relacao:
-            recordPayload?.responsavelRelacao ||
-            patient?.responsible_relationship ||
-            patient?.metadata?.responsibleRelationship ||
-            patient?.guardian?.relacao ||
-            null,
-        },
-        patientProfileType: normalizePatientProfileType(
-          recordPayload?.patientProfileType ||
-            recordPayload?.panelType ||
-            patient?.patient_profile_type ||
-            patient?.panel_type ||
-            patient?.profile_type ||
-            patient?.type,
-        ),
-        panelType: normalizePatientProfileType(
-          recordPayload?.panelType ||
-            recordPayload?.patientProfileType ||
-            patient?.panel_type ||
-            patient?.patient_profile_type ||
-            patient?.profile_type ||
-            patient?.type,
-        ),
-        anamnesisData,
-        pei: peiGoals,
-        evaluationLinks:
-          recordPayload?.evaluationLinks && typeof recordPayload.evaluationLinks === 'object'
-            ? recordPayload.evaluationLinks
-            : patient?.evaluationLinks && typeof patient.evaluationLinks === 'object'
-              ? patient.evaluationLinks
-              : {},
-        interventionTaskLinks:
-          recordPayload?.interventionTaskLinks && typeof recordPayload.interventionTaskLinks === 'object'
-            ? recordPayload.interventionTaskLinks
-            : patient?.interventionTaskLinks && typeof patient.interventionTaskLinks === 'object'
-              ? patient.interventionTaskLinks
-              : {},
-        anamnesisSubmissions: submissions,
-        anamnesisTemplate: clinicTemplateRes?.data || {},
-        lastAnamnesisAt: recordPayload?.lastAnamnesisAt || patient?.lastAnamnesisAt || null,
-        financialPlans: Array.isArray(recordPayload?.financialPlans)
-          ? recordPayload.financialPlans
-          : Array.isArray(patient?.financialPlans)
-            ? patient.financialPlans
-            : [],
-        monthlyTreatmentValue: Number(recordPayload?.monthlyTreatmentValue ?? patient?.monthlyTreatmentValue ?? 0) || 0,
-        billingDueDay: recordPayload?.billingDueDay || patient?.billingDueDay || null,
-        billingMethod: recordPayload?.billingMethod || patient?.billingMethod || null,
-      });
-
-      clinicalRecords.push({
-        patientId,
-        diagnosis: recordPayload?.diagnosis || patient?.diagnosis || null,
-        anamnesisData,
-        pei: peiGoals,
-        evaluationLinks:
-          recordPayload?.evaluationLinks && typeof recordPayload.evaluationLinks === 'object'
-            ? recordPayload.evaluationLinks
-            : {},
-        interventionTaskLinks:
-          recordPayload?.interventionTaskLinks && typeof recordPayload.interventionTaskLinks === 'object'
-            ? recordPayload.interventionTaskLinks
-            : {},
-        anamneseJsonb: anamnesisData,
-        anamnesisSubmissions: submissions
-      });
-    }
+    const hydratedPatients: any[] = [...patients];
 
     const clinicStateData = clinicStateRes?.data || {
       clinicId: workspaceId || null,

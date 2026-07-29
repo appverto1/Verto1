@@ -238,6 +238,11 @@ import {
 } from "../utils/patientProfileType";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
+  isPatientVisibleInMainList,
+  patientMatchesProfessionalFilter,
+  resolvePatientProfessionalIds,
+} from "../utils/patientList";
+import {
   ABA_INDIVIDUAL_EXPECTED_TUSS_CODE,
   ABA_INDIVIDUAL_EXPECTED_TUSS_DESCRIPTION,
   findSuggestedTissAuthorizationForFinancialPlan,
@@ -492,6 +497,8 @@ interface CoordinatorDashboardProps {
   user: any;
   onLogout: () => void;
   allPatients: any[];
+  patientListError?: string;
+  onOpenPatientDetails?: (patientId: any) => Promise<any> | any;
   therapistAgenda: any[];
   onOpenOnboarding?: () => void;
   rooms: any[];
@@ -623,6 +630,8 @@ export function CoordinatorDashboard({
   user,
   onLogout,
   allPatients,
+  patientListError = "",
+  onOpenPatientDetails,
   therapistAgenda,
   onOpenOnboarding,
   rooms,
@@ -990,14 +999,7 @@ export function CoordinatorDashboard({
   };
 
   const isInactivePatientForDashboard = (patient: any) => {
-    const normalized = String(patient?.status || "").trim().toLowerCase();
-    return Boolean(
-      patient?.deleted_at ||
-        patient?.deletedAt ||
-        patient?.unlinkedAt ||
-        patient?.is_active === false ||
-        ["inactive", "inativo", "deleted", "archived", "cancelled", "canceled", "unlinked"].includes(normalized),
-    );
+    return !isPatientVisibleInMainList(patient);
   };
 
   const isBirthdayTodayPatient = (patient: any) => {
@@ -1082,12 +1084,14 @@ export function CoordinatorDashboard({
 
   const roleScopedPatients = useMemo(() => {
     const currentTherapistId = String(user?.id || "").trim();
+    const mainListPatients = allPatients.filter(isPatientVisibleInMainList);
     return isTherapist
-      ? allPatients.filter((patient: any) => {
-          const therapistId = resolvePatientResponsibleProfessionalId(patient);
-          return Boolean(currentTherapistId) && therapistId === currentTherapistId;
-        })
-      : allPatients;
+      ? mainListPatients.filter(
+          (patient: any) =>
+            Boolean(currentTherapistId) &&
+            patientMatchesProfessionalFilter(patient, currentTherapistId),
+        )
+      : mainListPatients;
   }, [allPatients, isTherapist, user?.id]);
 
   const birthdayPatients = useMemo(
@@ -1110,15 +1114,30 @@ export function CoordinatorDashboard({
 
     let filteredPatients = patientsAllowedForRole;
     if (patientTherapistFilter !== "all" && !isTherapist) {
+      const selectedProfessional = therapistFilterOptions.find(
+        (professional: any) => String(professional?.id || "") === patientTherapistFilter,
+      );
+      const selectedProfessionalIds = Array.from(
+        new Set(
+          [
+            patientTherapistFilter,
+            ...(Array.isArray((selectedProfessional as any)?.matchIds)
+              ? (selectedProfessional as any).matchIds
+              : []),
+          ]
+            .map((id) => String(id || "").trim())
+            .filter(Boolean),
+        ),
+      );
       if (patientTherapistFilter === "unassigned") {
         filteredPatients = patientsAllowedForRole.filter((patient: any) => {
-          const therapistId = resolvePatientResponsibleProfessionalId(patient);
-          return !therapistId;
+          return resolvePatientProfessionalIds(patient).length === 0;
         });
       } else {
         filteredPatients = patientsAllowedForRole.filter((patient: any) => {
-          const therapistId = resolvePatientResponsibleProfessionalId(patient);
-          return therapistId === patientTherapistFilter;
+          return selectedProfessionalIds.some((professionalId) =>
+            patientMatchesProfessionalFilter(patient, professionalId),
+          );
         });
       }
     }
@@ -1128,21 +1147,36 @@ export function CoordinatorDashboard({
     }
 
     return filteredPatients;
-  }, [isTherapist, patientQuickFilter, patientTherapistFilter, roleScopedPatients, patientSchoolFilter, schoolFilteredPatientRows]);
+  }, [isTherapist, patientQuickFilter, patientTherapistFilter, roleScopedPatients, patientSchoolFilter, schoolFilteredPatientRows, therapistFilterOptions]);
 
   const visiblePatientsWithoutQuickFilter = useMemo(() => {
     if (patientTherapistFilter === "all" || isTherapist) return roleScopedPatients;
     if (patientTherapistFilter === "unassigned") {
       return roleScopedPatients.filter((patient: any) => {
-        const therapistId = resolvePatientResponsibleProfessionalId(patient);
-        return !therapistId;
+        return resolvePatientProfessionalIds(patient).length === 0;
       });
     }
+    const selectedProfessional = therapistFilterOptions.find(
+      (professional: any) => String(professional?.id || "") === patientTherapistFilter,
+    );
+    const selectedProfessionalIds = Array.from(
+      new Set(
+        [
+          patientTherapistFilter,
+          ...(Array.isArray((selectedProfessional as any)?.matchIds)
+            ? (selectedProfessional as any).matchIds
+            : []),
+        ]
+          .map((id) => String(id || "").trim())
+          .filter(Boolean),
+      ),
+    );
     return roleScopedPatients.filter((patient: any) => {
-      const therapistId = resolvePatientResponsibleProfessionalId(patient);
-      return therapistId === patientTherapistFilter;
+      return selectedProfessionalIds.some((professionalId) =>
+        patientMatchesProfessionalFilter(patient, professionalId),
+      );
     });
-  }, [isTherapist, patientTherapistFilter, roleScopedPatients]);
+  }, [isTherapist, patientTherapistFilter, roleScopedPatients, therapistFilterOptions]);
 
   const billingHistory = [
     {
@@ -1512,6 +1546,11 @@ export function CoordinatorDashboard({
       console.warn("Falha ao persistir contexto do painel:", error);
     }
   }, [dashboardResumeKey, activeTab, view, selectedPatientId, patientOpenTab]);
+
+  useEffect(() => {
+    if (view !== "patient" || !selectedPatientId) return;
+    void onOpenPatientDetails?.(selectedPatientId);
+  }, [onOpenPatientDetails, selectedPatientId, view]);
 
   const [payments, setPayments] = useState<any[]>([]);
   const [professionalPayments, setProfessionalPayments] = useState<any[]>([]);
@@ -6073,6 +6112,7 @@ export function CoordinatorDashboard({
         };
 
     setSelectedPatientId(resolvedPatient.id);
+    void onOpenPatientDetails?.(resolvedPatient.id);
     setPatientOpenTab(nextOptions.tab || "history");
     setOpenAnamnesisOnPatientOpen(Boolean(nextOptions.openAnamnesis));
     setView("patient");
@@ -12177,9 +12217,15 @@ export function CoordinatorDashboard({
                     </div>
                   ))}
                   {visiblePatients.length === 0 && (
-                    <div className="col-span-full rounded-2xl border border-slate-100 bg-slate-50 p-6 text-sm font-medium text-slate-500">
-                      Nenhum paciente encontrado para o filtro selecionado.
-                    </div>
+                    patientListError ? (
+                      <div role="alert" className="col-span-full rounded-2xl border border-rose-100 bg-rose-50 p-6 text-sm font-medium text-rose-700">
+                        Não foi possível carregar os pacientes. {patientListError}
+                      </div>
+                    ) : (
+                      <div className="col-span-full rounded-2xl border border-slate-100 bg-slate-50 p-6 text-sm font-medium text-slate-500">
+                        Nenhum paciente encontrado para o filtro selecionado.
+                      </div>
+                    )
                   )}
                 </div>
               </motion.div>
