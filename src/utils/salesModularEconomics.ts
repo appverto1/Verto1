@@ -6,6 +6,10 @@ export const SALES_PROFITABILITY_POLICY_MIGRATION_PENDING_CODE =
   'SALES_PROFITABILITY_POLICY_MIGRATION_PENDING';
 export const SALES_PROFITABILITY_POLICY_MIGRATION_PENDING_MESSAGE =
   'A estrutura comercial de margem precisa ser aplicada antes de usar esta versão.';
+export const SALES_PROFITABILITY_POLICY_REQUIRED_CODE =
+  'PRICING_PROFITABILITY_POLICY_REQUIRED';
+export const SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE =
+  'Publique uma nova versão do catálogo com a política de margem antes de criar propostas personalizadas.';
 
 export const isSalesProfitabilityPolicySchemaMissingError = (
   error: unknown
@@ -34,6 +38,8 @@ export const isSalesProfitabilityPolicySchemaMissingError = (
   );
 };
 
+// Mantido apenas como referência histórica para snapshots anteriores.
+// Novos cálculos usam exclusivamente os valores da política versionada.
 export const SALES_PROFITABILITY_TARGETS_BASIS_POINTS = [
   6000,
   7000,
@@ -41,8 +47,7 @@ export const SALES_PROFITABILITY_TARGETS_BASIS_POINTS = [
   8000
 ] as const;
 
-export type SalesProfitabilityTargetBasisPoints =
-  (typeof SALES_PROFITABILITY_TARGETS_BASIS_POINTS)[number];
+export type SalesProfitabilityTargetBasisPoints = number;
 
 export type SalesExpansionItemKey =
   | 'appointments_communication'
@@ -311,18 +316,89 @@ export type SalesModuleMarginStatus =
   | 'blocked'
   | 'insufficient_data';
 
+export type SalesIncrementalMarginKind = 'module' | 'capacity';
+
+export const formatSalesBasisPointsPercent = (basisPoints: number) =>
+  `${(basisPoints / 100).toLocaleString('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+  })}%`;
+
+export const salesProfitabilityPolicyThresholds = (
+  policy: SalesProfitabilityPolicy
+) =>
+  Array.from(
+    new Set([
+      policy.clinicMinimumEbitdaMarginBasisPoints,
+      policy.recurringTargetEbitdaMarginBasisPoints,
+      policy.postPromotionMinimumEbitdaMarginBasisPoints,
+      policy.moduleMinimumIncrementalMarginBasisPoints,
+      policy.capacityMinimumIncrementalMarginBasisPoints,
+      policy.moduleTargetIncrementalMarginBasisPoints
+    ])
+  ).sort((left, right) => left - right);
+
+export const resolveSalesIncrementalMarginThresholds = (
+  policy: SalesProfitabilityPolicy,
+  kind: SalesIncrementalMarginKind = 'module'
+) => {
+  const minimumBasisPoints =
+    kind === 'capacity'
+      ? policy.capacityMinimumIncrementalMarginBasisPoints
+      : policy.moduleMinimumIncrementalMarginBasisPoints;
+  return {
+    healthyBasisPoints: Math.max(
+      minimumBasisPoints,
+      policy.moduleTargetIncrementalMarginBasisPoints
+    ),
+    minimumBasisPoints,
+    attentionBasisPoints: policy.clinicMinimumEbitdaMarginBasisPoints
+  };
+};
+
 export const classifyModuleIncrementalMargin = (
-  margin: number | null
-): SalesModuleMarginStatus =>
-  margin === null
-    ? 'insufficient_data'
-    : margin >= 8000
-      ? 'healthy'
-      : margin >= 7500
-        ? 'acceptable'
-        : margin >= 7000
-          ? 'attention'
-          : 'blocked';
+  margin: number | null,
+  policy: SalesProfitabilityPolicy,
+  kind: SalesIncrementalMarginKind = 'module'
+): SalesModuleMarginStatus => {
+  if (margin === null) return 'insufficient_data';
+  const thresholds = resolveSalesIncrementalMarginThresholds(policy, kind);
+  if (margin >= thresholds.healthyBasisPoints) return 'healthy';
+  if (margin >= thresholds.minimumBasisPoints) return 'acceptable';
+  if (margin >= thresholds.attentionBasisPoints) return 'attention';
+  return 'blocked';
+};
+
+export const formatSalesIncrementalMarginStatusLabel = (
+  status: SalesModuleMarginStatus,
+  policy: SalesProfitabilityPolicy,
+  kind: SalesIncrementalMarginKind = 'module'
+) => {
+  if (status === 'insufficient_data') return 'Dados insuficientes';
+  const thresholds = resolveSalesIncrementalMarginThresholds(policy, kind);
+  if (status === 'healthy') {
+    return `Saudável · ≥ ${formatSalesBasisPointsPercent(
+      thresholds.healthyBasisPoints
+    )}`;
+  }
+  if (status === 'acceptable') {
+    return `Aceitável · ≥ ${formatSalesBasisPointsPercent(
+      thresholds.minimumBasisPoints
+    )} e < ${formatSalesBasisPointsPercent(
+      thresholds.healthyBasisPoints
+    )}`;
+  }
+  if (status === 'attention') {
+    return `Atenção · ≥ ${formatSalesBasisPointsPercent(
+      thresholds.attentionBasisPoints
+    )} e < ${formatSalesBasisPointsPercent(
+      thresholds.minimumBasisPoints
+    )}`;
+  }
+  return `Abaixo do piso · < ${formatSalesBasisPointsPercent(
+    thresholds.attentionBasisPoints
+  )}`;
+};
 
 export type SalesModuleEffect = {
   marginBeforeBasisPoints: number | null;
@@ -365,6 +441,7 @@ export type SalesCapacityEconomicsResult = {
   marginBasisPoints: number | null;
   minimumPriceCents: number | null;
   meetsMinimumMargin: boolean | null;
+  incrementalStatus: SalesModuleMarginStatus;
 };
 
 export type SalesClinicPhaseEconomics = {
@@ -447,6 +524,7 @@ export type SalesCommercialExceptionApprovalSnapshot = {
     catalogVersion: number | null;
     schemaVersion: number;
   };
+  policyHash?: string;
   justification: string;
   resultHash: string;
 };
@@ -483,13 +561,20 @@ type SalesProposalReviewSource = {
 };
 
 const COMMERCIAL_REVIEW_CODE_PREFIXES = [
+  'CLINIC_MARGIN_BELOW_MINIMUM',
+  'POST_PROMOTION_MARGIN_BELOW_MINIMUM',
+  'MODULE_MARGIN_BELOW_MINIMUM:',
+  'CAPACITY_MARGIN_BELOW_MINIMUM',
+  'EXPANSION_MARGIN_BELOW_MINIMUM:',
+  'CLINIC_MARGIN_BELOW_TARGET',
+  'TEMPORARY_DISCOUNT_REQUIRED',
+  'MODULE_PROMOTION_TERMS_REQUIRED',
+  // Compatibilidade exclusiva para leitura de snapshots históricos.
   'CLINIC_MARGIN_BELOW_60',
   'POST_PROMOTION_MARGIN_BELOW_70',
   'MODULE_MARGIN_BELOW_75:',
   'CAPACITY_MARGIN_BELOW_75',
-  'EXPANSION_MARGIN_BELOW_75:',
-  'TEMPORARY_DISCOUNT_REQUIRED',
-  'MODULE_PROMOTION_TERMS_REQUIRED'
+  'EXPANSION_MARGIN_BELOW_75:'
 ] as const;
 
 export const isSalesCommercialReviewCode = (code: string) =>
@@ -602,6 +687,14 @@ export const buildSalesCommercialApprovalResult = (
     result.commercialPricing?.totalProposedPricePerPatientCents ?? null,
   contractedCapacityPatients:
     result.commercialPricing?.contractedCapacityPatients ?? null
+});
+
+export const buildSalesCommercialApprovalHashInput = (
+  result: SalesProposalReviewSource,
+  approvedCodes: string[]
+) => ({
+  approvalResult: buildSalesCommercialApprovalResult(result, approvedCodes),
+  profitabilityPolicy: result.economics?.policy ?? null
 });
 
 export const validateSalesCommercialExceptionActor = (input: {
