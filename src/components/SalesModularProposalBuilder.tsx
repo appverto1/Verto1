@@ -24,6 +24,7 @@ import {
   isSalesPackageTierCompatible,
   recommendSalesPackageTier,
   resolveSalesPackageTierSelection,
+  salesModularProposalRequiresVersionedProfitabilityPolicy,
   salesPackageDemand,
   type SalesModularLineSelection,
   type SalesModularProposalInput,
@@ -43,6 +44,17 @@ import {
   validateCustomCapacityPolicy,
   type OfferItemDiscountType
 } from '../utils/salesCommercialEvolution';
+import {
+  SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE,
+  classifySalesProposalReview,
+  formatSalesBasisPointsPercent,
+  formatSalesIncrementalMarginStatusLabel,
+  validateSalesProfitabilityPolicy,
+  type SalesCommercialExceptionApprovalSnapshot,
+  type SalesCommercialExceptionType,
+  type SalesProfitabilityPolicy,
+  type SalesProposalReviewClassification
+} from '../utils/salesModularEconomics';
 import type {
   SalesAssumptionSnapshot,
   SalesUsageProfile
@@ -67,7 +79,12 @@ type SavedModularSimulation = {
   assumption_set_id: string;
   catalog_version_id: string;
   modular_input_snapshot: SalesModularProposalInput;
-  results_snapshot: SalesModularProposalResult;
+  results_snapshot: SalesModularProposalResult & {
+    commercialReview?: SalesProposalReviewClassification & {
+      canGeneratePublicOffer?: boolean;
+    };
+    commercialExceptionApproval?: SalesCommercialExceptionApprovalSnapshot | null;
+  };
   profitability_rating: SalesModularProposalResult['rating'];
   internal_justification?: string | null;
   internal_notes?: string | null;
@@ -117,7 +134,8 @@ const itemTierForQuantity = (
 const selectionForItem = (
   item: SalesPricingCatalogItem,
   patientQuantity: number,
-  baseTier: SalesPricingCatalogTier
+  baseTier: SalesPricingCatalogTier,
+  perPatientPricing = false
 ): SalesModularLineSelection => {
   const quantity =
     item.itemKey === 'insurance_tiss'
@@ -134,7 +152,20 @@ const selectionForItem = (
     tierId: linkedTier?.id || null,
     quantity,
     itemDiscountBasisPoints: 0,
-    customRecurringAmountCents: linkedTier?.isCustom ? 0 : null,
+    customRecurringAmountCents:
+      perPatientPricing && item.billingInterval !== 'one_time'
+        ? null
+        : linkedTier?.isCustom
+          ? 0
+          : null,
+    pricingEditMode:
+      perPatientPricing && item.billingInterval !== 'one_time'
+        ? 'per_patient'
+        : undefined,
+    proposedPricePerPatientCents:
+      perPatientPricing && item.billingInterval !== 'one_time'
+        ? null
+        : undefined,
     customOneTimeAmountCents: item.itemKey === 'onboarding' ? 0 : null
   };
 };
@@ -161,6 +192,105 @@ const costSourceLabel: Record<string, string> = {
   unavailable: 'Indisponível'
 };
 
+const incrementalMarginLabel = formatSalesIncrementalMarginStatusLabel;
+
+const commercialAlertLabel = (
+  code: string,
+  policy?: SalesProfitabilityPolicy | null
+) => {
+  const clinicMinimum = policy
+    ? formatSalesBasisPointsPercent(
+        policy.clinicMinimumEbitdaMarginBasisPoints
+      )
+    : null;
+  const postPromotionMinimum = policy
+    ? formatSalesBasisPointsPercent(
+        policy.postPromotionMinimumEbitdaMarginBasisPoints
+      )
+    : null;
+  const moduleMinimum = policy
+    ? formatSalesBasisPointsPercent(
+        policy.moduleMinimumIncrementalMarginBasisPoints
+      )
+    : null;
+  const capacityMinimum = policy
+    ? formatSalesBasisPointsPercent(
+        policy.capacityMinimumIncrementalMarginBasisPoints
+      )
+    : null;
+  const recurringTarget = policy
+    ? formatSalesBasisPointsPercent(
+        policy.recurringTargetEbitdaMarginBasisPoints
+      )
+    : null;
+  if (
+    code === 'CLINIC_MARGIN_BELOW_MINIMUM' ||
+    code === 'CLINIC_MARGIN_BELOW_60'
+  ) {
+    return clinicMinimum
+      ? `A margem da clínica está abaixo do piso comercial de ${clinicMinimum}.`
+      : 'A margem da clínica está abaixo do piso comercial.';
+  }
+  if (
+    code === 'POST_PROMOTION_MARGIN_BELOW_MINIMUM' ||
+    code === 'POST_PROMOTION_MARGIN_BELOW_70'
+  ) {
+    return postPromotionMinimum
+      ? `A condição posterior está abaixo do piso de ${postPromotionMinimum}.`
+      : 'A condição posterior está abaixo da meta comercial.';
+  }
+  if (
+    code.startsWith('MODULE_MARGIN_BELOW_MINIMUM:') ||
+    code.startsWith('MODULE_MARGIN_BELOW_75:')
+  ) {
+    return moduleMinimum
+      ? `Um módulo está abaixo da margem incremental mínima de ${moduleMinimum}.`
+      : 'Um módulo está abaixo da margem incremental prevista.';
+  }
+  if (
+    code === 'CAPACITY_MARGIN_BELOW_MINIMUM' ||
+    code === 'CAPACITY_MARGIN_BELOW_75'
+  ) {
+    return capacityMinimum
+      ? `Os blocos de capacidade estão abaixo da margem incremental mínima de ${capacityMinimum}.`
+      : 'Os blocos de capacidade estão abaixo da margem incremental prevista.';
+  }
+  if (
+    code.startsWith('EXPANSION_MARGIN_BELOW_MINIMUM:') ||
+    code.startsWith('EXPANSION_MARGIN_BELOW_75:')
+  ) {
+    return capacityMinimum
+      ? `Um excedente por driver está abaixo da margem incremental mínima de ${capacityMinimum}.`
+      : 'Um excedente por driver está abaixo da margem incremental prevista.';
+  }
+  if (code === 'CLINIC_MARGIN_BELOW_TARGET') {
+    return recurringTarget
+      ? `A margem da clínica está abaixo da meta comercial de ${recurringTarget}.`
+      : 'A margem da clínica está abaixo da meta comercial.';
+  }
+  if (code === 'PROMOTIONAL_PHASE_DEFICIT') {
+    return 'A fase promocional possui resultado operacional atribuído negativo.';
+  }
+  if (code.startsWith('FREE_MODULE_WITH_COST:')) {
+    return 'Um módulo gratuito mantém custo operacional durante o benefício.';
+  }
+  if (code === 'TEMPORARY_DISCOUNT_REQUIRED') {
+    return 'A condição requer benefício temporário com término definido.';
+  }
+  if (code === 'MODULE_PROMOTION_TERMS_REQUIRED') {
+    return 'A promoção de um módulo precisa de prazo e condição posterior.';
+  }
+  return 'A composição requer revisão da política comercial.';
+};
+
+const publicOfferDiscount = (
+  discount: SalesModularLineSelection['offerDiscount']
+) => {
+  if (!discount) return null;
+  const { internalNotes: _internalNotes, ...publicDiscount } = discount;
+  return publicDiscount;
+};
+
 export const SalesModularProposalBuilder = ({
   lead,
   onClose,
@@ -171,6 +301,13 @@ export const SalesModularProposalBuilder = ({
   const panelRef = useRef<HTMLElement | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
   const [useLegacyFallback, setUseLegacyFallback] = useState(false);
+  const [showEconomySimulator, setShowEconomySimulator] = useState(false);
+  const [economySimulatorPatients, setEconomySimulatorPatients] =
+    useState<150 | 160 | 170 | 200>(150);
+  const [economySimulatorProfile, setEconomySimulatorProfile] =
+    useState<Extract<SalesUsageProfile, 'light' | 'standard' | 'intensive'>>(
+      'intensive'
+    );
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -184,6 +321,10 @@ export const SalesModularProposalBuilder = ({
   const [input, setInput] = useState<SalesModularProposalInput | null>(null);
   const [scenarioName, setScenarioName] = useState('Cenário principal');
   const [internalJustification, setInternalJustification] = useState('');
+  const [approveCommercialException, setApproveCommercialException] =
+    useState(false);
+  const [commercialExceptionType, setCommercialExceptionType] =
+    useState<SalesCommercialExceptionType>('margin_policy_override');
   const [internalNotes, setInternalNotes] = useState('');
   const [publicNotes, setPublicNotes] = useState('');
   const [selectedSimulationId, setSelectedSimulationId] = useState('');
@@ -295,7 +436,15 @@ export const SalesModularProposalBuilder = ({
               : null,
           customCapacityBlocks: null,
           customCapacitySelectionMode: 'automatic',
-          lines: [selectionForItem(core, patientQuantity, recommendedTier)],
+          lines: [
+            selectionForItem(
+              core,
+              patientQuantity,
+              recommendedTier,
+              recommendedTier.isCustom ||
+                recommendedTier.maximumQuantity === null
+            )
+          ],
           globalDiscountBasisPoints: 0,
           discountDurationMonths: 0,
           offerValidityDays: 14,
@@ -380,11 +529,17 @@ export const SalesModularProposalBuilder = ({
       return;
     }
     const coreLine = input.lines.find((line) => line.itemKey === 'clinical_core');
+    const coreBasePriceCents =
+      coreLine?.pricingEditMode === 'per_patient' &&
+      typeof coreLine.proposedPricePerPatientCents === 'number'
+        ? Math.round(
+            Number(input.customBasePackageLimit || 0) *
+              coreLine.proposedPricePerPatientCents
+          )
+        : Number(coreLine?.customRecurringAmountCents || 0);
     if (
       !Number.isInteger(input.customBasePackageLimit) ||
       Number(input.customBasePackageLimit) < 1 ||
-      !Number.isInteger(coreLine?.customRecurringAmountCents) ||
-      Number(coreLine?.customRecurringAmountCents) <= 0 ||
       catalog.status !== 'active' ||
       !validateCustomCapacityPolicy(catalog.customCapacityPolicy)
     ) {
@@ -393,9 +548,9 @@ export const SalesModularProposalBuilder = ({
     const capacity = calculateCustomCapacity(
       {
         currentPatients: input.patientQuantity,
-        expectedPatients: input.expectedPatientQuantity12Months,
-        baseLimitPatients: Number(input.customBasePackageLimit),
-        basePriceCents: Number(coreLine?.customRecurringAmountCents),
+          expectedPatients: input.expectedPatientQuantity12Months,
+          baseLimitPatients: Number(input.customBasePackageLimit),
+          basePriceCents: coreBasePriceCents,
         selection: {
           mode: input.customCapacitySelectionMode === 'manual' ? 'manual' : 'automatic',
           selectedBlocks: input.customCapacityBlocks
@@ -424,17 +579,71 @@ export const SalesModularProposalBuilder = ({
     }
   }, [catalog, input]);
 
+  const hasValidVersionedProfitabilityPolicy = Boolean(
+    catalog?.hasVersionedProfitabilityPolicy === true &&
+      validateSalesProfitabilityPolicy(catalog.profitabilityPolicy)
+  );
+  const proposalRequiresVersionedProfitabilityPolicy =
+    salesModularProposalRequiresVersionedProfitabilityPolicy(input, catalog);
+  const profitabilityPolicyRequired = Boolean(
+    catalog?.status === 'active' &&
+      proposalRequiresVersionedProfitabilityPolicy &&
+      !hasValidVersionedProfitabilityPolicy
+  );
   const preview = useMemo(() => {
-    if (!input || !catalog || !assumptions) return null;
+    if (!input || !catalog || !assumptions || profitabilityPolicyRequired) {
+      return null;
+    }
     try {
       return calculateSalesModularProposal(input, catalog, assumptions);
     } catch {
       return null;
     }
-  }, [assumptions, catalog, input]);
+  }, [assumptions, catalog, input, profitabilityPolicyRequired]);
+  const proposalReview = useMemo(
+    () => preview ? classifySalesProposalReview(preview) : null,
+    [preview]
+  );
+  const profitabilityThresholdColumns = useMemo(() => {
+    const policy = preview?.economics?.policy;
+    if (!policy) return [];
+    const definitions = [
+      ['Piso clínica', policy.clinicMinimumEbitdaMarginBasisPoints],
+      ['Meta recorrente', policy.recurringTargetEbitdaMarginBasisPoints],
+      ['Piso pós-promo', policy.postPromotionMinimumEbitdaMarginBasisPoints],
+      ['Piso módulo', policy.moduleMinimumIncrementalMarginBasisPoints],
+      ['Piso capacidade', policy.capacityMinimumIncrementalMarginBasisPoints],
+      ['Meta módulo', policy.moduleTargetIncrementalMarginBasisPoints]
+    ] as const;
+    const grouped = new Map<number, string[]>();
+    definitions.forEach(([label, basisPoints]) => {
+      grouped.set(basisPoints, [
+        ...(grouped.get(basisPoints) || []),
+        label
+      ]);
+    });
+    return Array.from(grouped.entries())
+      .sort(([left], [right]) => left - right)
+      .map(([basisPoints, labels]) => ({
+        basisPoints,
+        label: `${labels.join(' / ')} · ${formatSalesBasisPointsPercent(
+          basisPoints
+        )}`
+      }));
+  }, [preview?.economics?.policy]);
+  const approvalResetKey = useMemo(
+    () => JSON.stringify(preview?.input || null),
+    [preview]
+  );
+
+  useEffect(() => {
+    setApproveCommercialException(false);
+  }, [approvalResetKey]);
 
   const aggressivePreview = useMemo(() => {
-    if (!input || !catalog || !assumptions) return null;
+    if (!input || !catalog || !assumptions || profitabilityPolicyRequired) {
+      return null;
+    }
     const aggressivePatients =
       preview?.basePackage.limitQuantity ??
       catalog.items
@@ -462,7 +671,202 @@ export const SalesModularProposalBuilder = ({
     } catch {
       return null;
     }
-  }, [assumptions, catalog, input, preview?.basePackage.limitQuantity]);
+  }, [
+    assumptions,
+    catalog,
+    input,
+    preview?.basePackage.limitQuantity,
+    profitabilityPolicyRequired
+  ]);
+
+  const economySimulatorRows = useMemo(() => {
+    if (
+      !showEconomySimulator ||
+      !input ||
+      !catalog ||
+      !assumptions ||
+      !hasValidVersionedProfitabilityPolicy
+    ) {
+      return [];
+    }
+    const coreItem = catalog.items.find(
+      (item) => item.itemKey === 'clinical_core'
+    );
+    const customTier = coreItem?.tiers.find(
+      (tier) => tier.isCustom || tier.maximumQuantity === null
+    );
+    const currentCore = input.lines.find(
+      (line) => line.itemKey === 'clinical_core'
+    );
+    const baseLimit = Number(input.customBasePackageLimit);
+    const currentCorePricePerPatientCents =
+      currentCore?.pricingEditMode === 'per_patient'
+        ? currentCore.proposedPricePerPatientCents
+        : currentCore?.pricingEditMode === 'monthly_total' &&
+            Number(currentCore.customRecurringAmountCents) >= 0 &&
+            baseLimit > 0
+          ? Number(currentCore.customRecurringAmountCents) / baseLimit
+          : Number(currentCore?.customRecurringAmountCents) > 0 &&
+              baseLimit > 0
+            ? Number(currentCore?.customRecurringAmountCents) / baseLimit
+            : null;
+    if (
+      !coreItem ||
+      !customTier ||
+      currentCorePricePerPatientCents === null ||
+      !Number.isFinite(currentCorePricePerPatientCents) ||
+      currentCorePricePerPatientCents <= 0 ||
+      !Number.isInteger(baseLimit) ||
+      baseLimit < 1
+    ) {
+      return [];
+    }
+    const moduleKeys = [
+      'appointments_communication',
+      'financial_management',
+      'insurance_tiss',
+      'school_management'
+    ] as const;
+    const moduleItems = moduleKeys
+      .map((itemKey) =>
+        catalog.items.find(
+          (item) => item.itemKey === itemKey && item.isActive
+        )
+      )
+      .filter(Boolean) as SalesPricingCatalogItem[];
+    const allModuleDraftLines: SalesModularLineSelection[] = [
+      {
+        itemKey: 'clinical_core',
+        tierId: customTier.id,
+        quantity: economySimulatorPatients,
+        itemDiscountBasisPoints: 0,
+        customRecurringAmountCents: null,
+        customOneTimeAmountCents: null,
+        pricingEditMode: 'per_patient',
+        proposedPricePerPatientCents: currentCorePricePerPatientCents
+      },
+      ...moduleItems.map((item) =>
+        selectionForItem(item, economySimulatorPatients, customTier, true)
+      )
+    ];
+    let suggestedPrices = new Map<string, number>();
+    try {
+      const recommendationPreview = calculateSalesModularProposal(
+        {
+          ...input,
+          patientQuantity: economySimulatorPatients,
+          expectedPatientQuantity12Months: economySimulatorPatients,
+          basePackageTierId: customTier.id,
+          customBasePackageLimit: baseLimit,
+          customCapacityBlocks: null,
+          customCapacitySelectionMode: 'automatic',
+          lines: allModuleDraftLines,
+          globalDiscountBasisPoints: 0,
+          discountDurationMonths: 0,
+          usageProfile: economySimulatorProfile,
+          driverOverrides: {}
+        },
+        catalog,
+        assumptions
+      );
+      suggestedPrices = new Map(
+        recommendationPreview.lines.flatMap((line) =>
+          line.commercialPricing.recommendedPricePerPatientCents === null
+            ? []
+            : [[
+                line.itemKey,
+                line.commercialPricing.recommendedPricePerPatientCents
+              ]]
+        )
+      );
+    } catch {
+      suggestedPrices = new Map();
+    }
+    const rows: Array<{
+      key: string;
+      label: string;
+      revenueCents: number;
+      costCents: number | null;
+      marginBasisPoints: number | null;
+      canSend: boolean;
+    }> = [];
+    for (let mask = 0; mask < 2 ** moduleItems.length; mask += 1) {
+      const selectedModules = moduleItems.filter(
+        (_item, index) => (mask & (1 << index)) !== 0
+      );
+      const lines: SalesModularLineSelection[] = [
+        {
+          itemKey: 'clinical_core',
+          tierId: customTier.id,
+          quantity: economySimulatorPatients,
+          itemDiscountBasisPoints: 0,
+          customRecurringAmountCents: null,
+          customOneTimeAmountCents: null,
+          pricingEditMode: 'per_patient',
+          proposedPricePerPatientCents:
+            currentCorePricePerPatientCents
+        },
+        ...selectedModules.map((item) => ({
+          ...selectionForItem(
+            item,
+            economySimulatorPatients,
+            customTier,
+            true
+          ),
+          proposedPricePerPatientCents:
+            input.lines.find((line) => line.itemKey === item.itemKey)
+              ?.proposedPricePerPatientCents ??
+            suggestedPrices.get(item.itemKey) ??
+            null
+        }))
+      ];
+      try {
+        const result = calculateSalesModularProposal(
+          {
+            ...input,
+            patientQuantity: economySimulatorPatients,
+            expectedPatientQuantity12Months: economySimulatorPatients,
+            basePackageTierId: customTier.id,
+            basePackageSelectionMode: 'automatic',
+            customBasePackageLimit: baseLimit,
+            customCapacityBlocks: null,
+            customCapacitySelectionMode: 'automatic',
+            lines,
+            globalDiscountBasisPoints: 0,
+            discountDurationMonths: 0,
+            usageProfile: economySimulatorProfile,
+            driverOverrides: {}
+          },
+          catalog,
+          assumptions
+        );
+        rows.push({
+          key: String(mask),
+          label:
+            selectedModules.length === 0
+              ? 'Apenas Verto Clínica'
+              : `Verto + ${selectedModules
+                  .map((item) => item.publicName)
+                  .join(' + ')}`,
+          revenueCents: result.postPromotion.recurringRevenueCents,
+          costCents: result.postPromotion.totalEstimatedCostCents,
+          marginBasisPoints: result.postPromotion.ebitdaMarginBasisPoints,
+          canSend: result.economics?.canSend === true
+        });
+      } catch {
+        // Cenários incompletos permanecem ausentes em vez de assumir custo zero.
+      }
+    }
+    return rows;
+  }, [
+    assumptions,
+    catalog,
+    economySimulatorPatients,
+    economySimulatorProfile,
+    input,
+    hasValidVersionedProfitabilityPolicy,
+    showEconomySimulator
+  ]);
 
   const selectedSimulation = useMemo(
     () =>
@@ -471,6 +875,34 @@ export const SalesModularProposalBuilder = ({
       ) || null,
     [selectedSimulationId, simulations]
   );
+  const selectedSimulationHasVersionedEconomics =
+    validateSalesProfitabilityPolicy(
+      selectedSimulation?.results_snapshot?.economics?.policy
+    );
+  const selectedSimulationRequiresVersionedProfitabilityPolicy = Boolean(
+    selectedSimulation &&
+      (
+        selectedSimulation.results_snapshot?.commercialPricing?.enabled === true ||
+        selectedSimulation.modular_input_snapshot?.customBasePackageLimit != null ||
+        (
+          selectedSimulation.catalog_version_id === catalog?.id &&
+          salesModularProposalRequiresVersionedProfitabilityPolicy(
+            selectedSimulation.modular_input_snapshot,
+            catalog
+          )
+        )
+      )
+  );
+  const selectedSimulationReview = useMemo(
+    () =>
+      selectedSimulation
+        ? classifySalesProposalReview(selectedSimulation.results_snapshot)
+        : null,
+    [selectedSimulation]
+  );
+  const selectedSimulationHasApproval =
+    selectedSimulation?.results_snapshot?.commercialExceptionApproval
+      ?.status === 'approved';
   const comparedSimulations = useMemo(
     () =>
       comparisonIds
@@ -508,8 +940,22 @@ export const SalesModularProposalBuilder = ({
           line.postPromotionRecurringRevenueCents,
         oneTimeAmountCents: line.oneTimeRevenueCents,
         itemDiscountBasisPoints: line.itemDiscountBasisPoints,
-        offerDiscount: line.offerDiscount,
-        publicMetadata: line.publicMetadata
+        offerDiscount: publicOfferDiscount(line.offerDiscount),
+        publicMetadata: {
+          tierName: line.publicMetadata.tierName || null,
+          unitName: line.publicMetadata.unitName || null,
+          includedQuantity: line.publicMetadata.includedQuantity ?? null,
+          maximumQuantity: line.publicMetadata.maximumQuantity ?? null,
+          pricePerPatientCents:
+            line.publicMetadata.pricePerPatientCents ?? null,
+          billedCapacityPatients:
+            line.publicMetadata.billedCapacityPatients ?? null,
+          pricingBasis:
+            line.publicMetadata.pricingBasis || 'catalog_snapshot',
+          features: Array.isArray(line.publicMetadata.features)
+            ? line.publicMetadata.features
+            : []
+        }
       })),
       promotionalMonthlyAmountCents:
         preview.promotionalRecurringRevenueCents,
@@ -527,7 +973,24 @@ export const SalesModularProposalBuilder = ({
       status: 'preview',
       modularCheckoutEnabled: false,
       stripeReady: false,
-      commercialPhases: preview.commercialPhases
+      commercialPhases: preview.commercialPhases.map((phase) => ({
+        phaseNumber: phase.phaseNumber,
+        startsAt: phase.startsAt,
+        endsAt: phase.endsAt,
+        recurringRevenueCents: phase.recurringRevenueCents,
+        invoiceAmountCents: phase.invoiceAmountCents,
+        lines: phase.lines.map((line) => ({
+          itemKey: line.itemKey,
+          publicName: line.publicName,
+          billingInterval: line.billingInterval,
+          normalPriceCents: line.normalPriceCents,
+          activePriceCents: line.activePriceCents,
+          discountCents: line.discountCents,
+          itemDiscountCents: line.itemDiscountCents,
+          globalDiscountCents: line.globalDiscountCents,
+          discount: publicOfferDiscount(line.discount)
+        }))
+      }))
     };
   }, [input, lead?.clinicName, lead?.name, preview, publicNotes, scenarioName]);
 
@@ -631,7 +1094,8 @@ export const SalesModularProposalBuilder = ({
     const newSelection = selectionForItem(
       item,
       input.patientQuantity,
-      baseTier
+      baseTier,
+      baseTier.isCustom || baseTier.maximumQuantity === null
     );
     if (
       item.itemKey === 'onboarding' &&
@@ -748,6 +1212,10 @@ export const SalesModularProposalBuilder = ({
 
   const saveSimulation = async () => {
     if (!input || !catalog || !assumptions || !preview) return;
+    if (!hasValidVersionedProfitabilityPolicy) {
+      setError(SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE);
+      return;
+    }
     setBusy('save');
     setError('');
     setNotice('');
@@ -764,6 +1232,9 @@ export const SalesModularProposalBuilder = ({
             scenarioName,
             input,
             internalJustification,
+            approveCommercialException,
+            commercialExceptionConfirmed: approveCommercialException,
+            commercialExceptionType,
             internalNotes,
             publicNotes
           })
@@ -781,7 +1252,9 @@ export const SalesModularProposalBuilder = ({
       setNotice(
         data.idempotent
           ? 'Cenário já salvo; o mesmo snapshot foi recuperado.'
-          : 'Cenário salvo no banco. Selecione-o quando estiver pronto para gerar a proposta.'
+          : stored.results_snapshot?.commercialExceptionApproval
+            ? 'Exceção aprovada e congelada em uma nova versão do cenário. Selecione-a para gerar a proposta.'
+            : 'Cenário salvo no banco. Selecione-o quando estiver pronto para gerar a proposta.'
       );
     } catch (saveError: any) {
       setError(saveError?.message || 'Não foi possível salvar o cenário.');
@@ -902,6 +1375,7 @@ export const SalesModularProposalBuilder = ({
       `Cópia de ${simulation.scenario_name || 'cenário modular'}`
     );
     setInternalJustification(simulation.internal_justification || '');
+    setApproveCommercialException(false);
     setInternalNotes(simulation.internal_notes || '');
     setPublicNotes(simulation.public_notes || '');
     setSelectedSimulationId('');
@@ -926,6 +1400,14 @@ export const SalesModularProposalBuilder = ({
 
   const prepareOffer = async () => {
     if (!selectedSimulation) return;
+    if (
+      !selectedSimulation.offer &&
+      selectedSimulationRequiresVersionedProfitabilityPolicy &&
+      !selectedSimulationHasVersionedEconomics
+    ) {
+      setError(SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE);
+      return;
+    }
     setBusy('offer');
     setError('');
     try {
@@ -1099,6 +1581,24 @@ export const SalesModularProposalBuilder = ({
   const hasVersionedCustomCapacityPolicy =
     catalog?.status === 'active' &&
     validateCustomCapacityPolicy(catalog.customCapacityPolicy);
+  const coreSelection = input?.lines.find(
+    (line) => line.itemKey === 'clinical_core'
+  );
+  const coreResult = preview?.lines.find(
+    (line) => line.itemKey === 'clinical_core'
+  );
+  const customPerPatientPricing =
+    Boolean(
+      selectedBaseTier &&
+      (selectedBaseTier.isCustom ||
+        selectedBaseTier.maximumQuantity === null)
+    ) &&
+    ['per_patient', 'monthly_total'].includes(
+      String(coreSelection?.pricingEditMode || '')
+    );
+  const commercialPricingMissing =
+    preview?.commercialPricing.enabled === true &&
+    preview.commercialPricing.missingPriceItemKeys.length > 0;
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-slate-950/45 backdrop-blur-[2px]">
@@ -1146,6 +1646,30 @@ export const SalesModularProposalBuilder = ({
         ) : (
           <div className="grid flex-1 gap-5 p-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)] lg:p-6">
             <div className="min-w-0 space-y-5">
+              {profitabilityPolicyRequired ? (
+                <section
+                  role="alert"
+                  className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 shadow-sm sm:p-5"
+                >
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="mt-0.5 shrink-0" size={18} />
+                    <div>
+                      <h2 className="font-semibold">
+                        Política de margem versionada obrigatória
+                      </h2>
+                      <p className="mt-1 font-normal leading-6">
+                        {SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE}
+                      </p>
+                      <p className="mt-2 font-normal leading-6">
+                        Clone o catálogo ativo, revise a política de margem e
+                        publique a nova versão. A consulta dos cenários
+                        históricos permanece disponível e nenhuma versão será
+                        clonada ou publicada automaticamente.
+                      </p>
+                    </div>
+                  </div>
+                </section>
+              ) : null}
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -1282,41 +1806,187 @@ export const SalesModularProposalBuilder = ({
                           : 'Capacidade contratada congelada nesta proposta. Este catálogo não possui blocos versionados.'}
                       </span>
                     </label>
-                    <label className="text-sm font-medium text-slate-700">
-                      Valor mensal personalizado do pacote-base
-                      <input
-                        type="number"
-                        min={0.01}
-                        step="0.01"
-                        required
-                        placeholder="0,00"
-                        value={
-                          Number(
-                            input.lines.find(
-                              (line) => line.itemKey === 'clinical_core'
-                            )?.customRecurringAmountCents || 0
-                          ) > 0
-                            ? Number(
-                                input.lines.find(
-                                  (line) => line.itemKey === 'clinical_core'
-                                )?.customRecurringAmountCents
-                              ) / 100
-                            : ''
-                        }
-                        onChange={(event) =>
-                          updateLine('clinical_core', {
-                            customRecurringAmountCents:
-                              event.target.value === ''
-                                ? null
-                                : Math.round(Number(event.target.value) * 100)
-                          })
-                        }
-                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                      />
-                      <span className="mt-1 block font-normal leading-5 text-slate-500">
-                        Obrigatório para calcular e salvar a faixa personalizada.
-                      </span>
-                    </label>
+                    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-slate-800">
+                          Preço comercial do pacote-base
+                        </p>
+                        <select
+                          aria-label="Modo de edição do preço do pacote-base"
+                          value={coreSelection?.pricingEditMode || 'per_patient'}
+                          onChange={(event) => {
+                            const pricingEditMode = event.target.value as
+                              | 'per_patient'
+                              | 'monthly_total';
+                            updateLine('clinical_core', {
+                              pricingEditMode,
+                              ...(pricingEditMode === 'monthly_total'
+                                ? {
+                                    customRecurringAmountCents:
+                                      coreResult?.commercialPricing
+                                        .derivedMonthlyRevenueCents ?? null
+                                  }
+                                : {
+                                    proposedPricePerPatientCents:
+                                      coreResult?.commercialPricing
+                                        .proposedPricePerPatientCents ?? null
+                                  })
+                            });
+                          }}
+                          className="min-h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs font-normal text-slate-700"
+                        >
+                          <option value="per_patient">Por paciente</option>
+                          <option value="monthly_total">Total mensal</option>
+                        </select>
+                      </div>
+                      {coreSelection?.pricingEditMode === 'monthly_total' ? (
+                        <label className="mt-3 block text-xs font-medium text-slate-600">
+                          Total mensal proposto
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            placeholder="Dados insuficientes"
+                            value={
+                              coreSelection.customRecurringAmountCents == null
+                                ? ''
+                                : coreSelection.customRecurringAmountCents / 100
+                            }
+                            onChange={(event) =>
+                              updateLine('clinical_core', {
+                                customRecurringAmountCents:
+                                  event.target.value === ''
+                                    ? null
+                                    : Math.round(
+                                        Number(event.target.value) * 100
+                                      )
+                              })
+                            }
+                            className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                          />
+                        </label>
+                      ) : (
+                        <label className="mt-3 block text-xs font-medium text-slate-600">
+                          Preço proposto por paciente
+                          <input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            placeholder="Dados insuficientes"
+                            value={
+                              coreSelection?.proposedPricePerPatientCents == null
+                                ? ''
+                                : coreSelection.proposedPricePerPatientCents /
+                                  100
+                            }
+                            onChange={(event) =>
+                              updateLine('clinical_core', {
+                                proposedPricePerPatientCents:
+                                  event.target.value === ''
+                                    ? null
+                                    : Math.round(
+                                        Number(event.target.value) * 100
+                                      )
+                              })
+                            }
+                            className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                          />
+                        </label>
+                      )}
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                        <span>
+                          {coreSelection?.pricingEditMode === 'monthly_total'
+                            ? `Derivado por paciente: ${currency(
+                                coreResult?.commercialPricing
+                                  .proposedPricePerPatientCents
+                              )}`
+                            : `Total derivado: ${currency(
+                                coreResult?.commercialPricing
+                                  .derivedMonthlyRevenueCents
+                              )}`}
+                        </span>
+                        {coreResult?.commercialPricing
+                          .recommendedPricePerPatientCents != null ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateLine('clinical_core', {
+                                pricingEditMode: 'per_patient',
+                                proposedPricePerPatientCents:
+                                  coreResult.commercialPricing
+                                    .recommendedPricePerPatientCents
+                              })
+                            }
+                            className="min-h-8 rounded-lg border border-violet-200 bg-white px-2 font-medium text-violet-700 hover:bg-violet-50"
+                          >
+                            Usar preço sugerido
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    {coreResult ? (
+                      <dl className="grid gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 text-xs sm:col-span-2 sm:grid-cols-3">
+                        {[
+                          [
+                            'Custo mensal estimado',
+                            currency(
+                              coreResult.commercialPricing
+                                .estimatedMonthlyCostCents
+                            )
+                          ],
+                          [
+                            'Custo efetivo por paciente',
+                            currency(
+                              coreResult.commercialPricing
+                                .effectiveCostPerPatientCents
+                            )
+                          ],
+                          [
+                            'Custo marginal por paciente',
+                            currency(
+                              coreResult.commercialPricing
+                                .marginalCostPerPatientCents
+                            )
+                          ],
+                          [
+                            'Piso por paciente',
+                            currency(
+                              coreResult.commercialPricing
+                                .minimumPricePerPatientCents
+                            )
+                          ],
+                          [
+                            'Sugerido por paciente',
+                            currency(
+                              coreResult.commercialPricing
+                                .recommendedPricePerPatientCents
+                            )
+                          ],
+                          [
+                            'Confiança da estimativa',
+                            coreResult.commercialPricing.confidenceLevel ===
+                            'unavailable'
+                              ? 'Dados insuficientes'
+                              : coreResult.commercialPricing.confidenceLevel ===
+                                  'high'
+                                ? 'Alta'
+                                : coreResult.commercialPricing
+                                      .confidenceLevel === 'medium'
+                                  ? 'Média'
+                                  : 'Baixa'
+                          ]
+                        ].map(([label, value]) => (
+                          <div key={label} className="bg-white px-3 py-2.5">
+                            <dt className="font-normal text-slate-500">
+                              {label}
+                            </dt>
+                            <dd className="mt-0.5 font-medium text-slate-800">
+                              {value}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    ) : null}
                     {hasVersionedCustomCapacityPolicy ? (
                     <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-3 sm:col-span-2">
                       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,0.45fr)] sm:items-end">
@@ -1325,7 +1995,11 @@ export const SalesModularProposalBuilder = ({
                             Blocos adicionais de capacidade
                           </p>
                           <p className="mt-1 text-xs font-normal leading-5 text-slate-600">
-                            Cada bloco reserva {catalog.customCapacityPolicy.blockSizePatients} pacientes e custa {currency(catalog.customCapacityPolicy.blockPriceCents)}/mês. O acesso clínico nunca é bloqueado.
+                            Cada bloco reserva {catalog.customCapacityPolicy.blockSizePatients} pacientes.{' '}
+                            {customPerPatientPricing
+                              ? 'O preço é derivado da soma dos preços por paciente dos módulos contratados.'
+                              : `Preço versionado: ${currency(catalog.customCapacityPolicy.blockPriceCents)}/mês.`}{' '}
+                            O acesso clínico nunca é bloqueado.
                           </p>
                         </div>
                         <label className="text-xs font-medium text-slate-700">
@@ -1351,16 +2025,46 @@ export const SalesModularProposalBuilder = ({
                         <dl className="mt-4 grid gap-px overflow-hidden rounded-xl border border-violet-100 bg-violet-100 text-xs sm:grid-cols-2 lg:grid-cols-4">
                           {[
                             ['Limite-base', `${preview.basePackage.capacity.baseLimitPatients} pacientes`],
-                            ['Preço-base', `${currency(preview.basePackage.capacity.basePriceCents)}/mês`],
+                            [
+                              'Preço-base',
+                              `${currency(
+                                commercialPricingMissing
+                                  ? null
+                                  : preview.basePackage.capacity.basePriceCents
+                              )}/mês`
+                            ],
                             ['Tamanho do bloco', `${preview.basePackage.capacity.policy.blockSizePatients} pacientes`],
-                            ['Preço por bloco', `${currency(preview.basePackage.capacity.policy.blockPriceCents)}/mês`],
+                            [
+                              'Preço por bloco',
+                              `${currency(
+                                preview.basePackage.capacity
+                                  .effectiveBlockPriceCents
+                              )}/mês`
+                            ],
                             ['Quantidade mínima', `${preview.basePackage.capacity.minimumBlocks}`],
                             ['Quantidade selecionada', `${preview.basePackage.capacity.selectedBlocks}`],
                             ['Capacidade adicionada', `${preview.basePackage.capacity.addedCapacityPatients} pacientes`],
                             ['Limite total', `${preview.basePackage.capacity.totalContractedLimitPatients} pacientes`],
                             ['Armazenamento incluído', `${preview.basePackage.capacity.includedStorageMb.toLocaleString('pt-BR')} MB`],
-                            ['Receita dos blocos', `${currency(preview.basePackage.capacity.blocksMonthlyRevenueCents)}/mês`],
-                            ['Mensalidade Verto Clínica', `${currency(preview.basePackage.capacity.clinicalCoreMonthlyRevenueCents)}/mês`],
+                            [
+                              'Receita dos blocos',
+                              `${currency(
+                                commercialPricingMissing
+                                  ? null
+                                  : preview.basePackage.capacity
+                                      .blocksMonthlyRevenueCents
+                              )}/mês`
+                            ],
+                            [
+                              'Mensalidade do pacote-base',
+                              `${currency(
+                                customPerPatientPricing
+                                  ? coreResult?.commercialPricing
+                                      .derivedMonthlyRevenueCents
+                                  : preview.basePackage.capacity
+                                      .clinicalCoreMonthlyRevenueCents
+                              )}/mês`
+                            ],
                             ['Ajuste de capacidade', `${preview.basePackage.capacity.policy.gracePeriodDays} dias · próximo ciclo`]
                           ].map(([label, value]) => (
                             <div key={label} className="bg-white/90 px-3 py-2.5">
@@ -1739,13 +2443,15 @@ export const SalesModularProposalBuilder = ({
 
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                 <h2 className="text-base font-semibold text-slate-900">
-                  Funcionalidades e adicionais
+                  Módulos e adicionais
                 </h2>
                 <p className="mt-1 text-sm font-normal text-slate-500">
                   A estrutura clínica e ABA completa já faz parte do pacote-base.
                 </p>
                 <div className="mt-4 space-y-3">
-                  {catalog.items.map((item) => {
+                  {catalog.items
+                    .filter((item) => item.itemKey !== 'clinical_core')
+                    .map((item) => {
                     const line = input.lines.find(
                       (selection) => selection.itemKey === item.itemKey
                     );
@@ -1796,9 +2502,12 @@ export const SalesModularProposalBuilder = ({
                               {enabled && preview ? (
                                 <p className="text-sm font-semibold text-slate-900">
                                   {currency(
-                                    resultLine?.postPromotionRecurringRevenueCents ||
-                                      resultLine?.oneTimeRevenueCents ||
-                                      0
+                                    item.billingInterval === 'one_time'
+                                      ? resultLine?.oneTimeRevenueCents
+                                      : resultLine?.commercialPricing
+                                          .derivedMonthlyRevenueCents ??
+                                          resultLine
+                                            ?.postPromotionRecurringRevenueCents
                                   )}
                                   <span className="font-normal text-slate-500">
                                     {item.billingInterval === 'one_time'
@@ -1826,7 +2535,13 @@ export const SalesModularProposalBuilder = ({
                                         updateLine(item.itemKey, {
                                           tierId: event.target.value,
                                           customRecurringAmountCents:
-                                            tier?.isCustom ? 0 : null
+                                            customPerPatientPricing
+                                              ? line
+                                                  .customRecurringAmountCents ??
+                                                null
+                                              : tier?.isCustom
+                                                ? 0
+                                                : null
                                         });
                                       }}
                                       className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
@@ -1861,7 +2576,203 @@ export const SalesModularProposalBuilder = ({
                                     />
                                   </label>
                                 ) : null}
-                                {selectedTier?.isCustom ? (
+                                {customPerPatientPricing &&
+                                item.billingInterval !== 'one_time' ? (
+                                  <div className="rounded-xl border border-slate-200 bg-white p-3 sm:col-span-3">
+                                    <div className="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)_auto] sm:items-end">
+                                      <label className="text-xs font-medium text-slate-600">
+                                        Editar por
+                                        <select
+                                          value={
+                                            line.pricingEditMode ||
+                                            'per_patient'
+                                          }
+                                          onChange={(event) => {
+                                            const pricingEditMode = event.target
+                                              .value as
+                                              | 'per_patient'
+                                              | 'monthly_total';
+                                            updateLine(item.itemKey, {
+                                              pricingEditMode,
+                                              ...(pricingEditMode ===
+                                              'monthly_total'
+                                                ? {
+                                                    customRecurringAmountCents:
+                                                      resultLine
+                                                        ?.commercialPricing
+                                                        .derivedMonthlyRevenueCents ??
+                                                      null
+                                                  }
+                                                : {
+                                                    proposedPricePerPatientCents:
+                                                      resultLine
+                                                        ?.commercialPricing
+                                                        .proposedPricePerPatientCents ??
+                                                      null
+                                                  })
+                                            });
+                                          }}
+                                          className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                        >
+                                          <option value="per_patient">
+                                            Preço por paciente
+                                          </option>
+                                          <option value="monthly_total">
+                                            Total mensal
+                                          </option>
+                                        </select>
+                                      </label>
+                                      {line.pricingEditMode ===
+                                      'monthly_total' ? (
+                                        <label className="text-xs font-medium text-slate-600">
+                                          Total mensal proposto
+                                          <input
+                                            type="number"
+                                            min={0}
+                                            step="0.01"
+                                            placeholder="Dados insuficientes"
+                                            value={
+                                              line.customRecurringAmountCents ==
+                                              null
+                                                ? ''
+                                                : line.customRecurringAmountCents /
+                                                  100
+                                            }
+                                            onChange={(event) =>
+                                              updateLine(item.itemKey, {
+                                                customRecurringAmountCents:
+                                                  event.target.value === ''
+                                                    ? null
+                                                    : Math.round(
+                                                        Number(
+                                                          event.target.value
+                                                        ) * 100
+                                                      )
+                                              })
+                                            }
+                                            className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                          />
+                                        </label>
+                                      ) : (
+                                        <label className="text-xs font-medium text-slate-600">
+                                          Preço proposto por paciente
+                                          <input
+                                            type="number"
+                                            min={0}
+                                            step="0.01"
+                                            placeholder="Dados insuficientes"
+                                            value={
+                                              line
+                                                .proposedPricePerPatientCents ==
+                                              null
+                                                ? ''
+                                                : line
+                                                    .proposedPricePerPatientCents /
+                                                  100
+                                            }
+                                            onChange={(event) =>
+                                              updateLine(item.itemKey, {
+                                                proposedPricePerPatientCents:
+                                                  event.target.value === ''
+                                                    ? null
+                                                    : Math.round(
+                                                        Number(
+                                                          event.target.value
+                                                        ) * 100
+                                                      )
+                                              })
+                                            }
+                                            className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
+                                          />
+                                        </label>
+                                      )}
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          resultLine?.commercialPricing
+                                            .recommendedPricePerPatientCents ==
+                                          null
+                                        }
+                                        onClick={() =>
+                                          updateLine(item.itemKey, {
+                                            pricingEditMode: 'per_patient',
+                                            proposedPricePerPatientCents:
+                                              resultLine!.commercialPricing
+                                                .recommendedPricePerPatientCents
+                                          })
+                                        }
+                                        className="min-h-10 rounded-xl border border-violet-200 bg-violet-50 px-3 text-xs font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        Usar sugerido
+                                      </button>
+                                    </div>
+                                    <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+                                      {[
+                                        [
+                                          'Total derivado',
+                                          currency(
+                                            resultLine?.commercialPricing
+                                              .derivedMonthlyRevenueCents
+                                          )
+                                        ],
+                                        [
+                                          'Custo mensal estimado',
+                                          currency(
+                                            resultLine?.commercialPricing
+                                              .estimatedMonthlyCostCents
+                                          )
+                                        ],
+                                        [
+                                          'Custo por paciente',
+                                          currency(
+                                            resultLine?.commercialPricing
+                                              .effectiveCostPerPatientCents
+                                          )
+                                        ],
+                                        [
+                                          'Custo marginal',
+                                          currency(
+                                            resultLine?.commercialPricing
+                                              .marginalCostPerPatientCents
+                                          )
+                                        ],
+                                        [
+                                          'Piso por paciente',
+                                          currency(
+                                            resultLine?.commercialPricing
+                                              .minimumPricePerPatientCents
+                                          )
+                                        ],
+                                        [
+                                          'Margem de contribuição',
+                                          percent(
+                                            resultLine?.commercialPricing
+                                              .contributionMarginBasisPoints
+                                          )
+                                        ]
+                                      ].map(([label, value]) => (
+                                        <div
+                                          key={label}
+                                          className="rounded-lg bg-slate-50 px-2.5 py-2"
+                                        >
+                                          <dt className="font-normal text-slate-500">
+                                            {label}
+                                          </dt>
+                                          <dd className="mt-0.5 font-medium text-slate-800">
+                                            {value}
+                                          </dd>
+                                        </div>
+                                      ))}
+                                    </dl>
+                                    <p className="mt-2 text-[11px] font-normal text-slate-500">
+                                      {resultLine?.commercialPricing
+                                        .estimateStatus ===
+                                      'insufficient_data'
+                                        ? 'Dados insuficientes: complete custo, driver ou preço.'
+                                        : `Estimativa ${resultLine?.commercialPricing.estimateStatus === 'calibrated' ? 'calibrada' : resultLine?.commercialPricing.estimateStatus === 'pre_launch' ? 'pré-lançamento' : 'estimada'} · modelo v${resultLine?.commercialPricing.costModelVersion ?? '—'} · premissas v${resultLine?.commercialPricing.assumptionsVersion ?? catalog.version}`}
+                                    </p>
+                                  </div>
+                                ) : selectedTier?.isCustom ? (
                                   <label className="text-xs font-medium text-slate-600">
                                     Valor mensal autorizado
                                     <input
@@ -2107,7 +3018,7 @@ export const SalesModularProposalBuilder = ({
                                 </div>
                                 <div>
                                   <p className="text-[11px] font-normal text-slate-500">
-                                    EBITDA estimado
+                                    Resultado operacional atribuído
                                   </p>
                                   <p className="mt-0.5 text-xs font-medium text-slate-800">
                                     {currency(
@@ -2277,24 +3188,91 @@ export const SalesModularProposalBuilder = ({
                     placeholder="Nunca será exibida na proposta pública."
                   />
                 </label>
-                {preview?.requiresJustification ? (
-                  <label className="mt-3 block text-sm font-medium text-rose-800">
-                    Justificativa administrativa obrigatória
-                    <textarea
-                      rows={2}
-                      maxLength={1500}
-                      value={internalJustification}
-                      onChange={(event) =>
-                        setInternalJustification(event.target.value)
-                      }
-                      className="mt-1 w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 font-normal text-slate-900"
-                      placeholder="Explique a exceção de margem."
-                    />
-                  </label>
+                {proposalReview?.requiresCommercialApproval ? (
+                  <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle
+                        aria-hidden="true"
+                        className="mt-0.5 shrink-0 text-amber-700"
+                        size={18}
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-amber-950">
+                          Aprovação comercial excepcional
+                        </p>
+                        <p className="mt-1 text-xs font-normal leading-5 text-amber-900">
+                          O cenário pode ser salvo como rascunho. Para gerar a
+                          proposta pública, um owner com MFA deve aprovar estes
+                          alertas sem alterar os cálculos.
+                        </p>
+                      </div>
+                    </div>
+                    <ul className="mt-3 space-y-1 text-xs font-normal leading-5 text-amber-950">
+                      {proposalReview.commercialAlertCodes.map((code) => (
+                        <li key={code} className="flex gap-2">
+                          <span aria-hidden="true">•</span>
+                          <span>{commercialAlertLabel(code, preview.economics.policy)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <label className="mt-4 block text-sm font-medium text-slate-700">
+                      Tipo da exceção
+                      <select
+                        value={commercialExceptionType}
+                        onChange={(event) =>
+                          setCommercialExceptionType(
+                            event.target.value as SalesCommercialExceptionType
+                          )
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-amber-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                      >
+                        <option value="margin_policy_override">
+                          Revisão individual de margem
+                        </option>
+                        <option value="temporary_promotion">
+                          Condição promocional temporária
+                        </option>
+                        <option value="strategic_showcase">
+                          Condição estratégica de cliente-vitrine
+                        </option>
+                      </select>
+                    </label>
+                    <label className="mt-3 block text-sm font-medium text-slate-700">
+                      Justificativa interna
+                      <textarea
+                        rows={3}
+                        maxLength={1500}
+                        value={internalJustification}
+                        onChange={(event) =>
+                          setInternalJustification(event.target.value)
+                        }
+                        className="mt-1 w-full rounded-xl border border-amber-200 bg-white px-3 py-2 font-normal text-slate-900 outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                        placeholder="Descreva o motivo, a condição posterior e o responsável pela decisão."
+                      />
+                      <span className="mt-1 block text-xs font-normal text-slate-500">
+                        Mínimo de 20 caracteres quando a aprovação for marcada.
+                      </span>
+                    </label>
+                    <label className="mt-3 flex min-h-11 cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-sm text-slate-800">
+                      <input
+                        type="checkbox"
+                        checked={approveCommercialException}
+                        onChange={(event) =>
+                          setApproveCommercialException(event.target.checked)
+                        }
+                        className="mt-0.5 h-5 w-5 rounded border-amber-300 text-violet-600 focus:ring-violet-500"
+                      />
+                      <span className="font-normal leading-5">
+                        Aprovo explicitamente esta exceção individual com os
+                        valores e margens exibidos. A política global permanece
+                        inalterada.
+                      </span>
+                    </label>
+                  </div>
                 ) : null}
               </section>
 
-              {preview ? (
+              {preview && !profitabilityPolicyRequired ? (
                 <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                   <div>
                     <h2 className="text-base font-semibold text-slate-900">
@@ -2337,7 +3315,9 @@ export const SalesModularProposalBuilder = ({
                           <th className="px-3 py-2 font-medium">Receita recorrente</th>
                           <th className="px-3 py-2 font-medium">Implantação</th>
                           <th className="px-3 py-2 font-medium">Desconto acumulado</th>
-                          <th className="px-3 py-2 font-medium">EBITDA</th>
+                          <th className="px-3 py-2 font-medium">
+                            Resultado operacional atribuído
+                          </th>
                           <th className="px-3 py-2 font-medium">Lucro</th>
                         </tr>
                       </thead>
@@ -2409,6 +3389,422 @@ export const SalesModularProposalBuilder = ({
                 </section>
               ) : null}
 
+              {preview?.economics ? (
+                <section className="overflow-hidden rounded-2xl border border-violet-200 bg-white shadow-sm">
+                  <div className="border-b border-violet-100 bg-violet-50/50 px-4 py-4 sm:px-5">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-xs font-medium text-violet-700">
+                          Perfil intensivo · política versionada
+                        </p>
+                        <h2 className="mt-1 text-base font-semibold text-slate-900">
+                          Economia da clínica
+                        </h2>
+                        <p className="mt-1 max-w-2xl text-sm font-normal leading-6 text-slate-600">
+                          O Verto Clínica absorve os custos compartilhados uma
+                          única vez. Cada módulo mostra apenas seu custo e sua
+                          margem incremental.
+                        </p>
+                      </div>
+                      <span
+                        className={`inline-flex min-h-8 items-center rounded-full px-3 text-xs font-medium ${
+                          proposalReview?.technicalBlockingCodes.length
+                            ? 'bg-rose-100 text-rose-800'
+                            : proposalReview?.requiresCommercialApproval
+                              ? 'bg-amber-100 text-amber-900'
+                              : preview.economics.canSend
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-rose-100 text-rose-800'
+                        }`}
+                      >
+                        {proposalReview?.technicalBlockingCodes.length
+                          ? 'Dados obrigatórios pendentes'
+                          : proposalReview?.requiresCommercialApproval
+                            ? 'Revisão comercial'
+                            : 'Dentro da política'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="p-4 sm:p-5">
+                    <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        [
+                          'Receita promocional',
+                          currency(preview.economics.promotional.revenueCents)
+                        ],
+                        [
+                          'Custo intensivo',
+                          currency(preview.economics.promotional.costCents)
+                        ],
+                        [
+                          'Margem promocional',
+                          percent(
+                            preview.economics.promotional.marginBasisPoints
+                          )
+                        ],
+                        [
+                          'Desconto máximo',
+                          currency(
+                            preview.economics.promotional
+                              .maximumDiscountCents
+                          )
+                        ],
+                        [
+                          'Receita posterior',
+                          currency(
+                            preview.economics.postPromotion.revenueCents
+                          )
+                        ],
+                        [
+                          'Resultado operacional atribuído posterior',
+                          currency(
+                            preview.economics.postPromotion.ebitdaCents
+                          )
+                        ],
+                        [
+                          'Margem posterior',
+                          percent(
+                            preview.economics.postPromotion.marginBasisPoints
+                          )
+                        ],
+                        [
+                          'Desconto máximo no 1º ano',
+                          currency(
+                            preview.economics.firstYearMaximumDiscountCents
+                          )
+                        ]
+                      ].map(([label, value]) => (
+                        <div
+                          key={String(label)}
+                          className="rounded-xl border border-slate-100 bg-slate-50/70 p-3"
+                        >
+                          <dt className="text-xs font-normal text-slate-500">
+                            {label}
+                          </dt>
+                          <dd className="mt-1 text-sm font-semibold text-slate-900">
+                            {value}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                    {!preview.economics.canSend ? (
+                      <div
+                        role="alert"
+                        className={`mt-4 rounded-xl border p-3 text-xs leading-5 ${
+                          proposalReview?.technicalBlockingCodes.length
+                            ? 'border-rose-200 bg-rose-50 text-rose-900'
+                            : 'border-amber-200 bg-amber-50 text-amber-950'
+                        }`}
+                      >
+                        <p className="font-medium">
+                          {proposalReview?.technicalBlockingCodes.length
+                            ? 'Dados obrigatórios antes do envio'
+                            : 'Alertas para aprovação comercial'}
+                        </p>
+                        <ul className="mt-1 list-disc space-y-1 pl-5 font-normal">
+                          {preview.economics.warnings.map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                          {proposalReview?.commercialAlertCodes
+                            .map((code) => (
+                              <li key={code}>
+                                {commercialAlertLabel(code, preview.economics.policy)}
+                              </li>
+                            ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    <div className="mt-4 overflow-auto rounded-xl border border-slate-200">
+                      <table className="min-w-[1120px] w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-500">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">Item</th>
+                            <th className="px-3 py-2 font-medium">Preço atual</th>
+                            {profitabilityThresholdColumns.map((threshold) => (
+                              <th
+                                key={threshold.basisPoints}
+                                className="px-3 py-2 font-medium"
+                              >
+                                {threshold.label}
+                              </th>
+                            ))}
+                            <th className="px-3 py-2 font-medium">Custo suportado</th>
+                            <th className="px-3 py-2 font-medium">Margem</th>
+                            <th className="px-3 py-2 font-medium">Antes</th>
+                            <th className="px-3 py-2 font-medium">Depois</th>
+                            <th className="px-3 py-2 font-medium">Variação</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {preview.economics.items.map((item) => (
+                            <tr key={item.itemKey}>
+                              <td className="px-3 py-3 font-medium text-slate-800">
+                                {item.publicName}
+                                <span className="mt-0.5 block font-normal text-slate-400">
+                                  {item.isBasePackage
+                                    ? 'margem operacional atribuída'
+                                    : incrementalMarginLabel(
+                                        item.incrementalStatus,
+                                        preview.economics.policy
+                                      )}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3">
+                                {currency(item.currentPriceCents)}
+                              </td>
+                              {profitabilityThresholdColumns.map(
+                                (threshold) => (
+                                  <td
+                                    key={threshold.basisPoints}
+                                    className="px-3 py-3"
+                                  >
+                                    {currency(
+                                      item.priceMinimumCents[
+                                        threshold.basisPoints
+                                      ]
+                                    )}
+                                  </td>
+                                )
+                              )}
+                              <td className="px-3 py-3">
+                                {currency(
+                                  item.maximumSupportedCostAtCurrentPriceCents
+                                )}
+                              </td>
+                              <td className="px-3 py-3">
+                                {percent(
+                                  item.postPromotionMarginBasisPoints
+                                )}
+                              </td>
+                              <td className="px-3 py-3">
+                                {percent(
+                                  item.effect?.marginBeforeBasisPoints
+                                )}
+                              </td>
+                              <td className="px-3 py-3">
+                                {percent(
+                                  item.effect?.marginAfterBasisPoints
+                                )}
+                              </td>
+                              <td className="px-3 py-3">
+                                {item.effect?.variationBasisPoints == null
+                                  ? '—'
+                                  : `${item.effect.variationBasisPoints >= 0 ? '+' : ''}${(
+                                      item.effect.variationBasisPoints / 100
+                                    ).toLocaleString('pt-BR', {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2
+                                    })} p.p.`}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {preview.economics.capacity ? (
+                      <div className="mt-3 grid gap-3 rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-xs sm:grid-cols-4">
+                        <span>
+                          Receita dos blocos
+                          <strong className="mt-1 block text-slate-900">
+                            {currency(preview.economics.capacity.revenueCents)}
+                          </strong>
+                        </span>
+                        <span>
+                          Custo incremental
+                          <strong className="mt-1 block text-slate-900">
+                            {currency(
+                              preview.economics.capacity.incrementalCostCents
+                            )}
+                          </strong>
+                        </span>
+                        <span>
+                          Margem dos blocos
+                          <strong className="mt-1 block text-slate-900">
+                            {preview.economics.capacity.revenueCents === 0
+                              ? 'Sem blocos'
+                              : percent(
+                                  preview.economics.capacity.marginBasisPoints
+                                )}
+                          </strong>
+                          {preview.economics.capacity.revenueCents > 0 ? (
+                            <small className="mt-1 block font-normal text-slate-500">
+                              {incrementalMarginLabel(
+                                preview.economics.capacity.incrementalStatus,
+                                preview.economics.policy,
+                                'capacity'
+                              )}
+                            </small>
+                          ) : null}
+                        </span>
+                        <span>
+                          Preço mínimo
+                          <strong className="mt-1 block text-slate-900">
+                            {currency(
+                              preview.economics.capacity.minimumPriceCents
+                            )}
+                          </strong>
+                        </span>
+                      </div>
+                    ) : null}
+                    {preview.economics.expansions.length > 0 ? (
+                      <div className="mt-3 overflow-auto rounded-xl border border-slate-200">
+                        <table className="w-full min-w-[720px] text-left text-xs">
+                          <thead className="bg-slate-50 text-slate-500">
+                            <tr>
+                              <th className="px-3 py-2 font-medium">Excedente</th>
+                              <th className="px-3 py-2 font-medium">Driver</th>
+                              <th className="px-3 py-2 font-medium">Franquia</th>
+                              <th className="px-3 py-2 font-medium">Blocos</th>
+                              <th className="px-3 py-2 font-medium">Receita</th>
+                              <th className="px-3 py-2 font-medium">
+                                Margem · piso{' '}
+                                {formatSalesBasisPointsPercent(
+                                  preview.economics.policy
+                                    .capacityMinimumIncrementalMarginBasisPoints
+                                )}
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {preview.economics.expansions.map((expansion) => (
+                              <tr key={expansion.itemKey}>
+                                <td className="px-3 py-2 text-slate-700">
+                                  {expansion.publicName}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {expansion.driverValue ?? 'Dados insuficientes'}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {expansion.includedUnits ??
+                                    'Dados insuficientes'}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {expansion.blocks ??
+                                    'Dados insuficientes'}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {currency(
+                                    expansion.additionalRevenueCents
+                                  )}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {percent(
+                                    expansion.incrementalMarginBasisPoints
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+                    <div className="mt-4 border-t border-slate-100 pt-4">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShowEconomySimulator((current) => !current)
+                        }
+                        className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 text-xs font-medium text-violet-700"
+                        aria-expanded={showEconomySimulator}
+                      >
+                        <GitCompareArrows size={15} />
+                        {showEconomySimulator
+                          ? 'Fechar simulador de escala'
+                          : 'Simular escala e módulos'}
+                      </button>
+                      {showEconomySimulator ? (
+                        <div className="mt-3 rounded-xl border border-slate-200 p-3">
+                          <div className="flex flex-wrap gap-3">
+                            <label className="text-xs font-medium text-slate-600">
+                              Capacidade
+                              <select
+                                value={economySimulatorPatients}
+                                onChange={(event) =>
+                                  setEconomySimulatorPatients(
+                                    Number(event.target.value) as
+                                      | 150
+                                      | 160
+                                      | 170
+                                      | 200
+                                  )
+                                }
+                                className="ml-2 min-h-9 rounded-lg border border-slate-200 bg-white px-2 font-normal"
+                              >
+                                {[150, 160, 170, 200].map((value) => (
+                                  <option key={value} value={value}>
+                                    {value} pacientes
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="text-xs font-medium text-slate-600">
+                              Perfil
+                              <select
+                                value={economySimulatorProfile}
+                                onChange={(event) =>
+                                  setEconomySimulatorProfile(
+                                    event.target.value as
+                                      | 'light'
+                                      | 'standard'
+                                      | 'intensive'
+                                  )
+                                }
+                                className="ml-2 min-h-9 rounded-lg border border-slate-200 bg-white px-2 font-normal"
+                              >
+                                <option value="light">Leve</option>
+                                <option value="standard">Padrão</option>
+                                <option value="intensive">Intensivo</option>
+                              </select>
+                            </label>
+                          </div>
+                          {economySimulatorRows.length > 0 ? (
+                            <div className="mt-3 max-h-72 overflow-auto">
+                              <table className="w-full min-w-[640px] text-left text-xs">
+                                <thead className="sticky top-0 bg-white text-slate-500">
+                                  <tr>
+                                    <th className="py-2 font-medium">Composição</th>
+                                    <th className="py-2 font-medium">Receita</th>
+                                    <th className="py-2 font-medium">Custo</th>
+                                    <th className="py-2 font-medium">Margem</th>
+                                    <th className="py-2 font-medium">Política</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {economySimulatorRows.map((row) => (
+                                    <tr key={row.key}>
+                                      <td className="py-2 pr-3 text-slate-700">
+                                        {row.label}
+                                      </td>
+                                      <td className="py-2 pr-3">
+                                        {currency(row.revenueCents)}
+                                      </td>
+                                      <td className="py-2 pr-3">
+                                        {currency(row.costCents)}
+                                      </td>
+                                      <td className="py-2 pr-3">
+                                        {percent(row.marginBasisPoints)}
+                                      </td>
+                                      <td className="py-2">
+                                        {row.canSend ? 'Aprovável' : 'Revisar'}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <p className="mt-3 text-xs leading-5 text-slate-500">
+                              Informe preço e limite personalizados válidos para
+                              simular todas as combinações sem inventar valores.
+                            </p>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </section>
+              ) : null}
+
               {preview?.commercialPhases?.length ? (
                 <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                   <div>
@@ -2440,7 +3836,7 @@ export const SalesModularProposalBuilder = ({
                         </div>
                         <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg bg-slate-50 p-2 text-xs">
                           <span>Receita<br /><strong>{currency(phase.recurringRevenueCents)}</strong></span>
-                          <span>EBITDA<br /><strong>{currency(phase.ebitdaCents)}</strong></span>
+                          <span>Resultado operacional atribuído<br /><strong>{currency(phase.ebitdaCents)}</strong></span>
                           <span>Margem<br /><strong>{percent(phase.marginBasisPoints)}</strong></span>
                         </div>
                       </article>
@@ -2614,7 +4010,9 @@ export const SalesModularProposalBuilder = ({
                           <th className="px-3 py-2 font-medium">Total</th>
                           <th className="px-3 py-2 font-medium">Desconto</th>
                           <th className="px-3 py-2 font-medium">Custos</th>
-                          <th className="px-3 py-2 font-medium">EBITDA</th>
+                          <th className="px-3 py-2 font-medium">
+                            Resultado operacional atribuído
+                          </th>
                           <th className="px-3 py-2 font-medium">Margem</th>
                           <th className="px-3 py-2 font-medium">Lucro</th>
                           <th className="px-3 py-2 font-medium">Diferença</th>
@@ -2710,7 +4108,13 @@ export const SalesModularProposalBuilder = ({
                         Total mensal
                       </p>
                       <p className="mt-1 text-2xl font-semibold">
-                        {currency(preview.promotionalRecurringRevenueCents)}
+                        {currency(
+                          preview.commercialPricing.enabled &&
+                            preview.commercialPricing.missingPriceItemKeys
+                              .length > 0
+                            ? null
+                            : preview.promotionalRecurringRevenueCents
+                        )}
                       </p>
                       {input.globalDiscountBasisPoints > 0 ? (
                         <p className="mt-1 text-xs font-normal text-slate-300">
@@ -2736,9 +4140,12 @@ export const SalesModularProposalBuilder = ({
                               .contributionMarginBasisPoints
                           )
                         ],
-                        ['EBITDA', currency(preview.promotional.ebitdaCents)],
                         [
-                          'Margem EBITDA',
+                          'Margem operacional atribuída',
+                          currency(preview.promotional.ebitdaCents)
+                        ],
+                        [
+                          'Percentual operacional atribuído',
                           percent(preview.promotional.ebitdaMarginBasisPoints)
                         ],
                         [
@@ -2768,6 +4175,143 @@ export const SalesModularProposalBuilder = ({
                         </div>
                       ))}
                     </dl>
+                    <div className="mt-4 rounded-xl border border-slate-200 p-3">
+                      <p className="text-xs font-medium text-slate-700">
+                        Dados do cenário
+                      </p>
+                      <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-2">
+                        {[
+                          ['Pacientes atuais', input.patientQuantity],
+                          [
+                            'Previsão em 12 meses',
+                            input.expectedPatientQuantity12Months
+                          ],
+                          [
+                            'Capacidade-base',
+                            preview.basePackage.capacity
+                              ?.baseLimitPatients ??
+                              preview.basePackage.limitQuantity
+                          ],
+                          [
+                            'Capacidade faturada',
+                            preview.basePackage.limitQuantity
+                          ],
+                          [
+                            'Módulos selecionados',
+                            preview.lines.filter(
+                              (line) => line.pricingMode !== 'one_time'
+                            ).length
+                          ],
+                          [
+                            'Preço efetivo por paciente',
+                            currency(
+                              preview.commercialPricing
+                                .totalProposedPricePerPatientCents
+                            )
+                          ],
+                          [
+                            'Taxas e impostos variáveis',
+                            currency(
+                              preview.promotional
+                                .transactionAndTaxCostAllocatedCents
+                            )
+                          ],
+                          [
+                            'Custos compartilhados atribuídos',
+                            currency(
+                              preview.promotional
+                                .sharedPlatformCostAllocatedCents
+                            )
+                          ]
+                        ].map(([label, value]) => (
+                          <div
+                            key={String(label)}
+                            className="flex items-baseline justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
+                          >
+                            <dt className="font-normal text-slate-500">
+                              {label}
+                            </dt>
+                            <dd className="text-right font-medium text-slate-800">
+                              {value ?? 'Dados insuficientes'}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                    <details className="mt-3 rounded-xl border border-slate-200 bg-white">
+                      <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
+                        Resultado em 12 meses e próxima expansão
+                      </summary>
+                      <dl className="grid grid-cols-2 gap-3 border-t border-slate-100 p-3 text-xs">
+                        {[
+                          [
+                            'Receita em 12 meses',
+                            currency(
+                              preview.horizons['12'].recurringRevenueCents +
+                                preview.horizons['12'].oneTimeRevenueCents
+                            )
+                          ],
+                          [
+                            'Custo em 12 meses',
+                            preview.horizons['12'].ebitdaCents === null
+                              ? 'Dados insuficientes'
+                              : currency(
+                                  preview.horizons['12']
+                                    .recurringRevenueCents +
+                                    preview.horizons['12']
+                                      .oneTimeRevenueCents -
+                                    preview.horizons['12'].ebitdaCents
+                                )
+                          ],
+                          [
+                            'Resultado operacional atribuído em 12 meses',
+                            currency(preview.horizons['12'].ebitdaCents)
+                          ],
+                          [
+                            'Valor subsidiado',
+                            currency(
+                              preview.horizons['12'].discountImpactCents
+                            )
+                          ],
+                          [
+                            'Preço do próximo bloco',
+                            currency(
+                              preview.commercialPricing.nextBlockPriceCents
+                            )
+                          ],
+                          [
+                            'Custo marginal do próximo bloco',
+                            currency(
+                              preview.commercialPricing
+                                .nextBlockMarginalCostCents
+                            )
+                          ],
+                          [
+                            'Contribuição do próximo bloco',
+                            currency(
+                              preview.commercialPricing
+                                .nextBlockContributionCents
+                            )
+                          ],
+                          [
+                            'Margem incremental do próximo bloco',
+                            percent(
+                              preview.commercialPricing
+                                .nextBlockMarginBasisPoints
+                            )
+                          ]
+                        ].map(([label, value]) => (
+                          <div key={String(label)}>
+                            <dt className="font-normal text-slate-500">
+                              {label}
+                            </dt>
+                            <dd className="mt-0.5 font-medium text-slate-800">
+                              {value}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </details>
                     <details className="mt-4 rounded-xl border border-slate-200 bg-white">
                       <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
                         Composição consolidada dos custos diretos
@@ -2840,6 +4384,27 @@ export const SalesModularProposalBuilder = ({
                         </p>
                       </div>
                     ) : null}
+                    {preview.commercialPricing.missingPriceItemKeys.length >
+                    0 ? (
+                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                        <p className="font-medium">
+                          Preço por paciente pendente
+                        </p>
+                        <p className="mt-1 font-normal">
+                          Informe o preço dos módulos:{' '}
+                          {preview.commercialPricing.missingPriceItemKeys
+                            .map(
+                              (itemKey) =>
+                                catalog.items.find(
+                                  (item) => item.itemKey === itemKey
+                                )?.publicName || itemKey
+                            )
+                            .join(', ')}
+                          . Os custos conhecidos continuam visíveis, mas o
+                          cenário não pode ser salvo.
+                        </p>
+                      </div>
+                    ) : null}
                     {preview.missingDrivers.length > 0 ? (
                       <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
                         <p className="font-medium">Dados insuficientes</p>
@@ -2875,14 +4440,18 @@ export const SalesModularProposalBuilder = ({
                 <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                   <div className="border-b border-slate-200 px-4 py-3">
                     <h2 className="text-sm font-semibold text-slate-900">
-                      Rentabilidade por funcionalidade
+                      Resultado interno por módulo
                     </h2>
                   </div>
                   <div className="max-h-[420px] overflow-auto">
-                    <table className="min-w-[1120px] w-full text-left text-xs">
+                    <table className="min-w-[1380px] w-full text-left text-xs">
                       <thead className="sticky top-0 bg-slate-50 text-slate-500">
                         <tr>
                           <th className="px-3 py-2 font-medium">Item</th>
+                          <th className="px-3 py-2 font-medium">Preço/paciente</th>
+                          <th className="px-3 py-2 font-medium">Custo/paciente</th>
+                          <th className="px-3 py-2 font-medium">Margem contribuição</th>
+                          <th className="px-3 py-2 font-medium">Confiança</th>
                           <th className="px-3 py-2 font-medium">Receita</th>
                           <th className="px-3 py-2 font-medium">Fixo direto</th>
                           <th className="px-3 py-2 font-medium">Por paciente</th>
@@ -2896,7 +4465,9 @@ export const SalesModularProposalBuilder = ({
                           <th className="px-3 py-2 font-medium">Taxas e tributos</th>
                           <th className="px-3 py-2 font-medium">Compartilhado alocado</th>
                           <th className="px-3 py-2 font-medium">Contribuição</th>
-                          <th className="px-3 py-2 font-medium">EBITDA</th>
+                          <th className="px-3 py-2 font-medium">
+                            Resultado operacional atribuído
+                          </th>
                           <th className="px-3 py-2 font-medium">Lucro</th>
                         </tr>
                       </thead>
@@ -2907,7 +4478,43 @@ export const SalesModularProposalBuilder = ({
                               {line.publicName}
                             </td>
                             <td className="px-3 py-3">
-                              {currency(line.promotional.netRevenueCents)}
+                              {currency(
+                                line.commercialPricing
+                                  .proposedPricePerPatientCents
+                              )}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(
+                                line.commercialPricing
+                                  .effectiveCostPerPatientCents
+                              )}
+                            </td>
+                            <td className="px-3 py-3">
+                              {percent(
+                                line.commercialPricing
+                                  .contributionMarginBasisPoints
+                              )}
+                            </td>
+                            <td className="px-3 py-3">
+                              {line.commercialPricing.confidenceLevel ===
+                              'unavailable'
+                                ? 'Dados insuficientes'
+                                : line.commercialPricing.confidenceLevel ===
+                                    'high'
+                                  ? 'Alta'
+                                  : line.commercialPricing.confidenceLevel ===
+                                      'medium'
+                                    ? 'Média'
+                                    : 'Baixa'}
+                            </td>
+                            <td className="px-3 py-3">
+                              {currency(
+                                line.commercialPricing.enabled &&
+                                  line.commercialPricing
+                                    .derivedMonthlyRevenueCents === null
+                                  ? null
+                                  : line.promotional.netRevenueCents
+                              )}
                             </td>
                             <td className="px-3 py-3">
                               {currency(line.directCostBreakdown.fixedCostCents)}
@@ -3076,9 +4683,12 @@ export const SalesModularProposalBuilder = ({
                 onClick={() => void saveSimulation()}
                 disabled={
                   Boolean(busy) ||
+                  profitabilityPolicyRequired ||
                   !preview ||
-                  (preview.requiresJustification &&
-                    internalJustification.trim().length < 12)
+                  preview.commercialPricing.missingPriceItemKeys.length > 0 ||
+                  Boolean(proposalReview?.technicalBlockingCodes.length) ||
+                  (approveCommercialException &&
+                    internalJustification.trim().length < 20)
                 }
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-300 bg-white px-4 text-sm font-medium text-violet-700 disabled:opacity-50"
               >
@@ -3087,7 +4697,9 @@ export const SalesModularProposalBuilder = ({
                 ) : (
                   <Save size={16} />
                 )}
-                Salvar cenário
+                {approveCommercialException
+                  ? 'Aprovar e salvar versão'
+                  : 'Salvar cenário'}
               </button>
               <button
                 type="button"
@@ -3095,7 +4707,18 @@ export const SalesModularProposalBuilder = ({
                 disabled={
                   Boolean(busy) ||
                   !selectedSimulation ||
-                  selectedSimulation.results_snapshot?.missingCosts?.length > 0
+                  (!selectedSimulation.offer &&
+                    selectedSimulationRequiresVersionedProfitabilityPolicy &&
+                    !selectedSimulationHasVersionedEconomics) ||
+                  selectedSimulation.results_snapshot?.missingCosts?.length > 0 ||
+                  Boolean(
+                    selectedSimulationReview?.technicalBlockingCodes.length
+                  ) ||
+                  (
+                    selectedSimulationReview?.requiresCommercialApproval ===
+                      true &&
+                    !selectedSimulationHasApproval
+                  )
                 }
                 className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
               >
@@ -3110,7 +4733,17 @@ export const SalesModularProposalBuilder = ({
               </button>
             </div>
             <p className="mt-2 text-right text-xs font-normal text-slate-500">
-              Gerar proposta pública não cria Checkout, cupom ou assinatura.
+              {selectedSimulation &&
+                    !selectedSimulation.offer &&
+                    selectedSimulationRequiresVersionedProfitabilityPolicy &&
+                    !selectedSimulationHasVersionedEconomics
+                  ? SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE
+                  : selectedSimulationReview?.requiresCommercialApproval &&
+                      !selectedSimulationHasApproval
+                    ? 'Salve uma cópia com aprovação excepcional antes de gerar a proposta pública.'
+                    : profitabilityPolicyRequired
+                      ? 'A composição personalizada atual exige política versionada; propostas padrão salvas permanecem disponíveis.'
+                    : 'Gerar proposta pública não cria Checkout, cupom ou assinatura.'}
             </p>
           </footer>
         ) : null}

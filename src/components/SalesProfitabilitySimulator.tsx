@@ -82,7 +82,8 @@ const assumptionLabels: Partial<
   depreciationAmortizationCents: 'depreciação e amortização',
   financialExpensesCents: 'despesas financeiras',
   profitTaxBasisPoints: 'impostos sobre lucro',
-  otherBelowEbitdaCents: 'outras despesas abaixo do EBITDA',
+  otherBelowEbitdaCents:
+    'outras despesas após o resultado operacional atribuído',
   minimumMarginBasisPoints: 'margem mínima',
   healthyMarginBasisPoints: 'faixa de oferta saudável',
   attentionMarginBasisPoints: 'faixa de atenção',
@@ -767,7 +768,7 @@ const LegacySalesProfitabilitySimulator = ({
                       </h3>
                       <p className="mt-1 text-sm font-normal leading-5 text-amber-900">
                         Configure as premissas financeiras uma única vez para
-                        calcular margem, EBITDA e lucro desta proposta.
+                        calcular margem, resultado operacional atribuído e lucro desta proposta.
                       </p>
                     </div>
                   </div>
@@ -1070,11 +1071,11 @@ const LegacySalesProfitabilitySimulator = ({
                       )
                     )}
                     {renderMetric(
-                      'EBITDA incremental',
+                      'Resultado operacional atribuído incremental',
                       formatCurrency(preview.promotional.ebitdaCents)
                     )}
                     {renderMetric(
-                      'Margem EBITDA',
+                      'Margem operacional atribuída',
                       formatPercent(
                         preview.promotional.ebitdaMarginBasisPoints
                       )
@@ -1117,7 +1118,7 @@ const LegacySalesProfitabilitySimulator = ({
                         </div>
                         <div className="flex justify-between gap-3">
                           <dt className="font-normal text-slate-500">
-                            Margem EBITDA
+                            Margem operacional atribuída
                           </dt>
                           <dd className="font-medium text-slate-900">
                             {formatPercent(
@@ -1163,7 +1164,7 @@ const LegacySalesProfitabilitySimulator = ({
                         </div>
                         <div className="flex justify-between gap-3">
                           <dt className="font-normal text-slate-500">
-                            Margem EBITDA
+                            Margem operacional atribuída
                           </dt>
                           <dd className="font-medium text-slate-900">
                             {formatPercent(
@@ -1219,7 +1220,7 @@ const LegacySalesProfitabilitySimulator = ({
                             formatCurrency(
                               preview.horizons[horizon].ebitdaCents
                             ),
-                            `EBITDA estimado · receita ${formatCurrency(
+                            `Resultado operacional atribuído estimado · receita ${formatCurrency(
                               preview.horizons[horizon].revenueCents
                             )}`
                           )
@@ -1245,7 +1246,7 @@ const LegacySalesProfitabilitySimulator = ({
                             : `${preview.breakEven.contributionPositiveQuantity} pacientes`
                         )}
                         {renderMetric(
-                          'EBITDA não negativo',
+                          'Resultado operacional atribuído não negativo',
                           preview.breakEven.nonNegativeEbitdaQuantity == null
                             ? 'Não alcançável'
                             : `${preview.breakEven.nonNegativeEbitdaQuantity} pacientes`
@@ -1375,7 +1376,7 @@ const LegacySalesProfitabilitySimulator = ({
                           após o desconto.
                         </p>
                         <p>
-                          Margem, EBITDA e lucro usam o snapshot da versão de
+                          Margem, resultado operacional atribuído e lucro usam o snapshot da versão de
                           premissas vinculada à simulação.
                         </p>
                         <p>
@@ -1494,7 +1495,7 @@ const LegacySalesProfitabilitySimulator = ({
                               )
                             )}
                             {renderMetric(
-                              'Margem EBITDA',
+                              'Margem operacional atribuída',
                               formatPercent(
                                 result.promotional
                                   .ebitdaMarginBasisPoints
@@ -1572,7 +1573,9 @@ const LegacySalesProfitabilitySimulator = ({
                       <tr className="border-b border-slate-200 text-slate-500">
                         <th className="px-2 py-2 font-medium">Condição</th>
                         <th className="px-2 py-2 font-medium">Receita</th>
-                        <th className="px-2 py-2 font-medium">EBITDA</th>
+                        <th className="px-2 py-2 font-medium">
+                          Resultado operacional atribuído
+                        </th>
                         <th className="px-2 py-2 font-medium">Margem</th>
                         <th className="px-2 py-2 font-medium">Classificação</th>
                       </tr>

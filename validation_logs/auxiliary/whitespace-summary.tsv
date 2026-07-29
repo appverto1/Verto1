@@ -1,0 +1,7 @@
+file	status
+server.ts	PASS
+src/components/SalesModularProposalBuilder.tsx	PASS
+src/utils/salesModularProposal.ts	PASS
+supabase/tests/20260728020000_sales_modular_profitability_policy_test.sql	PASS
+tests/salesModularEconomics.test.ts	PASS
+tests/salesProfitabilityPolicyVersioning.test.ts	PASS

@@ -98,12 +98,12 @@ assert.match(
 );
 assert.match(
   engine,
-  /const capacity = isCustomBaseTier && customCapacityPolicy/
+  /let capacity = isCustomBaseTier && customCapacityPolicy/
 );
 
 assert.match(
   catalogPanel,
-  /Catálogo comercial v\$\{Math\.max\([\s\S]*?— blocos de capacidade/
+  /Catálogo comercial v\$\{Math\.max\([\s\S]*?— margem operacional modular/
 );
 assert.match(catalogPanel, /customCapacityPolicy: customCapacityPolicyDraft/);
 assert.match(catalogPanel, /Blocos adicionais de capacidade/);

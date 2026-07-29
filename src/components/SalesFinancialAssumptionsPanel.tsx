@@ -151,7 +151,8 @@ const advancedGroups: Array<{
   },
   {
     title: 'Resultado gerencial',
-    description: 'Premissas abaixo do EBITDA e limite de oferta saudável.',
+    description:
+      'Premissas após o resultado operacional atribuído e limite de oferta saudável.',
     fields: [
       {
         key: 'depreciationAmortizationCents',

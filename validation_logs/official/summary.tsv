@@ -1,0 +1,15 @@
+index	command	exit_code	status
+01	npm ci	1	FAIL
+02	npm test	1	FAIL
+03	npm run test:sales-commercial-exceptions	127	FAIL
+04	npm run test:sales-personalized-per-patient	127	FAIL
+05	npm run test:sales-profitability-policy-versioning	127	FAIL
+06	npm run test:sales-capacity-versioning	127	FAIL
+07	npm run test:sales-modular-economics	127	FAIL
+08	npm run test:sales-modular-stripe	127	FAIL
+09	npm run test:security	1	FAIL
+10	npm run build	127	FAIL
+11	npm run check:docker-runtime-imports	1	FAIL
+12	npm run lint	1	FAIL
+13	npm run typecheck	1	FAIL
+14	git diff --check	129	FAIL

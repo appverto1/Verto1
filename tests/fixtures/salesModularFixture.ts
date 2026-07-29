@@ -131,6 +131,8 @@ export const modularCatalogFixture: SalesPricingCatalogSnapshot = {
   },
   customCapacityPolicy: null,
   hasVersionedCustomCapacityPolicy: false,
+  profitabilityPolicy: null,
+  hasVersionedProfitabilityPolicy: false,
   items: [
     {
       id: 'clinical-core',

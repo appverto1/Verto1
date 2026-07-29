@@ -39,6 +39,9 @@ export type CustomCapacitySnapshot = {
   includedStorageMb: number;
   blocksMonthlyRevenueCents: number;
   clinicalCoreMonthlyRevenueCents: number;
+  effectiveBlockPriceCents?: number | null;
+  blockPricingBasis?: 'catalog_fixed' | 'selected_module_per_patient_prices';
+  selectedModulePricePerPatientCents?: number | null;
 };
 
 const isSafeNonNegativeInteger = (value: unknown, maximum = 1_000_000_000) =>
@@ -87,6 +90,8 @@ export function calculateCustomCapacity(
     expectedPatients: number;
     baseLimitPatients: number;
     basePriceCents: number;
+    blockPriceCentsOverride?: number | null;
+    selectedModulePricePerPatientCents?: number | null;
     selection?: CustomCapacitySelection;
   },
   policy: CustomCapacityPolicy
@@ -98,9 +103,20 @@ export function calculateCustomCapacity(
     currentPatients: args.currentPatients,
     expectedPatients: args.expectedPatients,
     baseLimitPatients: args.baseLimitPatients,
-    basePriceCents: args.basePriceCents
+    basePriceCents: args.basePriceCents,
+    ...(args.blockPriceCentsOverride === undefined
+      ? {}
+      : { blockPriceCentsOverride: args.blockPriceCentsOverride })
   })) {
-    if (!isSafeNonNegativeInteger(value, key === 'basePriceCents' ? 1_000_000_000 : 100_000)) {
+    if (key === 'blockPriceCentsOverride' && value === null) continue;
+    if (
+      !isSafeNonNegativeInteger(
+        value,
+        key === 'basePriceCents' || key === 'blockPriceCentsOverride'
+          ? 1_000_000_000
+          : 100_000
+      )
+    ) {
       throw new Error(`CUSTOM_CAPACITY_INVALID:${key}`);
     }
   }
@@ -126,7 +142,13 @@ export function calculateCustomCapacity(
     : minimumBlocks;
   const totalContractedLimitPatients =
     args.baseLimitPatients + selectedBlocks * policy.blockSizePatients;
-  const blocksMonthlyRevenueCents = selectedBlocks * policy.blockPriceCents;
+  const hasBlockPriceOverride = args.blockPriceCentsOverride !== undefined;
+  const effectiveBlockPriceCents =
+    hasBlockPriceOverride ? args.blockPriceCentsOverride ?? null : policy.blockPriceCents;
+  const blocksMonthlyRevenueCents =
+    effectiveBlockPriceCents === null
+      ? 0
+      : selectedBlocks * effectiveBlockPriceCents;
   return {
     schemaVersion: 1,
     policy: { ...policy },
@@ -143,7 +165,13 @@ export function calculateCustomCapacity(
       totalContractedLimitPatients * policy.includedStorageMbPerPatient,
     blocksMonthlyRevenueCents,
     clinicalCoreMonthlyRevenueCents:
-      args.basePriceCents + blocksMonthlyRevenueCents
+      args.basePriceCents + blocksMonthlyRevenueCents,
+    effectiveBlockPriceCents,
+    blockPricingBasis: hasBlockPriceOverride
+      ? 'selected_module_per_patient_prices'
+      : 'catalog_fixed',
+    selectedModulePricePerPatientCents:
+      args.selectedModulePricePerPatientCents ?? null
   };
 }
 

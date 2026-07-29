@@ -34,6 +34,21 @@ import {
   type OfferCommercialPhase,
   type OfferItemDiscount
 } from './salesCommercialEvolution';
+import {
+  calculateMaximumSupportedCostCents,
+  calculateSalesDriverExpansion,
+  calculateSalesMinimumPriceCents,
+  calculateSalesModuleEffect,
+  classifyModuleIncrementalMargin,
+  formatSalesBasisPointsPercent,
+  marginBasisPoints,
+  salesProfitabilityPolicyThresholds,
+  validateSalesProfitabilityPolicy,
+  type SalesModularEconomicsResult,
+  type SalesPriceThresholds,
+  type SalesProfitabilityPolicy,
+  type SalesExpansionItemKey
+} from './salesModularEconomics';
 
 export type SalesPricingMode =
   | 'package_limit'
@@ -50,6 +65,22 @@ export type SalesSharedAllocationMethod =
   | 'base_package'
   | 'none'
   | 'custom';
+
+export type SalesCommercialPricingEditMode =
+  | 'per_patient'
+  | 'monthly_total';
+
+export type SalesCommercialEstimateStatus =
+  | 'calibrated'
+  | 'estimated'
+  | 'pre_launch'
+  | 'insufficient_data';
+
+export type SalesCommercialConfidenceLevel =
+  | 'high'
+  | 'medium'
+  | 'low'
+  | 'unavailable';
 
 export type SalesPricingCatalogTier = {
   id: string;
@@ -130,6 +161,8 @@ export type SalesPricingCatalogSnapshot = {
   modularCostSettings: SalesModularCostSettings;
   customCapacityPolicy: CustomCapacityPolicy | null;
   hasVersionedCustomCapacityPolicy: boolean;
+  profitabilityPolicy: SalesProfitabilityPolicy | null;
+  hasVersionedProfitabilityPolicy: boolean;
   items: SalesPricingCatalogItem[];
 };
 
@@ -140,6 +173,8 @@ export type SalesModularLineSelection = {
   itemDiscountBasisPoints?: number;
   customRecurringAmountCents?: number | null;
   customOneTimeAmountCents?: number | null;
+  pricingEditMode?: SalesCommercialPricingEditMode;
+  proposedPricePerPatientCents?: number | null;
   offerDiscount?: OfferItemDiscount | null;
 };
 
@@ -225,6 +260,25 @@ export type SalesModularProposalLineResult = {
   resolvedDrivers: Partial<Record<SalesModularDriverKey, SalesModularDriverValue>>;
   missingDrivers: SalesModularDriverKey[];
   directCostBreakdown: SalesModularDirectCostBreakdown;
+  commercialPricing: {
+    enabled: boolean;
+    editMode: SalesCommercialPricingEditMode | 'legacy_monthly_total';
+    contractedCapacityPatients: number | null;
+    proposedPricePerPatientCents: number | null;
+    derivedMonthlyRevenueCents: number | null;
+    estimatedMonthlyCostCents: number | null;
+    effectiveCostPerPatientCents: number | null;
+    marginalCostPerPatientCents: number | null;
+    minimumPricePerPatientCents: number | null;
+    recommendedPricePerPatientCents: number | null;
+    contributionCents: number | null;
+    contributionMarginBasisPoints: number | null;
+    estimateStatus: SalesCommercialEstimateStatus;
+    confidenceLevel: SalesCommercialConfidenceLevel;
+    costModelVersion: number | null;
+    assumptionsVersion: number;
+    estimatedAt: string;
+  };
   minimumRecommendedRevenueCents: number | null;
   maximumRecommendedDiscountBasisPoints: number | null;
   breakEvenQuantity: number | null;
@@ -311,9 +365,49 @@ export type SalesModularProposalResult = {
     discountImpactCents: number;
   }>;
   commercialPhases: OfferCommercialPhase[];
+  economics: SalesModularEconomicsResult | null;
+  commercialPricing: {
+    schemaVersion: 1;
+    enabled: boolean;
+    contractedCapacityPatients: number | null;
+    selectedRecurringItemKeys: string[];
+    missingPriceItemKeys: string[];
+    totalProposedPricePerPatientCents: number | null;
+    nextBlockPriceCents: number | null;
+    nextBlockMarginalCostCents: number | null;
+    nextBlockContributionCents: number | null;
+    nextBlockMarginBasisPoints: number | null;
+    estimateStatus: SalesCommercialEstimateStatus;
+    assumptionSetVersion: number;
+    calculatedAt: string;
+  };
 };
 
 export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-28-v4';
+export const SALES_MODULAR_ECONOMICS_MODEL_VERSION = '2026-07-28-v5';
+export const SALES_MODULAR_PER_PATIENT_MODEL_VERSION = '2026-07-28-v6';
+
+export const SALES_COMMERCIAL_MODULE_DEPENDENCIES: Readonly<
+  Record<string, readonly string[]>
+> = Object.freeze({
+  appointments_communication: ['clinical_core'],
+  financial_management: ['clinical_core'],
+  insurance_tiss: ['clinical_core'],
+  school_management: ['clinical_core'],
+  additional_storage: ['clinical_core'],
+  onboarding: ['clinical_core']
+});
+
+export const findMissingSalesModuleDependencies = (
+  selectedItemKeys: readonly string[]
+) => {
+  const selected = new Set(selectedItemKeys);
+  return selectedItemKeys.flatMap((itemKey) =>
+    (SALES_COMMERCIAL_MODULE_DEPENDENCIES[itemKey] || [])
+      .filter((dependency) => !selected.has(dependency))
+      .map((dependency) => ({ itemKey, dependency }))
+  );
+};
 
 const integer = (value: unknown, fallback = 0) => {
   const parsed = Number(value);
@@ -388,6 +482,23 @@ export function recommendSalesPackageTier(
     ) ||
     ordered.find((tier) => tier.isCustom || tier.maximumQuantity === null) ||
     null
+  );
+}
+
+export function salesModularProposalRequiresVersionedProfitabilityPolicy(
+  input: Pick<SalesModularProposalInput, 'basePackageTierId'> | null | undefined,
+  catalog: Pick<SalesPricingCatalogSnapshot, 'items'> | null | undefined
+): boolean {
+  if (!input?.basePackageTierId || !catalog) return false;
+  const clinicalCore = catalog.items.find(
+    (item) => item.itemKey === 'clinical_core' && item.isActive
+  );
+  const selectedTier = clinicalCore?.tiers.find(
+    (tier) => tier.id === input.basePackageTierId
+  );
+  return Boolean(
+    selectedTier &&
+      (selectedTier.isCustom || selectedTier.maximumQuantity === null)
   );
 }
 
@@ -478,6 +589,7 @@ export function applySalesPackageTierSelection(
       ? Number(input.customBasePackageLimit)
       : 150
     : null;
+  const customPricing = tier.isCustom || tier.maximumQuantity === null;
   return {
     ...input,
     basePackageTierId: tier.id,
@@ -491,15 +603,40 @@ export function applySalesPackageTierSelection(
       tier.isCustom || tier.maximumQuantity === null
         ? input.customCapacitySelectionMode || 'automatic'
         : 'automatic',
-    lines: input.lines.map((line) =>
-      line.itemKey === 'clinical_core'
+    lines: input.lines.map((line) => {
+      const recurringCustomLine =
+        customPricing && line.itemKey !== 'onboarding';
+      if (line.itemKey === 'clinical_core') {
+        return {
+          ...line,
+          tierId: tier.id,
+          quantity: input.patientQuantity,
+          pricingEditMode: recurringCustomLine
+            ? line.pricingEditMode || 'per_patient'
+            : undefined,
+          proposedPricePerPatientCents: recurringCustomLine
+            ? line.proposedPricePerPatientCents ?? null
+            : undefined,
+          customRecurringAmountCents: recurringCustomLine
+            ? line.pricingEditMode === 'monthly_total'
+              ? line.customRecurringAmountCents ?? null
+              : null
+            : null
+        };
+      }
+      return recurringCustomLine
         ? {
             ...line,
-            tierId: tier.id,
-            quantity: input.patientQuantity
+            pricingEditMode: line.pricingEditMode || 'per_patient',
+            proposedPricePerPatientCents:
+              line.proposedPricePerPatientCents ?? null,
+            customRecurringAmountCents:
+              line.pricingEditMode === 'monthly_total'
+                ? line.customRecurringAmountCents ?? null
+                : null
           }
-        : line
-    )
+        : line;
+    })
   };
 }
 
@@ -616,6 +753,23 @@ export function validateSalesModularProposalInput(
           errors.push(`lines.${index}.offerDiscount`);
         }
       }
+      if (
+        line.pricingEditMode !== undefined &&
+        !['per_patient', 'monthly_total'].includes(line.pricingEditMode)
+      ) {
+        errors.push(`lines.${index}.pricingEditMode`);
+      }
+      if (
+        line.proposedPricePerPatientCents !== null &&
+        line.proposedPricePerPatientCents !== undefined &&
+        (
+          !Number.isFinite(line.proposedPricePerPatientCents) ||
+          line.proposedPricePerPatientCents < 0 ||
+          line.proposedPricePerPatientCents > 10_000_000
+        )
+      ) {
+        errors.push(`lines.${index}.proposedPricePerPatientCents`);
+      }
       for (const [field, amount] of [
         ['customRecurringAmountCents', line.customRecurringAmountCents],
         ['customOneTimeAmountCents', line.customOneTimeAmountCents]
@@ -722,9 +876,58 @@ const resolveItemTier = (
 const resolveGrossAmounts = (
   item: SalesPricingCatalogItem,
   tier: SalesPricingCatalogTier | null,
-  selection: SalesModularLineSelection
+  selection: SalesModularLineSelection,
+  options?: {
+    perPatientPricingEnabled: boolean;
+    contractedCapacityPatients: number;
+  }
 ) => {
   const quantity = Math.max(1, integer(selection.quantity, 1));
+  const contractedCapacityPatients =
+    options?.perPatientPricingEnabled === true
+      ? Math.max(1, integer(options.contractedCapacityPatients, 1))
+      : null;
+  if (
+    contractedCapacityPatients !== null &&
+    item.billingInterval !== 'one_time'
+  ) {
+    const editMode =
+      selection.pricingEditMode === 'monthly_total'
+        ? 'monthly_total'
+        : 'per_patient';
+    const sourceAmount =
+      editMode === 'per_patient'
+        ? selection.proposedPricePerPatientCents
+        : selection.customRecurringAmountCents;
+    const sourceAvailable =
+      typeof sourceAmount === 'number' &&
+      Number.isFinite(sourceAmount) &&
+      sourceAmount >= 0;
+    const recurringAmountCents = !sourceAvailable
+      ? 0
+      : editMode === 'per_patient'
+        ? Math.round(contractedCapacityPatients * Number(sourceAmount))
+        : Math.round(Number(sourceAmount));
+    const proposedPricePerPatientCents = !sourceAvailable
+      ? null
+      : editMode === 'per_patient'
+        ? Number(sourceAmount)
+        : recurringAmountCents / contractedCapacityPatients;
+    return {
+      recurringAmountCents,
+      oneTimeAmountCents: 0,
+      quantity,
+      commercialPricing: {
+        enabled: true,
+        editMode: editMode as SalesCommercialPricingEditMode,
+        contractedCapacityPatients,
+        proposedPricePerPatientCents,
+        derivedMonthlyRevenueCents: sourceAvailable
+          ? recurringAmountCents
+          : null
+      }
+    };
+  }
   const customPriceAllowed =
     item.pricingMode === 'custom' || Boolean(tier?.isCustom);
   const recurringUnit = customPriceAllowed
@@ -742,7 +945,14 @@ const resolveGrossAmounts = (
   return {
     recurringAmountCents: recurringUnit * recurringMultiplier,
     oneTimeAmountCents: oneTimeUnit,
-    quantity
+    quantity,
+    commercialPricing: {
+      enabled: false,
+      editMode: 'legacy_monthly_total' as const,
+      contractedCapacityPatients: null,
+      proposedPricePerPatientCents: null,
+      derivedMonthlyRevenueCents: recurringUnit * recurringMultiplier
+    }
   };
 };
 
@@ -817,6 +1027,47 @@ const validDriverDatum = (
       Number.isFinite(value.value) &&
       value.value >= 0
   );
+
+const classifyCommercialEstimate = (
+  model: SalesPricingCostModel | null,
+  missingDrivers: SalesModularDriverKey[]
+): {
+  estimateStatus: SalesCommercialEstimateStatus;
+  confidenceLevel: SalesCommercialConfidenceLevel;
+} => {
+  if (
+    !model ||
+    model.costSource === 'unavailable' ||
+    missingDrivers.length > 0
+  ) {
+    return {
+      estimateStatus: 'insufficient_data',
+      confidenceLevel: 'unavailable'
+    };
+  }
+  if (/pré-lançamento|pre-lancamento/i.test(model.sourceDetail || '')) {
+    return {
+      estimateStatus: 'pre_launch',
+      confidenceLevel: 'low'
+    };
+  }
+  if (model.costSource === 'actual') {
+    return {
+      estimateStatus: 'calibrated',
+      confidenceLevel: 'high'
+    };
+  }
+  if (model.costSource === 'calculated') {
+    return {
+      estimateStatus: 'calibrated',
+      confidenceLevel: 'medium'
+    };
+  }
+  return {
+    estimateStatus: 'estimated',
+    confidenceLevel: model.costSource === 'manual' ? 'low' : 'medium'
+  };
+};
 
 const directMonthlyCost = (
   item: SalesPricingCatalogItem,
@@ -1701,12 +1952,31 @@ export function calculateSalesModularProposal(
     }
     throw new Error(`PROPOSAL_SIMULATION_INVALID:${invalidFields.join(',')}`);
   }
-  if (catalog.status !== 'active' && catalog.status !== 'draft') {
+  if (
+    catalog.status !== 'active' &&
+    catalog.status !== 'draft' &&
+    catalog.status !== 'archived'
+  ) {
     throw new Error('PRICING_CATALOG_INACTIVE');
   }
   const costSettings = normalizeModularCostSettings(
     catalog.modularCostSettings
   );
+  const profitabilityPolicy =
+    catalog.hasVersionedProfitabilityPolicy === true &&
+    validateSalesProfitabilityPolicy(catalog.profitabilityPolicy)
+      ? {
+          ...catalog.profitabilityPolicy,
+          driverExpansionPolicies: Object.fromEntries(
+            Object.entries(
+              catalog.profitabilityPolicy.driverExpansionPolicies
+            ).map(([itemKey, policy]) => [
+              itemKey,
+              policy ? { ...policy } : policy
+            ])
+          )
+        }
+      : null;
   const commercialStartsAt = input.offerStartsAt || assumptionSnapshot.effectiveAt;
 
   const itemsByKey = new Map(
@@ -1732,8 +2002,23 @@ export function calculateSalesModularProposal(
   if (coreSelections.length !== 1) {
     throw new Error('PROPOSAL_SIMULATION_INVALID:clinical_core');
   }
+  const missingDependencies = findMissingSalesModuleDependencies(
+    selections.map((selection) => selection.itemKey)
+  );
+  if (missingDependencies.length > 0) {
+    const missing = missingDependencies[0];
+    throw new Error(
+      `PROPOSAL_MODULE_DEPENDENCY_MISSING:${missing.itemKey}:${missing.dependency}`
+    );
+  }
+  const perPatientPricingEnabled =
+    isCustomBaseTier &&
+    ['per_patient', 'monthly_total'].includes(
+      String(coreSelections[0].pricingEditMode || '')
+    );
   if (
     isCustomBaseTier &&
+    !perPatientPricingEnabled &&
     (!Number.isInteger(coreSelections[0].customRecurringAmountCents) ||
       Number(coreSelections[0].customRecurringAmountCents) <= 0)
   ) {
@@ -1752,13 +2037,20 @@ export function calculateSalesModularProposal(
   const customCapacityPolicy = hasVersionedCustomCapacityPolicy
     ? catalog.customCapacityPolicy
     : null;
-  const capacity = isCustomBaseTier && customCapacityPolicy
+  let capacity = isCustomBaseTier && customCapacityPolicy
     ? calculateCustomCapacity(
         {
           currentPatients: input.patientQuantity,
           expectedPatients: input.expectedPatientQuantity12Months,
           baseLimitPatients: Number(input.customBasePackageLimit),
-          basePriceCents: Number(coreSelections[0].customRecurringAmountCents),
+          basePriceCents: perPatientPricingEnabled
+            ? typeof coreSelections[0].proposedPricePerPatientCents === 'number'
+              ? Math.round(
+                  Number(input.customBasePackageLimit) *
+                    Number(coreSelections[0].proposedPricePerPatientCents)
+                )
+              : 0
+            : Number(coreSelections[0].customRecurringAmountCents),
           selection: {
             mode:
               input.customCapacitySelectionMode === 'manual'
@@ -1826,16 +2118,27 @@ export function calculateSalesModularProposal(
     ) {
       throw new Error(`PRICING_PACKAGE_LIMIT_EXCEEDED:${item.itemKey}`);
     }
-    const resolvedAmounts = resolveGrossAmounts(item, tier, effectiveSelection);
+    const resolvedAmounts = resolveGrossAmounts(
+      item,
+      tier,
+      effectiveSelection,
+      {
+        perPatientPricingEnabled,
+        contractedCapacityPatients: basePackageContractedLimit
+      }
+    );
     const amounts = {
       ...resolvedAmounts,
       recurringAmountCents:
-        item.itemKey === 'clinical_core' && capacity
+        item.itemKey === 'clinical_core' &&
+        capacity &&
+        !perPatientPricingEnabled
           ? capacity.clinicalCoreMonthlyRevenueCents
           : resolvedAmounts.recurringAmountCents
     };
     if (
       item.billingInterval !== 'one_time' &&
+      !perPatientPricingEnabled &&
       amounts.recurringAmountCents <= 0
     ) {
       throw new Error(`PRICING_TIER_NOT_FOUND:${item.itemKey}`);
@@ -1913,11 +2216,66 @@ export function calculateSalesModularProposal(
           : amounts.recurringAmountCents - itemDiscountCents,
       oneTimeRevenueCents:
         amounts.oneTimeAmountCents - oneTimeDiscountCents,
+      commercialPricing: resolvedAmounts.commercialPricing,
       directCostCents: costResolution.monthlyCostCents,
       oneTimeDirectCostCents: costResolution.oneTimeCostCents,
       costResolution
     };
   });
+
+  const selectedRecurringLines = resolved.filter(
+    (line) => line.item.billingInterval !== 'one_time'
+  );
+  const missingCommercialPriceItemKeys = perPatientPricingEnabled
+    ? selectedRecurringLines
+        .filter(
+          (line) =>
+            line.commercialPricing.proposedPricePerPatientCents === null
+        )
+        .map((line) => line.item.itemKey)
+    : [];
+  const totalProposedPricePerPatientCents =
+    perPatientPricingEnabled && missingCommercialPriceItemKeys.length === 0
+      ? selectedRecurringLines.reduce(
+          (sum, line) =>
+            sum +
+            Number(line.commercialPricing.proposedPricePerPatientCents),
+          0
+        )
+      : null;
+  if (capacity && perPatientPricingEnabled) {
+    const corePerPatient = resolved.find(
+      (line) => line.item.itemKey === 'clinical_core'
+    )?.commercialPricing.proposedPricePerPatientCents;
+    capacity = calculateCustomCapacity(
+      {
+        currentPatients: input.patientQuantity,
+        expectedPatients: input.expectedPatientQuantity12Months,
+        baseLimitPatients: Number(input.customBasePackageLimit),
+        basePriceCents:
+          corePerPatient === null || corePerPatient === undefined
+            ? 0
+            : Math.round(Number(input.customBasePackageLimit) * corePerPatient),
+        blockPriceCentsOverride:
+          totalProposedPricePerPatientCents === null
+            ? null
+            : Math.round(
+                customCapacityPolicy!.blockSizePatients *
+                  totalProposedPricePerPatientCents
+              ),
+        selectedModulePricePerPatientCents:
+          totalProposedPricePerPatientCents,
+        selection: {
+          mode:
+            input.customCapacitySelectionMode === 'manual'
+              ? 'manual'
+              : 'automatic',
+          selectedBlocks: input.customCapacityBlocks
+        }
+      },
+      customCapacityPolicy!
+    );
+  }
 
   const baseIndex = Math.max(
     0,
@@ -1945,10 +2303,12 @@ export function calculateSalesModularProposal(
       catalog.allocationSettings?.stripePercentage,
       'net_revenue'
     ),
-    stripeFixed: resolvedAllocationMethod(
-      catalog.allocationSettings?.stripeFixed,
-      'base_package'
-    ),
+    stripeFixed: profitabilityPolicy
+      ? 'base_package' as const
+      : resolvedAllocationMethod(
+          catalog.allocationSettings?.stripeFixed,
+          'base_package'
+        ),
     revenueTax: resolvedAllocationMethod(
       catalog.allocationSettings?.revenueTax,
       'net_revenue'
@@ -1957,10 +2317,12 @@ export function calculateSalesModularProposal(
       catalog.allocationSettings?.delinquency,
       'net_revenue'
     ),
-    sharedPlatformCosts: resolvedAllocationMethod(
-      catalog.allocationSettings?.sharedPlatformCosts,
-      'configured_weight'
-    ),
+    sharedPlatformCosts: profitabilityPolicy
+      ? 'base_package' as const
+      : resolvedAllocationMethod(
+          catalog.allocationSettings?.sharedPlatformCosts,
+          'configured_weight'
+        ),
     belowEbitda: resolvedAllocationMethod(
       catalog.allocationSettings?.belowEbitda,
       'configured_weight'
@@ -2108,8 +2470,16 @@ export function calculateSalesModularProposal(
         promotional.ebitdaCents !== null &&
         promotional.ebitdaCents < 0
       ) {
-        warnings.push('EBITDA promocional negativo.');
+        warnings.push('Resultado operacional atribuído promocional negativo.');
       }
+      const estimateClassification = classifyCommercialEstimate(
+        line.item.costModel,
+        line.costResolution.missingDrivers
+      );
+      const contractedCapacityPatients =
+        line.commercialPricing.enabled
+          ? basePackageContractedLimit
+          : null;
       return {
         lineKey: lineIdentity(line.selection),
         catalogItemId: line.item.id,
@@ -2150,6 +2520,33 @@ export function calculateSalesModularProposal(
         resolvedDrivers: line.costResolution.resolvedDrivers,
         missingDrivers: line.costResolution.missingDrivers,
         directCostBreakdown: line.costResolution.breakdown,
+        commercialPricing: {
+          enabled: line.commercialPricing.enabled,
+          editMode: line.commercialPricing.editMode,
+          contractedCapacityPatients,
+          proposedPricePerPatientCents:
+            line.commercialPricing.proposedPricePerPatientCents,
+          derivedMonthlyRevenueCents:
+            line.commercialPricing.derivedMonthlyRevenueCents,
+          estimatedMonthlyCostCents: line.directCostCents,
+          effectiveCostPerPatientCents:
+            line.directCostCents === null ||
+            contractedCapacityPatients === null
+              ? null
+              : line.directCostCents / contractedCapacityPatients,
+          marginalCostPerPatientCents: null,
+          minimumPricePerPatientCents: null,
+          recommendedPricePerPatientCents: null,
+          contributionCents: promotional.contributionMarginCents,
+          contributionMarginBasisPoints:
+            promotional.contributionMarginBasisPoints,
+          ...estimateClassification,
+          costModelVersion: line.item.costModel?.version ?? null,
+          assumptionsVersion: assumptionSnapshot.version,
+          estimatedAt:
+            line.item.costModel?.effectiveAt ||
+            assumptionSnapshot.effectiveAt
+        },
         minimumRecommendedRevenueCents,
         maximumRecommendedDiscountBasisPoints,
         breakEvenQuantity:
@@ -2174,6 +2571,16 @@ export function calculateSalesModularProposal(
             line.item.itemKey === 'clinical_core'
               ? basePackageContractedLimit
               : line.tier?.maximumQuantity ?? line.item.maximumQuantity,
+          pricePerPatientCents:
+            line.commercialPricing.proposedPricePerPatientCents,
+          billedCapacityPatients:
+            line.commercialPricing.enabled
+              ? basePackageContractedLimit
+              : null,
+          pricingBasis:
+            line.commercialPricing.enabled
+              ? 'contracted_capacity'
+              : 'catalog_snapshot',
           features: Array.isArray(line.item.metadata?.features)
             ? line.item.metadata.features
                 .filter(
@@ -2250,61 +2657,7 @@ export function calculateSalesModularProposal(
     Array.from({ length: onboardingInstallments }, () => 1),
     0
   );
-  const horizons = [12, 24, 36].reduce<
-    SalesModularProposalResult['horizons']
-  >((accumulator, months) => {
-    const promotionalMonths = Math.min(
-      input.discountDurationMonths,
-      months
-    );
-    const fullPriceMonths = months - promotionalMonths;
-    const recognizedInstallments = Math.min(
-      months,
-      onboardingInstallments
-    );
-    const recognizedOneTimeRevenueCents = oneTimeRevenueInstallments
-      .slice(0, recognizedInstallments)
-      .reduce((sum, installment) => sum + installment, 0);
-    const recognizedOneTimeDiscountCents = oneTimeDiscountInstallments
-      .slice(0, recognizedInstallments)
-      .reduce((sum, installment) => sum + installment, 0);
-    accumulator[String(months) as '12' | '24' | '36'] = {
-      months,
-      promotionalMonths,
-      fullPriceMonths,
-      recurringRevenueCents:
-        promotionalPeriod.consolidated.recurringRevenueCents *
-          promotionalMonths +
-        postPeriod.consolidated.recurringRevenueCents * fullPriceMonths,
-      oneTimeRevenueCents: recognizedOneTimeRevenueCents,
-      ebitdaCents:
-        promotionalPeriod.consolidated.ebitdaCents === null ||
-        postPeriod.consolidated.ebitdaCents === null ||
-        oneTimeDirectCostCents === null
-          ? null
-          : promotionalPeriod.consolidated.ebitdaCents *
-              promotionalMonths +
-            postPeriod.consolidated.ebitdaCents * fullPriceMonths +
-            recognizedOneTimeRevenueCents -
-            oneTimeDirectCostCents,
-      netIncomeCents:
-        promotionalPeriod.consolidated.netIncomeCents === null ||
-        postPeriod.consolidated.netIncomeCents === null ||
-        oneTimeDirectCostCents === null
-          ? null
-          : promotionalPeriod.consolidated.netIncomeCents *
-              promotionalMonths +
-            postPeriod.consolidated.netIncomeCents * fullPriceMonths +
-            recognizedOneTimeRevenueCents -
-            oneTimeDirectCostCents,
-      discountImpactCents:
-        (postPeriod.consolidated.recurringRevenueCents -
-          promotionalPeriod.consolidated.recurringRevenueCents) *
-          promotionalMonths +
-        recognizedOneTimeDiscountCents
-    };
-    return accumulator;
-  }, {} as SalesModularProposalResult['horizons']);
+  let horizons = {} as SalesModularProposalResult['horizons'];
   const warnings: string[] = [];
   if (missingCosts.length > 0) {
     warnings.push(
@@ -2436,6 +2789,10 @@ export function calculateSalesModularProposal(
       discount: line.offerDiscount
     }))
   });
+  const commercialPhasePeriods = new Map<
+    number,
+    SalesModularConsolidatedPeriod
+  >();
   const commercialPhases = initialCommercialPhases.map((phase) => {
     const recalculated = calculatePeriod(
       resolved.map((line, index) => {
@@ -2461,6 +2818,10 @@ export function calculateSalesModularProposal(
       input.expectedPatientQuantity12Months,
       costSettings
     );
+    commercialPhasePeriods.set(
+      phase.phaseNumber,
+      recalculated.consolidated
+    );
     return {
       ...phase,
       lines: phase.lines.map((line, index) => ({
@@ -2480,6 +2841,95 @@ export function calculateSalesModularProposal(
       marginBasisPoints: recalculated.consolidated.ebitdaMarginBasisPoints
     };
   });
+  const normalRecurringRevenueCents = lines.reduce(
+    (sum, line) =>
+      sum +
+      (line.pricingMode === 'one_time'
+        ? 0
+        : line.grossRecurringRevenueCents),
+    0
+  );
+  horizons = [12, 24, 36].reduce<
+    SalesModularProposalResult['horizons']
+  >((accumulator, months) => {
+    const monthPhases = Array.from({ length: months }, (_, monthIndex) => {
+      const monthStartsAt =
+        monthIndex === 0
+          ? commercialStartsAt
+          : addCommercialDuration(
+              commercialStartsAt,
+              monthIndex,
+              'months'
+            );
+      const monthTime = Date.parse(monthStartsAt);
+      return (
+        commercialPhases.find((phase) => {
+          const phaseStarts = Date.parse(phase.startsAt);
+          const phaseEnds =
+            phase.endsAt === null ? Number.POSITIVE_INFINITY : Date.parse(phase.endsAt);
+          return monthTime >= phaseStarts && monthTime < phaseEnds;
+        }) ||
+        commercialPhases[commercialPhases.length - 1]
+      );
+    });
+    const promotionalMonths = monthPhases.filter(
+      (phase) =>
+        phase &&
+        phase.recurringRevenueCents < normalRecurringRevenueCents
+    ).length;
+    const fullPriceMonths = months - promotionalMonths;
+    const recognizedInstallments = Math.min(months, onboardingInstallments);
+    const recognizedOneTimeRevenueCents = oneTimeRevenueInstallments
+      .slice(0, recognizedInstallments)
+      .reduce((sum, installment) => sum + installment, 0);
+    const recognizedOneTimeDiscountCents = oneTimeDiscountInstallments
+      .slice(0, recognizedInstallments)
+      .reduce((sum, installment) => sum + installment, 0);
+    const monthlyPeriods = monthPhases.map((phase) =>
+      phase ? commercialPhasePeriods.get(phase.phaseNumber) || null : null
+    );
+    const recurringRevenueCents = monthPhases.reduce(
+      (sum, phase) => sum + Number(phase?.recurringRevenueCents || 0),
+      0
+    );
+    const recurringEbitdaCents = nullableSum(
+      monthlyPeriods.map((period) => period?.ebitdaCents ?? null)
+    );
+    const recurringNetIncomeCents = nullableSum(
+      monthlyPeriods.map((period) => period?.netIncomeCents ?? null)
+    );
+    const oneTimeContributionCents =
+      oneTimeDirectCostCents === null
+        ? null
+        : recognizedOneTimeRevenueCents - oneTimeDirectCostCents;
+    accumulator[String(months) as '12' | '24' | '36'] = {
+      months,
+      promotionalMonths,
+      fullPriceMonths,
+      recurringRevenueCents,
+      oneTimeRevenueCents: recognizedOneTimeRevenueCents,
+      ebitdaCents: nullableSum([
+        recurringEbitdaCents,
+        oneTimeContributionCents
+      ]),
+      netIncomeCents: nullableSum([
+        recurringNetIncomeCents,
+        oneTimeContributionCents
+      ]),
+      discountImpactCents:
+        monthPhases.reduce(
+          (sum, phase) =>
+            sum +
+            Math.max(
+              0,
+              normalRecurringRevenueCents -
+                Number(phase?.recurringRevenueCents || 0)
+            ),
+          0
+        ) + recognizedOneTimeDiscountCents
+    };
+    return accumulator;
+  }, {} as SalesModularProposalResult['horizons']);
   const phaseMargins = commercialPhases.map((phase) => phase.marginBasisPoints);
   const allPhaseMarginsKnown = phaseMargins.every((margin) => margin !== null);
   const minimumPhaseMargin = allPhaseMarginsKnown
@@ -2511,11 +2961,905 @@ export function calculateSalesModularProposal(
     );
   }
 
+  const commercialLineEconomics = new Map<
+    string,
+    {
+      marginalCostPerPatientCents: number | null;
+      minimumPricePerPatientCents: number | null;
+      recommendedPricePerPatientCents: number | null;
+    }
+  >();
+  let economics: SalesModularEconomicsResult | null = null;
+  if (profitabilityPolicy) {
+    const intensiveInput: SalesModularProposalInput = {
+      ...input,
+      usageProfile: 'intensive',
+      driverOverrides: {}
+    };
+    const intensiveValues = resolveProfileAssumptions(
+      assumptionSnapshot,
+      profitabilityPolicy.pricingProfile
+    );
+    const intensiveCosts = resolved.map((line) =>
+      directMonthlyCost(
+        line.item,
+        line.tier,
+        line.quantity,
+        intensiveInput,
+        costSettings,
+        basePackageContractedLimit
+      )
+    );
+    const previousDemand = Math.max(
+      1,
+      salesPackageDemand(
+        input.patientQuantity,
+        input.expectedPatientQuantity12Months
+      ) - 1
+    );
+    const previousCapacity = Math.max(
+      1,
+      basePackageContractedLimit - 1
+    );
+    const previousIntensiveCosts = resolved.map((line) =>
+      line.item.billingInterval === 'one_time'
+        ? line.costResolution
+        : directMonthlyCost(
+            line.item,
+            line.tier,
+            line.quantity,
+            {
+              ...intensiveInput,
+              patientQuantity: Math.min(
+                input.patientQuantity,
+                previousDemand
+              ),
+              expectedPatientQuantity12Months: previousDemand
+            },
+            costSettings,
+            previousCapacity
+          )
+    );
+    const intensivePeriodForPhase = (phase: OfferCommercialPhase) =>
+      calculatePeriod(
+        resolved.map((line, index) => ({
+          itemKey: line.item.itemKey,
+          netRevenueCents:
+            line.item.billingInterval === 'one_time'
+              ? 0
+              : phase.lines[index].activePriceCents,
+          grossRevenueCents:
+            line.item.billingInterval === 'one_time'
+              ? 0
+              : line.grossRecurringRevenueCents,
+          directCostCents:
+            line.item.billingInterval === 'one_time'
+              ? 0
+              : intensiveCosts[index].monthlyCostCents,
+          directCostBreakdown: intensiveCosts[index].breakdown,
+          weight: line.item.itemKey === 'clinical_core' ? 1 : 0,
+          isBase: line.item.itemKey === 'clinical_core'
+        })),
+        intensiveValues,
+        allocationSettings,
+        input.expectedPatientQuantity12Months,
+        costSettings
+      );
+    const intensivePhasePeriods = commercialPhases.map((phase) =>
+      intensivePeriodForPhase(phase)
+    );
+    const intensivePromotionalPeriod =
+      intensivePhasePeriods[0] || promotionalPeriod;
+    const intensivePostPeriod =
+      intensivePhasePeriods[intensivePhasePeriods.length - 1] ||
+      postPeriod;
+    const percentageParts = [
+      intensiveValues.stripeFeeBasisPoints,
+      intensiveValues.estimatedDelinquencyBasisPoints,
+      intensiveValues.revenueTaxBasisPoints
+    ];
+    const percentageCostBasisPoints = percentageParts.some(
+      (value) => value === null
+    )
+      ? null
+      : percentageParts.reduce<number>(
+          (sum, value) => sum + Number(value),
+          0
+        );
+    const intensiveSharedCostCents = sharedPlatformCosts(
+      intensiveValues,
+      input.expectedPatientQuantity12Months,
+      costSettings,
+      resolved.map((line) => line.item.itemKey)
+    );
+    const minimumPrices = (
+      directCostCents: number | null,
+      fixedAllocatedCostCents: number | null,
+      fixedPaymentFeeCents: number | null
+    ) =>
+      Object.fromEntries(
+        salesProfitabilityPolicyThresholds(profitabilityPolicy).map(
+          (target) => [
+            target,
+            calculateSalesMinimumPriceCents({
+              directCostCents,
+              fixedAllocatedCostCents,
+              fixedPaymentFeeCents,
+              targetEbitdaMarginBasisPoints: target,
+              stripePercentageBasisPoints:
+                intensiveValues.stripeFeeBasisPoints,
+              delinquencyPercentageBasisPoints:
+                intensiveValues.estimatedDelinquencyBasisPoints,
+              taxPercentageBasisPoints:
+                intensiveValues.revenueTaxBasisPoints
+            })
+          ]
+        )
+      ) as SalesPriceThresholds;
+    const lineTotalCost = (
+      periodLine: SalesModularPeriodLineResult
+    ): number | null =>
+      nullableSum([
+        periodLine.directCostCents,
+        periodLine.transactionAndTaxCostAllocatedCents,
+        periodLine.sharedPlatformCostAllocatedCents
+      ]);
+
+    let accumulatedRevenueCents =
+      intensivePostPeriod.lines[baseIndex]?.netRevenueCents || 0;
+    let accumulatedCostCents = lineTotalCost(
+      intensivePostPeriod.lines[baseIndex]
+    );
+    const effects = new Map<
+      number,
+      ReturnType<typeof calculateSalesModuleEffect>
+    >();
+    resolved.forEach((line, index) => {
+      if (index === baseIndex || line.item.billingInterval === 'one_time') {
+        return;
+      }
+      const moduleCostCents = lineTotalCost(
+        intensivePostPeriod.lines[index]
+      );
+      const effect = calculateSalesModuleEffect({
+        revenueBeforeCents: accumulatedRevenueCents,
+        costBeforeCents: accumulatedCostCents,
+        moduleRevenueCents:
+          intensivePostPeriod.lines[index].netRevenueCents,
+        moduleCostCents
+      });
+      effects.set(index, effect);
+      accumulatedRevenueCents +=
+        intensivePostPeriod.lines[index].netRevenueCents;
+      accumulatedCostCents =
+        accumulatedCostCents === null || moduleCostCents === null
+          ? null
+          : accumulatedCostCents + moduleCostCents;
+    });
+
+    const economicsItems = resolved.map((line, index) => {
+      const isBasePackage = index === baseIndex;
+      const fixedAllocatedCostCents = isBasePackage
+        ? intensiveSharedCostCents
+        : 0;
+      const fixedPaymentFeeCents = isBasePackage
+        ? intensiveValues.stripeFixedFeeCents
+        : 0;
+      const thresholds = minimumPrices(
+        intensiveCosts[index].monthlyCostCents,
+        fixedAllocatedCostCents,
+        fixedPaymentFeeCents
+      );
+      const promotionalCostCents = lineTotalCost(
+        intensivePromotionalPeriod.lines[index]
+      );
+      const postPromotionCostCents = lineTotalCost(
+        intensivePostPeriod.lines[index]
+      );
+      const promotionalRevenueCents =
+        intensivePromotionalPeriod.lines[index].netRevenueCents;
+      const postPromotionRevenueCents =
+        intensivePostPeriod.lines[index].netRevenueCents;
+      const promotionalMarginBasisPoints = marginBasisPoints(
+        promotionalRevenueCents,
+        promotionalCostCents
+      );
+      const postPromotionMarginBasisPoints = marginBasisPoints(
+        postPromotionRevenueCents,
+        postPromotionCostCents
+      );
+      const target = isBasePackage
+        ? profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
+        : profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints;
+      const targetMinimum = calculateSalesMinimumPriceCents({
+        directCostCents: intensiveCosts[index].monthlyCostCents,
+        fixedAllocatedCostCents,
+        fixedPaymentFeeCents,
+        targetEbitdaMarginBasisPoints: target,
+        stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
+        delinquencyPercentageBasisPoints:
+          intensiveValues.estimatedDelinquencyBasisPoints,
+        taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
+      });
+      const commercialMinimumRevenueCents =
+        calculateSalesMinimumPriceCents({
+          directCostCents: intensiveCosts[index].monthlyCostCents,
+          fixedAllocatedCostCents,
+          fixedPaymentFeeCents,
+          targetEbitdaMarginBasisPoints: isBasePackage
+            ? profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints
+            : profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints,
+          stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
+          delinquencyPercentageBasisPoints:
+            intensiveValues.estimatedDelinquencyBasisPoints,
+          taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
+        });
+      const commercialRecommendedRevenueCents =
+        calculateSalesMinimumPriceCents({
+          directCostCents: intensiveCosts[index].monthlyCostCents,
+          fixedAllocatedCostCents,
+          fixedPaymentFeeCents,
+          targetEbitdaMarginBasisPoints: isBasePackage
+            ? profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
+            : profitabilityPolicy.moduleTargetIncrementalMarginBasisPoints,
+          stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
+          delinquencyPercentageBasisPoints:
+            intensiveValues.estimatedDelinquencyBasisPoints,
+          taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
+        });
+      const previousDirectCostCents =
+        previousIntensiveCosts[index].monthlyCostCents;
+      commercialLineEconomics.set(lineIdentity(line.selection), {
+        marginalCostPerPatientCents:
+          intensiveCosts[index].monthlyCostCents === null ||
+          previousDirectCostCents === null
+            ? null
+            : Math.max(
+                0,
+                intensiveCosts[index].monthlyCostCents -
+                  previousDirectCostCents
+              ),
+        minimumPricePerPatientCents:
+          commercialMinimumRevenueCents === null ||
+          basePackageContractedLimit <= 0
+            ? null
+            : commercialMinimumRevenueCents /
+              basePackageContractedLimit,
+        recommendedPricePerPatientCents:
+          commercialRecommendedRevenueCents === null ||
+          basePackageContractedLimit <= 0
+            ? null
+            : commercialRecommendedRevenueCents /
+              basePackageContractedLimit
+      });
+      return {
+        itemKey: line.item.itemKey,
+        publicName: line.item.publicName,
+        isBasePackage,
+        currentPriceCents: line.grossRecurringRevenueCents,
+        intensiveDirectCostCents: intensiveCosts[index].monthlyCostCents,
+        fixedAllocatedCostCents,
+        fixedPaymentFeeCents,
+        percentageCostBasisPoints,
+        priceMinimumCents: thresholds,
+        maximumSupportedCostAtCurrentPriceCents:
+          percentageCostBasisPoints === null
+            ? null
+            : calculateMaximumSupportedCostCents(
+                line.grossRecurringRevenueCents,
+                target,
+                percentageCostBasisPoints
+              ),
+        promotionalRevenueCents,
+        promotionalCostCents,
+        promotionalMarginBasisPoints,
+        postPromotionRevenueCents,
+        postPromotionCostCents,
+        postPromotionMarginBasisPoints,
+        incrementalStatus: classifyModuleIncrementalMargin(
+          postPromotionMarginBasisPoints,
+          profitabilityPolicy
+        ),
+        effect: effects.get(index) || null,
+        maximumDiscountCents:
+          targetMinimum === null
+            ? null
+            : Math.max(0, line.grossRecurringRevenueCents - targetMinimum)
+      };
+    });
+
+    let capacityEconomics: SalesModularEconomicsResult['capacity'] = null;
+    if (capacity) {
+      const coreLine = resolved[baseIndex];
+      const baseOnlyCost = directMonthlyCost(
+        coreLine.item,
+        coreLine.tier,
+        Math.min(coreLine.quantity, capacity.baseLimitPatients),
+        {
+          ...intensiveInput,
+          patientQuantity: Math.min(
+            input.patientQuantity,
+            capacity.baseLimitPatients
+          ),
+          expectedPatientQuantity12Months: Math.min(
+            input.expectedPatientQuantity12Months,
+            capacity.baseLimitPatients
+          ),
+          customCapacityBlocks: 0
+        },
+        costSettings,
+        capacity.baseLimitPatients
+      ).monthlyCostCents;
+      const totalCoreCost = intensiveCosts[baseIndex].monthlyCostCents;
+      let capacityDirectCostCents =
+        totalCoreCost === null || baseOnlyCost === null
+          ? null
+          : Math.max(0, totalCoreCost - baseOnlyCost);
+      if (perPatientPricingEnabled) {
+        const baseRecurringCosts = resolved.map((line) =>
+          line.item.billingInterval === 'one_time'
+            ? 0
+            : directMonthlyCost(
+                line.item,
+                line.tier,
+                line.quantity,
+                {
+                  ...intensiveInput,
+                  patientQuantity: Math.min(
+                    input.patientQuantity,
+                    capacity.baseLimitPatients
+                  ),
+                  expectedPatientQuantity12Months: Math.min(
+                    input.expectedPatientQuantity12Months,
+                    capacity.baseLimitPatients
+                  ),
+                  customCapacityBlocks: 0
+                },
+                costSettings,
+                capacity.baseLimitPatients
+              ).monthlyCostCents
+        );
+        const totalRecurringCosts = intensiveCosts.map((cost, index) =>
+          resolved[index].item.billingInterval === 'one_time'
+            ? 0
+            : cost.monthlyCostCents
+        );
+        const baseAllCost = nullableSum(baseRecurringCosts);
+        const totalAllCost = nullableSum(totalRecurringCosts);
+        capacityDirectCostCents =
+          baseAllCost === null || totalAllCost === null
+            ? null
+            : Math.max(0, totalAllCost - baseAllCost);
+      }
+      const capacityPercentageCostCents =
+        percentageCostBasisPoints === null
+          ? null
+          : multiplyBasisPoints(
+              capacity.blocksMonthlyRevenueCents,
+              percentageCostBasisPoints
+            );
+      const incrementalCostCents = nullableSum([
+        capacityDirectCostCents,
+        capacityPercentageCostCents
+      ]);
+      const capacityMarginBasisPoints =
+        capacity.blocksMonthlyRevenueCents === 0
+          ? null
+          : marginBasisPoints(
+              capacity.blocksMonthlyRevenueCents,
+              incrementalCostCents
+            );
+      const minimumPriceCents = calculateSalesMinimumPriceCents({
+        directCostCents: capacityDirectCostCents,
+        fixedAllocatedCostCents: 0,
+        fixedPaymentFeeCents: 0,
+        targetEbitdaMarginBasisPoints:
+          profitabilityPolicy.capacityMinimumIncrementalMarginBasisPoints,
+        stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
+        delinquencyPercentageBasisPoints:
+          intensiveValues.estimatedDelinquencyBasisPoints,
+        taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
+      });
+      capacityEconomics = {
+        revenueCents: capacity.blocksMonthlyRevenueCents,
+        incrementalCostCents,
+        marginBasisPoints: capacityMarginBasisPoints,
+        minimumPriceCents,
+        meetsMinimumMargin:
+          capacity.blocksMonthlyRevenueCents === 0
+            ? true
+            : capacityMarginBasisPoints === null
+              ? null
+              : capacityMarginBasisPoints >=
+                profitabilityPolicy.capacityMinimumIncrementalMarginBasisPoints,
+        incrementalStatus:
+          capacity.blocksMonthlyRevenueCents === 0
+            ? 'acceptable'
+            : classifyModuleIncrementalMargin(
+                capacityMarginBasisPoints,
+                profitabilityPolicy,
+                'capacity'
+              )
+      };
+    }
+
+    const expansionEconomics = Object.entries(
+      profitabilityPolicy.driverExpansionPolicies
+    ).flatMap(([itemKey, expansionPolicy]) => {
+      if (!expansionPolicy) return [];
+      const index = resolved.findIndex(
+        (line) => line.item.itemKey === itemKey
+      );
+      if (index < 0) return [];
+      const line = resolved[index];
+      const configuredDriver =
+        intensiveCosts[index].resolvedDrivers[expansionPolicy.driverKey];
+      const driverValue =
+        itemKey === 'additional_storage'
+          ? intensiveCosts[index].breakdown.estimatedUsedStorageGb
+          : validDriverDatum(configuredDriver)
+            ? Number(configuredDriver.value)
+            : null;
+      let incrementalCostPerUnitCents: number | null = null;
+      if (
+        itemKey === 'additional_storage' &&
+        driverValue !== null &&
+        driverValue > 0
+      ) {
+        const storageAndEgress = nullableSum([
+          intensiveCosts[index].breakdown.storageCostCents,
+          intensiveCosts[index].breakdown.egressCostCents
+        ]);
+        incrementalCostPerUnitCents =
+          storageAndEgress === null
+            ? null
+            : storageAndEgress / driverValue;
+      } else if (driverValue !== null && driverValue > 0) {
+        const zeroDriverInput: SalesModularProposalInput = {
+          ...intensiveInput,
+          driverOverrides: {
+            [itemKey]: {
+              [expansionPolicy.driverKey]: calculatedDriver(
+                0,
+                'Base sem consumo incremental para cálculo marginal.',
+                line.item.costModel?.effectiveAt || catalog.effectiveAt,
+                line.item.costModel?.version || 1
+              )
+            }
+          }
+        };
+        const zeroDriverCost = directMonthlyCost(
+          line.item,
+          line.tier,
+          line.quantity,
+          zeroDriverInput,
+          costSettings,
+          basePackageContractedLimit
+        ).monthlyCostCents;
+        incrementalCostPerUnitCents =
+          zeroDriverCost === null ||
+          intensiveCosts[index].monthlyCostCents === null
+            ? null
+            : Math.max(
+                0,
+                intensiveCosts[index].monthlyCostCents - zeroDriverCost
+              ) / driverValue;
+      }
+      return [
+        {
+          itemKey: itemKey as SalesExpansionItemKey,
+          publicName: line.item.publicName,
+          driverKey: expansionPolicy.driverKey,
+          incrementalCostPerUnitCents,
+          ...calculateSalesDriverExpansion({
+            driverValue,
+            policy: expansionPolicy,
+            incrementalCostPerUnitCents,
+            minimumMarginBasisPoints:
+              profitabilityPolicy.capacityMinimumIncrementalMarginBasisPoints
+          })
+        }
+      ];
+    });
+
+    const phaseHasTemporaryDiscount = (phase: OfferCommercialPhase) =>
+      phase.endsAt !== null &&
+      phase.lines.some(
+        (line) =>
+          line.billingInterval === 'monthly' && line.discountCents > 0
+      );
+    const economicsPhases = commercialPhases.map((phase, index) => {
+      const intensive = intensivePhasePeriods[index].consolidated;
+      const target =
+        index === commercialPhases.length - 1
+          ? profitabilityPolicy.postPromotionMinimumEbitdaMarginBasisPoints
+          : profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints;
+      const directAndShared = nullableSum([
+        intensive.directCostCents,
+        intensive.sharedPlatformCostAllocatedCents
+      ]);
+      const minimumPhasePrice = calculateSalesMinimumPriceCents({
+        directCostCents: directAndShared,
+        fixedAllocatedCostCents: 0,
+        fixedPaymentFeeCents: intensiveValues.stripeFixedFeeCents,
+        targetEbitdaMarginBasisPoints: target,
+        stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
+        delinquencyPercentageBasisPoints:
+          intensiveValues.estimatedDelinquencyBasisPoints,
+        taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
+      });
+      return {
+        startsAt: phase.startsAt,
+        endsAt: phase.endsAt,
+        revenueCents: intensive.recurringRevenueCents,
+        costCents: intensive.totalEstimatedCostCents,
+        ebitdaCents: intensive.ebitdaCents,
+        marginBasisPoints: intensive.ebitdaMarginBasisPoints,
+        maximumDiscountCents:
+          minimumPhasePrice === null
+            ? null
+            : Math.max(
+                0,
+                intensive.recurringRevenueCents - minimumPhasePrice
+              ),
+        belowAbsoluteMinimum:
+          intensive.ebitdaMarginBasisPoints !== null &&
+          intensive.ebitdaMarginBasisPoints <
+            profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints,
+        requiresTemporaryDiscountJustification:
+          intensive.ebitdaMarginBasisPoints !== null &&
+          intensive.ebitdaMarginBasisPoints >=
+            profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints &&
+          intensive.ebitdaMarginBasisPoints <
+            profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
+      };
+    });
+    const blockingCodes: string[] = [];
+    const economicsWarnings: string[] = [];
+    if (
+      perPatientPricingEnabled &&
+      missingCommercialPriceItemKeys.length > 0
+    ) {
+      missingCommercialPriceItemKeys.forEach((itemKey) =>
+        blockingCodes.push(
+          `COMMERCIAL_PRICE_PER_PATIENT_MISSING:${itemKey}`
+        )
+      );
+      economicsWarnings.push(
+        'Informe o preço comercial por paciente dos módulos selecionados; custos conhecidos continuam calculados.'
+      );
+    }
+    if (
+      intensiveCosts.some(
+        (cost) =>
+          cost.monthlyCostCents === null || cost.missingDrivers.length > 0
+      ) ||
+      economicsPhases.some((phase) => phase.marginBasisPoints === null)
+    ) {
+      blockingCodes.push('ECONOMICS_INSUFFICIENT_DATA');
+      economicsWarnings.push(
+        'Dados intensivos incompletos não são tratados como custo zero.'
+      );
+    }
+    if (
+      percentageCostBasisPoints !== null &&
+      salesProfitabilityPolicyThresholds(profitabilityPolicy).some(
+        (target) => 10_000 - target - percentageCostBasisPoints <= 0
+      )
+    ) {
+      blockingCodes.push('ECONOMICS_DENOMINATOR_INVALID');
+      economicsWarnings.push(
+        'A soma da margem alvo, Stripe, inadimplência e impostos invalida o denominador do preço mínimo.'
+      );
+    }
+    if (economicsPhases.some((phase) => phase.belowAbsoluteMinimum)) {
+      blockingCodes.push('CLINIC_MARGIN_BELOW_MINIMUM');
+      economicsWarnings.push(
+        `Ao menos uma fase está abaixo da margem operacional atribuída mínima de ${formatSalesBasisPointsPercent(
+          profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints
+        )}.`
+      );
+    }
+    const finalPhase = economicsPhases[economicsPhases.length - 1];
+    if (
+      finalPhase &&
+      finalPhase.marginBasisPoints !== null &&
+      finalPhase.marginBasisPoints <
+        profitabilityPolicy.postPromotionMinimumEbitdaMarginBasisPoints
+    ) {
+      blockingCodes.push('POST_PROMOTION_MARGIN_BELOW_MINIMUM');
+      economicsWarnings.push(
+        `A condição posterior precisa alcançar margem operacional atribuída de pelo menos ${formatSalesBasisPointsPercent(
+          profitabilityPolicy.postPromotionMinimumEbitdaMarginBasisPoints
+        )}.`
+      );
+    }
+    const phaseNeedsJustification = economicsPhases.some(
+      (phase) => phase.requiresTemporaryDiscountJustification
+    );
+    const promotionalModuleNeedsJustification = economicsItems
+      .filter((item) => !item.isBasePackage)
+      .some(
+        (item) =>
+          (item.promotionalRevenueCents === 0 &&
+            Number(item.promotionalCostCents) > 0) ||
+          (item.promotionalMarginBasisPoints !== null &&
+            item.promotionalMarginBasisPoints <
+              profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints)
+      );
+    const phaseMissingTemporaryDiscount = economicsPhases.some(
+      (phase, index) =>
+        phase.requiresTemporaryDiscountJustification &&
+        !phaseHasTemporaryDiscount(commercialPhases[index])
+    );
+    if (phaseNeedsJustification && phaseMissingTemporaryDiscount) {
+      blockingCodes.push('TEMPORARY_DISCOUNT_REQUIRED');
+      economicsWarnings.push(
+        `Margens entre ${formatSalesBasisPointsPercent(
+          profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints
+        )} e ${formatSalesBasisPointsPercent(
+          profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
+        )} exigem desconto temporário com término definido.`
+      );
+    }
+    const firstCommercialPhase = commercialPhases[0];
+    const promotionalModuleHasTemporaryDiscount =
+      firstCommercialPhase !== undefined &&
+      firstCommercialPhase.endsAt !== null &&
+      firstCommercialPhase.lines.some(
+        (line) =>
+          line.billingInterval === 'monthly' &&
+          line.itemKey !== 'clinical_core' &&
+          line.discountCents > 0
+      );
+    if (
+      promotionalModuleNeedsJustification &&
+      !promotionalModuleHasTemporaryDiscount
+    ) {
+      blockingCodes.push('MODULE_PROMOTION_TERMS_REQUIRED');
+      economicsWarnings.push(
+        'Módulo abaixo do piso incremental exige benefício temporário explícito e justificativa.'
+      );
+    }
+    economicsItems
+      .filter((item) => !item.isBasePackage)
+      .forEach((item) => {
+        if (
+          item.postPromotionMarginBasisPoints !== null &&
+          item.postPromotionMarginBasisPoints <
+            profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints
+        ) {
+          blockingCodes.push(
+            `MODULE_MARGIN_BELOW_MINIMUM:${item.itemKey}`
+          );
+          economicsWarnings.push(
+            `${item.publicName} está abaixo da margem incremental mínima de ${formatSalesBasisPointsPercent(
+              profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints
+            )}.`
+          );
+        }
+      });
+    if (capacityEconomics?.meetsMinimumMargin === false) {
+      blockingCodes.push('CAPACITY_MARGIN_BELOW_MINIMUM');
+      economicsWarnings.push(
+        `Os blocos de capacidade não preservam a margem incremental mínima de ${formatSalesBasisPointsPercent(
+          profitabilityPolicy.capacityMinimumIncrementalMarginBasisPoints
+        )}.`
+      );
+    }
+    expansionEconomics.forEach((expansion) => {
+      if (expansion.status === 'insufficient_data') {
+        blockingCodes.push(
+          `EXPANSION_INSUFFICIENT_DATA:${expansion.itemKey}`
+        );
+      } else if (expansion.status === 'blocked') {
+        blockingCodes.push(
+          `EXPANSION_MARGIN_BELOW_MINIMUM:${expansion.itemKey}`
+        );
+        economicsWarnings.push(
+          `${expansion.publicName} está abaixo da margem incremental mínima de ${formatSalesBasisPointsPercent(
+            profitabilityPolicy.capacityMinimumIncrementalMarginBasisPoints
+          )} para excedentes por driver.`
+        );
+      }
+    });
+    const promotionalMinimumPrice = calculateSalesMinimumPriceCents({
+      directCostCents: nullableSum([
+        intensivePromotionalPeriod.consolidated.directCostCents,
+        intensivePromotionalPeriod.consolidated
+          .sharedPlatformCostAllocatedCents
+      ]),
+      fixedAllocatedCostCents: 0,
+      fixedPaymentFeeCents: intensiveValues.stripeFixedFeeCents,
+      targetEbitdaMarginBasisPoints:
+        profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints,
+      stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
+      delinquencyPercentageBasisPoints:
+        intensiveValues.estimatedDelinquencyBasisPoints,
+      taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
+    });
+    const postMinimumPrice = calculateSalesMinimumPriceCents({
+      directCostCents: nullableSum([
+        intensivePostPeriod.consolidated.directCostCents,
+        intensivePostPeriod.consolidated.sharedPlatformCostAllocatedCents
+      ]),
+      fixedAllocatedCostCents: 0,
+      fixedPaymentFeeCents: intensiveValues.stripeFixedFeeCents,
+      targetEbitdaMarginBasisPoints:
+        profitabilityPolicy.postPromotionMinimumEbitdaMarginBasisPoints,
+      stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
+      delinquencyPercentageBasisPoints:
+        intensiveValues.estimatedDelinquencyBasisPoints,
+      taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
+    });
+    const firstYearMaximumDiscountCents =
+      promotionalMinimumPrice === null
+        ? null
+        : Math.max(
+            0,
+            intensivePostPeriod.consolidated.recurringRevenueCents * 12 -
+              promotionalMinimumPrice *
+                Math.min(12, input.discountDurationMonths) -
+              (postMinimumPrice || promotionalMinimumPrice) *
+                Math.max(0, 12 - input.discountDurationMonths)
+          );
+    economics = {
+      policy: profitabilityPolicy,
+      pricingProfile: 'intensive',
+      percentageCostBasisPoints,
+      promotional: {
+        revenueCents:
+          intensivePromotionalPeriod.consolidated.recurringRevenueCents,
+        costCents:
+          intensivePromotionalPeriod.consolidated.totalEstimatedCostCents,
+        ebitdaCents: intensivePromotionalPeriod.consolidated.ebitdaCents,
+        marginBasisPoints:
+          intensivePromotionalPeriod.consolidated.ebitdaMarginBasisPoints,
+        maximumDiscountCents:
+          promotionalMinimumPrice === null
+            ? null
+            : Math.max(
+                0,
+                intensivePromotionalPeriod.consolidated
+                  .recurringRevenueCents - promotionalMinimumPrice
+              )
+      },
+      postPromotion: {
+        revenueCents:
+          intensivePostPeriod.consolidated.recurringRevenueCents,
+        costCents: intensivePostPeriod.consolidated.totalEstimatedCostCents,
+        ebitdaCents: intensivePostPeriod.consolidated.ebitdaCents,
+        marginBasisPoints:
+          intensivePostPeriod.consolidated.ebitdaMarginBasisPoints,
+        maximumDiscountCents:
+          postMinimumPrice === null
+            ? null
+            : Math.max(
+                0,
+                intensivePostPeriod.consolidated.recurringRevenueCents -
+                  postMinimumPrice
+              )
+      },
+      items: economicsItems,
+      capacity: capacityEconomics,
+      expansions: expansionEconomics,
+      phases: economicsPhases,
+      firstYearMaximumDiscountCents,
+      canSend: blockingCodes.length === 0,
+      requiresJustification:
+        phaseNeedsJustification || promotionalModuleNeedsJustification,
+      blockingCodes: Array.from(new Set(blockingCodes)),
+      warnings: economicsWarnings
+    };
+    warnings.push(...economicsWarnings);
+  }
+
+  const finalizedLines = lines.map((line) => {
+    const commercialEconomics = commercialLineEconomics.get(line.lineKey);
+    return {
+      ...line,
+      commercialPricing: {
+        ...line.commercialPricing,
+        marginalCostPerPatientCents:
+          commercialEconomics?.marginalCostPerPatientCents ?? null,
+        minimumPricePerPatientCents:
+          commercialEconomics?.minimumPricePerPatientCents ?? null,
+        recommendedPricePerPatientCents:
+          commercialEconomics?.recommendedPricePerPatientCents ?? null
+      }
+    };
+  });
+  const nextBlockPriceCents =
+    capacity?.effectiveBlockPriceCents ??
+    (capacity ? capacity.policy.blockPriceCents : null);
+  const recurringMarginalCosts = finalizedLines
+    .filter((line) => line.pricingMode !== 'one_time')
+    .map((line) => line.commercialPricing.marginalCostPerPatientCents);
+  const nextBlockDirectCostCents =
+    perPatientPricingEnabled &&
+    capacity &&
+    recurringMarginalCosts.every((value) => value !== null)
+      ? Math.round(
+          recurringMarginalCosts.reduce(
+            (sum, value) => sum + Number(value),
+            0
+          ) * capacity.policy.blockSizePatients
+        )
+      : null;
+  const nextBlockPercentageCostCents =
+    nextBlockPriceCents === null ||
+    economics?.percentageCostBasisPoints === null ||
+    economics?.percentageCostBasisPoints === undefined
+      ? null
+      : multiplyBasisPoints(
+          nextBlockPriceCents,
+          economics.percentageCostBasisPoints
+        );
+  const nextBlockMarginalCostCents = nullableSum([
+    nextBlockDirectCostCents,
+    nextBlockPercentageCostCents
+  ]);
+  const nextBlockContributionCents =
+    nextBlockPriceCents === null || nextBlockMarginalCostCents === null
+      ? null
+      : nextBlockPriceCents - nextBlockMarginalCostCents;
+  const nextBlockMarginBasisPoints =
+    nextBlockPriceCents === null || nextBlockMarginalCostCents === null
+      ? null
+      : marginBasisPoints(
+          nextBlockPriceCents,
+          nextBlockMarginalCostCents
+        );
+  const lineEstimateStatuses = finalizedLines
+    .filter((line) => line.pricingMode !== 'one_time')
+    .map((line) => line.commercialPricing.estimateStatus);
+  const commercialEstimateStatus: SalesCommercialEstimateStatus =
+    missingCommercialPriceItemKeys.length > 0 ||
+    lineEstimateStatuses.includes('insufficient_data')
+      ? 'insufficient_data'
+      : lineEstimateStatuses.includes('pre_launch')
+        ? 'pre_launch'
+        : lineEstimateStatuses.includes('estimated')
+          ? 'estimated'
+          : 'calibrated';
+  const canonicalInput: SalesModularProposalInput = perPatientPricingEnabled
+    ? {
+        ...input,
+        lines: input.lines.map((selection) => {
+          const resultLine = finalizedLines.find(
+            (line) => line.lineKey === lineIdentity(selection)
+          );
+          if (
+            !resultLine ||
+            resultLine.pricingMode === 'one_time' ||
+            !resultLine.commercialPricing.enabled
+          ) {
+            return selection;
+          }
+          return {
+            ...selection,
+            pricingEditMode:
+              resultLine.commercialPricing.editMode === 'monthly_total'
+                ? 'monthly_total'
+                : 'per_patient',
+            proposedPricePerPatientCents:
+              resultLine.commercialPricing.proposedPricePerPatientCents,
+            customRecurringAmountCents:
+              resultLine.commercialPricing.derivedMonthlyRevenueCents
+          };
+        })
+      }
+    : input;
+
   return {
-    modelVersion: SALES_MODULAR_PROPOSAL_MODEL_VERSION,
+    modelVersion: perPatientPricingEnabled
+      ? SALES_MODULAR_PER_PATIENT_MODEL_VERSION
+      : profitabilityPolicy
+        ? SALES_MODULAR_ECONOMICS_MODEL_VERSION
+        : SALES_MODULAR_PROPOSAL_MODEL_VERSION,
     catalogVersionId: catalog.id,
     catalogVersion: catalog.version,
-    input,
+    input: canonicalInput,
     basePackage: {
       itemKey: 'clinical_core',
       tierId: baseTier.id,
@@ -2533,7 +3877,7 @@ export function calculateSalesModularProposal(
       ),
       capacity
     },
-    lines,
+    lines: finalizedLines,
     promotional: promotionalPeriod.consolidated,
     postPromotion: postPeriod.consolidated,
     grossRecurringRevenueCents: lines.reduce(
@@ -2555,8 +3899,16 @@ export function calculateSalesModularProposal(
     oneTimeContributionMarginCents,
     minimumRecommendedRecurringRevenueCents,
     maximumRecommendedDiscountBasisPoints,
-    rating: phaseRating,
-    requiresJustification: finalRequiresJustification,
+    rating: economics
+      ? economics.blockingCodes.includes('ECONOMICS_INSUFFICIENT_DATA') ||
+        missingCommercialPriceItemKeys.length > 0
+        ? 'insufficient_data'
+        : economics.canSend
+          ? 'healthy'
+          : 'not_recommended'
+      : phaseRating,
+    requiresJustification:
+      finalRequiresJustification || economics?.requiresJustification === true,
     missingCosts: Array.from(new Set(missingCosts)),
     missingDrivers,
     possibleDuplicateCosts,
@@ -2570,6 +3922,30 @@ export function calculateSalesModularProposal(
     },
     warnings,
     horizons,
-    commercialPhases
+    commercialPhases,
+    economics,
+    commercialPricing: {
+      schemaVersion: 1,
+      enabled: perPatientPricingEnabled,
+      contractedCapacityPatients: perPatientPricingEnabled
+        ? basePackageContractedLimit
+        : null,
+      selectedRecurringItemKeys: selectedRecurringLines.map(
+        (line) => line.item.itemKey
+      ),
+      missingPriceItemKeys: missingCommercialPriceItemKeys,
+      totalProposedPricePerPatientCents,
+      nextBlockPriceCents:
+        perPatientPricingEnabled ? nextBlockPriceCents : null,
+      nextBlockMarginalCostCents:
+        perPatientPricingEnabled ? nextBlockMarginalCostCents : null,
+      nextBlockContributionCents:
+        perPatientPricingEnabled ? nextBlockContributionCents : null,
+      nextBlockMarginBasisPoints:
+        perPatientPricingEnabled ? nextBlockMarginBasisPoints : null,
+      estimateStatus: commercialEstimateStatus,
+      assumptionSetVersion: assumptionSnapshot.version,
+      calculatedAt: commercialStartsAt
+    }
   };
 }

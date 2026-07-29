@@ -3,6 +3,7 @@ import type {
   SimulationValueSource
 } from './salesProfitability';
 import { validateCustomCapacityPolicy } from './salesCommercialEvolution';
+import { validateSalesProfitabilityPolicy } from './salesModularEconomics';
 
 export type ModularCostOwnershipValue =
   | 'shared'
@@ -395,6 +396,7 @@ export type SalesCatalogPublicationBlock = {
     | 'INCLUDED_STORAGE_MODEL_MISSING'
     | 'EGRESS_CRITERION_MISSING'
     | 'CUSTOM_CAPACITY_POLICY_INVALID'
+    | 'PROFITABILITY_POLICY_INVALID'
     | 'COST_SETTINGS_INVALID'
     | 'DRIVER_CONFIG_INVALID'
     | 'NEGATIVE_COST'
@@ -599,6 +601,7 @@ export const validateModularCatalogForPublication = (
   catalog: {
     modularCostSettings?: Partial<SalesModularCostSettings> | null;
     customCapacityPolicy?: unknown;
+    profitabilityPolicy?: unknown;
     items: Array<{
       itemKey: string;
       publicName: string;
@@ -621,6 +624,15 @@ export const validateModularCatalogForPublication = (
       field: 'customCapacityPolicy',
       message:
         'Defina e salve uma política versionada válida para os blocos de capacidade antes de publicar.'
+    });
+  }
+
+  if (!validateSalesProfitabilityPolicy(catalog.profitabilityPolicy)) {
+    blocks.push({
+      code: 'PROFITABILITY_POLICY_INVALID',
+      field: 'profitabilityPolicy',
+      message:
+        'Defina e salve a política de margem versionada, a alocação no Verto Clínica e a expansão antes de publicar.'
     });
   }
 

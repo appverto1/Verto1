@@ -36,6 +36,11 @@ import {
   validateCustomCapacityPolicy,
   type CustomCapacityPolicy
 } from '../utils/salesCommercialEvolution';
+import {
+  DEFAULT_SALES_PROFITABILITY_POLICY,
+  validateSalesProfitabilityPolicy,
+  type SalesProfitabilityPolicy
+} from '../utils/salesModularEconomics';
 
 type CatalogVersion = {
   id: string;
@@ -141,6 +146,82 @@ const profileLabels: Record<SalesModularProfile, string> = {
   intensive: 'Intensivo'
 };
 
+const profitabilityMarginFields: Array<{
+  key:
+    | 'clinicMinimumEbitdaMarginBasisPoints'
+    | 'recurringTargetEbitdaMarginBasisPoints'
+    | 'moduleTargetIncrementalMarginBasisPoints'
+    | 'moduleMinimumIncrementalMarginBasisPoints'
+    | 'capacityMinimumIncrementalMarginBasisPoints'
+    | 'postPromotionMinimumEbitdaMarginBasisPoints';
+  label: string;
+  hint: string;
+}> = [
+  {
+    key: 'clinicMinimumEbitdaMarginBasisPoints',
+    label: 'Piso absoluto da clínica',
+    hint: 'Nenhuma fase pode ficar abaixo.'
+  },
+  {
+    key: 'recurringTargetEbitdaMarginBasisPoints',
+    label: 'Meta recorrente',
+    hint: 'Obrigatória após promoções.'
+  },
+  {
+    key: 'moduleMinimumIncrementalMarginBasisPoints',
+    label: 'Piso dos módulos',
+    hint: 'Custo incremental, sem rateio duplicado.'
+  },
+  {
+    key: 'moduleTargetIncrementalMarginBasisPoints',
+    label: 'Meta dos módulos',
+    hint: 'Classificação saudável.'
+  },
+  {
+    key: 'capacityMinimumIncrementalMarginBasisPoints',
+    label: 'Piso da capacidade',
+    hint: 'Blocos e excedentes.'
+  },
+  {
+    key: 'postPromotionMinimumEbitdaMarginBasisPoints',
+    label: 'Piso posterior',
+    hint: 'Condição normal congelada.'
+  }
+];
+
+const expansionPolicyItems = [
+  {
+    itemKey: 'appointments_communication',
+    label: 'Agenda e Comunicação',
+    driverKey: 'monthlyAppointments',
+    unit: 'sessões'
+  },
+  {
+    itemKey: 'financial_management',
+    label: 'Financeiro e Gestão',
+    driverKey: 'financialEntries',
+    unit: 'lançamentos'
+  },
+  {
+    itemKey: 'insurance_tiss',
+    label: 'Convênios e TISS',
+    driverKey: 'tissGuides',
+    unit: 'guias'
+  },
+  {
+    itemKey: 'school_management',
+    label: 'Gestão Escolar',
+    driverKey: 'schoolPatients',
+    unit: 'vínculos escolares'
+  },
+  {
+    itemKey: 'additional_storage',
+    label: 'Armazenamento adicional',
+    driverKey: 'expectedStorageGb',
+    unit: 'GB'
+  }
+] as const;
+
 const primaryUsageUnitByItem: Record<string, string> = {
   clinical_core: 'R$/sessão clínica',
   appointments_communication: 'R$/sessão',
@@ -203,6 +284,8 @@ export const SalesPricingCatalogPanel = () => {
     useState<SalesModularCostSettings | null>(null);
   const [customCapacityPolicyDraft, setCustomCapacityPolicyDraft] =
     useState<CustomCapacityPolicy | null>(null);
+  const [profitabilityPolicyDraft, setProfitabilityPolicyDraft] =
+    useState<SalesProfitabilityPolicy | null>(null);
   const [publicationBlocks, setPublicationBlocks] = useState<
     SalesCatalogPublicationBlock[]
   >([]);
@@ -276,6 +359,28 @@ export const SalesPricingCatalogPanel = () => {
           : { ...DEFAULT_CUSTOM_CAPACITY_POLICY }
         : validateCustomCapacityPolicy(loadedCatalog?.customCapacityPolicy)
           ? { ...loadedCatalog.customCapacityPolicy }
+          : null
+    );
+    setProfitabilityPolicyDraft(
+      loadedCatalog?.status === 'draft'
+        ? validateSalesProfitabilityPolicy(loadedCatalog.profitabilityPolicy)
+          ? {
+              ...loadedCatalog.profitabilityPolicy,
+              driverExpansionPolicies: {
+                ...loadedCatalog.profitabilityPolicy.driverExpansionPolicies
+              }
+            }
+          : {
+              ...DEFAULT_SALES_PROFITABILITY_POLICY,
+              driverExpansionPolicies: {}
+            }
+        : validateSalesProfitabilityPolicy(loadedCatalog?.profitabilityPolicy)
+          ? {
+              ...loadedCatalog.profitabilityPolicy,
+              driverExpansionPolicies: {
+                ...loadedCatalog.profitabilityPolicy.driverExpansionPolicies
+              }
+            }
           : null
     );
     const nextCosts: Record<string, Record<string, any>> = {};
@@ -372,7 +477,7 @@ export const SalesPricingCatalogPanel = () => {
             name: `Catálogo comercial v${Math.max(
               1,
               ...versions.map((version) => version.version + 1)
-            )} — blocos de capacidade`
+            )} — margem operacional modular`
           })
         }
       );
@@ -600,7 +705,7 @@ export const SalesPricingCatalogPanel = () => {
     { key: 'revenueTax', label: 'Imposto sobre faturamento' },
     { key: 'delinquency', label: 'Inadimplência' },
     { key: 'sharedPlatformCosts', label: 'Custos compartilhados' },
-    { key: 'belowEbitda', label: 'Despesas abaixo do EBITDA' }
+    { key: 'belowEbitda', label: 'Despesas após o resultado operacional atribuído' }
   ];
   const allocationOptions: Array<{
     value: SalesSharedAllocationMethod;
@@ -721,6 +826,11 @@ export const SalesPricingCatalogPanel = () => {
               ? 'Política de blocos versionada'
               : 'Sem política de blocos nesta versão'}
           </span>
+          <span className="text-xs font-normal text-slate-500">
+            {catalog.hasVersionedProfitabilityPolicy
+              ? 'Política de margem versionada'
+              : 'Sem política de margem nesta versão'}
+          </span>
         </div>
 
         {error ? (
@@ -765,7 +875,8 @@ export const SalesPricingCatalogPanel = () => {
                       name: draftName,
                       allocationSettings: allocationDraft,
                       modularCostSettings: modularCostDraft,
-                      customCapacityPolicy: customCapacityPolicyDraft
+                      customCapacityPolicy: customCapacityPolicyDraft,
+                      profitabilityPolicy: profitabilityPolicyDraft
                     },
                     'version'
                   )
@@ -773,7 +884,8 @@ export const SalesPricingCatalogPanel = () => {
                 disabled={
                   Boolean(busy) ||
                   draftName.trim().length < 2 ||
-                  !validateCustomCapacityPolicy(customCapacityPolicyDraft)
+                  !validateCustomCapacityPolicy(customCapacityPolicyDraft) ||
+                  !validateSalesProfitabilityPolicy(profitabilityPolicyDraft)
                 }
                 className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 disabled:opacity-50"
               >
@@ -826,6 +938,226 @@ export const SalesPricingCatalogPanel = () => {
                 </div>
               </div>
             </div>
+          ) : null}
+          {profitabilityPolicyDraft ? (
+            <fieldset className="mt-4 border-t border-amber-200 pt-4">
+              <legend className="text-sm font-medium text-slate-800">
+                Política de margem operacional atribuída
+              </legend>
+              <p className="mt-1 max-w-3xl text-xs font-normal leading-5 text-slate-600">
+                O perfil intensivo define os preços mínimos. Infraestrutura,
+                operação-base, suporte-base e taxa fixa são absorvidos uma única
+                vez pelo Verto Clínica.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {profitabilityMarginFields.map((field) => (
+                  <label
+                    key={field.key}
+                    className="rounded-xl border border-slate-200 bg-white p-3 text-xs font-medium text-slate-700"
+                  >
+                    <span className="flex items-center justify-between gap-3">
+                      {field.label}
+                      <span className="flex min-h-9 items-center rounded-lg border border-slate-200 px-2 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
+                        <input
+                          type="number"
+                          min={0}
+                          max={99.99}
+                          step={0.01}
+                          value={
+                            profitabilityPolicyDraft[field.key] / 100
+                          }
+                          onChange={(event) =>
+                            setProfitabilityPolicyDraft((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    [field.key]: Math.round(
+                                      Number(event.target.value) * 100
+                                    )
+                                  }
+                                : current
+                            )
+                          }
+                          className="w-16 bg-transparent text-right font-normal outline-none"
+                        />
+                        <span className="ml-1 text-slate-400">%</span>
+                      </span>
+                    </span>
+                    <span className="mt-2 block font-normal leading-5 text-slate-500">
+                      {field.hint}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-xs">
+                  <p className="font-medium text-emerald-900">
+                    Custos compartilhados
+                  </p>
+                  <p className="mt-1 font-normal leading-5 text-emerald-800">
+                    Alocação fixa em Verto Clínica. Módulos recebem apenas seus
+                    custos incrementais e taxas percentuais.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-3 text-xs">
+                  <p className="font-medium text-slate-700">
+                    Fórmula auditável
+                  </p>
+                  <p className="mt-1 font-normal leading-5 text-slate-500">
+                    Custo fixo + direto + taxa fixa, dividido pelo saldo após
+                    margem alvo, Stripe, inadimplência e imposto.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50/40 p-3 text-xs text-slate-600">
+                <p className="font-medium text-slate-800">
+                  Referências para 150 pacientes
+                </p>
+                <p className="mt-1 font-normal leading-5">
+                  Promocional atual: {money(159900)} · intermediário:{' '}
+                  {money(199900)} · referência de tabela: {money(219900)}.
+                  São referências comerciais; o preço mínimo exibido na proposta
+                  é sempre recalculado com custos e premissas publicados.
+                </p>
+              </div>
+              <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+                <summary className="cursor-pointer text-xs font-medium text-slate-700">
+                  Franquias e excedentes por driver
+                </summary>
+                <p className="mt-2 text-xs font-normal leading-5 text-slate-500">
+                  Ative somente com valores comerciais aprovados. Campos
+                  indisponíveis não são convertidos silenciosamente em zero.
+                </p>
+                <div className="mt-3 space-y-3">
+                  {expansionPolicyItems.map((definition) => {
+                    const configured =
+                      profitabilityPolicyDraft.driverExpansionPolicies[
+                        definition.itemKey
+                      ];
+                    const updateExpansion = (
+                      patch: Record<string, unknown>
+                    ) =>
+                      setProfitabilityPolicyDraft((current) => {
+                        if (!current) return current;
+                        const previous =
+                          current.driverExpansionPolicies[
+                            definition.itemKey
+                          ];
+                        const next = {
+                          enabled: false,
+                          driverKey: definition.driverKey,
+                          includedUnits: null,
+                          blockSizeUnits: null,
+                          blockPriceCents: null,
+                          source: 'unavailable' as const,
+                          sourceDetail:
+                            'Franquia ainda não aprovada comercialmente.',
+                          effectiveAt: new Date().toISOString(),
+                          version: 1,
+                          ...(previous || {}),
+                          ...patch
+                        };
+                        return {
+                          ...current,
+                          driverExpansionPolicies: {
+                            ...current.driverExpansionPolicies,
+                            [definition.itemKey]: next
+                          }
+                        };
+                      });
+                    return (
+                      <div
+                        key={definition.itemKey}
+                        className="grid gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3 lg:grid-cols-[1.4fr_repeat(3,1fr)]"
+                      >
+                        <label className="flex min-h-11 items-center justify-between gap-3 text-xs font-medium text-slate-700">
+                          <span>
+                            {definition.label}
+                            <span className="mt-1 block font-normal text-slate-500">
+                              Driver: {definition.unit}
+                            </span>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={configured?.enabled === true}
+                            onChange={(event) =>
+                              updateExpansion({
+                                enabled: event.target.checked,
+                                source: event.target.checked
+                                  ? 'manual'
+                                  : 'unavailable',
+                                sourceDetail: event.target.checked
+                                  ? 'Política aprovada e informada manualmente no catálogo.'
+                                  : 'Franquia desabilitada nesta versão.'
+                              })
+                            }
+                            className="h-5 w-5 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                          />
+                        </label>
+                        {[
+                          ['includedUnits', 'Franquia incluída'],
+                          ['blockSizeUnits', 'Unidades por bloco'],
+                          ['blockPriceCents', 'Preço do bloco (R$)']
+                        ].map(([fieldKey, label]) => (
+                          <label
+                            key={fieldKey}
+                            className="text-xs font-medium text-slate-600"
+                          >
+                            {label}
+                            <input
+                              type="number"
+                              min={0}
+                              step={
+                                fieldKey === 'blockPriceCents' ? 0.01 : 1
+                              }
+                              value={
+                                configured?.[
+                                  fieldKey as
+                                    | 'includedUnits'
+                                    | 'blockSizeUnits'
+                                    | 'blockPriceCents'
+                                ] == null
+                                  ? ''
+                                  : fieldKey === 'blockPriceCents'
+                                    ? Number(configured.blockPriceCents) / 100
+                                    : Number(
+                                        configured[
+                                          fieldKey as
+                                            | 'includedUnits'
+                                            | 'blockSizeUnits'
+                                        ]
+                                      )
+                              }
+                              disabled={!configured?.enabled}
+                              onChange={(event) =>
+                                updateExpansion({
+                                  [fieldKey]:
+                                    event.target.value === ''
+                                      ? null
+                                      : fieldKey === 'blockPriceCents'
+                                        ? Math.round(
+                                            Number(event.target.value) * 100
+                                          )
+                                        : Number(event.target.value)
+                                })
+                              }
+                              className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal disabled:bg-slate-100"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+              {!validateSalesProfitabilityPolicy(
+                profitabilityPolicyDraft
+              ) ? (
+                <p role="alert" className="mt-3 text-xs text-rose-700">
+                  Revise os pisos de margem e complete cada franquia habilitada.
+                </p>
+              ) : null}
+            </fieldset>
           ) : null}
           {customCapacityPolicyDraft ? (
             <fieldset className="mt-4 border-t border-amber-200 pt-4">
@@ -1858,7 +2190,9 @@ export const SalesPricingCatalogPanel = () => {
                   <th className="px-3 py-2 font-medium">Propostos</th>
                   <th className="px-3 py-2 font-medium">Receita média</th>
                   <th className="px-3 py-2 font-medium">Custo direto</th>
-                  <th className="px-3 py-2 font-medium">EBITDA</th>
+                  <th className="px-3 py-2 font-medium">
+                    Resultado operacional atribuído
+                  </th>
                   <th className="px-3 py-2 font-medium">Margem média</th>
                   <th className="px-3 py-2 font-medium">Faixa</th>
                   <th className="px-3 py-2 font-medium">Selecionadas</th>

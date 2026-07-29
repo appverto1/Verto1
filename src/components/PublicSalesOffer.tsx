@@ -13,8 +13,7 @@ import {
   formatSalesCurrency
 } from '../constants/salesCommercial';
 import type {
-  CustomCapacitySnapshot,
-  OfferCommercialPhase,
+  CustomCapacityPolicy,
   OfferItemDiscount
 } from '../utils/salesCommercialEvolution';
 
@@ -53,6 +52,44 @@ type ModularOfferItem = {
   publicMetadata: Record<string, any>;
 };
 
+type PublicOfferCommercialPhase = {
+  phaseNumber: number;
+  startsAt: string;
+  endsAt: string | null;
+  recurringRevenueCents: number;
+  invoiceAmountCents: number;
+  lines: Array<{
+    itemKey: string;
+    publicName: string;
+    billingInterval: 'monthly' | 'one_time';
+    normalPriceCents: number;
+    activePriceCents: number;
+    discountCents: number;
+    itemDiscountCents: number;
+    globalDiscountCents: number;
+    discount: Omit<OfferItemDiscount, 'internalNotes'> | null;
+  }>;
+};
+
+type PublicCapacitySnapshot = {
+  schemaVersion: number;
+  demandPatients: number;
+  baseLimitPatients: number;
+  basePriceCents: number;
+  minimumBlocks: number;
+  selectedBlocks: number;
+  selectionMode: 'automatic' | 'manual';
+  addedCapacityPatients: number;
+  totalContractedLimitPatients: number;
+  includedStorageMb: number;
+  blocksMonthlyRevenueCents: number;
+  effectiveBlockPriceCents: number | null;
+  blockPricingBasis:
+    | 'catalog_fixed'
+    | 'selected_module_per_patient_prices';
+  policy: CustomCapacityPolicy;
+};
+
 export type ModularPublicOffer = {
   offerType: 'modular';
   proposalName: string;
@@ -64,7 +101,7 @@ export type ModularPublicOffer = {
     name?: string;
     limitQuantity?: number | null;
     includedStorageMb?: number | null;
-    capacity?: CustomCapacitySnapshot | null;
+    capacity?: PublicCapacitySnapshot | null;
   } | null;
   items: ModularOfferItem[];
   promotionalMonthlyAmountCents: number;
@@ -80,7 +117,7 @@ export type ModularPublicOffer = {
   modularCheckoutEnabled: false;
   stripeReady: false;
   acceptedAt?: string | null;
-  commercialPhases?: OfferCommercialPhase[];
+  commercialPhases?: PublicOfferCommercialPhase[];
 };
 
 type PublicOffer = LegacyPublicOffer | ModularPublicOffer;
@@ -163,6 +200,18 @@ export const ModularOfferDetails = ({
                       : `${item.includedQuantity?.toLocaleString('pt-BR')} ${item.publicMetadata?.unitName || ''} incluídos`}
                   </p>
                 ) : null}
+                {item.publicMetadata?.pricePerPatientCents != null ? (
+                  <p className="mt-1 pl-[23px] text-xs font-medium text-slate-700">
+                    {formatSalesCurrency(
+                      Number(item.publicMetadata.pricePerPatientCents),
+                      offer.currency
+                    )}{' '}
+                    por paciente/mês · capacidade faturada{' '}
+                    {Number(
+                      item.publicMetadata.billedCapacityPatients || 0
+                    ).toLocaleString('pt-BR')}
+                  </p>
+                ) : null}
                 {item.itemDiscountBasisPoints > 0 ? (
                   <p className="mt-1 pl-[23px] text-xs font-medium text-emerald-700">
                     Desconto do módulo:{' '}
@@ -219,8 +268,16 @@ export const ModularOfferDetails = ({
             <span>Quantidade reservada: {offer.basePackage.capacity.selectedBlocks} bloco(s)</span>
             <span>Limite total: {offer.basePackage.capacity.totalContractedLimitPatients} pacientes</span>
             <span>Armazenamento: {offer.basePackage.capacity.includedStorageMb.toLocaleString('pt-BR')} MB</span>
-            <span>Receita adicional: {formatSalesCurrency(offer.basePackage.capacity.blocksMonthlyRevenueCents, offer.currency)}/mês</span>
-            <span>Total Verto Clínica: {formatSalesCurrency(offer.basePackage.capacity.clinicalCoreMonthlyRevenueCents, offer.currency)}/mês</span>
+            <span>
+              Valor por bloco:{' '}
+              {offer.basePackage.capacity.effectiveBlockPriceCents == null
+                ? 'definido na condição comercial'
+                : `${formatSalesCurrency(
+                    offer.basePackage.capacity.effectiveBlockPriceCents,
+                    offer.currency
+                  )}/mês`}
+            </span>
+            <span>Valor dos blocos reservados: {formatSalesCurrency(offer.basePackage.capacity.blocksMonthlyRevenueCents, offer.currency)}/mês</span>
           </div>
           <p className="mt-3 text-xs leading-5 text-slate-600">
             Há {offer.basePackage.capacity.policy.gracePeriodDays} dias de tolerância para ajuste no próximo ciclo. O atendimento clínico nunca é bloqueado.

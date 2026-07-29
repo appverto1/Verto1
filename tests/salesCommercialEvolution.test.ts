@@ -186,7 +186,9 @@ assert.equal(
 const catalogWithCapacity = {
   ...modularCatalogFixture,
   customCapacityPolicy: { ...DEFAULT_CUSTOM_CAPACITY_POLICY },
-  hasVersionedCustomCapacityPolicy: true
+  hasVersionedCustomCapacityPolicy: true,
+  profitabilityPolicy: null,
+  hasVersionedProfitabilityPolicy: false
 };
 const draftCatalogWithCapacity = {
   ...catalogWithCapacity,

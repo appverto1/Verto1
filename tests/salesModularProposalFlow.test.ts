@@ -23,18 +23,18 @@ assert.match(server, /customBasePackageLimit/);
 assert.match(server, /basePackageSelectionMode/);
 assert.match(
   server,
-  /inputSnapshot: input/,
-  'o limite e o preÃ§o personalizados devem ser congelados no snapshot de entrada'
+  /inputSnapshot: resultSnapshot\.input/,
+  'o limite, o preço por paciente e o total derivado devem ser congelados no snapshot canônico'
 );
 assert.match(
   server,
-  /resultsSnapshot: results/,
-  'o resultado calculado da faixa personalizada deve ser congelado sem recÃ¡lculo histÃ³rico'
+  /resultsSnapshot: resultSnapshot/,
+  'o resultado calculado da faixa personalizada deve ser congelado sem recálculo histórico'
 );
 assert.match(
   server,
-  /basePackage: modularSnapshot\.basePackage \|\| null/,
-  'a proposta pÃºblica deve reutilizar o pacote-base congelado'
+  /basePackage: sanitizePublicBasePackage\(/,
+  'a proposta pública deve reutilizar e sanitizar o pacote-base congelado'
 );
 assert.match(server, /modularCheckoutEnabled: false/);
 assert.match(server, /PROPOSAL_MODULAR_CHECKOUT_NOT_ENABLED/);

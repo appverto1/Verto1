@@ -33,7 +33,10 @@ assert.match(checkoutRoute, /client_reference_id: offerId/);
 assert.match(checkoutRoute, /idempotencyKey/);
 assert.match(checkoutRoute, /MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
 assert.match(checkoutRoute, /MODULAR_OFFER_EXPIRED/);
-assert.match(checkoutRoute, /MODULAR_CHECKOUT_MARGIN_JUSTIFICATION_REQUIRED/);
+assert.match(
+  checkoutRoute,
+  /MODULAR_CHECKOUT_MARGIN_POLICY_REVIEW_REQUIRED/
+);
 assert.match(checkoutRoute, /MODULAR_CHECKOUT_PAYMENT_RECOVERY_REQUIRED/);
 assert.match(
   checkoutRoute,

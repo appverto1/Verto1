@@ -88,6 +88,7 @@ import {
 import {
   calculateSalesModularProposal,
   recommendSalesPackageTier,
+  salesModularProposalRequiresVersionedProfitabilityPolicy,
   validateSalesModularProposalInput,
   type SalesModularProposalInput,
   type SalesPricingCatalogSnapshot,
@@ -109,6 +110,21 @@ import {
   validateCustomCapacityPolicy,
   type OfferItemDiscount
 } from './src/utils/salesCommercialEvolution';
+import {
+  buildSalesCommercialApprovalHashInput,
+  buildSalesCommercialApprovalResult,
+  classifySalesProposalReview,
+  SALES_COMMERCIAL_EXCEPTION_TYPES,
+  SALES_PROFITABILITY_POLICY_MIGRATION_PENDING_CODE,
+  SALES_PROFITABILITY_POLICY_MIGRATION_PENDING_MESSAGE,
+  SALES_PROFITABILITY_POLICY_REQUIRED_CODE,
+  SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE,
+  isSalesProfitabilityPolicySchemaMissingError,
+  validateSalesCommercialExceptionActor,
+  validateSalesProfitabilityPolicy,
+  type SalesCommercialExceptionApprovalSnapshot,
+  type SalesCommercialExceptionType
+} from './src/utils/salesModularEconomics';
 import {
   buildAbaPromptSnapshot,
   normalizeAbaPromptTypeConfig,
@@ -2146,7 +2162,7 @@ function normalizeSalesSimulationRequest(raw: unknown): SalesSimulationInput {
 }
 
 const SALES_PRICING_CATALOG_VERSION_SELECT =
-  "id,version,name,status,effective_at,allocation_settings,modular_cost_settings,custom_capacity_policy,admin_notes,catalog_snapshot,created_by,created_at,published_by,published_at,archived_at";
+  "id,version,name,status,effective_at,allocation_settings,modular_cost_settings,custom_capacity_policy,profitability_policy,admin_notes,catalog_snapshot,created_by,created_at,published_by,published_at,archived_at";
 const SALES_PRICING_CATALOG_ITEM_SELECT =
   "id,catalog_version_id,item_key,public_name,internal_name,public_description,pricing_mode,billing_interval,unit_name,included_quantity,maximum_quantity,recurring_amount_cents,one_time_amount_cents,sort_order,is_required,is_public,is_active,compatible_base_packages,metadata";
 const SALES_PRICING_CATALOG_TIER_SELECT =
@@ -2257,7 +2273,7 @@ async function loadSalesPricingCatalog(
     .order("version", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (versionError) throw versionError;
+  if (versionError) throw salesProfitabilityPolicySchemaError(versionError);
   if (!version) {
     const error = new Error("PRICING_CATALOG_VERSION_NOT_FOUND");
     (error as any).code = "PRICING_CATALOG_VERSION_NOT_FOUND";
@@ -2363,6 +2379,14 @@ async function loadSalesPricingCatalog(
     hasVersionedCustomCapacityPolicy: validateCustomCapacityPolicy(
       version.custom_capacity_policy,
     ),
+    profitabilityPolicy: validateSalesProfitabilityPolicy(
+      version.profitability_policy,
+    )
+      ? version.profitability_policy
+      : null,
+    hasVersionedProfitabilityPolicy: validateSalesProfitabilityPolicy(
+      version.profitability_policy,
+    ),
     items,
     metadata: {
       adminNotes: sanitizeString(version.admin_notes, 2000) || null,
@@ -2434,6 +2458,18 @@ function normalizeSalesModularProposalRequest(
           || line?.customOneTimeAmountCents === undefined
             ? null
             : Number(line.customOneTimeAmountCents),
+        pricingEditMode:
+          ["per_patient", "monthly_total"].includes(
+            sanitizeString(line?.pricingEditMode, 30),
+          )
+            ? sanitizeString(line.pricingEditMode, 30) as
+              "per_patient" | "monthly_total"
+            : undefined,
+        proposedPricePerPatientCents:
+          line?.proposedPricePerPatientCents === null
+          || line?.proposedPricePerPatientCents === undefined
+            ? null
+            : Number(line.proposedPricePerPatientCents),
         offerDiscount:
           line?.offerDiscount && typeof line.offerDiscount === "object"
             ? {
@@ -2546,6 +2582,33 @@ function salesModularResultMatches(
       !== recalculated.basePackage.limitQuantity
     || stored.basePackage?.includedStorageMb
       !== recalculated.basePackage.includedStorageMb
+    || (
+      recalculated.commercialPricing.enabled
+      && (
+        stored.commercialPricing?.enabled !== true
+        || Number(
+          stored.commercialPricing?.contractedCapacityPatients,
+        ) !== recalculated.commercialPricing.contractedCapacityPatients
+        || Number(
+          stored.commercialPricing?.totalProposedPricePerPatientCents,
+        ) !== Number(
+          recalculated.commercialPricing.totalProposedPricePerPatientCents,
+        )
+        || Number(stored.commercialPricing?.nextBlockPriceCents)
+          !== Number(recalculated.commercialPricing.nextBlockPriceCents)
+      )
+    )
+    || Boolean(stored.economics) !== Boolean(recalculated.economics)
+    || (
+      recalculated.economics
+      && (
+        stored.economics?.canSend !== recalculated.economics.canSend
+        || Number(stored.economics?.promotional?.marginBasisPoints)
+          !== Number(recalculated.economics.promotional.marginBasisPoints)
+        || Number(stored.economics?.postPromotion?.marginBasisPoints)
+          !== Number(recalculated.economics.postPromotion.marginBasisPoints)
+      )
+    )
     || !Array.isArray(stored.lines)
     || stored.lines.length !== recalculated.lines.length
   ) {
@@ -2571,12 +2634,228 @@ function salesModularResultMatches(
         === line.postPromotionRecurringRevenueCents
       && Number(storedLine.oneTimeRevenueCents)
         === line.oneTimeRevenueCents
+      && (
+        !recalculated.commercialPricing.enabled
+        || (
+          Number(
+            storedLine.commercialPricing?.proposedPricePerPatientCents,
+          ) === Number(
+            line.commercialPricing.proposedPricePerPatientCents,
+          )
+          && Number(
+            storedLine.commercialPricing?.derivedMonthlyRevenueCents,
+          ) === Number(
+            line.commercialPricing.derivedMonthlyRevenueCents,
+          )
+        )
+      )
       && Number(storedLine.promotional?.ebitdaCents)
         === Number(line.promotional.ebitdaCents)
       && Number(storedLine.promotional?.netIncomeCents)
         === Number(line.promotional.netIncomeCents),
     );
   });
+}
+
+function expectedSalesCommercialApprovalCodes(
+  result: ReturnType<typeof calculateSalesModularProposal>,
+  type: SalesCommercialExceptionType,
+): string[] {
+  const review = classifySalesProposalReview(result);
+  return Array.from(new Set([
+    ...review.commercialAlertCodes,
+    ...(type === "strategic_showcase"
+      ? ["STRATEGIC_SHOWCASE_CONDITION"]
+      : []),
+  ])).sort();
+}
+
+function salesCommercialApprovalPolicyHash(
+  result: ReturnType<typeof calculateSalesModularProposal>,
+): string {
+  return stableHashPayload(result.economics?.policy ?? null);
+}
+
+function hashSalesCommercialApprovalResult(
+  result: ReturnType<typeof calculateSalesModularProposal>,
+  approvedCodes: string[],
+  includePolicyHash = true,
+): string {
+  const approvalResult = buildSalesCommercialApprovalResult(
+    result,
+    approvedCodes,
+  );
+  return includePolicyHash
+    ? stableHashPayload(
+        buildSalesCommercialApprovalHashInput(result, approvedCodes),
+      )
+    : stableHashPayload(approvalResult);
+}
+
+function buildSalesCommercialExceptionApproval(input: {
+  result: ReturnType<typeof calculateSalesModularProposal>;
+  actorUserId: string;
+  actorRole: unknown;
+  mfaVerified: boolean;
+  explicitConfirmation: boolean;
+  justification: string;
+  type: unknown;
+  approvedAt: string;
+}): {
+  approval: SalesCommercialExceptionApprovalSnapshot | null;
+  error: string | null;
+} {
+  const validationError = validateSalesCommercialExceptionActor({
+    role: input.actorRole,
+    mfaVerified: input.mfaVerified,
+    explicitConfirmation: input.explicitConfirmation,
+    justification: input.justification,
+    type: input.type,
+  });
+  if (validationError) return { approval: null, error: validationError };
+  const type = input.type as SalesCommercialExceptionType;
+  const review = classifySalesProposalReview(input.result);
+  if (review.technicalBlockingCodes.length > 0) {
+    return { approval: null, error: "PROPOSAL_TECHNICAL_BLOCKED" };
+  }
+  if (!review.requiresCommercialApproval && type !== "strategic_showcase") {
+    return { approval: null, error: "COMMERCIAL_EXCEPTION_NOT_REQUIRED" };
+  }
+  const approvedCodes = expectedSalesCommercialApprovalCodes(
+    input.result,
+    type,
+  );
+  const approvedResult = buildSalesCommercialApprovalResult(
+    input.result,
+    approvedCodes,
+  );
+  return {
+    approval: {
+      schemaVersion: 1,
+      status: "approved",
+      type,
+      explicitConfirmation: true,
+      approvedCodes,
+      promotionalMarginBasisPoints:
+        approvedResult.promotionalMarginBasisPoints,
+      postPromotionMarginBasisPoints:
+        approvedResult.postPromotionMarginBasisPoints,
+      moduleMargins: approvedResult.moduleMargins,
+      capacityMarginBasisPoints: approvedResult.capacityMarginBasisPoints,
+      monthlyPriceCents: approvedResult.monthlyPriceCents,
+      pricePerPatientCents: approvedResult.pricePerPatientCents,
+      contractedCapacityPatients:
+        approvedResult.contractedCapacityPatients,
+      approvedBy: input.actorUserId,
+      approvedAt: input.approvedAt,
+      policyVersion: {
+        catalogVersion: approvedResult.catalogVersion,
+        schemaVersion: approvedResult.policySchemaVersion,
+      },
+      policyHash: salesCommercialApprovalPolicyHash(input.result),
+      justification: input.justification.trim(),
+      resultHash: hashSalesCommercialApprovalResult(
+        input.result,
+        approvedCodes,
+      ),
+    },
+    error: null,
+  };
+}
+
+function salesCommercialExceptionApprovalMatches(
+  result: ReturnType<typeof calculateSalesModularProposal>,
+  rawApproval: any,
+): boolean {
+  if (
+    !rawApproval
+    || rawApproval.schemaVersion !== 1
+    || rawApproval.status !== "approved"
+    || rawApproval.explicitConfirmation !== true
+    || !SALES_COMMERCIAL_EXCEPTION_TYPES.includes(rawApproval.type)
+    || !isUuid(sanitizeString(rawApproval.approvedBy, 120))
+    || sanitizeString(rawApproval.justification, 1500).trim().length < 20
+    || !Number.isFinite(Date.parse(sanitizeString(rawApproval.approvedAt, 80)))
+    || !Array.isArray(rawApproval.approvedCodes)
+    || !/^[a-f0-9]{64}$/.test(String(rawApproval.resultHash || ""))
+    || (
+      rawApproval.policyHash !== undefined
+      && !/^[a-f0-9]{64}$/.test(String(rawApproval.policyHash || ""))
+    )
+  ) {
+    return false;
+  }
+  const expectedCodes = expectedSalesCommercialApprovalCodes(
+    result,
+    rawApproval.type,
+  );
+  const storedCodes = Array.from(
+    new Set(
+      rawApproval.approvedCodes
+        .map((code: unknown) => sanitizeString(code, 160))
+        .filter(Boolean),
+    ),
+  ).sort();
+  if (
+    expectedCodes.length !== storedCodes.length
+    || expectedCodes.some((code, index) => code !== storedCodes[index])
+  ) {
+    return false;
+  }
+  const approvedResult = buildSalesCommercialApprovalResult(
+    result,
+    expectedCodes,
+  );
+  const storedFinancialApproval = {
+    promotionalMarginBasisPoints:
+      rawApproval.promotionalMarginBasisPoints ?? null,
+    postPromotionMarginBasisPoints:
+      rawApproval.postPromotionMarginBasisPoints ?? null,
+    moduleMargins: Array.isArray(rawApproval.moduleMargins)
+      ? rawApproval.moduleMargins
+      : [],
+    capacityMarginBasisPoints:
+      rawApproval.capacityMarginBasisPoints ?? null,
+    monthlyPriceCents: Number(rawApproval.monthlyPriceCents),
+    pricePerPatientCents: rawApproval.pricePerPatientCents ?? null,
+    contractedCapacityPatients:
+      rawApproval.contractedCapacityPatients ?? null,
+  };
+  const expectedFinancialApproval = {
+    promotionalMarginBasisPoints:
+      approvedResult.promotionalMarginBasisPoints,
+    postPromotionMarginBasisPoints:
+      approvedResult.postPromotionMarginBasisPoints,
+    moduleMargins: approvedResult.moduleMargins,
+    capacityMarginBasisPoints:
+      approvedResult.capacityMarginBasisPoints,
+    monthlyPriceCents: approvedResult.monthlyPriceCents,
+    pricePerPatientCents: approvedResult.pricePerPatientCents,
+    contractedCapacityPatients:
+      approvedResult.contractedCapacityPatients,
+  };
+  const hasPolicyHash = typeof rawApproval.policyHash === "string";
+  if (
+    hasPolicyHash
+    && sanitizeString(rawApproval.policyHash, 64) !==
+      salesCommercialApprovalPolicyHash(result)
+  ) {
+    return false;
+  }
+  return (
+    rawApproval.policyVersion?.catalogVersion ===
+      approvedResult.catalogVersion
+    && rawApproval.policyVersion?.schemaVersion ===
+      approvedResult.policySchemaVersion
+    && stableHashPayload(storedFinancialApproval) ===
+      stableHashPayload(expectedFinancialApproval)
+    && sanitizeString(rawApproval.resultHash, 64) ===
+      hashSalesCommercialApprovalResult(
+        result,
+        expectedCodes,
+        hasPolicyHash,
+      )
+  );
 }
 
 function isCustomCouponDurationMonths(value: unknown): value is number {
@@ -3464,6 +3743,53 @@ function extractMissingColumnName(error: any): string | null {
   if (postgrestCacheMatch?.[1]) return sanitizeString(postgrestCacheMatch[1], 120).toLowerCase();
 
   return null;
+}
+
+function isSalesProfitabilityPolicySchemaMissing(error: any): boolean {
+  const code = sanitizeString(error?.code || error?.message, 220);
+  return (
+    code.includes(SALES_PROFITABILITY_POLICY_MIGRATION_PENDING_CODE) ||
+    isSalesProfitabilityPolicySchemaMissingError(error) ||
+    extractMissingColumnName(error) === 'profitability_policy'
+  );
+}
+
+function salesProfitabilityPolicySchemaError(error: any): Error {
+  if (!isSalesProfitabilityPolicySchemaMissing(error)) return error;
+  const pending = new Error(SALES_PROFITABILITY_POLICY_MIGRATION_PENDING_CODE);
+  (pending as any).code = SALES_PROFITABILITY_POLICY_MIGRATION_PENDING_CODE;
+  return pending;
+}
+
+function sendSalesProfitabilityPolicySchemaPending(
+  res: any,
+  error: any
+): boolean {
+  if (!isSalesProfitabilityPolicySchemaMissing(error)) return false;
+  res.status(503).json({
+    success: false,
+    code: SALES_PROFITABILITY_POLICY_MIGRATION_PENDING_CODE,
+    error: SALES_PROFITABILITY_POLICY_MIGRATION_PENDING_MESSAGE
+  });
+  return true;
+}
+
+function salesCatalogHasVersionedProfitabilityPolicy(
+  catalog: SalesPricingCatalogSnapshot
+): boolean {
+  return (
+    catalog.hasVersionedProfitabilityPolicy === true &&
+    validateSalesProfitabilityPolicy(catalog.profitabilityPolicy)
+  );
+}
+
+function sendSalesProfitabilityPolicyRequired(res: any) {
+  return res.status(409).json({
+    success: false,
+    code: SALES_PROFITABILITY_POLICY_REQUIRED_CODE,
+    error: SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE,
+    message: SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE
+  });
 }
 
 function hasMissingFinancialSchema(error: any): boolean {
@@ -18329,6 +18655,166 @@ async function startServer() {
     },
   );
 
+  const sanitizePublicOfferDiscount = (raw: any) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    return {
+      type: sanitizeString(raw.type, 30),
+      percentageBasisPoints:
+        raw.percentageBasisPoints == null
+          ? undefined
+          : Number(raw.percentageBasisPoints),
+      amountOffCents:
+        raw.amountOffCents == null ? undefined : Number(raw.amountOffCents),
+      startsAt: sanitizeString(raw.startsAt, 80),
+      endsAt: sanitizeString(raw.endsAt, 80) || null,
+      durationCount:
+        raw.durationCount == null ? undefined : Number(raw.durationCount),
+      durationUnit: sanitizeString(raw.durationUnit, 30) || undefined,
+      priceBeforeDiscountCents: Number(raw.priceBeforeDiscountCents || 0),
+      discountedPriceCents: Number(raw.discountedPriceCents || 0),
+      priceAfterExpirationCents: Number(
+        raw.priceAfterExpirationCents || 0,
+      ),
+      reason: sanitizeString(raw.reason, 300),
+      status: sanitizeString(raw.status, 30),
+    };
+  };
+
+  const sanitizePublicModularMetadata = (raw: any) => {
+    const source =
+      raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    return {
+      tierName: sanitizeString(source.tierName, 120) || null,
+      unitName: sanitizeString(source.unitName, 80) || null,
+      includedQuantity:
+        source.includedQuantity == null
+          ? null
+          : Number(source.includedQuantity),
+      maximumQuantity:
+        source.maximumQuantity == null
+          ? null
+          : Number(source.maximumQuantity),
+      pricePerPatientCents:
+        source.pricePerPatientCents == null
+          ? null
+          : Number(source.pricePerPatientCents),
+      billedCapacityPatients:
+        source.billedCapacityPatients == null
+          ? null
+          : Number(source.billedCapacityPatients),
+      pricingBasis:
+        sanitizeString(source.pricingBasis, 40) || "catalog_snapshot",
+      features: Array.isArray(source.features)
+        ? source.features
+            .map((feature: unknown) => sanitizeString(feature, 160))
+            .filter(Boolean)
+            .slice(0, 30)
+        : [],
+    };
+  };
+
+  const sanitizePublicCommercialPhases = (raw: any) =>
+    Array.isArray(raw)
+      ? raw.slice(0, 50).map((phase: any, index: number) => ({
+          phaseNumber: Number(phase?.phaseNumber || index + 1),
+          startsAt: sanitizeString(phase?.startsAt, 80),
+          endsAt: sanitizeString(phase?.endsAt, 80) || null,
+          lines: Array.isArray(phase?.lines)
+            ? phase.lines.slice(0, 50).map((line: any) => ({
+                itemKey: sanitizeString(line?.itemKey, 80),
+                publicName: sanitizeString(line?.publicName, 120),
+                billingInterval:
+                  sanitizeString(line?.billingInterval, 30) === "one_time"
+                    ? "one_time"
+                    : "monthly",
+                normalPriceCents: Number(line?.normalPriceCents || 0),
+                activePriceCents: Number(line?.activePriceCents || 0),
+                discountCents: Number(line?.discountCents || 0),
+                itemDiscountCents: Number(line?.itemDiscountCents || 0),
+                globalDiscountCents: Number(
+                  line?.globalDiscountCents || 0,
+                ),
+                discount: sanitizePublicOfferDiscount(line?.discount),
+              }))
+            : [],
+          recurringRevenueCents: Number(phase?.recurringRevenueCents || 0),
+          invoiceAmountCents: Number(phase?.invoiceAmountCents || 0),
+        }))
+      : [];
+
+  const sanitizePublicBasePackage = (raw: any) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const capacity =
+      raw.capacity
+      && typeof raw.capacity === "object"
+      && !Array.isArray(raw.capacity)
+        ? raw.capacity
+        : null;
+    return {
+      itemKey: "clinical_core",
+      tierId: sanitizeString(raw.tierId, 120),
+      name: sanitizeString(raw.name, 120),
+      limitQuantity:
+        raw.limitQuantity == null ? null : Number(raw.limitQuantity),
+      includedStorageMb:
+        raw.includedStorageMb == null ? null : Number(raw.includedStorageMb),
+      occupiedQuantity: Number(raw.occupiedQuantity || 0),
+      availableQuantity:
+        raw.availableQuantity == null ? null : Number(raw.availableQuantity),
+      capacity: capacity
+        ? {
+            schemaVersion: Number(capacity.schemaVersion || 1),
+            demandPatients: Number(capacity.demandPatients || 0),
+            baseLimitPatients: Number(capacity.baseLimitPatients || 0),
+            basePriceCents: Number(capacity.basePriceCents || 0),
+            minimumBlocks: Number(capacity.minimumBlocks || 0),
+            selectedBlocks: Number(capacity.selectedBlocks || 0),
+            selectionMode:
+              sanitizeString(capacity.selectionMode, 20) === "manual"
+                ? "manual"
+                : "automatic",
+            addedCapacityPatients: Number(
+              capacity.addedCapacityPatients || 0,
+            ),
+            totalContractedLimitPatients: Number(
+              capacity.totalContractedLimitPatients || 0,
+            ),
+            includedStorageMb: Number(capacity.includedStorageMb || 0),
+            blocksMonthlyRevenueCents: Number(
+              capacity.blocksMonthlyRevenueCents || 0,
+            ),
+            effectiveBlockPriceCents:
+              capacity.effectiveBlockPriceCents == null
+                ? null
+                : Number(capacity.effectiveBlockPriceCents),
+            blockPricingBasis:
+              sanitizeString(capacity.blockPricingBasis, 80)
+              || "catalog_fixed",
+            policy:
+              capacity.policy && typeof capacity.policy === "object"
+                ? {
+                    enabled: capacity.policy.enabled === true,
+                    blockSizePatients: Number(
+                      capacity.policy.blockSizePatients || 0,
+                    ),
+                    blockPriceCents: Number(
+                      capacity.policy.blockPriceCents || 0,
+                    ),
+                    includedStorageMbPerPatient: Number(
+                      capacity.policy.includedStorageMbPerPatient || 0,
+                    ),
+                    gracePeriodDays: Number(
+                      capacity.policy.gracePeriodDays || 0,
+                    ),
+                    billingAdjustment: "next_cycle",
+                    blocksClinicalAccess: false,
+                  }
+                : null,
+          }
+        : null,
+    };
+  };
+
   const loadPublicSalesOffer = async (token: string) => {
     const safeToken = sanitizeString(token, 256);
     if (safeToken.length < 32) return { error: "invalid_token" as const };
@@ -18447,7 +18933,9 @@ async function startServer() {
               initialActivePatientQuantity: Number(
                 offer.initial_active_patient_quantity || 1,
               ),
-              basePackage: modularSnapshot.basePackage || null,
+              basePackage: sanitizePublicBasePackage(
+                modularSnapshot.basePackage,
+              ),
               items: (modularItems || []).map((item: any) => ({
                 itemKey: sanitizeString(item.item_key, 80),
                 publicName: sanitizeString(
@@ -18489,13 +18977,13 @@ async function startServer() {
                 offerDiscount:
                   item.public_metadata?.offerDiscount
                   && typeof item.public_metadata.offerDiscount === "object"
-                    ? item.public_metadata.offerDiscount
+                    ? sanitizePublicOfferDiscount(
+                        item.public_metadata.offerDiscount,
+                      )
                     : null,
-                publicMetadata:
-                  item.public_metadata
-                  && typeof item.public_metadata === "object"
-                    ? item.public_metadata
-                    : {},
+                publicMetadata: sanitizePublicModularMetadata(
+                  item.public_metadata,
+                ),
               })),
               promotionalMonthlyAmountCents: Number(
                 modularSnapshot.promotionalRecurringRevenueCents || 0,
@@ -18524,11 +19012,9 @@ async function startServer() {
               expiresAt: offer.expires_at,
               status: offer.status,
               acceptedAt: offer.accepted_at || null,
-              commercialPhases: Array.isArray(
+              commercialPhases: sanitizePublicCommercialPhases(
                 modularSnapshot.commercialPhases,
-              )
-                ? modularSnapshot.commercialPhases
-                : [],
+              ),
               modularCheckoutEnabled: false,
               stripeReady: false,
             },
@@ -70866,6 +71352,7 @@ async function startServer() {
           },
         });
       } catch (error: any) {
+        if (sendSalesProfitabilityPolicySchemaPending(res, error)) return;
         const missingSchema = isMissingRelationError(error);
         const code = sanitizeString(error?.code || error?.message, 160);
         return res.status(missingSchema ? 503 : code.includes("NOT_FOUND") ? 404 : 500).json({
@@ -70914,7 +71401,7 @@ async function startServer() {
       }
       try {
         const { data, error } = await supabase.rpc(
-          "clone_sales_pricing_catalog_version_v2",
+          "clone_sales_pricing_catalog_version_v3",
           {
             p_source_version_id: sourceVersionId,
             p_name: name,
@@ -70925,6 +71412,7 @@ async function startServer() {
         if (error) throw error;
         return res.status(201).json({ success: true, catalogVersion: data });
       } catch (error: any) {
+        if (sendSalesProfitabilityPolicySchemaPending(res, error)) return;
         const code = sanitizeString(error?.message || error?.code, 160);
         return res.status(code.includes("NOT_FOUND") ? 404 : 500).json({
           success: false,
@@ -70974,7 +71462,7 @@ async function startServer() {
       }
       try {
         const { data, error } = await supabase.rpc(
-          "save_sales_pricing_catalog_draft_v2",
+          "save_sales_pricing_catalog_draft_v3",
           {
             p_catalog_version_id: versionId,
             p_action: action,
@@ -70986,6 +71474,7 @@ async function startServer() {
         if (error) throw error;
         return res.json({ success: true, data });
       } catch (error: any) {
+        if (sendSalesProfitabilityPolicySchemaPending(res, error)) return;
         const rawCode = sanitizeString(
           error?.message || error?.code,
           180,
@@ -70994,6 +71483,9 @@ async function startServer() {
         const notFound = rawCode.includes("NOT_FOUND");
         const capacityPolicyInvalid = rawCode.includes(
           "PRICING_CUSTOM_CAPACITY_POLICY_INVALID",
+        );
+        const profitabilityPolicyInvalid = rawCode.includes(
+          "PRICING_PROFITABILITY_POLICY_INVALID",
         );
         return res.status(immutable ? 409 : notFound ? 404 : 422).json({
           success: false,
@@ -71007,6 +71499,8 @@ async function startServer() {
                   : "PRICING_CATALOG_NOT_FOUND"
               : capacityPolicyInvalid
                 ? "PRICING_CUSTOM_CAPACITY_POLICY_INVALID"
+                : profitabilityPolicyInvalid
+                  ? "PRICING_PROFITABILITY_POLICY_INVALID"
                 : "PRICING_CATALOG_INVALID",
           error: immutable
             ? "Versões publicadas são imutáveis. Crie um novo rascunho."
@@ -71014,6 +71508,8 @@ async function startServer() {
               ? "O registro do catálogo não foi encontrado."
               : capacityPolicyInvalid
                 ? "Revise a política de blocos: informe valores válidos, ajuste no próximo ciclo e acesso clínico sempre preservado."
+                : profitabilityPolicyInvalid
+                  ? "Revise os pisos de margem e complete as franquias de expansão habilitadas."
                 : "Revise os valores informados.",
         });
       }
@@ -71056,7 +71552,7 @@ async function startServer() {
           });
         }
         const { data, error } = await supabase.rpc(
-          "publish_sales_pricing_catalog_version_v2",
+          "publish_sales_pricing_catalog_version_v3",
           {
             p_catalog_version_id: versionId,
             p_actor_user_id: actorUserId,
@@ -71066,6 +71562,7 @@ async function startServer() {
         if (error) throw error;
         return res.json({ success: true, catalogVersion: data });
       } catch (error: any) {
+        if (sendSalesProfitabilityPolicySchemaPending(res, error)) return;
         const rawCode = sanitizeString(
           error?.message || error?.code,
           180,
@@ -71385,6 +71882,22 @@ async function startServer() {
           error: "Dados da simulação modular inválidos.",
         });
       }
+      if (
+        req.body?.economics
+        || req.body?.results
+        || req.body?.resultsSnapshot
+        || req.body?.commercialExceptionApproval
+        || req.body?.promotionalMarginBasisPoints
+        || req.body?.postPromotionMarginBasisPoints
+        || req.body?.totalMonthlyCents
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "PROPOSAL_BROWSER_VALUES_REJECTED",
+          error:
+            "Margens, totais e aprovações são calculados e congelados exclusivamente no servidor.",
+        });
+      }
       try {
         const input = normalizeSalesModularProposalRequest(
           req.body?.input || req.body,
@@ -71435,6 +71948,15 @@ async function startServer() {
             error: "Salve cenários apenas com o catálogo ativo.",
           });
         }
+        if (
+          salesModularProposalRequiresVersionedProfitabilityPolicy(
+            input,
+            catalog,
+          )
+          && !salesCatalogHasVersionedProfitabilityPolicy(catalog)
+        ) {
+          return sendSalesProfitabilityPolicyRequired(res);
+        }
         const assumptions = mapSalesAssumptionSnapshot(
           assumptionResult.data,
         );
@@ -71443,18 +71965,84 @@ async function startServer() {
           catalog,
           assumptions,
         );
+        if (
+          results.commercialPricing.enabled
+          && results.commercialPricing.missingPriceItemKeys.length > 0
+        ) {
+          return res.status(422).json({
+            success: false,
+            code: "PROPOSAL_PRICE_PER_PATIENT_MISSING",
+            fields: results.commercialPricing.missingPriceItemKeys,
+            error:
+              "Informe o preço por paciente de todos os módulos selecionados antes de salvar.",
+          });
+        }
         const justification = sanitizeString(
           req.body?.internalJustification,
           1500,
         );
-        if (results.requiresJustification && justification.length < 12) {
+        const review = classifySalesProposalReview(results);
+        if (review.technicalBlockingCodes.length > 0) {
           return res.status(422).json({
             success: false,
-            code: "PROPOSAL_MARGIN_JUSTIFICATION_REQUIRED",
+            code: "PROPOSAL_TECHNICAL_BLOCKED",
+            blockingCodes: review.technicalBlockingCodes,
             error:
-              "Informe uma justificativa administrativa para a margem abaixo do mínimo.",
+              "Corrija os dados, custos, drivers e valores obrigatórios antes de salvar.",
           });
         }
+        const calculatedAt = new Date().toISOString();
+        const approvalRequested =
+          req.body?.approveCommercialException === true;
+        const approvalResult = approvalRequested
+          ? buildSalesCommercialExceptionApproval({
+              result: results,
+              actorUserId,
+              actorRole: req.session?.user?.role,
+              mfaVerified: hasVerifiedOwnerMfaSession(req.session?.user),
+              explicitConfirmation:
+                req.body?.commercialExceptionConfirmed === true,
+              justification,
+              type: sanitizeString(
+                req.body?.commercialExceptionType,
+                60,
+              ),
+              approvedAt: calculatedAt,
+            })
+          : { approval: null, error: null };
+        if (approvalResult.error) {
+          const accessError = [
+            "OWNER_ROLE_REQUIRED",
+            "OWNER_MFA_REQUIRED",
+          ].includes(approvalResult.error);
+          return res.status(accessError ? 403 : 422).json({
+            success: false,
+            code: approvalResult.error,
+            blockingCodes: review.technicalBlockingCodes,
+            error: accessError
+              ? "A aprovação excepcional exige owner com MFA validado."
+              : approvalResult.error ===
+                    "COMMERCIAL_EXCEPTION_JUSTIFICATION_REQUIRED"
+                ? "Informe uma justificativa comercial com pelo menos 20 caracteres."
+                : approvalResult.error ===
+                      "COMMERCIAL_EXCEPTION_CONFIRMATION_REQUIRED"
+                  ? "Confirme explicitamente a aprovação desta exceção."
+                  : "Revise o tipo e os dados da aprovação excepcional.",
+          });
+        }
+        const resultSnapshot = {
+          ...results,
+          commercialReview: {
+            ...review,
+            canGeneratePublicOffer:
+              review.technicalBlockingCodes.length === 0 &&
+              (
+                review.commercialAlertCodes.length === 0 ||
+                approvalResult.approval !== null
+              ),
+          },
+          commercialExceptionApproval: approvalResult.approval,
+        };
         const requestHash = crypto
           .createHash("sha256")
           .update(
@@ -71463,8 +72051,12 @@ async function startServer() {
               actorUserId,
               assumptionSetId,
               catalogVersionId,
-              input,
+              input: resultSnapshot.input,
               justification,
+              commercialExceptionType:
+                approvalResult.approval?.type || null,
+              commercialExceptionResultHash:
+                approvalResult.approval?.resultHash || null,
               scenarioName: sanitizeString(req.body?.scenarioName, 120),
             }),
           )
@@ -71498,7 +72090,7 @@ async function startServer() {
               offerValidityDays: input.offerValidityDays,
               usageProfile: input.usageProfile,
               assumptionsSnapshot: assumptions,
-              resultsSnapshot: results,
+              resultsSnapshot: resultSnapshot,
               profitabilityRating: results.rating,
               internalJustification: justification || null,
               internalNotes:
@@ -71514,9 +72106,9 @@ async function startServer() {
                 || `Cenário ${input.patientQuantity} pacientes`,
               idempotencyKey,
               requestHash,
-              inputSnapshot: input,
+              inputSnapshot: resultSnapshot.input,
             },
-            p_items: results.lines.map((line) => ({
+            p_items: resultSnapshot.lines.map((line) => ({
               ...line,
               sortOrder: catalogSortOrder.get(line.itemKey) || 0,
             })),
@@ -71528,6 +72120,7 @@ async function startServer() {
           ...data,
         });
       } catch (error: any) {
+        if (sendSalesProfitabilityPolicySchemaPending(res, error)) return;
         const rawCode = sanitizeString(
           error?.message || error?.code,
           220,
@@ -72090,6 +72683,51 @@ async function startServer() {
           error: "Selecione o cenário antes de gerar a proposta pública.",
         });
       }
+      const historicalPublishedOffer =
+        sanitizeString(simulation.status, 30) === "offered";
+      if (historicalPublishedOffer) {
+        const { data: existingOffer, error: existingOfferError } =
+          await supabase
+            .from("sales_offers")
+            .select(
+              "id,simulation_id,status,expires_at,created_by,idempotency_key,created_at",
+            )
+            .eq("simulation_id", simulationId)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        if (existingOfferError) throw existingOfferError;
+        const offerCreatedBy = sanitizeString(
+          existingOffer?.created_by,
+          120,
+        );
+        const offerIdempotencyKey = sanitizeString(
+          existingOffer?.idempotency_key,
+          240,
+        );
+        if (!existingOffer || !offerCreatedBy || !offerIdempotencyKey) {
+          return res.status(409).json({
+            success: false,
+            code: "PROPOSAL_SNAPSHOT_CONFLICT",
+            error:
+              "A proposta publicada não possui os dados congelados necessários para recuperar o link original.",
+          });
+        }
+        const publicToken = deriveSalesOfferPublicToken(
+          offerCreatedBy,
+          offerIdempotencyKey,
+        );
+        return res.status(200).json({
+          success: true,
+          offer: existingOffer,
+          publicUrl: buildSalesOfferPublicUrl(req, publicToken),
+          stripeReady: false,
+          modularCheckoutEnabled: false,
+          idempotent: true,
+          message:
+            "A proposta modular já existia; o mesmo link foi recuperado.",
+        });
+      }
       const [catalog, assumptionResult] = await Promise.all([
         loadSalesPricingCatalog(
           sanitizeString(simulation.catalog_version_id, 120),
@@ -72111,6 +72749,25 @@ async function startServer() {
       const input = normalizeSalesModularProposalRequest(
         simulation.modular_input_snapshot,
       );
+      const requiresVersionedProfitabilityPolicy =
+        salesModularProposalRequiresVersionedProfitabilityPolicy(
+          input,
+          catalog,
+        );
+      const hasVersionedEconomicSnapshot =
+        validateSalesProfitabilityPolicy(
+          simulation.results_snapshot?.economics?.policy,
+        );
+      if (
+        !historicalPublishedOffer
+        && requiresVersionedProfitabilityPolicy
+        && (
+          !salesCatalogHasVersionedProfitabilityPolicy(catalog)
+          || !hasVersionedEconomicSnapshot
+        )
+      ) {
+        return sendSalesProfitabilityPolicyRequired(res);
+      }
       const assumptions = mapSalesAssumptionSnapshot(
         assumptionResult.data,
       );
@@ -72143,17 +72800,40 @@ async function startServer() {
         });
       }
       if (
-        recalculated.requiresJustification
-        && sanitizeString(
-          simulation.internal_justification,
-          1500,
-        ).length < 12
+        recalculated.commercialPricing.enabled
+        && recalculated.commercialPricing.missingPriceItemKeys.length > 0
       ) {
         return res.status(422).json({
           success: false,
-          code: "PROPOSAL_MARGIN_JUSTIFICATION_REQUIRED",
+          code: "PROPOSAL_PRICE_PER_PATIENT_MISSING",
+          fields: recalculated.commercialPricing.missingPriceItemKeys,
           error:
-            "Esta margem exige justificativa administrativa antes da proposta.",
+            "Informe o preço por paciente dos módulos selecionados antes de gerar a proposta.",
+          });
+      }
+      const proposalReview = classifySalesProposalReview(recalculated);
+      if (proposalReview.technicalBlockingCodes.length > 0) {
+        return res.status(422).json({
+          success: false,
+          code: "PROPOSAL_TECHNICAL_BLOCKED",
+          blockingCodes: proposalReview.technicalBlockingCodes,
+          error:
+            "Corrija os dados técnicos obrigatórios antes de gerar a proposta.",
+        });
+      }
+      if (
+        proposalReview.requiresCommercialApproval
+        && !salesCommercialExceptionApprovalMatches(
+          recalculated,
+          simulation.results_snapshot?.commercialExceptionApproval,
+        )
+      ) {
+        return res.status(422).json({
+          success: false,
+          code: "PROPOSAL_MARGIN_POLICY_REVIEW_REQUIRED",
+          alertCodes: proposalReview.commercialAlertCodes,
+          error:
+            "Esta condição comercial exige aprovação explícita de owner com MFA e justificativa.",
         });
       }
       const requestHash = crypto
@@ -72164,6 +72844,9 @@ async function startServer() {
             simulationId,
             catalogVersionId: catalog.id,
             resultModelVersion: recalculated.modelVersion,
+            commercialExceptionResultHash:
+              simulation.results_snapshot?.commercialExceptionApproval
+                ?.resultHash || null,
           }),
         )
         .digest("hex");
@@ -72205,6 +72888,7 @@ async function startServer() {
           : "Proposta pública modular criada sem acessar a Stripe.",
       });
     } catch (error: any) {
+      if (sendSalesProfitabilityPolicySchemaPending(res, error)) return;
       const rawCode = sanitizeString(
         error?.message || error?.code,
         220,
@@ -73307,14 +73991,27 @@ async function startServer() {
             error: "O snapshot congelado não contém fases reconciliáveis.",
           });
         }
+        const frozenReview = classifySalesProposalReview(frozenResults);
+        if (frozenReview.technicalBlockingCodes.length > 0) {
+          return res.status(409).json({
+            success: false,
+            code: "MODULAR_CHECKOUT_TECHNICAL_BLOCKED",
+            error:
+              "O snapshot congelado possui uma pendência técnica não excepcionável.",
+          });
+        }
         if (
-          frozenResults.requiresJustification === true
-          && sanitizeString(offer.internal_justification, 2000).length < 12
+          frozenReview.requiresCommercialApproval
+          && !salesCommercialExceptionApprovalMatches(
+            frozenResults,
+            frozenResults.commercialExceptionApproval,
+          )
         ) {
           return res.status(409).json({
             success: false,
-            code: "MODULAR_CHECKOUT_MARGIN_JUSTIFICATION_REQUIRED",
-            error: "A margem desta proposta exige justificativa comercial antes do Checkout.",
+            code: "MODULAR_CHECKOUT_MARGIN_POLICY_REVIEW_REQUIRED",
+            error:
+              "A condição comercial congelada não possui uma aprovação excepcional válida.",
           });
         }
         const firstPhase = phases[0];
