@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  SALES_MODULAR_PER_PATIENT_MODEL_VERSION,
+  SALES_MODULAR_CAPACITY_BLOCK_MODEL_VERSION,
   calculateSalesModularProposal,
   findMissingSalesModuleDependencies,
   type SalesModularProposalInput,
@@ -162,7 +162,10 @@ const result150 = calculateSalesModularProposal(
   modularAssumptionsFixture
 );
 const core150 = result150.lines.find((line) => line.itemKey === 'clinical_core');
-assert.equal(result150.modelVersion, SALES_MODULAR_PER_PATIENT_MODEL_VERSION);
+assert.equal(
+  result150.modelVersion,
+  SALES_MODULAR_CAPACITY_BLOCK_MODEL_VERSION
+);
 assert.equal(result150.basePackage.limitQuantity, 150);
 assert.equal(result150.basePackage.capacity?.selectedBlocks, 0);
 assert.equal(core150?.commercialPricing.proposedPricePerPatientCents, 1000);
@@ -387,7 +390,7 @@ const belowFloor = calculateSalesModularProposal(
 );
 assert.equal(belowFloor.economics?.canSend, false);
 assert.ok(
-  belowFloor.economics?.blockingCodes.includes('CLINIC_MARGIN_BELOW_60')
+  belowFloor.economics?.blockingCodes.includes('CLINIC_MARGIN_BELOW_MINIMUM')
 );
 
 const legacyResult = calculateSalesModularProposal(

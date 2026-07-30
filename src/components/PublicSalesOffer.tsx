@@ -16,6 +16,7 @@ import type {
   CustomCapacityPolicy,
   OfferItemDiscount
 } from '../utils/salesCommercialEvolution';
+import { formatSalesCommercialDate } from '../utils/salesCommercialDate';
 
 type LegacyPublicOffer = {
   offerType: 'legacy';
@@ -87,7 +88,34 @@ type PublicCapacitySnapshot = {
   blockPricingBasis:
     | 'catalog_fixed'
     | 'selected_module_per_patient_prices';
-  policy: CustomCapacityPolicy;
+  blockSizePatients?: number;
+  gracePeriodDays?: number;
+  billingAdjustment?: 'next_cycle';
+  policy?: CustomCapacityPolicy | null;
+};
+
+type PublicCapacityBlockPhase = {
+  schemaVersion: 1;
+  phaseNumber: number;
+  startsAt: string;
+  endsAt: string | null;
+  baseCapacityPatients: number;
+  contractedCapacityPatients: number;
+  blockSizePatients: number;
+  selectedBlocks: number;
+  effectivePricePerPatientCents: number;
+  contractedMonthlyRevenueCents: number;
+  blockPriceCents: number;
+  blocksRevenueCents: number;
+  modules: Array<{
+    itemKey: string;
+    publicName: string;
+    normalPricePerPatientCents: number;
+    effectivePricePerPatientCents: number;
+    normalBlockRevenueCents: number;
+    blockRevenueCents: number;
+    subsidizedBlockRevenueCents: number;
+  }>;
 };
 
 export type ModularPublicOffer = {
@@ -118,6 +146,7 @@ export type ModularPublicOffer = {
   stripeReady: false;
   acceptedAt?: string | null;
   commercialPhases?: PublicOfferCommercialPhase[];
+  capacityBlockPhases?: PublicCapacityBlockPhase[];
 };
 
 type PublicOffer = LegacyPublicOffer | ModularPublicOffer;
@@ -144,6 +173,23 @@ export const ModularOfferDetails = ({
   const hasPromotion =
     offer.promotionalMonthlyAmountCents !==
     offer.postDiscountMonthlyAmountCents;
+  const capacityBlockPhases = offer.capacityBlockPhases || [];
+  const currentBlockPhase = capacityBlockPhases[0] || null;
+  const postBenefitBlockPhase =
+    capacityBlockPhases[capacityBlockPhases.length - 1] || null;
+  const publicBlockSizePatients =
+    currentBlockPhase?.blockSizePatients ??
+    offer.basePackage?.capacity?.blockSizePatients ??
+    offer.basePackage?.capacity?.policy?.blockSizePatients ??
+    0;
+  const publicGracePeriodDays =
+    offer.basePackage?.capacity?.gracePeriodDays ??
+    offer.basePackage?.capacity?.policy?.gracePeriodDays ??
+    0;
+  const historicalBlockPriceCents =
+    offer.basePackage?.capacity?.effectiveBlockPriceCents ??
+    offer.basePackage?.capacity?.policy?.blockPriceCents ??
+    null;
 
   return (
     <>
@@ -236,7 +282,7 @@ export const ModularOfferDetails = ({
                       {item.offerDiscount.durationCount
                         ? `durante ${item.offerDiscount.durationCount} ${item.offerDiscount.durationUnit === 'days' ? 'dias' : 'meses'}`
                         : item.offerDiscount.endsAt
-                          ? `até ${new Date(item.offerDiscount.endsAt).toLocaleDateString('pt-BR')}`
+                          ? `até ${formatSalesCommercialDate(item.offerDiscount.endsAt)}`
                           : 'condição vigente'}
                     </p>
                     <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-900">
@@ -269,18 +315,161 @@ export const ModularOfferDetails = ({
             <span>Limite total: {offer.basePackage.capacity.totalContractedLimitPatients} pacientes</span>
             <span>Armazenamento: {offer.basePackage.capacity.includedStorageMb.toLocaleString('pt-BR')} MB</span>
             <span>
-              Valor por bloco:{' '}
-              {offer.basePackage.capacity.effectiveBlockPriceCents == null
-                ? 'definido na condição comercial'
+              Valor do bloco nesta fase:{' '}
+              {currentBlockPhase == null
+                ? historicalBlockPriceCents == null
+                  ? 'definido na condição comercial'
+                  : `${formatSalesCurrency(
+                      historicalBlockPriceCents,
+                      offer.currency
+                    )}/mês`
                 : `${formatSalesCurrency(
-                    offer.basePackage.capacity.effectiveBlockPriceCents,
+                    currentBlockPhase.blockPriceCents,
                     offer.currency
                   )}/mês`}
             </span>
-            <span>Valor dos blocos reservados: {formatSalesCurrency(offer.basePackage.capacity.blocksMonthlyRevenueCents, offer.currency)}/mês</span>
+            {postBenefitBlockPhase &&
+            postBenefitBlockPhase.phaseNumber !==
+              currentBlockPhase?.phaseNumber ? (
+              <span>
+                Valor do bloco após os benefícios:{' '}
+                {formatSalesCurrency(
+                  postBenefitBlockPhase.blockPriceCents,
+                  offer.currency
+                )}/mês
+              </span>
+            ) : null}
+            <span>
+              Valor dos blocos reservados nesta fase:{' '}
+              {formatSalesCurrency(
+                currentBlockPhase?.blocksRevenueCents ??
+                  offer.basePackage.capacity.blocksMonthlyRevenueCents,
+                offer.currency
+              )}/mês
+            </span>
           </div>
+          {currentBlockPhase ? (
+            <details className="mt-3 rounded-xl border border-violet-100 bg-white/80">
+              <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-violet-900">
+                Módulos que compõem o bloco de{' '}
+                {currentBlockPhase.blockSizePatients}
+              </summary>
+              <div className="divide-y divide-violet-50 border-t border-violet-100 px-3">
+                {currentBlockPhase.modules.map((module) => {
+                  const postModule = postBenefitBlockPhase?.modules.find(
+                    (candidate) => candidate.itemKey === module.itemKey
+                  );
+                  return (
+                    <div
+                      key={module.itemKey}
+                      className="flex items-center justify-between gap-3 py-2 text-xs"
+                    >
+                      <span className="text-slate-600">{module.publicName}</span>
+                      <span className="text-right font-medium text-slate-800">
+                        {formatSalesCurrency(
+                          module.blockRevenueCents,
+                          offer.currency
+                        )}
+                        {postModule &&
+                        postModule.blockRevenueCents !==
+                          module.blockRevenueCents
+                          ? ` · depois ${formatSalesCurrency(
+                              postModule.blockRevenueCents,
+                              offer.currency
+                            )}`
+                          : ''}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          ) : null}
+          {capacityBlockPhases.length > 0 ? (
+            <div className="mt-3 space-y-2" aria-label="Fases comerciais da capacidade">
+              {capacityBlockPhases.map((phase, phaseIndex) => {
+                const previousPhase =
+                  phaseIndex > 0 ? capacityBlockPhases[phaseIndex - 1] : null;
+                const changedModules = phase.modules.filter((module) => {
+                  if (!previousPhase) return true;
+                  const previousModule = previousPhase.modules.find(
+                    (candidate) => candidate.itemKey === module.itemKey
+                  );
+                  return (
+                    !previousModule ||
+                    previousModule.effectivePricePerPatientCents !==
+                      module.effectivePricePerPatientCents
+                  );
+                });
+                return (
+                  <div
+                    key={phase.phaseNumber}
+                    className="rounded-xl border border-violet-100 bg-white/80 p-3"
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-xs font-medium text-violet-900">
+                          Fase {phase.phaseNumber}
+                        </p>
+                        <p className="mt-0.5 text-[11px] font-normal text-slate-500">
+                          {formatSalesCommercialDate(phase.startsAt)} —{' '}
+                          {phase.endsAt
+                            ? formatSalesCommercialDate(phase.endsAt)
+                            : 'condição permanente'}
+                        </p>
+                      </div>
+                      <div className="text-left text-xs text-slate-700 sm:text-right">
+                        <p>
+                          {formatSalesCurrency(
+                            phase.effectivePricePerPatientCents,
+                            offer.currency
+                          )}
+                          /paciente
+                        </p>
+                        <p className="mt-0.5 font-medium text-slate-900">
+                          {formatSalesCurrency(
+                            phase.contractedMonthlyRevenueCents,
+                            offer.currency
+                          )}
+                          /mês · bloco{' '}
+                          {formatSalesCurrency(
+                            phase.blockPriceCents,
+                            offer.currency
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                    {changedModules.length > 0 ? (
+                      <p className="mt-2 text-[11px] font-normal leading-5 text-slate-600">
+                        {phaseIndex === 0
+                          ? 'Módulos desta fase: '
+                          : 'Valores alterados nesta fase: '}
+                        {changedModules
+                          .map(
+                            (module) =>
+                              `${module.publicName} ${formatSalesCurrency(
+                                module.effectivePricePerPatientCents,
+                                offer.currency
+                              )}/paciente`
+                          )
+                          .join(' · ')}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
           <p className="mt-3 text-xs leading-5 text-slate-600">
-            Há {offer.basePackage.capacity.policy.gracePeriodDays} dias de tolerância para ajuste no próximo ciclo. O atendimento clínico nunca é bloqueado.
+            A capacidade contratada contempla até{' '}
+            {offer.basePackage.capacity.baseLimitPatients} pacientes ativos. Ao
+            ultrapassar esse limite, a capacidade será ampliada em blocos de{' '}
+            {publicBlockSizePatients} pacientes,
+            mantendo os mesmos módulos contratados e os preços por paciente
+            vigentes em cada fase. Há{' '}
+            {publicGracePeriodDays} dias de
+            tolerância para ajuste no próximo ciclo. O atendimento clínico
+            nunca é bloqueado.
           </p>
         </div>
       ) : null}
@@ -364,7 +553,7 @@ export const ModularOfferDetails = ({
 
       <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm font-normal text-amber-900">
         Proposta válida até{' '}
-        {new Date(offer.expiresAt).toLocaleString('pt-BR')}.
+        {formatSalesCommercialDate(offer.expiresAt)}.
       </div>
 
       <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center">

@@ -44,6 +44,7 @@ import {
   validateCustomCapacityPolicy,
   type OfferItemDiscountType
 } from '../utils/salesCommercialEvolution';
+import { formatSalesCommercialDate } from '../utils/salesCommercialDate';
 import {
   SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE,
   classifySalesProposalReview,
@@ -924,6 +925,35 @@ export const SalesModularProposalBuilder = ({
         limitQuantity: preview.basePackage.limitQuantity,
         includedStorageMb: preview.basePackage.includedStorageMb,
         capacity: preview.basePackage.capacity
+          ? {
+              schemaVersion: preview.basePackage.capacity.schemaVersion,
+              demandPatients: preview.basePackage.capacity.demandPatients,
+              baseLimitPatients:
+                preview.basePackage.capacity.baseLimitPatients,
+              basePriceCents: preview.basePackage.capacity.basePriceCents,
+              minimumBlocks: preview.basePackage.capacity.minimumBlocks,
+              selectedBlocks: preview.basePackage.capacity.selectedBlocks,
+              selectionMode: preview.basePackage.capacity.selectionMode,
+              addedCapacityPatients:
+                preview.basePackage.capacity.addedCapacityPatients,
+              totalContractedLimitPatients:
+                preview.basePackage.capacity.totalContractedLimitPatients,
+              includedStorageMb:
+                preview.basePackage.capacity.includedStorageMb,
+              blocksMonthlyRevenueCents:
+                preview.basePackage.capacity.blocksMonthlyRevenueCents,
+              effectiveBlockPriceCents:
+                preview.basePackage.capacity.effectiveBlockPriceCents ?? null,
+              blockPricingBasis:
+                preview.basePackage.capacity.blockPricingBasis ||
+                'selected_module_per_patient_prices',
+              blockSizePatients:
+                preview.basePackage.capacity.policy.blockSizePatients,
+              gracePeriodDays:
+                preview.basePackage.capacity.policy.gracePeriodDays,
+              billingAdjustment: 'next_cycle'
+            }
+          : null
       },
       items: preview.lines.map((line) => ({
         itemKey: line.itemKey,
@@ -990,7 +1020,36 @@ export const SalesModularProposalBuilder = ({
           globalDiscountCents: line.globalDiscountCents,
           discount: publicOfferDiscount(line.discount)
         }))
-      }))
+      })),
+      capacityBlockPhases:
+        preview.commercialPricing.capacityBlockPhases.map((phase) => ({
+          schemaVersion: 1,
+          phaseNumber: phase.phaseNumber,
+          startsAt: phase.startsAt,
+          endsAt: phase.endsAt,
+          baseCapacityPatients: phase.baseCapacityPatients,
+          contractedCapacityPatients: phase.contractedCapacityPatients,
+          blockSizePatients: phase.blockSizePatients,
+          selectedBlocks: phase.selectedBlocks,
+          effectivePricePerPatientCents:
+            phase.effectivePricePerPatientCents,
+          contractedMonthlyRevenueCents:
+            phase.contractedMonthlyRevenueCents,
+          blockPriceCents: phase.blockPriceCents,
+          blocksRevenueCents: phase.blocksRevenueCents,
+          modules: phase.modules.map((module) => ({
+            itemKey: module.itemKey,
+            publicName: module.publicName,
+            normalPricePerPatientCents:
+              module.normalPricePerPatientCents,
+            effectivePricePerPatientCents:
+              module.effectivePricePerPatientCents,
+            normalBlockRevenueCents: module.normalBlockRevenueCents,
+            blockRevenueCents: module.blockRevenueCents,
+            subsidizedBlockRevenueCents:
+              module.subsidizedBlockRevenueCents
+          }))
+        }))
     };
   }, [input, lead?.clinicName, lead?.name, preview, publicNotes, scenarioName]);
 
@@ -1599,6 +1658,15 @@ export const SalesModularProposalBuilder = ({
   const commercialPricingMissing =
     preview?.commercialPricing.enabled === true &&
     preview.commercialPricing.missingPriceItemKeys.length > 0;
+  const currentCapacityBlockPhase =
+    preview?.commercialPricing.capacityBlockPhases[0] || null;
+  const postBenefitCapacityBlockPhase =
+    preview?.commercialPricing.capacityBlockPhases[
+      Math.max(
+        0,
+        (preview?.commercialPricing.capacityBlockPhases.length || 1) - 1
+      )
+    ] || null;
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-slate-950/45 backdrop-blur-[2px]">
@@ -2035,10 +2103,20 @@ export const SalesModularProposalBuilder = ({
                             ],
                             ['Tamanho do bloco', `${preview.basePackage.capacity.policy.blockSizePatients} pacientes`],
                             [
-                              'Preço por bloco',
+                              'Preço do bloco nesta fase',
                               `${currency(
-                                preview.basePackage.capacity
-                                  .effectiveBlockPriceCents
+                                currentCapacityBlockPhase?.blockPriceCents ??
+                                  preview.basePackage.capacity
+                                    .effectiveBlockPriceCents
+                              )}/mês`
+                            ],
+                            [
+                              'Preço após benefícios',
+                              `${currency(
+                                postBenefitCapacityBlockPhase
+                                  ?.blockPriceCents ??
+                                  currentCapacityBlockPhase?.blockPriceCents ??
+                                  null
                               )}/mês`
                             ],
                             ['Quantidade mínima', `${preview.basePackage.capacity.minimumBlocks}`],
@@ -2047,23 +2125,50 @@ export const SalesModularProposalBuilder = ({
                             ['Limite total', `${preview.basePackage.capacity.totalContractedLimitPatients} pacientes`],
                             ['Armazenamento incluído', `${preview.basePackage.capacity.includedStorageMb.toLocaleString('pt-BR')} MB`],
                             [
-                              'Receita dos blocos',
+                              'Receita adicional nesta fase',
                               `${currency(
                                 commercialPricingMissing
                                   ? null
-                                  : preview.basePackage.capacity
+                                  : currentCapacityBlockPhase
+                                      ?.blocksRevenueCents ??
+                                    preview.basePackage.capacity
                                       .blocksMonthlyRevenueCents
                               )}/mês`
                             ],
                             [
-                              'Mensalidade do pacote-base',
+                              'Mensalidade consolidada nesta fase',
                               `${currency(
                                 customPerPatientPricing
-                                  ? coreResult?.commercialPricing
-                                      .derivedMonthlyRevenueCents
+                                  ? currentCapacityBlockPhase
+                                      ?.contractedMonthlyRevenueCents
                                   : preview.basePackage.capacity
                                       .clinicalCoreMonthlyRevenueCents
                               )}/mês`
+                            ],
+                            [
+                              'Margem incremental do bloco',
+                              percent(
+                                currentCapacityBlockPhase
+                                  ?.blockIncrementalMarginBasisPoints
+                              )
+                            ],
+                            [
+                              'Preço mínimo recomendado',
+                              currency(
+                                currentCapacityBlockPhase
+                                  ?.blockMinimumPriceCents
+                              )
+                            ],
+                            [
+                              'Classificação',
+                              currentCapacityBlockPhase &&
+                              catalog.profitabilityPolicy
+                                ? formatSalesIncrementalMarginStatusLabel(
+                                    currentCapacityBlockPhase.blockMarginStatus,
+                                    catalog.profitabilityPolicy,
+                                    'capacity'
+                                  )
+                                : 'Dados insuficientes'
                             ],
                             ['Ajuste de capacidade', `${preview.basePackage.capacity.policy.gracePeriodDays} dias · próximo ciclo`]
                           ].map(([label, value]) => (
@@ -2073,6 +2178,103 @@ export const SalesModularProposalBuilder = ({
                             </div>
                           ))}
                         </dl>
+                      ) : null}
+                      {currentCapacityBlockPhase ? (
+                        <details className="mt-3 rounded-xl border border-violet-100 bg-white/90">
+                          <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-violet-900">
+                            Composição do bloco de{' '}
+                            {currentCapacityBlockPhase.blockSizePatients}{' '}
+                            pacientes
+                          </summary>
+                          <div className="divide-y divide-violet-50 border-t border-violet-100 px-3">
+                            {currentCapacityBlockPhase.modules.map((module) => {
+                              const postModule =
+                                postBenefitCapacityBlockPhase?.modules.find(
+                                  (candidate) =>
+                                    candidate.itemKey === module.itemKey
+                                );
+                              return (
+                                <div
+                                  key={module.itemKey}
+                                  className="flex items-center justify-between gap-3 py-2 text-xs"
+                                >
+                                  <span className="text-slate-600">
+                                    {module.publicName}
+                                  </span>
+                                  <span className="text-right font-medium text-slate-800">
+                                    {currency(module.blockRevenueCents)}
+                                    {postModule &&
+                                    postModule.blockRevenueCents !==
+                                      module.blockRevenueCents
+                                      ? ` · depois ${currency(
+                                          postModule.blockRevenueCents
+                                        )}`
+                                      : ''}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                            <div className="flex items-center justify-between gap-3 py-2 text-xs font-medium text-violet-950">
+                              <span>Total do bloco</span>
+                              <span>
+                                {currency(
+                                  currentCapacityBlockPhase.blockPriceCents
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                        </details>
+                      ) : null}
+                      {preview &&
+                      preview.commercialPricing.capacityBlockPhases.length >
+                        1 ? (
+                        <details className="mt-3 rounded-xl border border-violet-100 bg-white/90">
+                          <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-violet-900">
+                            Ver todas as fases do bloco
+                          </summary>
+                          <div className="space-y-2 border-t border-violet-100 p-3">
+                            {preview.commercialPricing.capacityBlockPhases.map(
+                              (phase) => (
+                                <div
+                                  key={phase.phaseNumber}
+                                  className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2.5"
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-2">
+                                    <div>
+                                      <p className="text-xs font-medium text-slate-800">
+                                        Fase {phase.phaseNumber}
+                                      </p>
+                                      <p className="mt-0.5 text-[11px] font-normal text-slate-500">
+                                        {formatSalesCommercialDate(
+                                          phase.startsAt
+                                        )}{' '}
+                                        —{' '}
+                                        {phase.endsAt
+                                          ? formatSalesCommercialDate(
+                                              phase.endsAt
+                                            )
+                                          : 'condição permanente'}
+                                      </p>
+                                    </div>
+                                    <p className="text-right text-xs font-medium text-slate-800">
+                                      {currency(
+                                        phase.effectivePricePerPatientCents
+                                      )}
+                                      /paciente ·{' '}
+                                      {currency(phase.blockPriceCents)}/bloco
+                                    </p>
+                                  </div>
+                                  <p className="mt-2 text-[11px] font-normal text-slate-600">
+                                    Mensalidade:{' '}
+                                    {currency(
+                                      phase.contractedMonthlyRevenueCents
+                                    )}
+                                  </p>
+                                </div>
+                              )
+                            )}
+                          </div>
+                        </details>
                       ) : null}
                       {input.customCapacitySelectionMode === 'manual' ? (
                         <button
@@ -2464,6 +2666,14 @@ export const SalesModularProposalBuilder = ({
                         result.itemKey === item.itemKey &&
                         (result.tierId || null) === (line?.tierId || null)
                     );
+                    const capacityBlockModule =
+                      currentCapacityBlockPhase?.modules.find(
+                        (module) => module.itemKey === item.itemKey
+                      );
+                    const postBenefitCapacityBlockModule =
+                      postBenefitCapacityBlockPhase?.modules.find(
+                        (module) => module.itemKey === item.itemKey
+                      );
                     return (
                       <div
                         key={item.id}
@@ -2520,6 +2730,24 @@ export const SalesModularProposalBuilder = ({
                             <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
                               {item.description}
                             </p>
+                            {enabled && capacityBlockModule ? (
+                              <p className="mt-1.5 text-xs font-medium text-violet-700">
+                                Parcela no bloco de{' '}
+                                {currentCapacityBlockPhase?.blockSizePatients}:{' '}
+                                {currency(
+                                  capacityBlockModule.blockRevenueCents
+                                )}
+                                {postBenefitCapacityBlockModule &&
+                                postBenefitCapacityBlockModule
+                                  .blockRevenueCents !==
+                                  capacityBlockModule.blockRevenueCents
+                                  ? ` durante o benefício · ${currency(
+                                      postBenefitCapacityBlockModule
+                                        .blockRevenueCents
+                                    )} depois`
+                                  : ''}
+                              </p>
+                            ) : null}
                             {enabled && line ? (
                               <div className="mt-3 grid gap-3 sm:grid-cols-3">
                                 {item.tiers.length > 0 ? (
@@ -2992,7 +3220,7 @@ export const SalesModularProposalBuilder = ({
                                             <div className="bg-white p-2.5"><dt className="text-slate-500">Preço de tabela</dt><dd className="mt-0.5 font-medium text-slate-800">{currency(resultLine.offerDiscount.priceBeforeDiscountCents)}</dd></div>
                                             <div className="bg-white p-2.5"><dt className="text-slate-500">Durante o benefício</dt><dd className="mt-0.5 font-medium text-emerald-700">{currency(resultLine.offerDiscount.discountedPriceCents)}</dd></div>
                                             <div className="bg-white p-2.5"><dt className="text-slate-500">Depois</dt><dd className="mt-0.5 font-medium text-slate-800">{currency(resultLine.offerDiscount.priceAfterExpirationCents)}</dd></div>
-                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Encerramento</dt><dd className="mt-0.5 font-medium text-slate-800">{resultLine.offerDiscount.endsAt ? new Date(resultLine.offerDiscount.endsAt).toLocaleDateString('pt-BR') : 'Sem término'}</dd></div>
+                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Encerramento</dt><dd className="mt-0.5 font-medium text-slate-800">{resultLine.offerDiscount.endsAt ? formatSalesCommercialDate(resultLine.offerDiscount.endsAt) : 'Sem término'}</dd></div>
                                             <div className="bg-white p-2.5"><dt className="text-slate-500">Impacto mensal</dt><dd className="mt-0.5 font-medium text-amber-700">− {currency(resultLine.offerDiscount.priceBeforeDiscountCents - resultLine.offerDiscount.discountedPriceCents)}</dd></div>
                                             <div className="bg-white p-2.5"><dt className="text-slate-500">Impacto no primeiro ano</dt><dd className="mt-0.5 font-medium text-amber-700">− {currency((resultLine.offerDiscount.priceBeforeDiscountCents - resultLine.offerDiscount.discountedPriceCents) * Math.min(12, resultLine.offerDiscount.durationUnit === 'days' ? Math.ceil(Number(resultLine.offerDiscount.durationCount || 0) / 30) : Number(resultLine.offerDiscount.durationCount || 12)))}</dd></div>
                                             <div className="bg-white p-2.5"><dt className="text-slate-500">Margem promoção / depois</dt><dd className="mt-0.5 font-medium text-slate-800">{percent(resultLine.promotional.ebitdaMarginBasisPoints)} / {percent(resultLine.postPromotion.ebitdaMarginBasisPoints)}</dd></div>
@@ -3821,7 +4049,7 @@ export const SalesModularProposalBuilder = ({
                           <div>
                             <p className="text-sm font-medium text-slate-900">Fase {phase.phaseNumber}</p>
                             <p className="mt-0.5 text-xs text-slate-500">
-                              {new Date(phase.startsAt).toLocaleDateString('pt-BR')} — {phase.endsAt ? new Date(phase.endsAt).toLocaleDateString('pt-BR') : 'condição permanente'}
+                              {formatSalesCommercialDate(phase.startsAt)} — {phase.endsAt ? formatSalesCommercialDate(phase.endsAt) : 'condição permanente'}
                             </p>
                           </div>
                           <p className="text-sm font-semibold text-slate-900">{currency(phase.invoiceAmountCents)}</p>
@@ -4203,10 +4431,47 @@ export const SalesModularProposalBuilder = ({
                             ).length
                           ],
                           [
-                            'Preço efetivo por paciente',
+                            'Valor por paciente nesta fase',
                             currency(
-                              preview.commercialPricing
-                                .totalProposedPricePerPatientCents
+                              currentCapacityBlockPhase
+                                ?.effectivePricePerPatientCents ??
+                                preview.commercialPricing
+                                  .totalProposedPricePerPatientCents
+                            )
+                          ],
+                          [
+                            'Mensalidade nesta fase',
+                            currency(
+                              currentCapacityBlockPhase
+                                ?.contractedMonthlyRevenueCents ??
+                                preview.promotionalRecurringRevenueCents
+                            )
+                          ],
+                          [
+                            'Preço do bloco nesta fase',
+                            currency(
+                              currentCapacityBlockPhase?.blockPriceCents
+                            )
+                          ],
+                          [
+                            'Valor por paciente posterior',
+                            currency(
+                              postBenefitCapacityBlockPhase
+                                ?.effectivePricePerPatientCents
+                            )
+                          ],
+                          [
+                            'Mensalidade posterior',
+                            currency(
+                              postBenefitCapacityBlockPhase
+                                ?.contractedMonthlyRevenueCents ??
+                                preview.postPromotionRecurringRevenueCents
+                            )
+                          ],
+                          [
+                            'Preço do bloco posterior',
+                            currency(
+                              postBenefitCapacityBlockPhase?.blockPriceCents
                             )
                           ],
                           [
@@ -4298,6 +4563,13 @@ export const SalesModularProposalBuilder = ({
                             percent(
                               preview.commercialPricing
                                 .nextBlockMarginBasisPoints
+                            )
+                          ],
+                          [
+                            'Preço mínimo do próximo bloco',
+                            currency(
+                              currentCapacityBlockPhase
+                                ?.blockMinimumPriceCents
                             )
                           ]
                         ].map(([label, value]) => (
@@ -4403,6 +4675,65 @@ export const SalesModularProposalBuilder = ({
                           . Os custos conhecidos continuam visíveis, mas o
                           cenário não pode ser salvo.
                         </p>
+                      </div>
+                    ) : null}
+                    {preview.commercialPricing.monthlyTotalMismatches.length >
+                    0 ? (
+                      <div
+                        className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950"
+                        role="alert"
+                      >
+                        <p className="font-medium">
+                          Total mensal incompatível com o preço por paciente
+                        </p>
+                        <p className="mt-1 font-normal">
+                          O valor informado foi preservado. Aceite o valor
+                          representável sugerido ou edite diretamente o preço
+                          por paciente antes de salvar.
+                        </p>
+                        <div className="mt-2 space-y-2">
+                          {preview.commercialPricing.monthlyTotalMismatches.map(
+                            (mismatch) => (
+                              <div
+                                key={mismatch.itemKey}
+                                className="flex flex-col gap-2 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                              >
+                                <span className="font-normal">
+                                  {mismatch.publicName}:{' '}
+                                  {currency(
+                                    mismatch.requestedMonthlyRevenueCents
+                                  )}{' '}
+                                  não fecha em{' '}
+                                  {preview.commercialPricing
+                                    .contractedCapacityPatients || 0}{' '}
+                                  pacientes. Valor mais próximo:{' '}
+                                  <strong className="font-medium">
+                                    {currency(
+                                      mismatch.nearestRepresentableMonthlyRevenueCents
+                                    )}
+                                  </strong>{' '}
+                                  ({mismatch.adjustmentCents >= 0 ? '+' : ''}
+                                  {currency(mismatch.adjustmentCents)}).
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateLine(mismatch.itemKey, {
+                                      pricingEditMode: 'monthly_total',
+                                      proposedPricePerPatientCents:
+                                        mismatch.proposedPricePerPatientCents,
+                                      customRecurringAmountCents:
+                                        mismatch.nearestRepresentableMonthlyRevenueCents
+                                    })
+                                  }
+                                  className="min-h-9 shrink-0 rounded-lg border border-amber-300 bg-white px-3 font-medium text-amber-900 hover:bg-amber-100"
+                                >
+                                  Usar total ajustado
+                                </button>
+                              </div>
+                            )
+                          )}
+                        </div>
                       </div>
                     ) : null}
                     {preview.missingDrivers.length > 0 ? (

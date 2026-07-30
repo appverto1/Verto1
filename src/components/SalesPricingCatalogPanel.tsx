@@ -1216,8 +1216,8 @@ export const SalesPricingCatalogPanel = () => {
                   </span>
                 </label>
                 <label className="text-xs font-medium text-slate-700">
-                  Preço mensal por bloco
-                  <span className="mt-1 flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-3 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
+                  Fallback legado do bloco
+                  <span className="mt-1 flex min-h-11 items-center rounded-xl border border-slate-200 bg-slate-50 px-3">
                     <span className="mr-2 text-slate-400">R$</span>
                     <input
                       type="number"
@@ -1225,21 +1225,18 @@ export const SalesPricingCatalogPanel = () => {
                       max={10000000}
                       step="0.01"
                       value={customCapacityPolicyDraft.blockPriceCents / 100}
-                      onChange={(event) =>
-                        setCustomCapacityPolicyDraft((current) =>
-                          current
-                            ? {
-                                ...current,
-                                blockPriceCents: Math.round(
-                                  Number(event.target.value) * 100
-                                )
-                              }
-                            : current
-                        )
-                      }
-                      className="min-w-0 flex-1 bg-transparent font-normal outline-none"
+                      readOnly
+                      aria-describedby="legacy-capacity-block-price-help"
+                      className="min-w-0 flex-1 bg-transparent font-normal text-slate-500 outline-none"
                     />
                     <span className="text-slate-400">/mês</span>
+                  </span>
+                  <span
+                    id="legacy-capacity-block-price-help"
+                    className="mt-1 block font-normal leading-5 text-slate-500"
+                  >
+                    Somente leitura histórica. Novas propostas modulares derivam
+                    o bloco dos módulos e da fase comercial.
                   </span>
                 </label>
                 <label className="text-xs font-medium text-slate-700">

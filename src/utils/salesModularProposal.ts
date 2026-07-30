@@ -266,6 +266,10 @@ export type SalesModularProposalLineResult = {
     contractedCapacityPatients: number | null;
     proposedPricePerPatientCents: number | null;
     derivedMonthlyRevenueCents: number | null;
+    requestedMonthlyRevenueCents: number | null;
+    monthlyTotalRepresentable: boolean;
+    nearestRepresentableMonthlyRevenueCents: number | null;
+    monthlyTotalAdjustmentCents: number | null;
     estimatedMonthlyCostCents: number | null;
     effectiveCostPerPatientCents: number | null;
     marginalCostPerPatientCents: number | null;
@@ -301,6 +305,46 @@ export type SalesModularConsolidatedPeriod = {
   netIncomeCents: number | null;
   netMarginBasisPoints: number | null;
   directCostBreakdown: SalesModularDirectCostBreakdown;
+};
+
+export type SalesCapacityBlockModulePricing = {
+  itemKey: string;
+  publicName: string;
+  normalPricePerPatientCents: number;
+  effectivePricePerPatientCents: number;
+  normalBlockRevenueCents: number;
+  blockRevenueCents: number;
+  subsidizedBlockRevenueCents: number;
+  marginalCostPerPatientCents: number | null;
+  blockMarginalCostCents: number | null;
+  blockContributionCents: number | null;
+  blockIncrementalMarginBasisPoints: number | null;
+};
+
+export type SalesCapacityBlockPhasePricing = {
+  schemaVersion: 1;
+  phaseNumber: number;
+  startsAt: string;
+  endsAt: string | null;
+  baseCapacityPatients: number;
+  contractedCapacityPatients: number;
+  blockSizePatients: number;
+  selectedBlocks: number;
+  effectivePricePerPatientCents: number;
+  contractedMonthlyRevenueCents: number;
+  blockPriceCents: number;
+  blocksRevenueCents: number;
+  blockMarginalCostCents: number | null;
+  blockContributionCents: number | null;
+  blockIncrementalMarginBasisPoints: number | null;
+  blockMinimumPriceCents: number | null;
+  blockMarginStatus:
+    | 'healthy'
+    | 'acceptable'
+    | 'attention'
+    | 'blocked'
+    | 'insufficient_data';
+  modules: SalesCapacityBlockModulePricing[];
 };
 
 export type SalesModularProposalResult = {
@@ -372,11 +416,20 @@ export type SalesModularProposalResult = {
     contractedCapacityPatients: number | null;
     selectedRecurringItemKeys: string[];
     missingPriceItemKeys: string[];
+    monthlyTotalMismatches: Array<{
+      itemKey: string;
+      publicName: string;
+      requestedMonthlyRevenueCents: number;
+      proposedPricePerPatientCents: number;
+      nearestRepresentableMonthlyRevenueCents: number;
+      adjustmentCents: number;
+    }>;
     totalProposedPricePerPatientCents: number | null;
     nextBlockPriceCents: number | null;
     nextBlockMarginalCostCents: number | null;
     nextBlockContributionCents: number | null;
     nextBlockMarginBasisPoints: number | null;
+    capacityBlockPhases: SalesCapacityBlockPhasePricing[];
     estimateStatus: SalesCommercialEstimateStatus;
     assumptionSetVersion: number;
     calculatedAt: string;
@@ -386,6 +439,7 @@ export type SalesModularProposalResult = {
 export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-28-v4';
 export const SALES_MODULAR_ECONOMICS_MODEL_VERSION = '2026-07-28-v5';
 export const SALES_MODULAR_PER_PATIENT_MODEL_VERSION = '2026-07-28-v6';
+export const SALES_MODULAR_CAPACITY_BLOCK_MODEL_VERSION = '2026-07-30-v7';
 
 export const SALES_COMMERCIAL_MODULE_DEPENDENCIES: Readonly<
   Record<string, readonly string[]>
@@ -423,8 +477,33 @@ const nullableNonNegativeInteger = (value: unknown): number | null => {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 };
 
-const multiplyBasisPoints = (amountCents: number, basisPoints: number) =>
-  Math.round((amountCents * basisPoints) / 10_000);
+export const roundSalesMoneyCents = (value: number) => {
+  if (!Number.isFinite(value)) {
+    throw new Error('PRICING_MONEY_INVALID');
+  }
+  const rounded = Math.round(value);
+  if (!Number.isSafeInteger(rounded) || Math.abs(rounded) > 1_000_000_000) {
+    throw new Error('PRICING_MONEY_INVALID');
+  }
+  return rounded;
+};
+
+export const multiplySalesMoneyBasisPoints = (
+  amountCents: number,
+  basisPoints: number
+) => {
+  const amount = roundSalesMoneyCents(amountCents);
+  if (
+    !Number.isSafeInteger(basisPoints) ||
+    basisPoints < 0 ||
+    basisPoints > 10_000
+  ) {
+    throw new Error('PRICING_BASIS_POINTS_INVALID');
+  }
+  return roundSalesMoneyCents((amount * basisPoints) / 10_000);
+};
+
+const multiplyBasisPoints = multiplySalesMoneyBasisPoints;
 
 const ratioBasisPoints = (numerator: number, denominator: number): number | null =>
   denominator > 0 ? Math.round((numerator * 10_000) / denominator) : null;
@@ -456,6 +535,297 @@ export function allocateSalesCents(
       : 0;
   allocation[safeBaseIndex] += safeTotal - allocated;
   return allocation;
+}
+
+export function deriveSalesCapacityBlockPhases(args: {
+  phases: OfferCommercialPhase[];
+  capacity: CustomCapacitySnapshot;
+  recurringLines: Array<{
+    itemKey: string;
+    publicName: string;
+    normalPricePerPatientCents: number | null;
+    blockDirectMarginalCostCents: number | null;
+  }>;
+  percentageCostBasisPoints: number | null;
+  policy: SalesProfitabilityPolicy;
+}): SalesCapacityBlockPhasePricing[] {
+  const contractedCapacityPatients =
+    args.capacity.totalContractedLimitPatients;
+  const blockSizePatients = args.capacity.policy.blockSizePatients;
+  if (
+    !Number.isSafeInteger(contractedCapacityPatients) ||
+    contractedCapacityPatients < 1 ||
+    !Number.isSafeInteger(blockSizePatients) ||
+    blockSizePatients < 1
+  ) {
+    throw new Error('PRICING_CAPACITY_INVALID');
+  }
+  const sourceByItemKey = new Map(
+    args.recurringLines.map((line) => [line.itemKey, line])
+  );
+  return args.phases.map((phase) => {
+    const recurringPhaseLines = phase.lines.filter(
+      (line) => line.billingInterval === 'monthly'
+    );
+    const preliminaryModules = recurringPhaseLines.map((phaseLine) => {
+      const source = sourceByItemKey.get(phaseLine.itemKey);
+      if (
+        !source ||
+        source.normalPricePerPatientCents === null ||
+        phaseLine.activePriceCents % contractedCapacityPatients !== 0
+      ) {
+        throw new Error(
+          `PRICING_PHASE_PER_PATIENT_MISMATCH:${phaseLine.itemKey}`
+        );
+      }
+      const normalPricePerPatientCents = roundSalesMoneyCents(
+        source.normalPricePerPatientCents
+      );
+      const effectivePricePerPatientCents =
+        phaseLine.activePriceCents / contractedCapacityPatients;
+      const normalBlockRevenueCents =
+        normalPricePerPatientCents * blockSizePatients;
+      const blockRevenueCents =
+        effectivePricePerPatientCents * blockSizePatients;
+      const directMarginalCostCents =
+        source.blockDirectMarginalCostCents === null
+          ? null
+          : roundSalesMoneyCents(source.blockDirectMarginalCostCents);
+      return {
+        itemKey: phaseLine.itemKey,
+        publicName: phaseLine.publicName,
+        normalPricePerPatientCents,
+        effectivePricePerPatientCents,
+        normalBlockRevenueCents,
+        blockRevenueCents,
+        subsidizedBlockRevenueCents:
+          normalBlockRevenueCents - blockRevenueCents,
+        directMarginalCostCents
+      };
+    });
+    const blockPriceCents = preliminaryModules.reduce(
+      (sum, module) => sum + module.blockRevenueCents,
+      0
+    );
+    const totalDirectMarginalCostCents = nullableSum(
+      preliminaryModules.map((module) => module.directMarginalCostCents)
+    );
+    const totalPercentageCostCents =
+      args.percentageCostBasisPoints === null
+        ? null
+        : multiplyBasisPoints(
+            blockPriceCents,
+            args.percentageCostBasisPoints
+          );
+    const percentageAllocations =
+      totalPercentageCostCents === null
+        ? preliminaryModules.map(() => null)
+        : allocateSalesCents(
+            totalPercentageCostCents,
+            preliminaryModules.map((module) => module.blockRevenueCents),
+            Math.max(
+              0,
+              preliminaryModules.findIndex(
+                (module) => module.itemKey === 'clinical_core'
+              )
+            )
+          );
+    const modules: SalesCapacityBlockModulePricing[] =
+      preliminaryModules.map((module, index) => {
+        const blockMarginalCostCents = nullableSum([
+          module.directMarginalCostCents,
+          percentageAllocations[index]
+        ]);
+        const blockContributionCents =
+          blockMarginalCostCents === null
+            ? null
+            : module.blockRevenueCents - blockMarginalCostCents;
+        return {
+          itemKey: module.itemKey,
+          publicName: module.publicName,
+          normalPricePerPatientCents:
+            module.normalPricePerPatientCents,
+          effectivePricePerPatientCents:
+            module.effectivePricePerPatientCents,
+          normalBlockRevenueCents: module.normalBlockRevenueCents,
+          blockRevenueCents: module.blockRevenueCents,
+          subsidizedBlockRevenueCents:
+            module.subsidizedBlockRevenueCents,
+          marginalCostPerPatientCents:
+            module.directMarginalCostCents === null
+              ? null
+              : roundSalesMoneyCents(
+                  module.directMarginalCostCents / blockSizePatients
+                ),
+          blockMarginalCostCents,
+          blockContributionCents,
+          blockIncrementalMarginBasisPoints: marginBasisPoints(
+            module.blockRevenueCents,
+            blockMarginalCostCents
+          )
+        };
+      });
+    const blockMarginalCostCents = nullableSum([
+      totalDirectMarginalCostCents,
+      totalPercentageCostCents
+    ]);
+    const blockContributionCents =
+      blockMarginalCostCents === null
+        ? null
+        : blockPriceCents - blockMarginalCostCents;
+    const blockIncrementalMarginBasisPoints = marginBasisPoints(
+      blockPriceCents,
+      blockMarginalCostCents
+    );
+    const blockMinimumPriceCents = calculateSalesMinimumPriceCents({
+      directCostCents: totalDirectMarginalCostCents,
+      fixedAllocatedCostCents: 0,
+      fixedPaymentFeeCents: 0,
+      targetEbitdaMarginBasisPoints:
+        args.policy.capacityMinimumIncrementalMarginBasisPoints,
+      stripePercentageBasisPoints: args.percentageCostBasisPoints,
+      delinquencyPercentageBasisPoints: 0,
+      taxPercentageBasisPoints: 0
+    });
+    const effectivePricePerPatientCents = modules.reduce(
+      (sum, module) => sum + module.effectivePricePerPatientCents,
+      0
+    );
+    const contractedMonthlyRevenueCents =
+      effectivePricePerPatientCents * contractedCapacityPatients;
+    if (contractedMonthlyRevenueCents !== phase.recurringRevenueCents) {
+      throw new Error(
+        `PRICING_PHASE_TOTAL_MISMATCH:${phase.phaseNumber}`
+      );
+    }
+    return {
+      schemaVersion: 1,
+      phaseNumber: phase.phaseNumber,
+      startsAt: phase.startsAt,
+      endsAt: phase.endsAt,
+      baseCapacityPatients: args.capacity.baseLimitPatients,
+      contractedCapacityPatients,
+      blockSizePatients,
+      selectedBlocks: args.capacity.selectedBlocks,
+      effectivePricePerPatientCents,
+      contractedMonthlyRevenueCents,
+      blockPriceCents,
+      blocksRevenueCents:
+        blockPriceCents * args.capacity.selectedBlocks,
+      blockMarginalCostCents,
+      blockContributionCents,
+      blockIncrementalMarginBasisPoints,
+      blockMinimumPriceCents,
+      blockMarginStatus: classifyModuleIncrementalMargin(
+        blockIncrementalMarginBasisPoints,
+        args.policy,
+        'capacity'
+      ),
+      modules
+    };
+  });
+}
+
+const reconciliationNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const reconciliationText = (value: unknown) =>
+  typeof value === 'string' ? value : '';
+
+export function canonicalizeSalesCapacityBlockPhasesForReconciliation(
+  raw: unknown
+) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((phase: any) => ({
+      schemaVersion: reconciliationNumber(phase?.schemaVersion),
+      phaseNumber: reconciliationNumber(phase?.phaseNumber),
+      startsAt: reconciliationText(phase?.startsAt),
+      endsAt:
+        phase?.endsAt === null || phase?.endsAt === undefined
+          ? null
+          : reconciliationText(phase.endsAt),
+      baseCapacityPatients: reconciliationNumber(
+        phase?.baseCapacityPatients
+      ),
+      contractedCapacityPatients: reconciliationNumber(
+        phase?.contractedCapacityPatients
+      ),
+      blockSizePatients: reconciliationNumber(phase?.blockSizePatients),
+      selectedBlocks: reconciliationNumber(phase?.selectedBlocks),
+      effectivePricePerPatientCents: reconciliationNumber(
+        phase?.effectivePricePerPatientCents
+      ),
+      contractedMonthlyRevenueCents: reconciliationNumber(
+        phase?.contractedMonthlyRevenueCents
+      ),
+      blockPriceCents: reconciliationNumber(phase?.blockPriceCents),
+      blocksRevenueCents: reconciliationNumber(phase?.blocksRevenueCents),
+      blockMarginalCostCents: reconciliationNumber(
+        phase?.blockMarginalCostCents
+      ),
+      blockContributionCents: reconciliationNumber(
+        phase?.blockContributionCents
+      ),
+      blockIncrementalMarginBasisPoints: reconciliationNumber(
+        phase?.blockIncrementalMarginBasisPoints
+      ),
+      blockMinimumPriceCents: reconciliationNumber(
+        phase?.blockMinimumPriceCents
+      ),
+      blockMarginStatus: reconciliationText(phase?.blockMarginStatus),
+      modules: (Array.isArray(phase?.modules) ? phase.modules : [])
+        .map((module: any) => ({
+          itemKey: reconciliationText(module?.itemKey),
+          normalPricePerPatientCents: reconciliationNumber(
+            module?.normalPricePerPatientCents
+          ),
+          effectivePricePerPatientCents: reconciliationNumber(
+            module?.effectivePricePerPatientCents
+          ),
+          normalBlockRevenueCents: reconciliationNumber(
+            module?.normalBlockRevenueCents
+          ),
+          blockRevenueCents: reconciliationNumber(
+            module?.blockRevenueCents
+          ),
+          subsidizedBlockRevenueCents: reconciliationNumber(
+            module?.subsidizedBlockRevenueCents
+          ),
+          blockMarginalCostCents: reconciliationNumber(
+            module?.blockMarginalCostCents
+          ),
+          blockContributionCents: reconciliationNumber(
+            module?.blockContributionCents
+          ),
+          blockIncrementalMarginBasisPoints: reconciliationNumber(
+            module?.blockIncrementalMarginBasisPoints
+          )
+        }))
+        .sort((left, right) => left.itemKey.localeCompare(right.itemKey))
+    }))
+    .sort(
+      (left, right) =>
+        Number(left.phaseNumber ?? Number.MAX_SAFE_INTEGER) -
+        Number(right.phaseNumber ?? Number.MAX_SAFE_INTEGER)
+    );
+}
+
+export function salesCapacityBlockPhasesMatch(
+  left: unknown,
+  right: unknown
+) {
+  return (
+    JSON.stringify(
+      canonicalizeSalesCapacityBlockPhasesForReconciliation(left)
+    ) ===
+    JSON.stringify(
+      canonicalizeSalesCapacityBlockPhasesForReconciliation(right)
+    )
+  );
 }
 
 export function recommendSalesPackageTier(
@@ -903,16 +1273,31 @@ const resolveGrossAmounts = (
       typeof sourceAmount === 'number' &&
       Number.isFinite(sourceAmount) &&
       sourceAmount >= 0;
-    const recurringAmountCents = !sourceAvailable
-      ? 0
-      : editMode === 'per_patient'
-        ? Math.round(contractedCapacityPatients * Number(sourceAmount))
-        : Math.round(Number(sourceAmount));
+    const requestedMonthlyRevenueCents =
+      editMode === 'monthly_total' && sourceAvailable
+        ? roundSalesMoneyCents(Number(sourceAmount))
+        : null;
     const proposedPricePerPatientCents = !sourceAvailable
       ? null
       : editMode === 'per_patient'
-        ? Number(sourceAmount)
-        : recurringAmountCents / contractedCapacityPatients;
+        ? roundSalesMoneyCents(Number(sourceAmount))
+        : roundSalesMoneyCents(
+            Number(sourceAmount) / contractedCapacityPatients
+          );
+    const recurringAmountCents =
+      proposedPricePerPatientCents === null
+        ? 0
+        : roundSalesMoneyCents(
+            contractedCapacityPatients * proposedPricePerPatientCents
+          );
+    const monthlyTotalRepresentable =
+      editMode !== 'monthly_total' ||
+      requestedMonthlyRevenueCents === null ||
+      requestedMonthlyRevenueCents === recurringAmountCents;
+    const monthlyTotalAdjustmentCents =
+      requestedMonthlyRevenueCents === null
+        ? null
+        : recurringAmountCents - requestedMonthlyRevenueCents;
     return {
       recurringAmountCents,
       oneTimeAmountCents: 0,
@@ -924,7 +1309,12 @@ const resolveGrossAmounts = (
         proposedPricePerPatientCents,
         derivedMonthlyRevenueCents: sourceAvailable
           ? recurringAmountCents
-          : null
+          : null,
+        requestedMonthlyRevenueCents,
+        monthlyTotalRepresentable,
+        nearestRepresentableMonthlyRevenueCents:
+          requestedMonthlyRevenueCents === null ? null : recurringAmountCents,
+        monthlyTotalAdjustmentCents
       }
     };
   }
@@ -951,8 +1341,48 @@ const resolveGrossAmounts = (
       editMode: 'legacy_monthly_total' as const,
       contractedCapacityPatients: null,
       proposedPricePerPatientCents: null,
-      derivedMonthlyRevenueCents: recurringUnit * recurringMultiplier
+      derivedMonthlyRevenueCents: recurringUnit * recurringMultiplier,
+      requestedMonthlyRevenueCents: null,
+      monthlyTotalRepresentable: true,
+      nearestRepresentableMonthlyRevenueCents: null,
+      monthlyTotalAdjustmentCents: null
     }
+  };
+};
+
+const normalizePerPatientOfferDiscount = (
+  discount: OfferItemDiscount,
+  normalPricePerPatientCents: number,
+  contractedCapacityPatients: number
+): OfferItemDiscount => {
+  const normalUnit = roundSalesMoneyCents(normalPricePerPatientCents);
+  let discountedUnit = normalUnit;
+  if (discount.type === 'free') {
+    discountedUnit = 0;
+  } else if (discount.type === 'percentage') {
+    discountedUnit =
+      normalUnit -
+      multiplyBasisPoints(
+        normalUnit,
+        Number(discount.percentageBasisPoints || 0)
+      );
+  } else {
+    discountedUnit = roundSalesMoneyCents(
+      discount.discountedPriceCents / contractedCapacityPatients
+    );
+  }
+  discountedUnit = Math.max(0, Math.min(normalUnit, discountedUnit));
+  const normalMonthlyCents = roundSalesMoneyCents(
+    normalUnit * contractedCapacityPatients
+  );
+  const discountedMonthlyCents = roundSalesMoneyCents(
+    discountedUnit * contractedCapacityPatients
+  );
+  return {
+    ...discount,
+    priceBeforeDiscountCents: normalMonthlyCents,
+    discountedPriceCents: discountedMonthlyCents,
+    priceAfterExpirationCents: normalMonthlyCents
   };
 };
 
@@ -2143,23 +2573,33 @@ export function calculateSalesModularProposal(
     ) {
       throw new Error(`PRICING_TIER_NOT_FOUND:${item.itemKey}`);
     }
-    const offerDiscount = effectiveSelection.offerDiscount
+    const normalizedOfferDiscount = effectiveSelection.offerDiscount
       ? normalizeOfferItemDiscount({
           ...effectiveSelection.offerDiscount,
           priceBeforeDiscountCents:
             item.billingInterval === 'one_time'
               ? amounts.oneTimeAmountCents
-              : item.itemKey === 'clinical_core' && capacity
-              ? capacity.basePriceCents
               : amounts.recurringAmountCents,
           priceAfterExpirationCents:
             item.billingInterval === 'one_time'
               ? amounts.oneTimeAmountCents
-              : item.itemKey === 'clinical_core' && capacity
-              ? capacity.basePriceCents
               : amounts.recurringAmountCents
         })
       : null;
+    const normalPricePerPatientCents =
+      perPatientPricingEnabled &&
+      item.billingInterval !== 'one_time'
+        ? amounts.commercialPricing.proposedPricePerPatientCents
+        : null;
+    const offerDiscount =
+      normalizedOfferDiscount &&
+      normalPricePerPatientCents !== null
+        ? normalizePerPatientOfferDiscount(
+            normalizedOfferDiscount,
+            normalPricePerPatientCents,
+            basePackageContractedLimit
+          )
+        : normalizedOfferDiscount;
     const legacyDiscountBasisPoints = nonNegativeInteger(
       effectiveSelection.itemDiscountBasisPoints
     );
@@ -2183,7 +2623,13 @@ export function calculateSalesModularProposal(
       ? offerDiscountAppliesInitially && item.billingInterval !== 'one_time'
         ? offerDiscount.priceBeforeDiscountCents - offerDiscount.discountedPriceCents
         : 0
-      : multiplyBasisPoints(amounts.recurringAmountCents, discountBasisPoints);
+      : normalPricePerPatientCents === null
+        ? multiplyBasisPoints(amounts.recurringAmountCents, discountBasisPoints)
+        : basePackageContractedLimit *
+          multiplyBasisPoints(
+            normalPricePerPatientCents,
+            discountBasisPoints
+          );
     const oneTimeDiscountCents = offerDiscount
       ? offerDiscountAppliesInitially && item.billingInterval === 'one_time'
         ? offerDiscount.priceBeforeDiscountCents - offerDiscount.discountedPriceCents
@@ -2216,6 +2662,23 @@ export function calculateSalesModularProposal(
           : amounts.recurringAmountCents - itemDiscountCents,
       oneTimeRevenueCents:
         amounts.oneTimeAmountCents - oneTimeDiscountCents,
+      normalPricePerPatientCents,
+      promotionalPricePerPatientCents:
+        normalPricePerPatientCents === null
+          ? null
+          : roundSalesMoneyCents(
+              (amounts.recurringAmountCents - itemDiscountCents) /
+                basePackageContractedLimit
+            ),
+      postPromotionPricePerPatientCents:
+        normalPricePerPatientCents === null
+          ? null
+          : offerDiscount
+            ? normalPricePerPatientCents
+            : roundSalesMoneyCents(
+                (amounts.recurringAmountCents - itemDiscountCents) /
+                  basePackageContractedLimit
+              ),
       commercialPricing: resolvedAmounts.commercialPricing,
       directCostCents: costResolution.monthlyCostCents,
       oneTimeDirectCostCents: costResolution.oneTimeCostCents,
@@ -2285,14 +2748,27 @@ export function calculateSalesModularProposal(
     (sum, line) => sum + line.promotionalItemRevenueCents,
     0
   );
-  const globalDiscountTotal = multiplyBasisPoints(
-    globalDiscountBase,
-    input.globalDiscountBasisPoints
-  );
-  const globalAllocations = allocateSalesCents(
-    globalDiscountTotal,
-    resolved.map((line) => line.promotionalItemRevenueCents),
-    baseIndex
+  const globalAllocations = perPatientPricingEnabled
+    ? resolved.map((line) =>
+        line.promotionalPricePerPatientCents === null
+          ? 0
+          : basePackageContractedLimit *
+            multiplyBasisPoints(
+              line.promotionalPricePerPatientCents,
+              input.globalDiscountBasisPoints
+            )
+      )
+    : allocateSalesCents(
+        multiplyBasisPoints(
+          globalDiscountBase,
+          input.globalDiscountBasisPoints
+        ),
+        resolved.map((line) => line.promotionalItemRevenueCents),
+        baseIndex
+      );
+  const globalDiscountTotal = globalAllocations.reduce(
+    (sum, amount) => sum + amount,
+    0
   );
   const values = resolveProfileAssumptions(
     assumptionSnapshot,
@@ -2528,12 +3004,22 @@ export function calculateSalesModularProposal(
             line.commercialPricing.proposedPricePerPatientCents,
           derivedMonthlyRevenueCents:
             line.commercialPricing.derivedMonthlyRevenueCents,
+          requestedMonthlyRevenueCents:
+            line.commercialPricing.requestedMonthlyRevenueCents,
+          monthlyTotalRepresentable:
+            line.commercialPricing.monthlyTotalRepresentable,
+          nearestRepresentableMonthlyRevenueCents:
+            line.commercialPricing.nearestRepresentableMonthlyRevenueCents,
+          monthlyTotalAdjustmentCents:
+            line.commercialPricing.monthlyTotalAdjustmentCents,
           estimatedMonthlyCostCents: line.directCostCents,
           effectiveCostPerPatientCents:
             line.directCostCents === null ||
             contractedCapacityPatients === null
               ? null
-              : line.directCostCents / contractedCapacityPatients,
+              : roundSalesMoneyCents(
+                  line.directCostCents / contractedCapacityPatients
+                ),
           marginalCostPerPatientCents: null,
           minimumPricePerPatientCents: null,
           recommendedPricePerPatientCents: null,
@@ -2766,27 +3252,34 @@ export function calculateSalesModularProposal(
 
   const initialCommercialPhases = buildOfferCommercialPhases({
     startsAt: commercialStartsAt,
-    globalDiscountBasisPoints: input.globalDiscountBasisPoints,
+    globalDiscountBasisPoints: perPatientPricingEnabled
+      ? 0
+      : input.globalDiscountBasisPoints,
     globalDiscountBaseItemKey: 'clinical_core',
     globalDiscountStartsAt: input.globalDiscountBasisPoints > 0 ? commercialStartsAt : null,
     globalDiscountEndsAt:
       input.globalDiscountBasisPoints > 0 && input.discountDurationMonths > 0
         ? addCommercialDuration(commercialStartsAt, input.discountDurationMonths, 'months')
         : null,
-    lines: lines.map((line) => ({
+    lines: lines.map((line, index) => ({
       itemKey: line.itemKey,
       publicName: line.publicName,
       billingInterval:
         line.pricingMode === 'one_time' ? 'one_time' : 'monthly',
       normalPriceCents:
         line.pricingMode === 'one_time'
-          ? line.grossOneTimeRevenueCents
-          : line.grossRecurringRevenueCents,
+          ? line.offerDiscount
+            ? line.grossOneTimeRevenueCents
+            : line.oneTimeRevenueCents
+          : line.offerDiscount
+            ? line.grossRecurringRevenueCents
+            : line.postPromotionRecurringRevenueCents,
       directCostCents:
         line.pricingMode === 'one_time'
           ? line.oneTimeDirectCostCents
           : line.promotional.directCostCents,
-      discount: line.offerDiscount
+      discount: line.offerDiscount,
+      globalDiscountCents: globalAllocations[index]
     }))
   });
   const commercialPhasePeriods = new Map<
@@ -2841,6 +3334,33 @@ export function calculateSalesModularProposal(
       marginBasisPoints: recalculated.consolidated.ebitdaMarginBasisPoints
     };
   });
+  if (
+    capacity &&
+    perPatientPricingEnabled &&
+    missingCommercialPriceItemKeys.length === 0 &&
+    commercialPhases[0]
+  ) {
+    const phasePricePerPatientCents = commercialPhases[0].lines
+      .filter((line) => line.billingInterval === 'monthly')
+      .reduce(
+        (sum, line) =>
+          sum +
+          roundSalesMoneyCents(
+            line.activePriceCents / basePackageContractedLimit
+          ),
+        0
+      );
+    const phaseBlockPriceCents =
+      capacity.policy.blockSizePatients * phasePricePerPatientCents;
+    capacity = {
+      ...capacity,
+      effectiveBlockPriceCents: phaseBlockPriceCents,
+      selectedModulePricePerPatientCents: phasePricePerPatientCents,
+      blocksMonthlyRevenueCents:
+        capacity.selectedBlocks * phaseBlockPriceCents,
+      blockPricingBasis: 'selected_module_per_patient_prices'
+    };
+  }
   const normalRecurringRevenueCents = lines.reduce(
     (sum, line) =>
       sum +
@@ -2969,6 +3489,10 @@ export function calculateSalesModularProposal(
       recommendedPricePerPatientCents: number | null;
     }
   >();
+  const commercialBlockDirectMarginalCosts = new Map<
+    string,
+    number | null
+  >();
   let economics: SalesModularEconomicsResult | null = null;
   if (profitabilityPolicy) {
     const intensiveInput: SalesModularProposalInput = {
@@ -2990,6 +3514,52 @@ export function calculateSalesModularProposal(
         basePackageContractedLimit
       )
     );
+    if (capacity && perPatientPricingEnabled) {
+      const currentCapacityPatients =
+        capacity.totalContractedLimitPatients;
+      const nextCapacityPatients =
+        currentCapacityPatients + capacity.policy.blockSizePatients;
+      const directCostsAtCapacity = (capacityPatients: number) =>
+        resolved.map((line) =>
+          line.item.billingInterval === 'one_time'
+            ? line.costResolution
+            : directMonthlyCost(
+                line.item,
+                line.tier,
+                line.item.itemKey === 'clinical_core'
+                  ? capacityPatients
+                  : line.quantity,
+                {
+                  ...intensiveInput,
+                  patientQuantity: capacityPatients,
+                  expectedPatientQuantity12Months: capacityPatients,
+                  customCapacityBlocks: Math.max(
+                    0,
+                    Math.ceil(
+                      (capacityPatients - capacity.baseLimitPatients) /
+                        capacity.policy.blockSizePatients
+                    )
+                  )
+                },
+                costSettings,
+                capacityPatients
+              )
+        );
+      const currentCapacityCosts =
+        directCostsAtCapacity(currentCapacityPatients);
+      const nextCapacityCosts = directCostsAtCapacity(nextCapacityPatients);
+      resolved.forEach((line, index) => {
+        if (line.item.billingInterval === 'one_time') return;
+        const currentCost = currentCapacityCosts[index].monthlyCostCents;
+        const nextCost = nextCapacityCosts[index].monthlyCostCents;
+        commercialBlockDirectMarginalCosts.set(
+          lineIdentity(line.selection),
+          currentCost === null || nextCost === null
+            ? null
+            : Math.max(0, nextCost - currentCost)
+        );
+      });
+    }
     const previousDemand = Math.max(
       1,
       salesPackageDemand(
@@ -3223,14 +3793,18 @@ export function calculateSalesModularProposal(
           commercialMinimumRevenueCents === null ||
           basePackageContractedLimit <= 0
             ? null
-            : commercialMinimumRevenueCents /
-              basePackageContractedLimit,
+            : Math.ceil(
+                commercialMinimumRevenueCents /
+                  basePackageContractedLimit
+              ),
         recommendedPricePerPatientCents:
           commercialRecommendedRevenueCents === null ||
           basePackageContractedLimit <= 0
             ? null
-            : commercialRecommendedRevenueCents /
-              basePackageContractedLimit
+            : Math.ceil(
+                commercialRecommendedRevenueCents /
+                  basePackageContractedLimit
+              )
       });
       return {
         itemKey: line.item.itemKey,
@@ -3769,47 +4343,66 @@ export function calculateSalesModularProposal(
       }
     };
   });
-  const nextBlockPriceCents =
-    capacity?.effectiveBlockPriceCents ??
-    (capacity ? capacity.policy.blockPriceCents : null);
-  const recurringMarginalCosts = finalizedLines
-    .filter((line) => line.pricingMode !== 'one_time')
-    .map((line) => line.commercialPricing.marginalCostPerPatientCents);
-  const nextBlockDirectCostCents =
+  const monthlyTotalMismatches = finalizedLines.flatMap((line) =>
+    line.commercialPricing.editMode === 'monthly_total' &&
+    line.commercialPricing.monthlyTotalRepresentable === false &&
+    line.commercialPricing.requestedMonthlyRevenueCents !== null &&
+    line.commercialPricing.proposedPricePerPatientCents !== null &&
+    line.commercialPricing.nearestRepresentableMonthlyRevenueCents !== null &&
+    line.commercialPricing.monthlyTotalAdjustmentCents !== null
+      ? [
+          {
+            itemKey: line.itemKey,
+            publicName: line.publicName,
+            requestedMonthlyRevenueCents:
+              line.commercialPricing.requestedMonthlyRevenueCents,
+            proposedPricePerPatientCents:
+              line.commercialPricing.proposedPricePerPatientCents,
+            nearestRepresentableMonthlyRevenueCents:
+              line.commercialPricing.nearestRepresentableMonthlyRevenueCents,
+            adjustmentCents:
+              line.commercialPricing.monthlyTotalAdjustmentCents
+          }
+        ]
+      : []
+  );
+  const capacityBlockPhases =
     perPatientPricingEnabled &&
     capacity &&
-    recurringMarginalCosts.every((value) => value !== null)
-      ? Math.round(
-          recurringMarginalCosts.reduce(
-            (sum, value) => sum + Number(value),
-            0
-          ) * capacity.policy.blockSizePatients
-        )
-      : null;
-  const nextBlockPercentageCostCents =
-    nextBlockPriceCents === null ||
-    economics?.percentageCostBasisPoints === null ||
-    economics?.percentageCostBasisPoints === undefined
-      ? null
-      : multiplyBasisPoints(
-          nextBlockPriceCents,
-          economics.percentageCostBasisPoints
-        );
-  const nextBlockMarginalCostCents = nullableSum([
-    nextBlockDirectCostCents,
-    nextBlockPercentageCostCents
-  ]);
-  const nextBlockContributionCents =
-    nextBlockPriceCents === null || nextBlockMarginalCostCents === null
-      ? null
-      : nextBlockPriceCents - nextBlockMarginalCostCents;
-  const nextBlockMarginBasisPoints =
-    nextBlockPriceCents === null || nextBlockMarginalCostCents === null
-      ? null
-      : marginBasisPoints(
-          nextBlockPriceCents,
-          nextBlockMarginalCostCents
-        );
+    profitabilityPolicy &&
+    missingCommercialPriceItemKeys.length === 0
+      ? deriveSalesCapacityBlockPhases({
+          phases: commercialPhases,
+          capacity,
+          recurringLines: finalizedLines
+            .filter((line) => line.pricingMode !== 'one_time')
+            .map((line) => ({
+              itemKey: line.itemKey,
+              publicName: line.publicName,
+              normalPricePerPatientCents:
+                line.commercialPricing.proposedPricePerPatientCents,
+              blockDirectMarginalCostCents:
+                commercialBlockDirectMarginalCosts.get(line.lineKey) ?? null
+            })),
+          percentageCostBasisPoints:
+            economics?.percentageCostBasisPoints ?? null,
+          policy: profitabilityPolicy
+        })
+      : [];
+  const currentCapacityBlockPhase = capacityBlockPhases[0] || null;
+  const nextBlockPriceCents = perPatientPricingEnabled
+    ? currentCapacityBlockPhase?.blockPriceCents ?? null
+    : capacity?.effectiveBlockPriceCents ??
+      (capacity ? capacity.policy.blockPriceCents : null);
+  const nextBlockMarginalCostCents = perPatientPricingEnabled
+    ? currentCapacityBlockPhase?.blockMarginalCostCents ?? null
+    : null;
+  const nextBlockContributionCents = perPatientPricingEnabled
+    ? currentCapacityBlockPhase?.blockContributionCents ?? null
+    : null;
+  const nextBlockMarginBasisPoints = perPatientPricingEnabled
+    ? currentCapacityBlockPhase?.blockIncrementalMarginBasisPoints ?? null
+    : null;
   const lineEstimateStatuses = finalizedLines
     .filter((line) => line.pricingMode !== 'one_time')
     .map((line) => line.commercialPricing.estimateStatus);
@@ -3845,7 +4438,9 @@ export function calculateSalesModularProposal(
             proposedPricePerPatientCents:
               resultLine.commercialPricing.proposedPricePerPatientCents,
             customRecurringAmountCents:
-              resultLine.commercialPricing.derivedMonthlyRevenueCents
+              resultLine.commercialPricing.monthlyTotalRepresentable
+                ? resultLine.commercialPricing.derivedMonthlyRevenueCents
+                : selection.customRecurringAmountCents
           };
         })
       }
@@ -3853,7 +4448,7 @@ export function calculateSalesModularProposal(
 
   return {
     modelVersion: perPatientPricingEnabled
-      ? SALES_MODULAR_PER_PATIENT_MODEL_VERSION
+      ? SALES_MODULAR_CAPACITY_BLOCK_MODEL_VERSION
       : profitabilityPolicy
         ? SALES_MODULAR_ECONOMICS_MODEL_VERSION
         : SALES_MODULAR_PROPOSAL_MODEL_VERSION,
@@ -3934,6 +4529,7 @@ export function calculateSalesModularProposal(
         (line) => line.item.itemKey
       ),
       missingPriceItemKeys: missingCommercialPriceItemKeys,
+      monthlyTotalMismatches,
       totalProposedPricePerPatientCents,
       nextBlockPriceCents:
         perPatientPricingEnabled ? nextBlockPriceCents : null,
@@ -3943,6 +4539,7 @@ export function calculateSalesModularProposal(
         perPatientPricingEnabled ? nextBlockContributionCents : null,
       nextBlockMarginBasisPoints:
         perPatientPricingEnabled ? nextBlockMarginBasisPoints : null,
+      capacityBlockPhases,
       estimateStatus: commercialEstimateStatus,
       assumptionSetVersion: assumptionSnapshot.version,
       calculatedAt: commercialStartsAt

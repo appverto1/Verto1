@@ -88,6 +88,7 @@ import {
 import {
   calculateSalesModularProposal,
   recommendSalesPackageTier,
+  salesCapacityBlockPhasesMatch,
   salesModularProposalRequiresVersionedProfitabilityPolicy,
   validateSalesModularProposalInput,
   type SalesModularProposalInput,
@@ -2596,6 +2597,10 @@ function salesModularResultMatches(
         )
         || Number(stored.commercialPricing?.nextBlockPriceCents)
           !== Number(recalculated.commercialPricing.nextBlockPriceCents)
+        || !salesCapacityBlockPhasesMatch(
+          stored.commercialPricing?.capacityBlockPhases,
+          recalculated.commercialPricing.capacityBlockPhases,
+        )
       )
     )
     || Boolean(stored.economics) !== Boolean(recalculated.economics)
@@ -18742,6 +18747,53 @@ async function startServer() {
         }))
       : [];
 
+  const sanitizePublicCapacityBlockPhases = (raw: any) =>
+    Array.isArray(raw)
+      ? raw.slice(0, 50).map((phase: any, index: number) => ({
+          schemaVersion: 1,
+          phaseNumber: Number(phase?.phaseNumber || index + 1),
+          startsAt: sanitizeString(phase?.startsAt, 80),
+          endsAt: sanitizeString(phase?.endsAt, 80) || null,
+          baseCapacityPatients: Number(
+            phase?.baseCapacityPatients || 0,
+          ),
+          contractedCapacityPatients: Number(
+            phase?.contractedCapacityPatients || 0,
+          ),
+          blockSizePatients: Number(phase?.blockSizePatients || 0),
+          selectedBlocks: Number(phase?.selectedBlocks || 0),
+          effectivePricePerPatientCents: Number(
+            phase?.effectivePricePerPatientCents || 0,
+          ),
+          contractedMonthlyRevenueCents: Number(
+            phase?.contractedMonthlyRevenueCents || 0,
+          ),
+          blockPriceCents: Number(phase?.blockPriceCents || 0),
+          blocksRevenueCents: Number(phase?.blocksRevenueCents || 0),
+          modules: Array.isArray(phase?.modules)
+            ? phase.modules.slice(0, 50).map((module: any) => ({
+                itemKey: sanitizeString(module?.itemKey, 80),
+                publicName: sanitizeString(module?.publicName, 120),
+                normalPricePerPatientCents: Number(
+                  module?.normalPricePerPatientCents || 0,
+                ),
+                effectivePricePerPatientCents: Number(
+                  module?.effectivePricePerPatientCents || 0,
+                ),
+                normalBlockRevenueCents: Number(
+                  module?.normalBlockRevenueCents || 0,
+                ),
+                blockRevenueCents: Number(
+                  module?.blockRevenueCents || 0,
+                ),
+                subsidizedBlockRevenueCents: Number(
+                  module?.subsidizedBlockRevenueCents || 0,
+                ),
+              }))
+            : [],
+        }))
+      : [];
+
   const sanitizePublicBasePackage = (raw: any) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const capacity =
@@ -18784,32 +18836,21 @@ async function startServer() {
               capacity.blocksMonthlyRevenueCents || 0,
             ),
             effectiveBlockPriceCents:
-              capacity.effectiveBlockPriceCents == null
-                ? null
-                : Number(capacity.effectiveBlockPriceCents),
+              capacity.effectiveBlockPriceCents != null
+                ? Number(capacity.effectiveBlockPriceCents)
+                : capacity.policy?.blockPriceCents != null
+                  ? Number(capacity.policy.blockPriceCents)
+                  : null,
             blockPricingBasis:
               sanitizeString(capacity.blockPricingBasis, 80)
               || "catalog_fixed",
-            policy:
-              capacity.policy && typeof capacity.policy === "object"
-                ? {
-                    enabled: capacity.policy.enabled === true,
-                    blockSizePatients: Number(
-                      capacity.policy.blockSizePatients || 0,
-                    ),
-                    blockPriceCents: Number(
-                      capacity.policy.blockPriceCents || 0,
-                    ),
-                    includedStorageMbPerPatient: Number(
-                      capacity.policy.includedStorageMbPerPatient || 0,
-                    ),
-                    gracePeriodDays: Number(
-                      capacity.policy.gracePeriodDays || 0,
-                    ),
-                    billingAdjustment: "next_cycle",
-                    blocksClinicalAccess: false,
-                  }
-                : null,
+            blockSizePatients: Number(
+              capacity.policy?.blockSizePatients || 0,
+            ),
+            gracePeriodDays: Number(
+              capacity.policy?.gracePeriodDays || 0,
+            ),
+            billingAdjustment: "next_cycle",
           }
         : null,
     };
@@ -19014,6 +19055,9 @@ async function startServer() {
               acceptedAt: offer.accepted_at || null,
               commercialPhases: sanitizePublicCommercialPhases(
                 modularSnapshot.commercialPhases,
+              ),
+              capacityBlockPhases: sanitizePublicCapacityBlockPhases(
+                modularSnapshot.commercialPricing?.capacityBlockPhases,
               ),
               modularCheckoutEnabled: false,
               stripeReady: false,

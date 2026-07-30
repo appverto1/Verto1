@@ -553,8 +553,18 @@ type SalesProposalReviewSource = {
   commercialPricing?: {
     enabled?: boolean;
     missingPriceItemKeys?: string[];
+    monthlyTotalMismatches?: Array<{
+      itemKey?: string;
+    }>;
     totalProposedPricePerPatientCents?: number | null;
     contractedCapacityPatients?: number | null;
+    capacityBlockPhases?: Array<{
+      phaseNumber?: number;
+      blockPriceCents?: number;
+      blocksRevenueCents?: number;
+      blockMarginalCostCents?: number | null;
+      blockIncrementalMarginBasisPoints?: number | null;
+    }>;
   };
   promotionalRecurringRevenueCents?: number;
   economics?: SalesModularEconomicsResult | null;
@@ -615,6 +625,12 @@ export const classifySalesProposalReview = (
   for (const itemKey of result.commercialPricing?.missingPriceItemKeys || []) {
     technicalBlockingCodes.push(
       `COMMERCIAL_PRICE_PER_PATIENT_MISSING:${itemKey}`
+    );
+  }
+  for (const mismatch of
+    result.commercialPricing?.monthlyTotalMismatches || []) {
+    technicalBlockingCodes.push(
+      `PRICING_MONTHLY_TOTAL_NOT_REPRESENTABLE:${mismatch.itemKey || 'unknown'}`
     );
   }
   if (result.totalsReconciled === false) {
@@ -686,7 +702,22 @@ export const buildSalesCommercialApprovalResult = (
   pricePerPatientCents:
     result.commercialPricing?.totalProposedPricePerPatientCents ?? null,
   contractedCapacityPatients:
-    result.commercialPricing?.contractedCapacityPatients ?? null
+    result.commercialPricing?.contractedCapacityPatients ?? null,
+  capacityBlockPhases: (
+    result.commercialPricing?.capacityBlockPhases || []
+  ).map((phase) => ({
+    phaseNumber: Number(phase.phaseNumber || 0),
+    blockPriceCents: Number(phase.blockPriceCents || 0),
+    blocksRevenueCents: Number(phase.blocksRevenueCents || 0),
+    blockMarginalCostCents:
+      phase.blockMarginalCostCents == null
+        ? null
+        : Number(phase.blockMarginalCostCents),
+    blockIncrementalMarginBasisPoints:
+      phase.blockIncrementalMarginBasisPoints == null
+        ? null
+        : Number(phase.blockIncrementalMarginBasisPoints)
+  }))
 });
 
 export const buildSalesCommercialApprovalHashInput = (
