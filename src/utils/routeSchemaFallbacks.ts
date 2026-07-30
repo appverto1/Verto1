@@ -324,6 +324,16 @@ export const HISTORY_SELECT_COLUMNS = [
   'deleted_at'
 ];
 
+export const HISTORY_SCORE_MUTATION_SELECT_COLUMNS = [
+  'id',
+  'patient_id',
+  'type',
+  'score',
+  'created_at',
+  'is_active',
+  'deleted_at'
+];
+
 export const HISTORY_LEGACY_SELECT_COLUMNS = [
   'id',
   'patient_id',
@@ -648,6 +658,8 @@ export const NOTE_LEGACY_SELECT = NOTE_LEGACY_SELECT_COLUMNS.join(',');
 export const PROFESSIONAL_PROFILE_SELECT = PROFESSIONAL_PROFILE_SELECT_COLUMNS.join(',');
 export const PROFESSIONAL_PROFILE_LEGACY_SELECT = PROFESSIONAL_PROFILE_LEGACY_SELECT_COLUMNS.join(',');
 export const HISTORY_SELECT = HISTORY_SELECT_COLUMNS.join(',');
+export const HISTORY_SCORE_MUTATION_SELECT =
+  HISTORY_SCORE_MUTATION_SELECT_COLUMNS.join(',');
 export const HISTORY_LEGACY_SELECT = HISTORY_LEGACY_SELECT_COLUMNS.join(',');
 export const TASK_SELECT = TASK_SELECT_COLUMNS.join(',');
 export const TASK_LEGACY_SELECT = TASK_LEGACY_SELECT_COLUMNS.join(',');

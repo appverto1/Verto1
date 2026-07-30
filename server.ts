@@ -303,6 +303,7 @@ import {
   ASSIGNED_TASK_SELECT,
   FINANCIAL_ENTRY_SELECT,
   HISTORY_SELECT,
+  HISTORY_SCORE_MUTATION_SELECT,
   INVITATION_SELECT,
   NOTE_LEGACY_SELECT,
   NOTE_SELECT,
@@ -335,6 +336,18 @@ import {
   fetchProfileWithSchemaFallback,
   fetchTasksWithSchemaFallback
 } from './src/utils/routeSchemaFallbacks';
+import {
+  composePatientProfessionalLinks,
+  executeAuthorizedPatientProfessionalLinkEnd,
+  isPatientProfessionalLinkManager,
+  isPatientProfessionalCaseRole,
+  resolveProfessionalProfileSpecialty,
+  validatePatientProfessionalCandidate
+} from './src/utils/patientProfessionalLinks';
+import {
+  evaluatePatientClinicalAccess,
+  executeAuthorizedHistoryScoreMutation
+} from './src/utils/patientClinicalAccess';
 import {
   HISTORY_WRITE_LEGACY_SELECT_COLUMNS,
   HISTORY_WRITE_SELECT_COLUMNS,
@@ -13302,7 +13315,78 @@ async function checkoutSessionUsesActivePatientPrice(
   return false;
 }
 
-async function canAccessPatientInCurrentClinic(patientId: string, user: any): Promise<boolean> {
+async function loadPatientProfessionalAccessEvidence(params: {
+  patientId: string;
+  clinicId: string;
+  actorId: string;
+}) {
+  const [professionalLinkResult, membershipResult, profileResult] =
+    await Promise.all([
+      supabase
+        .from('patient_professional_links')
+        .select('id,organization_id,clinic_id,patient_id,professional_id,status,permissions')
+        .eq('organization_id', params.clinicId)
+        .eq('patient_id', params.patientId)
+        .eq('professional_id', params.actorId)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('clinic_memberships')
+        .select('user_id,clinic_id,role,status')
+        .eq('user_id', params.actorId)
+        .eq('clinic_id', params.clinicId)
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('professional_profiles')
+        .select('user_id,specialty')
+        .eq('user_id', params.actorId)
+        .limit(1)
+        .maybeSingle()
+    ]);
+
+  const legacyMembershipSchemaUnavailable =
+    isMissingRelationError(professionalLinkResult.error) ||
+    isMissingRelationError(membershipResult.error);
+  for (const result of [
+    professionalLinkResult,
+    membershipResult,
+    profileResult
+  ]) {
+    if (result.error && !isMissingRelationError(result.error)) {
+      throw result.error;
+    }
+  }
+  if (
+    profileResult.error &&
+    !legacyMembershipSchemaUnavailable
+  ) {
+    throw profileResult.error;
+  }
+
+  return {
+    activeProfessionalLink: legacyMembershipSchemaUnavailable
+      ? null
+      : professionalLinkResult.data,
+    activeProfessionalMembership: legacyMembershipSchemaUnavailable
+      ? null
+      : membershipResult.data,
+    activeProfessionalProfile: profileResult.error
+      ? null
+      : profileResult.data,
+    activeManagerMembership: legacyMembershipSchemaUnavailable
+      ? null
+      : membershipResult.data,
+    legacyMembershipSchemaUnavailable
+  };
+}
+
+async function canAccessPatientInCurrentClinic(
+  patientId: string,
+  user: any,
+  requiredPermission: 'read' | 'write' = 'read'
+): Promise<boolean> {
   if (!isUuid(patientId)) return false;
   const explicitDemoUser = isExplicitDemoUser(user);
   if (hasGlobalClinicAccess(user) && !explicitDemoUser) return true;
@@ -13324,23 +13408,69 @@ async function canAccessPatientInCurrentClinic(patientId: string, user: any): Pr
     if (explicitDemoUser && (data?.is_demo !== true || sanitizeString(data?.clinic_id, 120) !== clinicId)) {
       return false;
     }
-    if (role === 'coordinator') return true;
-    if (role === 'therapist' && sanitizeString(data?.therapist_id, 120) === userId) return true;
+    const resolvedAccess = {
+      actorId: userId,
+      actorRole: role,
+      actorClinicId: clinicId,
+      patientId: data.id,
+      patientClinicId: data.clinic_id,
+      legacyTherapistId: data.therapist_id,
+      requiredPermission
+    };
+    if (
+      clinicId &&
+      sanitizeString(data?.clinic_id, 120) === clinicId &&
+      isUuid(userId)
+    ) {
+      try {
+        const evidence = await loadPatientProfessionalAccessEvidence({
+          patientId,
+          clinicId,
+          actorId: userId
+        });
+        if (evidence.legacyMembershipSchemaUnavailable) {
+          return (
+            (role === 'therapist' &&
+              sanitizeString(data?.therapist_id, 120) === userId) ||
+            role === 'coordinator'
+          );
+        }
+        return evaluatePatientClinicalAccess({
+          ...resolvedAccess,
+          ...evidence
+        });
+      } catch {
+        return false;
+      }
+    }
     return false;
   }
 
-  // Fallback robusto: se contexto de clínica não estiver pronto na sessão,
-  // terapeuta responsável ainda pode acessar seu próprio paciente.
-  if (!explicitDemoUser && role === 'therapist' && isUuid(userId)) {
+  // Compatibilidade restrita a instalações legadas sem o schema de
+  // memberships. Com o schema canônico disponível, a clínica ativa é
+  // obrigatória e therapist_id não substitui a membership.
+  if (!clinicId && !explicitDemoUser && role === 'therapist' && isUuid(userId)) {
     const { data: byTherapist, error: byTherapistError } = await supabase
       .from('patients')
-      .select('id')
+      .select('id,clinic_id,therapist_id')
       .eq('id', patientId)
       .eq('therapist_id', userId)
       .eq('is_active', true)
       .is('deleted_at', null)
       .maybeSingle();
-    if (!byTherapistError && byTherapist?.id) return true;
+    const legacyClinicId = sanitizeString(byTherapist?.clinic_id, 120);
+    if (!byTherapistError && byTherapist?.id && isUuid(legacyClinicId)) {
+      try {
+        const evidence = await loadPatientProfessionalAccessEvidence({
+          patientId,
+          clinicId: legacyClinicId,
+          actorId: userId
+        });
+        return evidence.legacyMembershipSchemaUnavailable;
+      } catch {
+        return false;
+      }
+    }
   }
 
   return false;
@@ -20059,7 +20189,8 @@ async function startServer() {
       if (hasGlobalClinicAccess(user) && isExplicitDemoUser(user)) {
         return res.status(403).json({ error: 'A conta demo não possui acesso global a prontuários.' });
       }
-      if (hasGlobalClinicAccess(user)) return next();
+      const globalClinicAccess = hasGlobalClinicAccess(user);
+      if (globalClinicAccess && !resolvedPatientId) return next();
 
       // Check if user is the patient themselves
       if (!isExplicitDemoUser(user) && (user.id === rawPatientId || (resolvedPatientId && user.id === resolvedPatientId))) return next();
@@ -20091,6 +20222,7 @@ async function startServer() {
         return res.status(403).json({ error: 'Acesso negado a este prontuário' });
       }
       req.resolvedPatientClinicId = sanitizeString(patient.clinic_id, 120);
+      if (globalClinicAccess) return next();
 
       const userRole = sanitizeString(user?.role, 40).toLowerCase();
       const userId = sanitizeString(user?.id, 120);
@@ -20105,36 +20237,75 @@ async function startServer() {
         return next();
       }
 
-      if (patient.therapist_id === user.id) {
-        return next();
-      }
-
+      const patientClinicId = sanitizeString(patient.clinic_id, 120);
+      const actorClinicId = sanitizeString(currentClinicId(user), 120);
       if (
-        userRole === 'therapist' &&
-        patient.clinic_id === currentClinicId(user)
+        patientClinicId &&
+        actorClinicId === patientClinicId &&
+        isUuid(userId)
       ) {
-        const { data: activeProfessionalLink, error: linkError } = await supabase
-          .from('patient_professional_links')
-          .select('id,permissions')
-          .eq('organization_id', sanitizeString(patient.clinic_id, 120))
-          .eq('patient_id', resolvedPatientId)
-          .eq('professional_id', userId)
-          .eq('status', 'active')
-          .limit(1)
-          .maybeSingle();
-        if (!linkError && activeProfessionalLink?.permissions?.read !== false) {
-          req.patientProfessionalLink = activeProfessionalLink;
+        const evidence = await loadPatientProfessionalAccessEvidence({
+          patientId: resolvedPatientId,
+          clinicId: patientClinicId,
+          actorId: userId
+        });
+        if (evidence.legacyMembershipSchemaUnavailable) {
+          if (
+            (userRole === 'therapist' &&
+              sanitizeString(patient.therapist_id, 120) === userId) ||
+            userRole === 'coordinator'
+          ) {
+            return next();
+          }
+        } else if (
+          evaluatePatientClinicalAccess({
+            actorId: userId,
+            actorRole: userRole,
+            actorClinicId,
+            patientId: resolvedPatientId,
+            patientClinicId,
+            legacyTherapistId: patient.therapist_id,
+            activeProfessionalLink: evidence.activeProfessionalLink,
+            activeProfessionalMembership:
+              evidence.activeProfessionalMembership,
+            activeProfessionalProfile: evidence.activeProfessionalProfile,
+            activeManagerMembership: evidence.activeManagerMembership,
+            requiredPermission: 'read'
+          })
+        ) {
+          if (evidence.activeProfessionalLink) {
+            req.patientProfessionalLink = evidence.activeProfessionalLink;
+          }
           return next();
         }
-        if (linkError && !isMissingRelationError(linkError)) throw linkError;
+
         const isTherapeuticPlanHistoryRead =
           String(req.method || '').toUpperCase() === 'GET'
           && /^\/api\/aba\/patients\/[^/]+\/therapeutic-plan\/?$/.test(String(req.path || ''));
-        if (!linkError && isTherapeuticPlanHistoryRead) {
+        const hasActiveTherapistMembership = Boolean(
+          evidence.activeProfessionalMembership &&
+          sanitizeString(
+            evidence.activeProfessionalMembership.role,
+            40
+          ).toLowerCase() === 'therapist' &&
+          sanitizeString(
+            evidence.activeProfessionalMembership.status,
+            40
+          ).toLowerCase() === 'active' &&
+          sanitizeString(
+            evidence.activeProfessionalProfile?.specialty,
+            120
+          ).length >= 2
+        );
+        if (
+          !evidence.activeProfessionalLink &&
+          hasActiveTherapistMembership &&
+          isTherapeuticPlanHistoryRead
+        ) {
           const { data: historicalLinks, error: historicalLinkError } = await supabase
             .from('patient_professional_links')
             .select('id,permissions,ends_at,updated_at')
-            .eq('organization_id', sanitizeString(patient.clinic_id, 120))
+            .eq('organization_id', patientClinicId)
             .eq('patient_id', resolvedPatientId)
             .eq('professional_id', userId)
             .eq('status', 'ended')
@@ -20154,17 +20325,15 @@ async function startServer() {
         }
       }
 
-      // Same-clinic access is reserved for clinic coordination.
-      if (
-        patient.clinic_id &&
-        patient.clinic_id === currentClinicId(user) &&
-        (userRole === 'coordinator' || hasGlobalClinicAccess(user))
-      ) {
-        return next();
-      }
-
       return res.status(403).json({ error: 'Acesso negado a este prontuário' });
     } catch (err) {
+      if (isMissingRelationError(err)) {
+        return res.status(503).json({
+          success: false,
+          error: 'MULTIDISCIPLINARY_SCHEMA_PENDING',
+          message: 'A estrutura multidisciplinar precisa ser aplicada.'
+        });
+      }
       return res.status(500).json({ error: 'Erro ao verificar permissões' });
     }
   };
@@ -22565,7 +22734,7 @@ async function startServer() {
       if (memberIds.length > 0) {
         const { data: professionalProfiles } = await supabase
           .from('professional_profiles')
-          .select('user_id, full_name, metadata')
+          .select('user_id, full_name, specialty, metadata')
           .in('user_id', memberIds);
 
         (professionalProfiles || []).forEach((profile: any) => {
@@ -22594,6 +22763,8 @@ async function startServer() {
             'Profissional',
           email: m.users?.email || '',
           role: m.role,
+          status: m.status,
+          specialty: resolveProfessionalProfileSpecialty(profile) || null,
           professionalTitle,
           profileRole: professionalTitle,
           roleLabel: formatClinicAccessRoleLabel(m.role, { professionalTitle }),
@@ -27785,40 +27956,90 @@ async function startServer() {
     async (req: any, res) => {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+      const linksSelect = 'id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,starts_at,ends_at,status,permissions,created_by,ended_by,created_at,updated_at';
+      const usersSelect = 'id,name,email';
+      const profilesSelect = 'user_id,specialty,council,council_number';
+      const membershipsSelect = 'user_id,clinic_id,role,status';
+      let stage = 'links';
+      let table = 'patient_professional_links';
+      let select = linksSelect;
       try {
-        const { data: links, error } = await supabase
+        const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+        const canInspectInconsistentLinks =
+          hasGlobalClinicAccess(req.session.user) ||
+          actorRole === 'coordinator';
+        let linksQuery = supabase
           .from('patient_professional_links')
-          .select('id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,starts_at,ends_at,status,permissions,created_by,ended_by,created_at,updated_at')
-          .eq('organization_id', clinicId)
+          .select(linksSelect)
           .eq('patient_id', patientId)
           .order('status', { ascending: true })
           .order('created_at', { ascending: true });
+        if (!canInspectInconsistentLinks) {
+          linksQuery = linksQuery.eq('organization_id', clinicId);
+        }
+        const { data: links, error } = await linksQuery;
         if (error) throw error;
         const professionalIds = Array.from(new Set(
           (links || []).map((link: any) => sanitizeString(link.professional_id, 120)).filter(isUuid),
         ));
-        const professionalsResult = professionalIds.length > 0
-          ? await supabase
-              .from('users')
-              .select('id,name,email,metadata,role,clinic_id')
+        let professionals: any[] = [];
+        let professionalProfiles: any[] = [];
+        let memberships: any[] = [];
+        if (professionalIds.length > 0) {
+          stage = 'professionals';
+          table = 'users';
+          select = usersSelect;
+          const professionalsResult = await supabase
+            .from('users')
+            .select(usersSelect)
+            .in('id', professionalIds);
+          if (professionalsResult.error) throw professionalsResult.error;
+          professionals = professionalsResult.data || [];
+
+          if (professionalIds.length > 0) {
+            stage = 'profiles';
+            table = 'professional_profiles';
+            select = profilesSelect;
+            const profilesResult = await supabase
+              .from('professional_profiles')
+              .select(profilesSelect)
+              .in('user_id', professionalIds);
+            if (profilesResult.error) throw profilesResult.error;
+            professionalProfiles = profilesResult.data || [];
+
+            stage = 'memberships';
+            table = 'clinic_memberships';
+            select = membershipsSelect;
+            const membershipsResult = await supabase
+              .from('clinic_memberships')
+              .select(membershipsSelect)
               .eq('clinic_id', clinicId)
-              .in('id', professionalIds)
-          : { data: [], error: null };
-        if (professionalsResult.error) throw professionalsResult.error;
-        const professionalById = new Map(
-          (professionalsResult.data || []).map((professional: any) => [professional.id, professional]),
-        );
+              .in('user_id', professionalIds);
+            if (membershipsResult.error) throw membershipsResult.error;
+            memberships = membershipsResult.data || [];
+          }
+        }
+
+        const composed = composePatientProfessionalLinks({
+          clinicId,
+          links: links || [],
+          users: professionals,
+          profiles: professionalProfiles,
+          memberships
+        });
         return res.json({
           success: true,
-          links: (links || []).map((link: any) => ({
-            ...link,
-            professional: professionalById.get(link.professional_id) || null,
-          })),
-          activeCount: (links || []).filter((link: any) => link.status === 'active').length,
-          activeLimit: 5,
+          ...composed
         });
       } catch (error: any) {
-        return res.status(500).json({
+        logRouteDbError('/api/patients/:patientId/professional-links [GET]', error, {
+          patientId,
+          requestId: requestIdForLogs(req),
+          stage,
+          table,
+          select
+        });
+        return res.status(isMissingRelationError(error) ? 503 : 500).json({
           success: false,
           error: isMissingRelationError(error)
             ? 'MULTIDISCIPLINARY_SCHEMA_PENDING'
@@ -27832,52 +28053,198 @@ async function startServer() {
     '/api/patients/:patientId/professional-links',
     checkAuth,
     checkPatientAccess,
-    requireRoles('coordinator', 'admin', 'owner'),
     async (req: any, res) => {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const actorId = sanitizeString(req.session.user.id, 120);
+      const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
       const professionalId = sanitizeString(req.body?.professionalId, 120);
-      const specialty = sanitizeString(req.body?.specialty, 120);
       const caseRole = sanitizeString(req.body?.caseRole, 160);
       const relationshipType = sanitizeString(req.body?.relationshipType, 30);
-      const startsAt = sanitizeIsoDateOnly(req.body?.startsAt) || new Date().toISOString().slice(0, 10);
+      const startsAt = sanitizeIsoDateOnly(req.body?.startsAt)
+        || dateGroupForClinic(new Date(), req.session.user);
       if (
-        !isUuid(patientId) || !isUuid(actorId) || !isUuid(professionalId)
-        || specialty.length < 2 || caseRole.length < 2
+        !isUuid(patientId) || !isUuid(actorId) || !isUuid(clinicId) || !isUuid(professionalId)
+        || !isPatientProfessionalCaseRole(caseRole)
         || !['primary', 'collaborator'].includes(relationshipType)
       ) {
         return res.status(400).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_INVALID' });
       }
-      const { data, error } = await supabase.rpc('upsert_patient_professional_link_v1', {
-        p_actor_id: actorId,
-        p_patient_id: patientId,
-        p_professional_id: professionalId,
-        p_specialty: specialty,
-        p_case_role: caseRole,
-        p_relationship_type: relationshipType,
-        p_starts_at: startsAt,
-        p_permissions: req.body?.permissions && typeof req.body.permissions === 'object'
-          ? {
-              read: req.body.permissions.read !== false,
-              write: req.body.permissions.write !== false,
-              historicalRead: req.body.permissions.historicalRead !== false,
-            }
-          : { read: true, write: true, historicalRead: true },
-        p_replace_primary: req.body?.replacePrimary === true,
-      });
-      if (error) {
-        const message = sanitizeString(error.message, 200);
-        const conflict = message.includes('DUPLICATE') || message.includes('LIMIT') || message.includes('one_primary');
-        return res.status(conflict ? 409 : 500).json({
+      let stage = 'professional';
+      let table = 'users';
+      let select = 'id,name,email';
+      try {
+        const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+        let actorMembership: any = null;
+        if (!['owner', 'admin'].includes(actorRole)) {
+          stage = 'actor_membership';
+          table = 'clinic_memberships';
+          select = 'user_id,clinic_id,role,status';
+          const actorMembershipResult = await supabase
+            .from('clinic_memberships')
+            .select(select)
+            .eq('user_id', actorId)
+            .eq('clinic_id', clinicId)
+            .eq('role', 'coordinator')
+            .eq('status', 'active')
+            .maybeSingle();
+          if (actorMembershipResult.error) throw actorMembershipResult.error;
+          actorMembership = actorMembershipResult.data;
+        }
+        if (!isPatientProfessionalLinkManager({
+          actorId,
+          actorRole,
+          clinicId,
+          membership: actorMembership
+        })) {
+          return res.status(403).json({
+            success: false,
+            error: 'PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED'
+          });
+        }
+
+        stage = 'professional';
+        table = 'users';
+        select = 'id,name,email';
+        const professionalResult = await supabase
+          .from('users')
+          .select(select)
+          .eq('id', professionalId)
+          .maybeSingle();
+        if (professionalResult.error) throw professionalResult.error;
+
+        stage = 'membership';
+        table = 'clinic_memberships';
+        select = 'user_id,clinic_id,role,status';
+        const membershipResult = await supabase
+          .from('clinic_memberships')
+          .select(select)
+          .eq('user_id', professionalId)
+          .eq('clinic_id', clinicId)
+          .eq('role', 'therapist')
+          .eq('status', 'active')
+          .maybeSingle();
+        if (membershipResult.error) throw membershipResult.error;
+
+        stage = 'profile';
+        table = 'professional_profiles';
+        select = 'user_id,specialty';
+        const profileResult = await supabase
+          .from('professional_profiles')
+          .select(select)
+          .eq('user_id', professionalId)
+          .maybeSingle();
+        if (profileResult.error) throw profileResult.error;
+        const candidate = validatePatientProfessionalCandidate({
+          clinicId,
+          professionalId,
+          user: professionalResult.data,
+          membership: membershipResult.data,
+          profile: profileResult.data
+        });
+        if (!candidate.ok) {
+          const status =
+            candidate.error === 'PATIENT_PROFESSIONAL_NOT_FOUND'
+              ? 404
+              : candidate.error ===
+                    'PATIENT_PROFESSIONAL_MEMBERSHIP_INACTIVE'
+                ? 409
+                : 422;
+          return res.status(status).json({
+            success: false,
+            error: candidate.error
+          });
+        }
+        const specialty = candidate.specialty;
+
+        stage = 'upsert';
+        table = 'patient_professional_links';
+        select = 'upsert_patient_professional_link_v1';
+        const { data, error } = await supabase.rpc('upsert_patient_professional_link_v1', {
+          p_actor_id: actorId,
+          p_patient_id: patientId,
+          p_professional_id: professionalId,
+          p_specialty: specialty,
+          p_case_role: caseRole,
+          p_relationship_type: relationshipType,
+          p_starts_at: startsAt,
+          p_permissions: req.body?.permissions && typeof req.body.permissions === 'object'
+            ? {
+                read: req.body.permissions.read !== false,
+                write: req.body.permissions.write !== false,
+                historicalRead: req.body.permissions.historicalRead !== false,
+              }
+            : { read: true, write: true, historicalRead: true },
+          p_replace_primary: req.body?.replacePrimary === true,
+        });
+        if (error) {
+          const message = sanitizeString(error.message, 200);
+          if (message.includes('PATIENT_PROFESSIONAL_NOT_FOUND')) {
+            return res.status(404).json({
+              success: false,
+              error: 'PATIENT_PROFESSIONAL_NOT_FOUND'
+            });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_MEMBERSHIP_INACTIVE')) {
+            return res.status(409).json({
+              success: false,
+              error: 'PATIENT_PROFESSIONAL_MEMBERSHIP_INACTIVE'
+            });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_PROFILE_REQUIRED')) {
+            return res.status(422).json({
+              success: false,
+              error: 'PATIENT_PROFESSIONAL_PROFILE_REQUIRED'
+            });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_SPECIALTY_REQUIRED')) {
+            return res.status(422).json({
+              success: false,
+              error: 'PATIENT_PROFESSIONAL_SPECIALTY_REQUIRED'
+            });
+          }
+          const membershipAuthorityMigrationPending =
+            message.includes('PROFESSIONAL_NOT_FOUND') ||
+            message.includes('PATIENT_NOT_FOUND') ||
+            message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED');
+          if (membershipAuthorityMigrationPending) {
+            return res.status(503).json({
+              success: false,
+              error: 'MULTIDISCIPLINARY_MEMBERSHIP_AUTHORITY_MIGRATION_PENDING'
+            });
+          }
+          const conflict =
+            message.includes('DUPLICATE') ||
+            message.includes('LIMIT') ||
+            message.includes('PRIMARY_EXISTS') ||
+            message.includes('one_primary');
+          return res.status(conflict ? 409 : 500).json({
+            success: false,
+            error: message.includes('LIMIT')
+              ? 'PATIENT_PROFESSIONAL_LINK_LIMIT_REACHED'
+              : message.includes('DUPLICATE')
+                ? 'PATIENT_PROFESSIONAL_LINK_DUPLICATE'
+                : message.includes('PRIMARY')
+                  ? 'PATIENT_PROFESSIONAL_LINK_PRIMARY_EXISTS'
+                : 'PATIENT_PROFESSIONAL_LINK_FAILED',
+          });
+        }
+        return res.status(201).json({ success: true, link: data });
+      } catch (error: any) {
+        logRouteDbError('/api/patients/:patientId/professional-links [POST]', error, {
+          patientId,
+          professionalId,
+          requestId: requestIdForLogs(req),
+          stage,
+          table,
+          select
+        });
+        return res.status(isMissingRelationError(error) ? 503 : 500).json({
           success: false,
-          error: message.includes('LIMIT')
-            ? 'PATIENT_PROFESSIONAL_LINK_LIMIT_REACHED'
-            : message.includes('DUPLICATE')
-              ? 'PATIENT_PROFESSIONAL_LINK_DUPLICATE'
-              : 'PATIENT_PROFESSIONAL_LINK_FAILED',
+          error: isMissingRelationError(error)
+            ? 'MULTIDISCIPLINARY_SCHEMA_PENDING'
+            : 'PATIENT_PROFESSIONAL_LINK_FAILED'
         });
       }
-      return res.status(201).json({ success: true, link: data });
     },
   );
 
@@ -27885,21 +28252,83 @@ async function startServer() {
     '/api/patients/:patientId/professional-links/:linkId/end',
     checkAuth,
     checkPatientAccess,
-    requireRoles('coordinator', 'admin', 'owner'),
     async (req: any, res) => {
       const actorId = sanitizeString(req.session.user.id, 120);
+      const actorRole = sanitizeString(req.session.user.role, 40).toLowerCase();
       const linkId = sanitizeString(req.params.linkId, 120);
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
-      if (!isUuid(actorId) || !isUuid(linkId) || !isUuid(patientId)) {
+      const clinicId = sanitizeString(
+        req.resolvedPatientClinicId || currentClinicId(req.session.user),
+        120
+      );
+      if (
+        !isUuid(actorId) ||
+        !isUuid(linkId) ||
+        !isUuid(patientId) ||
+        !isUuid(clinicId)
+      ) {
         return res.status(400).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_INVALID' });
       }
-      const { data, error } = await supabase.rpc('end_patient_professional_link_v1', {
-        p_actor_id: actorId,
-        p_link_id: linkId,
-        p_patient_id: patientId,
-        p_ends_at: sanitizeIsoDateOnly(req.body?.endsAt) || new Date().toISOString().slice(0, 10),
+      let actorMembership: any = null;
+      if (!['owner', 'admin'].includes(actorRole)) {
+        const membershipResult = await supabase
+          .from('clinic_memberships')
+          .select('user_id,clinic_id,role,status')
+          .eq('user_id', actorId)
+          .eq('clinic_id', clinicId)
+          .eq('role', 'coordinator')
+          .eq('status', 'active')
+          .maybeSingle();
+        if (membershipResult.error) {
+          return res.status(
+            isMissingRelationError(membershipResult.error) ? 503 : 500
+          ).json({
+            success: false,
+            error: isMissingRelationError(membershipResult.error)
+              ? 'MULTIDISCIPLINARY_SCHEMA_PENDING'
+              : 'PATIENT_PROFESSIONAL_LINK_FAILED'
+          });
+        }
+        actorMembership = membershipResult.data;
+      }
+      const outcome = await executeAuthorizedPatientProfessionalLinkEnd({
+        isManager: isPatientProfessionalLinkManager({
+          actorId,
+          actorRole,
+          clinicId,
+          membership: actorMembership
+        }),
+        persist: () => supabase.rpc('end_patient_professional_link_v1', {
+          p_actor_id: actorId,
+          p_link_id: linkId,
+          p_patient_id: patientId,
+          p_ends_at: sanitizeIsoDateOnly(req.body?.endsAt)
+            || dateGroupForClinic(new Date(), req.session.user),
+        })
       });
-      if (error) return res.status(404).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_NOT_FOUND' });
+      if (!outcome.ok) {
+        return res.status(outcome.status).json({
+          success: false,
+          error: outcome.error
+        });
+      }
+      const { data, error } = outcome.result;
+      if (error) {
+        const message = sanitizeString(error.message, 200);
+        if (
+          message.includes('PATIENT_NOT_FOUND') ||
+          message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED')
+        ) {
+          return res.status(503).json({
+            success: false,
+            error: 'MULTIDISCIPLINARY_MEMBERSHIP_AUTHORITY_MIGRATION_PENDING'
+          });
+        }
+        return res.status(404).json({
+          success: false,
+          error: 'PATIENT_PROFESSIONAL_LINK_NOT_FOUND'
+        });
+      }
       return res.json({ success: true, link: data });
     },
   );
@@ -35785,75 +36214,52 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/history/:historyId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/history/:historyId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+    let scopedPatientId = '';
     try {
       const historyId = sanitizeString(req.params.historyId, 120);
       if (!historyId) return res.status(400).json({ success: false, error: 'historyId inválido.' });
       const { data: existing, error: existingError } = await supabase
         .from('history')
-        .select(HISTORY_SELECT)
+        .select(HISTORY_SCORE_MUTATION_SELECT)
         .eq('id', historyId)
         .eq('is_active', true)
         .is('deleted_at', null)
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
-      const scopedPatientId = sanitizeString(existing.patient_id, 120);
-      const hasDirectAccess = await canAccessPatientInCurrentClinic(scopedPatientId, req.session.user);
-      if (!hasDirectAccess) {
-        const clinicId = currentClinicId(req.session.user);
-        const safeEmail = sanitizeEmail(existing.patient_email);
-        let hasEmailAccess = false;
-        if (clinicId && safeEmail) {
-          const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
-          hasEmailAccess = clinicPatientIds.length > 0;
-        }
-        if (!hasEmailAccess) {
-          return res.status(403).json({ success: false, error: 'Acesso negado.' });
-        }
-      }
-      const updates = cleanObject({
-        title: req.body?.title !== undefined ? sanitizeTextField(req.body?.title, 180) : undefined,
-        score: req.body?.score !== undefined ? asSafeNumber(req.body?.score, 0, 100) : undefined,
-        energy: req.body?.energy !== undefined ? asSafeNumber(req.body?.energy, 0, 100) : undefined,
-        note: req.body?.note !== undefined ? sanitizeTextField(req.body?.note, 12000) : undefined,
-        icon: req.body?.icon !== undefined ? sanitizeString(req.body?.icon, 40) : undefined,
-        updated_at: new Date().toISOString()
+      scopedPatientId = sanitizeString(existing.patient_id, 120);
+      const hasDirectAccess = await canAccessPatientInCurrentClinic(
+        scopedPatientId,
+        req.session.user,
+        'write'
+      );
+      const mutation = await executeAuthorizedHistoryScoreMutation({
+        hasWriteAccess: hasDirectAccess,
+        recordType: existing.type,
+        requestedScore: req.body?.score,
+        persist: async (score) => supabase
+          .from('history')
+          .update({ score })
+          .eq('id', historyId)
+          .eq('patient_id', scopedPatientId)
+          .select(HISTORY_SCORE_MUTATION_SELECT)
+          .single()
       });
-      let data: any = null;
-      let error: any = null;
-      {
-        const result = await supabase
-          .from('history')
-          .update(updates)
-          .eq('id', historyId)
-          .select(HISTORY_SELECT)
-          .single();
-        data = result.data;
-        error = result.error;
+      if (!mutation.ok) {
+        return res.status(mutation.status).json({
+          success: false,
+          error: mutation.error
+        });
       }
-
-      // Compatibilidade com produção: alguns ambientes não têm updated_at na history.
-      if (error && /updated_at/i.test(String(error?.message || ''))) {
-        const fallbackUpdates: any = { ...updates };
-        delete fallbackUpdates.updated_at;
-        const retry = await supabase
-          .from('history')
-          .update(fallbackUpdates)
-          .eq('id', historyId)
-          .select(HISTORY_SELECT)
-          .single();
-        data = retry.data;
-        error = retry.error;
-      }
-
+      const { data, error } = mutation.result;
       if (error) throw error;
       return res.json({ success: true, data });
     } catch (error: any) {
       return sendClinicalMutationError(res, '/api/history/:historyId', 'update', error, {
         historyId: sanitizeString(req.params.historyId, 120),
         actorId: sanitizeString(req.session.user?.id, 120),
-        patientId: sanitizeString(req.body?.patient_id || req.body?.patientId, 120)
+        patientId: scopedPatientId || null
       });
     }
   });
