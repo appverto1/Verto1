@@ -15,6 +15,8 @@ type CumulativeGrowthChartProps = {
   history?: any[];
   protocols?: any[];
   protocolId?: string | number | null;
+  compact?: boolean;
+  dark?: boolean;
 };
 
 type CumulativePoint = {
@@ -98,14 +100,14 @@ const formatFullDate = (timestamp: number, fallbackIndex: number) => {
   return new Date(timestamp).toLocaleDateString('pt-BR');
 };
 
-const CustomTooltip = ({ active, payload }: any) => {
+const CustomTooltip = ({ active, payload, dark = false }: any) => {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload as CumulativePoint;
   if (!row) return null;
 
   return (
-    <div className="rounded-xl border border-slate-100 bg-white p-3 shadow-sm">
-      <p className="text-xs font-semibold uppercase tracking-widest text-slate-900">{row.date}</p>
+    <div className={`rounded-xl border p-3 shadow-sm ${dark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-white'}`}>
+      <p className={`text-xs font-semibold ${dark ? 'text-slate-100' : 'text-slate-900'}`}>{row.date}</p>
       <p className="mt-2 text-sm font-medium text-[#3B82F6]">
         {row.total} habilidade{row.total === 1 ? '' : 's'} dominada{row.total === 1 ? '' : 's'}
       </p>
@@ -113,7 +115,14 @@ const CustomTooltip = ({ active, payload }: any) => {
   );
 };
 
-export const CumulativeGrowthChart = ({ patientId, history = [], protocols = [], protocolId = null }: CumulativeGrowthChartProps) => {
+export const CumulativeGrowthChart = ({
+  patientId,
+  history = [],
+  protocols = [],
+  protocolId = null,
+  compact = false,
+  dark = false
+}: CumulativeGrowthChartProps) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
 
@@ -196,28 +205,46 @@ export const CumulativeGrowthChart = ({ patientId, history = [], protocols = [],
 
   if (!chartData.length) {
     return (
-      <div className="rounded-2xl border border-slate-100 bg-white p-5 text-center shadow-sm">
+      <div className={`rounded-2xl border p-5 text-center ${dark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-white'}`}>
         <TrendingUp size={30} className="mx-auto mb-3 text-slate-300" />
-        <p className="text-sm font-medium text-slate-400">
-          Ainda nao ha registros suficientes para gerar crescimento cumulativo.
+        <p className={`text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+          Ainda não há registros suficientes para mostrar o crescimento cumulativo.
         </p>
       </div>
     );
   }
 
+  const latestTotal = chartData[chartData.length - 1]?.total || 0;
+  const growth = latestTotal - (chartData[0]?.total || 0);
+
   return (
-    <div className="min-w-0 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-6">
-      <div className="mb-5">
-        <h3 className="flex items-center gap-2 text-base font-semibold leading-snug text-slate-900 sm:text-lg">
-          <TrendingUp size={20} className="text-[#3B82F6]" />
-          Crescimento cumulativo
-        </h3>
-        <p className="mt-1 text-[11px] font-medium uppercase tracking-widest text-slate-400 sm:text-xs">
-          Registro cumulativo de habilidades dominadas ao longo das sessoes
-        </p>
+    <div className={`min-w-0 rounded-2xl border p-4 ${dark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-white'}`}>
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h3 className={`flex items-center gap-2 text-base font-semibold leading-snug ${dark ? 'text-slate-100' : 'text-slate-900'}`}>
+            <TrendingUp size={20} className="text-[#3B82F6]" />
+            Crescimento cumulativo
+          </h3>
+          <p className={`mt-1 text-xs leading-5 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+            Habilidades dominadas ao longo das sessões registradas.
+          </p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className={`text-xl font-semibold ${dark ? 'text-slate-100' : 'text-slate-900'}`}>{latestTotal}</p>
+          <p className={`text-[11px] ${growth > 0 ? 'text-emerald-600' : dark ? 'text-slate-400' : 'text-slate-500'}`}>
+            {growth > 0 ? `+${growth} no período` : 'total atual'}
+          </p>
+        </div>
       </div>
 
-      <div className="h-[260px] sm:h-[320px]">
+      {chartData.length < 2 ? (
+        <div className={`flex min-h-40 items-center justify-center rounded-xl border border-dashed px-5 text-center ${dark ? 'border-slate-700 bg-slate-900/50 text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
+          <p className="max-w-sm text-sm leading-6">
+            Há um primeiro registro disponível. A curva aparecerá quando uma nova sessão produzir outro ponto de evolução.
+          </p>
+        </div>
+      ) : (
+      <div className={compact ? 'h-[240px]' : 'h-[260px] sm:h-[320px]'}>
         {isMounted ? (
           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={240}>
             <AreaChart data={chartData} margin={{ top: 12, right: 24, left: 0, bottom: 8 }}>
@@ -227,20 +254,20 @@ export const CumulativeGrowthChart = ({ patientId, history = [], protocols = [],
                   <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
+              <CartesianGrid stroke={dark ? '#1E293B' : '#EEF2F7'} strokeDasharray="3 3" vertical={false} />
               <XAxis
                 dataKey="label"
                 axisLine={false}
                 tickLine={false}
-                tick={{ fill: '#64748B', fontSize: 10, fontWeight: 500 }}
+                tick={{ fill: dark ? '#94A3B8' : '#64748B', fontSize: 10, fontWeight: 500 }}
               />
               <YAxis
                 allowDecimals={false}
                 axisLine={false}
                 tickLine={false}
-                tick={{ fill: '#94A3B8', fontSize: 10, fontWeight: 500 }}
+                tick={{ fill: dark ? '#64748B' : '#94A3B8', fontSize: 10, fontWeight: 500 }}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={<CustomTooltip dark={dark} />} />
               <Area
                 type="monotone"
                 dataKey="total"
@@ -256,6 +283,7 @@ export const CumulativeGrowthChart = ({ patientId, history = [], protocols = [],
           <div className="h-full w-full animate-pulse rounded-3xl bg-slate-50" />
         )}
       </div>
+      )}
     </div>
   );
 };

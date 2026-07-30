@@ -15,7 +15,10 @@ type RadarDomainAssessmentChartProps = {
   protocols?: any[];
   history?: any[];
   initialProtocolId?: string | number | null;
+  protocolId?: string | number | null;
   storageKey?: string;
+  compact?: boolean;
+  dark?: boolean;
 };
 
 type RadarDomainRow = {
@@ -53,16 +56,16 @@ const resolveScore = (row: any) => {
   return Number.isFinite(score) ? score : null;
 };
 
-const CustomTooltip = ({ active, payload }: any) => {
+const CustomTooltip = ({ active, payload, dark = false }: any) => {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload as RadarDomainRow;
   if (!row) return null;
 
   return (
-    <div className="rounded-xl border border-slate-100 bg-white p-3 shadow-sm">
-      <p className="text-xs font-semibold uppercase tracking-widest text-slate-900">{row.subject}</p>
+    <div className={`rounded-xl border p-3 shadow-sm ${dark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-white'}`}>
+      <p className={`text-xs font-semibold ${dark ? 'text-slate-100' : 'text-slate-900'}`}>{row.subject}</p>
       <p className="mt-2 text-sm font-medium text-[#8B5CF6]">{row.score.toFixed(1)}%</p>
-      <p className="mt-1 text-[10px] font-medium uppercase tracking-widest text-slate-400">
+      <p className={`mt-1 text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
         {row.obtained.toFixed(1)} de {row.total.toFixed(1)} pts
       </p>
     </div>
@@ -74,7 +77,10 @@ export const RadarDomainAssessmentChart = ({
   protocols = [],
   history = [],
   initialProtocolId = null,
-  storageKey
+  protocolId,
+  storageKey,
+  compact = false,
+  dark = false
 }: RadarDomainAssessmentChartProps) => {
   const [isMounted, setIsMounted] = useState(false);
   const persistedStorageKey = storageKey || `verto.radar-domain-filter:${String(patientId || 'unknown')}`;
@@ -86,9 +92,13 @@ export const RadarDomainAssessmentChart = ({
       return '';
     }
   };
-  const [selectedProtocolId, setSelectedProtocolId] = useState(() =>
+  const [internalProtocolId, setInternalProtocolId] = useState(() =>
     readPersistedProtocolId() || String(initialProtocolId || '').trim() || 'all'
   );
+  const isProtocolControlled = protocolId !== undefined;
+  const selectedProtocolId = isProtocolControlled
+    ? String(protocolId || '').trim() || 'all'
+    : internalProtocolId;
   const lastHydratedStorageKeyRef = useRef(persistedStorageKey);
   const hasUserSelectedProtocolRef = useRef(false);
   useEffect(() => setIsMounted(true), []);
@@ -109,8 +119,10 @@ export const RadarDomainAssessmentChart = ({
     hasUserSelectedProtocolRef.current = false;
 
     const nextProtocolId = readPersistedProtocolId() || String(initialProtocolId || '').trim() || 'all';
-    setSelectedProtocolId((prev) => (prev === nextProtocolId ? prev : nextProtocolId));
-  }, [initialProtocolId, persistedStorageKey]);
+    if (!isProtocolControlled) {
+      setInternalProtocolId((prev) => (prev === nextProtocolId ? prev : nextProtocolId));
+    }
+  }, [initialProtocolId, isProtocolControlled, persistedStorageKey]);
 
   useEffect(() => {
     const normalizedInitialProtocolId = String(initialProtocolId || '').trim();
@@ -118,7 +130,8 @@ export const RadarDomainAssessmentChart = ({
       ? protocolOptions.some((option) => option.id === normalizedInitialProtocolId)
       : false;
 
-    setSelectedProtocolId((prev) => {
+    if (isProtocolControlled) return;
+    setInternalProtocolId((prev) => {
       const previousIsValid = prev === 'all' || protocolOptions.some((option) => option.id === prev);
       if (previousIsValid) {
         if (prev === 'all' && !hasUserSelectedProtocolRef.current && initialIsValid) {
@@ -128,16 +141,16 @@ export const RadarDomainAssessmentChart = ({
       }
       return initialIsValid ? normalizedInitialProtocolId : 'all';
     });
-  }, [initialProtocolId, protocolOptions]);
+  }, [initialProtocolId, isProtocolControlled, protocolOptions]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || isProtocolControlled) return;
     try {
       window.localStorage.setItem(persistedStorageKey, selectedProtocolId);
     } catch {
       // localStorage can be unavailable in restricted contexts.
     }
-  }, [persistedStorageKey, selectedProtocolId]);
+  }, [isProtocolControlled, persistedStorageKey, selectedProtocolId]);
 
   const visibleProtocols = useMemo(() => {
     if (selectedProtocolId === 'all') return protocolOptions.map((option) => option.protocol);
@@ -208,38 +221,42 @@ export const RadarDomainAssessmentChart = ({
 
   if (!chartData.length) {
     return (
-      <div className="rounded-2xl border border-slate-100 bg-white p-5 text-center shadow-sm">
+      <div className={`rounded-2xl border p-5 text-center ${dark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-white'}`}>
         <Activity size={30} className="mx-auto mb-3 text-slate-300" />
-        <p className="text-sm font-medium text-slate-400">
-          Ainda nao ha avaliacoes suficientes para gerar o radar individual deste paciente.
+        <p className={`text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+          Ainda não há avaliações suficientes para mostrar o desempenho por domínio.
         </p>
       </div>
     );
   }
 
+  const useDomainList = compact && chartData.length > 8;
+
   return (
-    <div className="min-w-0 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm sm:p-6">
-      <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+    <div className={`min-w-0 rounded-2xl border p-4 ${dark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-white'}`}>
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h3 className="flex items-center gap-2 text-base font-semibold leading-snug text-slate-900 sm:text-lg">
+          <h3 className={`flex items-center gap-2 text-base font-semibold leading-snug ${dark ? 'text-slate-100' : 'text-slate-900'}`}>
             <Activity size={20} className="text-[#8B5CF6]" />
-            Radar individual por dominio
+            {useDomainList ? 'Desempenho por domínio' : 'Radar individual por domínio'}
           </h3>
-          <p className="mt-1 text-[11px] font-medium uppercase tracking-widest text-slate-400 sm:text-xs">
-            Visao 360 do equilibrio de desenvolvimento do paciente
+          <p className={`mt-1 text-xs leading-5 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+            {useDomainList
+              ? 'Lista completa para preservar a leitura de protocolos com muitos domínios.'
+              : 'Distribuição atual dos resultados no protocolo selecionado.'}
           </p>
         </div>
-        {protocolOptions.length > 1 && (
+        {!isProtocolControlled && protocolOptions.length > 1 && (
           <div className="w-full min-w-0 lg:w-64">
-            <label className="mb-1 block text-[10px] font-medium uppercase tracking-widest text-slate-400">
+            <label className={`mb-1 block text-xs font-medium ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
               Filtrar protocolo
             </label>
             <select
-              className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-medium text-slate-700 outline-none transition-all focus:border-[#8B5CF6] focus:ring-4 focus:ring-[#8B5CF6]/10"
+              className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#8B5CF6] focus:ring-2 focus:ring-[#8B5CF6]/15 ${dark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
               value={selectedProtocolId}
               onChange={(event) => {
                 hasUserSelectedProtocolRef.current = true;
-                setSelectedProtocolId(event.target.value);
+                setInternalProtocolId(event.target.value);
               }}
             >
               <option value="all">Todos os protocolos</option>
@@ -253,27 +270,46 @@ export const RadarDomainAssessmentChart = ({
         )}
       </div>
 
-      <div className="h-[300px] sm:h-[420px]">
+      {useDomainList ? (
+        <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2" role="list" aria-label="Resultados por domínio">
+          {chartData.map((domain) => (
+            <div key={domain.subject} role="listitem" className="min-w-0">
+              <div className={`mb-1.5 flex items-start justify-between gap-3 text-xs ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
+                <span className="min-w-0 break-words leading-5">{domain.subject}</span>
+                <strong className={dark ? 'text-violet-300' : 'text-violet-700'}>{domain.score.toFixed(0)}%</strong>
+              </div>
+              <div className={`h-1.5 overflow-hidden rounded-full ${dark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                <div className="h-full rounded-full bg-violet-500" style={{ width: `${domain.score}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+      <div className={compact ? 'h-[280px]' : 'h-[300px] sm:h-[420px]'}>
         {isMounted ? (
           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={280}>
-            <RadarChart data={chartData} outerRadius="70%">
-              <PolarGrid stroke="#CBD5E1" />
-              <PolarAngleAxis dataKey="subject" tick={{ fill: '#475569', fontSize: 10, fontWeight: 500 }} />
+            <RadarChart data={chartData} outerRadius={compact ? '64%' : '70%'}>
+              <PolarGrid stroke={dark ? '#334155' : '#CBD5E1'} />
+              <PolarAngleAxis
+                dataKey="subject"
+                tick={{ fill: dark ? '#CBD5E1' : '#475569', fontSize: compact ? 9 : 10, fontWeight: 500 }}
+                tickFormatter={(value) => String(value).length > 22 ? `${String(value).slice(0, 20)}…` : String(value)}
+              />
               <PolarRadiusAxis
                 angle={90}
                 domain={[0, 100]}
                 tickCount={6}
-                tick={{ fill: '#94A3B8', fontSize: 9, fontWeight: 500 }}
+                tick={{ fill: dark ? '#64748B' : '#94A3B8', fontSize: 9, fontWeight: 500 }}
                 tickFormatter={(value) => `${value}%`}
               />
-              <Tooltip content={<CustomTooltip />} />
+              <Tooltip content={<CustomTooltip dark={dark} />} />
               <Radar
                 name="Maestria"
                 dataKey="score"
                 stroke={RADAR_COLOR}
                 fill={RADAR_COLOR}
-                fillOpacity={0.5}
-                strokeWidth={3}
+                fillOpacity={0.25}
+                strokeWidth={2}
               />
             </RadarChart>
           </SafeResponsiveContainer>
@@ -281,6 +317,7 @@ export const RadarDomainAssessmentChart = ({
           <div className="h-full w-full animate-pulse rounded-3xl bg-slate-50" />
         )}
       </div>
+      )}
     </div>
   );
 };

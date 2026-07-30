@@ -8276,8 +8276,76 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
   }, [isTutorialActive, tutorialStep, isKidsProfile, allowedTabsSet]);
 
+  const renderHistoryTimelineControls = () => (
+    <section
+      className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}
+      aria-label="Filtros da linha do tempo"
+    >
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="block">
+            <span className={`mb-1.5 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>Período da linha do tempo</span>
+            <select
+              value={historyPeriod}
+              onChange={(event) => setHistoryPeriod(event.target.value as PatientHistoryPeriod)}
+              className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
+            >
+              <option value="all">Todo o histórico</option>
+              <option value="30d">Últimos 30 dias</option>
+              <option value="90d">Últimos 90 dias</option>
+              <option value="180d">Últimos 6 meses</option>
+              <option value="365d">Último ano</option>
+              <option value="custom">Período personalizado</option>
+            </select>
+          </label>
+          {historyPeriod === 'custom' && (
+            <React.Fragment>
+              <label className="block">
+                <span className={`mb-1.5 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>De</span>
+                <input
+                  type="date"
+                  value={historyCustomFrom}
+                  onChange={(event) => setHistoryCustomFrom(event.target.value)}
+                  className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
+                />
+              </label>
+              <label className="block">
+                <span className={`mb-1.5 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>Até</span>
+                <input
+                  type="date"
+                  value={historyCustomTo}
+                  onChange={(event) => setHistoryCustomTo(event.target.value)}
+                  className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
+                />
+              </label>
+            </React.Fragment>
+          )}
+        </div>
+        <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`} aria-live="polite">
+          {historyPagination.loading
+            ? 'Carregando registros...'
+            : `${visibleHistoryWithFamilyNotes.length} registro${visibleHistoryWithFamilyNotes.length === 1 ? '' : 's'} carregado${visibleHistoryWithFamilyNotes.length === 1 ? '' : 's'}`}
+        </p>
+      </div>
+      {!historyRange.ready && historyPeriod === 'custom' && (
+        <p className="mt-3 text-sm text-amber-700">Informe uma data inicial e final válidas para consultar o período.</p>
+      )}
+      {historyPagination.error && (
+        <div className="mt-3 flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between" role="alert">
+          <span>{historyPagination.error}</span>
+          <button type="button" onClick={() => void requestPatientHistoryPage()} className="min-h-10 rounded-lg border border-rose-300 px-3 font-medium hover:bg-rose-100">
+            Tentar novamente
+          </button>
+        </div>
+      )}
+      {historyPagination.offline && (
+        <p className="mt-3 text-xs text-amber-700">Exibindo os registros disponíveis neste dispositivo. A paginação será retomada quando houver conexão.</p>
+      )}
+    </section>
+  );
+
   return ( 
-    <div className={`relative flex min-h-screen flex-col overflow-x-hidden overflow-y-auto transition-colors animate-slide-up ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}>
+    <div className={`relative flex min-h-screen flex-col overflow-x-hidden transition-colors animate-slide-up ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}>
       <div
         aria-hidden="true"
         style={{
@@ -8333,7 +8401,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome, categoria (Criança/Adulto) e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
             { targetId: 'tab-nav', title: 'Navegação por Abas', content: 'O prontuário é organizado em abas para facilitar o acesso a diferentes tipos de informação.', placement: 'bottom' },
             { targetId: 'tab-history', title: 'Aba Histórico', content: 'Veja a evolução clínica e o histórico de todas as atividades realizadas pelo paciente.', placement: 'bottom' },
-            { targetId: 'history-filters', title: 'Filtros e Comparação', content: 'Filtre por protocolo ou data para comparar o desempenho em diferentes momentos.', placement: 'bottom' },
+            { targetId: 'history-filters', title: 'Evolução clínica', content: 'Escolha o protocolo para acompanhar a evolução e comparar os domínios avaliados.', placement: 'bottom' },
             { targetId: 'evolution-chart-container', title: 'Gráfico de Evolução', content: 'Visualize o progresso quantitativo através de gráficos de radar ou linha.', placement: 'bottom' },
             { targetId: 'history-item-0', title: 'Detalhes da Atividade', content: 'Clique nos cards de histórico para ver notas, áudios e vídeos enviados pela família.', placement: 'top' },
             { targetId: 'tab-notes', title: 'Aba Anotações', content: 'Registre suas observações clínicas, orientações para a família ou notas para a equipe.', placement: 'bottom' },
@@ -9037,7 +9105,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       )}
 
       <div className={`z-20 border-b px-4 py-4 transition-colors sm:px-6 sm:py-5 ${isPanelDark ? 'border-slate-800 bg-[#0f1b2f]' : 'border-slate-100 bg-white'}`}>
-        <div className="mb-4 flex min-w-0 flex-col items-stretch gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="mx-auto w-full max-w-[1480px]">
+        <div className="mb-4 flex min-w-0 flex-col items-stretch gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex min-w-0 items-start gap-3 sm:gap-4">
             {!hideBackButton && (
               <button id="back-btn" onClick={onBack} className={`group flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 transition-all hover:text-[#7a32fc] ${isPanelDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-100 text-slate-400 hover:bg-slate-50'}`}>
@@ -9062,34 +9131,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     )}
                   </div>
                 )}
-                {canManageTherapistAssignment && (
-                  <div className="mt-3 flex w-full max-w-sm flex-col items-stretch gap-1.5 sm:flex-row sm:items-center sm:gap-2">
-                    <label className={`text-[10px] font-medium uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      Profissional responsável
-                    </label>
-                    <select
-                      className={`w-full min-w-0 rounded-lg border px-3 py-2 text-xs font-medium outline-none focus:border-[#7551FF] sm:w-56 ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`}
-                      value={selectedTherapistId}
-                      onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
-                      disabled={isLoadingTherapists}
-                    >
-                      <option value="">{isLoadingTherapists ? 'Carregando profissionais...' : 'Sem profissional responsável'}</option>
-                      {clinicTherapists.map((therapist: any) => (
-                        <option key={String(therapist.id)} value={String(therapist.id)}>
-                          {formatPatientProfessionalOptionLabel(therapist)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-                {patient?.id ? (
-                  <PatientProfessionalLinksPanel
-                    patientId={String(patient.id)}
-                    professionals={clinicTherapists}
-                    canManage={canManageTherapistAssignment}
-                    dark={isPanelDark}
-                  />
-                ) : null}
             </div> 
           </div> 
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
@@ -9142,124 +9183,86 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </button>
           </div>
         </div> 
-        <div id="tab-nav" className={`flex gap-1 overflow-x-auto rounded-xl p-1 no-scrollbar transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-gray-100'}`}>
-          {canAccessTab('history') && <button id="tab-history" onClick={() => setActiveTab('history')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'history' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Histórico</button>}
-          {canAccessTab('notes') && <button id="tab-notes" onClick={() => setActiveTab('notes')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'notes' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Anotações</button>}
-          {canAccessTab('report') && <button id="tab-report" onClick={() => setActiveTab('report')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'report' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Relatório</button>}
+        <div
+          id="patient-care-context"
+          className={`mb-4 grid min-w-0 gap-3 ${canManageTherapistAssignment ? 'lg:grid-cols-[minmax(15rem,19rem)_minmax(0,1fr)]' : ''}`}
+        >
+          {canManageTherapistAssignment && (
+            <section
+              className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-slate-50'}`}
+              aria-labelledby="patient-primary-professional-heading"
+            >
+              <div className="flex items-start gap-2">
+                <Activity size={18} className="mt-0.5 shrink-0 text-violet-600" />
+                <div className="min-w-0">
+                  <h2 id="patient-primary-professional-heading" className={`text-sm font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                    Responsável principal
+                  </h2>
+                  <p className={`mt-0.5 text-xs leading-5 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    Referência atual do prontuário.
+                  </p>
+                </div>
+              </div>
+              <label className={`mt-3 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                Profissional
+                <select
+                  className={`mt-1.5 h-11 w-full min-w-0 rounded-xl border px-3 text-sm outline-none transition focus:border-[#7551FF] focus:ring-2 focus:ring-[#7551FF]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}
+                  value={selectedTherapistId}
+                  onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
+                  disabled={isLoadingTherapists}
+                >
+                  <option value="">{isLoadingTherapists ? 'Carregando profissionais...' : 'Sem profissional responsável'}</option>
+                  {clinicTherapists.map((therapist: any) => (
+                    <option key={String(therapist.id)} value={String(therapist.id)}>
+                      {formatPatientProfessionalOptionLabel(therapist)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </section>
+          )}
+          {patient?.id ? (
+            <PatientProfessionalLinksPanel
+              patientId={String(patient.id)}
+              professionals={clinicTherapists}
+              canManage={canManageTherapistAssignment}
+              dark={isPanelDark}
+            />
+          ) : null}
+        </div>
+        <nav
+          id="tab-nav"
+          aria-label="Áreas do prontuário"
+          className={`flex gap-1 overflow-x-auto rounded-xl p-1 scrollbar-hide no-scrollbar transition-colors lg:grid lg:auto-cols-fr lg:grid-flow-col ${isPanelDark ? 'bg-slate-900/70' : 'bg-gray-100'}`}
+        >
+          {canAccessTab('history') && <button id="tab-history" aria-current={activeTab === 'history' ? 'page' : undefined} onClick={() => setActiveTab('history')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'history' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Histórico</button>}
+          {canAccessTab('notes') && <button id="tab-notes" aria-current={activeTab === 'notes' ? 'page' : undefined} onClick={() => setActiveTab('notes')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'notes' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Anotações</button>}
+          {canAccessTab('report') && <button id="tab-report" aria-current={activeTab === 'report' ? 'page' : undefined} onClick={() => setActiveTab('report')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'report' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Relatório</button>}
           {canAccessTab('plan') && (
             <button
               id="tab-plan"
+              aria-current={activeTab === 'plan' ? 'page' : undefined}
               onClick={() => setActiveTab('plan')}
-              className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'plan' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}
+              className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'plan' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}
             >
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
           {canAccessTab('session') && isKidsProfile && (
-            <button id="tab-session" onClick={() => requestSessionStart('fullscreen')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
+            <button id="tab-session" onClick={() => requestSessionStart('fullscreen')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
           )}
           {abaV2Enabled && canAccessTab('aba-charts') && isKidsProfile && (
-            <button id="tab-aba-charts" onClick={() => setActiveTab('aba-charts')} className={`min-w-[7rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos ABA</button>
+            <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-11 min-w-[7rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos ABA</button>
           )}
-          {canAccessTab('school') && <button id="tab-school" onClick={() => setActiveTab('school')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'school' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Escola</button>}
-          {canAccessTab('files') && <button id="tab-files" onClick={() => setActiveTab('files')} className={`min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all ${activeTab === 'files' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF]') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Arquivos</button>}
-        </div> 
+          {canAccessTab('school') && <button id="tab-school" aria-current={activeTab === 'school' ? 'page' : undefined} onClick={() => setActiveTab('school')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'school' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Escola</button>}
+          {canAccessTab('files') && <button id="tab-files" aria-current={activeTab === 'files' ? 'page' : undefined} onClick={() => setActiveTab('files')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'files' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Arquivos</button>}
+        </nav>
+        </div>
       </div> 
       <div className={`min-w-0 p-4 transition-colors sm:p-6 ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}>
+        <div className="mx-auto w-full max-w-[1480px]">
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
-            <section className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`} aria-label="Período do histórico">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  <label className="block">
-                    <span className={`mb-1.5 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>Período visível</span>
-                    <select
-                      value={historyPeriod}
-                      onChange={(event) => setHistoryPeriod(event.target.value as PatientHistoryPeriod)}
-                      className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
-                    >
-                      <option value="all">Todo o histórico</option>
-                      <option value="30d">Últimos 30 dias</option>
-                      <option value="90d">Últimos 90 dias</option>
-                      <option value="180d">Últimos 6 meses</option>
-                      <option value="365d">Último ano</option>
-                      <option value="custom">Período personalizado</option>
-                    </select>
-                  </label>
-                  {historyPeriod === 'custom' && (
-                    <React.Fragment>
-                      <label className="block">
-                        <span className={`mb-1.5 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>De</span>
-                        <input
-                          type="date"
-                          value={historyCustomFrom}
-                          onChange={(event) => setHistoryCustomFrom(event.target.value)}
-                          className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className={`mb-1.5 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>Até</span>
-                        <input
-                          type="date"
-                          value={historyCustomTo}
-                          onChange={(event) => setHistoryCustomTo(event.target.value)}
-                          className={`h-11 w-full rounded-xl border px-3 text-sm outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
-                        />
-                      </label>
-                    </React.Fragment>
-                  )}
-                </div>
-                <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`} aria-live="polite">
-                  {historyPagination.loading
-                    ? 'Carregando registros...'
-                    : `${visibleHistoryWithFamilyNotes.length} registro${visibleHistoryWithFamilyNotes.length === 1 ? '' : 's'} carregado${visibleHistoryWithFamilyNotes.length === 1 ? '' : 's'}`}
-                </p>
-              </div>
-              {!historyRange.ready && historyPeriod === 'custom' && (
-                <p className="mt-3 text-sm text-amber-700">Informe uma data inicial e final válidas para consultar o período.</p>
-              )}
-              {historyPagination.error && (
-                <div className="mt-3 flex flex-col gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between" role="alert">
-                  <span>{historyPagination.error}</span>
-                  <button type="button" onClick={() => void requestPatientHistoryPage()} className="min-h-10 rounded-lg border border-rose-300 px-3 font-medium hover:bg-rose-100">
-                    Tentar novamente
-                  </button>
-                </div>
-              )}
-              {historyPagination.offline && (
-                <p className="mt-3 text-xs text-amber-700">Exibindo os registros disponíveis neste dispositivo. A paginação será retomada quando houver conexão.</p>
-              )}
-            </section>
-            {showCoordinatorPatientRadar && (
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-                <RadarDomainAssessmentChart
-                  patientId={patient.id}
-                  protocols={planProtocolCatalog}
-                  history={cumulativeGrowthHistory}
-                  initialProtocolId={selectedChartProtocolId}
-                  storageKey={`verto.radar-domain-filter:${String(patient?.id || 'unknown')}`}
-                />
-                <CumulativeGrowthChart
-                  patientId={patient.id}
-                  history={cumulativeGrowthHistory}
-                  protocols={planProtocolCatalog}
-                  protocolId={selectedChartProtocolId}
-                />
-              </div>
-            )}
-            {isKidsProfile && (
-              <div className="bg-white border border-amber-100 rounded-3xl p-5 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-gray-800">Marcos validados pela clínica</p>
-                    <p className="text-xs text-gray-500 mt-1">Cada foto da família validada com ⭐ conta para premiações clínicas.</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-lg font-extrabold text-amber-600">{kidsMilestoneStars} ⭐</p>
-                  </div>
-                </div>
-              </div>
-            )}
             {!isKidsProfile && (
               <div className="space-y-4 mb-6">
                 <div className={`border rounded-3xl p-5 shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
@@ -9318,6 +9321,54 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </div>
                 </div>
               </div>
+            )}
+
+            {!isKidsProfile && showCoordinatorPatientRadar && (
+              <section
+                className={`space-y-4 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-slate-50/70'}`}
+                aria-labelledby="adult-development-overview-heading"
+              >
+                <div>
+                  <h2 id="adult-development-overview-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                    Panorama do desenvolvimento
+                  </h2>
+                  <p className={`mt-1 text-sm leading-6 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    Desempenho por domínio e habilidades dominadas no protocolo selecionado.
+                  </p>
+                </div>
+                <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
+                  <RadarDomainAssessmentChart
+                    patientId={patient.id}
+                    protocols={planProtocolCatalog}
+                    history={cumulativeGrowthHistory}
+                    protocolId={selectedChartProtocolId}
+                    compact
+                    dark={isPanelDark}
+                  />
+                  <CumulativeGrowthChart
+                    patientId={patient.id}
+                    history={cumulativeGrowthHistory}
+                    protocols={planProtocolCatalog}
+                    protocolId={selectedChartProtocolId}
+                    compact
+                    dark={isPanelDark}
+                  />
+                </div>
+              </section>
+            )}
+
+            {!isKidsProfile && (
+              <section className="space-y-4" aria-labelledby="adult-timeline-heading">
+                <div>
+                  <h2 id="adult-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                    Linha do tempo clínica
+                  </h2>
+                  <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    Registros concluídos, avaliações e anotações em ordem cronológica.
+                  </p>
+                </div>
+                {renderHistoryTimelineControls()}
+              </section>
             )}
 
             {!isKidsProfile && (
@@ -9431,55 +9482,87 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             )}
             {isKidsProfile ? (
               <React.Fragment>
-                <div id="evolution-chart-container" className="min-h-[320px] min-w-0">
+                <section
+                  id="patient-history-insights"
+                  className={`space-y-4 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-slate-50/70'}`}
+                  aria-labelledby="patient-history-insights-heading"
+                >
+                  <div id="history-filters" className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                    <div className="min-w-0">
+                      <h2 id="patient-history-insights-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                        Evolução clínica
+                      </h2>
+                      <p className={`mt-1 max-w-2xl text-sm leading-6 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Uma leitura consolidada do protocolo selecionado. Para análises ABA detalhadas, use a aba Gráficos ABA.
+                      </p>
+                    </div>
+                    <label className={`block w-full lg:max-w-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                      <span className="mb-1.5 flex items-center gap-2 text-xs font-medium">
+                        <SlidersHorizontal size={14} className="text-[#7a32fc]" /> Protocolo
+                      </span>
+                      <div className="relative">
+                        <select
+                          id="protocol-selector"
+                          className={`h-11 w-full appearance-none rounded-xl border px-3 pr-10 text-sm font-medium outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
+                          value={selectedChartProtocolId}
+                          onChange={(e) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(e.target.value); }}
+                        >
+                          {planProtocolCatalog.map((protocol: any) => (
+                            <option key={protocol.id} value={protocol.id}>{protocol.title}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                      </div>
+                    </label>
+                  </div>
+                  <div id="evolution-chart-container" className="min-w-0">
                   <EvolutionBarChart
                     chartData={radarChartData}
                     maxScore={100}
                     title="Evolução por domínio"
                     description="Compare a primeira avaliação registrada com o registro mais recente do protocolo selecionado."
-                    headerAction={(
-                      <div id="history-filters" className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2 lg:w-[620px]">
-                        <div>
-                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
-                            <SlidersHorizontal size={12} className="text-[#7a32fc]"/> Protocolo
-                          </label>
-                          <div className="relative">
-                            <select 
-                              id="protocol-selector"
-                              className="w-full bg-white border border-slate-200 text-sm font-semibold text-slate-700 px-4 py-3 rounded-2xl outline-none focus:border-[#7a32fc] focus:ring-4 focus:ring-[#7a32fc]/10 transition-all appearance-none"
-                              value={selectedChartProtocolId}
-                              onChange={(e) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(e.target.value); }}
-                            >
-                              {protocols.map((p: any) => (
-                                <option key={p.id} value={p.id}>{p.title}</option>
-                              ))}
-                            </select>
-                            <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-2 ml-1">
-                            <Calendar size={12} className="text-[#05CD99]"/> Recorte
-                          </label>
-                          <div className="relative">
-                            <select 
-                              id="snapshot-selector"
-                              className="w-full bg-white border border-slate-200 text-sm font-semibold text-slate-700 px-4 py-3 rounded-2xl outline-none focus:border-[#05CD99] focus:ring-4 focus:ring-[#05CD99]/10 transition-all appearance-none"
-                              value={selectedSnapshotDate}
-                              onChange={(e) => setSelectedSnapshotDate(e.target.value)}
-                            >
-                              <option value="all">Último registro por domínio</option>
-                              {availableSnapshots.map((date: any) => (
-                                <option key={date} value={date}>Comparar com {date}</option>
-                              ))}
-                            </select>
-                            <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={16} />
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    variant="patient-history"
+                    dark={isPanelDark}
                   />
-                </div>
+                  </div>
+                  {showCoordinatorPatientRadar && (
+                    <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
+                      <RadarDomainAssessmentChart
+                        patientId={patient.id}
+                        protocols={planProtocolCatalog}
+                        history={cumulativeGrowthHistory}
+                        protocolId={selectedChartProtocolId}
+                        compact
+                        dark={isPanelDark}
+                      />
+                      <CumulativeGrowthChart
+                        patientId={patient.id}
+                        history={cumulativeGrowthHistory}
+                        protocols={planProtocolCatalog}
+                        protocolId={selectedChartProtocolId}
+                        compact
+                        dark={isPanelDark}
+                      />
+                    </div>
+                  )}
+                </section>
+                <section className="space-y-4" aria-labelledby="patient-timeline-heading">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <h2 id="patient-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                        Linha do tempo
+                      </h2>
+                      <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Registros da família e das sessões, organizados por data.
+                      </p>
+                    </div>
+                    <div className={`inline-flex items-center gap-3 self-start rounded-xl border px-3 py-2 sm:self-auto ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+                      <span className="text-xs font-medium">Marcos validados</span>
+                      <strong className="text-base font-semibold">{kidsMilestoneStars} ⭐</strong>
+                    </div>
+                  </div>
+                  {renderHistoryTimelineControls()}
+                </section>
               </React.Fragment>
             ) : null}
             {isKidsProfile && historyPagination.loading && (sortedDateKeys?.length || 0) === 0 ? (
@@ -10850,7 +10933,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               )}
             </div>
           </div>
-        )} 
+        )}
+        </div>
       </div> 
 
       {showAnamnesisFileModal && (

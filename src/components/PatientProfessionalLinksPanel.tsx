@@ -186,10 +186,10 @@ export const PatientProfessionalLinksPanel = ({
 
   const shell = dark
     ? 'border-slate-700 bg-slate-900/60 text-slate-100'
-    : 'border-slate-200 bg-slate-50 text-slate-900';
+    : 'border-slate-200 bg-white text-slate-900';
 
   return (
-    <section className={`mt-3 w-full max-w-3xl rounded-2xl border p-3 ${shell}`} aria-label="Equipe do caso">
+    <section className={`w-full min-w-0 rounded-2xl border p-4 ${shell}`} aria-label="Equipe do caso">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-2">
           <UsersRound size={18} className="mt-0.5 text-violet-600" />
@@ -294,7 +294,7 @@ export const PatientProfessionalLinksPanel = ({
         </div>
       ) : null}
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {active.map((link) => (
           <article
             key={link.id}
@@ -338,7 +338,7 @@ export const PatientProfessionalLinksPanel = ({
           <summary className="cursor-pointer text-xs font-medium text-slate-500">
             Histórico de vínculos ({history.length})
           </summary>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {history.map((link) => (
               <div key={link.id} className={`rounded-lg border px-3 py-2 text-xs ${dark ? 'border-slate-700 text-slate-400' : 'border-slate-200 bg-white text-slate-600'}`}>
                 <p className="font-medium">{link.professional?.name || link.professional?.email || 'Profissional'}</p>
