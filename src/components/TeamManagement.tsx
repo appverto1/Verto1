@@ -18,6 +18,12 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { motion, AnimatePresence } from 'framer-motion';
+import {
+  CLINICAL_SPECIALTY_OPTIONS,
+  getClinicalSpecialtyOptions,
+  normalizeClinicalSpecialty,
+  readClinicalSpecialtyFromSource,
+} from '../utils/clinicalSpecialties';
 
 interface Member {
   id: string;
@@ -26,6 +32,7 @@ interface Member {
   role: 'coordinator' | 'therapist' | 'receptionist' | 'patient' | 'admin';
   profileRole?: string | null;
   professionalTitle?: string | null;
+  specialty?: string | null;
   clinic_id: string;
   created_at: string;
   workSchedule?: any;
@@ -45,14 +52,6 @@ const WORK_SCHEDULE_DAYS = [
   { key: 'saturday', label: 'Sábado' },
   { key: 'sunday', label: 'Domingo' }
 ];
-const PROFESSIONAL_TITLE_OPTIONS = [
-  'Psicólogo',
-  'Terapeuta Ocupacional',
-  'Acompanhante Terapêutico',
-  'Aplicador ABA'
-];
-const DEFAULT_PROFESSIONAL_TITLE = 'Psicólogo';
-
 const buildDefaultWorkSchedule = () => ({
   active: true,
   stepMinutes: 50,
@@ -94,31 +93,17 @@ const hasSameOperationalRole = (member: Member, reference: Member | null) => {
   return isAttendanceProfessional(member) && isAttendanceProfessional(reference);
 };
 
-const normalizeProfessionalTitle = (value: unknown, fallback = '') => {
-  const text = String(value || '').trim();
-  const match = PROFESSIONAL_TITLE_OPTIONS.find((option) => option.toLowerCase() === text.toLowerCase());
-  return match || fallback;
-};
-
-const getProfessionalTitleFromSource = (source: any, fallback = DEFAULT_PROFESSIONAL_TITLE) => {
-  const requiredFields = source?.requiredOnboardingFields || source?.required_onboarding_fields || {};
-  return normalizeProfessionalTitle(
-    source?.professionalTitle ||
-      source?.professional_title ||
-      source?.profileRole ||
-      requiredFields?.professionalTitle ||
-      requiredFields?.professional_title ||
-      requiredFields?.title,
-    fallback
-  );
-};
-
 const formatAccessRoleLabel = (role: unknown, source?: any) => {
   const normalizedRole = String(role || '').trim().toLowerCase();
   if (normalizedRole === 'coordinator') return 'Coordenador';
   if (normalizedRole === 'receptionist') return 'Recepcionista/Assistente';
   if (normalizedRole === 'admin' || normalizedRole === 'owner') return 'Administrador';
-  if (normalizedRole === 'therapist') return getProfessionalTitleFromSource(source);
+  if (normalizedRole === 'therapist') {
+    return (
+      readClinicalSpecialtyFromSource(source) ||
+      'Especialidade clínica pendente'
+    );
+  }
   if (normalizedRole === 'patient') return 'Paciente';
   return 'Profissional';
 };
@@ -127,7 +112,7 @@ const formatWorkScheduleMemberTitle = (member: Member) => {
   const rawName = String(member?.name || member?.email || 'Profissional').trim();
   const nameWithoutGenericPrefix = rawName.replace(/^terapeuta\s+/i, '').trim() || rawName;
   if (member?.role === 'therapist') {
-    return `${getProfessionalTitleFromSource(member, 'Profissional')} ${nameWithoutGenericPrefix}`.trim();
+    return `${readClinicalSpecialtyFromSource(member, 'Profissional')} ${nameWithoutGenericPrefix}`.trim();
   }
   if (member?.role === 'coordinator') {
     return `Coordenador ${nameWithoutGenericPrefix}`.trim();
@@ -140,7 +125,7 @@ const formatInvitationRoleLabel = (invitation: any) => {
   const roleLabel = invitation?.roleLabel || invitation?.role_label;
   if (roleLabel && !/therapist/i.test(String(roleLabel))) return String(roleLabel);
   if (String(role || '').toLowerCase() === 'therapist') {
-    return `Profissional de atendimento · ${getProfessionalTitleFromSource(invitation)}`;
+    return `Profissional de atendimento · ${readClinicalSpecialtyFromSource(invitation, 'Especialidade pendente')}`;
   }
   return formatAccessRoleLabel(role, invitation);
 };
@@ -252,7 +237,9 @@ export function TeamManagement({
   const [unlinkingMemberId, setUnlinkingMemberId] = useState<string | null>(null);
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<'therapist' | 'receptionist' | 'coordinator'>('therapist');
-  const [newMemberProfessionalTitle, setNewMemberProfessionalTitle] = useState(DEFAULT_PROFESSIONAL_TITLE);
+  const [newMemberSpecialty, setNewMemberSpecialty] = useState('');
+  const [specialtySavingId, setSpecialtySavingId] = useState<string | null>(null);
+  const [roleSpecialtyDrafts, setRoleSpecialtyDrafts] = useState<Record<string, string>>({});
   const [editingScheduleMember, setEditingScheduleMember] = useState<Member | null>(null);
   const [workScheduleDraft, setWorkScheduleDraft] = useState<any>(null);
   const [workScheduleLoadingId, setWorkScheduleLoadingId] = useState<string | null>(null);
@@ -324,6 +311,11 @@ export function TeamManagement({
       setIsAssigning(false);
       return;
     }
+    if (newMemberRole === 'therapist' && !normalizeClinicalSpecialty(newMemberSpecialty)) {
+      setError('Selecione a especialidade clínica do profissional.');
+      setIsAssigning(false);
+      return;
+    }
 
     try {
       const result = await dataService.inviteToClinic(
@@ -331,8 +323,7 @@ export function TeamManagement({
         newMemberRole,
         newMemberRole === 'therapist'
           ? {
-              professionalTitle: newMemberProfessionalTitle,
-              professional_title: newMemberProfessionalTitle,
+              specialty: newMemberSpecialty,
               accessRoleLabel: 'Profissional de atendimento'
             }
           : {}
@@ -340,6 +331,7 @@ export function TeamManagement({
       if (result.success) {
         setSuccess(`Convite enviado com sucesso para ${newMemberEmail}`);
         setNewMemberEmail('');
+        setNewMemberSpecialty('');
         fetchInvitations();
       } else {
         setError(result.error);
@@ -377,14 +369,26 @@ export function TeamManagement({
     setSuccess(null);
     setResendingInvitationId(invitation.id);
     try {
+      const invitationSpecialty =
+        invitation.role === 'therapist'
+          ? normalizeClinicalSpecialty(
+              readClinicalSpecialtyFromSource(invitation),
+            )
+          : null;
+      if (invitation.role === 'therapist' && !invitationSpecialty) {
+        setError(
+          'Este convite usa uma especialidade de cadastro anterior. Cancele-o e crie um novo convite com uma especialidade clínica válida.',
+        );
+        return;
+      }
+
       const result = await dataService.inviteToClinic(
         invitation.email,
         invitation.role,
         invitation.role === 'therapist'
           ? {
               ...(invitation.requiredOnboardingFields || invitation.required_onboarding_fields || {}),
-              professionalTitle: getProfessionalTitleFromSource(invitation),
-              professional_title: getProfessionalTitleFromSource(invitation),
+              specialty: invitationSpecialty,
               accessRoleLabel: 'Profissional de atendimento'
             }
           : (invitation.requiredOnboardingFields || invitation.required_onboarding_fields || {})
@@ -403,31 +407,79 @@ export function TeamManagement({
     }
   };
 
-  const handleUpdateRole = async (memberId: string, newRole: any, professionalTitle?: string | null) => {
+  const handleUpdateRole = async (
+    memberId: string,
+    newRole: Member['role'],
+    metadata?: Record<string, any>,
+  ) => {
     try {
-      const resolvedTitle = newRole === 'therapist'
-        ? normalizeProfessionalTitle(professionalTitle, DEFAULT_PROFESSIONAL_TITLE)
-        : null;
-      const result = await dataService.updateMemberRole(memberId, newRole, {
-        professionalTitle: resolvedTitle,
-        professional_title: resolvedTitle
-      });
+      const result = await dataService.updateMemberRole(memberId, newRole, metadata);
       if (result.success) {
         setSuccess('Acesso atualizado com sucesso');
         setMembers((prev) => prev.map((member) => member.id === memberId
           ? {
               ...member,
               role: newRole,
-              professionalTitle: resolvedTitle,
-              profileRole: resolvedTitle
+              specialty:
+                newRole === 'therapist'
+                  ? normalizeClinicalSpecialty(metadata?.specialty) || member.specialty
+                  : member.specialty,
             }
           : member));
+        setRoleSpecialtyDrafts((current) => {
+          const next = { ...current };
+          delete next[memberId];
+          return next;
+        });
         fetchMembers();
+        return true;
       } else {
         setError(result.error);
+        return false;
       }
     } catch (err) {
       setError('Erro ao atualizar papel');
+      return false;
+    }
+  };
+
+  const handleUpdateSpecialty = async (
+    member: Member,
+    nextSpecialty: string,
+  ) => {
+    const specialty = normalizeClinicalSpecialty(nextSpecialty);
+    if (!specialty) {
+      setError(
+        'Selecione uma especialidade clínica válida para atualizar o cadastro.',
+      );
+      return;
+    }
+
+    setError(null);
+    setSuccess(null);
+    setSpecialtySavingId(member.id);
+    try {
+      const result = await dataService.updateMemberSpecialty(
+        member.id,
+        specialty,
+      );
+      if (!result.success) {
+        setError(
+          result.error || 'Não foi possível atualizar a especialidade clínica.',
+        );
+        return;
+      }
+
+      setMembers((current) =>
+        current.map((item) =>
+          item.id === member.id ? { ...item, specialty } : item,
+        ),
+      );
+      setSuccess('Especialidade clínica atualizada com sucesso.');
+    } catch (_error) {
+      setError('Erro ao atualizar a especialidade clínica.');
+    } finally {
+      setSpecialtySavingId(null);
     }
   };
 
@@ -797,26 +849,87 @@ export function TeamManagement({
                         </button>
                         
                         {openMenuId === member.id && (
-                          <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
+                          <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl shadow-xl border border-slate-100 z-50 py-2 animate-in fade-in zoom-in duration-200">
                             <div className="px-4 py-2 border-b border-slate-50 mb-1">
                               <p className="text-xs font-medium text-slate-500">Alterar acesso</p>
                             </div>
                             <button 
-                              onClick={() => { handleUpdateRole(member.id, 'coordinator', null); setOpenMenuId(null); }}
+                              onClick={() => { handleUpdateRole(member.id, 'coordinator'); setOpenMenuId(null); }}
                               className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'coordinator' ? 'text-purple-600 bg-purple-50' : 'text-slate-600 hover:bg-slate-50'}`}
                               disabled={member.id === user.id}
                             >
                               <Shield size={14} /> Coordenador
                             </button>
+                            {member.role === 'therapist' ? (
+                              <div className="flex w-full items-center gap-3 bg-blue-50 px-4 py-2.5 text-xs font-medium text-blue-600">
+                                <Stethoscope size={14} /> Profissional de atendimento
+                              </div>
+                            ) : (
+                              <div className="border-y border-slate-50 px-3 py-3">
+                                <label
+                                  htmlFor={`member-role-specialty-${member.id}`}
+                                  className="block px-1 text-xs font-medium text-slate-500"
+                                >
+                                  Conceder acesso clínico
+                                </label>
+                                <select
+                                  id={`member-role-specialty-${member.id}`}
+                                  value={
+                                    roleSpecialtyDrafts[member.id] ??
+                                    normalizeClinicalSpecialty(
+                                      readClinicalSpecialtyFromSource(member),
+                                    ) ??
+                                    ''
+                                  }
+                                  onChange={(event) =>
+                                    setRoleSpecialtyDrafts((current) => ({
+                                      ...current,
+                                      [member.id]: event.target.value,
+                                    }))
+                                  }
+                                  disabled={member.id === user.id}
+                                  className="mt-2 min-h-10 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/10 disabled:opacity-50"
+                                >
+                                  <option value="" disabled>
+                                    Escolha a especialidade
+                                  </option>
+                                  {CLINICAL_SPECIALTY_OPTIONS.map((specialty) => (
+                                    <option key={specialty} value={specialty}>
+                                      {specialty}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  disabled={
+                                    member.id === user.id ||
+                                    !normalizeClinicalSpecialty(
+                                      roleSpecialtyDrafts[member.id] ??
+                                      readClinicalSpecialtyFromSource(member),
+                                    )
+                                  }
+                                  onClick={() => {
+                                    const specialty = normalizeClinicalSpecialty(
+                                      roleSpecialtyDrafts[member.id] ??
+                                      readClinicalSpecialtyFromSource(member),
+                                    );
+                                    if (!specialty) {
+                                      setError('Escolha a especialidade antes de conceder acesso clínico.');
+                                      return;
+                                    }
+                                    void handleUpdateRole(member.id, 'therapist', { specialty })
+                                      .then((updated) => {
+                                        if (updated) setOpenMenuId(null);
+                                      });
+                                  }}
+                                  className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 text-xs font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <Stethoscope size={14} /> Aplicar acesso profissional
+                                </button>
+                              </div>
+                            )}
                             <button 
-                              onClick={() => { handleUpdateRole(member.id, 'therapist', getProfessionalTitleFromSource(member)); setOpenMenuId(null); }}
-                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'therapist' ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:bg-slate-50'}`}
-                              disabled={member.id === user.id}
-                            >
-                              <Stethoscope size={14} /> Profissional de atendimento
-                            </button>
-                            <button 
-                              onClick={() => { handleUpdateRole(member.id, 'receptionist', null); setOpenMenuId(null); }}
+                              onClick={() => { handleUpdateRole(member.id, 'receptionist'); setOpenMenuId(null); }}
                               className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'receptionist' ? 'text-green-600 bg-green-50' : 'text-slate-600 hover:bg-slate-50'}`}
                               disabled={member.id === user.id}
                             >
@@ -824,22 +937,51 @@ export function TeamManagement({
                             </button>
                             {member.role === 'therapist' && (
                               <div className="border-t border-slate-50 pt-2 mt-1">
-                                <div className="px-4 py-2">
-                                  <p className="text-xs font-medium text-slate-500">Título profissional</p>
-                                </div>
-                                {PROFESSIONAL_TITLE_OPTIONS.map((title) => {
-                                  const selected = getProfessionalTitleFromSource(member) === title;
-                                  return (
-                                    <button
-                                      key={title}
-                                      type="button"
-                                      onClick={() => { handleUpdateRole(member.id, 'therapist', title); setOpenMenuId(null); }}
-                                      className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${selected ? 'text-blue-600 bg-blue-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                                <label
+                                  htmlFor={`member-specialty-${member.id}`}
+                                  className="block px-4 pb-1 pt-2 text-xs font-medium text-slate-500"
+                                >
+                                  Especialidade clínica
+                                </label>
+                                <div className="px-3 pb-2">
+                                  <select
+                                    id={`member-specialty-${member.id}`}
+                                    value={readClinicalSpecialtyFromSource(member)}
+                                    onChange={(event) =>
+                                      void handleUpdateSpecialty(
+                                        member,
+                                        event.target.value,
+                                      )
+                                    }
+                                    disabled={specialtySavingId === member.id}
+                                    className="min-h-10 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/10 disabled:cursor-wait disabled:opacity-60"
+                                  >
+                                    {!readClinicalSpecialtyFromSource(member) && (
+                                      <option value="" disabled>
+                                        Selecione
+                                      </option>
+                                    )}
+                                    {getClinicalSpecialtyOptions(
+                                      readClinicalSpecialtyFromSource(member),
+                                    ).map((option) => (
+                                      <option
+                                        key={option.value}
+                                        value={option.value}
+                                        disabled={option.legacy}
+                                      >
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {specialtySavingId === member.id && (
+                                    <p
+                                      className="mt-1 text-[11px] text-blue-600"
+                                      role="status"
                                     >
-                                      <Stethoscope size={14} /> {title}
-                                    </button>
-                                  );
-                                })}
+                                      Salvando especialidade...
+                                    </p>
+                                  )}
+                                </div>
                               </div>
                             )}
                             {(member.role === 'therapist' || member.role === 'coordinator') && (
@@ -1277,20 +1419,32 @@ export function TeamManagement({
 
                   {newMemberRole === 'therapist' && (
                     <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                      <p className="mb-2 text-xs font-medium text-slate-600">Título profissional</p>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-2">
-                        {PROFESSIONAL_TITLE_OPTIONS.map((title) => (
-                          <button
-                            key={title}
-                            type="button"
-                            aria-pressed={newMemberProfessionalTitle === title}
-                            onClick={() => setNewMemberProfessionalTitle(title)}
-                            className={`min-h-10 rounded-lg border px-3 py-2 text-left text-xs font-medium transition ${newMemberProfessionalTitle === title ? 'border-blue-300 bg-white text-blue-700 shadow-sm' : 'border-transparent bg-white/60 text-slate-600 hover:border-blue-100 hover:bg-white'}`}
-                          >
-                            {title}
-                          </button>
+                      <label
+                        htmlFor="team-invitation-clinical-specialty"
+                        className="mb-2 block text-xs font-medium text-slate-600"
+                      >
+                        Especialidade clínica
+                      </label>
+                      <select
+                        id="team-invitation-clinical-specialty"
+                        value={newMemberSpecialty}
+                        required
+                        onChange={(event) => setNewMemberSpecialty(event.target.value)}
+                        className="min-h-11 w-full rounded-xl border border-blue-100 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"
+                      >
+                        <option value="" disabled>
+                          Selecione a especialidade
+                        </option>
+                        {CLINICAL_SPECIALTY_OPTIONS.map((specialty) => (
+                          <option key={specialty} value={specialty}>
+                            {specialty}
+                          </option>
                         ))}
-                      </div>
+                      </select>
+                      <p className="mt-2 text-xs leading-5 text-slate-500">
+                        Usada nos vínculos clínicos e nos planos desta
+                        especialidade.
+                      </p>
                     </div>
                   )}
 

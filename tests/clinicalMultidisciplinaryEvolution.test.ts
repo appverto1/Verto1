@@ -92,7 +92,11 @@ assert.doesNotMatch(migration, /delete from public\.patient_professional_links|d
 assert.match(server, /THERAPEUTIC_PLAN_VERSION_CONFLICT/);
 assert.match(server, /\.eq\('edit_version', expectedVersion\)/);
 assert.match(server, /THERAPEUTIC_PLAN_PROFESSIONAL_NOT_LINKED/);
-assert.match(server, /meta: \{ queryCount: 7, batched: true/);
+assert.match(
+  server,
+  /queryCount: 7 \+ \(linkedProfessionalIds\.length \? 2 : 0\)/,
+  'perfil e membership dos profissionais vinculados devem ser carregados em duas consultas em lote, sem N+1',
+);
 assert.match(server, /\.in\('professional_id', professionalIds\)/, 'profissionais devem ser carregados em lote');
 assert.match(server, /TEMPLATE_PRIVACY_REVIEW_REQUIRED/);
 assert.match(server, /visibility === 'private'/);
@@ -100,7 +104,9 @@ assert.match(server, /source_template_version/);
 assert.match(server, /patientProfessionalHistoricalReadOnly/);
 assert.match(server, /historicalSnapshotOnly: true/);
 assert.match(server, /\.contains\('authorized_reader_ids', \[actorId\]\)/);
-assert.match(server, /\.lte\('created_at', accessEndedAt\)/);
+assert.match(server, /\.lte\('created_at', historicalCutoff\.updatedAt\)/);
+assert.match(server, /\.lt\('created_at', historicalCutoff\.exclusiveCivilEndAt\)/);
+assert.match(server, /from\('aba_program_versions'\)/);
 assert.match(planPanel, /therapeutic-plan-history-read-only/);
 assert.match(planPanel, /somente as versões congeladas/);
 assert.match(linksPanel, /active\.length >= 5/);

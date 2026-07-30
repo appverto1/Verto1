@@ -345,6 +345,22 @@ import {
   validatePatientProfessionalCandidate
 } from './src/utils/patientProfessionalLinks';
 import {
+  normalizeClinicalSpecialty,
+  readClinicalSpecialtyFromSource
+} from './src/utils/clinicalSpecialties';
+import {
+  canEditTherapeuticPlanScope,
+  filterTherapeuticPlanProgramsForActor,
+  filterTherapeuticPlanScopesForActor,
+  isTherapeuticPlanManager,
+  normalizeTherapeuticSpecialtyObjectives,
+  resolveHistoricalTherapeuticPlanReadCutoff
+} from './src/utils/therapeuticPlanAccess';
+import {
+  resolveEffectiveClinicRoleFromMembership,
+  type ClinicAuthorityRole
+} from './src/utils/clinicMembershipAuthority';
+import {
   evaluatePatientClinicalAccess,
   executeAuthorizedHistoryScoreMutation
 } from './src/utils/patientClinicalAccess';
@@ -7945,6 +7961,94 @@ function dateGroupForClinic(value: unknown, user: any): string {
 function hasGlobalClinicAccess(user: any): boolean {
   const role = sanitizeString(user?.role, 40).toLowerCase();
   return role === 'admin' || role === 'owner';
+}
+
+async function resolveEffectiveClinicRole(
+  user: any
+): Promise<ClinicAuthorityRole | null> {
+  const actorId = sanitizeString(user?.id || user?.user_id, 120);
+  const clinicId = sanitizeString(currentClinicId(user), 120);
+  const sessionRole = sanitizeString(user?.role, 40).toLowerCase();
+  if (!isUuid(actorId)) return null;
+
+  const [globalActorResult, membershipResult] = await Promise.all([
+    supabase
+      .from('users')
+      .select('id,role')
+      .eq('id', actorId)
+      .limit(1)
+      .maybeSingle(),
+    isUuid(clinicId)
+      ? supabase
+          .from('clinic_memberships')
+          .select('user_id,clinic_id,role,status')
+          .eq('user_id', actorId)
+          .eq('clinic_id', clinicId)
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null })
+  ]);
+  if (globalActorResult.error) throw globalActorResult.error;
+  if (membershipResult.error) throw membershipResult.error;
+
+  return resolveEffectiveClinicRoleFromMembership({
+    actorId,
+    clinicId,
+    sessionRole,
+    globalRole: globalActorResult.data?.role,
+    membership: membershipResult.data
+  });
+}
+
+function requireActiveClinicRoles(
+  ...allowedRoles: ClinicAuthorityRole[]
+) {
+  const allowed = new Set<ClinicAuthorityRole>(allowedRoles);
+  return async (req: any, res: any, next: any) => {
+    try {
+      const role = await resolveEffectiveClinicRole(req.session?.user);
+      if (!role || !allowed.has(role)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_MEMBERSHIP_ROLE_DENIED',
+          message: 'Seu acesso atual nesta clínica não permite esta ação.'
+        });
+      }
+      if (
+        role === 'owner' &&
+        !hasVerifiedOwnerMfaSession({
+          ...req.session?.user,
+          role: 'owner'
+        })
+      ) {
+        return res.status(401).json({
+          success: false,
+          error: 'OWNER_MFA_REQUIRED',
+          message: 'Confirme o Google Authenticator para acessar esta área.'
+        });
+      }
+      req.effectiveClinicRole = role;
+      return next();
+    } catch (error) {
+      logRouteDbError('requireActiveClinicRoles', error, {
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+        userId: sanitizeString(req.session?.user?.id, 120)
+      });
+      if (isMissingRelationError(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_MEMBERSHIP_SCHEMA_UNAVAILABLE',
+          message: 'A estrutura de acesso por clínica ainda não foi aplicada.'
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'CLINIC_MEMBERSHIP_ROLE_UNAVAILABLE',
+        message: 'Não foi possível validar seu acesso nesta clínica agora.'
+      });
+    }
+  };
 }
 
 function normalizePromptTypeKey(value: unknown): string {
@@ -20185,11 +20289,19 @@ async function startServer() {
         req.body.patientId = canonicalPatientId;
       }
 
+      const hasResolvedClinicRole =
+        typeof req.effectiveClinicRole === 'string' &&
+        req.effectiveClinicRole.length > 0;
+      const globalClinicAccess = hasResolvedClinicRole
+        ? ['admin', 'owner'].includes(
+            sanitizeString(req.effectiveClinicRole, 40).toLowerCase()
+          )
+        : hasGlobalClinicAccess(user);
+
       // Global backoffice bypass only
-      if (hasGlobalClinicAccess(user) && isExplicitDemoUser(user)) {
+      if (globalClinicAccess && isExplicitDemoUser(user)) {
         return res.status(403).json({ error: 'A conta demo não possui acesso global a prontuários.' });
       }
-      const globalClinicAccess = hasGlobalClinicAccess(user);
       if (globalClinicAccess && !resolvedPatientId) return next();
 
       // Check if user is the patient themselves
@@ -20224,7 +20336,10 @@ async function startServer() {
       req.resolvedPatientClinicId = sanitizeString(patient.clinic_id, 120);
       if (globalClinicAccess) return next();
 
-      const userRole = sanitizeString(user?.role, 40).toLowerCase();
+      const userRole = sanitizeString(
+        req.effectiveClinicRole || user?.role,
+        40
+      ).toLowerCase();
       const userId = sanitizeString(user?.id, 120);
       const userEmail = sanitizeEmail(user?.email);
       const isResponsibleLink =
@@ -22544,40 +22659,20 @@ async function startServer() {
     exceptions: []
   });
 
-  const PROFESSIONAL_TITLE_OPTIONS = [
-    'Psicólogo',
-    'Terapeuta Ocupacional',
-    'Acompanhante Terapêutico',
-    'Aplicador ABA'
-  ];
-  const DEFAULT_PROFESSIONAL_TITLE = 'Psicólogo';
-
-  const normalizeProfessionalTitleForClinic = (value: unknown, fallback = '') => {
-    const text = sanitizeString(value, 80);
-    const match = PROFESSIONAL_TITLE_OPTIONS.find((option) => option.toLowerCase() === text.toLowerCase());
-    return match || fallback;
-  };
-
-  const readProfessionalTitleFromSource = (source: any, fallback = DEFAULT_PROFESSIONAL_TITLE) => {
-    const payload = source && typeof source === 'object' ? source : {};
-    const requiredFields = payload.requiredOnboardingFields || payload.required_onboarding_fields || payload.metadata || {};
-    return normalizeProfessionalTitleForClinic(
-      payload.professionalTitle ||
-        payload.professional_title ||
-        payload.profileRole ||
-        requiredFields?.professionalTitle ||
-        requiredFields?.professional_title ||
-        requiredFields?.title ||
-        requiredFields?.role,
-      fallback
-    );
+  const readProfessionalTitleFromSource = (source: any, fallback = '') => {
+    return readClinicalSpecialtyFromSource(source, fallback);
   };
 
   const formatClinicAccessRoleLabel = (role: unknown, source?: any) => {
     const normalizedRole = sanitizeString(role, 40).toLowerCase();
     if (normalizedRole === 'coordinator') return 'Coordenador';
     if (normalizedRole === 'receptionist') return 'Recepcionista/Assistente';
-    if (normalizedRole === 'therapist') return `Profissional de atendimento · ${readProfessionalTitleFromSource(source)}`;
+    if (normalizedRole === 'therapist') {
+      const specialty = readProfessionalTitleFromSource(source);
+      return specialty
+        ? `Profissional de atendimento · ${specialty}`
+        : 'Profissional de atendimento · Especialidade pendente';
+    }
     return 'Profissional';
   };
 
@@ -22697,11 +22792,8 @@ async function startServer() {
   };
 
   // Clinic Management & Invitations
-  app.get('/api/clinic/members', checkAuth, async (req: any, res) => {
+  app.get('/api/clinic/members', checkAuth, requireActiveClinicRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     const user = req.session.user;
-    if (user.role !== 'coordinator' && user.role !== 'admin' && user.role !== 'owner') {
-      return res.status(403).json({ error: 'Apenas coordenadores podem gerenciar a equipe' });
-    }
 
     try {
       const clinicId = currentClinicId(user);
@@ -22748,8 +22840,9 @@ async function startServer() {
         const profile = professionalProfilesByUserId.get(memberId) || {};
         const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
         const fallbackDuration = asSafeNumber(metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes, 15, 360) || 50;
+        const specialty = resolveProfessionalProfileSpecialty(profile) || null;
         const professionalTitle = m.role === 'therapist'
-          ? readProfessionalTitleFromSource({ metadata, professionalTitle: metadata?.professionalTitle || metadata?.professional_title || metadata?.role }, DEFAULT_PROFESSIONAL_TITLE)
+          ? specialty || readProfessionalTitleFromSource({ metadata }) || null
           : null;
         return {
           id: m.users?.id || m.user_id,
@@ -22764,7 +22857,7 @@ async function startServer() {
           email: m.users?.email || '',
           role: m.role,
           status: m.status,
-          specialty: resolveProfessionalProfileSpecialty(profile) || null,
+          specialty,
           professionalTitle,
           profileRole: professionalTitle,
           roleLabel: formatClinicAccessRoleLabel(m.role, { professionalTitle }),
@@ -22990,7 +23083,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/invite', inviteLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/clinic/invite', inviteLimiter, checkAuth, requireActiveClinicRoles('coordinator', 'admin'), async (req: any, res) => {
     try {
       const email = sanitizeEmail(req.body?.email);
       const roleRaw = sanitizeString(req.body?.role, 30);
@@ -23000,20 +23093,28 @@ async function startServer() {
         : {};
       const user = req.session.user;
 
-      if (user.role !== 'coordinator' && user.role !== 'admin') {
-        return res.status(403).json({ error: 'Apenas coordenadores podem convidar membros' });
-      }
       if (!email || !role) {
         return res.status(400).json({ error: 'Email e papel validos sao obrigatorios' });
       }
-      const professionalTitle = role === 'therapist'
-        ? normalizeProfessionalTitleForClinic(
-            requiredOnboardingFields?.professionalTitle || requiredOnboardingFields?.professional_title || req.body?.professionalTitle || req.body?.professional_title,
-            DEFAULT_PROFESSIONAL_TITLE
-          )
+      const requestedSpecialty =
+        requiredOnboardingFields?.specialty ||
+        requiredOnboardingFields?.specialtyName ||
+        requiredOnboardingFields?.specialty_name ||
+        req.body?.specialty;
+      const specialty = role === 'therapist'
+        ? normalizeClinicalSpecialty(requestedSpecialty)
         : null;
+      if (role === 'therapist' && !specialty) {
+        return res.status(400).json({
+          success: false,
+          error: 'CLINICAL_SPECIALTY_INVALID',
+          message: 'Selecione uma especialidade clínica válida para este profissional.'
+        });
+      }
+      const professionalTitle = specialty;
       const normalizedOnboardingFields = cleanObject({
         ...requiredOnboardingFields,
+        specialty,
         professionalTitle,
         professional_title: professionalTitle,
         accessRoleLabel: role === 'therapist' ? 'Profissional de atendimento' : undefined
@@ -23161,6 +23262,7 @@ async function startServer() {
             full_name: email.split('@')[0],
             invited_role: role,
             professional_title: professionalTitle,
+            specialty,
             clinic_id: clinicId
           }
         });
@@ -23209,6 +23311,7 @@ async function startServer() {
           invitationId: data?.id || null,
           clinicId,
           invitedRole: role,
+          specialty,
           professionalTitle,
           invitedBy: user.id,
           email: maskEmail(email)
@@ -23289,7 +23392,7 @@ async function startServer() {
       if (historyUserIds.length > 0) {
         const { data: historyProfiles, error: historyProfileError } = await supabase
           .from('professional_profiles')
-          .select('user_id,metadata')
+          .select('user_id,specialty,metadata')
           .in('user_id', historyUserIds);
         if (historyProfileError && !isMissingRelationError(historyProfileError)) throw historyProfileError;
         (historyProfiles || []).forEach((profile: any) => {
@@ -23299,9 +23402,15 @@ async function startServer() {
       }
 
       const invitations = (invitationsResult.data || []).map((invitation: any) => {
-        const professionalTitle = invitation?.role === 'therapist' ? readProfessionalTitleFromSource(invitation, DEFAULT_PROFESSIONAL_TITLE) : null;
+        const specialty = invitation?.role === 'therapist'
+          ? readClinicalSpecialtyFromSource(invitation, '')
+          : null;
+        const professionalTitle = invitation?.role === 'therapist'
+          ? specialty || readProfessionalTitleFromSource(invitation) || null
+          : null;
         return {
           ...invitation,
+          specialty,
           professionalTitle,
           professional_title: professionalTitle,
           roleLabel: formatClinicAccessRoleLabel(invitation?.role, { ...invitation, professionalTitle }),
@@ -23316,8 +23425,11 @@ async function startServer() {
           const userId = sanitizeString(m?.user_id, 120);
           const profile = historyProfilesByUserId.get(userId) || {};
           const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
+          const specialty = m?.role === 'therapist'
+            ? resolveProfessionalProfileSpecialty(profile) || null
+            : null;
           const professionalTitle = m?.role === 'therapist'
-            ? readProfessionalTitleFromSource({ metadata, professionalTitle: metadata?.professionalTitle || metadata?.professional_title || metadata?.role }, DEFAULT_PROFESSIONAL_TITLE)
+            ? specialty || readProfessionalTitleFromSource({ metadata }) || null
             : null;
           return {
             id: `membership-${userId}`,
@@ -23325,6 +23437,7 @@ async function startServer() {
             email: sanitizeEmail(m?.users?.email) || '',
             name: sanitizeString(m?.users?.name, 180) || 'Colaborador',
             role: sanitizeString(m?.role, 40) || 'therapist',
+            specialty,
             professionalTitle,
             professional_title: professionalTitle,
             roleLabel: formatClinicAccessRoleLabel(m?.role, { professionalTitle }),
@@ -23443,7 +23556,7 @@ async function startServer() {
         return res.status(403).json({ error: 'Este convite não é para você' });
       }
 
-      await supabase
+      const { error: membershipUpsertError } = await supabase
         .from('clinic_memberships')
         .upsert([{
           user_id: user.id,
@@ -23453,6 +23566,7 @@ async function startServer() {
           invited_by: invitation.invited_by,
           created_at: new Date().toISOString()
         }], { onConflict: 'user_id,clinic_id' });
+      if (membershipUpsertError) throw membershipUpsertError;
 
       const { error: updateError } = await supabase
         .from('users')
@@ -23464,23 +23578,30 @@ async function startServer() {
 
       if (updateError) throw updateError;
       if (invitation.role === 'therapist') {
-        const professionalTitle = readProfessionalTitleFromSource(invitation, DEFAULT_PROFESSIONAL_TITLE);
+        const invitationSpecialty = readClinicalSpecialtyFromSource(invitation, '');
         const { data: existingProfile, error: profileError } = await supabase
           .from('professional_profiles')
-          .select('user_id,full_name,metadata')
+          .select('user_id,full_name,specialty,metadata')
           .eq('user_id', user.id)
           .maybeSingle();
         if (profileError && !isMissingRelationError(profileError)) throw profileError;
         const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
           ? existingProfile.metadata
           : {};
+        const professionalTitle =
+          invitationSpecialty ||
+          sanitizeString(existingProfile?.specialty, 120) ||
+          readProfessionalTitleFromSource({ metadata: currentMetadata }) ||
+          null;
         const { error: professionalTitleError } = await supabase
           .from('professional_profiles')
           .upsert(cleanObject({
             user_id: user.id,
             full_name: sanitizeString(existingProfile?.full_name || user.name || user.email?.split('@')?.[0], 180) || undefined,
+            specialty: invitationSpecialty || sanitizeString(existingProfile?.specialty, 120) || undefined,
             metadata: cleanObject({
               ...currentMetadata,
+              specialty: invitationSpecialty || sanitizeString(existingProfile?.specialty, 120) || undefined,
               professionalTitle,
               professional_title: professionalTitle,
               role: professionalTitle,
@@ -23574,34 +23695,141 @@ async function startServer() {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
-  app.patch('/api/clinic/members/:memberId/role', checkAuth, async (req: any, res) => {
-    const adminUser = req.session.user;
-    if (adminUser.role !== 'coordinator' && adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Apenas coordenadores podem atualizar papeis' });
+  app.patch('/api/clinic/members/:memberId/specialty', checkAuth, requireActiveClinicRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    const actor = req.session.user;
+    if (!enforcePayloadLimit(req, res, 4 * 1024, 'Especialidade clínica')) return;
+
+    const memberId = sanitizeString(req.params?.memberId, 120);
+    const specialty = normalizeClinicalSpecialty(req.body?.specialty);
+    if (!isUuid(memberId) || !specialty) {
+      return res.status(400).json({
+        success: false,
+        error: 'CLINICAL_SPECIALTY_INVALID',
+        message: 'Selecione uma especialidade clínica válida.'
+      });
     }
 
-    const { memberId } = req.params;
-    const roleRaw = sanitizeString(req.body?.role, 30);
-    const role = ensureClinicRole(roleRaw) ? roleRaw : null;
-    const professionalTitle = role === 'therapist'
-      ? normalizeProfessionalTitleForClinic(req.body?.professionalTitle || req.body?.professional_title, DEFAULT_PROFESSIONAL_TITLE)
-      : null;
-
-    if (!role) return res.status(400).json({ error: 'Papel e obrigatorio' });
-
     try {
-      const clinicId = currentClinicId(adminUser);
-      const { error } = await supabase
+      const clinicId = sanitizeString(currentClinicId(actor), 120);
+      const { data: membership, error: membershipError } = await supabase
         .from('clinic_memberships')
-        .update({ role })
+        .select('user_id,clinic_id,role,status')
         .eq('user_id', memberId)
         .eq('clinic_id', clinicId)
-        .eq('status', 'active');
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle();
+      if (membershipError) throw membershipError;
+      if (!membership || sanitizeString(membership.role, 40).toLowerCase() !== 'therapist') {
+        return res.status(404).json({
+          success: false,
+          error: 'CLINICAL_SPECIALTY_MEMBER_NOT_FOUND',
+          message: 'Profissional de atendimento ativo não encontrado nesta clínica.'
+        });
+      }
 
-      if (error) throw error;
       const { data: existingProfile, error: profileError } = await supabase
         .from('professional_profiles')
         .select('user_id,full_name,metadata')
+        .eq('user_id', memberId)
+        .limit(1)
+        .maybeSingle();
+      if (profileError && !isMissingRelationError(profileError)) throw profileError;
+      const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
+        ? existingProfile.metadata
+        : {};
+      const now = new Date().toISOString();
+      const { error: specialtyError } = await supabase
+        .from('professional_profiles')
+        .upsert(cleanObject({
+          user_id: memberId,
+          full_name: sanitizeString(existingProfile?.full_name, 180) || undefined,
+          specialty,
+          metadata: cleanObject({
+            ...currentMetadata,
+            specialty,
+            professionalTitle: specialty,
+            professional_title: specialty,
+            role: specialty,
+            specialtyUpdatedAt: now,
+            specialtyUpdatedBy: sanitizeString(actor?.id, 120) || null
+          }),
+          updated_at: now
+        }), { onConflict: 'user_id' });
+      if (specialtyError) throw specialtyError;
+
+      await persistActivityLog({
+        title: 'Especialidade clínica atualizada',
+        content: `Especialidade do profissional ${memberId} atualizada para ${specialty}.`,
+        type: 'management',
+        userId: sanitizeString(actor?.id, 120),
+        clinicId,
+        actorName: sanitizeString(actor?.name || actor?.email || 'Coordenação', 180)
+      });
+      return res.json({
+        success: true,
+        message: 'Especialidade clínica atualizada com sucesso.',
+        data: { memberId, specialty }
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/clinic/members/:memberId/specialty [PATCH]', error, {
+        memberId,
+        requestId: requestIdForLogs(req)
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'CLINICAL_SPECIALTY_UPDATE_FAILED',
+        message: 'Não foi possível atualizar a especialidade clínica agora.'
+      });
+    }
+  });
+
+  app.patch('/api/clinic/members/:memberId/role', checkAuth, requireActiveClinicRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    const adminUser = req.session.user;
+
+    const memberId = sanitizeString(req.params?.memberId, 120);
+    const roleRaw = sanitizeString(req.body?.role, 30);
+    const role = ensureClinicRole(roleRaw) ? roleRaw : null;
+    const specialty = role === 'therapist'
+      ? normalizeClinicalSpecialty(
+          req.body?.specialty ||
+          req.body?.professionalTitle ||
+          req.body?.professional_title
+        )
+      : null;
+    const professionalTitle = specialty;
+
+    if (!isUuid(memberId) || !role) return res.status(400).json({ error: 'Papel e membro válidos são obrigatórios' });
+    if (role === 'therapist' && !specialty) {
+      return res.status(400).json({
+        success: false,
+        error: 'CLINICAL_SPECIALTY_INVALID',
+        message: 'Selecione uma especialidade clínica válida antes de conceder acesso de atendimento.'
+      });
+    }
+
+    try {
+      const clinicId = currentClinicId(adminUser);
+      const { data: currentMembership, error: membershipLookupError } = await supabase
+        .from('clinic_memberships')
+        .select('user_id,clinic_id,role,status')
+        .eq('user_id', memberId)
+        .eq('clinic_id', clinicId)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle();
+      if (membershipLookupError) throw membershipLookupError;
+      if (!currentMembership) {
+        return res.status(404).json({
+          success: false,
+          error: 'CLINIC_MEMBER_NOT_FOUND',
+          message: 'Membro ativo não encontrado nesta clínica.'
+        });
+      }
+
+      const { data: existingProfile, error: profileError } = await supabase
+        .from('professional_profiles')
+        .select('user_id,full_name,specialty,metadata')
         .eq('user_id', memberId)
         .maybeSingle();
       if (profileError && !isMissingRelationError(profileError)) throw profileError;
@@ -23611,6 +23839,7 @@ async function startServer() {
       const nextMetadata = role === 'therapist'
         ? cleanObject({
             ...currentMetadata,
+            specialty,
             professionalTitle,
             professional_title: professionalTitle,
             role: professionalTitle,
@@ -23625,16 +23854,49 @@ async function startServer() {
             professionalTitleUpdatedAt: new Date().toISOString(),
             professionalTitleUpdatedBy: sanitizeString(adminUser?.id, 120) || null
           });
-      if (role === 'therapist' || existingProfile?.user_id) {
+      const persistProfessionalProfile = async () => {
         const { error: titleError } = await supabase
           .from('professional_profiles')
           .upsert(cleanObject({
             user_id: memberId,
             full_name: sanitizeString(existingProfile?.full_name, 180) || undefined,
+            specialty: role === 'therapist'
+              ? specialty
+              : sanitizeString(existingProfile?.specialty, 120) || undefined,
             metadata: nextMetadata,
             updated_at: new Date().toISOString()
           }), { onConflict: 'user_id' });
         if (titleError) throw titleError;
+      };
+      // A especialidade canônica é persistida antes de conceder acesso clínico.
+      // Assim uma falha de perfil nunca deixa um novo terapeuta ativo sem
+      // especialidade; a eventual sobra é apenas cadastral e pode ser repetida.
+      if (role === 'therapist') {
+        await persistProfessionalProfile();
+      }
+
+      const { data: updatedMembership, error } = await supabase
+        .from('clinic_memberships')
+        .update({ role })
+        .eq('user_id', memberId)
+        .eq('clinic_id', clinicId)
+        .eq('status', 'active')
+        .select('user_id,clinic_id,role,status')
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!updatedMembership) {
+        return res.status(409).json({
+          success: false,
+          error: 'CLINIC_MEMBER_ROLE_NOT_UPDATED',
+          message: 'O acesso do membro mudou durante a operação. Recarregue a equipe e tente novamente.'
+        });
+      }
+      // Na redução de acesso, primeiro retiramos o papel clínico e só depois
+      // atualizamos os metadados de apresentação.
+      if (role !== 'therapist' && existingProfile?.user_id) {
+        await persistProfessionalProfile();
       }
       await persistActivityLog({
         title: 'Papel de colaborador atualizado',
@@ -23650,6 +23912,7 @@ async function startServer() {
         data: {
           memberId,
           role,
+          specialty,
           professionalTitle,
           roleLabel: formatClinicAccessRoleLabel(role, { professionalTitle })
         }
@@ -41414,8 +41677,13 @@ async function startServer() {
     const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
     const name = sanitizeString(profile?.full_name || profile?.name || fallbackName, 180) || 'Profissional não identificado';
     const title = readProfessionalTitleFromSource(
-      { metadata, professionalTitle: metadata?.professionalTitle || metadata?.professional_title },
-      DEFAULT_PROFESSIONAL_TITLE
+      {
+        specialty: profile?.specialty,
+        metadata,
+        professionalTitle:
+          metadata?.professionalTitle || metadata?.professional_title
+      },
+      'Profissional'
     );
     if (name === 'Profissional não identificado') return name;
     const personalName = name
@@ -59667,6 +59935,127 @@ async function startServer() {
     'sort_order', 'program_version', 'objective_snapshot', 'measurement_type',
     'created_at', 'updated_at'
   ].join(',');
+  const canActorEditTherapeuticProgram = async (params: {
+    actorId: string;
+    actorRole: string;
+    organizationId: string;
+    clinicId: string;
+    patientId: string;
+    programId: string;
+  }) => {
+    if (isTherapeuticPlanManager(params.actorRole)) return true;
+    if (params.actorRole !== 'therapist') return false;
+
+    const { data: program, error: programError } = await supabase
+      .from('aba_programs')
+      .select('id,therapeutic_plan_id')
+      .eq('id', params.programId)
+      .eq('clinic_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .limit(1)
+      .maybeSingle();
+    if (programError) throw programError;
+    const planId = sanitizeString(program?.therapeutic_plan_id, 120);
+    if (!planId) return false;
+
+    const [planResult, linkResult] = await Promise.all([
+      supabase
+        .from('patient_therapeutic_plans')
+        .select('id,patient_id,responsible_professional_id,participant_professional_ids')
+        .eq('id', planId)
+        .eq('organization_id', params.organizationId)
+        .eq('patient_id', params.patientId)
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('patient_professional_links')
+        .select('patient_id,professional_id,status,permissions')
+        .eq('organization_id', params.organizationId)
+        .eq('patient_id', params.patientId)
+        .eq('professional_id', params.actorId)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle()
+    ]);
+    if (planResult.error) throw planResult.error;
+    if (linkResult.error) throw linkResult.error;
+    if (!planResult.data || !linkResult.data) return false;
+    return canEditTherapeuticPlanScope(planResult.data, {
+      actorId: params.actorId,
+      actorRole: params.actorRole,
+      professionalLinks: [linkResult.data]
+    });
+  };
+  const canActorReadTherapeuticProgram = async (params: {
+    actorId: string;
+    actorRole: string;
+    organizationId: string;
+    clinicId: string;
+    program: any;
+  }) => {
+    if (isTherapeuticPlanManager(params.actorRole)) return true;
+    if (params.actorRole !== 'therapist') return false;
+
+    const patientId = sanitizeString(params.program?.patient_id, 120);
+    const planId = sanitizeString(
+      params.program?.therapeutic_plan_id,
+      120
+    );
+    if (!patientId) return false;
+
+    const [linkResult, planResult] = await Promise.all([
+      supabase
+        .from('patient_professional_links')
+        .select('patient_id,professional_id,status,permissions')
+        .eq('organization_id', params.organizationId)
+        .eq('clinic_id', params.clinicId)
+        .eq('patient_id', patientId)
+        .eq('professional_id', params.actorId)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle(),
+      planId
+        ? supabase
+            .from('patient_therapeutic_plans')
+            .select(
+              'id,patient_id,responsible_professional_id,participant_professional_ids'
+            )
+            .eq('id', planId)
+            .eq('organization_id', params.organizationId)
+            .eq('clinic_id', params.clinicId)
+            .eq('patient_id', patientId)
+            .limit(1)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null })
+    ]);
+    if (linkResult.error) throw linkResult.error;
+    if (planResult.error) throw planResult.error;
+    if (!linkResult.data || linkResult.data?.permissions?.read === false) {
+      return false;
+    }
+
+    if (planId) {
+      return filterTherapeuticPlanProgramsForActor(
+        [params.program],
+        planResult.data ? [planResult.data] : [],
+        {
+          actorId: params.actorId,
+          actorRole: params.actorRole,
+          professionalLinks: [linkResult.data]
+        }
+      ).length === 1;
+    }
+
+    const legacyResponsibleIds = new Set([
+      sanitizeString(params.program?.created_by, 120),
+      ...(Array.isArray(params.program?.responsible_professional_ids)
+        ? params.program.responsible_professional_ids.map((value: unknown) =>
+            sanitizeString(value, 120)
+          )
+        : [])
+    ]);
+    return legacyResponsibleIds.has(params.actorId);
+  };
   const THERAPEUTIC_TEMPLATE_SELECT = [
     'id', 'organization_id', 'clinic_id', 'source_scope', 'owner_user_id',
     'name', 'description', 'category', 'objective', 'suggested_targets',
@@ -59849,7 +60238,16 @@ async function startServer() {
       const profile: any = user ? profileByUserId.get(professionalId) || null : null;
       const scopedProfessionalId = user ? professionalId : '';
       const professionalTitle = scopedProfessionalId
-        ? readProfessionalTitleFromSource({ metadata: profile?.metadata, professionalTitle: profile?.metadata?.professionalTitle || profile?.metadata?.professional_title }, user?.role === 'therapist' ? DEFAULT_PROFESSIONAL_TITLE : 'Profissional')
+        ? readProfessionalTitleFromSource(
+            {
+              specialty: profile?.specialty,
+              metadata: profile?.metadata,
+              professionalTitle:
+                profile?.metadata?.professionalTitle ||
+                profile?.metadata?.professional_title
+            },
+            'Profissional'
+          )
         : '';
       const professionalName = stripProfessionalTitlePrefix(profile?.full_name || user?.name || user?.email);
       const convertedProgram: any = convertedProgramByRecommendationId.get(recommendationId) || null;
@@ -59953,41 +60351,120 @@ async function startServer() {
     };
   };
 
-  app.get('/api/aba/patients/:patientId/therapeutic-plan', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/therapeutic-plan', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       if (req.patientProfessionalHistoricalReadOnly === true) {
-        const accessEndedAt = sanitizeString(
-          req.patientProfessionalLink?.updated_at || req.patientProfessionalLink?.ends_at,
-          80,
+        const historicalCutoff = resolveHistoricalTherapeuticPlanReadCutoff(
+          req.patientProfessionalLink,
         );
+        if (!historicalCutoff) {
+          return res.status(403).json({
+            success: false,
+            error: 'THERAPEUTIC_PLAN_HISTORICAL_ACCESS_INVALID',
+            message: 'O encerramento do vínculo não possui as datas necessárias para liberar o histórico.',
+          });
+        }
         const { data: historicalVersions, error: historyError } = await supabase
           .from('patient_therapeutic_plan_versions')
           .select('id,plan_id,version,snapshot,authored_by,created_at')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .contains('authorized_reader_ids', [actorId])
-          .lte('created_at', accessEndedAt)
+          .lte('created_at', historicalCutoff.updatedAt)
+          .lt('created_at', historicalCutoff.exclusiveCivilEndAt)
           .order('created_at', { ascending: false })
           .limit(100);
         if (historyError) throw historyError;
+        const historicalPlanIds = Array.from(
+          new Set(
+            (historicalVersions || [])
+              .map((version: any) => sanitizeString(version?.plan_id, 120))
+              .filter(isUuid),
+          ),
+        );
+        const historicalProgramVersionsResult = historicalPlanIds.length
+          ? await supabase
+              .from('aba_program_versions')
+              .select('id,program_id,version,snapshot,created_at')
+              .eq('organization_id', organizationId)
+              .eq('patient_id', patientId)
+              .lte('created_at', historicalCutoff.updatedAt)
+              .lt('created_at', historicalCutoff.exclusiveCivilEndAt)
+              .order('created_at', { ascending: false })
+              .limit(1000)
+          : { data: [], error: null };
+        if (historicalProgramVersionsResult.error) {
+          throw historicalProgramVersionsResult.error;
+        }
+        const allowedHistoricalPlanIds = new Set(historicalPlanIds);
+        const latestHistoricalProgramVersions = new Map<string, any>();
+        for (const row of historicalProgramVersionsResult.data || []) {
+          const snapshot = row?.snapshot;
+          const program = snapshot?.program;
+          if (!snapshot || typeof snapshot !== 'object' || !program || typeof program !== 'object') continue;
+          const planId = sanitizeString(
+            (program as any)?.therapeutic_plan_id || (program as any)?.therapeuticPlanId,
+            120,
+          );
+          const programId = sanitizeString(row?.program_id || (program as any)?.id, 180);
+          if (!programId || !allowedHistoricalPlanIds.has(planId)) continue;
+          const previous = latestHistoricalProgramVersions.get(programId);
+          const shouldReplace =
+            !previous ||
+            Number(row?.version || 0) > Number(previous?.version || 0) ||
+            (
+              Number(row?.version || 0) === Number(previous?.version || 0) &&
+              String(row?.created_at || '') > String(previous?.created_at || '')
+            );
+          if (shouldReplace) latestHistoricalProgramVersions.set(programId, row);
+        }
+        const historicalPrograms = Array.from(
+          latestHistoricalProgramVersions.values(),
+        ).map((row: any) => ({
+          ...(row.snapshot?.program || {}),
+          targets: Array.isArray(row.snapshot?.targets) ? row.snapshot.targets : [],
+          history: Array.isArray(row.snapshot?.history) ? row.snapshot.history : [],
+          historical_version: Number(row.version || 0),
+          historical_version_created_at: row.created_at || null,
+          read_only_history: true,
+        }));
+        const historicalObjectives = Array.from(
+          new Map(
+            historicalPrograms
+              .map((program: any) => {
+                const source = latestHistoricalProgramVersions.get(
+                  sanitizeString(program?.id, 180),
+                )?.snapshot;
+                const objective = source?.objective;
+                return objective && typeof objective === 'object'
+                  ? [sanitizeString((objective as any).id, 120), objective]
+                  : null;
+              })
+              .filter((entry: any): entry is [string, any] => Boolean(entry?.[0])),
+          ).values(),
+        );
+        const historicalTargets = historicalPrograms.flatMap((program: any) =>
+          Array.isArray(program?.targets) ? program.targets : [],
+        );
         return res.json({
           success: true,
           data: {
-            programs: [],
-            objectives: [],
-            targets: [],
+            programs: historicalPrograms,
+            objectives: historicalObjectives,
+            targets: historicalTargets,
             planScopes: [],
             professionalLinks: [],
             historicalPlanVersions: historicalVersions || [],
+            historicalPrograms,
             readOnlyHistory: true,
-            accessEndedAt,
+            accessEndedAt: historicalCutoff.updatedAt,
           },
           meta: {
-            queryCount: 1,
+            queryCount: 1 + (historicalPlanIds.length ? 1 : 0),
             batched: true,
             historicalSnapshotOnly: true,
             patientId,
@@ -60056,8 +60533,111 @@ async function startServer() {
         throw firstError;
       }
 
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const professionalLinks = professionalLinkResult.data || [];
+      const accessContext = {
+        actorId,
+        actorRole,
+        professionalLinks
+      };
+      const visiblePlanScopes = filterTherapeuticPlanScopesForActor(
+        planScopeResult.data || [],
+        accessContext
+      ).map((scope: any) => ({
+        ...scope,
+        canEdit: canEditTherapeuticPlanScope(scope, accessContext)
+      }));
+      const visibleProgramRows = filterTherapeuticPlanProgramsForActor(
+        programResult.data || [],
+        planScopeResult.data || [],
+        accessContext
+      );
+      const visibleProgramIds = new Set(
+        visibleProgramRows.map((program: any) => String(program.id))
+      );
+      const visibleObjectiveIds = new Set(
+        visibleProgramRows
+          .map((program: any) =>
+            sanitizeString(program?.therapeutic_objective_id, 120)
+          )
+          .filter(Boolean)
+      );
+      const visibleObjectiveRows = isTherapeuticPlanManager(actorRole)
+        ? objectiveResult.data || []
+        : (objectiveResult.data || []).filter((objective: any) =>
+            visibleObjectiveIds.has(String(objective.id))
+          );
+      const visibleTargetRows = (targetResult.data || []).filter((target: any) =>
+        visibleProgramIds.has(String(target.program_id))
+      );
+      const linkedProfessionalIds = Array.from(new Set(
+        professionalLinks
+          .map((link: any) => sanitizeString(link?.professional_id, 120))
+          .filter(isUuid)
+      ));
+      const [linkedProfilesResult, linkedMembershipsResult] = linkedProfessionalIds.length
+        ? await Promise.all([
+            supabase
+              .from('professional_profiles')
+              .select('user_id,full_name,specialty')
+              .in('user_id', linkedProfessionalIds)
+              .limit(5),
+            supabase
+              .from('clinic_memberships')
+              .select('user_id,clinic_id,role,status')
+              .eq('clinic_id', clinicId)
+              .eq('role', 'therapist')
+              .eq('status', 'active')
+              .in('user_id', linkedProfessionalIds)
+              .limit(5)
+          ])
+        : [
+            { data: [], error: null },
+            { data: [], error: null }
+          ];
+      if (linkedProfilesResult.error) throw linkedProfilesResult.error;
+      if (linkedMembershipsResult.error) throw linkedMembershipsResult.error;
+      const linkedProfileById = new Map(
+        (linkedProfilesResult.data || []).map((profile: any) => [String(profile.user_id), profile])
+      );
+      const linkedMembershipIds = new Set(
+        (linkedMembershipsResult.data || []).map((membership: any) =>
+          String(membership.user_id)
+        )
+      );
+      const enrichedProfessionalLinks = professionalLinks.map((link: any) => {
+        const profile: any = linkedProfileById.get(String(link.professional_id)) || {};
+        const canonicalSpecialty = normalizeClinicalSpecialty(profile?.specialty);
+        const hasActiveTherapistMembership = linkedMembershipIds.has(
+          String(link.professional_id)
+        );
+        const canWritePlan = link?.permissions?.write !== false;
+        const planEligible =
+          hasActiveTherapistMembership &&
+          Boolean(canonicalSpecialty) &&
+          canWritePlan;
+        return {
+          ...link,
+          name: sanitizeString(profile?.full_name, 180) || 'Profissional',
+          specialty:
+            canonicalSpecialty ||
+            sanitizeTextField(link?.specialty, 120) ||
+            null,
+          specialtySnapshot:
+            sanitizeTextField(link?.specialty, 120) || null,
+          planEligible,
+          planEligibilityReason: !hasActiveTherapistMembership
+            ? 'Profissional sem acesso de atendimento ativo nesta clínica.'
+            : !canonicalSpecialty
+              ? 'Especialidade clínica canônica ainda não cadastrada.'
+              : !canWritePlan
+                ? 'Vínculo sem permissão de escrita neste plano.'
+                : null
+        };
+      });
+
       const targetsByProgram = new Map<string, any[]>();
-      for (const target of targetResult.data || []) {
+      for (const target of visibleTargetRows) {
         const programId = sanitizeString((target as any)?.program_id, 180);
         if (!programId) continue;
         const list = targetsByProgram.get(programId) || [];
@@ -60067,7 +60647,7 @@ async function startServer() {
       const historyByProgram = new Map<string, any[]>();
       for (const event of auditResult.data || []) {
         const programId = sanitizeString((event as any)?.program_id, 180);
-        if (!programId) continue;
+        if (!programId || !visibleProgramIds.has(programId)) continue;
         const list = historyByProgram.get(programId) || [];
         list.push(event);
         historyByProgram.set(programId, list);
@@ -60076,9 +60656,9 @@ async function startServer() {
       for (const trial of trialResult.data || []) {
         const programId = sanitizeString((trial as any)?.program_id, 180);
         const occurredAt = sanitizeString((trial as any)?.occurred_at, 80);
-        if (programId && occurredAt && !lastAppliedByProgram.has(programId)) lastAppliedByProgram.set(programId, occurredAt);
+        if (programId && visibleProgramIds.has(programId) && occurredAt && !lastAppliedByProgram.has(programId)) lastAppliedByProgram.set(programId, occurredAt);
       }
-      const programs = (programResult.data || []).map((program: any) => ({
+      const programs = visibleProgramRows.map((program: any) => ({
         ...program,
         targets: targetsByProgram.get(String(program.id)) || [],
         history: historyByProgram.get(String(program.id)) || [],
@@ -60088,12 +60668,29 @@ async function startServer() {
         success: true,
         data: {
           programs,
-          objectives: objectiveResult.data || [],
-          targets: targetResult.data || [],
-          planScopes: planScopeResult.data || [],
-          professionalLinks: professionalLinkResult.data || []
+          objectives: visibleObjectiveRows,
+          targets: visibleTargetRows,
+          planScopes: visiblePlanScopes,
+          professionalLinks: enrichedProfessionalLinks,
+          capabilities: {
+            actorId,
+            actorRole,
+            programsEnabled: isAbaV2ApiEnabled(),
+            canManageAllPlans: isTherapeuticPlanManager(actorRole),
+            canCreatePlans:
+              isTherapeuticPlanManager(actorRole) ||
+              enrichedProfessionalLinks.some((link: any) =>
+                String(link?.professional_id) === actorId &&
+                link?.planEligible === true
+              )
+          }
         },
-        meta: { queryCount: 7, batched: true, patientId, organizationId }
+        meta: {
+          queryCount: 7 + (linkedProfessionalIds.length ? 2 : 0),
+          batched: true,
+          patientId,
+          organizationId
+        }
       });
     } catch (error) {
       return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plan [GET]', error, {
@@ -60102,7 +60699,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-plans', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-plans', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Escopo do Plano terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -60110,7 +60707,10 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const mode = sanitizeString(req.body?.mode, 40).toLowerCase();
-      const specialty = mode === 'specialty' ? sanitizeTextField(req.body?.specialty, 120) : null;
+      const idempotencyKey = sanitizeString(
+        req.body?.idempotencyKey || req.body?.idempotency_key,
+        180
+      );
       const responsibleProfessionalId = sanitizeString(req.body?.responsibleProfessionalId || req.body?.responsible_professional_id, 120);
       const requestedParticipants = Array.from(new Set(
         (Array.isArray(req.body?.participantProfessionalIds || req.body?.participant_professional_ids)
@@ -60121,11 +60721,25 @@ async function startServer() {
           .filter(Boolean)
       ));
       const participantProfessionalIds = Array.from(new Set([responsibleProfessionalId, ...requestedParticipants])).filter(Boolean);
-      if (!['specialty', 'interdisciplinary'].includes(mode) || (mode === 'specialty' && !specialty) || !responsibleProfessionalId) {
-        return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_INVALID', message: 'Informe o modo, a especialidade quando aplicável e o profissional responsável.' });
+      if (!['specialty', 'interdisciplinary'].includes(mode) || !responsibleProfessionalId) {
+        return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_INVALID', message: 'Informe o tipo do plano e o profissional responsável.' });
+      }
+      if (!idempotencyKey) {
+        return res.status(400).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_IDEMPOTENCY_KEY_REQUIRED',
+          message: 'Reabra o formulário e tente salvar o plano novamente.'
+        });
+      }
+      if (participantProfessionalIds.some((id) => !isUuid(id))) {
+        return res.status(400).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_PROFESSIONAL_INVALID',
+          message: 'Selecione profissionais válidos da equipe desta clínica.'
+        });
       }
       if (participantProfessionalIds.length > 5 || (mode === 'interdisciplinary' && participantProfessionalIds.length < 2)) {
-        return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_PARTICIPANTS_INVALID', message: 'Um plano interdisciplinar requer ao menos dois e no máximo cinco profissionais vinculados.' });
+        return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_PARTICIPANTS_INVALID', message: 'O Projeto Terapêutico Singular requer ao menos dois e no máximo cinco profissionais vinculados.' });
       }
       const { data: activeLinks, error: activeLinksError } = await supabase
         .from('patient_professional_links')
@@ -60140,14 +60754,250 @@ async function startServer() {
       if (participantProfessionalIds.some((id) => !activeByProfessional.has(id))) {
         return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_PROFESSIONAL_NOT_LINKED', message: 'Todos os participantes precisam possuir vínculo ativo com este paciente.' });
       }
-      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
-      if (!['owner', 'admin', 'coordinator'].includes(role)) {
+      const [participantProfilesResult, participantMembershipsResult] = await Promise.all([
+        supabase
+          .from('professional_profiles')
+          .select('user_id,specialty')
+          .in('user_id', participantProfessionalIds)
+          .limit(5),
+        supabase
+          .from('clinic_memberships')
+          .select('user_id,clinic_id,role,status')
+          .eq('clinic_id', clinicId)
+          .eq('role', 'therapist')
+          .eq('status', 'active')
+          .in('user_id', participantProfessionalIds)
+          .limit(5)
+      ]);
+      if (participantProfilesResult.error) throw participantProfilesResult.error;
+      if (participantMembershipsResult.error) throw participantMembershipsResult.error;
+      const participantMembershipIds = new Set(
+        (participantMembershipsResult.data || []).map((membership: any) =>
+          String(membership.user_id)
+        )
+      );
+      if (
+        participantProfessionalIds.some(
+          (professionalId) => !participantMembershipIds.has(professionalId)
+        )
+      ) {
+        return res.status(403).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_PROFESSIONAL_MEMBERSHIP_INACTIVE',
+          message: 'Todos os participantes precisam ser profissionais de atendimento ativos nesta clínica.'
+        });
+      }
+      const profileByProfessional = new Map(
+        (participantProfilesResult.data || []).map((profile: any) => [
+          String(profile.user_id),
+          profile,
+        ])
+      );
+      const participantSpecialties = participantProfessionalIds.map((id) =>
+        normalizeClinicalSpecialty(
+          (profileByProfessional.get(id) as any)?.specialty
+        )
+      );
+      if (participantSpecialties.some((specialty) => !specialty)) {
+        return res.status(422).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_SPECIALTY_UNAVAILABLE',
+          message: 'Cadastre uma especialidade clínica válida para todos os participantes antes de criar o plano.'
+        });
+      }
+      const role = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const canManageAny = ['owner', 'admin', 'coordinator'].includes(role);
+      if (!canManageAny && responsibleProfessionalId !== actorId) {
+        return res.status(403).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_RESPONSIBLE_INVALID',
+          message: 'O profissional pode criar um plano somente quando ele próprio for o responsável.'
+        });
+      }
+      if (mode === 'interdisciplinary' && !canManageAny && !participantProfessionalIds.includes(actorId)) {
+        return res.status(403).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_PARTICIPATION_REQUIRED',
+          message: 'Você precisa participar do Projeto Terapêutico Singular que está criando.'
+        });
+      }
+      const participantLinks = participantProfessionalIds.map((id) => activeByProfessional.get(id) as any);
+      if (participantLinks.some((link) => link?.permissions?.write === false)) {
+        return res.status(403).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_PARTICIPANT_WRITE_REQUIRED',
+          message: 'Todos os participantes precisam ter permissão de escrita no plano.'
+        });
+      }
+      const specialty = mode === 'specialty'
+        ? normalizeClinicalSpecialty(
+            (profileByProfessional.get(responsibleProfessionalId) as any)?.specialty
+          )
+        : null;
+      if (mode === 'specialty' && !specialty) {
+        return res.status(422).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_SPECIALTY_UNAVAILABLE',
+          message: 'A especialidade do responsável precisa estar cadastrada antes de criar o plano.'
+        });
+      }
+      if (
+        mode === 'specialty' &&
+        participantSpecialties.some((participantSpecialty) =>
+          String(participantSpecialty).toLocaleLowerCase('pt-BR') !==
+          String(specialty).toLocaleLowerCase('pt-BR')
+        )
+      ) {
+        return res.status(422).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_SPECIALTY_MISMATCH',
+          message: 'Colaboradores de outras especialidades devem participar pelo Projeto Terapêutico Singular.'
+        });
+      }
+      if (!canManageAny) {
         const actorLink: any = activeByProfessional.get(actorId);
         if (!actorLink || actorLink?.permissions?.write === false) {
           return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_EDIT_DENIED' });
         }
       }
+      const requestedSourceTemplateId = sanitizeString(
+        req.body?.sourceTemplateId || req.body?.source_template_id,
+        180
+      );
+      if (
+        !requestedSourceTemplateId &&
+        (req.body?.sourceTemplateVersion != null ||
+          req.body?.source_template_version != null)
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_TEMPLATE_INVALID',
+          message: 'Selecione um modelo acessível antes de informar sua versão.'
+        });
+      }
+      let sourceTemplateId: string | null = null;
+      let sourceTemplateVersion: number | null = null;
+      if (requestedSourceTemplateId) {
+        const { data: sourceTemplate, error: sourceTemplateError } = await supabase
+          .from('aba_program_templates')
+          .select(
+            'id,organization_id,clinic_id,source_scope,owner_user_id,visibility,status,template_version'
+          )
+          .eq('id', requestedSourceTemplateId)
+          .eq('organization_id', organizationId)
+          .eq('clinic_id', clinicId)
+          .limit(1)
+          .maybeSingle();
+        if (sourceTemplateError) throw sourceTemplateError;
+        const templateVisibility = sanitizeString(
+          sourceTemplate?.visibility,
+          20
+        ).toLowerCase();
+        const templateSourceScope = sanitizeString(
+          sourceTemplate?.source_scope,
+          20
+        ).toUpperCase();
+        const canReadSourceTemplate = Boolean(
+          sourceTemplate?.id &&
+            (
+              (
+                templateVisibility === 'private' &&
+                String(sourceTemplate?.owner_user_id || '') === actorId
+              ) ||
+              (
+                templateVisibility === 'clinic' &&
+                templateSourceScope === 'CLINIC' &&
+                sanitizeString(sourceTemplate?.status, 40).toUpperCase() ===
+                  'PUBLISHED'
+              )
+            )
+        );
+        if (!canReadSourceTemplate) {
+          return res.status(403).json({
+            success: false,
+            error: 'THERAPEUTIC_PLAN_TEMPLATE_NOT_ACCESSIBLE',
+            message: 'O modelo selecionado não está disponível para esta clínica.'
+          });
+        }
+        const canonicalTemplateVersion = Number(
+          sourceTemplate?.template_version
+        );
+        if (
+          !Number.isSafeInteger(canonicalTemplateVersion) ||
+          canonicalTemplateVersion < 1
+        ) {
+          return res.status(422).json({
+            success: false,
+            error: 'THERAPEUTIC_PLAN_TEMPLATE_VERSION_INVALID',
+            message: 'A versão do modelo selecionado não é válida.'
+          });
+        }
+        sourceTemplateId = String(sourceTemplate.id);
+        sourceTemplateVersion = canonicalTemplateVersion;
+      }
       const now = new Date().toISOString();
+      const commonObjectives = sanitizeClinicalPayload(
+        req.body?.commonObjectives || req.body?.common_objectives || []
+      );
+      const normalizedSpecialtyObjectives = normalizeTherapeuticSpecialtyObjectives(
+        req.body?.specialtyObjectives ?? req.body?.specialty_objectives ?? {},
+        mode === 'specialty' ? [specialty] : participantSpecialties,
+      );
+      if (!normalizedSpecialtyObjectives) {
+        return res.status(422).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_SPECIALTY_OBJECTIVES_INVALID',
+          message: 'Os objetivos por especialidade precisam pertencer somente às especialidades participantes deste plano.',
+        });
+      }
+      const specialtyObjectives = sanitizeClinicalPayload(
+        normalizedSpecialtyObjectives,
+      );
+      const requestHash = crypto
+        .createHash('sha256')
+        .update(
+          JSON.stringify({
+            organizationId,
+            clinicId,
+            patientId,
+            mode,
+            specialty,
+            responsibleProfessionalId,
+            participantProfessionalIds: [...participantProfessionalIds].sort(),
+            participantSpecialties: [...participantSpecialties].sort(),
+            commonObjectives,
+            specialtyObjectives,
+            sourceTemplateId,
+            sourceTemplateVersion
+          })
+        )
+        .digest('hex');
+      const { data: idempotentPlan, error: idempotentPlanError } = await supabase
+        .from('patient_therapeutic_plans')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .eq('idempotency_key', idempotencyKey)
+        .limit(1)
+        .maybeSingle();
+      if (idempotentPlanError) throw idempotentPlanError;
+      if (idempotentPlan) {
+        if (
+          sanitizeString(idempotentPlan.request_hash, 80).toLowerCase() !==
+          requestHash
+        ) {
+          return res.status(409).json({
+            success: false,
+            error: 'THERAPEUTIC_PLAN_IDEMPOTENCY_CONFLICT',
+            message: 'Esta chave de salvamento já foi usada com outro conteúdo.'
+          });
+        }
+        return res.json({
+          success: true,
+          data: idempotentPlan,
+          idempotent: true,
+          message: 'Plano já criado anteriormente.'
+        });
+      }
       const payload = {
         organization_id: organizationId,
         clinic_id: clinicId,
@@ -60156,19 +61006,21 @@ async function startServer() {
         specialty,
         responsible_professional_id: responsibleProfessionalId,
         participant_professional_ids: participantProfessionalIds,
-        participant_specialties: participantProfessionalIds.map((id) => String((activeByProfessional.get(id) as any)?.specialty || 'Especialidade não informada')),
-        common_objectives: sanitizeClinicalPayload(req.body?.commonObjectives || req.body?.common_objectives || []),
-        specialty_objectives: sanitizeClinicalPayload(req.body?.specialtyObjectives || req.body?.specialty_objectives || {}),
+        participant_specialties: participantSpecialties,
+        common_objectives: commonObjectives,
+        specialty_objectives: specialtyObjectives,
         scope_snapshot: sanitizeClinicalPayload({
           mode,
           specialty,
           responsibleProfessionalId,
           participantProfessionalIds,
-          participantSpecialties: participantProfessionalIds.map((id) => String((activeByProfessional.get(id) as any)?.specialty || 'Especialidade não informada')),
+          participantSpecialties,
           capturedAt: now
         }),
-        source_template_id: sanitizeString(req.body?.sourceTemplateId || req.body?.source_template_id, 180) || null,
-        source_template_version: Number.isSafeInteger(Number(req.body?.sourceTemplateVersion || req.body?.source_template_version)) ? Number(req.body?.sourceTemplateVersion || req.body?.source_template_version) : null,
+        source_template_id: sourceTemplateId,
+        source_template_version: sourceTemplateVersion,
+        idempotency_key: idempotencyKey,
+        request_hash: requestHash,
         status: 'draft',
         edit_version: 1,
         created_by: actorId,
@@ -60182,7 +61034,36 @@ async function startServer() {
         .select('*')
         .single();
       if (error) {
-        if (String(error.code || '') === '23505') return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_EXISTS', message: 'Já existe um plano ativo para esta especialidade.' });
+        if (String(error.code || '') === '23505') {
+          const { data: retryPlan, error: retryError } = await supabase
+            .from('patient_therapeutic_plans')
+            .select('*')
+            .eq('organization_id', organizationId)
+            .eq('idempotency_key', idempotencyKey)
+            .limit(1)
+            .maybeSingle();
+          if (retryError) throw retryError;
+          if (
+            retryPlan &&
+            sanitizeString(retryPlan.request_hash, 80).toLowerCase() ===
+              requestHash
+          ) {
+            return res.json({
+              success: true,
+              data: retryPlan,
+              idempotent: true,
+              message: 'Plano já criado anteriormente.'
+            });
+          }
+          return res.status(409).json({
+            success: false,
+            error: 'THERAPEUTIC_PLAN_SCOPE_EXISTS',
+            message:
+              mode === 'interdisciplinary'
+                ? 'Já existe um Projeto Terapêutico Singular vigente para este paciente.'
+                : 'Já existe um plano ativo para esta especialidade.'
+          });
+        }
         throw error;
       }
       return res.status(201).json({ success: true, data, message: 'Escopo do Plano terapêutico criado com histórico independente.' });
@@ -60193,7 +61074,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Escopo do Plano terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -60201,7 +61082,7 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
-      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const role = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
       const { data: existing, error: existingError } = await supabase
         .from('patient_therapeutic_plans')
         .select('*')
@@ -60240,6 +61121,27 @@ async function startServer() {
       if (!['draft', 'active', 'paused', 'completed', 'archived'].includes(nextStatus)) {
         return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_STATUS_INVALID' });
       }
+      const hasSpecialtyObjectivesUpdate =
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'specialtyObjectives') ||
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'specialty_objectives');
+      const allowedSpecialties = String(existing.mode || '').toLowerCase() === 'specialty'
+        ? [existing.specialty]
+        : (Array.isArray(existing.participant_specialties)
+          ? existing.participant_specialties
+          : []);
+      const normalizedSpecialtyObjectives = hasSpecialtyObjectivesUpdate
+        ? normalizeTherapeuticSpecialtyObjectives(
+            req.body?.specialtyObjectives ?? req.body?.specialty_objectives,
+            allowedSpecialties,
+          )
+        : existing.specialty_objectives;
+      if (!normalizedSpecialtyObjectives) {
+        return res.status(422).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_SPECIALTY_OBJECTIVES_INVALID',
+          message: 'Os objetivos por especialidade precisam pertencer somente às especialidades participantes deste plano.',
+        });
+      }
       const now = new Date().toISOString();
       const { error: versionError } = await supabase.from('patient_therapeutic_plan_versions').upsert({
         plan_id: planId,
@@ -60259,7 +61161,7 @@ async function startServer() {
         .from('patient_therapeutic_plans')
         .update({
           common_objectives: sanitizeClinicalPayload(req.body?.commonObjectives ?? req.body?.common_objectives ?? existing.common_objectives),
-          specialty_objectives: sanitizeClinicalPayload(req.body?.specialtyObjectives ?? req.body?.specialty_objectives ?? existing.specialty_objectives),
+          specialty_objectives: sanitizeClinicalPayload(normalizedSpecialtyObjectives),
           status: nextStatus,
           edit_version: expectedVersion + 1,
           updated_by: actorId,
@@ -60280,12 +61182,12 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
-      const actorRole = sanitizeString(req.session.user?.role, 80).toLowerCase();
+      const actorRole = sanitizeString(req.effectiveClinicRole, 80).toLowerCase();
       const canManageLibrary = ['owner', 'admin', 'coordinator'].includes(actorRole);
       const includeArchived = String(req.query?.includeArchived || '').toLowerCase() === 'true';
       const templateQuery = supabase
@@ -60356,16 +61258,23 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-programs', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-programs', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
-      const role = sanitizeString(req.session.user?.role, 80).toLowerCase();
+      const role = sanitizeString(req.effectiveClinicRole, 80).toLowerCase();
       const therapeuticPlanId = sanitizeString(req.body?.therapeuticPlanId || req.body?.therapeutic_plan_id, 120);
       let therapeuticPlanScope: any = null;
+      if (!therapeuticPlanId) {
+        return res.status(422).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_SCOPE_REQUIRED',
+          message: 'Selecione o plano da especialidade ou o Projeto Terapêutico Singular deste programa.'
+        });
+      }
       if (therapeuticPlanId) {
         if (!isUuid(therapeuticPlanId)) {
           return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_INVALID' });
@@ -60609,17 +61518,34 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
-      const role = sanitizeString(req.session.user?.role, 80).toLowerCase();
+      const role = sanitizeString(req.effectiveClinicRole, 80).toLowerCase();
       const status = sanitizeString(req.body?.status, 40).toLowerCase();
       if (!['owner', 'admin', 'coordinator'].includes(role) && status !== 'awaiting_approval') {
         return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode alterar a fase oficial do programa.' });
+      }
+      if (!isTherapeuticPlanManager(role)) {
+        const canEdit = await canActorEditTherapeuticProgram({
+          actorId,
+          actorRole: role,
+          organizationId,
+          clinicId,
+          patientId,
+          programId
+        });
+        if (!canEdit) {
+          return res.status(403).json({
+            success: false,
+            error: 'THERAPEUTIC_PLAN_EDIT_DENIED',
+            message: 'Você não possui permissão de escrita neste plano.'
+          });
+        }
       }
       const { data, error } = await supabase.rpc('update_therapeutic_program_status', {
         p_organization_id: organizationId,
@@ -60640,7 +61566,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -60648,6 +61574,22 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const canEdit = await canActorEditTherapeuticProgram({
+        actorId,
+        actorRole,
+        organizationId,
+        clinicId,
+        patientId,
+        programId
+      });
+      if (!canEdit) {
+        return res.status(403).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_EDIT_DENIED',
+          message: 'Você não possui permissão de escrita neste plano.'
+        });
+      }
       const targets = (Array.isArray(req.body?.targets) ? req.body.targets : [])
         .slice(0, 50)
         .map((target: any) => ({
@@ -60687,13 +61629,29 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-programs/:programId/targets', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-programs/:programId/targets', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const canEdit = await canActorEditTherapeuticProgram({
+        actorId,
+        actorRole,
+        organizationId,
+        clinicId,
+        patientId,
+        programId
+      });
+      if (!canEdit) {
+        return res.status(403).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_EDIT_DENIED',
+          message: 'Você não possui permissão de escrita neste plano.'
+        });
+      }
       const { data, error } = await supabase.rpc('add_therapeutic_program_target', {
         p_organization_id: organizationId,
         p_patient_id: patientId,
@@ -60712,12 +61670,12 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
-      const role = sanitizeString(req.session.user?.role, 80).toLowerCase();
+      const role = sanitizeString(req.effectiveClinicRole, 80).toLowerCase();
       const canShareWithClinic = ['owner', 'admin', 'coordinator'].includes(role);
       const requestedVisibility = sanitizeString(req.body?.visibility, 20) === 'private'
         ? 'private'
@@ -60725,6 +61683,21 @@ async function startServer() {
       const visibility = canShareWithClinic ? requestedVisibility : 'private';
       const sourceScope = visibility === 'private' ? 'PERSONAL' : 'CLINIC';
       const programId = sanitizeString(req.body?.programId || req.body?.program_id, 180);
+      const templateSpecialtyWasProvided = Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        'specialty',
+      );
+      const requestedTemplateSpecialty = sanitizeString(req.body?.specialty, 120);
+      const templateSpecialty = requestedTemplateSpecialty
+        ? normalizeClinicalSpecialty(requestedTemplateSpecialty)
+        : null;
+      if (templateSpecialtyWasProvided && requestedTemplateSpecialty && !templateSpecialty) {
+        return res.status(422).json({
+          success: false,
+          error: 'CLINICAL_SPECIALTY_INVALID',
+          message: 'Selecione uma especialidade clínica disponível para salvar o modelo.',
+        });
+      }
       if (!programId) {
         const name = sanitizeTextField(req.body?.name, 240);
         const objective = sanitizeTextField(req.body?.objective, 1000);
@@ -60770,7 +61743,7 @@ async function startServer() {
           measurement_type: sanitizeString(req.body?.measurementType || req.body?.measurement_type || 'independent_prompted_no_response', 80),
           mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria || req.body?.mastery_criteria || {}),
           advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings || req.body?.advanced_settings || {}),
-          specialty: sanitizeString(req.body?.specialty, 120) || null,
+          specialty: templateSpecialty,
           tags: (Array.isArray(req.body?.tags) ? req.body.tags : []).slice(0, 30).map((tag: any) => sanitizeString(tag, 60)).filter(Boolean),
           structure_snapshot: sanitizeClinicalPayload(directPrivacy.sanitized),
           template_version: 1,
@@ -60789,19 +61762,57 @@ async function startServer() {
         if (error) throw error;
         return res.status(201).json({ success: true, data, message: sourceScope === 'CLINIC' && status === 'PUBLISHED' ? 'Modelo publicado na biblioteca da clínica.' : 'Modelo privado salvo.' });
       }
-      const [programResult, targetsResult] = await Promise.all([
-        supabase.from('aba_programs').select(THERAPEUTIC_PROGRAM_SELECT).eq('id', programId).eq('organization_id', organizationId).limit(1).maybeSingle(),
-        supabase.from('aba_targets').select('name,description,sort_order').eq('program_id', programId).eq('organization_id', organizationId).order('sort_order', { ascending: true }).limit(100)
-      ]);
-      if (programResult.error || !programResult.data || targetsResult.error) return res.status(404).json({ success: false, error: 'Programa não encontrado nesta clínica.' });
-      const program: any = programResult.data;
-      const { data: templatePatient } = await supabase
-        .from('patients')
-        .select('name')
-        .eq('id', program.patient_id)
+      const programResult = await supabase
+        .from('aba_programs')
+        .select(THERAPEUTIC_PROGRAM_SELECT)
+        .eq('id', programId)
+        .eq('organization_id', organizationId)
         .eq('clinic_id', clinicId)
         .limit(1)
         .maybeSingle();
+      if (programResult.error || !programResult.data) {
+        return res.status(404).json({
+          success: false,
+          error: 'Programa não encontrado nesta clínica.'
+        });
+      }
+      const program: any = programResult.data;
+      const canReadProgram = await canActorReadTherapeuticProgram({
+        actorId,
+        actorRole: role,
+        organizationId,
+        clinicId,
+        program
+      });
+      if (!canReadProgram) {
+        return res.status(403).json({
+          success: false,
+          error: 'THERAPEUTIC_PROGRAM_READ_DENIED',
+          message: 'Você não possui acesso a este programa terapêutico.'
+        });
+      }
+      const [targetsResult, patientResult] = await Promise.all([
+        supabase
+          .from('aba_targets')
+          .select('name,description,sort_order')
+          .eq('program_id', programId)
+          .eq('organization_id', organizationId)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', program.patient_id)
+          .order('sort_order', { ascending: true })
+          .limit(100),
+        supabase
+          .from('patients')
+          .select('name')
+          .eq('id', program.patient_id)
+          .eq('clinic_id', clinicId)
+          .limit(1)
+          .maybeSingle()
+      ]);
+      if (targetsResult.error || patientResult.error) {
+        throw targetsResult.error || patientResult.error;
+      }
+      const templatePatient = patientResult.data;
       const patientName = templatePatient?.name || null;
       const templatePrivacy = sanitizeTherapeuticTemplateContent({
         name: req.body?.name || program.name,
@@ -60839,7 +61850,7 @@ async function startServer() {
         measurement_type: sanitizeString(program.measurement_type || 'independent_prompted_no_response', 80),
         mastery_criteria: sanitizeClinicalPayload(program.mastery_criteria || {}),
         advanced_settings: sanitizeClinicalPayload(program.advanced_settings || {}),
-        specialty: sanitizeString(req.body?.specialty, 120) || null,
+        specialty: templateSpecialty,
         tags: (Array.isArray(req.body?.tags) ? req.body.tags : []).slice(0, 30).map((tag: any) => sanitizeString(tag, 60)).filter(Boolean),
         structure_snapshot: sanitizeClinicalPayload(templatePrivacy.sanitized),
         template_version: 1,
@@ -60864,13 +61875,13 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/program-templates/:templateId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/aba/program-templates/:templateId', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Modelo de programa')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
-      const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
       const templateId = sanitizeString(req.params.templateId, 180);
       const existingResult = await supabase
         .from('aba_program_templates')
@@ -60929,6 +61940,25 @@ async function startServer() {
         : 'clinic';
       const canShareWithClinic = ['owner', 'admin', 'coordinator'].includes(actorRole);
       const visibility = canShareWithClinic ? requestedVisibility : 'private';
+      const templateSpecialtyWasProvided = Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        'specialty',
+      );
+      const requestedTemplateSpecialty = sanitizeString(req.body?.specialty, 120);
+      const normalizedTemplateSpecialty = requestedTemplateSpecialty
+        ? normalizeClinicalSpecialty(requestedTemplateSpecialty)
+        : null;
+      if (
+        templateSpecialtyWasProvided &&
+        requestedTemplateSpecialty &&
+        !normalizedTemplateSpecialty
+      ) {
+        return res.status(422).json({
+          success: false,
+          error: 'CLINICAL_SPECIALTY_INVALID',
+          message: 'Selecione uma especialidade clínica disponível para salvar o modelo.',
+        });
+      }
       const patch = {
         name: sanitizeTextField(privacyReview.sanitized.name, 240),
         description: sanitizeTextField(privacyReview.sanitized.description, 1000),
@@ -60938,7 +61968,9 @@ async function startServer() {
         measurement_type: sanitizeString(req.body?.measurementType ?? req.body?.measurement_type ?? existing.measurement_type, 80),
         mastery_criteria: sanitizeClinicalPayload(privacyReview.sanitized.masteryCriteria),
         advanced_settings: sanitizeClinicalPayload(privacyReview.sanitized.advancedSettings),
-        specialty: sanitizeString(req.body?.specialty ?? existing.specialty, 120) || null,
+        specialty: templateSpecialtyWasProvided
+          ? normalizedTemplateSpecialty
+          : sanitizeString(existing.specialty, 120) || null,
         tags: (Array.isArray(req.body?.tags) ? req.body.tags : existing.tags || []).slice(0, 30).map((tag: any) => sanitizeString(tag, 60)).filter(Boolean),
         visibility,
         source_scope: visibility === 'private' ? 'PERSONAL' : 'CLINIC',

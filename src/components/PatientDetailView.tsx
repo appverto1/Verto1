@@ -10092,6 +10092,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     protocols={planProtocolCatalog}
                     professionals={clinicTherapists}
                     userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
+                    currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                     isDark={isPanelDark}
                     onStartSession={() => requestSessionStart('fullscreen')}
                   />
@@ -10442,6 +10443,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
             {!isKidsProfile && (
               <React.Fragment>
+                <div className={`rounded-3xl border p-5 shadow-sm sm:p-6 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
+                  <TherapeuticPlanPanel
+                    patient={patient}
+                    protocols={planProtocolCatalog}
+                    professionals={clinicTherapists}
+                    userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
+                    currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
+                    isDark={isPanelDark}
+                  />
+                </div>
                 <div id="new-schedule-card" className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}> 
                   <h3 className={`font-semibold text-lg mb-2 tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Plano Semanal Adulto</h3> 
                   <p className={`text-xs font-medium mb-4 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>

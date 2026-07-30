@@ -206,6 +206,33 @@ const unwrapList = (response: any, key?: string) => {
 
 const normalizeCategory = (value: any) => String(value || 'OUTRO').trim().toUpperCase();
 
+const objectiveLines = (value: unknown): string[] => {
+  const rows = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
+  return rows
+    .flatMap((row: any) => {
+      const text = typeof row === 'string'
+        ? row
+        : row && typeof row === 'object'
+          ? row.title || row.description || row.objective || ''
+          : '';
+      return String(text || '').split(/\r?\n/);
+    })
+    .map((line) => line.trim())
+    .filter(Boolean);
+};
+
+const specialtyObjectiveGroups = (
+  value: unknown,
+): Array<{ specialty: string; objectives: string[] }> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.entries(value as Record<string, unknown>)
+    .map(([specialty, objectives]) => ({
+      specialty: String(specialty || '').trim(),
+      objectives: objectiveLines(objectives),
+    }))
+    .filter((group) => group.specialty && group.objectives.length > 0);
+};
+
 const resolveMasteryPreset = (criteria: any) => {
   const accuracy = Number(criteria?.minAccuracyPercent ?? criteria?.min_accuracy_percent);
   const sessions = Number(criteria?.requiredSessions ?? criteria?.required_sessions);
@@ -250,22 +277,33 @@ const sourceCardClass = (dark: boolean) => `group flex min-h-[150px] flex-col it
     : 'border-slate-200 bg-white text-slate-800 hover:border-violet-300 hover:shadow-sm'
 }`;
 
-export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], userRole, isDark = false, onStartSession }: any) => {
+export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], userRole, currentUserId, isDark = false, onStartSession }: any) => {
   const patientId = String(patient?.id || '').trim();
   const patientName = String(patient?.name || patient?.nome || 'Paciente').trim() || 'Paciente';
   const normalizedRole = String(userRole || '').trim().toLowerCase();
-  const canManageStructure = ['owner', 'admin', 'coordinator'].includes(normalizedRole);
-  const roleCanCreate = !['patient', 'paciente', 'guardian', 'responsavel', 'responsável'].includes(normalizedRole);
   const [planData, setPlanData] = useState<any>({
     programs: [],
     objectives: [],
     targets: [],
     planScopes: [],
     professionalLinks: [],
+    capabilities: null,
     historicalPlanVersions: [],
+    historicalPrograms: [],
     readOnlyHistory: false,
   });
-  const canCreate = roleCanCreate && planData.readOnlyHistory !== true;
+  const effectiveRole = String(
+    planData?.capabilities?.actorRole || normalizedRole,
+  ).trim().toLowerCase();
+  const canManageStructure = ['owner', 'admin', 'coordinator'].includes(effectiveRole);
+  const roleCanCreate = ['owner', 'admin', 'coordinator', 'therapist'].includes(effectiveRole);
+  const canCreatePlanScope =
+    roleCanCreate &&
+    planData.readOnlyHistory !== true &&
+    planData?.capabilities?.canCreatePlans !== false;
+  const canCreateProgram =
+    canCreatePlanScope &&
+    planData?.capabilities?.programsEnabled !== false;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -331,6 +369,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const [editingScopeId, setEditingScopeId] = useState('');
   const [scopeEditDraft, setScopeEditDraft] = useState<any>({ commonObjectives: '', specialtyObjectives: {}, status: 'draft', expectedVersion: 1 });
   const requestSequence = useRef(0);
+  const scopeIdempotencyKeyRef = useRef('');
   const addProgramButtonRef = useRef<HTMLButtonElement | null>(null);
   const drawerScrollRef = useRef<HTMLDivElement | null>(null);
   const recommendationScrollTopRef = useRef(0);
@@ -340,9 +379,47 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const programs = useMemo(() => normalizeTherapeuticPrograms(planData), [planData]);
   const objectives = Array.isArray(planData?.objectives) ? planData.objectives : [];
   const planScopes = Array.isArray(planData?.planScopes) ? planData.planScopes : [];
+  const historicalPrograms = Array.isArray(planData?.historicalPrograms)
+    ? planData.historicalPrograms
+    : [];
   const professionalLinks = Array.isArray(planData?.professionalLinks) ? planData.professionalLinks : [];
-  const linkedProfessionalIds = useMemo(() => new Set(professionalLinks.map((link: any) => String(link.professional_id))), [professionalLinks]);
-  const linkedProfessionals = useMemo(() => professionals.filter((professional: any) => linkedProfessionalIds.has(String(professional.id))), [linkedProfessionalIds, professionals]);
+  const linkedProfessionals = useMemo(() => {
+    const providedById = new Map(
+      (Array.isArray(professionals) ? professionals : []).map((professional: any) => [
+        String(professional.id),
+        professional,
+      ]),
+    );
+    return professionalLinks.map((link: any) => {
+      const id = String(link.professional_id || '');
+      const provided: any = providedById.get(id) || {};
+      return {
+        ...provided,
+        id,
+        name: provided.name || link.name || 'Profissional',
+        specialty: link.specialty || provided.specialty || null,
+        permissions: link.permissions || {},
+        planEligible: link.planEligible === true,
+        planEligibilityReason: link.planEligibilityReason || null,
+      };
+    }).filter((professional: any) => professional.id);
+  }, [professionalLinks, professionals]);
+  const eligibleLinkedProfessionals = linkedProfessionals.filter(
+    (professional: any) => professional.planEligible === true,
+  );
+  const actorId = String(
+    planData?.capabilities?.actorId ||
+    currentUserId ||
+    '',
+  ).trim();
+  const actorProfessional = linkedProfessionals.find(
+    (professional: any) => String(professional.id) === actorId,
+  ) || null;
+  const selectableResponsibleProfessionals = canManageStructure
+    ? eligibleLinkedProfessionals
+    : actorProfessional?.planEligible === true
+      ? [actorProfessional]
+      : [];
   const summary = useMemo(() => buildTherapeuticPlanSummary(programs, objectives), [objectives, programs]);
   const groupedRecommendations = useMemo(() => groupTherapeuticRecommendations(recommendations), [recommendations]);
   const visibleRecommendationGroups = useMemo(() => filterTherapeuticRecommendationGroups(groupedRecommendations, {
@@ -372,6 +449,16 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     () => programs.find((program: any) => String(program.id) === selectedProgramId) || null,
     [programs, selectedProgramId],
   );
+  const canEditProgram = (program: any) => {
+    if (canManageStructure) return true;
+    const scopeId = String(
+      program?.therapeutic_plan_id || program?.therapeuticPlanId || '',
+    );
+    if (!scopeId) return false;
+    return planScopes.some(
+      (scope: any) => String(scope.id) === scopeId && scope.canEdit === true,
+    );
+  };
   const currentCreationSnapshot = useMemo(
     () => buildCreationDraftSnapshot(form, targetInput),
     [form, targetInput],
@@ -410,7 +497,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       targets: Array.isArray(data?.targets) ? data.targets : [],
       planScopes: Array.isArray(data?.planScopes) ? data.planScopes : [],
       professionalLinks: Array.isArray(data?.professionalLinks) ? data.professionalLinks : [],
+      capabilities: data?.capabilities || null,
       historicalPlanVersions: Array.isArray(data?.historicalPlanVersions) ? data.historicalPlanVersions : [],
+      historicalPrograms: Array.isArray(data?.historicalPrograms) ? data.historicalPrograms : [],
       readOnlyHistory: data?.readOnlyHistory === true,
       accessEndedAt: data?.accessEndedAt || null,
     });
@@ -425,7 +514,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       targets: [],
       planScopes: [],
       professionalLinks: [],
+      capabilities: null,
       historicalPlanVersions: [],
+      historicalPrograms: [],
       readOnlyHistory: false,
     });
     setSelectedProgramId('');
@@ -503,7 +594,20 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   };
 
   const startCreation = () => {
+    const firstAvailableScope = planScopes.find(
+      (scope: any) =>
+        scope.status !== 'archived' &&
+        (canManageStructure || scope.canEdit === true),
+    );
+    if (!firstAvailableScope) {
+      setNotice(
+        'Crie primeiro um plano da especialidade ou um Projeto Terapêutico Singular (PTS).',
+      );
+      openPlanScopeForm();
+      return;
+    }
     resetCreation();
+    setSelectedPlanScopeId(String(firstAvailableScope.id));
     setOperationKey(newIdempotencyKey(`therapeutic-program:${patientId}`));
     setCreationStep('source');
   };
@@ -786,6 +890,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       setFormError(validation);
       return;
     }
+    if (!editingProgramId && !selectedPlanScopeId) {
+      setFormError('Selecione o plano da especialidade ou o Projeto Terapêutico Singular deste programa.');
+      return;
+    }
     setFormError('');
     setCreationStep('review');
   };
@@ -794,6 +902,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const validation = validateForm();
     if (validation) {
       setFormError(validation);
+      return;
+    }
+    if (!editingProgramId && !selectedPlanScopeId) {
+      setFormError('Selecione o plano da especialidade ou o Projeto Terapêutico Singular deste programa.');
       return;
     }
     if (saving) return;
@@ -895,27 +1007,79 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     setActionProgramId('');
   };
 
+  const openPlanScopeForm = () => {
+    scopeIdempotencyKeyRef.current = newIdempotencyKey(
+      `therapeutic-plan-scope:${patientId}`,
+    );
+    const responsibleProfessionalId = canManageStructure
+      ? ''
+      : actorId;
+    const specialty = canManageStructure
+      ? ''
+      : String(actorProfessional?.specialty || '');
+    setScopeDraft({
+      mode: 'specialty',
+      specialty,
+      responsibleProfessionalId,
+      participantProfessionalIds: responsibleProfessionalId
+        ? [responsibleProfessionalId]
+        : [],
+    });
+    setScopeFormOpen(true);
+  };
+
   const createPlanScope = async () => {
+    const responsibleProfessional = linkedProfessionals.find(
+      (professional: any) =>
+        String(professional.id) === scopeDraft.responsibleProfessionalId,
+    );
+    const derivedSpecialty = String(
+      responsibleProfessional?.specialty || '',
+    ).trim();
     const participantIds = Array.from(new Set([
       scopeDraft.responsibleProfessionalId,
       ...scopeDraft.participantProfessionalIds,
     ].filter(Boolean)));
-    if (!scopeDraft.responsibleProfessionalId || (scopeDraft.mode === 'specialty' && !scopeDraft.specialty.trim())) {
-      setNotice('Informe o profissional responsável e a especialidade deste plano.');
+    const ineligibleParticipant = participantIds
+      .map((professionalId) =>
+        linkedProfessionals.find(
+          (professional: any) =>
+            String(professional.id) === professionalId,
+        ),
+      )
+      .find((professional: any) => professional?.planEligible !== true);
+    if (!scopeDraft.responsibleProfessionalId) {
+      setNotice('Informe o profissional responsável por este plano.');
+      return;
+    }
+    if (ineligibleParticipant) {
+      setNotice(
+        ineligibleParticipant.planEligibilityReason ||
+        'Um dos participantes ainda não está apto a editar planos deste paciente.',
+      );
+      return;
+    }
+    if (scopeDraft.mode === 'specialty' && !derivedSpecialty) {
+      setNotice('Cadastre a especialidade clínica do responsável antes de criar o plano.');
       return;
     }
     if (scopeDraft.mode === 'interdisciplinary' && participantIds.length < 2) {
-      setNotice('Selecione ao menos dois profissionais para o plano interdisciplinar.');
+      setNotice('Selecione ao menos dois profissionais para o Projeto Terapêutico Singular.');
       return;
+    }
+    if (!scopeIdempotencyKeyRef.current) {
+      scopeIdempotencyKeyRef.current = newIdempotencyKey(
+        `therapeutic-plan-scope:${patientId}`,
+      );
     }
     setScopeSaving(true);
     const response = await dataService.createPatientTherapeuticPlanScope(patientId, {
       mode: scopeDraft.mode,
-      specialty: scopeDraft.mode === 'specialty' ? scopeDraft.specialty.trim() : null,
       responsibleProfessionalId: scopeDraft.responsibleProfessionalId,
       participantProfessionalIds: participantIds,
       commonObjectives: [],
       specialtyObjectives: {},
+      idempotencyKey: scopeIdempotencyKeyRef.current,
     });
     setScopeSaving(false);
     if (response?.success === false) {
@@ -923,8 +1087,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       return;
     }
     setScopeFormOpen(false);
+    scopeIdempotencyKeyRef.current = '';
     setScopeDraft({ mode: 'specialty', specialty: '', responsibleProfessionalId: '', participantProfessionalIds: [] });
-    setNotice('Escopo do plano criado. Alterações futuras serão versionadas.');
+    setNotice(scopeDraft.mode === 'interdisciplinary'
+      ? 'Projeto Terapêutico Singular criado. Alterações futuras serão versionadas.'
+      : `Plano de ${derivedSpecialty} criado. Alterações futuras serão versionadas.`);
     await loadPlan(true);
   };
 
@@ -1429,7 +1596,37 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <label className={`text-xs ${muted}`}>Nome do programa<input className={`${field} mt-1.5`} value={form.name} maxLength={240} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} placeholder="Ex.: Solicitar ajuda" /></label>
             <label className={`text-xs ${muted}`}>Categoria<select className={`${field} mt-1.5`} value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))}>{CATEGORY_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-            {planScopes.length > 0 && <label className={`text-xs ${muted} md:col-span-2`}>Escopo clínico<select className={`${field} mt-1.5`} value={selectedPlanScopeId} onChange={(event) => setSelectedPlanScopeId(event.target.value)}><option value="">Plano geral, sem escopo específico</option>{planScopes.filter((scope: any) => scope.status !== 'archived').map((scope: any) => <option key={scope.id} value={scope.id}>{scope.mode === 'interdisciplinary' ? 'Interdisciplinar' : scope.specialty} · versão {scope.edit_version}</option>)}</select></label>}
+            {planScopes.length > 0 && (
+              <label className={`text-xs ${muted} md:col-span-2`}>
+                {editingProgramId ? 'Plano vinculado' : 'Plano do programa'}
+                <select
+                  className={`${field} mt-1.5 disabled:cursor-not-allowed disabled:opacity-70`}
+                  value={selectedPlanScopeId}
+                  disabled={Boolean(editingProgramId)}
+                  onChange={(event) => setSelectedPlanScopeId(event.target.value)}
+                >
+                  {editingProgramId && !selectedPlanScopeId ? (
+                    <option value="">Programa anterior, sem plano vinculado</option>
+                  ) : (
+                    <option value="" disabled>Selecione o plano</option>
+                  )}
+                  {planScopes
+                    .filter(
+                      (scope: any) =>
+                        scope.status !== 'archived' ||
+                        String(scope.id) === selectedPlanScopeId,
+                    )
+                    .map((scope: any) => (
+                      <option key={scope.id} value={scope.id}>
+                        {scope.mode === 'interdisciplinary'
+                          ? 'Projeto Terapêutico Singular (PTS)'
+                          : `Plano da especialidade · ${scope.specialty || 'não informada'}`}
+                        {' · '}versão {scope.edit_version}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
           </div>
           <label className={`block text-xs ${muted}`}>Objetivo terapêutico<textarea className={`${field} mt-1.5 min-h-[92px] resize-y`} value={form.objective} maxLength={1000} onChange={(event) => setForm((current) => ({ ...current, objective: event.target.value }))} placeholder="O que se pretende desenvolver?" /></label>
           <div>
@@ -1558,7 +1755,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         </header>
 
         {openMenuId === String(program.id) && <div className={`absolute right-5 top-14 z-20 w-56 rounded-xl border p-1.5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
-          {canManageStructure && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}
+          {canEditProgram(program) && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}
           {canManageStructure && status !== 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'paused')}><Pause size={15} /> Pausar</button>}
           {canManageStructure && status !== 'maintenance' && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'maintenance')}><Clock3 size={15} /> Mover para manutenção</button>}
           {canManageStructure && status !== 'completed' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'completed')}><CheckCircle2 size={15} /> Concluir</button>}
@@ -1600,6 +1797,16 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const historicalVersions = Array.isArray(planData.historicalPlanVersions)
       ? planData.historicalPlanVersions
       : [];
+    const historicalProgramsByPlanId = new Map<string, any[]>();
+    for (const program of historicalPrograms) {
+      const planId = String(
+        program?.therapeutic_plan_id || program?.therapeuticPlanId || '',
+      ).trim();
+      if (!planId) continue;
+      const list = historicalProgramsByPlanId.get(planId) || [];
+      list.push(program);
+      historicalProgramsByPlanId.set(planId, list);
+    }
     return (
       <section className="space-y-5" data-testid="therapeutic-plan-history-read-only">
         <div>
@@ -1624,8 +1831,17 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                 ? versionRow.snapshot
                 : {};
               const title = snapshot.mode === 'interdisciplinary'
-                ? 'Plano interdisciplinar'
+                ? 'Projeto Terapêutico Singular (PTS)'
                 : snapshot.specialty || 'Plano por especialidade';
+              const historicalCommonObjectives = objectiveLines(
+                snapshot.common_objectives,
+              );
+              const historicalObjectiveGroups = specialtyObjectiveGroups(
+                snapshot.specialty_objectives,
+              );
+              const preservedPrograms = historicalProgramsByPlanId.get(
+                String(versionRow.plan_id || ''),
+              ) || [];
               return (
                 <article key={versionRow.id} className={`rounded-2xl border p-4 ${subpanel}`}>
                   <div className="flex items-start justify-between gap-3">
@@ -1640,8 +1856,68 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                     </span>
                   </div>
                   <p className={`mt-3 text-xs leading-5 ${muted}`}>
-                    {(snapshot.participant_professional_ids || []).length} participante(s) · objetivos e responsabilidades preservados no snapshot.
+                    {(snapshot.participant_professional_ids || []).length} participante(s) · responsabilidades preservadas no snapshot.
                   </p>
+                  <div className={`mt-3 space-y-2 border-t pt-3 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                    {historicalCommonObjectives.length > 0 && (
+                      <div>
+                        <p className={`text-[11px] ${muted}`}>Objetivos comuns</p>
+                        <ul className={`mt-1 space-y-1 text-xs leading-5 ${text}`}>
+                          {historicalCommonObjectives.map((objective, index) => (
+                            <li key={`${versionRow.id}-common-${index}`} className="flex gap-2">
+                              <span className="text-violet-500" aria-hidden="true">•</span>
+                              <span>{objective}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {historicalObjectiveGroups.map((group) => (
+                      <div key={`${versionRow.id}-${group.specialty}`}>
+                        <p className={`text-[11px] ${muted}`}>
+                          Objetivos de {group.specialty}
+                        </p>
+                        <ul className={`mt-1 space-y-1 text-xs leading-5 ${text}`}>
+                          {group.objectives.map((objective, index) => (
+                            <li key={`${versionRow.id}-${group.specialty}-${index}`} className="flex gap-2">
+                              <span className="text-violet-500" aria-hidden="true">•</span>
+                              <span>{objective}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                    {historicalCommonObjectives.length === 0 &&
+                      historicalObjectiveGroups.length === 0 && (
+                        <p className={`text-xs leading-5 ${muted}`}>
+                          Esta versão não possui objetivos registrados.
+                        </p>
+                      )}
+                    {preservedPrograms.length > 0 && (
+                      <div>
+                        <p className={`text-[11px] ${muted}`}>
+                          Programas e alvos preservados
+                        </p>
+                        <ul className={`mt-1 space-y-2 text-xs leading-5 ${text}`}>
+                          {preservedPrograms.map((program: any) => {
+                            const targets = Array.isArray(program?.targets)
+                              ? program.targets
+                              : [];
+                            return (
+                              <li key={`${versionRow.id}-${program.id}`}>
+                                <span className="font-medium">{program.name || 'Programa sem título'}</span>
+                                <span className={`block ${muted}`}>
+                                  {targets.length} alvo(s){targets.length > 0
+                                    ? ` · ${targets.slice(0, 3).map((target: any) => target?.name || 'Alvo').join(', ')}`
+                                    : ''}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
                 </article>
               );
             })}
@@ -1660,29 +1936,313 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     <section className="space-y-5" data-testid="therapeutic-plan-panel">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div><h2 className={`text-lg font-medium ${text}`}>Plano terapêutico</h2><p className={`mt-1 text-sm leading-relaxed ${muted}`}>Objetivos gerais, programas individualizados e alvos usados nas sessões.</p></div>
-        <div className="flex flex-wrap gap-2">{typeof onStartSession === 'function' && programs.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status))) && <button type="button" className={secondaryButton} onClick={onStartSession}><Play size={16} /> Iniciar sessão</button>}{canCreate && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={startCreation}><Plus size={17} /> Adicionar programa</button>}</div>
+        <div className="flex flex-wrap gap-2">{typeof onStartSession === 'function' && programs.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status))) && <button type="button" className={secondaryButton} onClick={onStartSession}><Play size={16} /> Iniciar sessão</button>}{canCreateProgram && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={startCreation}><Plus size={17} /> Adicionar programa</button>}</div>
       </div>
 
       {notice && <div className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div>}
       {error && <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}<button type="button" className="ml-2 underline" onClick={() => void loadPlan(true)}>Tentar novamente</button></div>}
 
-      <section className={`rounded-2xl border p-4 ${subpanel}`} aria-label="Organização multidisciplinar do plano">
+      <section className={`rounded-2xl border p-4 sm:p-5 ${subpanel}`} aria-label="Planos da equipe multiprofissional">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className={`text-sm font-medium ${text}`}>Escopos clínicos</p>
-            <p className={`mt-1 text-xs leading-5 ${muted}`}>Organize planos independentes por especialidade ou um plano interdisciplinar compartilhado.</p>
+          <div className="max-w-2xl">
+            <p className={`text-sm font-medium ${text}`}>Planos da equipe</p>
+            <p className={`mt-1 text-xs leading-5 ${muted}`}>
+              Crie um plano próprio da especialidade ou um Projeto Terapêutico Singular (PTS), construído em conjunto pela equipe.
+            </p>
           </div>
-          {canCreate && <button type="button" disabled={linkedProfessionals.length === 0} className={secondaryButton} onClick={() => setScopeFormOpen((open) => !open)}><Plus size={15} /> Novo escopo</button>}
+          {canCreatePlanScope && (
+            <button
+              type="button"
+              disabled={selectableResponsibleProfessionals.length === 0}
+              className={secondaryButton}
+              onClick={() => scopeFormOpen ? setScopeFormOpen(false) : openPlanScopeForm()}
+            >
+              <Plus size={15} /> {scopeFormOpen ? 'Fechar' : 'Novo plano'}
+            </button>
+          )}
         </div>
-        {!loading && linkedProfessionals.length === 0 && <p className={`mt-3 text-xs ${muted}`}>Vincule ao menos um profissional ao paciente para criar um escopo clínico.</p>}
-        {scopeFormOpen && <div className={`mt-4 grid gap-3 rounded-xl border p-4 md:grid-cols-2 ${panel}`}>
-          <label className={`text-xs ${muted}`}>Modo<select className={`${field} mt-1.5`} value={scopeDraft.mode} onChange={(event) => setScopeDraft((current) => ({ ...current, mode: event.target.value, specialty: event.target.value === 'specialty' ? current.specialty : '' }))}><option value="specialty">Por especialidade</option><option value="interdisciplinary">Interdisciplinar</option></select></label>
-          {scopeDraft.mode === 'specialty' && <label className={`text-xs ${muted}`}>Especialidade<input className={`${field} mt-1.5`} maxLength={120} value={scopeDraft.specialty} onChange={(event) => setScopeDraft((current) => ({ ...current, specialty: event.target.value }))} placeholder="Ex.: Fonoaudiologia" /></label>}
-          <label className={`text-xs ${muted}`}>Responsável principal<select className={`${field} mt-1.5`} value={scopeDraft.responsibleProfessionalId} onChange={(event) => setScopeDraft((current) => ({ ...current, responsibleProfessionalId: event.target.value }))}><option value="">Selecione</option>{linkedProfessionals.map((professional: any) => <option key={professional.id} value={professional.id}>{professional.name || professional.email || 'Profissional'}</option>)}</select></label>
-          {scopeDraft.mode === 'interdisciplinary' && <fieldset className="md:col-span-2"><legend className={`text-xs ${muted}`}>Participantes vinculados (até cinco)</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{linkedProfessionals.map((professional: any) => { const id = String(professional.id); const selected = scopeDraft.participantProfessionalIds.includes(id); return <label key={id} className={`flex min-h-11 items-center gap-2 rounded-xl border px-3 text-sm ${selected ? 'border-violet-300 bg-violet-50 text-violet-800' : panel}`}><input type="checkbox" checked={selected} disabled={!selected && scopeDraft.participantProfessionalIds.length >= 5} onChange={() => setScopeDraft((current) => ({ ...current, participantProfessionalIds: selected ? current.participantProfessionalIds.filter((value) => value !== id) : [...current.participantProfessionalIds, id].slice(0, 5) }))} />{professional.name || professional.email || 'Profissional'}</label>; })}</div></fieldset>}
-          <div className="flex justify-end gap-2 md:col-span-2"><button type="button" className={secondaryButton} onClick={() => setScopeFormOpen(false)}>Cancelar</button><button type="button" disabled={scopeSaving} className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50" onClick={() => void createPlanScope()}>{scopeSaving ? 'Salvando...' : 'Criar escopo'}</button></div>
-        </div>}
-        {planScopes.length > 0 ? <div className="mt-4 grid gap-2 md:grid-cols-2">{planScopes.map((scope: any) => <article key={scope.id} className={`rounded-xl border p-3 ${panel}`}><div className="flex items-center justify-between gap-2"><p className={`text-sm font-medium ${text}`}>{scope.mode === 'interdisciplinary' ? 'Plano interdisciplinar' : scope.specialty}</p><span className={`rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>v{scope.edit_version}</span></div><p className={`mt-1 text-xs ${muted}`}>{(scope.participant_professional_ids || []).length} participante(s) · {scope.status === 'active' ? 'Ativo' : scope.status === 'archived' ? 'Arquivado' : 'Rascunho'}</p>{canCreate && scope.status !== 'archived' && <button type="button" className="mt-2 text-xs font-medium text-violet-600" onClick={() => startEditingScope(scope)}>Editar objetivos e estado</button>}{editingScopeId === String(scope.id) && <div className="mt-3 space-y-3 border-t border-slate-200 pt-3"><label className={`block text-xs ${muted}`}>Objetivos comuns, um por linha<textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.commonObjectives} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, commonObjectives: event.target.value }))} /></label>{Object.keys(scopeEditDraft.specialtyObjectives || {}).map((specialty) => <label key={specialty} className={`block text-xs ${muted}`}>Objetivos de {specialty}, um por linha<textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.specialtyObjectives[specialty]} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, specialtyObjectives: { ...current.specialtyObjectives, [specialty]: event.target.value } }))} /></label>)}<label className={`block text-xs ${muted}`}>Estado<select className={`${field} mt-1.5`} value={scopeEditDraft.status} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, status: event.target.value }))}><option value="draft">Rascunho</option><option value="active">Ativo</option><option value="paused">Pausado</option><option value="completed">Concluído</option><option value="archived">Arquivado</option></select></label><div className="flex justify-end gap-2"><button type="button" className={secondaryButton} onClick={() => setEditingScopeId('')}>Cancelar</button><button type="button" disabled={scopeSaving} className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50" onClick={() => void savePlanScope()}>{scopeSaving ? 'Salvando...' : 'Salvar nova versão'}</button></div></div>}</article>)}</div> : <p className={`mt-3 text-xs ${muted}`}>Os programas atuais continuam intactos. Crie um escopo quando desejar separar responsabilidades.</p>}
+
+        {!loading && selectableResponsibleProfessionals.length === 0 && (
+          <p className={`mt-3 text-xs ${muted}`}>
+            Vincule ao menos um profissional de atendimento ativo, com especialidade cadastrada e permissão de escrita.
+          </p>
+        )}
+
+        {scopeFormOpen && (
+          <div className={`mt-4 grid gap-4 rounded-xl border p-4 md:grid-cols-2 ${panel}`}>
+            <label className={`text-xs ${muted}`}>
+              Tipo de plano
+              <select
+                className={`${field} mt-1.5`}
+                value={scopeDraft.mode}
+                onChange={(event) => {
+                  const mode = event.target.value;
+                  setScopeDraft((current) => ({
+                    ...current,
+                    mode,
+                    specialty: mode === 'specialty'
+                      ? String(
+                          linkedProfessionals.find((professional: any) =>
+                            String(professional.id) === current.responsibleProfessionalId
+                          )?.specialty || ''
+                        )
+                      : '',
+                    participantProfessionalIds: current.responsibleProfessionalId
+                      ? [current.responsibleProfessionalId]
+                      : [],
+                  }));
+                }}
+              >
+                <option value="specialty">Plano da especialidade</option>
+                <option value="interdisciplinary">Projeto Terapêutico Singular (PTS)</option>
+              </select>
+            </label>
+
+            <label className={`text-xs ${muted}`}>
+              Responsável principal
+              <select
+                className={`${field} mt-1.5`}
+                value={scopeDraft.responsibleProfessionalId}
+                disabled={!canManageStructure}
+                onChange={(event) => {
+                  const responsibleProfessionalId = event.target.value;
+                  const responsible = linkedProfessionals.find(
+                    (professional: any) =>
+                      String(professional.id) === responsibleProfessionalId,
+                  );
+                  setScopeDraft((current) => ({
+                    ...current,
+                    responsibleProfessionalId,
+                    specialty: current.mode === 'specialty'
+                      ? String(responsible?.specialty || '')
+                      : '',
+                    participantProfessionalIds: responsibleProfessionalId
+                      ? [responsibleProfessionalId]
+                      : [],
+                  }));
+                }}
+              >
+                <option value="">Selecione</option>
+                {selectableResponsibleProfessionals.map((professional: any) => (
+                  <option key={professional.id} value={professional.id}>
+                    {professional.name} · {professional.specialty || 'especialidade pendente'}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {scopeDraft.mode === 'specialty' && (
+              <div className={`rounded-xl border px-3.5 py-3 md:col-span-2 ${subpanel}`}>
+                <p className={`text-[11px] ${muted}`}>Especialidade obtida do cadastro profissional</p>
+                <p className={`mt-1 text-sm font-medium ${text}`}>
+                  {scopeDraft.specialty || 'Selecione um responsável com especialidade cadastrada'}
+                </p>
+              </div>
+            )}
+
+            <fieldset className="md:col-span-2">
+              <legend className={`text-xs ${muted}`}>
+                {scopeDraft.mode === 'interdisciplinary'
+                  ? 'Equipe participante (de 2 a 5 profissionais)'
+                  : 'Colaboradores da mesma especialidade (opcional)'}
+              </legend>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {linkedProfessionals
+                  .filter((professional: any) =>
+                    scopeDraft.mode === 'interdisciplinary' ||
+                    !scopeDraft.specialty ||
+                    String(professional.specialty || '').toLocaleLowerCase('pt-BR') ===
+                      scopeDraft.specialty.toLocaleLowerCase('pt-BR')
+                  )
+                  .map((professional: any) => {
+                    const id = String(professional.id);
+                    const selected = scopeDraft.participantProfessionalIds.includes(id);
+                    const requiredParticipant =
+                      id === scopeDraft.responsibleProfessionalId ||
+                      (!canManageStructure && id === actorId);
+                    const disabled =
+                      professional.planEligible !== true ||
+                      requiredParticipant ||
+                      (!selected && scopeDraft.participantProfessionalIds.length >= 5);
+                    return (
+                      <label
+                        key={id}
+                        className={`flex min-h-12 items-center gap-3 rounded-xl border px-3 text-sm ${
+                          selected
+                            ? isDark
+                              ? 'border-violet-500/50 bg-violet-500/10 text-violet-200'
+                              : 'border-violet-200 bg-violet-50 text-violet-800'
+                            : panel
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={disabled}
+                          onChange={() =>
+                            setScopeDraft((current) => ({
+                              ...current,
+                              participantProfessionalIds: selected
+                                ? current.participantProfessionalIds.filter((value) => value !== id)
+                                : [...current.participantProfessionalIds, id].slice(0, 5),
+                            }))
+                          }
+                        />
+                        <span className="min-w-0">
+                          <span className="block truncate">{professional.name}</span>
+                          <span className={`block truncate text-[11px] ${muted}`}>
+                            {professional.planEligible === true
+                              ? professional.specialty || 'Especialidade pendente'
+                              : professional.planEligibilityReason || 'Indisponível para novos planos'}
+                          </span>
+                        </span>
+                      </label>
+                    );
+                  })}
+              </div>
+            </fieldset>
+
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end md:col-span-2">
+              <button type="button" className={secondaryButton} onClick={() => setScopeFormOpen(false)}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={scopeSaving}
+                className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50"
+                onClick={() => void createPlanScope()}
+              >
+                {scopeSaving
+                  ? 'Salvando...'
+                  : scopeDraft.mode === 'interdisciplinary'
+                    ? 'Criar PTS'
+                    : 'Criar plano da especialidade'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {planScopes.length > 0 ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {planScopes.map((scope: any) => {
+              const isPts = scope.mode === 'interdisciplinary';
+              const statusLabel =
+                scope.status === 'active' ? 'Ativo'
+                  : scope.status === 'paused' ? 'Pausado'
+                    : scope.status === 'completed' ? 'Concluído'
+                      : scope.status === 'archived' ? 'Arquivado'
+                        : 'Rascunho';
+              const commonObjectives = objectiveLines(scope.common_objectives);
+              const objectiveGroups = specialtyObjectiveGroups(
+                scope.specialty_objectives,
+              );
+              return (
+                <article key={scope.id} className={`rounded-xl border p-4 ${panel}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className={`text-sm font-medium ${text}`}>
+                        {isPts
+                          ? 'Projeto Terapêutico Singular (PTS)'
+                          : `Plano da especialidade · ${scope.specialty || 'Não informada'}`}
+                      </p>
+                      <p className={`mt-1 text-xs leading-5 ${muted}`}>
+                        {isPts
+                          ? 'Plano integrado da equipe'
+                          : 'Plano clínico específico da especialidade'}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                      v{scope.edit_version}
+                    </span>
+                  </div>
+                  <p className={`mt-3 text-xs ${muted}`}>
+                    {(scope.participant_professional_ids || []).length} participante(s) · {statusLabel}
+                  </p>
+                  <div className={`mt-3 space-y-3 border-t pt-3 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                    {commonObjectives.length > 0 && (
+                      <div>
+                        <p className={`text-[11px] ${muted}`}>
+                          {isPts ? 'Objetivos comuns do PTS' : 'Objetivos do plano'}
+                        </p>
+                        <ul className={`mt-1.5 space-y-1 text-sm leading-5 ${text}`}>
+                          {commonObjectives.map((objective, index) => (
+                            <li key={`${scope.id}-common-${index}`} className="flex gap-2">
+                              <span className="text-violet-500" aria-hidden="true">•</span>
+                              <span>{objective}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {objectiveGroups.map((group) => (
+                      <div key={`${scope.id}-${group.specialty}`}>
+                        <p className={`text-[11px] ${muted}`}>
+                          Objetivos de {group.specialty}
+                        </p>
+                        <ul className={`mt-1.5 space-y-1 text-sm leading-5 ${text}`}>
+                          {group.objectives.map((objective, index) => (
+                            <li key={`${scope.id}-${group.specialty}-${index}`} className="flex gap-2">
+                              <span className="text-violet-500" aria-hidden="true">•</span>
+                              <span>{objective}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                    {commonObjectives.length === 0 && objectiveGroups.length === 0 && (
+                      <p className={`text-xs leading-5 ${muted}`}>
+                        Os objetivos ainda não foram definidos.
+                      </p>
+                    )}
+                  </div>
+                  {scope.canEdit === true && scope.status !== 'archived' && (
+                    <button
+                      type="button"
+                      className="mt-3 min-h-10 rounded-lg px-2 text-xs font-medium text-violet-600 hover:bg-violet-500/10"
+                      onClick={() => startEditingScope(scope)}
+                    >
+                      Editar objetivos e estado
+                    </button>
+                  )}
+                  {editingScopeId === String(scope.id) && (
+                    <div className={`mt-3 space-y-3 border-t pt-3 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                      <label className={`block text-xs ${muted}`}>
+                        Objetivos comuns, um por linha
+                        <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.commonObjectives} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, commonObjectives: event.target.value }))} />
+                      </label>
+                      {Object.keys(scopeEditDraft.specialtyObjectives || {}).map((specialty) => (
+                        <label key={specialty} className={`block text-xs ${muted}`}>
+                          Objetivos de {specialty}, um por linha
+                          <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.specialtyObjectives[specialty]} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, specialtyObjectives: { ...current.specialtyObjectives, [specialty]: event.target.value } }))} />
+                        </label>
+                      ))}
+                      <label className={`block text-xs ${muted}`}>
+                        Estado
+                        <select className={`${field} mt-1.5`} value={scopeEditDraft.status} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, status: event.target.value }))}>
+                          <option value="draft">Rascunho</option>
+                          <option value="active">Ativo</option>
+                          <option value="paused">Pausado</option>
+                          <option value="completed">Concluído</option>
+                          <option value="archived">Arquivado</option>
+                        </select>
+                      </label>
+                      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                        <button type="button" className={secondaryButton} onClick={() => setEditingScopeId('')}>Cancelar</button>
+                        <button type="button" disabled={scopeSaving} className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50" onClick={() => void savePlanScope()}>
+                          {scopeSaving ? 'Salvando...' : 'Salvar nova versão'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <p className={`mt-3 text-xs ${muted}`}>
+            Crie o primeiro plano para organizar responsabilidades e programas da equipe.
+          </p>
+        )}
       </section>
 
       <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-3 text-sm ${subpanel}`} data-therapeutic-plan-summary>
@@ -1700,7 +2260,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         <label className="relative w-full md:max-w-xs"><Search size={15} className={`absolute left-3.5 top-1/2 -translate-y-1/2 ${muted}`} /><input className={`${field} pl-10`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar programa ou alvo" /></label>
       </div>
 
-      {loading ? <div className={`flex items-center justify-center gap-2 rounded-2xl border border-dashed py-12 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><Loader2 size={18} className="animate-spin" /> Carregando Plano terapêutico...</div> : visiblePrograms.length ? <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">{visiblePrograms.map(renderProgramCard)}</div> : <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}><Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} /><p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas individualizados neste plano.'}</p>{canCreate && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={startCreation}>Adicionar o primeiro programa</button>}</div>}
+      {loading ? <div className={`flex items-center justify-center gap-2 rounded-2xl border border-dashed py-12 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><Loader2 size={18} className="animate-spin" /> Carregando Plano terapêutico...</div> : visiblePrograms.length ? <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">{visiblePrograms.map(renderProgramCard)}</div> : <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}><Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} /><p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas individualizados neste plano.'}</p>{canCreateProgram && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={startCreation}>Adicionar o primeiro programa</button>}</div>}
 
       <ResponsiveDrawer
         open={Boolean(creationStep)}
@@ -1732,7 +2292,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         isDark={isDark}
       />
 
-      {selectedProgram && <div className="fixed inset-0 z-[115] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"><div className={`flex max-h-[94vh] w-full max-w-5xl flex-col rounded-t-3xl border shadow-2xl sm:rounded-3xl ${panel}`} role="dialog" aria-modal="true"><header className={`flex items-start justify-between gap-3 border-b px-5 py-4 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}><div><div className="flex flex-wrap items-center gap-2"><h3 className={`text-xl font-medium ${text}`}>{selectedProgram.name}</h3><span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(selectedProgram.status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[normalizeTherapeuticProgramStatus(selectedProgram.status)]}</span></div><p className={`mt-1 text-xs ${muted}`}>Origem: {SOURCE_LABELS[String(selectedProgram.origin_type || 'manual')] || 'Programa individual'} · Versão {selectedProgram.version || 1}</p></div><button type="button" className={`rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`} onClick={() => setSelectedProgramId('')}><X size={19} /></button></header><nav className={`flex gap-1 overflow-x-auto border-b px-5 py-2 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>{[['overview', 'Visão geral'], ['targets', 'Alvos'], ['procedure', 'Procedimento'], ['progress', 'Progresso'], ['history', 'Histórico']].map(([value, label]) => <button key={value} type="button" className={`shrink-0 rounded-lg px-3 py-2 text-sm ${detailTab === value ? 'bg-violet-600 text-white' : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setDetailTab(value)}>{label}</button>)}</nav><div className="overflow-y-auto p-5 sm:p-6">{detailTab === 'overview' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className={`rounded-2xl border p-5 md:col-span-2 ${subpanel}`}><p className={`text-xs ${muted}`}>Objetivo</p><p className={`mt-2 leading-relaxed ${text}`}>{selectedProgram.objective || 'Não informado.'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Critério de domínio</p><p className={`mt-1 text-sm ${text}`}>{masteryCriterionLabel(selectedProgram.mastery_criteria)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Próxima revisão</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.review_due_date)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Responsáveis</p><p className={`mt-1 text-sm ${text}`}>{Array.isArray(selectedProgram.responsible_professional_ids) && selectedProgram.responsible_professional_ids.length ? `${selectedProgram.responsible_professional_ids.length} profissional(is)` : 'Equipe clínica'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Última aplicação</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.lastAppliedAt)}</p></div>{canManageStructure && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <button type="button" className={secondaryButton} onClick={() => editProgram(selectedProgram)}><Pencil size={16} /> Editar programa</button>}</div>}{detailTab === 'targets' && <div className="space-y-3">{(selectedProgram.targets || []).map((target: any, index: number) => <div key={target.id || `${target.name}-${index}`} className={`flex items-center justify-between gap-3 rounded-2xl border p-4 ${subpanel}`}><div><p className={`font-medium ${text}`}>{target.name}</p><p className={`mt-1 text-xs ${muted}`}>{target.normalizedStatus === 'mastered' ? 'Dominado' : target.normalizedStatus === 'maintenance' ? 'Em manutenção' : target.normalizedStatus === 'paused' ? 'Pausado' : target.normalizedStatus === 'teaching' ? 'Em ensino' : 'Não iniciado'}</p></div><span className={`rounded-full px-2.5 py-1 text-xs ${target.normalizedStatus === 'mastered' ? isDark ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span></div>)}{canManageStructure && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <div className={`flex flex-col gap-2 rounded-2xl border p-4 sm:flex-row ${subpanel}`}><input className={field} value={newTargetName} maxLength={240} onChange={(event) => setNewTargetName(event.target.value)} placeholder="Nome do novo alvo" /><button type="button" className="shrink-0 rounded-xl bg-violet-600 px-4 py-2.5 text-sm text-white disabled:opacity-50" disabled={!newTargetName.trim() || actionProgramId === String(selectedProgram.id)} onClick={() => void addTargetToProgram()}>{actionProgramId === String(selectedProgram.id) ? 'Adicionando...' : 'Adicionar alvo'}</button></div>}</div>}{detailTab === 'procedure' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{[['Instrução / antecedente', 'antecedent'], ['Resposta esperada', 'expectedResponse'], ['Materiais', 'materials'], ['Hierarquia de ajuda', 'promptHierarchy'], ['Reforçamento', 'reinforcement'], ['Correção de erro', 'errorCorrection'], ['Generalização', 'generalization'], ['Manutenção', 'maintenance']].map(([label, key]) => <div key={key} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-2 whitespace-pre-wrap text-sm leading-relaxed ${text}`}>{selectedProgram?.advanced_settings?.[key] || 'Não informado.'}</p></div>)}</div>}{detailTab === 'progress' && <div className="space-y-4"><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{[['Alvos', selectedProgram.targets.length], ['Dominados', selectedProgram.masteredTargetCount], ['Em ensino', selectedProgram.targets.filter((target: any) => target.normalizedStatus === 'teaching').length], ['Aplicações recentes', selectedProgram.lastAppliedAt ? 1 : 0]].map(([label, value]) => <div key={String(label)} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-1 text-xl font-medium ${text}`}>{value}</p></div>)}</div><div className={`rounded-2xl border p-5 ${subpanel}`}><p className={`text-sm ${text}`}>Progresso por alvo</p><div className="mt-4 space-y-3">{selectedProgram.targets.map((target: any) => <div key={target.id}><div className={`mb-1 flex justify-between text-xs ${muted}`}><span>{target.name}</span><span>{target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : 'Em coleta'}</span></div><div className={`h-2 rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500" style={{ width: target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : '15%' }} /></div></div>)}</div></div></div>}{detailTab === 'history' && <div className="space-y-3">{(selectedProgram.history || []).map((event: any) => <div key={event.id} className={`flex gap-3 rounded-2xl border p-4 ${subpanel}`}><div className={`mt-0.5 rounded-lg p-2 ${isDark ? 'bg-slate-800 text-violet-300' : 'bg-violet-50 text-violet-600'}`}><History size={15} /></div><div><p className={`text-sm ${text}`}>{String(event.event_type || 'UPDATED').replaceAll('_', ' ').toLocaleLowerCase('pt-BR')}</p><p className={`mt-1 text-xs ${muted}`}>{formatTherapeuticPlanDate(event.created_at)}</p></div></div>)}{!(selectedProgram.history || []).length && <p className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma alteração registrada.</p>}</div>}</div></div></div>}
+      {selectedProgram && <div className="fixed inset-0 z-[115] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"><div className={`flex max-h-[94vh] w-full max-w-5xl flex-col rounded-t-3xl border shadow-2xl sm:rounded-3xl ${panel}`} role="dialog" aria-modal="true"><header className={`flex items-start justify-between gap-3 border-b px-5 py-4 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}><div><div className="flex flex-wrap items-center gap-2"><h3 className={`text-xl font-medium ${text}`}>{selectedProgram.name}</h3><span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(selectedProgram.status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[normalizeTherapeuticProgramStatus(selectedProgram.status)]}</span></div><p className={`mt-1 text-xs ${muted}`}>Origem: {SOURCE_LABELS[String(selectedProgram.origin_type || 'manual')] || 'Programa individual'} · Versão {selectedProgram.version || 1}</p></div><button type="button" className={`rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`} onClick={() => setSelectedProgramId('')}><X size={19} /></button></header><nav className={`flex gap-1 overflow-x-auto border-b px-5 py-2 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>{[['overview', 'Visão geral'], ['targets', 'Alvos'], ['procedure', 'Procedimento'], ['progress', 'Progresso'], ['history', 'Histórico']].map(([value, label]) => <button key={value} type="button" className={`shrink-0 rounded-lg px-3 py-2 text-sm ${detailTab === value ? 'bg-violet-600 text-white' : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setDetailTab(value)}>{label}</button>)}</nav><div className="overflow-y-auto p-5 sm:p-6">{detailTab === 'overview' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className={`rounded-2xl border p-5 md:col-span-2 ${subpanel}`}><p className={`text-xs ${muted}`}>Objetivo</p><p className={`mt-2 leading-relaxed ${text}`}>{selectedProgram.objective || 'Não informado.'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Critério de domínio</p><p className={`mt-1 text-sm ${text}`}>{masteryCriterionLabel(selectedProgram.mastery_criteria)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Próxima revisão</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.review_due_date)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Responsáveis</p><p className={`mt-1 text-sm ${text}`}>{Array.isArray(selectedProgram.responsible_professional_ids) && selectedProgram.responsible_professional_ids.length ? `${selectedProgram.responsible_professional_ids.length} profissional(is)` : 'Equipe clínica'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Última aplicação</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.lastAppliedAt)}</p></div>{canEditProgram(selectedProgram) && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <button type="button" className={secondaryButton} onClick={() => editProgram(selectedProgram)}><Pencil size={16} /> Editar programa</button>}</div>}{detailTab === 'targets' && <div className="space-y-3">{(selectedProgram.targets || []).map((target: any, index: number) => <div key={target.id || `${target.name}-${index}`} className={`flex items-center justify-between gap-3 rounded-2xl border p-4 ${subpanel}`}><div><p className={`font-medium ${text}`}>{target.name}</p><p className={`mt-1 text-xs ${muted}`}>{target.normalizedStatus === 'mastered' ? 'Dominado' : target.normalizedStatus === 'maintenance' ? 'Em manutenção' : target.normalizedStatus === 'paused' ? 'Pausado' : target.normalizedStatus === 'teaching' ? 'Em ensino' : 'Não iniciado'}</p></div><span className={`rounded-full px-2.5 py-1 text-xs ${target.normalizedStatus === 'mastered' ? isDark ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span></div>)}{canEditProgram(selectedProgram) && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <div className={`flex flex-col gap-2 rounded-2xl border p-4 sm:flex-row ${subpanel}`}><input className={field} value={newTargetName} maxLength={240} onChange={(event) => setNewTargetName(event.target.value)} placeholder="Nome do novo alvo" /><button type="button" className="shrink-0 rounded-xl bg-violet-600 px-4 py-2.5 text-sm text-white disabled:opacity-50" disabled={!newTargetName.trim() || actionProgramId === String(selectedProgram.id)} onClick={() => void addTargetToProgram()}>{actionProgramId === String(selectedProgram.id) ? 'Adicionando...' : 'Adicionar alvo'}</button></div>}</div>}{detailTab === 'procedure' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{[['Instrução / antecedente', 'antecedent'], ['Resposta esperada', 'expectedResponse'], ['Materiais', 'materials'], ['Hierarquia de ajuda', 'promptHierarchy'], ['Reforçamento', 'reinforcement'], ['Correção de erro', 'errorCorrection'], ['Generalização', 'generalization'], ['Manutenção', 'maintenance']].map(([label, key]) => <div key={key} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-2 whitespace-pre-wrap text-sm leading-relaxed ${text}`}>{selectedProgram?.advanced_settings?.[key] || 'Não informado.'}</p></div>)}</div>}{detailTab === 'progress' && <div className="space-y-4"><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{[['Alvos', selectedProgram.targets.length], ['Dominados', selectedProgram.masteredTargetCount], ['Em ensino', selectedProgram.targets.filter((target: any) => target.normalizedStatus === 'teaching').length], ['Aplicações recentes', selectedProgram.lastAppliedAt ? 1 : 0]].map(([label, value]) => <div key={String(label)} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-1 text-xl font-medium ${text}`}>{value}</p></div>)}</div><div className={`rounded-2xl border p-5 ${subpanel}`}><p className={`text-sm ${text}`}>Progresso por alvo</p><div className="mt-4 space-y-3">{selectedProgram.targets.map((target: any) => <div key={target.id}><div className={`mb-1 flex justify-between text-xs ${muted}`}><span>{target.name}</span><span>{target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : 'Em coleta'}</span></div><div className={`h-2 rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500" style={{ width: target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : '15%' }} /></div></div>)}</div></div></div>}{detailTab === 'history' && <div className="space-y-3">{(selectedProgram.history || []).map((event: any) => <div key={event.id} className={`flex gap-3 rounded-2xl border p-4 ${subpanel}`}><div className={`mt-0.5 rounded-lg p-2 ${isDark ? 'bg-slate-800 text-violet-300' : 'bg-violet-50 text-violet-600'}`}><History size={15} /></div><div><p className={`text-sm ${text}`}>{String(event.event_type || 'UPDATED').replaceAll('_', ' ').toLocaleLowerCase('pt-BR')}</p><p className={`mt-1 text-xs ${muted}`}>{formatTherapeuticPlanDate(event.created_at)}</p></div></div>)}{!(selectedProgram.history || []).length && <p className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma alteração registrada.</p>}</div>}</div></div></div>}
     </section>
   );
 };

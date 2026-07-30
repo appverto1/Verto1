@@ -11,6 +11,9 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { dataService } from '../services/dataService';
+import {
+  CLINICAL_SPECIALTY_OPTIONS,
+} from '../utils/clinicalSpecialties';
 import { LogoVerto } from './Common';
 
 interface InvitationModalProps {
@@ -18,16 +21,13 @@ interface InvitationModalProps {
   onClose: () => void;
 }
 
-const PROFESSIONAL_TITLE_OPTIONS = [
-  'Psicólogo',
-  'Terapeuta Ocupacional',
-  'Acompanhante Terapêutico',
-  'Aplicador ABA'
-];
-const DEFAULT_PROFESSIONAL_TITLE = 'Psicólogo';
-
-const formatInviteRoleLabel = (role: string, title = DEFAULT_PROFESSIONAL_TITLE) => {
-  if (role === 'therapist') return `Profissional de atendimento · ${title}`;
+const formatInviteRoleLabel = (
+  role: string,
+  specialty = '',
+) => {
+  if (role === 'therapist') {
+    return `Profissional de atendimento · ${specialty || 'Especialidade pendente'}`;
+  }
   if (role === 'receptionist') return 'Recepcionista/Assistente';
   return 'Profissional';
 };
@@ -35,7 +35,7 @@ const formatInviteRoleLabel = (role: string, title = DEFAULT_PROFESSIONAL_TITLE)
 export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'therapist' | 'receptionist'>('therapist');
-  const [professionalTitle, setProfessionalTitle] = useState(DEFAULT_PROFESSIONAL_TITLE);
+  const [specialty, setSpecialty] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -51,6 +51,10 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
       setError(`Sua configuracao permite no maximo ${maxMembers} profissionais.`);
       return;
     }
+    if (role === 'therapist' && !specialty) {
+      setError('Selecione a especialidade clínica do profissional.');
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -62,15 +66,18 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
         role,
         role === 'therapist'
           ? {
-              professionalTitle,
-              professional_title: professionalTitle,
+              specialty,
               accessRoleLabel: 'Profissional de atendimento'
             }
           : {}
       );
       if (result.success) {
-        setInvitations([...invitations, { email, role: formatInviteRoleLabel(role, professionalTitle) }]);
+        setInvitations([
+          ...invitations,
+          { email, role: formatInviteRoleLabel(role, specialty) },
+        ]);
         setEmail('');
+        setSpecialty('');
         setSuccess(true);
         setSuccessMessage(
           result?.message ||
@@ -166,19 +173,32 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
 
                   {role === 'therapist' && (
                     <div className="col-span-2 rounded-2xl border border-blue-100 bg-blue-50/40 p-3">
-                      <p className="mb-2 text-xs font-semibold text-slate-500">Título profissional</p>
-                      <div className="grid grid-cols-1 gap-2">
-                        {PROFESSIONAL_TITLE_OPTIONS.map((title) => (
-                          <button
-                            key={title}
-                            type="button"
-                            onClick={() => setProfessionalTitle(title)}
-                            className={`rounded-xl border px-3 py-2 text-left text-xs font-semibold transition-all ${professionalTitle === title ? 'border-blue-400 bg-white text-blue-700' : 'border-transparent bg-white/60 text-slate-600 hover:bg-white'}`}
-                          >
-                            {title}
-                          </button>
+                      <label
+                        htmlFor="invitation-clinical-specialty"
+                        className="mb-2 block text-xs font-medium text-slate-600"
+                      >
+                        Especialidade clínica
+                      </label>
+                      <select
+                        id="invitation-clinical-specialty"
+                        value={specialty}
+                        required
+                        onChange={(event) => setSpecialty(event.target.value)}
+                        className="min-h-11 w-full rounded-xl border border-blue-100 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"
+                      >
+                        <option value="" disabled>
+                          Selecione a especialidade
+                        </option>
+                        {CLINICAL_SPECIALTY_OPTIONS.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
                         ))}
-                      </div>
+                      </select>
+                      <p className="mt-2 text-xs leading-5 text-slate-500">
+                        A especialidade será usada nos vínculos e planos do
+                        profissional.
+                      </p>
                     </div>
                   )}
 

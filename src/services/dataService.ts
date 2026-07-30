@@ -4335,7 +4335,6 @@ export const dataService = {
   },
 
   async getPatientTherapeuticPlan(patientId: string, options: { force?: boolean } = {}) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ programs: [], objectives: [], targets: [] });
     const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plan${options.force ? `?_reload=${Date.now()}` : ''}`;
     try {
       const response = await fetchClinical(endpoint, {
@@ -4383,7 +4382,6 @@ export const dataService = {
   },
 
   async createPatientTherapeuticPlanScope(patientId: string, payload: any = {}) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans`;
     try {
       const response = await fetchClinical(endpoint, {
@@ -4424,7 +4422,6 @@ export const dataService = {
   },
 
   async updatePatientTherapeuticPlanScope(patientId: string, planId: string, payload: any = {}) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}`;
     try {
       const response = await fetchClinical(endpoint, {
@@ -6875,7 +6872,7 @@ export const dataService = {
         return await response.json();
       }
       const err = await response.json();
-      return { success: false, error: err.error || 'Failed to send invitation' };
+      return { success: false, error: err.message || err.error || 'Falha ao enviar convite' };
     } catch (error) {
       console.error('Error inviting to clinic:', error);
       return { success: false, error: String(error) };
@@ -6928,10 +6925,41 @@ export const dataService = {
         return await response.json();
       }
       const err = await response.json();
-      return { success: false, error: err.error || 'Failed to update role' };
+      return { success: false, error: err.message || err.error || 'Falha ao atualizar acesso' };
     } catch (error) {
       console.error('Error updating member role:', error);
       return { success: false, error: String(error) };
+    }
+  },
+
+  async updateMemberSpecialty(memberId: string, specialty: string) {
+    try {
+      const response = await fetch(
+        `/api/clinic/members/${encodeURIComponent(String(memberId))}/specialty`,
+        {
+          method: 'PATCH',
+          headers: await getAuthHeaders(),
+          credentials: 'include',
+          body: JSON.stringify({ specialty }),
+        },
+      );
+      const result = await safeJson(response);
+      if (!response.ok) {
+        return {
+          success: false,
+          error:
+            result?.message ||
+            result?.error ||
+            'Não foi possível atualizar a especialidade clínica.',
+        };
+      }
+      return result;
+    } catch (error) {
+      console.error('Error updating member specialty:', error);
+      return {
+        success: false,
+        error: 'Não foi possível atualizar a especialidade clínica.',
+      };
     }
   },
 
