@@ -54,6 +54,8 @@ export type AbaClinicalRecommendation = {
   rejected_by?: string | null;
   rejected_at?: string | null;
   edited_from_id?: string | null;
+  suggestion_key?: string | null;
+  suggestion_key_version?: number | null;
   context_hash: string;
   created_at?: string;
   updated_at?: string;
