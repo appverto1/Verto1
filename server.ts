@@ -1305,6 +1305,14 @@ function roleRequiresClinicBillingAccess(role: any): boolean {
 function hasActiveClinicBillingAccess(user: any): boolean {
   const role = sanitizeString(user?.role, 40).toLowerCase();
   if (!roleRequiresClinicBillingAccess(role)) return true;
+  const onboardingContext = compactOnboardingContextForSession(user?.onboardingContext);
+  if (
+    onboardingContext?.requiresPayment === false &&
+    onboardingContext?.clinic?.id &&
+    ['invited_professional', 'clinic_member'].includes(onboardingContext.onboardingMode)
+  ) {
+    return onboardingContext.canAccessDashboard !== false;
+  }
   if (user?.isDemoUser === true || user?.is_demo_user === true) return true;
   const billingModel = sanitizeString(user?.billingModel || user?.billing_model, 60).toLowerCase();
   if (billingModel === 'demo' || billingModel === 'demo_sandbox') return true;
@@ -1318,6 +1326,7 @@ function isBillingOnboardingAllowedPath(pathname: any): boolean {
   const path = sanitizeString(pathname, 240).toLowerCase();
   return (
     path === '/api/auth/me' ||
+    path === '/api/onboarding/context' ||
     path === '/api/auth/logout' ||
     path === '/api/workspaces' ||
     path === '/api/workspaces/select' ||
@@ -13149,6 +13158,389 @@ async function fetchUserWorkspaces(userId: string) {
   }).filter((w: any) => w.clinicId);
 }
 
+
+type OnboardingContextMode =
+  | 'invited_professional'
+  | 'clinic_member'
+  | 'clinic_owner'
+  | 'standard'
+  | 'invalid';
+
+type ResolvedOnboardingContext = {
+  onboardingMode: OnboardingContextMode;
+  requiresPayment: boolean;
+  canAccessDashboard: boolean;
+  canEditClinic: boolean;
+  source: 'membership_invitation' | 'membership' | 'clinic_owner' | 'profile';
+  errorCode: string | null;
+  clinic: {
+    id: string;
+    name: string;
+    phone: string | null;
+    whatsapp: string | null;
+    logoUrl: string | null;
+    subscriptionStatus: string | null;
+    billingModel: string | null;
+    address: string | null;
+  } | null;
+  membership: {
+    role: string;
+    specialty: string | null;
+    invitedBy: string | null;
+    invitationId: string | null;
+    invitationStatus: string | null;
+  } | null;
+};
+
+function compactOnboardingContextForSession(value: any): ResolvedOnboardingContext | null {
+  if (!value || typeof value !== 'object') return null;
+  const mode = sanitizeString(value.onboardingMode, 60) as OnboardingContextMode;
+  if (!['invited_professional', 'clinic_member', 'clinic_owner', 'standard', 'invalid'].includes(mode)) {
+    return null;
+  }
+  const clinic = value.clinic && typeof value.clinic === 'object'
+    ? {
+        id: sanitizeString(value.clinic.id, 120),
+        name: sanitizeString(value.clinic.name, 160) || 'Clínica',
+        phone: sanitizePhone(value.clinic.phone) || null,
+        whatsapp: sanitizePhone(value.clinic.whatsapp) || null,
+        logoUrl: sanitizeSessionUrl(value.clinic.logoUrl),
+        subscriptionStatus: normalizeClinicAccessStatus(value.clinic.subscriptionStatus) || null,
+        billingModel: sanitizeString(value.clinic.billingModel, 60).toLowerCase() || null,
+        address: sanitizeString(value.clinic.address, 320) || null,
+      }
+    : null;
+  const membership = value.membership && typeof value.membership === 'object'
+    ? {
+        role: ensureClinicRole(value.membership.role) ? sanitizeString(value.membership.role, 40) : 'therapist',
+        specialty: normalizeClinicalSpecialty(value.membership.specialty) || null,
+        invitedBy: sanitizeString(value.membership.invitedBy, 120) || null,
+        invitationId: sanitizeString(value.membership.invitationId, 120) || null,
+        invitationStatus: sanitizeString(value.membership.invitationStatus, 40).toLowerCase() || null,
+      }
+    : null;
+  return {
+    onboardingMode: mode,
+    requiresPayment: value.requiresPayment === true,
+    canAccessDashboard: value.canAccessDashboard !== false,
+    canEditClinic: value.canEditClinic === true,
+    source: ['membership_invitation', 'membership', 'clinic_owner', 'profile'].includes(value.source)
+      ? value.source
+      : 'profile',
+    errorCode: sanitizeString(value.errorCode, 80) || null,
+    clinic,
+    membership,
+  };
+}
+
+async function fetchClinicOnboardingSnapshot(clinicId: string) {
+  const requiredColumns = ['id', 'name'];
+  const optionalColumns = [
+    'display_name',
+    'owner_user_id',
+    'phone_commercial',
+    'phone',
+    'clinic_phone',
+    'whatsapp',
+    'logo_url',
+    'subscription_status',
+    'billing_model',
+    'address',
+    'clinic_address',
+    'city',
+    'state',
+  ];
+  let columns = [...requiredColumns, ...optionalColumns];
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < optionalColumns.length + 2; attempt += 1) {
+    const result = await supabase
+      .from('clinics')
+      .select(columns.join(','))
+      .eq('id', clinicId)
+      .maybeSingle();
+    if (!result.error) return { data: result.data || null, error: null };
+    lastError = result.error;
+    const missingColumn = extractMissingColumnName(result.error);
+    if (!missingColumn || !optionalColumns.includes(missingColumn) || !columns.includes(missingColumn)) break;
+    columns = columns.filter((column) => column !== missingColumn);
+  }
+
+  return { data: null, error: lastError };
+}
+
+function clinicOnboardingAddress(row: any): string | null {
+  const rawAddress = row?.clinic_address ?? row?.address;
+  if (typeof rawAddress === 'string') return sanitizeString(rawAddress, 320) || null;
+  if (rawAddress && typeof rawAddress === 'object') {
+    return sanitizeString(
+      [
+        rawAddress.address_line || rawAddress.logradouro || rawAddress.street,
+        rawAddress.number,
+        rawAddress.district || rawAddress.bairro,
+        rawAddress.city || rawAddress.cidade,
+        rawAddress.state || rawAddress.uf,
+      ].filter(Boolean).join(', '),
+      320,
+    ) || null;
+  }
+  return sanitizeString([row?.city, row?.state].filter(Boolean).join(' - '), 320) || null;
+}
+
+async function resolveOnboardingContextForUser(params: {
+  userId: string;
+  email?: string | null;
+  preferredClinicId?: string | null;
+  role?: string | null;
+}): Promise<ResolvedOnboardingContext> {
+  const userId = sanitizeString(params.userId, 120);
+  const email = sanitizeEmail(params.email);
+  const preferredClinicId = sanitizeString(params.preferredClinicId, 120);
+  const fallbackRole = ensureClinicRole(params.role) ? sanitizeString(params.role, 40) : 'therapist';
+
+  if (!isUuid(userId)) {
+    return {
+      onboardingMode: 'invalid',
+      requiresPayment: false,
+      canAccessDashboard: false,
+      canEditClinic: false,
+      source: 'profile',
+      errorCode: 'ONBOARDING_USER_INVALID',
+      clinic: null,
+      membership: null,
+    };
+  }
+
+  const membershipResult = await supabase
+    .from('clinic_memberships')
+    .select('user_id,clinic_id,role,status,invited_by,created_at')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: true })
+    .limit(30);
+  if (membershipResult.error) throw membershipResult.error;
+
+  const memberships = Array.isArray(membershipResult.data) ? membershipResult.data : [];
+  const membership =
+    memberships.find((item: any) => sanitizeString(item?.clinic_id, 120) === preferredClinicId) ||
+    memberships[0] ||
+    null;
+  const ownerFallbackClinicId = ['owner', 'coordinator'].includes(fallbackRole) ? userId : '';
+  const clinicId = sanitizeString(membership?.clinic_id || preferredClinicId || ownerFallbackClinicId, 120);
+  const role = ensureClinicRole(membership?.role) ? sanitizeString(membership.role, 40) : fallbackRole;
+
+  if (!isUuid(clinicId)) {
+    return {
+      onboardingMode: role === 'coordinator' || role === 'admin' ? 'clinic_owner' : 'standard',
+      requiresPayment: roleRequiresClinicBillingAccess(role),
+      canAccessDashboard: false,
+      canEditClinic: role === 'coordinator' || role === 'admin',
+      source: 'profile',
+      errorCode: 'ONBOARDING_CLINIC_NOT_RESOLVED',
+      clinic: null,
+      membership: null,
+    };
+  }
+
+  const clinicResult = await fetchClinicOnboardingSnapshot(clinicId);
+  if (clinicResult.error) throw clinicResult.error;
+  const clinicRow = clinicResult.data as any;
+  if (!clinicRow?.id) {
+    const canProvisionOwnerClinic = !membership && ['owner', 'coordinator'].includes(role);
+    if (canProvisionOwnerClinic) {
+      return {
+        onboardingMode: 'clinic_owner',
+        requiresPayment: true,
+        canAccessDashboard: false,
+        canEditClinic: true,
+        source: 'clinic_owner',
+        errorCode: null,
+        clinic: {
+          id: clinicId,
+          name: 'Minha Clínica',
+          phone: null,
+          whatsapp: null,
+          logoUrl: null,
+          subscriptionStatus: null,
+          billingModel: null,
+          address: null,
+        },
+        membership: null,
+      };
+    }
+    return {
+      onboardingMode: 'invalid',
+      requiresPayment: false,
+      canAccessDashboard: false,
+      canEditClinic: false,
+      source: membership ? 'membership' : 'profile',
+      errorCode: 'ONBOARDING_CLINIC_NOT_FOUND',
+      clinic: null,
+      membership: membership
+        ? {
+            role,
+            specialty: null,
+            invitedBy: sanitizeString(membership.invited_by, 120) || null,
+            invitationId: null,
+            invitationStatus: null,
+          }
+        : null,
+    };
+  }
+
+  let invitation: any = null;
+  if (email) {
+    const invitationResult = await fetchClinicInvitationsWithSchemaFallback({
+      supabase,
+      clinicId,
+      limit: 300,
+      logger: console,
+    });
+    if (invitationResult.error) throw invitationResult.error;
+    invitation = (invitationResult.data || []).find((item: any) => {
+      const status = sanitizeString(item?.status, 40).toLowerCase();
+      return sanitizeEmail(item?.email) === email && ['pending', 'accepted'].includes(status);
+    }) || null;
+  }
+
+  const professionalProfileResult = await fetchProfessionalProfileWithSchemaFallback({
+    supabase,
+    userId,
+    logger: console,
+  });
+  if (professionalProfileResult.error && !isMissingRelationError(professionalProfileResult.error)) {
+    throw professionalProfileResult.error;
+  }
+  const professionalProfile = professionalProfileResult.data as any;
+  const specialty = role === 'therapist'
+    ? normalizeClinicalSpecialty(
+        readClinicalSpecialtyFromSource(invitation, '') ||
+        readClinicalSpecialtyFromSource(professionalProfile, ''),
+      ) || null
+    : null;
+  const invitedBy = sanitizeString(membership?.invited_by || invitation?.invited_by, 120) || null;
+  const isInvited = Boolean(invitedBy || invitation?.id);
+  const ownerUserId = sanitizeString(clinicRow?.owner_user_id, 120);
+  const isOwner = ownerUserId === userId || role === 'owner' || (!isInvited && role === 'coordinator' && clinicId === userId);
+  const onboardingMode: OnboardingContextMode = isInvited
+    ? 'invited_professional'
+    : isOwner
+      ? 'clinic_owner'
+      : membership
+        ? 'clinic_member'
+        : 'standard';
+  const clinicSubscriptionStatus = normalizeClinicAccessStatus(clinicRow?.subscription_status);
+  const billingModel = sanitizeString(clinicRow?.billing_model, 60).toLowerCase();
+  const canAccessDashboard = onboardingMode === 'clinic_owner'
+    ? CLINIC_ACCESS_ACTIVE_STATUSES.has(clinicSubscriptionStatus) || billingModel === 'demo' || billingModel === 'demo_sandbox'
+    : !clinicSubscriptionStatus || CLINIC_ACCESS_ACTIVE_STATUSES.has(clinicSubscriptionStatus) || billingModel === 'demo' || billingModel === 'demo_sandbox';
+
+  return {
+    onboardingMode,
+    requiresPayment: onboardingMode === 'clinic_owner',
+    canAccessDashboard,
+    canEditClinic: onboardingMode === 'clinic_owner' && ['owner', 'admin', 'coordinator'].includes(role),
+    source: isInvited ? 'membership_invitation' : isOwner ? 'clinic_owner' : membership ? 'membership' : 'profile',
+    errorCode: null,
+    clinic: {
+      id: clinicId,
+      name: sanitizeString(clinicRow?.display_name || clinicRow?.name, 160) || 'Clínica',
+      phone: sanitizePhone(clinicRow?.phone_commercial || clinicRow?.clinic_phone || clinicRow?.phone) || null,
+      whatsapp: sanitizePhone(clinicRow?.whatsapp) || null,
+      logoUrl: sanitizeSessionUrl(clinicRow?.logo_url),
+      subscriptionStatus: clinicSubscriptionStatus || null,
+      billingModel: billingModel || null,
+      address: clinicOnboardingAddress(clinicRow),
+    },
+    membership: membership
+      ? {
+          role,
+          specialty,
+          invitedBy,
+          invitationId: sanitizeString(invitation?.id, 120) || null,
+          invitationStatus: sanitizeString(invitation?.status, 40).toLowerCase() || null,
+        }
+      : null,
+  };
+}
+
+async function persistSpecialtyFromOnboardingContext(params: {
+  userId: string;
+  userName?: string | null;
+  context: ResolvedOnboardingContext;
+}) {
+  const specialty = normalizeClinicalSpecialty(params.context?.membership?.specialty);
+  if (params.context.onboardingMode !== 'invited_professional' || params.context.membership?.role !== 'therapist' || !specialty) {
+    return;
+  }
+  const existingResult = await fetchProfessionalProfileWithSchemaFallback({
+    supabase,
+    userId: params.userId,
+    logger: console,
+  });
+  if (existingResult.error && !isMissingRelationError(existingResult.error)) throw existingResult.error;
+  const existing = existingResult.data as any;
+  const metadata = existing?.metadata && typeof existing.metadata === 'object' ? existing.metadata : {};
+  const { error } = await supabase
+    .from('professional_profiles')
+    .upsert(cleanObject({
+      user_id: params.userId,
+      full_name: sanitizeString(existing?.full_name || params.userName, 180) || undefined,
+      specialty,
+      metadata: cleanObject({
+        ...metadata,
+        specialty,
+        professionalTitle: specialty,
+        professional_title: specialty,
+        specialtyAuthority: 'clinic_invitation',
+        specialtyConfirmedAt: new Date().toISOString(),
+      }),
+      updated_at: new Date().toISOString(),
+    }), { onConflict: 'user_id' });
+  if (error) throw error;
+}
+
+function mergeAuthoritativeClinicSettings(sessionSettings: any, context: ResolvedOnboardingContext) {
+  if (!context.clinic) return compactClinicSettingsForSession(sessionSettings);
+  return compactClinicSettingsForSession({
+    ...(sessionSettings && typeof sessionSettings === 'object' ? sessionSettings : {}),
+    clinicName: context.clinic.name,
+    clinicPhone: context.clinic.phone,
+    clinicWhatsapp: context.clinic.whatsapp,
+    clinicLogoUrl: context.clinic.logoUrl,
+    clinicAddress: context.clinic.address,
+    specialty: context.membership?.specialty || sessionSettings?.specialty || null,
+  });
+}
+
+async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
+  if (!sessionUser?.id) return buildSessionUserPayload(sessionUser);
+  const context = await resolveOnboardingContextForUser({
+    userId: sessionUser.id,
+    email: sessionUser.email,
+    preferredClinicId: sessionUser.activeWorkspaceId || sessionUser.clinicId,
+    role: sessionUser.role,
+  });
+  const clinicManagedBilling = ['invited_professional', 'clinic_member'].includes(context.onboardingMode) && Boolean(context.clinic?.id);
+  return buildSessionUserPayload({
+    ...sessionUser,
+    role: context.membership?.role || sessionUser.role,
+    clinicId: context.clinic?.id || sessionUser.clinicId,
+    activeWorkspaceId: context.clinic?.id || sessionUser.activeWorkspaceId,
+    subscriptionStatus: clinicManagedBilling
+      ? context.clinic?.subscriptionStatus || sessionUser.subscriptionStatus
+      : sessionUser.subscriptionStatus,
+    billingModel: clinicManagedBilling
+      ? context.clinic?.billingModel || sessionUser.billingModel
+      : sessionUser.billingModel,
+    specialties: context.membership?.specialty || sessionUser.specialties,
+    clinicSettings: clinicManagedBilling
+      ? mergeAuthoritativeClinicSettings(sessionUser.clinicSettings, context)
+      : sessionUser.clinicSettings,
+    onboardingContext: context,
+  });
+}
+
 async function findAuthUserByEmail(email: string): Promise<any | null> {
   if (!supabase) return null;
   const target = sanitizeEmail(email);
@@ -13397,6 +13789,7 @@ function buildSessionUserPayload(input: any) {
     firstLoginCompleted:
       typeof input?.firstLoginCompleted === 'boolean' ? input.firstLoginCompleted : null,
     activationRequired: Boolean(input?.activationRequired),
+    onboardingContext: compactOnboardingContextForSession(input?.onboardingContext),
     crp: resolveStoredCrp(input),
     cpf:
       normalizeCpf(input?.cpf) ||
@@ -22346,6 +22739,30 @@ async function startServer() {
         null;
       const roleForSession = selectedWorkspace?.role || profile.role;
       const clinicForSession = selectedWorkspace?.clinicId || profile.clinic_id;
+      const onboardingContext = await resolveOnboardingContextForUser({
+        userId: sanitizeString(user.id, 120),
+        email: sanitizeEmail(user.email),
+        preferredClinicId: clinicForSession,
+        role: roleForSession,
+      });
+      if (onboardingContext.onboardingMode === 'invalid') {
+        console.error('[Onboarding] Clinic context unavailable during login.', {
+          userId: sanitizeString(user.id, 120),
+          clinicId: sanitizeString(clinicForSession, 120),
+          errorCode: onboardingContext.errorCode,
+        });
+        return res.status(409).json({
+          success: false,
+          code: onboardingContext.errorCode || 'ONBOARDING_CONTEXT_INVALID',
+          error: 'Não foi possível identificar a clínica vinculada ao seu acesso. Fale com o responsável da clínica.'
+        });
+      }
+      await persistSpecialtyFromOnboardingContext({
+        userId: sanitizeString(user.id, 120),
+        userName: sanitizeString(profile?.name || user?.user_metadata?.full_name, 180),
+        context: onboardingContext,
+      });
+      const clinicManagedBilling = ['invited_professional', 'clinic_member'].includes(onboardingContext.onboardingMode) && Boolean(onboardingContext.clinic?.id);
 
       const securityProfileResult = await fetchMfaSecurityProfile(sanitizeString(user.id, 120));
       const securityProfile = securityProfileResult.data as any;
@@ -22543,31 +22960,39 @@ async function startServer() {
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
         type: profile.type || user.user_metadata?.type || null,
         age: typeof profile.age === 'number' ? profile.age : null,
-        subscriptionStatus: profile.subscription_status,
+        subscriptionStatus: clinicManagedBilling
+          ? onboardingContext.clinic?.subscriptionStatus || profile.subscription_status
+          : profile.subscription_status,
         planName: profile.plan_name,
         planPrice: profile.plan_price,
-        billingModel: profile.billing_model,
+        billingModel: clinicManagedBilling
+          ? onboardingContext.clinic?.billingModel || profile.billing_model
+          : profile.billing_model,
         isDemoUser: profile.is_demo_user,
         demoRole: profile.demo_role,
         demoAccessMode: profile.demo_access_mode,
         demoExpiresAt: profile.demo_expires_at,
         activationRequired: authActivationRequired,
         treatmentStatus,
-        clinicId: clinicForSession,
-        activeWorkspaceId: clinicForSession,
+        clinicId: onboardingContext.clinic?.id || clinicForSession,
+        activeWorkspaceId: onboardingContext.clinic?.id || clinicForSession,
         emailVerified: isEmailVerified,
         phoneVerified: Boolean(profile.phone_verified_at),
         firstLoginCompleted: (profile.first_login_completed ?? user.user_metadata?.first_login_completed) ?? null,
         crp: resolveStoredCrp(profile),
         signatureDataUrl: (profile as any)?.signatureDataUrl || (profile as any)?.signature_data_url || null,
-        specialties: (profile as any)?.specialties || null,
+        specialties: onboardingContext.membership?.specialty || (profile as any)?.specialties || null,
         miniCurriculum: (profile as any)?.miniCurriculum || (profile as any)?.mini_curriculum || null,
-        clinicSettings: user.user_metadata?.clinic_settings || null,
+        clinicSettings: clinicManagedBilling
+          ? mergeAuthoritativeClinicSettings(user.user_metadata?.clinic_settings, onboardingContext)
+          : user.user_metadata?.clinic_settings || null,
+        onboardingContext,
         workspaces
       };
 
-      req.session.user = buildSessionUserPayload(userData);
-      const loginResponse = { success: true, user: userData, isFirstLogin: Boolean(req.session.isFirstLogin) };
+      const sessionUser = buildSessionUserPayload(userData);
+      req.session.user = sessionUser;
+      const loginResponse = { success: true, user: sessionUser, isFirstLogin: Boolean(req.session.isFirstLogin) };
       console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
       req.session.save((err) => {
         if (err) {
@@ -22625,7 +23050,20 @@ async function startServer() {
         res.clearCookie('verto-session');
         return res.status(401).json({ user: null, error: 'OWNER_MFA_REQUIRED' });
       }
-      return res.json({ user: req.session.user });
+      try {
+        req.session.user = await hydrateSessionUserWithOnboardingContext(req.session.user);
+        return res.json({ user: req.session.user });
+      } catch (error: any) {
+        logRouteDbError('/api/auth/me', error, {
+          userId: sanitizeString(req.session.user?.id, 120),
+          stage: 'onboarding_context'
+        });
+        return res.status(503).json({
+          user: null,
+          code: 'ONBOARDING_CONTEXT_UNAVAILABLE',
+          error: 'Não foi possível carregar seu vínculo com a clínica agora.'
+        });
+      }
     }
 
     const authHeader = sanitizeString(req.headers?.authorization, 9000);
@@ -22645,12 +23083,62 @@ async function startServer() {
 
       if (didRespond) return;
       if (req.session?.user) {
-        req.session.user = buildSessionUserPayload(req.session.user);
-        return res.json({ user: req.session.user });
+        try {
+          req.session.user = await hydrateSessionUserWithOnboardingContext(req.session.user);
+          return res.json({ user: req.session.user });
+        } catch (error: any) {
+          logRouteDbError('/api/auth/me', error, {
+            userId: sanitizeString(req.session.user?.id, 120),
+            stage: 'bearer_onboarding_context'
+          });
+          return res.status(503).json({ user: null, error: 'Não foi possível carregar seu vínculo com a clínica agora.' });
+        }
       }
     }
 
     return res.json({ user: null });
+  });
+
+  app.get('/api/onboarding/context', checkAuth, async (req: any, res) => {
+    try {
+      const context = await resolveOnboardingContextForUser({
+        userId: sanitizeString(req.session.user?.id, 120),
+        email: sanitizeEmail(req.session.user?.email),
+        preferredClinicId: req.session.user?.activeWorkspaceId || req.session.user?.clinicId,
+        role: req.session.user?.role,
+      });
+      if (context.onboardingMode === 'invalid' || !context.clinic?.id) {
+        console.error('[Onboarding] Valid membership has no clinic.', {
+          userId: sanitizeString(req.session.user?.id, 120),
+          errorCode: context.errorCode,
+        });
+        return res.status(409).json({
+          success: false,
+          code: context.errorCode || 'ONBOARDING_CLINIC_NOT_FOUND',
+          error: 'Não foi possível identificar a clínica vinculada ao seu convite. Fale com o responsável da clínica.'
+        });
+      }
+      await persistSpecialtyFromOnboardingContext({
+        userId: sanitizeString(req.session.user?.id, 120),
+        userName: sanitizeString(req.session.user?.name, 180),
+        context,
+      });
+      req.session.user = await hydrateSessionUserWithOnboardingContext({
+        ...req.session.user,
+        onboardingContext: context,
+      });
+      return req.session.save((error: any) => {
+        if (error) {
+          return res.status(500).json({ success: false, error: 'Não foi possível salvar o contexto do seu acesso.' });
+        }
+        return res.json({ success: true, data: context, user: req.session.user });
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/onboarding/context', error, {
+        userId: sanitizeString(req.session.user?.id, 120)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar seu vínculo com a clínica.' });
+    }
   });
 
   app.get('/api/workspaces', checkAuth, async (req: any, res) => {
@@ -22711,7 +23199,7 @@ async function startServer() {
       req.session.user.demoKind = selected.demoKind || null;
       req.session.user.demoKey = selected.demoKey || null;
       req.session.user.workspaces = compactWorkspacesForSession(workspaces);
-      req.session.user = buildSessionUserPayload(req.session.user);
+      req.session.user = await hydrateSessionUserWithOnboardingContext(req.session.user);
 
       req.session.save((err: any) => {
         if (err) {
@@ -23509,18 +23997,13 @@ async function startServer() {
         return res.status(502).json({
           success: false,
           code: 'CLINIC_INVITATION_EMAIL_SEND_FAILED',
-          error: 'Convite salvo como pendente, mas o e-mail não foi aceito pelo Resend. Verifique o remetente e o template configurados e tente reenviar.',
-          message: `O convite para ${email} foi salvo como pendente, mas o e-mail não foi enviado.`,
+          error: 'O convite foi registrado, mas não foi possível enviar o e-mail. Tente reenviar.',
+          message: 'O convite foi registrado, mas não foi possível enviar o e-mail. Tente reenviar.',
           data,
           invitationPersisted: true,
           invitationEmailSent: false,
           resent: reusedExistingInvitation,
-          retryable: true,
-          emailDelivery: {
-            provider: emailDelivery.provider,
-            accepted: false,
-            errorCode: emailDelivery.errorCode
-          }
+          retryable: true
         });
       }
 
@@ -23529,17 +24012,7 @@ async function startServer() {
         data,
         invitationEmailSent: true,
         resent: reusedExistingInvitation,
-        emailDelivery: {
-          provider: emailDelivery.provider,
-          accepted: true,
-          mode: emailDelivery.deliveryMode,
-          templateFallbackUsed
-        },
-        message: templateFallbackUsed
-          ? `Convite enviado para ${email} com o modelo local de contingência. Revise o template personalizado do Resend.`
-          : reusedExistingInvitation
-            ? `Convite reenviado para ${email}.`
-            : `Convite enviado para ${email}.`
+        message: 'Convite enviado com sucesso.'
       });
     } catch (error: any) {
       logRouteDbError('/api/clinic/invite [POST]', error, {
@@ -23725,8 +24198,11 @@ async function startServer() {
 
   app.post('/api/clinic/accept-invite', checkAuth, async (req: any, res) => {
     try {
-      const { invitationId } = req.body;
+      const invitationId = sanitizeString(req.body?.invitationId, 120);
       const user = req.session.user;
+      if (!isUuid(invitationId)) {
+        return res.status(400).json({ error: 'Convite inválido.' });
+      }
 
       const { data: invitation, error: fetchError } = await supabase
         .from('invitations')
@@ -23738,7 +24214,7 @@ async function startServer() {
         return res.status(404).json({ error: 'Convite não encontrado' });
       }
 
-      if (invitation.email !== user.email) {
+      if (sanitizeEmail(invitation.email) !== sanitizeEmail(user.email)) {
         return res.status(403).json({ error: 'Este convite não é para você' });
       }
 
@@ -23834,9 +24310,23 @@ async function startServer() {
       req.session.user.activeWorkspaceId = invitation.clinic_id;
       req.session.user.role = invitation.role;
       req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(user.id));
-      req.session.user = buildSessionUserPayload(req.session.user);
+      const context = await resolveOnboardingContextForUser({
+        userId: sanitizeString(user.id, 120),
+        email: sanitizeEmail(user.email),
+        preferredClinicId: invitation.clinic_id,
+        role: invitation.role,
+      });
+      await persistSpecialtyFromOnboardingContext({
+        userId: sanitizeString(user.id, 120),
+        userName: sanitizeString(user.name, 180),
+        context,
+      });
+      req.session.user = await hydrateSessionUserWithOnboardingContext({
+        ...req.session.user,
+        onboardingContext: context,
+      });
 
-      res.json({ success: true });
+      res.json({ success: true, onboardingContext: context, user: req.session.user });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
@@ -35603,9 +36093,23 @@ async function startServer() {
     }
 
     try {
-      const role = req.session.user.role as AppRole;
-      const clinicId = currentClinicId(req.session.user);
+      const context = await resolveOnboardingContextForUser({
+        userId: sanitizeString(userId, 120),
+        email: sanitizeEmail(req.session.user?.email),
+        preferredClinicId: req.session.user?.activeWorkspaceId || req.session.user?.clinicId,
+        role: req.session.user?.role,
+      });
+      if (context.onboardingMode === 'invalid' || !context.clinic?.id) {
+        return res.status(409).json({
+          success: false,
+          code: context.errorCode || 'ONBOARDING_CLINIC_NOT_FOUND',
+          error: 'Não foi possível identificar a clínica vinculada ao seu convite. Fale com o responsável da clínica.'
+        });
+      }
 
+      const role = (context.membership?.role || req.session.user.role) as AppRole;
+      const clinicId = context.clinic.id;
+      const isClinicManagedMember = ['invited_professional', 'clinic_member'].includes(context.onboardingMode);
       const fullName = sanitizeString(req.body?.fullName || req.body?.name, 180);
       const birthDate = sanitizeDate(req.body?.birthDate);
       const gender = sanitizeString(req.body?.gender, 40);
@@ -35619,49 +36123,102 @@ async function startServer() {
       const sessionDurationMinutes = asSafeNumber(req.body?.sessionDurationMinutes, 20, 240) || 50;
       const countryCode = sanitizeString(req.body?.countryCode, 8);
       const phone = sanitizePhone(req.body?.phone);
-      const clinicName = sanitizeString(req.body?.clinicName, 160);
-      const clinicLogoUrl = sanitizeUrl(req.body?.clinicLogoUrl);
-      const clinicLogoPath = sanitizeString(req.body?.clinicLogoPath, 260);
+      const cpf = normalizeCpf(req.body?.cpf);
+      const miniCurriculum = sanitizeString(req.body?.miniCurriculum || req.body?.mini_curriculum, 4000);
+      const requestedClinicName = sanitizeString(req.body?.clinicName, 160);
+      const requestedClinicLogoUrl = sanitizeUrl(req.body?.clinicLogoUrl);
+      const requestedClinicLogoPath = sanitizeString(req.body?.clinicLogoPath, 260);
       const clinicCnpj = sanitizeString(req.body?.clinicCnpj, 24);
-      const clinicPhone = sanitizePhone(req.body?.clinicPhone);
+      const requestedClinicPhone = sanitizePhone(req.body?.clinicPhone);
       const clinicOperationTypeRaw = sanitizeString(req.body?.clinicOperationType || req.body?.clinic_operation_type, 40).toLowerCase();
       const clinicOperationType = ['private', 'insurance', 'mixed'].includes(clinicOperationTypeRaw)
         ? clinicOperationTypeRaw
         : 'mixed';
-      const specialty = sanitizeString(req.body?.specialty, 120);
+      const authoritativeSpecialty = normalizeClinicalSpecialty(context.membership?.specialty);
+      const specialty = role === 'therapist'
+        ? authoritativeSpecialty
+        : normalizeClinicalSpecialty(req.body?.specialty) || null;
       const council = sanitizeString(req.body?.council, 80);
       const councilNumber = sanitizeString(req.body?.councilNumber, 80);
       const signatureDataUrl = sanitizeUrl(req.body?.signatureDataUrl);
       const signaturePath = sanitizeString(req.body?.signaturePath, 260);
       const profilePicture = sanitizeUrl(req.body?.profilePicture);
       const profilePicturePath = sanitizeString(req.body?.profilePicturePath, 260);
+      const workSchedule = sanitizeProfessionalWorkingSchedule(req.body?.workSchedule || req.body?.work_schedule, sessionDurationMinutes);
       const currentSubscriptionStatus = normalizeClinicAccessStatus(req.session.user?.subscriptionStatus);
-      const nextSubscriptionStatus = CLINIC_ACCESS_ACTIVE_STATUSES.has(currentSubscriptionStatus)
-        ? currentSubscriptionStatus
-        : 'payment_required';
+      const nextSubscriptionStatus = isClinicManagedMember
+        ? normalizeClinicAccessStatus(context.clinic.subscriptionStatus) || currentSubscriptionStatus || null
+        : CLINIC_ACCESS_ACTIVE_STATUSES.has(currentSubscriptionStatus)
+          ? currentSubscriptionStatus
+          : 'payment_required';
+      const nextBillingModel = isClinicManagedMember
+        ? context.clinic.billingModel || req.session.user?.billingModel || null
+        : role === 'patient'
+          ? req.session.user?.billingModel || null
+          : ACTIVE_PATIENT_BILLING_MODEL;
+      const clinicName = isClinicManagedMember ? context.clinic.name : requestedClinicName;
+      const clinicPhone = isClinicManagedMember ? context.clinic.phone : requestedClinicPhone;
+      const clinicLogoUrl = isClinicManagedMember ? context.clinic.logoUrl : requestedClinicLogoUrl;
+      const clinicLogoPath = isClinicManagedMember ? null : requestedClinicLogoPath;
 
       if (!fullName) {
-        return res.status(400).json({ error: 'Nome completo e obrigatorio.' });
+        return res.status(400).json({ error: 'Nome completo é obrigatório.' });
+      }
+      if (role === 'therapist' && !specialty) {
+        return res.status(409).json({
+          success: false,
+          code: 'ONBOARDING_SPECIALTY_NOT_RESOLVED',
+          error: 'Não foi possível identificar a especialidade vinculada ao convite. Fale com o responsável da clínica.'
+        });
       }
 
-      const address = { cep, logradouro, number, complement, bairro, cidade, uf: uf || null, cnpj: clinicCnpj || null };
-
-      const { error: userUpdateError } = await supabase
-        .from('users')
-        .update({
-          name: fullName,
-          profile_picture: profilePicture,
+      const address = { cep, logradouro, number, complement, bairro, cidade, uf: uf || null, cnpj: isClinicManagedMember ? null : clinicCnpj || null };
+      const userPatch = cleanObject({
+        name: fullName,
+        phone: phone || undefined,
+        cpf: cpf || undefined,
+        profile_picture: profilePicture || undefined,
+        specialties: specialty || undefined,
+        mini_curriculum: miniCurriculum || undefined,
+        council: council || undefined,
+        council_number: councilNumber || undefined,
+        signature_url: signatureDataUrl || undefined,
+        updated_at: new Date().toISOString(),
+        ...(isClinicManagedMember ? {} : {
           subscription_status: nextSubscriptionStatus,
-          billing_model: role === 'patient' ? undefined : ACTIVE_PATIENT_BILLING_MODEL,
-          first_login_completed: true,
-          updated_at: new Date().toISOString()
+          billing_model: nextBillingModel,
         })
-        .eq('id', userId);
+      });
+      let safeUserPatch: Record<string, any> = { ...userPatch };
+      let userUpdateError: any = null;
+      for (let attempt = 0; attempt < 16 && Object.keys(safeUserPatch).length > 0; attempt += 1) {
+        const updateResult = await supabase
+          .from('users')
+          .update(safeUserPatch)
+          .eq('id', userId);
+        userUpdateError = updateResult.error;
+        if (!userUpdateError) break;
+        const missingColumn = extractMissingColumnName(userUpdateError);
+        if (!missingColumn || !(missingColumn in safeUserPatch)) break;
+        delete safeUserPatch[missingColumn];
+      }
       if (userUpdateError) throw userUpdateError;
 
-      await supabase
+      const existingProfileResult = await fetchProfessionalProfileWithSchemaFallback({
+        supabase,
+        userId,
+        logger: console,
+      });
+      if (existingProfileResult.error && !isMissingRelationError(existingProfileResult.error)) {
+        throw existingProfileResult.error;
+      }
+      const existingProfile = existingProfileResult.data as any;
+      const existingMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
+        ? existingProfile.metadata
+        : {};
+      const { error: professionalProfileError } = await supabase
         .from('professional_profiles')
-        .upsert([{
+        .upsert([cleanObject({
           user_id: userId,
           full_name: fullName,
           birth_date: birthDate,
@@ -35679,29 +36236,42 @@ async function startServer() {
           requires_onboarding: false,
           onboarding_completed_at: new Date().toISOString(),
           address,
-          metadata: {
+          metadata: cleanObject({
+            ...existingMetadata,
             role,
             sessionDurationMinutes,
-            clinicOperationType,
-            clinicCnpj: clinicCnpj || null,
+            defaultSessionDurationMinutes: sessionDurationMinutes,
+            workSchedule,
+            work_schedule: workSchedule,
+            cpf: cpf || null,
+            miniCurriculum: miniCurriculum || null,
+            mini_curriculum: miniCurriculum || null,
+            specialty,
+            professionalTitle: specialty,
+            professional_title: specialty,
+            clinicId,
+            clinicAuthority: isClinicManagedMember ? 'clinic_membership' : 'clinic_owner',
+            clinicOperationType: isClinicManagedMember ? existingMetadata?.clinicOperationType : clinicOperationType,
+            clinicCnpj: isClinicManagedMember ? existingMetadata?.clinicCnpj || null : clinicCnpj || null,
             profilePicturePath: profilePicturePath || null,
             clinicLogoPath: clinicLogoPath || null,
             signaturePath: signaturePath || null
-          },
+          }),
           updated_at: new Date().toISOString()
-        }], { onConflict: 'user_id' });
+        })], { onConflict: 'user_id' });
+      if (professionalProfileError) throw professionalProfileError;
 
-      if (clinicId && (role === 'coordinator' || role === 'admin')) {
-        await supabase
+      if (!isClinicManagedMember && clinicId && (role === 'coordinator' || role === 'admin' || role === 'owner')) {
+        const { error: clinicUpdateError } = await supabase
           .from('clinics')
           .upsert([{
             id: clinicId,
             owner_user_id: req.session.user.id,
-            name: clinicName || 'Minha Clinica',
+            name: clinicName || 'Minha Clínica',
             logo_url: clinicLogoUrl,
             phone_commercial: clinicPhone,
             subscription_status: nextSubscriptionStatus,
-            billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+            billing_model: nextBillingModel || ACTIVE_PATIENT_BILLING_MODEL,
             session_duration_minutes: sessionDurationMinutes,
             specialty,
             council,
@@ -35711,55 +36281,95 @@ async function startServer() {
             address,
             updated_at: new Date().toISOString()
           }], { onConflict: 'id' });
+        if (clinicUpdateError) throw clinicUpdateError;
       }
 
-      const nextClinicSettings = cleanObject({
-        ...(req.session.user?.clinicSettings || {}),
-        clinicName: clinicName || null,
-        clinicLogoUrl: clinicLogoUrl || null,
-        clinicCnpj: clinicCnpj || null,
-        clinicPhone: clinicPhone || null,
-        clinicOperationType,
-        specialty: specialty || null,
-        council: council || null,
-        councilNumber: councilNumber || null,
-        signatureDataUrl: signatureDataUrl || null,
-        defaultSessionDuration: sessionDurationMinutes,
-        workStart: req.session.user?.clinicSettings?.workStart || '08:00',
-        workEnd: req.session.user?.clinicSettings?.workEnd || '18:00',
-        clinicAddress: [logradouro, number, bairro, cidade].filter(Boolean).join(', ')
-      });
+      const nextClinicSettings = isClinicManagedMember
+        ? mergeAuthoritativeClinicSettings(req.session.user?.clinicSettings, context)
+        : cleanObject({
+            ...(req.session.user?.clinicSettings || {}),
+            clinicName: clinicName || null,
+            clinicLogoUrl: clinicLogoUrl || null,
+            clinicCnpj: clinicCnpj || null,
+            clinicPhone: clinicPhone || null,
+            clinicOperationType,
+            specialty: specialty || null,
+            council: council || null,
+            councilNumber: councilNumber || null,
+            signatureDataUrl: signatureDataUrl || null,
+            defaultSessionDuration: sessionDurationMinutes,
+            workStart: req.session.user?.clinicSettings?.workStart || '08:00',
+            workEnd: req.session.user?.clinicSettings?.workEnd || '18:00',
+            clinicAddress: [logradouro, number, bairro, cidade].filter(Boolean).join(', ')
+          });
 
-      await supabase.auth.admin.updateUserById(userId, {
+      const authCompletionResult = await supabase.auth.admin.updateUserById(userId, {
         user_metadata: {
           clinic_settings: nextClinicSettings,
-          first_login_completed: true
+          first_login_completed: true,
+          onboarding_mode: context.onboardingMode,
         }
       });
+      if (authCompletionResult.error) throw authCompletionResult.error;
 
-      req.session.user.name = fullName;
-      req.session.user.firstLoginCompleted = true;
-      req.session.user.subscriptionStatus = nextSubscriptionStatus;
-      req.session.user.billingModel = role === 'patient' ? req.session.user?.billingModel : ACTIVE_PATIENT_BILLING_MODEL;
-      req.session.user.crp = councilNumber || req.session.user?.crp || null;
-      req.session.user.profilePicture = sanitizeSessionUrl(profilePicture) || req.session.user.profilePicture || null;
-      req.session.user.clinicSettings = compactClinicSettingsForSession(nextClinicSettings);
-      req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(userId));
+      const publicCompletionResult = await supabase
+        .from('users')
+        .update({
+          first_login_completed: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', userId);
+      if (publicCompletionResult.error) {
+        await supabase.auth.admin.updateUserById(userId, {
+          user_metadata: {
+            clinic_settings: nextClinicSettings,
+            first_login_completed: false,
+            onboarding_mode: context.onboardingMode,
+          }
+        }).catch(() => undefined);
+        throw publicCompletionResult.error;
+      }
+
+      req.session.user = await hydrateSessionUserWithOnboardingContext({
+        ...req.session.user,
+        name: fullName,
+        role,
+        clinicId,
+        activeWorkspaceId: clinicId,
+        firstLoginCompleted: true,
+        subscriptionStatus: nextSubscriptionStatus,
+        billingModel: nextBillingModel,
+        crp: councilNumber || req.session.user?.crp || null,
+        cpf: cpf || req.session.user?.cpf || null,
+        phone: phone || req.session.user?.phone || null,
+        specialties: specialty || req.session.user?.specialties || null,
+        miniCurriculum: miniCurriculum || req.session.user?.miniCurriculum || null,
+        profilePicture: sanitizeSessionUrl(profilePicture) || req.session.user?.profilePicture || null,
+        signatureDataUrl: sanitizeSessionUrl(signatureDataUrl) || req.session.user?.signatureDataUrl || null,
+        clinicSettings: nextClinicSettings,
+        onboardingContext: context,
+        workspaces: compactWorkspacesForSession(await fetchUserWorkspaces(userId)),
+      });
 
       req.session.save((err: any) => {
         if (err) {
-          return res.status(500).json({ error: 'Erro ao salvar sessao' });
+          return res.status(500).json({ error: 'Erro ao salvar sessão' });
         }
-        res.json({
+        return res.json({
           success: true,
-          subscriptionStatus: nextSubscriptionStatus,
-          onboardingState: nextSubscriptionStatus === 'active' || nextSubscriptionStatus === 'trial_active' || nextSubscriptionStatus === 'trialing'
-            ? 'ACTIVE'
-            : 'PAYMENT_REQUIRED'
+          subscriptionStatus: req.session.user.subscriptionStatus,
+          onboardingMode: context.onboardingMode,
+          requiresPayment: context.requiresPayment,
+          onboardingContext: req.session.user.onboardingContext,
+          user: req.session.user,
+          onboardingState: context.requiresPayment ? 'PAYMENT_REQUIRED' : 'MEMBER_READY'
         });
       });
     } catch (error: any) {
-      res.status(500).json({ error: error.message || 'Erro interno no servidor' });
+      logRouteDbError('/api/profile/:userId/complete-onboarding', error, {
+        userId: sanitizeString(userId, 120),
+      });
+      res.status(500).json({ error: 'Não foi possível concluir sua configuração agora.' });
     }
   });
   app.get('/api/profile/:userId', checkAuth, async (req: any, res) => {
@@ -77034,6 +77644,31 @@ async function startServer() {
         organizationIdPresent: Boolean(clinicId),
         userIdPresent: Boolean(userId)
       };
+      if (!isPatientCheckout && userId) {
+        const onboardingContext = await resolveOnboardingContextForUser({
+          userId,
+          email: sanitizeEmail(user.email),
+          preferredClinicId: clinicId,
+          role: user.role,
+        });
+        if (
+          onboardingContext.requiresPayment === false &&
+          onboardingContext.clinic?.id &&
+          ['invited_professional', 'clinic_member'].includes(onboardingContext.onboardingMode)
+        ) {
+          console.warn('[Stripe] Blocked checkout attempt by clinic member.', {
+            userId,
+            clinicId: onboardingContext.clinic.id,
+            onboardingMode: onboardingContext.onboardingMode,
+          });
+          return rejectCheckout(
+            403,
+            'CLINIC_MEMBER_CHECKOUT_FORBIDDEN',
+            'A assinatura é administrada pela clínica responsável.'
+          );
+        }
+      }
+
       if (!userId || (!isPatientCheckout && !clinicId)) {
         return rejectCheckout(
           400,

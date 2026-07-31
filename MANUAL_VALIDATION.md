@@ -1,76 +1,68 @@
-# Roteiro manual de validação
+# Validação manual recomendada
 
-## 1. Substituição
+## Preparação
 
-Copie somente os oito arquivos de projeto do ZIP, preservando a estrutura de pastas.
+Use um ambiente de homologação e uma clínica já existente, com nome, telefone e assinatura administrada pelo responsável.
 
-## 2. Configuração no Railway
-
-Confirme as variáveis sem colar valores em logs ou commits:
-
-```text
-RESEND_API_KEY
-RESEND_FROM_EMAIL
-RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID
-```
-
-`RESEND_FROM_EMAIL` deve usar exatamente o domínio ou subdomínio verificado no Resend, por exemplo:
-
-```text
-Verto <naoresponda@subdominio-verificado.appverto.com.br>
-```
-
-O template indicado deve estar publicado e declarar exatamente:
-
-```text
-nome
-link_ativacao
-```
-
-## 3. Diagnóstico sem envio
-
-No worktree completo e com uma API key que permita consultar domínios e templates:
-
-```powershell
-npm run check:resend
-```
-
-Resultado esperado:
-
-- exit code 0;
-- `ok: true`;
-- domínio `verified`;
-- capacidade de envio `enabled`;
-- template `published`;
-- variáveis `nome` e `link_ativacao`.
-
-Se a chave for restrita apenas a envio, o diagnóstico administrativo pode falhar embora os e-mails sejam aceitos. Nesse caso, execute o diagnóstico com uma chave temporária de acesso completo e depois remova-a.
-
-## 4. Validação do convite
+## Cenário A — novo profissional convidado
 
 1. Entre como coordenador.
-2. Convide um profissional com uma das especialidades canônicas.
-3. Verifique a resposta na interface.
-4. Confirme que o convite aparece em “Convites pendentes”.
-5. No Resend, confirme o registro pelo ID da mensagem gravado no log de atividade.
-6. Confirme `deliveryMode`:
-   - `template`: template personalizado aceito;
-   - `html_fallback`: template rejeitado, HTML local enviado;
-   - `html`: nenhum template configurado.
-7. Abra o e-mail e confira nome e link de ativação.
+2. Convide um profissional e selecione uma especialidade.
+3. Confirme que o botão muda para `Convite enviado com sucesso.`.
+4. Confirme que nenhuma referência a Resend, template, fallback ou contingência aparece.
+5. Abra o convite em uma conta nova.
+6. Conclua autenticação/senha.
+7. Confirme que:
+   - nome da clínica já aparece preenchido;
+   - telefone/WhatsApp é o já cadastrado;
+   - papel e especialidade estão preenchidos;
+   - clínica e especialidade não podem ser alteradas;
+   - não aparece “Nome da clínica pendente”.
+8. Preencha nome, telefone, CPF, conselho, minicurrículo, foto e assinatura.
+9. Configure dias, horários e duração.
+10. Conclua.
+11. Confirme entrada direta no painel permitido.
+12. Confirme que nenhuma tela de plano, Stripe, trial, cartão ou pagamento apareceu.
 
-## 5. Teste de falha controlada
+## Cenário B — convite para usuário já existente
 
-Em ambiente de homologação, configure temporariamente um remetente não verificado ou template inválido.
+1. Convide um e-mail Auth já existente, mas sem membership na clínica-alvo.
+2. Entre com esse usuário.
+3. Confirme criação idempotente de uma única membership.
+4. Atualize a página e faça logout/login.
+5. Confirme que o vínculo permanece e o checkout não aparece.
+6. Reabra o link do convite e confirme que não há duplicação.
 
-Resultado esperado:
+## Cenário C — clínica sem acesso financeiro ativo
 
-- convite permanece pendente;
-- interface não mostra sucesso falso;
-- API retorna HTTP 502 e `CLINIC_INVITATION_EMAIL_SEND_FAILED`;
-- botão “Reenviar” permanece utilizável;
-- nenhum segredo ou stack aparece na resposta.
+1. Use um profissional convidado vinculado a uma clínica bloqueada.
+2. Confirme que o profissional não vê planos ou checkout.
+3. Confirme que aparece somente o estado de acesso administrado pela clínica.
+4. Confirme que uma chamada direta a `/api/billing/checkout` retorna 403 e `CLINIC_MEMBER_CHECKOUT_FORBIDDEN`.
 
-## 6. Entrega versus caixa de entrada
+## Cenário D — proprietário de nova clínica
 
-A aceitação da API do Resend não garante a aba principal da caixa de entrada. Verifique também o evento final no Resend e, no destinatário, spam, promoções, quarentena corporativa e filtros pessoais.
+1. Use o fluxo de proprietário/coordenador responsável por nova clínica.
+2. Confirme que ainda pode preencher os dados da clínica.
+3. Confirme que o botão `Continuar para o plano` permanece.
+4. Confirme que o checkout e a estratégia comercial continuam funcionando somente nesse fluxo.
+
+## Cenário E — convite inválido ou clínica removida
+
+1. Abra um convite inválido/expirado ou remova a clínica apenas em homologação.
+2. Confirme mensagem amigável.
+3. Confirme que não é possível digitar uma nova `clinic_id`, alterar papel ou criar clínica substituta.
+4. Verifique os detalhes técnicos somente nos logs.
+
+## Observabilidade
+
+Nos logs internos, confirme a permanência de:
+
+- modo de entrega do e-mail;
+- ID do provedor;
+- template/fallback;
+- `onboardingMode`;
+- `clinic_id`;
+- bloqueios de checkout.
+
+Esses dados não devem aparecer na interface do cliente.

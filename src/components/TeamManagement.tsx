@@ -230,6 +230,7 @@ export function TeamManagement({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [inviteSent, setInviteSent] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [isAssigning, setIsAssigning] = useState(false);
   const [cancellingInvitationId, setCancellingInvitationId] = useState<string | null>(null);
@@ -305,6 +306,7 @@ export function TeamManagement({
     setIsAssigning(true);
     setError(null);
     setSuccess(null);
+    setInviteSent(false);
 
     if (!canInvite) {
       setError(`Limite saudável atingido: ${inviteLimit} acessos de equipe para ${normalizedActivePatientCount} paciente(s) ativo(s).`);
@@ -329,7 +331,7 @@ export function TeamManagement({
           : {}
       );
       if (result.success && result.invitationEmailSent !== false) {
-        setSuccess(result.message || `Convite enviado para ${newMemberEmail}.`);
+        setInviteSent(true);
         setNewMemberEmail('');
         setNewMemberSpecialty('');
         await fetchInvitations();
@@ -1395,7 +1397,10 @@ export function TeamManagement({
                     type="email"
                     required
                     value={newMemberEmail}
-                    onChange={(e) => setNewMemberEmail(e.target.value)}
+                    onChange={(e) => {
+                      setNewMemberEmail(e.target.value);
+                      setInviteSent(false);
+                    }}
                     placeholder="exemplo@email.com"
                     className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 pl-12 pr-4 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/10"
                   />
@@ -1503,10 +1508,18 @@ export function TeamManagement({
                 className={`h-12 w-full rounded-xl text-sm font-medium text-white shadow-sm transition ${
                   !canInvite
                     ? 'cursor-not-allowed bg-slate-300 shadow-none'
-                    : 'bg-[#7a32fc] hover:bg-[#6924df] active:translate-y-px'
+                    : inviteSent
+                      ? 'bg-emerald-600 hover:bg-emerald-600'
+                      : 'bg-[#7a32fc] hover:bg-[#6924df] active:translate-y-px'
                 } disabled:opacity-60`}
               >
-                {isAssigning ? 'Enviando...' : !canInvite ? 'Limite atingido' : 'Enviar convite'}
+                {isAssigning
+                  ? 'Enviando...'
+                  : !canInvite
+                    ? 'Limite atingido'
+                    : inviteSent
+                      ? 'Convite enviado com sucesso.'
+                      : 'Enviar convite'}
               </button>
             </form>
           </div>

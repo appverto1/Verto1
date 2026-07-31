@@ -6412,6 +6412,25 @@ export const dataService = {
     }
   },
 
+  async getOnboardingContext() {
+    try {
+      const response = await fetch('/api/onboarding/context', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (response.ok) return result;
+      return {
+        ...result,
+        success: false,
+        error: result?.error || result?.message || 'Não foi possível carregar o vínculo com a clínica.'
+      };
+    } catch (error: any) {
+      console.error('Error fetching onboarding context:', error);
+      return { success: false, error: 'Não foi possível carregar o vínculo com a clínica.' };
+    }
+  },
+
   async getUserProfile(userId: string) {
     try {
       const response = await fetch(`/api/profile/${userId}`, {

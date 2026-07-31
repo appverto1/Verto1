@@ -84,11 +84,24 @@ assert.doesNotMatch(inviteRoute, /\/api\/tasks\/:patientId/);
 assert.match(inviteDataService, /const payload = await safeJson\(response\)/);
 assert.match(inviteDataService, /\.\.\.payload,[\s\S]*?success: false/);
 assert.match(newInviteHandler, /result\.success && result\.invitationEmailSent !== false/);
-assert.match(newInviteHandler, /setSuccess\(result\.message \|\|/);
+assert.match(newInviteHandler, /setInviteSent\(true\)/);
+assert.doesNotMatch(newInviteHandler, /setSuccess\(result\.message/);
 assert.match(newInviteHandler, /if \(result\.invitationPersisted\) \{[\s\S]*?await fetchInvitations\(\)/);
 assert.doesNotMatch(newInviteHandler, /Convite enviado com sucesso para/);
 assert.match(invitationModal, /result\.success && result\.invitationEmailSent !== false/);
 assert.match(invitationModal, /result\.invitationPersisted/);
+assert.match(inviteRoute, /message: 'Convite enviado com sucesso\.'/);
+assert.match(inviteRoute, /O convite foi registrado, mas não foi possível enviar o e-mail\. Tente reenviar\./);
+const publicInviteResponse = inviteRoute.slice(inviteRoute.indexOf('if (!emailSent)'));
+assert.doesNotMatch(
+  publicInviteResponse,
+  /emailDelivery:\s*\{/,
+  'detalhes do provedor não devem ser retornados ao cliente',
+);
+assert.match(teamManagement, /inviteSent[\s\S]*?Convite enviado com sucesso\./);
+assert.match(invitationModal, /success \? 'Convite enviado com sucesso\.'/);
+assert.doesNotMatch(invitationModal, /setTimeout\(/);
+assert.doesNotMatch(newInviteHandler, /Resend|fallback|contingência|template personalizado/i);
 
 assert.match(envExample, /RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID=/);
 assert.match(envExample, /variables `nome` and `link_ativacao`/);

@@ -1,0 +1,72 @@
+{
+  "destructiveActionsExecuted": false,
+  "deployExecuted": false,
+  "databaseSqlExecuted": false,
+  "railwayChanged": false,
+  "gitCommitOrPushExecuted": false,
+  "migrationAdded": false,
+  "syntaxTranspile": {
+    "status": "passed",
+    "files": [
+      "server.ts",
+      "src/App.tsx",
+      "src/components/InvitationModal.tsx",
+      "src/components/ProfessionalOnboarding.tsx",
+      "src/components/TeamManagement.tsx",
+      "src/services/dataService.ts",
+      "tests/clinicInvitationDelivery.test.ts",
+      "tests/invitedProfessionalOnboarding.test.ts"
+    ],
+    "method": "TypeScript transpileModule using the globally available TypeScript compiler"
+  },
+  "focusedTests": {
+    "status": "passed",
+    "tests": [
+      "tests/clinicInvitationDelivery.test.ts",
+      "tests/invitedProfessionalOnboarding.test.ts",
+      "tests/clinicMembershipAuthority.test.ts",
+      "tests/clinicalSpecialtiesFrontend.test.ts",
+      "tests/clinicalSpecialtyTherapeuticPlans.test.ts",
+      "tests/billing.test.ts",
+      "tests/salesModularStripeAssisted.test.ts",
+      "tests/ownerMfaEnforcement.test.ts",
+      "tests/salesCheckoutProvisioning.test.ts",
+      "tests/security.regression.test.mjs"
+    ]
+  },
+  "dockerRuntimeImports": {
+    "status": "passed",
+    "coveredFiles": 65
+  },
+  "whitespaceChecks": {
+    "status": "passed",
+    "method": "git diff --no-index --check"
+  },
+  "officialCommands": {
+    "npmCi": {
+      "status": "blocked_by_environment",
+      "exitCode": 1,
+      "detail": "Internal package registry returned HTTP 404 for yallist-3.1.1.tgz. Environment also runs Node 22 while the project declares Node 20.x."
+    },
+    "npmRunBuild": {
+      "status": "not_completed",
+      "exitCode": 127,
+      "detail": "vite was unavailable because npm ci did not complete."
+    },
+    "npmTest": {
+      "status": "not_completed",
+      "exitCode": 1,
+      "detail": "The project runner could not start tsx after the interrupted dependency installation."
+    },
+    "npmRunTypecheck": {
+      "status": "not_completed",
+      "exitCode": 2,
+      "detail": "vite/client type definitions were unavailable because dependencies were not installed."
+    },
+    "npmRunLint": {
+      "status": "not_completed",
+      "exitCode": 2,
+      "detail": "This script also runs tsc --noEmit and failed for the same missing vite/client dependency."
+    }
+  }
+}

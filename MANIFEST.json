@@ -1,86 +1,149 @@
 {
-  "generated_at": "2026-07-30T20:36:00-03:00",
-  "base_archive": "Verto(25).zip",
-  "project_files": [
-    {
-      "path": ".env.example",
-      "status": "modified",
-      "sha256_before": "80a71da06a7c19ad79eab0952533afa2fbbde472f8928e1e064f8130ff2f9c36",
-      "sha256_after": "b719226ed51f210ddc26a5b92a0fc66097dc4ab74a802cb0a1ffc0a093e231ba",
-      "bytes_before": 1681,
-      "bytes_after": 2196,
-      "diff_added_lines": 9,
-      "diff_removed_lines": 0
-    },
-    {
-      "path": "package.json",
-      "status": "modified",
-      "sha256_before": "6dca76a4bc922f28646cf9966030e5c69598d983fb781fce68413cc7ccf5a908",
-      "sha256_after": "e4fe0a3a446902b2f427630f76d42ac9591af966e5e3fbe87e690d901c5593c9",
-      "bytes_before": 9865,
-      "bytes_after": 9932,
-      "diff_added_lines": 1,
-      "diff_removed_lines": 0
-    },
+  "generatedAt": "2026-07-31T13:54:10-03:00",
+  "delivery": "verto_invited_professional_onboarding_fix_20260731",
+  "sourceArchive": "Verto(26).zip",
+  "changes": {
+    "modifiedFiles": 7,
+    "newFiles": 1,
+    "migrationAdded": false,
+    "databaseChanged": false
+  },
+  "files": [
     {
       "path": "server.ts",
       "status": "modified",
-      "sha256_before": "2ca98b79507edd39f7c0249485cb233244cedb4a3a1ee00496a04aef1c5a15e2",
-      "sha256_after": "44bd3d4900a3d0f9625992a27e48725f4786b6c6151e11beade9fafc83aec08e",
-      "bytes_before": 3525975,
-      "bytes_after": 3532757,
-      "diff_added_lines": 266,
-      "diff_removed_lines": 80
+      "beforeSha256": "44bd3d4900a3d0f9625992a27e48725f4786b6c6151e11beade9fafc83aec08e",
+      "afterSha256": "421969f94fdd28be6633f6a18ab35964599a5965d073b3628fb3296528c4a584",
+      "beforeBytes": 3532757,
+      "afterBytes": 3559679
     },
     {
-      "path": "scripts/check-resend-configuration.mjs",
-      "status": "added",
-      "sha256_before": null,
-      "sha256_after": "97eb45708226e628ab4a982e636d58a36cf8e7ffad13f7c6eddc1e7df087ae7d",
-      "bytes_before": 0,
-      "bytes_after": 3936,
-      "diff_added_lines": 121,
-      "diff_removed_lines": 0
+      "path": "src/App.tsx",
+      "status": "modified",
+      "beforeSha256": "8799fa8afde8103c6f272a46e606e4640429bdf42cc39975e396e955873db596",
+      "afterSha256": "7b0bceac3bcd7068aac9b3a05d6ca4ec77a688e4e3743aa6beb7059fab4eb145",
+      "beforeBytes": 339279,
+      "afterBytes": 341295
     },
     {
       "path": "src/components/InvitationModal.tsx",
       "status": "modified",
-      "sha256_before": "4d3ba8791592b70cbec20c9e55cf92cdea61b525238a940cf77d587c85fe9181",
-      "sha256_after": "a79f1c90e25fa80f4e8ca9b1e73e138c9f45e4d4a9380b7e0cb84ae7b77dc367",
-      "bytes_before": 11887,
-      "bytes_after": 12170,
-      "diff_added_lines": 8,
-      "diff_removed_lines": 2
+      "beforeSha256": "a79f1c90e25fa80f4e8ca9b1e73e138c9f45e4d4a9380b7e0cb84ae7b77dc367",
+      "afterSha256": "ab2db41d6808a03c5b349cac1fb31f2d3f1ecfddbf30ca62a2f3f61c0eb8a4a5",
+      "beforeBytes": 12170,
+      "afterBytes": 11846
+    },
+    {
+      "path": "src/components/ProfessionalOnboarding.tsx",
+      "status": "modified",
+      "beforeSha256": "f3d9759708a8eb6d3dff295342b5e14a8267254397a768d4c5215d5fd0ca13ab",
+      "afterSha256": "a32db80e4c52652440980d1374179d480e32f3d13b4780e3f82f50d435498a31",
+      "beforeBytes": 22742,
+      "afterBytes": 30462
     },
     {
       "path": "src/components/TeamManagement.tsx",
       "status": "modified",
-      "sha256_before": "fdb4c55987e7606e2719a0ebd79eed385839d9499902eac82542691d3fb2b082",
-      "sha256_after": "a08a0bdc4b7c63c7010c4e6b6abafe6acddb4d8f578b63316609bc927f2c3283",
-      "bytes_before": 86328,
-      "bytes_after": 86529,
-      "diff_added_lines": 7,
-      "diff_removed_lines": 4
+      "beforeSha256": "a08a0bdc4b7c63c7010c4e6b6abafe6acddb4d8f578b63316609bc927f2c3283",
+      "afterSha256": "08af9d34533140b383a49aad3d5fbc3eac5fbc83dc6dc7e32dd0f5a88eab0f67",
+      "beforeBytes": 86529,
+      "afterBytes": 86912
     },
     {
       "path": "src/services/dataService.ts",
       "status": "modified",
-      "sha256_before": "9b14c8e05a06a444ef8e63a7278c347ac0fee34557c672f9a56c04e22eaf00e8",
-      "sha256_after": "568f8013ad57dcc2f91f3257956c0047c00d047d9dd4c34006e717be741ecb7d",
-      "bytes_before": 322398,
-      "bytes_after": 322441,
-      "diff_added_lines": 7,
-      "diff_removed_lines": 3
+      "beforeSha256": "568f8013ad57dcc2f91f3257956c0047c00d047d9dd4c34006e717be741ecb7d",
+      "afterSha256": "76097d6f6b842d4099c21cdc3c78f22027b069b7051f4bb3ac53077a810a4f88",
+      "beforeBytes": 322441,
+      "afterBytes": 323093
     },
     {
       "path": "tests/clinicInvitationDelivery.test.ts",
-      "status": "added",
-      "sha256_before": null,
-      "sha256_after": "f2cf62a614293a41094aff6fae70000555a32329db1360666f81f8f5508f60fb",
-      "bytes_before": 0,
-      "bytes_after": 5592,
-      "diff_added_lines": 119,
-      "diff_removed_lines": 0
+      "status": "modified",
+      "beforeSha256": "f2cf62a614293a41094aff6fae70000555a32329db1360666f81f8f5508f60fb",
+      "afterSha256": "e89229e07d1c232d3a61f5d98394c7b35fee8756203c904b566079a2f2c428fb",
+      "beforeBytes": 5592,
+      "afterBytes": 6368
+    },
+    {
+      "path": "tests/invitedProfessionalOnboarding.test.ts",
+      "status": "new",
+      "beforeSha256": null,
+      "afterSha256": "4080bd5d753d3324f72329151b75ae0632c1a61eb039f8bf02bf0f700fd2a5be",
+      "beforeBytes": 0,
+      "afterBytes": 7822
     }
-  ]
+  ],
+  "validation": {
+    "destructiveActionsExecuted": false,
+    "deployExecuted": false,
+    "databaseSqlExecuted": false,
+    "railwayChanged": false,
+    "gitCommitOrPushExecuted": false,
+    "migrationAdded": false,
+    "syntaxTranspile": {
+      "status": "passed",
+      "files": [
+        "server.ts",
+        "src/App.tsx",
+        "src/components/InvitationModal.tsx",
+        "src/components/ProfessionalOnboarding.tsx",
+        "src/components/TeamManagement.tsx",
+        "src/services/dataService.ts",
+        "tests/clinicInvitationDelivery.test.ts",
+        "tests/invitedProfessionalOnboarding.test.ts"
+      ],
+      "method": "TypeScript transpileModule using the globally available TypeScript compiler"
+    },
+    "focusedTests": {
+      "status": "passed",
+      "tests": [
+        "tests/clinicInvitationDelivery.test.ts",
+        "tests/invitedProfessionalOnboarding.test.ts",
+        "tests/clinicMembershipAuthority.test.ts",
+        "tests/clinicalSpecialtiesFrontend.test.ts",
+        "tests/clinicalSpecialtyTherapeuticPlans.test.ts",
+        "tests/billing.test.ts",
+        "tests/salesModularStripeAssisted.test.ts",
+        "tests/ownerMfaEnforcement.test.ts",
+        "tests/salesCheckoutProvisioning.test.ts",
+        "tests/security.regression.test.mjs"
+      ]
+    },
+    "dockerRuntimeImports": {
+      "status": "passed",
+      "coveredFiles": 65
+    },
+    "whitespaceChecks": {
+      "status": "passed",
+      "method": "git diff --no-index --check"
+    },
+    "officialCommands": {
+      "npmCi": {
+        "status": "blocked_by_environment",
+        "exitCode": 1,
+        "detail": "Internal package registry returned HTTP 404 for yallist-3.1.1.tgz. Environment also runs Node 22 while the project declares Node 20.x."
+      },
+      "npmRunBuild": {
+        "status": "not_completed",
+        "exitCode": 127,
+        "detail": "vite was unavailable because npm ci did not complete."
+      },
+      "npmTest": {
+        "status": "not_completed",
+        "exitCode": 1,
+        "detail": "The project runner could not start tsx after the interrupted dependency installation."
+      },
+      "npmRunTypecheck": {
+        "status": "not_completed",
+        "exitCode": 2,
+        "detail": "vite/client type definitions were unavailable because dependencies were not installed."
+      },
+      "npmRunLint": {
+        "status": "not_completed",
+        "exitCode": 2,
+        "detail": "This script also runs tsc --noEmit and failed for the same missing vite/client dependency."
+      }
+    }
+  }
 }

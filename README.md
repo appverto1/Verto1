@@ -1,22 +1,13 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Verto — correção do onboarding de profissionais convidados
 
-# Run and deploy your AI Studio app
+Este pacote contém somente os arquivos alterados, com a estrutura de pastas preservada.
 
-This contains everything you need to run your app locally.
+Consulte:
 
-View your app in AI Studio: https://ai.studio/apps/2fa9719c-6546-4f44-9e9b-6e528b752828
+- `DELIVERY_REPORT.md` — causas, comportamento e contratos;
+- `MANUAL_VALIDATION.md` — roteiro de homologação;
+- `VALIDATION_RESULTS.md` — testes e limitações;
+- `MANIFEST.json` — hashes before/after;
+- `CHANGES.diff` — diff integral.
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
-
-<!-- deploy-trigger: reschedule-schema-repair-20260721 -->
+Não há SQL ou migration. Nenhuma ação de deploy foi executada.

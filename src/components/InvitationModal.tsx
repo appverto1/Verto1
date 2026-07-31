@@ -39,7 +39,6 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [invitations, setInvitations] = useState<{email: string, role: string}[]>([]);
 
   const explicitTeamLimit = Number(user?.teamMemberLimit || user?.team_member_limit || 0);
@@ -58,7 +57,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
 
     setLoading(true);
     setError(null);
-    setSuccessMessage(null);
+    setSuccess(false);
 
     try {
       const result = await dataService.inviteToClinic(
@@ -79,13 +78,6 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
         setEmail('');
         setSpecialty('');
         setSuccess(true);
-        setSuccessMessage(
-          result?.message ||
-            (result?.invitationEmailSent === false
-              ? 'Convite criado, mas houve falha no envio do e-mail. Tente reenviar.'
-              : 'Convite enviado com sucesso!')
-        );
-        setTimeout(() => setSuccess(false), 3000);
       } else {
         setError(
           result.error ||
@@ -156,7 +148,10 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
                     type="email"
                     required
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      setSuccess(false);
+                    }}
                     placeholder="exemplo@email.com"
                     className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-none rounded-2xl text-sm focus:ring-2 focus:ring-blue-500/20 transition-all"
                   />
@@ -228,19 +223,15 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
                 </div>
               )}
 
-              {success && (
-                <div className="p-4 bg-green-50 text-green-600 rounded-2xl text-xs flex items-center gap-2">
-                  <CheckCircle2 size={16} />
-                  {successMessage || 'Convite enviado com sucesso!'}
-                </div>
-              )}
-
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-[#4318FF] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98] disabled:opacity-50"
+                className={`w-full py-4 rounded-2xl font-bold text-sm text-white shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 ${success ? 'bg-emerald-600 shadow-emerald-500/20' : 'bg-[#4318FF] shadow-blue-500/20 hover:scale-[1.02]'}`}
               >
-                {loading ? 'Enviando...' : 'Enviar Convite'}
+                <span className="inline-flex items-center justify-center gap-2">
+                  {success && <CheckCircle2 size={17} />}
+                  {loading ? 'Enviando...' : success ? 'Convite enviado com sucesso.' : 'Enviar convite'}
+                </span>
               </button>
             </form>
 

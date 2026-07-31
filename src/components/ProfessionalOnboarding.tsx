@@ -1,9 +1,42 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Camera, X } from 'lucide-react';
+import {
+  Building2,
+  CalendarClock,
+  Camera,
+  FileSignature,
+  Loader2,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
+
+type OnboardingContext = {
+  onboardingMode: 'invited_professional' | 'clinic_member' | 'clinic_owner' | 'standard' | 'invalid';
+  requiresPayment: boolean;
+  canAccessDashboard: boolean;
+  canEditClinic: boolean;
+  errorCode?: string | null;
+  clinic: {
+    id: string;
+    name: string;
+    phone?: string | null;
+    whatsapp?: string | null;
+    logoUrl?: string | null;
+    address?: string | null;
+    subscriptionStatus?: string | null;
+    billingModel?: string | null;
+  } | null;
+  membership: {
+    role: string;
+    specialty?: string | null;
+    invitedBy?: string | null;
+    invitationId?: string | null;
+    invitationStatus?: string | null;
+  } | null;
+};
 
 interface ProfessionalOnboardingProps {
   user: any;
@@ -11,206 +44,181 @@ interface ProfessionalOnboardingProps {
   onClose?: () => void;
 }
 
-export function ProfessionalOnboarding({ user, onComplete, onClose }: ProfessionalOnboardingProps) {
-  const formatCnpjInput = (value: string) => {
-    const digits = String(value || '').replace(/\D/g, '').slice(0, 14);
-    if (digits.length <= 2) return digits;
-    if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
-    if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
-    if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
-    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
-  };
-  const isCoordinator = user.role === 'coordinator' || user.role === 'admin';
-  const isTherapist = user.role === 'therapist';
-  const onboardingWorkspaceId = String(user?.activeWorkspaceId || user?.clinicId || 'global').trim() || 'global';
-  const onboardingDraftKey = `verto:onboarding:draft:${String(user?.id || '').trim()}:${onboardingWorkspaceId}`;
-  const onboardingStepKey = `verto:onboarding:step:${String(user?.id || '').trim()}:${onboardingWorkspaceId}`;
+const WEEKDAYS = [
+  ['monday', 'Segunda'],
+  ['tuesday', 'Terça'],
+  ['wednesday', 'Quarta'],
+  ['thursday', 'Quinta'],
+  ['friday', 'Sexta'],
+  ['saturday', 'Sábado'],
+  ['sunday', 'Domingo'],
+] as const;
 
-  const [step, setStep] = useState(() => {
-    const raw = Number(localStorage.getItem(onboardingStepKey) || 1);
-    return raw === 2 ? 2 : 1;
-  });
+const roleLabel = (role: string) => {
+  if (role === 'coordinator') return 'Coordenador';
+  if (role === 'receptionist') return 'Recepcionista/Assistente';
+  if (role === 'admin') return 'Administrador';
+  if (role === 'owner') return 'Proprietário';
+  return 'Profissional de atendimento';
+};
+
+export function ProfessionalOnboarding({ user, onComplete, onClose }: ProfessionalOnboardingProps) {
+  const initialContext = (user?.onboardingContext || null) as OnboardingContext | null;
+  const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || 'global').trim() || 'global';
+  const draftKey = `verto:onboarding:draft:${String(user?.id || '').trim()}:${workspaceId}`;
+  const stepKey = `verto:onboarding:step:${String(user?.id || '').trim()}:${workspaceId}`;
+
+  const [context, setContext] = useState<OnboardingContext | null>(initialContext);
+  const [contextLoading, setContextLoading] = useState(true);
+  const [contextError, setContextError] = useState<string | null>(null);
+  const [step, setStep] = useState(() => Math.max(1, Math.min(3, Number(localStorage.getItem(stepKey) || 1))));
   const [loading, setLoading] = useState(false);
 
-  const [fullName, setFullName] = useState(user.name || '');
+  const [fullName, setFullName] = useState(user?.name || '');
+  const [phone, setPhone] = useState(user?.phone || '');
+  const [cpf, setCpf] = useState(user?.cpf || '');
   const [birthDate, setBirthDate] = useState('');
   const [gender, setGender] = useState('');
-  const [cep, setCep] = useState('');
-  const [logradouro, setLogradouro] = useState('');
-  const [number, setNumber] = useState('');
-  const [complement, setComplement] = useState('');
-  const [bairro, setBairro] = useState('');
-  const [cidade, setCidade] = useState('');
-  const [uf, setUf] = useState('');
-  const [sessionDurationMinutes, setSessionDurationMinutes] = useState('50');
   const [countryCode, setCountryCode] = useState('+55');
-  const [phone, setPhone] = useState('');
-  const [profilePicture, setProfilePicture] = useState<string | null>(
-    user?.profilePicture || user?.profile_picture || null,
-  );
-
-  const [clinicName, setClinicName] = useState('');
-  const [clinicLogoUrl, setClinicLogoUrl] = useState<string | null>(
-    user?.clinicSettings?.clinicLogoUrl || null,
-  );
-  const [clinicCnpj, setClinicCnpj] = useState('');
-  const [clinicPhone, setClinicPhone] = useState('');
-  const [clinicOperationType, setClinicOperationType] = useState<'private' | 'insurance' | 'mixed'>('mixed');
-  const [specialty, setSpecialty] = useState('');
+  const [profilePicture, setProfilePicture] = useState<string | null>(user?.profilePicture || null);
   const [council, setCouncil] = useState('');
-  const [councilNumber, setCouncilNumber] = useState('');
-  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(
-    user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
+  const [councilNumber, setCouncilNumber] = useState(user?.crp || '');
+  const [miniCurriculum, setMiniCurriculum] = useState(user?.miniCurriculum || '');
+  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(user?.signatureDataUrl || null);
+  const [sessionDurationMinutes, setSessionDurationMinutes] = useState('50');
+  const [selectedDays, setSelectedDays] = useState<string[]>(['monday', 'tuesday', 'wednesday', 'thursday', 'friday']);
+  const [workStart, setWorkStart] = useState('08:00');
+  const [workEnd, setWorkEnd] = useState('18:00');
+
+  // Owner-only clinic fields. They are never submitted for invited members.
+  const [clinicName, setClinicName] = useState(user?.clinicSettings?.clinicName || '');
+  const [clinicPhone, setClinicPhone] = useState(user?.clinicSettings?.clinicPhone || '');
+  const [clinicLogoUrl, setClinicLogoUrl] = useState<string | null>(user?.clinicSettings?.clinicLogoUrl || null);
+  const [clinicOperationType, setClinicOperationType] = useState<'private' | 'insurance' | 'mixed'>('mixed');
+
+  const isManagedMember = Boolean(
+    context?.clinic?.id &&
+    ['invited_professional', 'clinic_member'].includes(context?.onboardingMode || ''),
   );
+  const isOwnerOnboarding = context?.requiresPayment === true;
+  const maxStep = isManagedMember ? 3 : 2;
+  const specialty = context?.membership?.specialty || user?.specialties || '';
+  const effectiveRole = context?.membership?.role || user?.role || 'therapist';
+
+  const schedule = useMemo(() => {
+    const days = Object.fromEntries(
+      WEEKDAYS.map(([key]) => [
+        key,
+        selectedDays.includes(key)
+          ? { enabled: true, periods: [{ start: workStart, end: workEnd }], intervals: [] }
+          : { enabled: false, periods: [], intervals: [] },
+      ]),
+    );
+    const duration = Number(sessionDurationMinutes) || 50;
+    return {
+      active: true,
+      stepMinutes: duration,
+      defaultSessionDurationMinutes: duration,
+      minLeadMinutes: 120,
+      maxSlotsPerDay: 8,
+      sessionBufferMinutes: 0,
+      days,
+      exceptions: [],
+    };
+  }, [selectedDays, sessionDurationMinutes, workStart, workEnd]);
 
   useEffect(() => {
-    localStorage.setItem(onboardingStepKey, String(step));
-  }, [step, onboardingStepKey]);
+    localStorage.setItem(stepKey, String(Math.min(step, maxStep)));
+  }, [maxStep, step, stepKey]);
 
   useEffect(() => {
-    const loadExistingProfile = async () => {
+    let active = true;
+    const load = async () => {
+      setContextLoading(true);
+      setContextError(null);
       try {
-        const shouldRestoreDraft = user?.firstLoginCompleted === false;
-        const draftRaw = shouldRestoreDraft ? localStorage.getItem(onboardingDraftKey) : null;
-        if (!shouldRestoreDraft) {
-          localStorage.removeItem(onboardingDraftKey);
-          localStorage.removeItem(onboardingStepKey);
+        const [contextResult, profileResult] = await Promise.all([
+          dataService.getOnboardingContext(),
+          dataService.getUserProfile(user.id),
+        ]);
+        if (!active) return;
+        if (!contextResult?.success || !contextResult?.data?.clinic?.id) {
+          throw new Error(contextResult?.error || 'Não foi possível identificar a clínica vinculada ao seu acesso.');
         }
-        if (draftRaw) {
-          const draft = JSON.parse(draftRaw);
-          setFullName(String(draft.fullName || fullName || ''));
-          setBirthDate(String(draft.birthDate || ''));
-          setGender(String(draft.gender || ''));
-          setCep(String(draft.cep || ''));
-          setLogradouro(String(draft.logradouro || ''));
-          setNumber(String(draft.number || ''));
-          setComplement(String(draft.complement || ''));
-          setBairro(String(draft.bairro || ''));
-          setCidade(String(draft.cidade || ''));
-          setUf(String(draft.uf || ''));
-          setSessionDurationMinutes(String(draft.sessionDurationMinutes || '50'));
-          setCountryCode(String(draft.countryCode || '+55'));
-          setPhone(String(draft.phone || ''));
-          setProfilePicture(draft.profilePicture || user?.profilePicture || user?.profile_picture || null);
-          setClinicName(String(draft.clinicName || ''));
-          setClinicLogoUrl(draft.clinicLogoUrl || user?.clinicSettings?.clinicLogoUrl || null);
-          setClinicCnpj(formatCnpjInput(String(draft.clinicCnpj || '')));
-          setClinicPhone(String(draft.clinicPhone || ''));
-          setClinicOperationType(
-            draft.clinicOperationType === 'private' || draft.clinicOperationType === 'insurance' || draft.clinicOperationType === 'mixed'
-              ? draft.clinicOperationType
-              : 'mixed',
-          );
-          setSpecialty(String(draft.specialty || ''));
-          setCouncil(String(draft.council || ''));
-          setCouncilNumber(formatProfessionalRegistry(String(draft.councilNumber || '')));
-          setSignatureDataUrl(draft.signatureDataUrl || user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null);
-        }
-        if (isTherapist && user?.clinicSettings?.clinicName) {
-          setClinicName(String(user.clinicSettings.clinicName));
-        }
-        const result = await dataService.getUserProfile(user.id);
-        const profile = result?.data?.professional_profile;
-        if (!profile) return;
+        const authoritativeContext = contextResult.data as OnboardingContext;
+        setContext(authoritativeContext);
+        const profile = profileResult?.data?.professional_profile;
+        const metadata = profile?.metadata || {};
+        const savedSchedule = metadata?.workSchedule || metadata?.work_schedule;
 
-        setFullName(profile.full_name || user.name || "");
-        setBirthDate(profile.birth_date || "");
-        setGender(profile.gender || "");
-        setCountryCode(profile.country_code || "+55");
-        setPhone(profile.phone || "");
-        setProfilePicture(profile.profile_photo_url || user?.profilePicture || user?.profile_picture || null);
-        setClinicName(profile.clinic_name || user?.clinicSettings?.clinicName || "");
-        setClinicLogoUrl(profile.clinic_logo_url || user?.clinicSettings?.clinicLogoUrl || null);
-        setClinicCnpj(formatCnpjInput(profile.metadata?.clinicCnpj || profile.address?.cnpj || ""));
-        setClinicPhone(profile.clinic_phone || "");
-        const savedOperationType = String(profile.metadata?.clinicOperationType || profile.metadata?.clinic_operation_type || user?.clinicSettings?.clinicOperationType || '');
-        setClinicOperationType(
-          savedOperationType === 'private' || savedOperationType === 'insurance' || savedOperationType === 'mixed'
-            ? savedOperationType
-            : 'mixed',
-        );
-        setSpecialty(profile.specialty || "");
-        setCouncil(profile.council || "");
-        setCouncilNumber(formatProfessionalRegistry(profile.council_number || ""));
-        setSignatureDataUrl(profile.signature_data_url || user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null);
-        setSessionDurationMinutes(String(profile.metadata?.sessionDurationMinutes || "50"));
+        const draftRaw = user?.firstLoginCompleted === false ? localStorage.getItem(draftKey) : null;
+        const draft = draftRaw ? JSON.parse(draftRaw) : {};
+        setFullName(profile?.full_name || draft.fullName || user?.name || '');
+        setPhone(profile?.phone || draft.phone || user?.phone || '');
+        setCpf(profile?.cpf || metadata?.cpf || draft.cpf || user?.cpf || '');
+        setBirthDate(profile?.birth_date || draft.birthDate || '');
+        setGender(profile?.gender || draft.gender || '');
+        setCountryCode(profile?.country_code || draft.countryCode || '+55');
+        setProfilePicture(profile?.profile_photo_url || draft.profilePicture || user?.profilePicture || null);
+        setCouncil(profile?.council || draft.council || '');
+        setCouncilNumber(formatProfessionalRegistry(profile?.council_number || draft.councilNumber || user?.crp || ''));
+        setMiniCurriculum(profile?.mini_curriculum || metadata?.miniCurriculum || draft.miniCurriculum || user?.miniCurriculum || '');
+        setSignatureDataUrl(profile?.signature_data_url || draft.signatureDataUrl || user?.signatureDataUrl || null);
+        setSessionDurationMinutes(String(metadata?.sessionDurationMinutes || metadata?.defaultSessionDurationMinutes || draft.sessionDurationMinutes || '50'));
 
-        const address = profile.address || {};
-        setCep(address.cep || "");
-        setLogradouro(address.logradouro || "");
-        setNumber(address.number || "");
-        setComplement(address.complement || "");
-        setBairro(address.bairro || "");
-        setCidade(address.cidade || "");
-        setUf(address.uf || address.state || "");
-      } catch (error) {
-        console.warn("Não foi possível carregar perfil existente para pré-preenchimento.");
+        if (savedSchedule?.days) {
+          setSelectedDays(WEEKDAYS.filter(([key]) => savedSchedule.days?.[key]?.enabled !== false && savedSchedule.days?.[key]?.periods?.length).map(([key]) => key));
+          const firstPeriod = WEEKDAYS.map(([key]) => savedSchedule.days?.[key]?.periods?.[0]).find(Boolean);
+          if (firstPeriod?.start) setWorkStart(firstPeriod.start);
+          if (firstPeriod?.end) setWorkEnd(firstPeriod.end);
+        } else {
+          setSelectedDays(Array.isArray(draft.selectedDays) ? draft.selectedDays : ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']);
+          setWorkStart(draft.workStart || '08:00');
+          setWorkEnd(draft.workEnd || '18:00');
+        }
+
+        // Clinic identity is server-authoritative for invited members.
+        setClinicName(authoritativeContext.clinic?.name || user?.clinicSettings?.clinicName || '');
+        setClinicPhone(authoritativeContext.clinic?.phone || authoritativeContext.clinic?.whatsapp || user?.clinicSettings?.clinicPhone || '');
+        setClinicLogoUrl(authoritativeContext.clinic?.logoUrl || user?.clinicSettings?.clinicLogoUrl || null);
+      } catch (error: any) {
+        if (active) setContextError(error?.message || 'Não foi possível carregar seu vínculo com a clínica.');
+      } finally {
+        if (active) setContextLoading(false);
       }
     };
-    loadExistingProfile();
-  }, [user.id, user.name, user.firstLoginCompleted, onboardingDraftKey, onboardingStepKey]);
+    void load();
+    return () => { active = false; };
+  }, [draftKey, user]);
 
   useEffect(() => {
-    const draft = {
+    if (user?.firstLoginCompleted !== false || contextLoading) return;
+    localStorage.setItem(draftKey, JSON.stringify({
       fullName,
+      phone,
+      cpf,
       birthDate,
       gender,
-      cep,
-      logradouro,
-      number,
-      complement,
-      bairro,
-      cidade,
-      uf,
-      sessionDurationMinutes,
       countryCode,
-      phone,
       profilePicture,
-      clinicName,
-      clinicLogoUrl,
-      clinicCnpj,
-      clinicPhone,
-      clinicOperationType,
-      specialty,
       council,
       councilNumber,
-      signatureDataUrl
-    };
-    if (user?.firstLoginCompleted === false) {
-      localStorage.setItem(onboardingDraftKey, JSON.stringify(draft));
-    }
+      miniCurriculum,
+      signatureDataUrl,
+      sessionDurationMinutes,
+      selectedDays,
+      workStart,
+      workEnd,
+      ...(isOwnerOnboarding ? { clinicName, clinicPhone, clinicLogoUrl, clinicOperationType } : {}),
+    }));
   }, [
-    onboardingDraftKey,
-    user?.firstLoginCompleted,
-    fullName,
-    birthDate,
-    gender,
-    cep,
-    logradouro,
-    number,
-    complement,
-    bairro,
-    cidade,
-    uf,
-    sessionDurationMinutes,
-    countryCode,
-    phone,
-    profilePicture,
-    clinicName,
-    clinicLogoUrl,
-    clinicCnpj,
-    clinicPhone,
-    clinicOperationType,
-    specialty,
-    council,
-    councilNumber,
-    signatureDataUrl
+    birthDate, clinicLogoUrl, clinicName, clinicOperationType, clinicPhone, contextLoading,
+    countryCode, council, councilNumber, cpf, draftKey, fullName, gender, isOwnerOnboarding,
+    miniCurriculum, phone, profilePicture, selectedDays, sessionDurationMinutes, signatureDataUrl,
+    user?.firstLoginCompleted, workEnd, workStart,
   ]);
 
-  const canGoNextPersonal = fullName.trim() && phone.trim();
-  const canGoNextClinic = !isCoordinator || (clinicName.trim() && clinicOperationType);
-
-  const toBase64 = (file: File, cb: (v: string) => void) => {
+  const toBase64 = (file: File, cb: (value: string) => void) => {
     if (file.size > 900 * 1024) {
       alert('A imagem está muito grande. Use um arquivo com até 900KB.');
       return;
@@ -232,264 +240,332 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const uploadImageIfNeeded = async (input: string | null, kind: 'profile' | 'logo' | 'signature') => {
     if (!input) return { url: null as string | null, path: null as string | null };
     if (!input.startsWith('data:image/')) return { url: input, path: null as string | null };
-
-    const mimeMatch = input.match(/^data:([^;]+);base64,/);
-    const contentType = mimeMatch?.[1] || 'image/png';
-    const extension = contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg' : 'png';
-    const safeKind = kind === 'profile' ? 'perfil' : kind === 'logo' ? 'logo' : 'assinatura';
-    const objectPath = `onboarding/${user.id}/${safeKind}-${Date.now()}.${extension}`;
-
-    const uploadResponse = await fetch('/api/storage/upload', {
+    const mime = input.match(/^data:([^;]+);base64,/)?.[1] || 'image/png';
+    const extension = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
+    const label = kind === 'profile' ? 'perfil' : kind === 'logo' ? 'logo' : 'assinatura';
+    const response = await fetch('/api/storage/upload', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         bucket: 'patient-photos',
-        path: objectPath,
-        contentType,
-        fileBase64: input
-      })
+        path: `onboarding/${user.id}/${label}-${Date.now()}.${extension}`,
+        contentType: mime,
+        fileBase64: input,
+      }),
     });
-
-    const uploadResult = await parseJsonSafe(uploadResponse);
-    if (!uploadResponse.ok || !uploadResult?.success || !uploadResult?.url) {
-      throw new Error(uploadResult?.error || `Não foi possível enviar a imagem (${safeKind}).`);
+    const result = await parseJsonSafe(response);
+    if (!response.ok || !result?.success || !result?.url) {
+      throw new Error(result?.error || `Não foi possível enviar a imagem (${label}).`);
     }
-    return {
-      url: uploadResult.url as string,
-      path: uploadResult.path ? `patient-photos/${uploadResult.path}` : null
-    };
+    return { url: result.url as string, path: result.path ? `patient-photos/${result.path}` : null };
   };
 
   const finish = async () => {
-    if (!canGoNextPersonal) {
+    if (!fullName.trim() || !phone.trim()) {
       alert('Preencha nome e telefone para continuar.');
       return;
     }
-
+    if (!context?.clinic?.id) {
+      alert('Não foi possível identificar a clínica vinculada ao seu acesso.');
+      return;
+    }
     setLoading(true);
     try {
-      const [profileUpload, clinicLogoUpload, signatureUpload] = await Promise.all([
+      const [profileUpload, signatureUpload, clinicLogoUpload] = await Promise.all([
         uploadImageIfNeeded(profilePicture, 'profile'),
-        uploadImageIfNeeded(clinicLogoUrl, 'logo'),
-        uploadImageIfNeeded(signatureDataUrl, 'signature')
+        uploadImageIfNeeded(signatureDataUrl, 'signature'),
+        isOwnerOnboarding
+          ? uploadImageIfNeeded(clinicLogoUrl, 'logo')
+          : Promise.resolve({ url: context.clinic.logoUrl || null, path: null as string | null }),
       ]);
 
+      const memberPayload = {
+        fullName,
+        birthDate,
+        gender,
+        countryCode,
+        phone,
+        cpf,
+        council,
+        councilNumber,
+        miniCurriculum,
+        sessionDurationMinutes: Number(sessionDurationMinutes),
+        workSchedule: schedule,
+        signatureDataUrl: signatureUpload.url,
+        signaturePath: signatureUpload.path,
+        profilePicture: profileUpload.url,
+        profilePicturePath: profileUpload.path,
+      };
+      const ownerPayload = {
+        ...memberPayload,
+        clinicName,
+        clinicPhone,
+        clinicLogoUrl: clinicLogoUpload.url,
+        clinicLogoPath: clinicLogoUpload.path,
+        clinicOperationType,
+      };
       const response = await fetch(`/api/profile/${user.id}/complete-onboarding`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          fullName,
-          birthDate,
-          gender,
-          cep,
-          logradouro,
-          number,
-          complement,
-          bairro,
-          cidade,
-          uf,
-          sessionDurationMinutes: Number(sessionDurationMinutes),
-          countryCode,
-          phone,
-          clinicName,
-          clinicLogoUrl: clinicLogoUpload.url,
-          clinicLogoPath: clinicLogoUpload.path,
-          clinicCnpj,
-          clinicPhone,
-          clinicOperationType,
-          specialty,
-          council,
-          councilNumber,
-          signatureDataUrl: signatureUpload.url,
-          signaturePath: signatureUpload.path,
-          profilePicture: profileUpload.url,
-          profilePicturePath: profileUpload.path
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isManagedMember ? memberPayload : ownerPayload),
       });
-
       const result = await parseJsonSafe(response);
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || 'Falha ao concluir onboarding');
+      if (!response.ok || !result?.success) {
+        throw new Error(result?.error || 'Falha ao concluir sua configuração.');
       }
-
+      localStorage.removeItem(draftKey);
+      localStorage.removeItem(stepKey);
       onComplete({
+        ...(result.user || {}),
         name: fullName,
         crp: councilNumber || null,
+        cpf: cpf || null,
+        phone: phone || null,
+        specialties: specialty || null,
+        miniCurriculum: miniCurriculum || null,
         profilePicture: profileUpload.url,
         signatureDataUrl: signatureUpload.url,
-        clinicSettings: {
-          ...(user?.clinicSettings || {}),
-          clinicName: clinicName || null,
-          clinicLogoUrl: clinicLogoUpload.url,
-          clinicCnpj: clinicCnpj || null,
-          clinicPhone: clinicPhone || null,
-          clinicOperationType,
-          specialty: specialty || null,
-          council: council || null,
-          councilNumber: councilNumber || null,
-          signatureDataUrl: signatureUpload.url,
-        },
         firstLoginCompleted: true,
-        subscriptionStatus: result?.subscriptionStatus || result?.data?.subscriptionStatus || 'payment_required'
+        onboardingContext: result.onboardingContext || context,
+        subscriptionStatus: result.subscriptionStatus ?? user?.subscriptionStatus ?? null,
+        clinicSettings: isManagedMember
+          ? {
+              ...(user?.clinicSettings || {}),
+              clinicName: context.clinic.name,
+              clinicPhone: context.clinic.phone || context.clinic.whatsapp || null,
+              clinicLogoUrl: context.clinic.logoUrl || null,
+              specialty: specialty || null,
+            }
+          : {
+              ...(user?.clinicSettings || {}),
+              clinicName,
+              clinicPhone,
+              clinicLogoUrl: clinicLogoUpload.url,
+              clinicOperationType,
+            },
       });
-      localStorage.removeItem(onboardingDraftKey);
-      localStorage.removeItem(onboardingStepKey);
     } catch (error: any) {
-      alert(error.message || 'Não foi possível concluir onboarding.');
+      alert(error?.message || 'Não foi possível concluir sua configuração.');
     } finally {
       setLoading(false);
     }
   };
 
+  if (contextLoading) {
+    return (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-50 p-6">
+        <div className="rounded-3xl border border-slate-100 bg-white px-8 py-10 text-center shadow-sm">
+          <Loader2 className="mx-auto animate-spin text-[#7a32fc]" size={32} />
+          <p className="mt-4 text-sm text-slate-500">Carregando seu vínculo com a clínica...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (contextError || !context?.clinic?.id) {
+    return (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-50 p-6">
+        <div className="w-full max-w-lg rounded-3xl border border-red-100 bg-white p-8 text-center shadow-sm">
+          <ShieldCheck className="mx-auto text-red-500" size={34} />
+          <h2 className="mt-4 text-xl font-bold text-slate-900">Vínculo não encontrado</h2>
+          <p className="mt-2 text-sm text-slate-500">{contextError || 'Fale com o responsável da clínica para revisar seu convite.'}</p>
+          {onClose && <button onClick={onClose} className="mt-6 rounded-xl bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-700">Fechar</button>}
+        </div>
+      </div>
+    );
+  }
+
+  const sidebarSteps = isManagedMember
+    ? ['Dados pessoais e profissionais', 'Configurações clínicas individuais', 'Horários e vínculo']
+    : ['Dados do usuário', 'Configurações da clínica'];
+
   return (
-    <div className="fixed inset-0 z-[200] bg-slate-50 overflow-y-auto p-4 md:p-6">
-      <div className="min-h-full w-full flex items-start justify-center py-2 md:py-6">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-white w-full max-w-5xl rounded-3xl shadow-xl border border-slate-100">
-        <div className="grid md:grid-cols-[320px_1fr] min-h-[680px]">
-          <div className="bg-[#7a32fc] text-white p-8 rounded-l-3xl">
-            <h2 className="text-2xl font-bold">Boas-vindas à Verto</h2>
-            <p className="text-sm text-violet-100 mt-3">Complete seus dados. O painel completo libera depois do plano e pagamento.</p>
-            <div className="mt-8 space-y-3 text-xs">
-              <div className={step >= 1 ? 'text-white font-semibold' : 'text-violet-200'}>1. Dados do usuário</div>
-              <div className={step >= 2 ? 'text-white font-semibold' : 'text-violet-200'}>2. Configurações da clínica</div>
-              <div className="text-violet-200">3. Plano por pacientes ativos</div>
-              <div className="text-violet-200">4. Cartão e assinatura</div>
-            </div>
-          </div>
-
-          <div className="p-8 relative">
-            {onClose && (
-              <button onClick={onClose} className="absolute right-6 top-6 text-slate-400 hover:text-slate-600">
-                <X size={18} />
-              </button>
-            )}
-
-            {step === 1 && (
-              <div className="space-y-5">
-                <h3 className="text-lg font-bold text-slate-900">Dados do usuário</h3>
-                <p className="text-sm text-slate-500">
-                  Informe apenas o essencial agora. Dados profissionais e fiscais podem ser completados nas configurações.
-                </p>
-
-                <div className="flex items-center gap-4">
-                  <div className="w-20 h-20 rounded-2xl border border-dashed border-slate-300 overflow-hidden flex items-center justify-center bg-slate-50">
-                    {profilePicture ? <SecureImage src={profilePicture} alt="Foto" className="w-full h-full object-cover" /> : <Camera size={24} className="text-slate-400" />}
+    <div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-50 p-4 md:p-6">
+      <div className="flex min-h-full w-full items-start justify-center py-2 md:py-6">
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-5xl rounded-3xl border border-slate-100 bg-white shadow-xl">
+          <div className="grid min-h-[680px] md:grid-cols-[320px_1fr]">
+            <div className="rounded-t-3xl bg-[#7a32fc] p-8 text-white md:rounded-l-3xl md:rounded-tr-none">
+              <h2 className="text-2xl font-bold">Boas-vindas à Verto</h2>
+              <p className="mt-3 text-sm text-violet-100">
+                {isManagedMember
+                  ? 'Complete suas informações profissionais para acessar a clínica à qual você foi convidado.'
+                  : 'Complete os dados iniciais da clínica antes de escolher o plano.'}
+              </p>
+              <div className="mt-8 space-y-3 text-xs">
+                {sidebarSteps.map((label, index) => (
+                  <div key={label} className={step >= index + 1 ? 'font-semibold text-white' : 'text-violet-200'}>
+                    {index + 1}. {label}
                   </div>
-                  <label className="text-xs font-semibold text-slate-700 cursor-pointer px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 transition-all">
-                    Escolher foto
-                    <input
-                      type="file"
-                      className="hidden"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) toBase64(file, setProfilePicture);
-                      }}
-                    />
-                  </label>
-                </div>
-
-                <div className="grid md:grid-cols-2 gap-4">
-                  <input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Nome completo" className="px-4 py-3 rounded-xl bg-slate-50" />
-                  <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Telefone ou WhatsApp" className="px-4 py-3 rounded-xl bg-slate-50" />
-                </div>
-
-                <div className="pt-2 flex justify-end">
-                  <button disabled={!canGoNextPersonal} onClick={() => setStep(2)} className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold disabled:opacity-40">Continuar</button>
-                </div>
-              </div>
-            )}
-
-            {step === 2 && (
-              <div className="space-y-5">
-                <h3 className="text-lg font-bold text-slate-900">Configurações da clínica</h3>
-                <p className="text-sm text-slate-500">
-                  Esses dados identificam a clínica no primeiro acesso. Credenciais profissionais, assinatura, CNPJ, CNES e TISS ficam para configurar depois.
-                </p>
-                {isTherapist && (
-                  <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
-                    <p className="text-[11px] uppercase tracking-widest font-bold text-violet-500">Clínica vinculada</p>
-                    <p className="text-base font-bold text-violet-900">
-                      {clinicName || user?.clinicSettings?.clinicName || user?.workspaceName || 'Nome da clínica pendente'}
-                    </p>
-                  </div>
+                ))}
+                {!isManagedMember && (
+                  <>
+                    <div className="text-violet-200">3. Plano por pacientes ativos</div>
+                    <div className="text-violet-200">4. Cartão e assinatura</div>
+                  </>
                 )}
+              </div>
+            </div>
 
-                {isCoordinator && (
-                  <div className="space-y-5">
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} placeholder="Nome da clínica" className="px-4 py-3 rounded-xl bg-slate-50" />
-                      <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone ou WhatsApp da clínica" className="px-4 py-3 rounded-xl bg-slate-50" />
-                      <input value={cidade} onChange={(e) => setCidade(e.target.value)} placeholder="Cidade (opcional)" className="px-4 py-3 rounded-xl bg-slate-50" />
-                      <input value={uf} onChange={(e) => setUf(e.target.value.toUpperCase().slice(0, 2))} placeholder="UF (opcional)" className="px-4 py-3 rounded-xl bg-slate-50" />
+            <div className="relative p-6 md:p-8">
+              {onClose && (
+                <button onClick={onClose} className="absolute right-6 top-6 text-slate-400 hover:text-slate-600" aria-label="Fechar onboarding">
+                  <X size={18} />
+                </button>
+              )}
+
+              {step === 1 && (
+                <div className="space-y-5">
+                  <h3 className="text-lg font-bold text-slate-900">Dados pessoais e profissionais</h3>
+                  <p className="text-sm text-slate-500">Preencha seus dados. A clínica e a especialidade vêm do convite e não podem ser trocadas aqui.</p>
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-slate-50">
+                      {profilePicture ? <SecureImage src={profilePicture} alt="Foto de perfil" className="h-full w-full object-cover" /> : <Camera size={24} className="text-slate-400" />}
                     </div>
+                    <label className="cursor-pointer rounded-xl bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200">
+                      Escolher foto
+                      <input type="file" className="hidden" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) toBase64(file, setProfilePicture); }} />
+                    </label>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Nome completo" className="rounded-xl bg-slate-50 px-4 py-3" />
+                    <input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Telefone ou WhatsApp" className="rounded-xl bg-slate-50 px-4 py-3" />
+                    <input value={cpf} onChange={(event) => setCpf(event.target.value.replace(/\D/g, '').slice(0, 11))} placeholder="CPF (quando aplicável)" className="rounded-xl bg-slate-50 px-4 py-3" />
+                    <input value={birthDate} onChange={(event) => setBirthDate(event.target.value)} type="date" className="rounded-xl bg-slate-50 px-4 py-3" />
+                    <select value={gender} onChange={(event) => setGender(event.target.value)} className="rounded-xl bg-slate-50 px-4 py-3">
+                      <option value="">Gênero (opcional)</option>
+                      <option value="female">Feminino</option>
+                      <option value="male">Masculino</option>
+                      <option value="other">Outro</option>
+                      <option value="prefer_not_to_say">Prefiro não informar</option>
+                    </select>
+                    <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
+                      <p className="text-[11px] font-bold uppercase tracking-wider text-violet-500">Especialidade vinculada</p>
+                      <p className="mt-1 text-sm font-semibold text-violet-900">{specialty || 'Definida pela clínica'}</p>
+                    </div>
+                  </div>
+                  <div className="flex justify-end pt-2">
+                    <button disabled={!fullName.trim() || !phone.trim()} onClick={() => setStep(2)} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">Continuar</button>
+                  </div>
+                </div>
+              )}
 
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <p className="text-sm font-bold text-slate-900">Como sua clínica atende hoje?</p>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Esta escolha define os padrões iniciais. Clínicas particulares não precisam configurar TISS/TUSS no primeiro acesso.
-                      </p>
-                      <div className="mt-4 grid md:grid-cols-3 gap-3">
-                        {[
-                          { value: 'private', title: 'Particular', description: 'Atendimentos sem convênio por padrão.' },
-                          { value: 'insurance', title: 'Convênio', description: 'Usa pagadores e pré-faturamento.' },
-                          { value: 'mixed', title: 'Ambos', description: 'Particular e convênio na mesma clínica.' },
-                        ].map((option) => {
-                          const selected = clinicOperationType === option.value;
-                          return (
-                            <button
-                              type="button"
-                              key={option.value}
-                              onClick={() => setClinicOperationType(option.value as 'private' | 'insurance' | 'mixed')}
-                              className={`rounded-2xl border px-4 py-3 text-left transition-all ${
-                                selected ? 'border-[#7a32fc] bg-white shadow-sm ring-2 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-300'
-                              }`}
-                            >
-                              <span className="block text-sm font-bold text-slate-900">{option.title}</span>
-                              <span className="mt-1 block text-xs text-slate-500">{option.description}</span>
-                            </button>
-                          );
-                        })}
+              {step === 2 && isManagedMember && (
+                <div className="space-y-5">
+                  <h3 className="text-lg font-bold text-slate-900">Configurações clínicas individuais</h3>
+                  <p className="text-sm text-slate-500">Essas informações pertencem ao seu perfil profissional e serão usadas em documentos clínicos.</p>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <input value={council} onChange={(event) => setCouncil(event.target.value)} placeholder="Conselho profissional" className="rounded-xl bg-slate-50 px-4 py-3" />
+                    <input value={councilNumber} onChange={(event) => setCouncilNumber(formatProfessionalRegistry(event.target.value))} placeholder="Número do conselho" className="rounded-xl bg-slate-50 px-4 py-3" />
+                    <select value={sessionDurationMinutes} onChange={(event) => setSessionDurationMinutes(event.target.value)} className="rounded-xl bg-slate-50 px-4 py-3">
+                      <option value="30">Sessões de 30 minutos</option>
+                      <option value="45">Sessões de 45 minutos</option>
+                      <option value="50">Sessões de 50 minutos</option>
+                      <option value="60">Sessões de 60 minutos</option>
+                      <option value="90">Sessões de 90 minutos</option>
+                    </select>
+                    <input value={countryCode} onChange={(event) => setCountryCode(event.target.value)} placeholder="Código do país" className="rounded-xl bg-slate-50 px-4 py-3" />
+                  </div>
+                  <textarea value={miniCurriculum} onChange={(event) => setMiniCurriculum(event.target.value.slice(0, 4000))} placeholder="Minicurrículo profissional" rows={5} className="w-full rounded-xl bg-slate-50 px-4 py-3" />
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex items-center gap-3">
+                      <FileSignature className="text-violet-500" size={22} />
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">Assinatura profissional</p>
+                        <p className="text-xs text-slate-500">Use uma imagem nítida com fundo claro.</p>
                       </div>
                     </div>
-
-                    <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3">
-                      <p className="text-sm font-semibold text-violet-900">Plano e pagamento vêm a seguir.</p>
-                      <p className="text-xs text-violet-700 mt-1">
-                        Depois de concluir esses dados mínimos, escolha o plano por pacientes ativos e cadastre o cartão no Stripe.
-                      </p>
+                    <div className="mt-4 flex items-center gap-4">
+                      {signatureDataUrl && <SecureImage src={signatureDataUrl} alt="Assinatura" className="h-16 max-w-[220px] rounded-lg border border-slate-100 object-contain" />}
+                      <label className="cursor-pointer rounded-xl bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200">
+                        Selecionar assinatura
+                        <input type="file" className="hidden" accept="image/*" onChange={(event) => { const file = event.target.files?.[0]; if (file) toBase64(file, setSignatureDataUrl); }} />
+                      </label>
                     </div>
                   </div>
-                )}
-
-                {!isCoordinator && (
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <input value={clinicName} onChange={(e) => setClinicName(e.target.value)} placeholder="Nome da clínica" className="px-4 py-3 rounded-xl bg-slate-50" />
-                    <input value={clinicPhone} onChange={(e) => setClinicPhone(e.target.value)} placeholder="Telefone ou WhatsApp da clínica" className="px-4 py-3 rounded-xl bg-slate-50" />
+                  <div className="flex justify-between pt-2">
+                    <button onClick={() => setStep(1)} className="rounded-xl bg-slate-100 px-6 py-3 font-semibold text-slate-700">Voltar</button>
+                    <button onClick={() => setStep(3)} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white">Continuar</button>
                   </div>
-                )}
-
-                <div className="pt-2 flex justify-between">
-                  <button onClick={() => setStep(1)} className="px-6 py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold">Voltar</button>
-                  <button disabled={loading || !canGoNextClinic} onClick={finish} className="px-6 py-3 rounded-xl bg-[#7a32fc] text-white font-semibold disabled:opacity-40">
-                    {loading ? 'Salvando...' : 'Continuar para o plano'}
-                  </button>
                 </div>
-              </div>
-            )}
+              )}
+
+              {step === 2 && !isManagedMember && (
+                <div className="space-y-5">
+                  <h3 className="text-lg font-bold text-slate-900">Configurações da clínica</h3>
+                  <p className="text-sm text-slate-500">Configure os dados mínimos da nova clínica. O fluxo comercial permanece disponível somente para o responsável.</p>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <input value={clinicName} onChange={(event) => setClinicName(event.target.value)} placeholder="Nome da clínica" className="rounded-xl bg-slate-50 px-4 py-3" />
+                    <input value={clinicPhone} onChange={(event) => setClinicPhone(event.target.value)} placeholder="Telefone ou WhatsApp da clínica" className="rounded-xl bg-slate-50 px-4 py-3" />
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    {[
+                      ['private', 'Particular'],
+                      ['insurance', 'Convênio'],
+                      ['mixed', 'Ambos'],
+                    ].map(([value, label]) => (
+                      <button key={value} type="button" onClick={() => setClinicOperationType(value as 'private' | 'insurance' | 'mixed')} className={`rounded-2xl border px-4 py-3 text-left ${clinicOperationType === value ? 'border-violet-400 bg-violet-50' : 'border-slate-200'}`}>
+                        <span className="text-sm font-bold text-slate-900">{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex justify-between pt-2">
+                    <button onClick={() => setStep(1)} className="rounded-xl bg-slate-100 px-6 py-3 font-semibold text-slate-700">Voltar</button>
+                    <button disabled={loading || !clinicName.trim()} onClick={finish} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">
+                      {loading ? 'Salvando...' : 'Continuar para o plano'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {step === 3 && isManagedMember && (
+                <div className="space-y-5">
+                  <h3 className="text-lg font-bold text-slate-900">Horários e vínculo</h3>
+                  <p className="text-sm text-slate-500">Defina sua disponibilidade e confirme a clínica à qual você foi vinculado.</p>
+                  <div className="rounded-2xl border border-violet-100 bg-violet-50 p-5">
+                    <div className="flex items-start gap-3">
+                      <Building2 className="mt-0.5 text-violet-600" size={22} />
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-wider text-violet-500">Clínica vinculada</p>
+                        <p className="mt-1 text-base font-bold text-violet-950">{context.clinic.name}</p>
+                        <p className="mt-1 text-sm text-violet-800">{context.clinic.phone || context.clinic.whatsapp || 'Contato administrado pela clínica'}</p>
+                        <p className="mt-2 text-xs text-violet-700">{roleLabel(effectiveRole)}{specialty ? ` · ${specialty}` : ''}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 p-5">
+                    <div className="flex items-center gap-3">
+                      <CalendarClock className="text-violet-500" size={22} />
+                      <p className="text-sm font-semibold text-slate-800">Disponibilidade semanal</p>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {WEEKDAYS.map(([key, label]) => {
+                        const selected = selectedDays.includes(key);
+                        return (
+                          <button key={key} type="button" onClick={() => setSelectedDays((current) => selected ? current.filter((item) => item !== key) : [...current, key])} className={`rounded-xl border px-3 py-2 text-xs font-semibold ${selected ? 'border-violet-400 bg-violet-50 text-violet-700' : 'border-slate-200 text-slate-500'}`}>
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <label className="text-xs font-medium text-slate-600">Início<input type="time" value={workStart} onChange={(event) => setWorkStart(event.target.value)} className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3" /></label>
+                      <label className="text-xs font-medium text-slate-600">Fim<input type="time" value={workEnd} onChange={(event) => setWorkEnd(event.target.value)} className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3" /></label>
+                    </div>
+                  </div>
+                  <div className="flex justify-between pt-2">
+                    <button onClick={() => setStep(2)} className="rounded-xl bg-slate-100 px-6 py-3 font-semibold text-slate-700">Voltar</button>
+                    <button disabled={loading || selectedDays.length === 0 || workStart >= workEnd} onClick={finish} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">
+                      {loading ? 'Salvando...' : 'Concluir configuração'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      </motion.div>
+        </motion.div>
       </div>
     </div>
   );
 }
-
-
-
-
-

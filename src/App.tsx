@@ -170,6 +170,14 @@ const isProfessionalClinicRole = (role: unknown): boolean =>
 const hasDashboardBillingAccess = (candidateUser: any): boolean => {
   const role = String(candidateUser?.role || '').trim().toLowerCase();
   if (!isProfessionalClinicRole(role)) return true;
+  const onboardingContext = candidateUser?.onboardingContext;
+  if (
+    onboardingContext?.requiresPayment === false &&
+    onboardingContext?.clinic?.id &&
+    ['invited_professional', 'clinic_member'].includes(onboardingContext?.onboardingMode)
+  ) {
+    return onboardingContext?.canAccessDashboard !== false;
+  }
   if (role === 'admin' && candidateUser?.isInternalAdmin === true) return true;
   if (candidateUser?.isDemoUser === true || candidateUser?.is_demo_user === true) return true;
   const billingModel = String(candidateUser?.billingModel || candidateUser?.billing_model || '').trim().toLowerCase();
@@ -2492,6 +2500,13 @@ export default function App() {
   };
 
   const handleCheckout = async (options?: { selectedPriceId?: string; activePatients?: number }) => {
+    if (user?.onboardingContext?.requiresPayment === false && ['invited_professional', 'clinic_member'].includes(user?.onboardingContext?.onboardingMode)) {
+      return {
+        success: false,
+        code: 'CLINIC_MEMBER_CHECKOUT_FORBIDDEN',
+        error: 'A assinatura é administrada pela clínica responsável.'
+      };
+    }
     const friendlyCheckoutMessage = (code: string, rawError?: string) => {
       switch (code) {
         case 'PRICE_NOT_AVAILABLE':
@@ -2553,6 +2568,23 @@ export default function App() {
       : `mailto:comercial@appverto.com.br?subject=${encodeURIComponent('Proposta personalizada Verto')}&body=${encodeURIComponent(message)}`;
     window.open(target, '_blank', 'noopener,noreferrer');
   };
+
+  const ClinicMemberAccessPending = ({ user, onLogout }: { user: any, onLogout: () => void }) => (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-xl rounded-3xl border border-slate-100 bg-white p-8 text-center shadow-sm">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-50 text-[#7a32fc]">
+          <Lock size={28} />
+        </div>
+        <h2 className="mt-5 text-xl font-bold text-slate-900">Acesso administrado pela clínica</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-500">
+          Seu vínculo com {user?.onboardingContext?.clinic?.name || 'a clínica'} está correto. A liberação financeira é feita pelo responsável da clínica e nenhuma cobrança será solicitada ao seu usuário.
+        </p>
+        <button onClick={onLogout} className="mt-6 rounded-xl bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-200">
+          Sair da conta
+        </button>
+      </div>
+    </div>
+  );
 
   const SubscriptionRequired = ({ user, onLogout }: { user: any, onLogout: () => void }) => {
     const isPatientCheckout = String(user?.role || '').toLowerCase() === 'patient';
@@ -7179,6 +7211,8 @@ export default function App() {
             }}
             onClose={() => setShowOnboarding(false)}
           />
+        ) : user?.onboardingContext?.requiresPayment === false && ['invited_professional', 'clinic_member'].includes(user?.onboardingContext?.onboardingMode) && user?.onboardingContext?.canAccessDashboard === false ? (
+          <ClinicMemberAccessPending user={user} onLogout={handleLogout} />
         ) : isProfessionalClinicRole(user.role) && !hasDashboardBillingAccess(user) ? (
           <SubscriptionRequired user={user} onLogout={handleLogout} />
         ) : (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !clinicStateHydrated ? (
