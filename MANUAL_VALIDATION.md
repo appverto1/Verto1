@@ -1,68 +1,49 @@
-# Validação manual recomendada
+# Validação manual
 
-## Preparação
+## Cenário principal — profissional muda de clínica
 
-Use um ambiente de homologação e uma clínica já existente, com nome, telefone e assinatura administrada pelo responsável.
+1. Use um profissional com conta Auth confirmada.
+2. Desvincule-o da clínica antiga.
+3. Confirme que a conta continua existindo em Authentication > Users.
+4. Envie um convite novo pela clínica atual.
+5. Confira no Resend que o link começa por:
+   `https://appverto.com.br/?auth_action=activate`
+6. Confirme que o link inclui um `invitation_id` novo e `invite_mode=existing`.
+7. Abra o link.
+8. Confirme que não ocorre HTTP 404.
+9. Entre com a senha atual ou com a mesma conta Google.
+10. Confirme que:
+    - o UUID Auth não mudou;
+    - a membership da nova clínica ficou ativa;
+    - a clínica atual da sessão é a clínica que enviou o convite;
+    - não foi criada uma segunda conta;
+    - não aparece fluxo de nova senha;
+    - não aparece plano ou pagamento.
 
-## Cenário A — novo profissional convidado
+## Idempotência
 
-1. Entre como coordenador.
-2. Convide um profissional e selecione uma especialidade.
-3. Confirme que o botão muda para `Convite enviado com sucesso.`.
-4. Confirme que nenhuma referência a Resend, template, fallback ou contingência aparece.
-5. Abra o convite em uma conta nova.
-6. Conclua autenticação/senha.
-7. Confirme que:
-   - nome da clínica já aparece preenchido;
-   - telefone/WhatsApp é o já cadastrado;
-   - papel e especialidade estão preenchidos;
-   - clínica e especialidade não podem ser alteradas;
-   - não aparece “Nome da clínica pendente”.
-8. Preencha nome, telefone, CPF, conselho, minicurrículo, foto e assinatura.
-9. Configure dias, horários e duração.
-10. Conclua.
-11. Confirme entrada direta no painel permitido.
-12. Confirme que nenhuma tela de plano, Stripe, trial, cartão ou pagamento apareceu.
+1. Reabra o mesmo convite depois de ele ter sido aceito.
+2. Enquanto a membership estiver ativa, confirme que não há duplicação.
+3. Desvincule novamente o profissional.
+4. Abra o link antigo.
+5. Confirme erro amigável informando que o convite já foi utilizado.
+6. Envie um convite novo e confirme que somente o novo link reativa o vínculo.
 
-## Cenário B — convite para usuário já existente
+## Usuário novo
 
-1. Convide um e-mail Auth já existente, mas sem membership na clínica-alvo.
-2. Entre com esse usuário.
-3. Confirme criação idempotente de uma única membership.
-4. Atualize a página e faça logout/login.
-5. Confirme que o vínculo permanece e o checkout não aparece.
-6. Reabra o link do convite e confirme que não há duplicação.
+1. Convide um e-mail nunca cadastrado.
+2. Confirme `invite_mode=new`.
+3. Conclua a ativação e definição de senha.
+4. Confirme que o onboarding de profissional convidado permanece sem checkout.
 
-## Cenário C — clínica sem acesso financeiro ativo
+## Google
 
-1. Use um profissional convidado vinculado a uma clínica bloqueada.
-2. Confirme que o profissional não vê planos ou checkout.
-3. Confirme que aparece somente o estado de acesso administrado pela clínica.
-4. Confirme que uma chamada direta a `/api/billing/checkout` retorna 403 e `CLINIC_MEMBER_CHECKOUT_FORBIDDEN`.
+1. Use uma conta já cadastrada com Google.
+2. Abra o convite novo.
+3. Entre com a mesma conta Google.
+4. Confirme que o `invitation_id` é preservado durante o redirecionamento.
+5. Confirme o vínculo com a clínica convidante.
 
-## Cenário D — proprietário de nova clínica
+## Logs esperados
 
-1. Use o fluxo de proprietário/coordenador responsável por nova clínica.
-2. Confirme que ainda pode preencher os dados da clínica.
-3. Confirme que o botão `Continuar para o plano` permanece.
-4. Confirme que o checkout e a estratégia comercial continuam funcionando somente nesse fluxo.
-
-## Cenário E — convite inválido ou clínica removida
-
-1. Abra um convite inválido/expirado ou remova a clínica apenas em homologação.
-2. Confirme mensagem amigável.
-3. Confirme que não é possível digitar uma nova `clinic_id`, alterar papel ou criar clínica substituta.
-4. Verifique os detalhes técnicos somente nos logs.
-
-## Observabilidade
-
-Nos logs internos, confirme a permanência de:
-
-- modo de entrega do e-mail;
-- ID do provedor;
-- template/fallback;
-- `onboardingMode`;
-- `clinic_id`;
-- bloqueios de checkout.
-
-Esses dados não devem aparecer na interface do cliente.
+Os logs podem registrar convite, membership e workspace, mas a interface deve continuar sem detalhes técnicos de Resend ou Supabase.

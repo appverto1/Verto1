@@ -1,192 +1,96 @@
-# Entrega — onboarding de profissionais convidados
+# Entrega — novo convite com reutilização do mesmo acesso
 
-## Resultado
+## Problema observado
 
-Foram corrigidos os três problemas solicitados no fluxo de convite, ativação e primeiro acesso de profissionais:
+O convite gerava uma URL como:
 
-1. A confirmação de convite agora é genérica e aparece no próprio botão.
-2. A clínica e a especialidade do profissional convidado são resolvidas pelo backend e exibidas como vínculo existente.
-3. Profissionais convidados não entram no fluxo de plano, trial, Stripe, checkout ou pagamento.
+`https://appverto.com.br/ativar?role=coordinator&email=...`
 
-Nenhum deploy, SQL, alteração no Railway, commit, push ou migration foi executado.
+No domínio publicado, o acesso direto a `/ativar` retornou HTTP 404 antes de a aplicação React ser carregada.
 
-## Causas-raiz
+Além disso, contas Auth já confirmadas ainda passavam por uma tentativa de link `signup`. Quando o usuário já existia, o Supabase rejeitava a criação de uma nova conta e o sistema caía no link genérico de ativação. O login também só aceitava automaticamente um convite quando o usuário não possuía nenhum workspace, o que não atendia a mudança de uma clínica para outra.
 
-### 1. Detalhes técnicos na confirmação
+## Correções
 
-A interface reutilizava a mensagem devolvida pelo backend. Como essa mensagem descrevia template, fallback e Resend, informações internas eram apresentadas ao cliente.
+### 1. Link compatível com a hospedagem pública
 
-Correção:
+Novos convites usam a raiz da SPA:
 
-- o botão passa a mostrar somente `Convite enviado com sucesso.`;
-- sucesso exige `success === true` e `invitationEmailSent !== false`;
-- falha parcial usa mensagem amigável;
-- dados do provedor continuam somente nos logs e na auditoria;
-- a resposta pública de sucesso não inclui o objeto técnico de entrega.
+`/?auth_action=activate&role=coordinator&email=...&invitation_id=...&invite_mode=...`
 
-### 2. Profissional tratado como criador da clínica
+Assim, o servidor público precisa entregar apenas `/`, evitando depender de rewrite para `/ativar`.
 
-O onboarding reutilizava o mesmo formulário para proprietário e membro convidado. Nome, telefone, especialidade e identidade da clínica podiam vir do estado local ou do corpo enviado pelo navegador.
+Links antigos em `/ativar` continuam reconhecidos pelo frontend, mas mensagens já enviadas com a URL quebrada não são alteradas retroativamente.
 
-Correção:
+### 2. Reutilização da conta existente
 
-- criação do contexto centralizado no backend;
-- `clinic_id`, papel e especialidade vêm de `clinic_memberships` e do convite;
-- os dados da clínica são consultados no servidor;
-- o contexto é reconstruído no login, `/api/auth/me` e troca de workspace;
-- o profissional vê a clínica e a especialidade em modo somente leitura;
-- campos de clínica enviados por membros são ignorados;
-- somente o onboarding de proprietário pode atualizar ou provisionar uma clínica;
-- clínica ausente para um membro gera erro controlado, sem criar uma substituta.
+Quando o e-mail já pertence a uma conta Auth confirmada:
 
-### 3. Profissional enviado ao plano e pagamento
+- não é criada uma segunda conta;
+- não é solicitado cadastro de nova senha;
+- o e-mail leva a uma tela de entrada com a senha atual ou Google;
+- o mesmo UUID Auth é preservado;
+- o convite exato é enviado ao backend durante o login.
 
-A decisão de cobrança dependia principalmente do papel e do status de assinatura presente no usuário, sem um modo explícito que diferenciasse proprietário de membro.
+Para usuário novo ou ainda não confirmado, o fluxo existente de ativação e definição de senha continua disponível.
 
-Correção:
+### 3. Vínculo com a nova clínica
 
-- a sessão recebe `onboardingContext`;
-- membros convidados recebem `requiresPayment: false`;
-- o frontend nunca renderiza o checkout para esses modos;
-- o backend bloqueia diretamente `/api/billing/checkout` com `CLINIC_MEMBER_CHECKOUT_FORBIDDEN`;
-- o bloqueio ocorre antes da inicialização do Stripe;
-- o onboarding do proprietário e a contratação comercial existente foram preservados;
-- se a clínica ainda não tiver liberação financeira, o membro vê somente um estado de acesso administrado pela clínica, nunca um checkout próprio.
+O backend valida:
 
-## Novo critério de roteamento
+- UUID do convite;
+- e-mail autenticado;
+- status do convite;
+- papel permitido;
+- clínica registrada no convite.
 
-O backend resolve um dos seguintes modos:
+Depois:
 
-- `invited_professional`: membership ativa com origem em convite;
-- `clinic_member`: membership ativa de membro que não é proprietário;
-- `clinic_owner`: proprietário ou coordenador no fluxo de criação/ativação da própria clínica;
-- `standard`: perfil fora desse fluxo;
-- `invalid`: vínculo inconsistente ou clínica ausente para um membro.
+- faz upsert idempotente da membership na clínica que enviou o novo convite;
+- marca o convite como aceito;
+- atualiza o contexto atual do usuário;
+- prioriza a clínica convidante como workspace da sessão;
+- preserva a mesma identidade Auth.
 
-O frontend usa esse contexto apenas depois de recebê-lo do servidor.
+Outras memberships legítimas não são removidas de forma indiscriminada. A desvinculação continua inativando somente a membership da clínica correspondente.
 
-## Contratos alterados
+### 4. Proteção contra reativação por link antigo
 
-### `GET /api/onboarding/context`
+Um convite já aceito só pode ser reutilizado idempotentemente enquanto a membership correspondente permanece ativa.
 
-Retorna o contexto autoritativo:
+Se o profissional foi desvinculado e abrir um link antigo já utilizado, o backend retorna erro controlado:
 
-```json
-{
-  "success": true,
-  "data": {
-    "onboardingMode": "invited_professional",
-    "requiresPayment": false,
-    "canAccessDashboard": true,
-    "canEditClinic": false,
-    "clinic": {
-      "id": "uuid",
-      "name": "Clínica",
-      "phone": null,
-      "whatsapp": null,
-      "logoUrl": null
-    },
-    "membership": {
-      "role": "therapist",
-      "specialty": "Fonoaudiólogo"
-    }
-  }
-}
-```
+`CLINIC_INVITATION_ALREADY_USED`
 
-### Sessão e autenticação
-
-`POST /api/auth/login`, `GET /api/auth/me`, aceite de convite e seleção de workspace passam a devolver a sessão hidratada com `onboardingContext`.
-
-### `POST /api/profile/:userId/complete-onboarding`
-
-Para `invited_professional` e `clinic_member`:
-
-- aceita somente dados do próprio profissional e agenda;
-- ignora identidade e dados editáveis da clínica enviados pelo navegador;
-- usa clínica, papel e especialidade resolvidos pelo servidor;
-- não altera assinatura, cobrança ou status financeiro da clínica;
-- marca `first_login_completed` somente depois de persistir o perfil e as configurações;
-- retorna `MEMBER_READY`.
-
-### `POST /api/billing/checkout`
-
-Membros convidados recebem HTTP 403 com:
-
-```json
-{
-  "success": false,
-  "code": "CLINIC_MEMBER_CHECKOUT_FORBIDDEN"
-}
-```
-
-### `POST /api/clinic/invite`
-
-Sucesso público:
-
-```json
-{
-  "success": true,
-  "invitationEmailSent": true,
-  "message": "Convite enviado com sucesso."
-}
-```
-
-Falha parcial:
-
-```json
-{
-  "success": false,
-  "invitationPersisted": true,
-  "invitationEmailSent": false,
-  "message": "O convite foi registrado, mas não foi possível enviar o e-mail. Tente reenviar."
-}
-```
-
-## Onboarding do membro convidado
-
-O fluxo possui:
-
-1. dados pessoais e profissionais;
-2. foto, assinatura, conselho, número e minicurrículo;
-3. duração e disponibilidade semanal;
-4. confirmação somente leitura da clínica, papel e especialidade;
-5. conclusão e entrada no painel permitido pela membership.
-
-Não há etapa de plano, cartão, trial, assinatura da plataforma ou pagamento.
-
-## Banco e migrations
-
-Nenhuma migration foi criada. O schema existente já oferece:
-
-- `invitations`;
-- `clinic_memberships`;
-- `users`;
-- `clinics`;
-- `professional_profiles`;
-- metadados para a agenda profissional.
+Dessa forma, um link antigo não consegue restaurar uma membership inativada. A nova clínica deve emitir um convite novo, que cria um novo `invitation_id`.
 
 ## Arquivos alterados
 
 - `server.ts`
 - `src/App.tsx`
-- `src/components/InvitationModal.tsx`
-- `src/components/ProfessionalOnboarding.tsx`
-- `src/components/TeamManagement.tsx`
-- `src/services/dataService.ts`
-- `tests/clinicInvitationDelivery.test.ts`
-- `tests/invitedProfessionalOnboarding.test.ts` — novo
+- `src/components/ActivationAccess.tsx`
+- `src/lib/supabase.ts`
+- `tests/clinicReinviteAccess.test.ts` — novo
 
-## Limitações da validação
+## Contrato do novo link
 
-Não foi possível concluir os comandos oficiais de instalação, build, typecheck, lint e suíte completa porque o registry interno retornou HTTP 404 para `yallist-3.1.1.tgz`. Sem a instalação, `vite`, `tsx` e `vite/client` não ficaram disponíveis localmente.
+Exemplo conceitual:
 
-Foram executados com sucesso:
+```text
+https://appverto.com.br/
+  ?auth_action=activate
+  &role=coordinator
+  &email=profissional%40exemplo.com
+  &invitation_id=<uuid-do-novo-convite>
+  &invite_mode=existing
+```
 
-- transpilação sintática dos oito arquivos;
-- dez testes focados/regressivos;
-- regressão de segurança;
-- verificação de imports do runtime Docker;
-- verificação de whitespace.
+Para contas novas, `invite_mode=new`.
 
-Não houve teste real contra Supabase, Resend, Stripe ou navegador nesta sessão.
+## Banco e migrations
+
+Nenhuma migration ou alteração de schema foi criada.
+
+## Observação importante
+
+O e-mail que já foi enviado com `/ativar?...` continuará levando ao 404. Depois de aplicar e publicar esta correção, é necessário reenviar um convite novo. O novo envio terá outro UUID de convite e a URL pela raiz da aplicação.

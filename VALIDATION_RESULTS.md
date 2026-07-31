@@ -2,51 +2,40 @@
 
 ## Aprovado
 
-- Transpilação sintática dos oito arquivos alterados.
+- Transpilação sintática dos cinco arquivos alterados.
+- `clinicReinviteAccess.test.ts`
 - `clinicInvitationDelivery.test.ts`
 - `invitedProfessionalOnboarding.test.ts`
 - `clinicMembershipAuthority.test.ts`
-- `clinicalSpecialtiesFrontend.test.ts`
-- `clinicalSpecialtyTherapeuticPlans.test.ts`
-- `billing.test.ts`
-- `salesModularStripeAssisted.test.ts`
-- `ownerMfaEnforcement.test.ts`
-- `salesCheckoutProvisioning.test.ts`
 - `security.regression.test.mjs`
-- `scripts/check-docker-runtime-imports.mjs` — 65 arquivos cobertos.
-- `git diff --no-index --check` nos arquivos alterados.
+- `ownerMfaEnforcement.test.ts`
+- `billing.test.ts`
+- Verificação de imports do runtime Docker — 65 arquivos.
+- Verificação de whitespace nos cinco arquivos.
 
-## Bloqueado pelo ambiente
+Resultado dos testes focados: **7 aprovados, 0 falhas**.
 
-### `npm ci`
+## Suíte auxiliar
 
-Exit code 1.
+Foram iniciados 28 arquivos de teste:
 
-O registry interno retornou HTTP 404 para:
+- 26 passaram;
+- 2 não iniciaram por módulos ausentes:
+  - `@supabase/supabase-js`;
+  - `react`.
 
-`yallist-3.1.1.tgz`
+Esses dois casos não chegaram às asserções e decorrem da instalação incompleta do ambiente.
 
-Também houve aviso de engine: o projeto declara Node 20.x e o ambiente disponibiliza Node 22.16.0.
+## Build oficial
 
-### `npm run build`
+Não foi possível aprovar `npm run build`. O `npm ci` anterior foi interrompido porque o registry interno retornou HTTP 404 para `yallist-3.1.1.tgz`; consequentemente, `vite` não está instalado no ambiente.
 
-Exit code 127: `vite: not found`, consequência da instalação interrompida.
-
-### `npm test`
-
-Exit code 1: o runner tentou iniciar `tsx`, indisponível após a instalação interrompida.
-
-### `npm run typecheck` e `npm run lint`
-
-Exit code 2: `vite/client` não encontrado, consequência da ausência de `node_modules`.
-
-## Escopo não executado
+## Não executado
 
 - deploy;
-- commit/push;
+- commit ou push;
+- SQL ou migration;
 - Railway;
-- SQL;
 - Supabase real;
-- Stripe real;
 - Resend real;
 - teste E2E em navegador.

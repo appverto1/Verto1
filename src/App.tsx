@@ -239,12 +239,15 @@ const rememberAutoRetriedFailedSyncIds = (ids: string[]) => {
 };
 
 export default function App() {
+  const authAction = typeof window !== 'undefined'
+    ? String(new URLSearchParams(window.location.search).get('auth_action') || '').toLowerCase()
+    : '';
   const isActivationRoute =
     typeof window !== 'undefined' &&
-    /^\/ativar\/?$/.test(window.location.pathname);
+    (/^\/ativar\/?$/.test(window.location.pathname) || authAction === 'activate');
   const isResetPasswordRoute =
     typeof window !== 'undefined' &&
-    /^\/reset-password\/?$/.test(window.location.pathname);
+    (/^\/reset-password\/?$/.test(window.location.pathname) || authAction === 'recovery');
   const isPortalRelationshipRoute =
     typeof window !== 'undefined' &&
     /^\/portal\/confirmar-vinculo\/?$/i.test(window.location.pathname);
@@ -1207,10 +1210,14 @@ export default function App() {
               const intendedRole = localStorage.getItem('verto_intended_role') || 'therapist';
               localStorage.removeItem('verto_intended_role');
               const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
-              const isActivationFlow = /^\/(ativar|reset-password)\/?$/i.test(currentPath);
+              const currentAuthAction = typeof window !== 'undefined'
+                ? String(new URLSearchParams(window.location.search).get('auth_action') || '').toLowerCase()
+                : '';
+              const isActivationFlow = /^\/(ativar|reset-password)\/?$/i.test(currentPath) || ['activate', 'recovery'].includes(currentAuthAction);
               const authProvider = String(session?.user?.app_metadata?.provider || '').toLowerCase();
               const isPasswordSignIn = authProvider === 'email' || authProvider === '';
               const activationEmail = String(localStorage.getItem('verto_activation_email') || '').trim().toLowerCase();
+              const activationInvitationId = String(localStorage.getItem('verto_activation_invitation_id') || '').trim();
               if (isActivationFlow && authProvider !== 'google') {
                 // Em ativação por e-mail, o acesso só pode seguir após definir senha explicitamente.
                 setLoading(false);
@@ -1225,6 +1232,7 @@ export default function App() {
                 provider: session?.user?.app_metadata?.provider || null,
                 activationFlow: isActivationFlow,
                 activationEmail: activationEmail || null,
+                invitationId: activationInvitationId || null,
               });
             } else if (event === 'SIGNED_OUT') {
               if (import.meta.env.DEV) console.log('Sessao encerrada pelo provedor de autenticacao.');
@@ -1476,8 +1484,17 @@ export default function App() {
     supabaseSession: any,
     intendedRole?: string,
     credentials?: { email?: string; password?: string },
-    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean; activationEmail?: string | null },
+    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean; activationEmail?: string | null; invitationId?: string | null },
   ) => {
+    const clearActivationInvitationContext = () => {
+      try {
+        localStorage.removeItem('verto_activation_email');
+        localStorage.removeItem('verto_activation_invitation_id');
+        localStorage.removeItem('verto_activation_invite_mode');
+      } catch {
+        // Storage is optional; backend authorization does not depend on it.
+      }
+    };
     try {
       if (!supabaseSession) {
         if (credentials?.email && credentials?.password) {
@@ -1492,6 +1509,7 @@ export default function App() {
               activationFlow: Boolean(authContext?.activationFlow),
               passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
               activationEmail: authContext?.activationEmail || null,
+              invitationId: authContext?.invitationId || null,
               email: credentials.email,
               password: credentials.password,
             })
@@ -1514,6 +1532,7 @@ export default function App() {
             };
           }
           const resolvedUser = await applyResolvedUserState(result.user, null);
+          clearActivationInvitationContext();
           return { success: true, user: resolvedUser };
         }
 
@@ -1567,6 +1586,7 @@ export default function App() {
           activationFlow,
           passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
           activationEmail: authContext?.activationEmail || null,
+          invitationId: authContext?.invitationId || null,
           email: credentials?.email || null,
           password: credentials?.password || null,
         })
@@ -1633,6 +1653,7 @@ export default function App() {
           };
         }
         const resolvedUser = await applyResolvedUserState(data.user, supabaseSession);
+        clearActivationInvitationContext();
         return { success: true, user: resolvedUser };
       } else {
         console.error('Login failed on server:', data.error);

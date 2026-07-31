@@ -8,7 +8,7 @@ type ActivationAccessProps = {
     session: any,
     intendedRole?: string,
     credentials?: { email?: string; password?: string },
-    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean; activationEmail?: string | null },
+    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean; activationEmail?: string | null; invitationId?: string | null },
   ) => Promise<any>;
 };
 
@@ -16,8 +16,12 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const safeAuthErrorMessage = (error: unknown) =>
     error instanceof Error ? error.message : 'Falha na operação de autenticação.';
 
+  const authAction = typeof window !== 'undefined'
+    ? String(new URLSearchParams(window.location.search).get('auth_action') || '').toLowerCase()
+    : '';
   const isRecoveryRoute =
-    typeof window !== 'undefined' && /^\/reset-password\/?$/.test(window.location.pathname);
+    typeof window !== 'undefined' &&
+    (/^\/reset-password\/?$/.test(window.location.pathname) || authAction === 'recovery');
   const [email, setEmail] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -27,6 +31,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [message, setMessage] = useState('');
   const [intendedRole, setIntendedRole] = useState<'patient' | 'coordinator'>('patient');
   const [isActivationLinkContext, setIsActivationLinkContext] = useState(true);
+  const [invitationId, setInvitationId] = useState('');
+  const [inviteMode, setInviteMode] = useState<'new' | 'existing'>('new');
+  const isExistingAccountInvite = !isRecoveryRoute && inviteMode === 'existing' && Boolean(invitationId);
 
   const parseActivationParams = () => {
     const searchParams = new URLSearchParams(window.location.search);
@@ -37,12 +44,18 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const tokenHash = String(searchParams.get('token_hash') || hashParams.get('token_hash') || '').trim();
     const accessToken = String(searchParams.get('access_token') || hashParams.get('access_token') || '').trim();
     const refreshToken = String(searchParams.get('refresh_token') || hashParams.get('refresh_token') || '').trim();
+    const action = String(searchParams.get('auth_action') || '').toLowerCase();
+    const parsedInvitationId = String(searchParams.get('invitation_id') || '').trim();
+    const parsedInviteMode = String(searchParams.get('invite_mode') || '').toLowerCase();
 
     const hasActivationParams =
       Boolean(code) ||
       Boolean(tokenHash) ||
       Boolean(accessToken) ||
       Boolean(refreshToken) ||
+      Boolean(parsedInvitationId) ||
+      action === 'activate' ||
+      action === 'recovery' ||
       type === 'signup' ||
       type === 'recovery' ||
       type === 'invite';
@@ -53,6 +66,8 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       tokenHash,
       accessToken,
       refreshToken,
+      invitationId: parsedInvitationId,
+      inviteMode: parsedInviteMode === 'existing' ? 'existing' : 'new',
       hasActivationParams,
     };
   };
@@ -111,7 +126,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       setEmail(sessionEmail);
       setIsActivationLinkContext(true);
       if (hasActivationParams) {
-        window.history.replaceState({}, document.title, '/ativar');
+        window.history.replaceState({}, document.title, '/?auth_action=activate');
       }
       return session;
     }
@@ -148,10 +163,24 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const roleParam = String(params.get('role') || '').toLowerCase();
     const emailParam = String(params.get('email') || '').trim().toLowerCase();
     const codeParam = String(params.get('code') || '').trim();
+    const invitationParam = String(
+      params.get('invitation_id') || localStorage.getItem('verto_activation_invitation_id') || '',
+    ).trim();
+    const inviteModeParam = String(
+      params.get('invite_mode') || localStorage.getItem('verto_activation_invite_mode') || '',
+    ).toLowerCase();
     if (emailParam) {
       setEmail(emailParam);
       setIdentifiedEmail(emailParam);
+      localStorage.setItem('verto_activation_email', emailParam);
     }
+    if (invitationParam) {
+      setInvitationId(invitationParam);
+      localStorage.setItem('verto_activation_invitation_id', invitationParam);
+    }
+    const resolvedInviteMode = inviteModeParam === 'existing' ? 'existing' : 'new';
+    setInviteMode(resolvedInviteMode);
+    localStorage.setItem('verto_activation_invite_mode', resolvedInviteMode);
     if (codeParam) {
       setRecoveryCode(codeParam);
     }
@@ -190,13 +219,22 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (expectedEmail) {
         localStorage.setItem('verto_activation_email', expectedEmail);
       }
+      if (invitationId) {
+        localStorage.setItem('verto_activation_invitation_id', invitationId);
+        localStorage.setItem('verto_activation_invite_mode', inviteMode);
+      }
+      const redirectParams = new URLSearchParams({
+        auth_action: isRecoveryRoute ? 'recovery' : 'activate',
+        role: intendedRole,
+      });
+      if (expectedEmail) redirectParams.set('email', expectedEmail);
+      if (invitationId) redirectParams.set('invitation_id', invitationId);
+      if (!isRecoveryRoute && invitationId) redirectParams.set('invite_mode', inviteMode);
       const supabase = await getSupabase();
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: isRecoveryRoute
-            ? `${window.location.origin}/reset-password`
-            : `${window.location.origin}/ativar?role=${intendedRole}`,
+          redirectTo: `${window.location.origin}/?${redirectParams.toString()}`,
         },
       });
       if (oauthError) throw oauthError;
@@ -212,7 +250,30 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     setMessage('');
     try {
       if (!newPassword) {
-        throw new Error('Informe a nova senha.');
+        throw new Error(isExistingAccountInvite ? 'Informe sua senha atual.' : 'Informe a nova senha.');
+      }
+      if (isExistingAccountInvite) {
+        const existingEmail = String(identifiedEmail || email).trim().toLowerCase();
+        if (!existingEmail || !invitationId) {
+          throw new Error('Não foi possível identificar o convite. Abra novamente pelo e-mail.');
+        }
+        const loginRes = await onLogin(
+          null,
+          intendedRole,
+          { email: existingEmail, password: newPassword },
+          {
+            provider: 'email',
+            activationFlow: true,
+            passwordSetupCompleted: false,
+            activationEmail: existingEmail,
+            invitationId,
+          },
+        );
+        if (!loginRes?.success) {
+          throw new Error(loginRes?.error || 'Não foi possível entrar com este acesso.');
+        }
+        setMessage('Acesso confirmado. Vinculando você à clínica...');
+        return;
       }
       if (isRecoveryRoute) {
         const recoveryEmail = String(identifiedEmail || email).trim().toLowerCase();
@@ -313,7 +374,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         refreshedSession || session,
         intendedRole,
         { email: userEmail },
-        { provider: 'email', activationFlow: true, passwordSetupCompleted: true, activationEmail: userEmail },
+        {
+          provider: 'email',
+          activationFlow: true,
+          passwordSetupCompleted: true,
+          activationEmail: userEmail,
+          invitationId: invitationId || null,
+        },
       );
       if (!loginRes?.success) {
         throw new Error(loginRes?.error || 'Senha definida, mas nao foi possivel concluir o login.');
@@ -336,11 +403,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         <div className="text-center mb-6">
           <LogoVerto size={34} showText={true} className="mx-auto mb-5" />
           <h1 className="text-2xl font-extrabold text-slate-900">
-            {isRecoveryRoute ? 'Recuperacao de Senha' : 'Ativacao de Conta'}
+            {isRecoveryRoute ? 'Recuperacao de Senha' : isExistingAccountInvite ? 'Entrar e aceitar convite' : 'Ativacao de Conta'}
           </h1>
           <p className="text-sm text-slate-500 mt-2">
             {isRecoveryRoute
               ? 'Defina sua nova senha pelo link recebido no e-mail de recuperacao.'
+              : isExistingAccountInvite
+              ? 'Use o mesmo acesso que você já possui na Verto para entrar na clínica que enviou este convite.'
               : isActivationLinkContext
               ? 'Defina sua senha para ativar o acesso. O e-mail ja foi identificado no convite.'
               : 'Entre com Google, entre com sua senha, ou ative sua conta pelo link recebido no e-mail.'}
@@ -359,7 +428,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
 
           <div className="border-t border-slate-100 pt-4 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              {isRecoveryRoute ? 'Redefinir senha' : 'Definir senha'}
+              {isRecoveryRoute ? 'Redefinir senha' : isExistingAccountInvite ? 'Entrar com acesso existente' : 'Definir senha'}
             </p>
             {identifiedEmail ? (
               <p className="text-xs text-slate-500">
@@ -393,16 +462,16 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Nova senha"
+              placeholder={isExistingAccountInvite ? 'Senha atual' : 'Nova senha'}
               className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
             />
-            <p className="text-xs text-slate-400">{passwordHint}</p>
+            {!isExistingAccountInvite ? <p className="text-xs text-slate-400">{passwordHint}</p> : null}
             <button
               onClick={handleSetPassword}
               disabled={loading}
               className="w-full h-11 rounded-xl border border-[#7a32fc] text-[#7a32fc] font-semibold hover:bg-violet-50 transition disabled:opacity-60"
             >
-              {isRecoveryRoute ? 'Redefinir senha e entrar' : 'Definir senha e entrar'}
+              {isRecoveryRoute ? 'Redefinir senha e entrar' : isExistingAccountInvite ? 'Entrar e aceitar convite' : 'Definir senha e entrar'}
             </button>
           </div>
         </div>

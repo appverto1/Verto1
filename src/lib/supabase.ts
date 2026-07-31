@@ -50,7 +50,8 @@ const shouldDetectSessionInUrl = (): boolean => {
   const authSignals = ['access_token=', 'refresh_token=', 'code=', 'token_hash='];
   const hasAuthSignal = authSignals.some((signal) => hash.includes(signal) || search.includes(signal));
   if (hasAuthSignal) return true;
-  return path.includes('/auth/callback') || path.includes('/ativar') || path.includes('/reset-password');
+  const authAction = String(new URLSearchParams(window.location.search).get('auth_action') || '').toLowerCase();
+  return authAction === 'activate' || authAction === 'recovery' || path.includes('/auth/callback') || path.includes('/ativar') || path.includes('/reset-password');
 };
 
 export const ensureFreshSession = async () => {

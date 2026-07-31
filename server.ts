@@ -3633,7 +3633,16 @@ function getAuthRedirectUrl(): string {
   return `${baseUrl.replace(/\/+$/, '')}/auth/callback`;
 }
 
-function getActivationRedirectUrl(role?: unknown, email?: unknown): string {
+type ActivationRedirectOptions = {
+  invitationId?: unknown;
+  inviteMode?: 'new' | 'existing';
+};
+
+function getActivationRedirectUrl(
+  role?: unknown,
+  email?: unknown,
+  options: ActivationRedirectOptions = {}
+): string {
   const baseUrl = sanitizeString(
     process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
     500
@@ -3644,8 +3653,19 @@ function getActivationRedirectUrl(role?: unknown, email?: unknown): string {
   const normalizedRole = sanitizeString(role, 40).toLowerCase();
   const roleParam = normalizedRole === 'patient' ? 'patient' : 'coordinator';
   const safeEmail = sanitizeEmail(email);
-  const emailParam = safeEmail ? `&email=${encodeURIComponent(safeEmail)}` : '';
-  return `${baseUrl.replace(/\/+$/, '')}/ativar?role=${roleParam}${emailParam}`;
+  const invitationId = sanitizeString(options.invitationId, 120);
+  const inviteMode = options.inviteMode === 'existing' ? 'existing' : options.inviteMode === 'new' ? 'new' : '';
+  const params = new URLSearchParams({
+    auth_action: 'activate',
+    role: roleParam
+  });
+  if (safeEmail) params.set('email', safeEmail);
+  if (isUuid(invitationId)) params.set('invitation_id', invitationId);
+  if (inviteMode) params.set('invite_mode', inviteMode);
+
+  // A entrada pela raiz evita 404 em hospedagens estáticas sem rewrite de SPA
+  // para rotas profundas como `/ativar`.
+  return `${baseUrl.replace(/\/+$/, '')}/?${params.toString()}`;
 }
 
 function getRecoveryRedirectUrl(): string {
@@ -22261,6 +22281,14 @@ async function startServer() {
     const passwordSetupCompleted = Boolean(req.body?.passwordSetupCompleted);
     const authProvider = sanitizeString(req.body?.provider, 40).toLowerCase();
     const activationEmail = sanitizeEmail(req.body?.activationEmail);
+    const requestedInvitationId = sanitizeString(req.body?.invitationId, 120);
+    if (requestedInvitationId && !isUuid(requestedInvitationId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'CLINIC_INVITATION_INVALID',
+        message: 'O convite informado é inválido.'
+      });
+    }
     let accessToken = sanitizeString(req.body?.accessToken, 8000);
     const credentialEmail = sanitizeEmail(req.body?.email);
     const credentialPassword = typeof req.body?.password === 'string' ? req.body.password : '';
@@ -22377,6 +22405,27 @@ async function startServer() {
         });
       }
 
+      let requestedClinicInvitation: any = null;
+      if (requestedInvitationId) {
+        const { data: invitation, error: requestedInvitationError } = await supabase
+          .from('invitations')
+          .select(INVITATION_SELECT)
+          .eq('id', requestedInvitationId)
+          .eq('email', safeAuthEmail)
+          .in('status', ['pending', 'accepted'])
+          .limit(1)
+          .maybeSingle();
+        if (requestedInvitationError) throw requestedInvitationError;
+        if (!invitation || !ensureClinicRole(invitation.role)) {
+          return res.status(403).json({
+            success: false,
+            error: 'CLINIC_INVITATION_NOT_AVAILABLE',
+            message: 'Este convite não está disponível para esta conta.'
+          });
+        }
+        requestedClinicInvitation = invitation;
+      }
+
       // Fetch user profile from 'users' table
       const profileResult = await fetchProfileWithSchemaFallback({
         supabase,
@@ -22482,27 +22531,37 @@ async function startServer() {
           });
         }
 
-        // Check for pending invitations for this email
-        const { data: invitations, error: inviteError } = await supabase
-          .from("invitations")
-          .select(INVITATION_SELECT)
-          .eq("email", user.email)
-          .eq("status", "pending");
+        // Convites existentes continuam sendo a autorização server-side para provisionamento.
+        let invitations: any[] = requestedClinicInvitation ? [requestedClinicInvitation] : [];
+        let inviteError: any = null;
+        if (!requestedClinicInvitation) {
+          const inviteResult = await supabase
+            .from('invitations')
+            .select(INVITATION_SELECT)
+            .eq('email', safeAuthEmail)
+            .eq('status', 'pending')
+            .order('created_at', { ascending: true })
+            .limit(1);
+          invitations = inviteResult.data || [];
+          inviteError = inviteResult.error;
+        }
 
         let clinicId: string | null = null;
 
-        if (!inviteError && invitations && invitations.length > 0) {
+        if (!inviteError && invitations.length > 0) {
           const invitation = invitations[0];
           clinicId = invitation.clinic_id;
           finalRole = ensureRole(invitation.role)
             ? invitation.role
-            : "therapist";
+            : 'therapist';
 
-          // Convites existentes continuam sendo a autorização server-side para provisionamento.
-          await supabase
-            .from("invitations")
-            .update({ status: "accepted" })
-            .eq("id", invitation.id);
+          if (sanitizeString(invitation.status, 30).toLowerCase() === 'pending') {
+            await supabase
+              .from('invitations')
+              .update({ status: 'accepted', accepted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+              .eq('id', invitation.id)
+              .eq('status', 'pending');
+          }
         } else if (finalRole === "patient") {
           // O cadastro público de paciente permanece isolado do fluxo comercial profissional.
           clinicId = null;
@@ -22691,48 +22750,86 @@ async function startServer() {
       }
 
       let workspaces = await fetchUserWorkspaces(user.id);
-      if (workspaces.length === 0 && user.email) {
-        const { data: pendingInvite } = await supabase
+      let invitationForWorkspace = requestedClinicInvitation;
+      if (!invitationForWorkspace && workspaces.length === 0 && safeAuthEmail) {
+        const { data: pendingInvite, error: pendingInviteError } = await supabase
           .from('invitations')
           .select(INVITATION_SELECT)
-          .eq('email', user.email)
+          .eq('email', safeAuthEmail)
           .eq('status', 'pending')
           .order('created_at', { ascending: true })
           .limit(1)
           .maybeSingle();
+        if (pendingInviteError) throw pendingInviteError;
+        invitationForWorkspace = pendingInvite || null;
+      }
 
-        if (pendingInvite && ensureClinicRole(pendingInvite.role)) {
-          await supabase
+      let invitedWorkspaceId = '';
+      if (invitationForWorkspace && ensureClinicRole(invitationForWorkspace.role)) {
+        invitedWorkspaceId = sanitizeString(invitationForWorkspace.clinic_id, 120);
+        const invitationStatus = sanitizeString(invitationForWorkspace.status, 30).toLowerCase();
+        if (invitationStatus === 'accepted') {
+          const { data: activeAcceptedMembership, error: acceptedMembershipError } = await supabase
             .from('clinic_memberships')
-            .upsert([{
-              user_id: user.id,
-              clinic_id: pendingInvite.clinic_id,
-              role: pendingInvite.role,
-              status: 'active',
-              invited_by: pendingInvite.invited_by,
-              created_at: new Date().toISOString()
-            }], { onConflict: 'user_id,clinic_id' });
-
-          await supabase
-            .from('invitations')
-            .update({ status: 'accepted' })
-            .eq('id', pendingInvite.id);
-
-          await supabase
-            .from('users')
-            .update({ clinic_id: pendingInvite.clinic_id, role: pendingInvite.role })
-            .eq('id', user.id);
-
-          profile.clinic_id = pendingInvite.clinic_id;
-          profile.role = pendingInvite.role;
-          workspaces = await fetchUserWorkspaces(user.id);
+            .select('user_id,clinic_id,status')
+            .eq('user_id', user.id)
+            .eq('clinic_id', invitedWorkspaceId)
+            .eq('status', 'active')
+            .limit(1)
+            .maybeSingle();
+          if (acceptedMembershipError) throw acceptedMembershipError;
+          if (!activeAcceptedMembership) {
+            return res.status(409).json({
+              success: false,
+              error: 'CLINIC_INVITATION_ALREADY_USED',
+              message: 'Este convite já foi utilizado. Solicite um novo convite à clínica.'
+            });
+          }
         }
+        const now = new Date().toISOString();
+        const { error: membershipInviteError } = await supabase
+          .from('clinic_memberships')
+          .upsert([{
+            user_id: user.id,
+            clinic_id: invitationForWorkspace.clinic_id,
+            role: invitationForWorkspace.role,
+            status: 'active',
+            invited_by: invitationForWorkspace.invited_by,
+            created_at: now,
+            updated_at: now
+          }], { onConflict: 'user_id,clinic_id' });
+        if (membershipInviteError) throw membershipInviteError;
+
+        if (invitationStatus === 'pending') {
+          const { error: invitationAcceptError } = await supabase
+            .from('invitations')
+            .update({ status: 'accepted', accepted_at: now, updated_at: now })
+            .eq('id', invitationForWorkspace.id)
+            .eq('email', safeAuthEmail)
+            .eq('status', 'pending');
+          if (invitationAcceptError) throw invitationAcceptError;
+        }
+
+        const { error: invitedProfileUpdateError } = await supabase
+          .from('users')
+          .update({
+            clinic_id: invitationForWorkspace.clinic_id,
+            role: invitationForWorkspace.role,
+            updated_at: now
+          })
+          .eq('id', user.id);
+        if (invitedProfileUpdateError) throw invitedProfileUpdateError;
+
+        profile.clinic_id = invitationForWorkspace.clinic_id;
+        profile.role = invitationForWorkspace.role;
+        workspaces = await fetchUserWorkspaces(user.id);
       }
       const preferredWorkspaceId = sanitizeString(
-        req.session?.user?.activeWorkspaceId || req.session?.user?.clinicId,
+        invitedWorkspaceId || req.session?.user?.activeWorkspaceId || req.session?.user?.clinicId,
         120
       );
       const selectedWorkspace =
+        workspaces.find((w: any) => w.clinicId === invitedWorkspaceId) ||
         workspaces.find((w: any) => w.clinicId === preferredWorkspaceId) ||
         workspaces.find((w: any) => w.clinicId === profile.clinic_id) ||
         workspaces[0] ||
@@ -23869,6 +23966,10 @@ async function startServer() {
 
       // Garante usuário Auth para fluxo de ativação por senha/google sem depender do e-mail do Supabase.
       let authUser = await findAuthUserByEmail(email);
+      const reusedExistingAuthAccess = Boolean(
+        authUser?.id && (authUser?.email_confirmed_at || authUser?.confirmed_at)
+      );
+      const authUserAlreadyExisted = Boolean(authUser?.id);
       if (!authUser?.id) {
         const tempPassword = generateTemporaryPassword();
         const createResult = await supabase.auth.admin.createUser({
@@ -23887,17 +23988,22 @@ async function startServer() {
         authUser = createResult.data?.user || null;
       }
 
-      const activationLink =
-        (await withTimeoutOrFallback(
-          generateSupabaseActionLink({
-            type: 'signup',
-            email,
-            redirectTo: getActivationRedirectUrl('coordinator', email)
-          }),
-          8000,
-          null,
-          'generateSupabaseActionLink(clinic_invite)'
-        )) || getActivationRedirectUrl('coordinator', email);
+      const activationEntryUrl = getActivationRedirectUrl('coordinator', email, {
+        invitationId: data?.id,
+        inviteMode: reusedExistingAuthAccess ? 'existing' : 'new'
+      });
+      const activationLink = reusedExistingAuthAccess
+        ? activationEntryUrl
+        : (await withTimeoutOrFallback(
+            generateSupabaseActionLink({
+              type: authUserAlreadyExisted ? 'recovery' : 'signup',
+              email,
+              redirectTo: activationEntryUrl
+            }),
+            8000,
+            null,
+            'generateSupabaseActionLink(clinic_invite)'
+          )) || activationEntryUrl;
 
       const clinicName = sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica';
       const invitedProfessionalName = sanitizeString(
@@ -23989,7 +24095,8 @@ async function startServer() {
           deliveryMode: emailDelivery.deliveryMode,
           templateId: emailDelivery.templateId,
           templateFallbackUsed,
-          deliveryErrorCode: emailDelivery.errorCode
+          deliveryErrorCode: emailDelivery.errorCode,
+          reusedExistingAuthAccess
         })
       });
 
