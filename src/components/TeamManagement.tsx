@@ -328,13 +328,16 @@ export function TeamManagement({
             }
           : {}
       );
-      if (result.success) {
-        setSuccess(`Convite enviado com sucesso para ${newMemberEmail}`);
+      if (result.success && result.invitationEmailSent !== false) {
+        setSuccess(result.message || `Convite enviado para ${newMemberEmail}.`);
         setNewMemberEmail('');
         setNewMemberSpecialty('');
-        fetchInvitations();
+        await fetchInvitations();
       } else {
-        setError(result.error);
+        if (result.invitationPersisted) {
+          await fetchInvitations();
+        }
+        setError(result.error || result.message || 'Não foi possível enviar o convite.');
       }
     } catch (err) {
       setError('Erro ao enviar convite');

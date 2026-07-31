@@ -1,84 +1,86 @@
 {
-  "artifact": "verto_profitability_policy_personalized_scope_fix_20260729",
-  "generated_at_utc": "2026-07-29T12:27:38Z",
-  "source_package": {
-    "uploaded_name": "verto_profitability_policy_remaining_fixes_20260729%285%29(1).zip",
-    "sha256": "39e5686fe79103e0b55ce693eb56c452c64fe4fe2d0fa5829ccd2409e68b1bfc"
-  },
-  "scope": {
-    "project_files_changed": 6,
-    "files": [
-      {
-        "path": "server.ts",
-        "before_sha256": "59d8dbdfd94a1c814dca062103a2d2704d39db29a279d34a67f30de63b97d7af",
-        "after_sha256": "9d26d9ebbec247f5e30ae887eb7ce112940f15ba548c63b62ccdd63e07d2cd4e",
-        "before_size_bytes": 3469731,
-        "after_size_bytes": 3471721,
-        "lines_added": 62,
-        "lines_removed": 6
-      },
-      {
-        "path": "src/components/SalesModularProposalBuilder.tsx",
-        "before_sha256": "d83f209eb47926ad37f71a3e3f777148e525f7cb23cb205d8c0ea2d1e87932d1",
-        "after_sha256": "152c216d581cfce0f8706efc3c8a2cbc0c93ca739abcce13a4b85e9438acf5f2",
-        "before_size_bytes": 228980,
-        "after_size_bytes": 230066,
-        "lines_added": 26,
-        "lines_removed": 4
-      },
-      {
-        "path": "src/utils/salesModularProposal.ts",
-        "before_sha256": "34af9e346c05018de947c869271fc037df3ba3d29093f206dacd3310a96a5ba3",
-        "after_sha256": "4ce91bba0d2aa45f8cbd575d2a6da77174c6add01195ac240fd59ef3d6f7e2c2",
-        "before_size_bytes": 136075,
-        "after_size_bytes": 136709,
-        "lines_added": 17,
-        "lines_removed": 0
-      },
-      {
-        "path": "supabase/tests/20260728020000_sales_modular_profitability_policy_test.sql",
-        "before_sha256": "6c9e2defbab945e7ec3a8c01949f7103b966b4f0be5bd5d2314533aea281ef77",
-        "after_sha256": "fc720bdd7a23ee39da61a2b650ca36272efdb77cce410afc7729e9498a0ebda2",
-        "before_size_bytes": 12193,
-        "after_size_bytes": 12913,
-        "lines_added": 17,
-        "lines_removed": 1
-      },
-      {
-        "path": "tests/salesModularEconomics.test.ts",
-        "before_sha256": "3881e354bd5688683b976cb831bf9c121df35b33ab38bb2ef490a726c8369492",
-        "after_sha256": "a0e256162fac1f0dbc231979062c22e5fd51dc34e1e490ba8d6d9f4e443cdf50",
-        "before_size_bytes": 20488,
-        "after_size_bytes": 24326,
-        "lines_added": 133,
-        "lines_removed": 6
-      },
-      {
-        "path": "tests/salesProfitabilityPolicyVersioning.test.ts",
-        "before_sha256": "1946830e61fe71ae3fc299cb53d6f728f3dc77001cf4320be5e7e56f462801bc",
-        "after_sha256": "9daf3b65f33c6b4b86b6deaf8619342c1314b915137c5743b7370c6597a40534",
-        "before_size_bytes": 6986,
-        "after_size_bytes": 10737,
-        "lines_added": 115,
-        "lines_removed": 1
-      }
-    ],
-    "migration_changed": false,
-    "migration_sha256": "5a85083c0591e9c3f6bb55ffd8bbd8fbfdda424fe5ea7d6538b80ec80a969d5a"
-  },
-  "prohibited_actions": {
-    "commit": false,
-    "push": false,
-    "branch": false,
-    "deploy": false,
-    "railway_change": false,
-    "sql_execution": false
-  },
-  "validation_status": {
-    "overall_approved": false,
-    "reason": "O worktree disponível é parcial; a suíte oficial, build, Docker, lint e typecheck não puderam ser aprovados. O SQL não foi executado por instrução expressa.",
-    "auxiliary_tests_passed": 5,
-    "official_commands_passed": 0,
-    "official_commands_attempted": 14
-  }
+  "generated_at": "2026-07-30T20:36:00-03:00",
+  "base_archive": "Verto(25).zip",
+  "project_files": [
+    {
+      "path": ".env.example",
+      "status": "modified",
+      "sha256_before": "80a71da06a7c19ad79eab0952533afa2fbbde472f8928e1e064f8130ff2f9c36",
+      "sha256_after": "b719226ed51f210ddc26a5b92a0fc66097dc4ab74a802cb0a1ffc0a093e231ba",
+      "bytes_before": 1681,
+      "bytes_after": 2196,
+      "diff_added_lines": 9,
+      "diff_removed_lines": 0
+    },
+    {
+      "path": "package.json",
+      "status": "modified",
+      "sha256_before": "6dca76a4bc922f28646cf9966030e5c69598d983fb781fce68413cc7ccf5a908",
+      "sha256_after": "e4fe0a3a446902b2f427630f76d42ac9591af966e5e3fbe87e690d901c5593c9",
+      "bytes_before": 9865,
+      "bytes_after": 9932,
+      "diff_added_lines": 1,
+      "diff_removed_lines": 0
+    },
+    {
+      "path": "server.ts",
+      "status": "modified",
+      "sha256_before": "2ca98b79507edd39f7c0249485cb233244cedb4a3a1ee00496a04aef1c5a15e2",
+      "sha256_after": "44bd3d4900a3d0f9625992a27e48725f4786b6c6151e11beade9fafc83aec08e",
+      "bytes_before": 3525975,
+      "bytes_after": 3532757,
+      "diff_added_lines": 266,
+      "diff_removed_lines": 80
+    },
+    {
+      "path": "scripts/check-resend-configuration.mjs",
+      "status": "added",
+      "sha256_before": null,
+      "sha256_after": "97eb45708226e628ab4a982e636d58a36cf8e7ffad13f7c6eddc1e7df087ae7d",
+      "bytes_before": 0,
+      "bytes_after": 3936,
+      "diff_added_lines": 121,
+      "diff_removed_lines": 0
+    },
+    {
+      "path": "src/components/InvitationModal.tsx",
+      "status": "modified",
+      "sha256_before": "4d3ba8791592b70cbec20c9e55cf92cdea61b525238a940cf77d587c85fe9181",
+      "sha256_after": "a79f1c90e25fa80f4e8ca9b1e73e138c9f45e4d4a9380b7e0cb84ae7b77dc367",
+      "bytes_before": 11887,
+      "bytes_after": 12170,
+      "diff_added_lines": 8,
+      "diff_removed_lines": 2
+    },
+    {
+      "path": "src/components/TeamManagement.tsx",
+      "status": "modified",
+      "sha256_before": "fdb4c55987e7606e2719a0ebd79eed385839d9499902eac82542691d3fb2b082",
+      "sha256_after": "a08a0bdc4b7c63c7010c4e6b6abafe6acddb4d8f578b63316609bc927f2c3283",
+      "bytes_before": 86328,
+      "bytes_after": 86529,
+      "diff_added_lines": 7,
+      "diff_removed_lines": 4
+    },
+    {
+      "path": "src/services/dataService.ts",
+      "status": "modified",
+      "sha256_before": "9b14c8e05a06a444ef8e63a7278c347ac0fee34557c672f9a56c04e22eaf00e8",
+      "sha256_after": "568f8013ad57dcc2f91f3257956c0047c00d047d9dd4c34006e717be741ecb7d",
+      "bytes_before": 322398,
+      "bytes_after": 322441,
+      "diff_added_lines": 7,
+      "diff_removed_lines": 3
+    },
+    {
+      "path": "tests/clinicInvitationDelivery.test.ts",
+      "status": "added",
+      "sha256_before": null,
+      "sha256_after": "f2cf62a614293a41094aff6fae70000555a32329db1360666f81f8f5508f60fb",
+      "bytes_before": 0,
+      "bytes_after": 5592,
+      "diff_added_lines": 119,
+      "diff_removed_lines": 0
+    }
+  ]
 }

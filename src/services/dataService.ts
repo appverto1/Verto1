@@ -6868,11 +6868,15 @@ export const dataService = {
         credentials: 'include',
         body: JSON.stringify({ email, role, requiredOnboardingFields })
       });
+      const payload = await safeJson(response);
       if (response.ok) {
-        return await response.json();
+        return payload;
       }
-      const err = await response.json();
-      return { success: false, error: err.message || err.error || 'Falha ao enviar convite' };
+      return {
+        ...payload,
+        success: false,
+        error: payload.error || payload.message || 'Falha ao enviar convite'
+      };
     } catch (error) {
       console.error('Error inviting to clinic:', error);
       return { success: false, error: String(error) };

@@ -1,87 +1,76 @@
-# Roteiro manual de validação no worktree completo
+# Roteiro manual de validação
 
-## 1. Aplicar somente os seis arquivos
+## 1. Substituição
 
-Faça backup dos caminhos existentes e substitua apenas:
+Copie somente os oito arquivos de projeto do ZIP, preservando a estrutura de pastas.
 
-- `server.ts`
-- `src/components/SalesModularProposalBuilder.tsx`
-- `src/utils/salesModularProposal.ts`
-- `supabase/tests/20260728020000_sales_modular_profitability_policy_test.sql`
-- `tests/salesModularEconomics.test.ts`
-- `tests/salesProfitabilityPolicyVersioning.test.ts`
+## 2. Configuração no Railway
 
-Não copie os arquivos de relatório para dentro do código-fonte caso não deseje versioná-los.
+Confirme as variáveis sem colar valores em logs ou commits:
 
-## 2. Confirmar preservação de escopo
-
-No repositório completo:
-
-```powershell
-git status --short
-git diff -- server.ts src/components/SalesModularProposalBuilder.tsx src/utils/salesModularProposal.ts supabase/tests/20260728020000_sales_modular_profitability_policy_test.sql tests/salesModularEconomics.test.ts tests/salesProfitabilityPolicyVersioning.test.ts
-git diff --check
+```text
+RESEND_API_KEY
+RESEND_FROM_EMAIL
+RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID
 ```
 
-Confirme que a migration não mudou:
+`RESEND_FROM_EMAIL` deve usar exatamente o domínio ou subdomínio verificado no Resend, por exemplo:
 
-```powershell
-Get-FileHash .\supabase\migrations\20260728020000_sales_modular_profitability_policy.sql -Algorithm SHA256
+```text
+Verto <naoresponda@subdominio-verificado.appverto.com.br>
 ```
 
-Hash esperado: `5A85083C0591E9C3F6BB55FFD8BBD8FBFDDA424FE5EA7D6538B80EC80A969D5A`.
+O template indicado deve estar publicado e declarar exatamente:
 
-## 3. Instalar e executar a suíte oficial
-
-```powershell
-npm ci
-npm test
-npm run test:sales-commercial-exceptions
-npm run test:sales-personalized-per-patient
-npm run test:sales-profitability-policy-versioning
-npm run test:sales-capacity-versioning
-npm run test:sales-modular-economics
-npm run test:sales-modular-stripe
-npm run test:security
-npm run build
-npm run check:docker-runtime-imports
-npm run lint
-npm run typecheck
-git diff --check
+```text
+nome
+link_ativacao
 ```
 
-Registre o exit code real de cada comando. Compare qualquer erro ABA com o baseline anterior; não aceite erro novo.
+## 3. Diagnóstico sem envio
 
-## 4. Executar manualmente o teste SQL
+No worktree completo e com uma API key que permita consultar domínios e templates:
 
-Nenhum SQL foi executado nesta entrega. No ambiente apropriado, execute manualmente:
+```powershell
+npm run check:resend
+```
 
-`supabase/tests/20260728020000_sales_modular_profitability_policy_test.sql`
+Resultado esperado:
 
-O arquivo contém `BEGIN` e `ROLLBACK`.
+- exit code 0;
+- `ok: true`;
+- domínio `verified`;
+- capacidade de envio `enabled`;
+- template `published`;
+- variáveis `nome` e `link_ativacao`.
 
-Valide separadamente:
+Se a chave for restrita apenas a envio, o diagnóstico administrativo pode falhar embora os e-mails sejam aceitos. Nesse caso, execute o diagnóstico com uma chave temporária de acesso completo e depois remova-a.
 
-1. primeira execução após a migration, quando o catálogo ativo histórico possui `profitability_policy null`;
-2. reexecução após uma nova versão legítima ter sido publicada com política válida.
+## 4. Validação do convite
 
-Nos dois casos, o teste deve completar sem exceção e encerrar com `ROLLBACK`.
+1. Entre como coordenador.
+2. Convide um profissional com uma das especialidades canônicas.
+3. Verifique a resposta na interface.
+4. Confirme que o convite aparece em “Convites pendentes”.
+5. No Resend, confirme o registro pelo ID da mensagem gravado no log de atividade.
+6. Confirme `deliveryMode`:
+   - `template`: template personalizado aceito;
+   - `html_fallback`: template rejeitado, HTML local enviado;
+   - `html`: nenhum template configurado.
+7. Abra o e-mail e confira nome e link de ativação.
 
-## 5. Verificação manual da interface
+## 5. Teste de falha controlada
 
-1. Abra o construtor com catálogo ativo histórico sem política.
-2. Selecione uma faixa padrão com máximo definido e `isCustom=false`.
-3. Confirme preview disponível, botão de salvar disponível e ausência do bloqueio de política.
-4. Confirme que métricas econômicas ausentes não aparecem como `0`.
-5. Troque para faixa `isCustom=true` ou `maximumQuantity=null`.
-6. Confirme aviso, orientação para clonar/revisar/publicar e bloqueio do salvamento.
-7. Volte à faixa padrão e confirme remoção imediata do bloqueio.
-8. Selecione uma simulação padrão histórica ainda não publicada e gere a proposta pública.
-9. Tente gerar nova proposta a partir de personalizada histórica sem política e confirme HTTP 409 com `PRICING_PROFITABILITY_POLICY_REQUIRED`.
-10. Recupere uma oferta já publicada e confirme mesmo ID e mesma URL, sem alteração do snapshot.
-11. Com política válida 55/65/70/75, confirme cálculos, textos, classificação e aprovação excepcional.
-12. Inspecione a resposta pública e confirme ausência de política, custos, margens, aprovação e justificativa.
+Em ambiente de homologação, configure temporariamente um remetente não verificado ou template inválido.
 
-## 6. Encerramento
+Resultado esperado:
 
-Não executar commit, push, branch, deploy, Railway ou SQL automatizado como parte da aplicação destes arquivos.
+- convite permanece pendente;
+- interface não mostra sucesso falso;
+- API retorna HTTP 502 e `CLINIC_INVITATION_EMAIL_SEND_FAILED`;
+- botão “Reenviar” permanece utilizável;
+- nenhum segredo ou stack aparece na resposta.
+
+## 6. Entrega versus caixa de entrada
+
+A aceitação da API do Resend não garante a aba principal da caixa de entrada. Verifique também o evento final no Resend e, no destinatário, spam, promoções, quarentena corporativa e filtros pessoais.

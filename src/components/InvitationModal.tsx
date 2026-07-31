@@ -71,7 +71,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
             }
           : {}
       );
-      if (result.success) {
+      if (result.success && result.invitationEmailSent !== false) {
         setInvitations([
           ...invitations,
           { email, role: formatInviteRoleLabel(role, specialty) },
@@ -87,7 +87,13 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
         );
         setTimeout(() => setSuccess(false), 3000);
       } else {
-        setError(result.error);
+        setError(
+          result.error ||
+            result.message ||
+            (result.invitationPersisted
+              ? 'Convite salvo como pendente, mas o e-mail não foi enviado. Tente reenviar.'
+              : 'Não foi possível enviar o convite.')
+        );
       }
     } catch (err) {
       setError('Erro ao enviar convite');

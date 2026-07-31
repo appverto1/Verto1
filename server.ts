@@ -4083,6 +4083,11 @@ function requestIdForLogs(req: any): string | null {
 const OFFICIAL_FROM_CONTACT = 'Verto <contato@appverto.com.br>';
 const OFFICIAL_FROM_NOREPLY = 'Verto <naoresponda@appverto.com.br>';
 const OFFICIAL_TRANSACTIONAL_REPLY_TO = 'contato@appverto.com.br';
+
+function resolveConfiguredResendFrom(fallback: string): string {
+  return sanitizeString(process.env.RESEND_FROM_EMAIL || '', 320) || fallback;
+}
+
 type ResendTemplateKind =
   | 'welcome_professional'
   | 'welcome_patient'
@@ -4150,7 +4155,19 @@ async function generateSupabaseActionLink(params: {
   }
 }
 
-async function sendTransactionalEmailSafe(params: {
+type ResendEmailDeliveryMode = 'template' | 'html' | 'html_fallback';
+
+type ResendEmailDeliveryResult = {
+  sent: boolean;
+  provider: 'resend';
+  providerMessageId: string | null;
+  deliveryMode: ResendEmailDeliveryMode | null;
+  templateId: string | null;
+  templateFallbackReason: string | null;
+  errorCode: string | null;
+};
+
+type TransactionalEmailParams = {
   to: string;
   subject: string;
   html: string;
@@ -4160,26 +4177,71 @@ async function sendTransactionalEmailSafe(params: {
   templateKind?: ResendTemplateKind;
   templateData?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-}): Promise<boolean> {
+};
+
+function classifyResendDeliveryError(error: any): string {
+  const statusCode = Number(error?.statusCode || 0);
+  const message = sanitizeString(error?.message || '', 500).toLowerCase();
+  if (message.includes('resend_api_key') || message.includes('resend_from_email')) {
+    return 'RESEND_CONFIGURATION_MISSING';
+  }
+  if (statusCode === 401 || statusCode === 403) return 'RESEND_AUTHENTICATION_FAILED';
+  if (statusCode === 429) return 'RESEND_RATE_LIMITED';
+  if (statusCode >= 500) return 'RESEND_UNAVAILABLE';
+  if (statusCode >= 400) return 'RESEND_REQUEST_REJECTED';
+  return 'RESEND_SEND_FAILED';
+}
+
+async function sendTransactionalEmailWithResultSafe(
+  params: TransactionalEmailParams
+): Promise<ResendEmailDeliveryResult> {
+  const templateId = resolveResendTemplateId(params.templateKind);
   try {
-    await sendEmailViaResend({
+    const result = await sendEmailViaResend({
       to: params.to,
       subject: params.subject,
       html: params.html,
       from: params.from || OFFICIAL_FROM_NOREPLY,
       replyTo: params.replyTo || OFFICIAL_TRANSACTIONAL_REPLY_TO,
-      templateId: resolveResendTemplateId(params.templateKind),
+      templateId,
       templateData: params.templateData
     });
-    return true;
+    return {
+      sent: true,
+      provider: 'resend',
+      providerMessageId: result.providerMessageId,
+      deliveryMode: result.deliveryMode,
+      templateId: result.templateId,
+      templateFallbackReason: result.templateFallbackReason,
+      errorCode: null
+    };
   } catch (error: any) {
+    const errorCode = classifyResendDeliveryError(error);
     console.error('[Email] transactional send failed:', {
       context: params.context,
-      message: error?.message || String(error),
+      errorCode,
+      providerStatus: Number(error?.statusCode || 0) || null,
+      providerCode: sanitizeString(error?.providerCode || '', 80) || null,
+      message: sanitizeString(error?.message || String(error), 500),
       metadata: redactForLogs(params.metadata || null)
     });
-    return false;
+    return {
+      sent: false,
+      provider: 'resend',
+      providerMessageId: null,
+      deliveryMode: null,
+      templateId,
+      templateFallbackReason: null,
+      errorCode
+    };
   }
+}
+
+async function sendTransactionalEmailSafe(
+  params: TransactionalEmailParams
+): Promise<boolean> {
+  const result = await sendTransactionalEmailWithResultSafe(params);
+  return result.sent;
 }
 
 type RecoveryChannel = 'email';
@@ -4405,6 +4467,58 @@ function isMissingColumnError(error: any, columnName?: string): boolean {
   return message.includes('does not exist') || isSchemaCacheMissing;
 }
 
+async function readResendResponseBody(response: Response): Promise<{
+  json: Record<string, any> | null;
+  raw: string;
+}> {
+  const raw = await response.text();
+  if (!raw) return { json: null, raw: '' };
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      json: parsed && typeof parsed === 'object' ? parsed : null,
+      raw
+    };
+  } catch {
+    return { json: null, raw };
+  }
+}
+
+function createResendDeliveryError(params: {
+  statusCode: number;
+  responseBody: { json: Record<string, any> | null; raw: string };
+}): Error & { statusCode: number; providerCode: string | null } {
+  const providerCode = sanitizeString(
+    params.responseBody.json?.name || params.responseBody.json?.code || '',
+    80
+  ) || null;
+  const providerMessage = sanitizeString(
+    params.responseBody.json?.message || params.responseBody.raw || 'Resposta sem detalhes.',
+    500
+  );
+  const error = new Error(
+    `Falha no envio de e-mail via Resend: ${params.statusCode} ${providerMessage}`
+  ) as Error & { statusCode: number; providerCode: string | null };
+  error.statusCode = params.statusCode;
+  error.providerCode = providerCode;
+  return error;
+}
+
+async function postResendEmail(
+  apiKey: string,
+  payload: Record<string, any>
+): Promise<Response> {
+  return fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'User-Agent': 'Verto/1.0'
+    },
+    body: JSON.stringify(payload)
+  });
+}
+
 async function sendEmailViaResend({
   to,
   subject,
@@ -4421,7 +4535,12 @@ async function sendEmailViaResend({
   replyTo?: string;
   templateId?: string | null;
   templateData?: Record<string, unknown>;
-}): Promise<void> {
+}): Promise<{
+  providerMessageId: string | null;
+  deliveryMode: ResendEmailDeliveryMode;
+  templateId: string | null;
+  templateFallbackReason: string | null;
+}> {
   const apiKey = sanitizeString(process.env.RESEND_API_KEY || '', 500);
   const defaultFrom = sanitizeString(process.env.RESEND_FROM_EMAIL || '', 320);
   const effectiveFrom = sanitizeString(from || defaultFrom, 320);
@@ -4430,53 +4549,63 @@ async function sendEmailViaResend({
     throw new Error('RESEND_API_KEY e RESEND_FROM_EMAIL são obrigatórios para envio de e-mails transacionais.');
   }
 
-  const payload: Record<string, any> = {
+  const htmlPayload: Record<string, any> = {
     from: effectiveFrom,
     to: [to],
     subject,
     html,
     ...(effectiveReplyTo ? { reply_to: [effectiveReplyTo] } : {})
   };
-  if (templateId) {
-    payload.template = {
-      id: templateId,
-      variables: templateData || {}
-    };
-    delete payload.html;
+  const templatePayload: Record<string, any> | null = templateId
+    ? {
+        from: effectiveFrom,
+        to: [to],
+        subject,
+        template: {
+          id: templateId,
+          variables: templateData || {}
+        },
+        ...(effectiveReplyTo ? { reply_to: [effectiveReplyTo] } : {})
+      }
+    : null;
+
+  let deliveryMode: ResendEmailDeliveryMode = templatePayload ? 'template' : 'html';
+  let templateFallbackReason: string | null = null;
+  let response = await postResendEmail(apiKey, templatePayload || htmlPayload);
+
+  if (!response.ok && templatePayload) {
+    const templateFailure = await readResendResponseBody(response);
+    templateFallbackReason = sanitizeString(
+      templateFailure.json?.message || templateFailure.raw || `HTTP ${response.status}`,
+      300
+    ) || `HTTP ${response.status}`;
+    console.warn('[Email] Resend template rejected; using local HTML fallback.', {
+      templateId,
+      providerStatus: response.status,
+      providerCode: sanitizeString(
+        templateFailure.json?.name || templateFailure.json?.code || '',
+        80
+      ) || null,
+      message: templateFallbackReason
+    });
+    response = await postResendEmail(apiKey, htmlPayload);
+    deliveryMode = 'html_fallback';
   }
 
-  let response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(payload)
-  });
-
-  // Fallback seguro para HTML caso template remoto não esteja disponível/configurado corretamente.
-  if (!response.ok && templateId) {
-    const fallbackPayload = {
-      from: effectiveFrom,
-      to: [to],
-      subject,
-      html,
-      ...(effectiveReplyTo ? { reply_to: [effectiveReplyTo] } : {})
-    };
-    response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(fallbackPayload)
+  const responseBody = await readResendResponseBody(response);
+  if (!response.ok) {
+    throw createResendDeliveryError({
+      statusCode: response.status,
+      responseBody
     });
   }
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Falha no envio de e-mail via Resend: ${response.status} ${body}`);
-  }
+  return {
+    providerMessageId: sanitizeString(responseBody.json?.id || '', 200) || null,
+    deliveryMode,
+    templateId: templateId || null,
+    templateFallbackReason
+  };
 }
 
 const HTML_ESCAPE_MAP: Record<string, string> = {
@@ -23283,48 +23412,70 @@ async function startServer() {
         )) || getActivationRedirectUrl('coordinator', email);
 
       const clinicName = sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica';
+      const invitedProfessionalName = sanitizeString(
+        authUser?.user_metadata?.full_name || authUser?.user_metadata?.name || email.split('@')[0],
+        180
+      ) || email.split('@')[0];
       const activationEmail = buildActivationEmailTemplate({
-        nome: email.split('@')[0],
+        nome: invitedProfessionalName,
         link_ativacao: activationLink,
         perfil: 'professional'
       });
       const htmlWithInviteContext = activationEmail.html
         .replace(
           '</h1>',
-          `</h1><p style="margin:0 0 16px 0;color:#5b21b6;font-size:15px;line-height:1.55;">Você foi convidado(a) para atuar como <strong>${invitedRoleLabel}</strong> na clínica <strong>${clinicName}</strong>.</p>`
+          `</h1><p style="margin:0 0 16px 0;color:#5b21b6;font-size:15px;line-height:1.55;">Você foi convidado(a) para atuar como <strong>${escapeHtml(invitedRoleLabel)}</strong> na clínica <strong>${escapeHtml(clinicName)}</strong>.</p>`
         );
 
-      const emailSent = await withTimeoutOrFallback(
-        sendTransactionalEmailSafe({
-        to: email,
-        subject: `Convite para ${clinicName} na Verto`,
-        html: htmlWithInviteContext,
-        context: 'clinic_invitation',
-        from: OFFICIAL_FROM_NOREPLY,
-        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-        templateKind: 'welcome_professional',
-        templateData: {
-          nome: email.split('@')[0],
-          link_ativacao: activationLink
-        },
-        metadata: {
-          invitationId: data?.id || null,
-          clinicId,
-          invitedRole: role,
-          specialty,
-          professionalTitle,
-          invitedBy: user.id,
-          email: maskEmail(email)
-        }
+      const emailDeliveryTimeoutFallback: ResendEmailDeliveryResult = {
+        sent: false,
+        provider: 'resend',
+        providerMessageId: null,
+        deliveryMode: null,
+        templateId: resolveResendTemplateId('welcome_professional'),
+        templateFallbackReason: null,
+        errorCode: 'RESEND_TIMEOUT'
+      };
+      const emailDelivery = await withTimeoutOrFallback(
+        sendTransactionalEmailWithResultSafe({
+          to: email,
+          subject: `Convite para ${clinicName} na Verto`,
+          html: htmlWithInviteContext,
+          context: 'clinic_invitation',
+          from: resolveConfiguredResendFrom(OFFICIAL_FROM_NOREPLY),
+          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+          templateKind: 'welcome_professional',
+          templateData: {
+            nome: invitedProfessionalName,
+            link_ativacao: activationLink
+          },
+          metadata: {
+            invitationId: data?.id || null,
+            clinicId,
+            invitedRole: role,
+            specialty,
+            professionalTitle,
+            invitedBy: user.id,
+            email: maskEmail(email)
+          }
         }),
         12000,
-        false,
-        'sendTransactionalEmailSafe(clinic_invitation)'
+        emailDeliveryTimeoutFallback,
+        'sendTransactionalEmailWithResultSafe(clinic_invitation)'
       );
+      const emailSent = emailDelivery.sent;
+      const templateFallbackUsed = emailDelivery.deliveryMode === 'html_fallback';
+      const deliveryDescription = !emailSent
+        ? 'com falha de envio'
+        : templateFallbackUsed
+          ? 'aceito pelo Resend com o modelo HTML local de contingência'
+          : emailDelivery.deliveryMode === 'template'
+            ? 'aceito pelo Resend com o template personalizado'
+            : 'aceito pelo Resend com o modelo HTML local';
 
       await persistIdentityAuditLog({
         title: 'Convite de colaborador enviado',
-        content: `Convite para ${maskEmail(email)} como ${invitedRoleLabel} em ${clinicName}. E-mail oficial ${emailSent ? 'enviado' : 'com falha de envio'}.`,
+        content: `Convite para ${maskEmail(email)} como ${invitedRoleLabel} em ${clinicName}. E-mail oficial ${deliveryDescription}.`,
         identifier: email,
         channel: 'email',
         userId: authUser?.id || null,
@@ -23336,7 +23487,7 @@ async function startServer() {
         clinicId: sanitizeString(clinicId, 120),
         actorName: sanitizeString(user.name || user.email || 'Coordenador', 180),
         title: reusedExistingInvitation ? 'Convite de colaborador reenviado' : 'Convite de colaborador enviado',
-        content: `Convite para ${maskEmail(email)} como ${invitedRoleLabel} em ${clinicName}. E-mail ${emailSent ? 'enviado' : 'com falha de envio'}.`,
+        content: `Convite para ${maskEmail(email)} como ${invitedRoleLabel} em ${clinicName}. E-mail ${deliveryDescription}.`,
         type: 'management',
         actionType: reusedExistingInvitation ? 'clinic_invite_resent' : 'clinic_invite_created',
         payloadDetails: JSON.stringify({
@@ -23344,24 +23495,59 @@ async function startServer() {
           invitedRole: role,
           professionalTitle,
           email: maskEmail(email),
-          emailSent
+          emailSent,
+          emailProvider: emailDelivery.provider,
+          providerMessageId: emailDelivery.providerMessageId,
+          deliveryMode: emailDelivery.deliveryMode,
+          templateId: emailDelivery.templateId,
+          templateFallbackUsed,
+          deliveryErrorCode: emailDelivery.errorCode
         })
       });
 
-      res.json({
+      if (!emailSent) {
+        return res.status(502).json({
+          success: false,
+          code: 'CLINIC_INVITATION_EMAIL_SEND_FAILED',
+          error: 'Convite salvo como pendente, mas o e-mail não foi aceito pelo Resend. Verifique o remetente e o template configurados e tente reenviar.',
+          message: `O convite para ${email} foi salvo como pendente, mas o e-mail não foi enviado.`,
+          data,
+          invitationPersisted: true,
+          invitationEmailSent: false,
+          resent: reusedExistingInvitation,
+          retryable: true,
+          emailDelivery: {
+            provider: emailDelivery.provider,
+            accepted: false,
+            errorCode: emailDelivery.errorCode
+          }
+        });
+      }
+
+      return res.json({
         success: true,
         data,
-        invitationEmailSent: emailSent,
+        invitationEmailSent: true,
         resent: reusedExistingInvitation,
-        message: emailSent
-          ? reusedExistingInvitation
+        emailDelivery: {
+          provider: emailDelivery.provider,
+          accepted: true,
+          mode: emailDelivery.deliveryMode,
+          templateFallbackUsed
+        },
+        message: templateFallbackUsed
+          ? `Convite enviado para ${email} com o modelo local de contingência. Revise o template personalizado do Resend.`
+          : reusedExistingInvitation
             ? `Convite reenviado para ${email}.`
             : `Convite enviado para ${email}.`
-          : `Convite criado, mas houve falha no envio de e-mail para ${email}.`
       });
     } catch (error: any) {
-      logRouteDbError('/api/tasks/:patientId [GET]', error, { patientId: sanitizeString(req.params.patientId, 120) });
-      res.status(500).json({ error: 'Falha na operação de dados.' });
+      logRouteDbError('/api/clinic/invite [POST]', error, {
+        email: maskEmail(sanitizeEmail(req.body?.email) || ''),
+        role: sanitizeString(req.body?.role, 30),
+        requestId: requestIdForLogs(req)
+      });
+      res.status(500).json({ success: false, error: 'Falha ao criar o convite.' });
     }
   });
 
