@@ -45,6 +45,7 @@ import {
 import {
   invalidateReminderClinicBranding,
   resolvePushSafeClinicLogoUrl,
+  verifyStableClinicNotificationLogoSignature,
   runAppointmentReminderScan,
   startAppointmentReminderCron,
   triggerAppointmentReminderScan
@@ -57,6 +58,7 @@ import {
 } from './services/pushNotificationService';
 import {
   buildActivationEmailTemplate,
+  buildClinicInvitationEmailTemplate,
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
 import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from './src/constants/vertoBranding';
@@ -4118,6 +4120,7 @@ function resolveConfiguredResendFrom(fallback: string): string {
 }
 
 type ResendTemplateKind =
+  | 'clinic_invitation'
   | 'welcome_professional'
   | 'welcome_patient'
   | 'recovery_professional'
@@ -4126,6 +4129,7 @@ type ResendTemplateKind =
 function resolveResendTemplateId(kind?: ResendTemplateKind): string | null {
   if (!kind) return null;
   const keyByKind: Record<ResendTemplateKind, string> = {
+    clinic_invitation: 'RESEND_TEMPLATE_CLINIC_INVITATION_ID',
     welcome_professional: 'RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID',
     welcome_patient: 'RESEND_TEMPLATE_WELCOME_PATIENT_ID',
     recovery_professional: 'RESEND_TEMPLATE_RECOVERY_PROFESSIONAL_ID',
@@ -13501,6 +13505,15 @@ async function persistSpecialtyFromOnboardingContext(params: {
   if (existingResult.error && !isMissingRelationError(existingResult.error)) throw existingResult.error;
   const existing = existingResult.data as any;
   const metadata = existing?.metadata && typeof existing.metadata === 'object' ? existing.metadata : {};
+  const existingGlobalSpecialty = normalizeClinicalSpecialty(
+    existing?.specialty
+      || metadata?.specialty
+      || metadata?.professionalTitle
+      || metadata?.professional_title,
+  );
+  if (existingGlobalSpecialty) {
+    return;
+  }
   const { error } = await supabase
     .from('professional_profiles')
     .upsert(cleanObject({
@@ -13509,11 +13522,11 @@ async function persistSpecialtyFromOnboardingContext(params: {
       specialty,
       metadata: cleanObject({
         ...metadata,
-        specialty,
-        professionalTitle: specialty,
-        professional_title: specialty,
-        specialtyAuthority: 'clinic_invitation',
-        specialtyConfirmedAt: new Date().toISOString(),
+        specialty: metadata?.specialty || specialty,
+        professionalTitle: metadata?.professionalTitle || specialty,
+        professional_title: metadata?.professional_title || specialty,
+        specialtyAuthority: metadata?.specialtyAuthority || 'first_clinic_invitation',
+        specialtyConfirmedAt: metadata?.specialtyConfirmedAt || new Date().toISOString(),
       }),
       updated_at: new Date().toISOString(),
     }), { onConflict: 'user_id' });
@@ -13585,6 +13598,80 @@ async function findAuthUserByEmail(email: string): Promise<any | null> {
     if (page > 20) break;
   }
   return null;
+}
+
+
+type AtomicClinicInvitationAcceptance = {
+  invitationId: string;
+  clinicId: string;
+  role: string;
+  invitationStatus: string;
+  membershipStatus: string;
+  idempotent: boolean;
+};
+
+function clinicInvitationAcceptanceError(error: any): Error & { code: string; statusCode: number } {
+  const raw = sanitizeString(error?.message || error?.details || error?.hint, 500);
+  const knownCodes = [
+    'CLINIC_INVITATION_INVALID',
+    'CLINIC_INVITATION_NOT_FOUND',
+    'CLINIC_INVITATION_EMAIL_MISMATCH',
+    'CLINIC_INVITATION_ROLE_INVALID',
+    'CLINIC_INVITATION_ALREADY_USED',
+    'CLINIC_INVITATION_NOT_AVAILABLE',
+    'CLINIC_INVITATION_CONCURRENT_UPDATE',
+  ];
+  const code = knownCodes.find((candidate) => raw.includes(candidate))
+    || (raw.includes('accept_clinic_invitation_v1') || raw.includes('schema cache')
+      ? 'CLINIC_INVITATION_MIGRATION_REQUIRED'
+      : 'CLINIC_INVITATION_ACCEPT_FAILED');
+  const statusByCode: Record<string, number> = {
+    CLINIC_INVITATION_INVALID: 400,
+    CLINIC_INVITATION_NOT_FOUND: 404,
+    CLINIC_INVITATION_EMAIL_MISMATCH: 403,
+    CLINIC_INVITATION_ROLE_INVALID: 422,
+    CLINIC_INVITATION_ALREADY_USED: 409,
+    CLINIC_INVITATION_NOT_AVAILABLE: 409,
+    CLINIC_INVITATION_CONCURRENT_UPDATE: 409,
+    CLINIC_INVITATION_MIGRATION_REQUIRED: 503,
+  };
+  const normalized = new Error(code) as Error & { code: string; statusCode: number };
+  normalized.code = code;
+  normalized.statusCode = statusByCode[code] || 500;
+  return normalized;
+}
+
+async function acceptClinicInvitationAtomically(params: {
+  invitationId: string;
+  userId: string;
+  verifiedEmail: string;
+}): Promise<AtomicClinicInvitationAcceptance> {
+  const invitationId = sanitizeString(params.invitationId, 120);
+  const userId = sanitizeString(params.userId, 120);
+  const verifiedEmail = sanitizeEmail(params.verifiedEmail);
+  if (!isUuid(invitationId) || !isUuid(userId) || !verifiedEmail) {
+    throw clinicInvitationAcceptanceError({ message: 'CLINIC_INVITATION_INVALID' });
+  }
+  const { data, error } = await supabase.rpc('accept_clinic_invitation_v1', {
+    p_invitation_id: invitationId,
+    p_user_id: userId,
+    p_verified_email: verifiedEmail,
+  });
+  if (error) throw clinicInvitationAcceptanceError(error);
+  const row = Array.isArray(data) ? data[0] : data;
+  const clinicId = sanitizeString(row?.clinic_id, 120);
+  const role = sanitizeString(row?.membership_role, 40).toLowerCase();
+  if (!isUuid(clinicId) || !ensureClinicRole(role)) {
+    throw clinicInvitationAcceptanceError({ message: 'CLINIC_INVITATION_ACCEPT_FAILED' });
+  }
+  return {
+    invitationId: sanitizeString(row?.invitation_id, 120) || invitationId,
+    clinicId,
+    role,
+    invitationStatus: sanitizeString(row?.invitation_status, 40).toLowerCase() || 'accepted',
+    membershipStatus: sanitizeString(row?.membership_status, 40).toLowerCase() || 'active',
+    idempotent: row?.idempotent === true,
+  };
 }
 
 async function findRecoverableAuthUserByEmail(email: string): Promise<any | null> {
@@ -22411,7 +22498,6 @@ async function startServer() {
           .from('invitations')
           .select(INVITATION_SELECT)
           .eq('id', requestedInvitationId)
-          .eq('email', safeAuthEmail)
           .in('status', ['pending', 'accepted'])
           .limit(1)
           .maybeSingle();
@@ -22421,6 +22507,13 @@ async function startServer() {
             success: false,
             error: 'CLINIC_INVITATION_NOT_AVAILABLE',
             message: 'Este convite não está disponível para esta conta.'
+          });
+        }
+        if (sanitizeEmail(invitation.email) !== safeAuthEmail) {
+          return res.status(403).json({
+            success: false,
+            error: 'CLINIC_INVITATION_EMAIL_MISMATCH',
+            message: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.'
           });
         }
         requestedClinicInvitation = invitation;
@@ -22517,6 +22610,7 @@ async function startServer() {
         leadId: string;
         checkoutSessionId: string;
       } | null = null;
+      let invitationPendingAcceptance: any = requestedClinicInvitation;
       if (!profile) {
         let finalRole: AppRole = normalizeRequestedRole(intendedRole);
         if (
@@ -22550,18 +22644,11 @@ async function startServer() {
 
         if (!inviteError && invitations.length > 0) {
           const invitation = invitations[0];
+          invitationPendingAcceptance = invitation;
           clinicId = invitation.clinic_id;
           finalRole = ensureRole(invitation.role)
             ? invitation.role
             : 'therapist';
-
-          if (sanitizeString(invitation.status, 30).toLowerCase() === 'pending') {
-            await supabase
-              .from('invitations')
-              .update({ status: 'accepted', accepted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-              .eq('id', invitation.id)
-              .eq('status', 'pending');
-          }
         } else if (finalRole === "patient") {
           // O cadastro público de paciente permanece isolado do fluxo comercial profissional.
           clinicId = null;
@@ -22715,7 +22802,7 @@ async function startServer() {
               clinicId: user.id,
             });
           }
-        } else if (clinicId && ensureClinicRole(finalRole)) {
+        } else if (clinicId && ensureClinicRole(finalRole) && !invitationPendingAcceptance) {
           await supabase.from("clinic_memberships").upsert(
             [
               {
@@ -22737,7 +22824,7 @@ async function startServer() {
       // Legacy compatibility: ensure coordinator always has clinic membership
       if (profile.role === 'coordinator') {
         await ensureClinicAndMembershipForCoordinator(user.id, profile.name || null);
-      } else if (profile.clinic_id && ensureClinicRole(profile.role)) {
+      } else if (profile.clinic_id && ensureClinicRole(profile.role) && !invitationPendingAcceptance) {
         await supabase
           .from('clinic_memberships')
           .upsert([{
@@ -22750,7 +22837,7 @@ async function startServer() {
       }
 
       let workspaces = await fetchUserWorkspaces(user.id);
-      let invitationForWorkspace = requestedClinicInvitation;
+      let invitationForWorkspace = requestedClinicInvitation || invitationPendingAcceptance;
       if (!invitationForWorkspace && workspaces.length === 0 && safeAuthEmail) {
         const { data: pendingInvite, error: pendingInviteError } = await supabase
           .from('invitations')
@@ -22766,62 +22853,49 @@ async function startServer() {
 
       let invitedWorkspaceId = '';
       if (invitationForWorkspace && ensureClinicRole(invitationForWorkspace.role)) {
-        invitedWorkspaceId = sanitizeString(invitationForWorkspace.clinic_id, 120);
-        const invitationStatus = sanitizeString(invitationForWorkspace.status, 30).toLowerCase();
-        if (invitationStatus === 'accepted') {
-          const { data: activeAcceptedMembership, error: acceptedMembershipError } = await supabase
-            .from('clinic_memberships')
-            .select('user_id,clinic_id,status')
-            .eq('user_id', user.id)
-            .eq('clinic_id', invitedWorkspaceId)
-            .eq('status', 'active')
-            .limit(1)
-            .maybeSingle();
-          if (acceptedMembershipError) throw acceptedMembershipError;
-          if (!activeAcceptedMembership) {
-            return res.status(409).json({
-              success: false,
-              error: 'CLINIC_INVITATION_ALREADY_USED',
-              message: 'Este convite já foi utilizado. Solicite um novo convite à clínica.'
-            });
-          }
+        let acceptedInvitation: AtomicClinicInvitationAcceptance;
+        try {
+          acceptedInvitation = await acceptClinicInvitationAtomically({
+            invitationId: invitationForWorkspace.id,
+            userId: user.id,
+            verifiedEmail: safeAuthEmail,
+          });
+        } catch (acceptanceError: any) {
+          const code = sanitizeString(acceptanceError?.code, 120) || 'CLINIC_INVITATION_ACCEPT_FAILED';
+          const messages: Record<string, string> = {
+            CLINIC_INVITATION_ALREADY_USED: 'Este convite já foi utilizado. Solicite um novo convite à clínica.',
+            CLINIC_INVITATION_EMAIL_MISMATCH: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.',
+            CLINIC_INVITATION_NOT_FOUND: 'Este convite não foi encontrado.',
+            CLINIC_INVITATION_NOT_AVAILABLE: 'Este convite expirou, foi cancelado ou não está mais disponível.',
+            CLINIC_INVITATION_MIGRATION_REQUIRED: 'A atualização segura de convites ainda não foi aplicada no banco de dados.',
+          };
+          return res.status(Number(acceptanceError?.statusCode) || 500).json({
+            success: false,
+            error: code,
+            message: messages[code] || 'Não foi possível aceitar o convite com segurança.',
+          });
         }
+
+        invitedWorkspaceId = acceptedInvitation.clinicId;
         const now = new Date().toISOString();
-        const { error: membershipInviteError } = await supabase
-          .from('clinic_memberships')
-          .upsert([{
-            user_id: user.id,
-            clinic_id: invitationForWorkspace.clinic_id,
-            role: invitationForWorkspace.role,
-            status: 'active',
-            invited_by: invitationForWorkspace.invited_by,
-            created_at: now,
-            updated_at: now
-          }], { onConflict: 'user_id,clinic_id' });
-        if (membershipInviteError) throw membershipInviteError;
-
-        if (invitationStatus === 'pending') {
-          const { error: invitationAcceptError } = await supabase
-            .from('invitations')
-            .update({ status: 'accepted', accepted_at: now, updated_at: now })
-            .eq('id', invitationForWorkspace.id)
-            .eq('email', safeAuthEmail)
-            .eq('status', 'pending');
-          if (invitationAcceptError) throw invitationAcceptError;
-        }
-
         const { error: invitedProfileUpdateError } = await supabase
           .from('users')
           .update({
-            clinic_id: invitationForWorkspace.clinic_id,
-            role: invitationForWorkspace.role,
+            clinic_id: acceptedInvitation.clinicId,
+            role: acceptedInvitation.role,
             updated_at: now
           })
           .eq('id', user.id);
-        if (invitedProfileUpdateError) throw invitedProfileUpdateError;
+        if (invitedProfileUpdateError) {
+          console.warn('[Auth] Convite aceito, mas o ponteiro legado users.clinic_id não pôde ser atualizado:', {
+            userId: sanitizeString(user.id, 120),
+            clinicId: acceptedInvitation.clinicId,
+            error: sanitizeString(invitedProfileUpdateError?.message, 240),
+          });
+        }
 
-        profile.clinic_id = invitationForWorkspace.clinic_id;
-        profile.role = invitationForWorkspace.role;
+        profile.clinic_id = acceptedInvitation.clinicId;
+        profile.role = acceptedInvitation.role;
         workspaces = await fetchUserWorkspaces(user.id);
       }
       const preferredWorkspaceId = sanitizeString(
@@ -23843,20 +23917,80 @@ async function startServer() {
           error: 'Ambiente demo não permite convidar membros reais.'
         });
       }
-      const { data: clinic } = await supabase
+      if (!isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'Clínica inválida para o convite.' });
+      }
+      const { data: clinic, error: clinicError } = await supabase
         .from('clinics')
-        .select('name')
+        .select('id,name')
         .eq('id', clinicId)
         .maybeSingle();
+      if (clinicError) throw clinicError;
+      const clinicName = sanitizeString(clinic?.name, 160);
+      if (!clinic?.id || !clinicName) {
+        return res.status(409).json({
+          success: false,
+          error: 'CLINIC_IDENTITY_NOT_CONFIGURED',
+          message: 'Cadastre o nome oficial da clínica antes de enviar convites.'
+        });
+      }
+
+      // Resolve the existing Auth identity before deciding whether a pending
+      // invitation can be reused. The e-mail remains the only automatic link.
+      let authUser = await findAuthUserByEmail(email);
 
       // Check for existing pending invitation.
-      const { data: existing } = await supabase
+      const { data: pendingInvitation, error: pendingInvitationError } = await supabase
         .from('invitations')
         .select(INVITATION_SELECT)
         .eq('email', email)
         .eq('clinic_id', clinicId)
         .eq('status', 'pending')
         .maybeSingle();
+      if (pendingInvitationError) throw pendingInvitationError;
+      let existing = pendingInvitation;
+
+      if (existing && isUuid(sanitizeString(authUser?.id, 120))) {
+        const { data: previousMembership, error: previousMembershipError } = await supabase
+          .from('clinic_memberships')
+          .select('user_id,clinic_id,status,created_at,updated_at')
+          .eq('user_id', authUser.id)
+          .eq('clinic_id', clinicId)
+          .limit(1)
+          .maybeSingle();
+        if (previousMembershipError) throw previousMembershipError;
+
+        const membershipStatus = sanitizeString(previousMembership?.status, 40).toLowerCase();
+        const invitationCreatedAt = Date.parse(sanitizeString(existing?.created_at, 80));
+        const membershipUnlinkedAt = Date.parse(
+          sanitizeString(previousMembership?.updated_at || previousMembership?.created_at, 80)
+        );
+        const pendingInvitationPredatesUnlink = Boolean(
+          previousMembership?.user_id
+          && membershipStatus !== 'active'
+          && Number.isFinite(invitationCreatedAt)
+          && Number.isFinite(membershipUnlinkedAt)
+          && invitationCreatedAt <= membershipUnlinkedAt
+        );
+
+        if (pendingInvitationPredatesUnlink) {
+          const now = new Date().toISOString();
+          const { error: retireOldInvitationError } = await supabase
+            .from('invitations')
+            .update({
+              status: 'canceled',
+              canceled_at: now,
+              canceled_by: user.id,
+              updated_at: now,
+            })
+            .eq('id', existing.id)
+            .eq('clinic_id', clinicId)
+            .eq('status', 'pending');
+          if (retireOldInvitationError) throw retireOldInvitationError;
+          existing = null;
+        }
+      }
+
       let reusedExistingInvitation = false;
       let existingInvitationId = sanitizeString(existing?.id, 120);
       if (!existing) {
@@ -23882,6 +24016,7 @@ async function startServer() {
         // Keep invitation fresh and allow role correction on resend.
         let patchPayload: Record<string, any> = cleanObject({
           role,
+          clinic_name: clinicName,
           required_onboarding_fields: normalizedOnboardingFields,
           invited_by: user.id,
           updated_at: new Date().toISOString()
@@ -23919,7 +24054,7 @@ async function startServer() {
       const invitationBasePayload = cleanObject({
         email,
         clinic_id: clinicId,
-        clinic_name: sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica',
+        clinic_name: clinicName,
         role,
         required_onboarding_fields: normalizedOnboardingFields,
         status: 'pending',
@@ -23965,7 +24100,6 @@ async function startServer() {
       const data = insertedInvitation;
 
       // Garante usuário Auth para fluxo de ativação por senha/google sem depender do e-mail do Supabase.
-      let authUser = await findAuthUserByEmail(email);
       const reusedExistingAuthAccess = Boolean(
         authUser?.id && (authUser?.email_confirmed_at || authUser?.confirmed_at)
       );
@@ -23977,7 +24111,6 @@ async function startServer() {
           password: tempPassword,
           email_confirm: false,
           user_metadata: {
-            full_name: email.split('@')[0],
             invited_role: role,
             professional_title: professionalTitle,
             specialty,
@@ -24005,44 +24138,43 @@ async function startServer() {
             'generateSupabaseActionLink(clinic_invite)'
           )) || activationEntryUrl;
 
-      const clinicName = sanitizeString(clinic?.name, 160) || sanitizeString(user.name, 160) || 'Clinica';
+      const invitedProfileResult = authUser?.id
+        ? await supabase.from('users').select('name').eq('id', authUser.id).maybeSingle()
+        : { data: null, error: null } as any;
+      if (invitedProfileResult.error) throw invitedProfileResult.error;
       const invitedProfessionalName = sanitizeString(
-        authUser?.user_metadata?.full_name || authUser?.user_metadata?.name || email.split('@')[0],
+        invitedProfileResult.data?.name || authUser?.user_metadata?.full_name || authUser?.user_metadata?.name,
         180
-      ) || email.split('@')[0];
-      const activationEmail = buildActivationEmailTemplate({
-        nome: invitedProfessionalName,
+      ) || null;
+      const responsibleProfessionalName = sanitizeString(user.name, 180) || null;
+      const invitationEmail = buildClinicInvitationEmailTemplate({
+        clinic_name: clinicName,
+        invited_professional_name: invitedProfessionalName,
+        responsible_professional_name: responsibleProfessionalName,
+        invited_email: email,
+        invited_role_label: invitedRoleLabel,
         link_ativacao: activationLink,
-        perfil: 'professional'
       });
-      const htmlWithInviteContext = activationEmail.html
-        .replace(
-          '</h1>',
-          `</h1><p style="margin:0 0 16px 0;color:#5b21b6;font-size:15px;line-height:1.55;">Você foi convidado(a) para atuar como <strong>${escapeHtml(invitedRoleLabel)}</strong> na clínica <strong>${escapeHtml(clinicName)}</strong>.</p>`
-        );
 
       const emailDeliveryTimeoutFallback: ResendEmailDeliveryResult = {
         sent: false,
         provider: 'resend',
         providerMessageId: null,
         deliveryMode: null,
-        templateId: resolveResendTemplateId('welcome_professional'),
+        templateId: resolveResendTemplateId('clinic_invitation'),
         templateFallbackReason: null,
         errorCode: 'RESEND_TIMEOUT'
       };
       const emailDelivery = await withTimeoutOrFallback(
         sendTransactionalEmailWithResultSafe({
           to: email,
-          subject: `Convite para ${clinicName} na Verto`,
-          html: htmlWithInviteContext,
+          subject: invitationEmail.subject,
+          html: invitationEmail.html,
           context: 'clinic_invitation',
           from: resolveConfiguredResendFrom(OFFICIAL_FROM_NOREPLY),
           replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-          templateKind: 'welcome_professional',
-          templateData: {
-            nome: invitedProfessionalName,
-            link_ativacao: activationLink
-          },
+          templateKind: 'clinic_invitation',
+          templateData: invitationEmail.variables,
           metadata: {
             invitationId: data?.id || null,
             clinicId,
@@ -24304,124 +24436,62 @@ async function startServer() {
   });
 
   app.post('/api/clinic/accept-invite', checkAuth, async (req: any, res) => {
+    const invitationId = sanitizeString(req.body?.invitationId, 120);
+    const user = req.session.user;
+    if (!isUuid(invitationId)) {
+      return res.status(400).json({ error: 'Convite inválido.' });
+    }
+    if (!isUuid(sanitizeString(user?.id, 120)) || !sanitizeEmail(user?.email)) {
+      return res.status(401).json({ error: 'Sessão inválida. Entre novamente para aceitar o convite.' });
+    }
+    if (user?.emailVerified === false) {
+      return res.status(403).json({
+        error: 'EMAIL_NOT_CONFIRMED',
+        message: 'Confirme seu e-mail antes de aceitar o convite.'
+      });
+    }
+
     try {
-      const invitationId = sanitizeString(req.body?.invitationId, 120);
-      const user = req.session.user;
-      if (!isUuid(invitationId)) {
-        return res.status(400).json({ error: 'Convite inválido.' });
-      }
-
-      const { data: invitation, error: fetchError } = await supabase
-        .from('invitations')
-        .select(INVITATION_SELECT)
-        .eq('id', invitationId)
-        .single();
-
-      if (fetchError || !invitation) {
-        return res.status(404).json({ error: 'Convite não encontrado' });
-      }
-
-      if (sanitizeEmail(invitation.email) !== sanitizeEmail(user.email)) {
-        return res.status(403).json({ error: 'Este convite não é para você' });
-      }
-
-      const { error: membershipUpsertError } = await supabase
-        .from('clinic_memberships')
-        .upsert([{
-          user_id: user.id,
-          clinic_id: invitation.clinic_id,
-          role: invitation.role,
-          status: 'active',
-          invited_by: invitation.invited_by,
-          created_at: new Date().toISOString()
-        }], { onConflict: 'user_id,clinic_id' });
-      if (membershipUpsertError) throw membershipUpsertError;
-
+      const acceptedInvitation = await acceptClinicInvitationAtomically({
+        invitationId,
+        userId: user.id,
+        verifiedEmail: user.email,
+      });
+      const now = new Date().toISOString();
       const { error: updateError } = await supabase
         .from('users')
         .update({
-          clinic_id: invitation.clinic_id,
-          role: invitation.role
+          clinic_id: acceptedInvitation.clinicId,
+          role: acceptedInvitation.role,
+          updated_at: now,
         })
         .eq('id', user.id);
-
-      if (updateError) throw updateError;
-      if (invitation.role === 'therapist') {
-        const invitationSpecialty = readClinicalSpecialtyFromSource(invitation, '');
-        const { data: existingProfile, error: profileError } = await supabase
-          .from('professional_profiles')
-          .select('user_id,full_name,specialty,metadata')
-          .eq('user_id', user.id)
-          .maybeSingle();
-        if (profileError && !isMissingRelationError(profileError)) throw profileError;
-        const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
-          ? existingProfile.metadata
-          : {};
-        const professionalTitle =
-          invitationSpecialty ||
-          sanitizeString(existingProfile?.specialty, 120) ||
-          readProfessionalTitleFromSource({ metadata: currentMetadata }) ||
-          null;
-        const { error: professionalTitleError } = await supabase
-          .from('professional_profiles')
-          .upsert(cleanObject({
-            user_id: user.id,
-            full_name: sanitizeString(existingProfile?.full_name || user.name || user.email?.split('@')?.[0], 180) || undefined,
-            specialty: invitationSpecialty || sanitizeString(existingProfile?.specialty, 120) || undefined,
-            metadata: cleanObject({
-              ...currentMetadata,
-              specialty: invitationSpecialty || sanitizeString(existingProfile?.specialty, 120) || undefined,
-              professionalTitle,
-              professional_title: professionalTitle,
-              role: professionalTitle,
-              titleUpdatedFromInvitationAt: new Date().toISOString()
-            }),
-            updated_at: new Date().toISOString()
-          }), { onConflict: 'user_id' });
-        if (professionalTitleError) throw professionalTitleError;
+      if (updateError) {
+        console.warn('[Clinic invite] Convite aceito, mas o ponteiro legado users.clinic_id não pôde ser atualizado:', {
+          userId: sanitizeString(user.id, 120),
+          clinicId: acceptedInvitation.clinicId,
+          error: sanitizeString(updateError?.message, 240),
+        });
       }
+
       await persistActivityLog({
         title: 'Convite aceito',
         content: `${maskEmail(sanitizeEmail(user.email) || '***')} aceitou convite e entrou na clínica.`,
         type: 'management',
         userId: sanitizeString(user?.id, 120),
-        clinicId: sanitizeString(invitation.clinic_id, 120),
+        clinicId: acceptedInvitation.clinicId,
         actorName: sanitizeString(user?.name || user?.email || 'Colaborador', 180)
       });
 
-      let acceptPayload: Record<string, any> = {
-        status: 'accepted',
-        accepted_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      const removedAcceptColumns = new Set<string>();
-      let acceptError: any = null;
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        const acceptResult = await supabase
-          .from('invitations')
-          .update(acceptPayload)
-          .eq('id', invitationId);
-        acceptError = acceptResult.error;
-        if (!acceptError) break;
-        const missingColumn = extractMissingColumnName(acceptError);
-        if (!missingColumn || removedAcceptColumns.has(missingColumn)) {
-          break;
-        }
-        removedAcceptColumns.add(missingColumn);
-        const { [missingColumn]: _removed, ...rest } = acceptPayload as any;
-        acceptPayload = rest;
-      }
-      if (acceptError) throw acceptError;
-
-      req.session.user.clinicId = invitation.clinic_id;
-      req.session.user.activeWorkspaceId = invitation.clinic_id;
-      req.session.user.role = invitation.role;
+      req.session.user.clinicId = acceptedInvitation.clinicId;
+      req.session.user.activeWorkspaceId = acceptedInvitation.clinicId;
+      req.session.user.role = acceptedInvitation.role;
       req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(user.id));
       const context = await resolveOnboardingContextForUser({
         userId: sanitizeString(user.id, 120),
         email: sanitizeEmail(user.email),
-        preferredClinicId: invitation.clinic_id,
-        role: invitation.role,
+        preferredClinicId: acceptedInvitation.clinicId,
+        role: acceptedInvitation.role,
       });
       await persistSpecialtyFromOnboardingContext({
         userId: sanitizeString(user.id, 120),
@@ -24433,9 +24503,30 @@ async function startServer() {
         onboardingContext: context,
       });
 
-      res.json({ success: true, onboardingContext: context, user: req.session.user });
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+      return res.json({
+        success: true,
+        idempotent: acceptedInvitation.idempotent,
+        onboardingContext: context,
+        user: req.session.user,
+      });
+    } catch (error: any) {
+      const code = sanitizeString(error?.code, 120) || 'CLINIC_INVITATION_ACCEPT_FAILED';
+      const messages: Record<string, string> = {
+        CLINIC_INVITATION_ALREADY_USED: 'Este convite já foi utilizado. Solicite um novo convite à clínica.',
+        CLINIC_INVITATION_EMAIL_MISMATCH: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.',
+        CLINIC_INVITATION_NOT_FOUND: 'Convite não encontrado.',
+        CLINIC_INVITATION_NOT_AVAILABLE: 'Este convite expirou, foi cancelado ou não está mais disponível.',
+        CLINIC_INVITATION_MIGRATION_REQUIRED: 'A atualização segura de convites ainda não foi aplicada no banco de dados.',
+      };
+      logRouteDbError('/api/clinic/accept-invite [POST]', error, {
+        invitationId,
+        userId: sanitizeString(user?.id, 120),
+      });
+      return res.status(Number(error?.statusCode) || 500).json({
+        success: false,
+        error: code,
+        message: messages[code] || 'Não foi possível aceitar o convite com segurança.',
+      });
     }
   });
 
@@ -28894,42 +28985,42 @@ async function startServer() {
       const appointmentId = sanitizeString(req.body?.appointmentId, 120);
       const patientId = sanitizeString(req.body?.patientId, 120);
       const patientEmail = sanitizeEmail(req.body?.patientEmail || req.body?.patient_email);
-      if (!appointmentId || !patientId) {
-        return res.status(400).json({ success: false, error: 'appointmentId e patientId são obrigatórios.' });
+      const reminderClinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(appointmentId) || !isUuid(patientId) || !isUuid(reminderClinicId)) {
+        return res.status(400).json({ success: false, error: 'appointmentId, patientId e clínica ativa válidos são obrigatórios.' });
       }
 
-      let reminderClinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      let reminderAppointmentContext: any = null;
-      if (isUuid(appointmentId)) {
-        const { data: appointmentClinic, error: appointmentClinicError } = await supabase
-          .from('appointments')
-          .select('clinic_id, patient_id, therapist_name, source_payload')
-          .eq('id', appointmentId)
-          .limit(1)
-          .maybeSingle();
-        if (!appointmentClinicError && appointmentClinic) {
-          reminderAppointmentContext = appointmentClinic;
-          if (appointmentClinic?.clinic_id) {
-            reminderClinicId = sanitizeString(appointmentClinic.clinic_id, 120);
-          }
-        } else if (appointmentClinicError && !hasMissingFinancialSchema(appointmentClinicError)) {
-          console.warn('[Push] appointment clinic read failed:', appointmentClinicError.message);
-        }
+      const { data: reminderAppointmentContext, error: appointmentClinicError } = await supabase
+        .from('appointments')
+        .select('id,clinic_id,patient_id,therapist_name,source_payload')
+        .eq('id', appointmentId)
+        .eq('clinic_id', reminderClinicId)
+        .limit(1)
+        .maybeSingle();
+      if (appointmentClinicError && !hasMissingFinancialSchema(appointmentClinicError)) {
+        throw appointmentClinicError;
       }
+      if (!reminderAppointmentContext || sanitizeString(reminderAppointmentContext.patient_id, 120) !== patientId) {
+        return res.status(404).json({ success: false, error: 'Atendimento não encontrado nesta clínica.' });
+      }
+
       const clinicBranding = await readClinicBrandingForFamilyView(reminderClinicId);
+      const pushClinicLogoUrl = await resolvePushSafeClinicLogoUrl(
+        { supabase, logger: console },
+        [clinicBranding.logoUrl],
+        reminderClinicId,
+      );
       const reminderSource = parseAppointmentSourcePayloadForFamilyView(reminderAppointmentContext?.source_payload);
       let patientName = sanitizeString(
-        reminderSource?.patientName ||
-          reminderSource?.patient_name ||
-          req.body?.patientName ||
-          req.body?.patient_name,
+        reminderSource?.patientName || reminderSource?.patient_name,
         180
       );
-      if (!patientName && isUuid(patientId)) {
+      if (!patientName) {
         const patientNameResult = await supabase
           .from('patients')
           .select('id,name')
           .eq('id', patientId)
+          .eq('clinic_id', reminderClinicId)
           .limit(1)
           .maybeSingle();
         if (!patientNameResult.error && patientNameResult.data?.name) {
@@ -28971,7 +29062,7 @@ async function startServer() {
           reminderKind: 'manual',
           clinicId: reminderClinicId,
           clinicName: clinicBranding.displayName,
-          clinicLogoUrl: clinicBranding.logoUrl,
+          clinicLogoUrl: pushClinicLogoUrl,
           patientName,
           professionalDisplayName,
           professionalLogoUrl,
@@ -31798,6 +31889,56 @@ async function startServer() {
       extractPatientPhotosStoragePath(reference) === targetPath
     );
   };
+
+  const detectNotificationLogoContentType = (buffer: Buffer): string | null => {
+    if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+      return 'image/png';
+    }
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+      return 'image/jpeg';
+    }
+    if (buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+      return 'image/webp';
+    }
+    if (buffer.length >= 6 && ['GIF87a', 'GIF89a'].includes(buffer.subarray(0, 6).toString('ascii'))) {
+      return 'image/gif';
+    }
+    return null;
+  };
+
+  app.get('/api/public/notification-assets/clinic-logo', async (req: any, res) => {
+    const clinicId = sanitizeString(req.query?.clinic_id, 120);
+    const objectPath = extractPatientPhotosStoragePath(req.query?.path);
+    const signature = sanitizeString(req.query?.signature, 128);
+    if (
+      !isUuid(clinicId)
+      || !objectPath
+      || objectPath.includes('..')
+      || !verifyStableClinicNotificationLogoSignature({ clinicId, storagePath: objectPath, signature })
+    ) {
+      return res.status(404).send('Imagem não encontrada.');
+    }
+
+    try {
+      const { data, error } = await supabase.storage.from('patient-photos').download(objectPath);
+      if (error || !data || Number((data as any).size || 0) > 5 * 1024 * 1024) {
+        return res.status(404).send('Imagem não encontrada.');
+      }
+      const buffer = Buffer.from(await data.arrayBuffer());
+      const contentType = detectNotificationLogoContentType(buffer);
+      if (!contentType) return res.status(415).send('Formato de imagem não suportado.');
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.send(buffer);
+    } catch (error: any) {
+      console.warn('[Push branding] Falha ao carregar logo pública da clínica:', {
+        clinicId,
+        message: sanitizeString(error?.message, 200) || 'unknown',
+      });
+      return res.status(404).send('Imagem não encontrada.');
+    }
+  });
 
   app.get('/api/storage/patient-photos/view', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'), async (req: any, res) => {
     try {
@@ -43313,8 +43454,9 @@ async function startServer() {
       const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
       const pushClinicLogoUrl = await resolvePushSafeClinicLogoUrl(
         { supabase, logger: console },
-        [clinicBranding.logoUrl]
-      ) || clinicBranding.logoUrl || null;
+        [clinicBranding.logoUrl],
+        clinicBranding.id || clinicId,
+      ) || null;
       const scheduledAt = sanitizeIsoDateTime(params.scheduledStart) || sanitizeString(appointment?.scheduled_at || appointment?.scheduledAt, 80);
       const date = scheduledAt ? new Date(scheduledAt) : new Date();
       const dateLabel = formatDateInAppointmentTimezone(date).split('-').reverse().join('/');

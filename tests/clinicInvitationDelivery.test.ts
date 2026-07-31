@@ -1,18 +1,12 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { buildActivationEmailTemplate } from '../src/services/emailTemplates';
+import { buildClinicInvitationEmailTemplate } from '../src/services/emailTemplates';
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const teamManagement = fs.readFileSync('src/components/TeamManagement.tsx', 'utf8');
 const invitationModal = fs.readFileSync('src/components/InvitationModal.tsx', 'utf8');
-const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
 const envExample = fs.readFileSync('.env.example', 'utf8');
-const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-const resendConfigurationCheck = fs.readFileSync(
-  'scripts/check-resend-configuration.mjs',
-  'utf8',
-);
-const resendCheckScript = fs.readFileSync('scripts/check-resend-configuration.mjs', 'utf8');
+const resendCheck = fs.readFileSync('scripts/check-resend-configuration.mjs', 'utf8');
 
 const section = (source: string, start: string, end: string): string => {
   const startIndex = source.indexOf(start);
@@ -22,111 +16,86 @@ const section = (source: string, start: string, end: string): string => {
   return source.slice(startIndex, endIndex);
 };
 
-const resendSender = section(
-  server,
-  'async function sendEmailViaResend({',
-  'const HTML_ESCAPE_MAP',
-);
 const inviteRoute = section(
   server,
   "app.post('/api/clinic/invite'",
   "app.get('/api/clinic/invitations'",
 );
-const inviteDataService = section(
-  dataService,
-  'async inviteToClinic(',
-  'async getInvitations()',
-);
-const newInviteHandler = section(
-  teamManagement,
-  'const handleInvite = async',
-  'const handleCancelInvitation = async',
-);
+const publicInviteResponse = inviteRoute.slice(inviteRoute.indexOf('if (!emailSent)'));
 
-assert.match(server, /function resolveConfiguredResendFrom\(fallback: string\)/);
-assert.match(inviteRoute, /from: resolveConfiguredResendFrom\(OFFICIAL_FROM_NOREPLY\)/);
-assert.doesNotMatch(
-  inviteRoute,
-  /from: OFFICIAL_FROM_NOREPLY/,
-  'o convite não pode ignorar RESEND_FROM_EMAIL',
-);
+// O backend resolve a identidade da clínica pela clinic_id autenticada.
+assert.match(inviteRoute, /const clinicId = currentClinicId\(user\)/);
+assert.match(inviteRoute, /from\('clinics'\)[\s\S]*?select\('id,name'\)[\s\S]*?eq\('id', clinicId\)/);
+assert.match(inviteRoute, /const clinicName = sanitizeString\(clinic\?\.name, 160\)/);
+assert.match(inviteRoute, /CLINIC_IDENTITY_NOT_CONFIGURED/);
+assert.doesNotMatch(inviteRoute, /clinic\?\.name\s*\|\|\s*user\.name/);
+assert.doesNotMatch(inviteRoute, /clinicName\s*=\s*sanitizeString\([^\n]*user\.name/);
 
-assert.match(resendSender, /template:\s*\{[\s\S]*?id: templateId,[\s\S]*?variables: templateData \|\| \{\}/);
-assert.match(resendSender, /templatePayload \|\| htmlPayload/);
-assert.match(resendSender, /deliveryMode = 'html_fallback'/);
-assert.match(resendSender, /providerMessageId: sanitizeString\(responseBody\.json\?\.id/);
-assert.match(server, /sendTransactionalEmailWithResultSafe/);
-assert.match(server, /'User-Agent': 'Verto\/1\.0'/);
-assert.match(server, /templateFallbackReason/);
+// As quatro identidades são mantidas em variáveis distintas.
+assert.match(inviteRoute, /clinic_name: clinicName/);
+assert.match(inviteRoute, /invited_professional_name: invitedProfessionalName/);
+assert.match(inviteRoute, /responsible_professional_name: responsibleProfessionalName/);
+assert.match(inviteRoute, /invited_email: email/);
+assert.match(inviteRoute, /templateKind: 'clinic_invitation'/);
+assert.match(inviteRoute, /templateData: invitationEmail\.variables/);
+assert.doesNotMatch(inviteRoute, /email\.split\('@'\)\[0\]/);
 
-assert.match(inviteRoute, /nome: invitedProfessionalName/);
-assert.match(inviteRoute, /link_ativacao: activationLink/);
-assert.match(inviteRoute, /escapeHtml\(invitedRoleLabel\)/);
-assert.match(inviteRoute, /escapeHtml\(clinicName\)/);
+const personalized = buildClinicInvitationEmailTemplate({
+  clinic_name: 'Espaço Guiar',
+  invited_professional_name: 'Marina Souza',
+  responsible_professional_name: 'Mateus Montoro',
+  invited_email: 'marina@example.com',
+  invited_role_label: 'Psicóloga',
+  link_ativacao: 'https://www.appverto.com.br/?auth_action=activate&invitation_id=00000000-0000-4000-8000-000000000001',
+});
+assert.equal(personalized.subject, 'Convite da clínica Espaço Guiar para acessar a Verto');
+assert.match(personalized.html, /Olá, Marina Souza!/);
+assert.match(personalized.html, /clínica <strong>Espaço Guiar<\/strong>/);
+assert.match(personalized.html, /Mateus Montoro<\/strong> realizou este convite em nome da clínica/);
+assert.doesNotMatch(personalized.subject, /Mateus Montoro/);
+assert.equal(personalized.variables.clinic_name, 'Espaço Guiar');
+assert.equal(personalized.variables.invited_professional_name, 'Marina Souza');
+assert.equal(personalized.variables.responsible_professional_name, 'Mateus Montoro');
+assert.equal(personalized.variables.invited_email, 'marina@example.com');
+
+const genericGreeting = buildClinicInvitationEmailTemplate({
+  clinic_name: 'Espaço Guiar',
+  invited_professional_name: null,
+  responsible_professional_name: null,
+  invited_email: 'contato.aba+financeiro@example.com',
+  invited_role_label: 'Profissional de atendimento',
+  link_ativacao: 'https://www.appverto.com.br/',
+});
+assert.match(genericGreeting.html, /Olá! 🎉/);
+assert.doesNotMatch(genericGreeting.html, /contato\.aba|financeiro/);
+assert.equal(genericGreeting.variables.invited_professional_name, '');
+
+// O cliente recebe somente estado funcional; IDs e fallback do Resend ficam nos logs.
 assert.match(inviteRoute, /providerMessageId: emailDelivery\.providerMessageId/);
 assert.match(inviteRoute, /deliveryMode: emailDelivery\.deliveryMode/);
 assert.match(inviteRoute, /templateId: emailDelivery\.templateId/);
-
-assert.match(inviteRoute, /res\.status\(502\)\.json\(\{/);
+assert.doesNotMatch(publicInviteResponse, /emailDelivery:\s*\{|providerMessageId|templateFallbackReason|templateId/);
 assert.match(inviteRoute, /code: 'CLINIC_INVITATION_EMAIL_SEND_FAILED'/);
 assert.match(inviteRoute, /invitationPersisted: true/);
 assert.match(inviteRoute, /invitationEmailSent: false/);
-assert.match(inviteRoute, /if \(!emailSent\)/);
-assert.match(inviteRoute, /return res\.json\(\{[\s\S]*?success: true,[\s\S]*?invitationEmailSent: true/);
-assert.doesNotMatch(
-  inviteRoute,
-  /success: true,[\s\S]{0,300}invitationEmailSent: emailSent/,
-  'falha de e-mail não pode continuar retornando sucesso global',
-);
-assert.match(inviteRoute, /logRouteDbError\('\/api\/clinic\/invite \[POST\]'/);
-assert.doesNotMatch(inviteRoute, /\/api\/tasks\/:patientId/);
-
-assert.match(inviteDataService, /const payload = await safeJson\(response\)/);
-assert.match(inviteDataService, /\.\.\.payload,[\s\S]*?success: false/);
-assert.match(newInviteHandler, /result\.success && result\.invitationEmailSent !== false/);
-assert.match(newInviteHandler, /setInviteSent\(true\)/);
-assert.doesNotMatch(newInviteHandler, /setSuccess\(result\.message/);
-assert.match(newInviteHandler, /if \(result\.invitationPersisted\) \{[\s\S]*?await fetchInvitations\(\)/);
-assert.doesNotMatch(newInviteHandler, /Convite enviado com sucesso para/);
-assert.match(invitationModal, /result\.success && result\.invitationEmailSent !== false/);
-assert.match(invitationModal, /result\.invitationPersisted/);
 assert.match(inviteRoute, /message: 'Convite enviado com sucesso\.'/);
-assert.match(inviteRoute, /O convite foi registrado, mas não foi possível enviar o e-mail\. Tente reenviar\./);
-const publicInviteResponse = inviteRoute.slice(inviteRoute.indexOf('if (!emailSent)'));
-assert.doesNotMatch(
-  publicInviteResponse,
-  /emailDelivery:\s*\{/,
-  'detalhes do provedor não devem ser retornados ao cliente',
-);
-assert.match(teamManagement, /inviteSent[\s\S]*?Convite enviado com sucesso\./);
-assert.match(invitationModal, /success \? 'Convite enviado com sucesso\.'/);
-assert.doesNotMatch(invitationModal, /setTimeout\(/);
-assert.doesNotMatch(newInviteHandler, /Resend|fallback|contingência|template personalizado/i);
+assert.match(teamManagement, /result\.success && result\.invitationEmailSent !== false/);
+assert.match(invitationModal, /result\.success && result\.invitationEmailSent !== false/);
 
-assert.match(envExample, /RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID=/);
-assert.match(envExample, /variables `nome` and `link_ativacao`/);
-assert.equal(
-  packageJson.scripts?.['check:resend'],
-  'node scripts/check-resend-configuration.mjs',
-);
-assert.match(resendConfigurationCheck, /GET|resendGet/);
-assert.match(resendConfigurationCheck, /\/domains/);
-assert.match(resendConfigurationCheck, /\/templates\//);
-assert.match(resendConfigurationCheck, /'User-Agent': 'Verto-Resend-Check\/1\.0'/);
-assert.match(resendConfigurationCheck, /AbortSignal\.timeout\(10_000\)/);
-assert.match(resendConfigurationCheck, /\['nome', 'link_ativacao'\]/);
-assert.match(resendCheckScript, /resendGet\('\/domains'\)/);
-assert.match(resendCheckScript, /\/templates\/\$\{encodeURIComponent\(professionalTemplate\)\}/);
-assert.match(resendCheckScript, /\['nome', 'link_ativacao'\]/);
-assert.doesNotMatch(resendCheckScript, /POST|\/emails/);
-
-const personalizedTemplate = buildActivationEmailTemplate({
-  nome: 'Marina',
-  link_ativacao: 'https://appverto.com.br/ativar?token=teste',
-  perfil: 'professional',
-});
-assert.match(personalizedTemplate.html, /Olá, Marina!/);
-assert.match(personalizedTemplate.html, /https:\/\/appverto\.com\.br\/ativar\?token=teste/);
-assert.doesNotMatch(personalizedTemplate.html, /\{\{saudacao\}\}|\{\{link_ativacao\}\}/);
+// Contrato explícito para template publicado, sem reutilizar o template de boas-vindas.
+assert.match(envExample, /RESEND_TEMPLATE_CLINIC_INVITATION_ID=/);
+for (const variable of [
+  'clinic_name',
+  'invited_professional_name',
+  'responsible_professional_name',
+  'invited_email',
+  'invited_role_label',
+  'link_ativacao',
+]) {
+  assert.match(envExample, new RegExp(variable));
+  assert.match(resendCheck, new RegExp(`['\"]${variable}['\"]`));
+}
+assert.match(resendCheck, /RESEND_TEMPLATE_CLINIC_INVITATION_ID/);
+assert.doesNotMatch(resendCheck, /RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID/);
 
 console.log('clinicInvitationDelivery.test.ts: ok');

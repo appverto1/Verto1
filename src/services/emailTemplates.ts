@@ -1,4 +1,4 @@
-﻿export type EmailTemplateProfile = 'professional' | 'patient';
+export type EmailTemplateProfile = 'professional' | 'patient';
 
 import { VERTO_EMAIL_HORIZONTAL_LOGO_URL } from '../constants/vertoBranding';
 
@@ -11,6 +11,15 @@ type ActivationTemplateInput = {
 type WelcomeTemplateInput = {
   nome: string;
   perfil: EmailTemplateProfile;
+};
+
+export type ClinicInvitationTemplateInput = {
+  clinic_name: string;
+  invited_professional_name?: string | null;
+  responsible_professional_name?: string | null;
+  invited_email: string;
+  invited_role_label: string;
+  link_ativacao: string;
 };
 
 type PasswordRecoveryTemplateInput = {
@@ -157,6 +166,46 @@ const PATIENT_RECOVERY_HTML = `
     </table>
   </div>
 `;
+
+export const buildClinicInvitationEmailTemplate = (
+  input: ClinicInvitationTemplateInput
+): { subject: string; html: string; variables: Record<string, string> } => {
+  const clinicName = escapeHtml(String(input.clinic_name || '').trim());
+  if (!clinicName) {
+    throw new Error('clinic_name is required for clinic invitation emails');
+  }
+  const invitedProfessionalName = String(input.invited_professional_name || '').trim();
+  const responsibleProfessionalName = String(input.responsible_professional_name || '').trim();
+  const invitedEmail = String(input.invited_email || '').trim().toLowerCase();
+  const invitedRoleLabel = escapeHtml(String(input.invited_role_label || '').trim() || 'profissional');
+  const activationLink = String(input.link_ativacao || '').trim();
+  const greeting = invitedProfessionalName
+    ? `Olá, ${escapeHtml(invitedProfessionalName)}! 🎉`
+    : 'Olá! 🎉';
+  const responsibleCopy = responsibleProfessionalName
+    ? `<p style="margin:0 0 16px 0;color:#5b21b6;font-size:15px;line-height:1.55;"><strong>${escapeHtml(responsibleProfessionalName)}</strong> realizou este convite em nome da clínica.</p>`
+    : '';
+  const invitationCopy = `<p style="margin:0 0 16px 0;color:#5b21b6;font-size:15px;line-height:1.55;">Você foi convidado(a) para atuar como <strong>${invitedRoleLabel}</strong> na clínica <strong>${clinicName}</strong>.</p>${responsibleCopy}`;
+  const html = PROFESSIONAL_WELCOME_HTML
+    .replace(/\{\{saudacao\}\}/g, greeting)
+    .replace(/\{\{link_ativacao\}\}/g, activationLink)
+    .replace('</h2>', `</h2>${invitationCopy}`);
+
+  return {
+    subject: `Convite da clínica ${String(input.clinic_name || '').trim()} para acessar a Verto`,
+    html,
+    variables: {
+      clinic_name: String(input.clinic_name || '').trim(),
+      invited_professional_name: invitedProfessionalName,
+      responsible_professional_name: responsibleProfessionalName,
+      invited_email: invitedEmail,
+      invited_role_label: String(input.invited_role_label || '').trim(),
+      link_ativacao: activationLink,
+      // Compatibility with the existing published professional template.
+      nome: invitedProfessionalName || 'Profissional',
+    },
+  };
+};
 
 export const buildActivationEmailTemplate = (
   input: ActivationTemplateInput

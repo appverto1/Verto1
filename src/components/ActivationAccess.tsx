@@ -35,6 +35,27 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [inviteMode, setInviteMode] = useState<'new' | 'existing'>('new');
   const isExistingAccountInvite = !isRecoveryRoute && inviteMode === 'existing' && Boolean(invitationId);
 
+  useEffect(() => {
+    const applyActivationError = (message: unknown) => {
+      const safeMessage = String(message || '').trim();
+      if (safeMessage) setError(safeMessage);
+    };
+    try {
+      const storedError = window.sessionStorage.getItem('verto_activation_error');
+      if (storedError) {
+        applyActivationError(storedError);
+        window.sessionStorage.removeItem('verto_activation_error');
+      }
+    } catch {
+      // Session storage is optional.
+    }
+    const handleActivationError = (event: Event) => {
+      applyActivationError((event as CustomEvent<{ message?: string }>).detail?.message);
+    };
+    window.addEventListener('verto:activation-error', handleActivationError);
+    return () => window.removeEventListener('verto:activation-error', handleActivationError);
+  }, []);
+
   const parseActivationParams = () => {
     const searchParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
@@ -62,6 +83,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
 
     return {
       type,
+      action,
       code,
       tokenHash,
       accessToken,
@@ -73,12 +95,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   };
 
   const establishSessionFromUrl = async () => {
-    const { type, code, tokenHash, accessToken, refreshToken, hasActivationParams } =
+    const { type, action, code, tokenHash, accessToken, refreshToken, invitationId: parsedInvitationId, inviteMode: parsedInviteMode, hasActivationParams } =
       parseActivationParams();
     const supabase = await getSupabase();
 
-    if (hasActivationParams) {
-      // Avoid stale/deleted-user local sessions hijacking activation flows.
+    if (code || tokenHash || accessToken || refreshToken) {
+      // Token exchanges must not inherit a stale local session. A plain invitation link,
+      // however, keeps an already authenticated professional signed in.
       try {
         await supabase.auth.signOut({ scope: 'local' } as any);
       } catch {
@@ -126,7 +149,12 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       setEmail(sessionEmail);
       setIsActivationLinkContext(true);
       if (hasActivationParams) {
-        window.history.replaceState({}, document.title, '/?auth_action=activate');
+        const continuationParams = new URLSearchParams({
+          auth_action: action === 'recovery' || type === 'recovery' ? 'recovery' : 'activate',
+        });
+        if (parsedInvitationId) continuationParams.set('invitation_id', parsedInvitationId);
+        if (parsedInvitationId) continuationParams.set('invite_mode', parsedInviteMode);
+        window.history.replaceState({}, document.title, `/?${continuationParams.toString()}`);
       }
       return session;
     }

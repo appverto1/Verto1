@@ -217,6 +217,18 @@ class LazyImportBoundary extends React.Component<LazyImportBoundaryProps, LazyIm
 }
 
 const AUTO_RETRIED_FAILED_SYNC_KEY = 'verto.failedSyncAutoRetried.v1';
+const ACTIVATION_ERROR_KEY = 'verto_activation_error';
+
+const publishActivationErrorMessage = (value: unknown) => {
+  const message = String(value || 'Não foi possível concluir este convite. Abra novamente o link recebido por e-mail.').trim();
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(ACTIVATION_ERROR_KEY, message);
+  } catch {
+    // Session storage is optional; the live event still updates the activation screen.
+  }
+  window.dispatchEvent(new CustomEvent('verto:activation-error', { detail: { message } }));
+};
 
 const readAutoRetriedFailedSyncIds = () => {
   try {
@@ -1217,7 +1229,11 @@ export default function App() {
               const authProvider = String(session?.user?.app_metadata?.provider || '').toLowerCase();
               const isPasswordSignIn = authProvider === 'email' || authProvider === '';
               const activationEmail = String(localStorage.getItem('verto_activation_email') || '').trim().toLowerCase();
-              const activationInvitationId = String(localStorage.getItem('verto_activation_invitation_id') || '').trim();
+              const activationInvitationId = String(
+                new URLSearchParams(window.location.search).get('invitation_id')
+                  || localStorage.getItem('verto_activation_invitation_id')
+                  || '',
+              ).trim();
               if (isActivationFlow && authProvider !== 'google') {
                 // Em ativação por e-mail, o acesso só pode seguir após definir senha explicitamente.
                 setLoading(false);
@@ -1228,12 +1244,15 @@ export default function App() {
                 setLoading(false);
                 return;
               }
-              await handleLoginSuccess(session, intendedRole, undefined, {
+              const loginResult = await handleLoginSuccess(session, intendedRole, undefined, {
                 provider: session?.user?.app_metadata?.provider || null,
                 activationFlow: isActivationFlow,
                 activationEmail: activationEmail || null,
                 invitationId: activationInvitationId || null,
               });
+              if (!loginResult?.success && isActivationFlow) {
+                publishActivationErrorMessage(loginResult?.error);
+              }
             } else if (event === 'SIGNED_OUT') {
               if (import.meta.env.DEV) console.log('Sessao encerrada pelo provedor de autenticacao.');
               if (manualLogoutInProgressRef.current) {
@@ -1310,8 +1329,28 @@ export default function App() {
           }
         }
 
+        const currentAuthParams = new URLSearchParams(window.location.search);
+        const currentAuthAction = String(currentAuthParams.get('auth_action') || '').toLowerCase();
+        const currentInvitationId = String(currentAuthParams.get('invitation_id') || '').trim();
+        const isInvitationContinuation = currentAuthAction === 'activate' && Boolean(currentInvitationId);
+
         if (authData?.user) {
-          await applyResolvedUserState(authData.user, session);
+          if (isInvitationContinuation && session?.access_token) {
+            const loginRes = await handleLoginSuccess(session, 'therapist', undefined, {
+              provider: session?.user?.app_metadata?.provider || null,
+              activationFlow: true,
+              activationEmail: session?.user?.email || null,
+              invitationId: currentInvitationId,
+            });
+            if (!loginRes?.success) {
+              publishActivationErrorMessage(loginRes?.error);
+              setUser(null);
+              setProfilePicture(null);
+              setShowWorkspacePicker(false);
+            }
+          } else {
+            await applyResolvedUserState(authData.user, session);
+          }
         } else if (session?.access_token) {
           // Fallback de recuperação em refresh: refaz o vínculo da sessão server-side.
           const intendedRole =
@@ -1320,9 +1359,12 @@ export default function App() {
               .toLowerCase();
           const loginRes = await handleLoginSuccess(session, intendedRole, undefined, {
             provider: session?.user?.app_metadata?.provider || null,
-            activationFlow: false,
+            activationFlow: isInvitationContinuation,
+            activationEmail: isInvitationContinuation ? session?.user?.email || null : null,
+            invitationId: isInvitationContinuation ? currentInvitationId : null,
           });
           if (!loginRes?.success) {
+            if (isInvitationContinuation) publishActivationErrorMessage(loginRes?.error);
             setUser(null);
             setProfilePicture(null);
             setShowWorkspacePicker(false);
@@ -1341,9 +1383,12 @@ export default function App() {
                 .toLowerCase();
             const loginRes = await handleLoginSuccess(session, intendedRole, undefined, {
               provider: session?.user?.app_metadata?.provider || null,
-              activationFlow: false,
+              activationFlow: isInvitationContinuation,
+              activationEmail: isInvitationContinuation ? session?.user?.email || null : null,
+              invitationId: isInvitationContinuation ? currentInvitationId : null,
             });
             if (!loginRes?.success) {
+              if (isInvitationContinuation) publishActivationErrorMessage(loginRes?.error);
               setUser(null);
               setProfilePicture(null);
               setShowWorkspacePicker(false);

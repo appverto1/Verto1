@@ -1,7 +1,7 @@
 const apiKey = String(process.env.RESEND_API_KEY || '').trim();
 const fromValue = String(process.env.RESEND_FROM_EMAIL || '').trim();
-const professionalTemplate = String(
-  process.env.RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID || 'bem-vindo-clnica',
+const clinicInvitationTemplate = String(
+  process.env.RESEND_TEMPLATE_CLINIC_INVITATION_ID || '',
 ).trim();
 
 const result = {
@@ -22,8 +22,8 @@ const extractSenderEmail = (value) => {
 const senderEmail = extractSenderEmail(fromValue);
 if (!apiKey) result.errors.push('RESEND_API_KEY não configurada.');
 if (!senderEmail) result.errors.push('RESEND_FROM_EMAIL ausente ou inválido.');
-if (!professionalTemplate) {
-  result.errors.push('Template profissional do Resend não configurado.');
+if (!clinicInvitationTemplate) {
+  result.errors.push('Template de convite de clínica do Resend não configurado.');
 }
 
 const resendGet = async (path) => {
@@ -83,7 +83,7 @@ try {
   }
 
   const template = await resendGet(
-    `/templates/${encodeURIComponent(professionalTemplate)}`,
+    `/templates/${encodeURIComponent(clinicInvitationTemplate)}`,
   );
   const variableKeys = Array.isArray(template?.variables)
     ? template.variables.map((variable) => String(variable?.key || ''))
@@ -96,11 +96,18 @@ try {
   };
 
   if (String(template?.status || '').toLowerCase() !== 'published') {
-    result.errors.push('O template profissional existe, mas não está publicado.');
+    result.errors.push('O template de convite de clínica existe, mas não está publicado.');
   }
-  for (const requiredVariable of ['nome', 'link_ativacao']) {
+  for (const requiredVariable of [
+    'clinic_name',
+    'invited_professional_name',
+    'responsible_professional_name',
+    'invited_email',
+    'invited_role_label',
+    'link_ativacao',
+  ]) {
     if (!variableKeys.includes(requiredVariable)) {
-      result.errors.push(`O template profissional não declara a variável ${requiredVariable}.`);
+      result.errors.push(`O template de convite de clínica não declara a variável ${requiredVariable}.`);
     }
   }
 

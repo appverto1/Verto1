@@ -1,7 +1,7 @@
-const SW_VERSION = "verto-branding-v14";
+const SW_VERSION = "verto-branding-v15";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260716-3";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260716-3";
-const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13"]);
+const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14"]);
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
 
 const isGenericBrandName = (value) => {
@@ -73,29 +73,34 @@ self.addEventListener("push", (event) => {
   const title = isGenericBrandName(payload.title) && !isGenericBrandName(brandName)
     ? brandName
     : (payload.title || brandName);
-  const payloadIcon = isVertoFallbackAsset(payload.icon) ? VERTO_NOTIFICATION_ICON : payload.icon;
-  const iconUrl = asNotificationAssetUrl(brandLogo || payloadIcon || VERTO_NOTIFICATION_ICON);
+  const iconUrl = asNotificationAssetUrl(VERTO_NOTIFICATION_ICON);
   const badgeUrl = asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
+  const imageUrl = asNotificationAssetUrl(payload.image || brandLogo || VERTO_NOTIFICATION_ICON);
+  const notificationOptions = {
+    body: payload.body || `Você tem uma sessão agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
+    ...(iconUrl ? { icon: iconUrl } : {}),
+    ...(badgeUrl ? { badge: badgeUrl } : {}),
+    ...(imageUrl ? { image: imageUrl } : {}),
+    tag: payload.tag || (appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined),
+    renotify: Boolean(appointmentId),
+    requireInteraction: true,
+    timestamp: Date.now(),
+    data: {
+      ...(payload.data || {}),
+      url: targetUrl,
+      appointmentId,
+      reminderKind,
+      brandName,
+      brandLogoUrl: brandLogo || null,
+      swVersion: SW_VERSION,
+    },
+    vibrate: [120, 60, 120],
+  };
 
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body: payload.body || `Você tem uma sessão agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
-      ...(iconUrl ? { icon: iconUrl } : {}),
-      ...(badgeUrl ? { badge: badgeUrl } : {}),
-      tag: payload.tag || (appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined),
-      renotify: Boolean(appointmentId),
-      requireInteraction: true,
-      timestamp: Date.now(),
-      data: {
-        ...(payload.data || {}),
-        url: targetUrl,
-        appointmentId,
-        reminderKind,
-        brandName,
-        brandLogoUrl: brandLogo || null,
-        swVersion: SW_VERSION,
-      },
-      vibrate: [120, 60, 120],
+    self.registration.showNotification(title, notificationOptions).catch(() => {
+      const { image: _failedImage, ...fallbackOptions } = notificationOptions;
+      return self.registration.showNotification(title, fallbackOptions);
     }),
   );
 });

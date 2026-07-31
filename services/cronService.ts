@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import crypto from 'crypto';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
@@ -68,7 +69,6 @@ const CRON_LOOKBACK_MINUTES = 180;
 const QUERY_AHEAD_HOURS = 28;
 const REMINDER_DEDUPE_TTL_MS = 30 * 60 * 60 * 1000;
 const CLINIC_BRANDING_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const CLINIC_LOGO_SIGNED_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 const REMINDER_STEPS = [
   {
@@ -838,21 +838,71 @@ export const invalidateReminderClinicBranding = (clinicId?: string | null) => {
 
 type ClinicBrandingResolverOptions = Pick<ActiveCronServiceOptions, 'supabase' | 'logger'>;
 
+const notificationAssetSigningSecret = () =>
+  sanitizeText(process.env.SESSION_SECRET, 500);
+
+const notificationAssetSignature = (clinicId: string, storagePath: string) => {
+  const secret = notificationAssetSigningSecret();
+  if (!secret) return '';
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`${clinicId}:${storagePath}`)
+    .digest('hex');
+};
+
+export function buildStableClinicNotificationLogoUrl(
+  clinicId: unknown,
+  storagePath: unknown,
+): string | null {
+  const safeClinicId = sanitizeText(clinicId, 120);
+  const safeStoragePath = extractReminderClinicLogoStoragePath(storagePath) || sanitizeText(storagePath, 2000);
+  if (!isUuid(safeClinicId) || !safeStoragePath || safeStoragePath.includes('..')) return null;
+  const signature = notificationAssetSignature(safeClinicId, safeStoragePath);
+  if (!signature) return null;
+  const baseUrl = sanitizeText(
+    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || 'https://www.appverto.com.br',
+    500,
+  ).replace(/\/+$/, '');
+  if (!/^https:\/\//i.test(baseUrl)) return null;
+  const query = new URLSearchParams({
+    clinic_id: safeClinicId,
+    path: safeStoragePath,
+    signature,
+  });
+  return `${baseUrl}/api/public/notification-assets/clinic-logo?${query.toString()}`;
+}
+
+export function verifyStableClinicNotificationLogoSignature(params: {
+  clinicId: unknown;
+  storagePath: unknown;
+  signature: unknown;
+}): boolean {
+  const clinicId = sanitizeText(params.clinicId, 120);
+  const storagePath = sanitizeText(params.storagePath, 2000);
+  const signature = sanitizeText(params.signature, 128).toLowerCase();
+  if (!isUuid(clinicId) || !storagePath || storagePath.includes('..') || !/^[a-f0-9]{64}$/.test(signature)) {
+    return false;
+  }
+  const expected = notificationAssetSignature(clinicId, storagePath);
+  if (!expected) return false;
+  const providedBuffer = Buffer.from(signature, 'hex');
+  const expectedBuffer = Buffer.from(expected, 'hex');
+  return providedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
 export async function resolvePushSafeClinicLogoUrl(
   options: ClinicBrandingResolverOptions,
   candidates: unknown[],
+  clinicId?: string | null,
 ) {
   for (const candidate of candidates) {
     const storagePath = extractReminderClinicLogoStoragePath(candidate);
     if (storagePath && !storagePath.includes('..')) {
-      const { data, error } = await options.supabase.storage
-        .from('patient-photos')
-        .createSignedUrl(storagePath, CLINIC_LOGO_SIGNED_URL_TTL_SECONDS);
-      const signedUrl = sanitizeClinicNotificationLogoUrl(data?.signedUrl);
-      if (!error && /^https?:\/\//i.test(signedUrl)) return signedUrl;
-      options.logger.warn('[Appointment Reminder Cron] Logo institucional nao pode ser assinado.', {
+      const stableUrl = buildStableClinicNotificationLogoUrl(clinicId, storagePath);
+      if (stableUrl) return stableUrl;
+      options.logger.warn('[Appointment Reminder Cron] Logo institucional não recebeu URL pública estável.', {
+        clinicId: sanitizeText(clinicId, 120) || null,
         storagePath,
-        message: error?.message || null,
       });
       continue;
     }
@@ -998,7 +1048,7 @@ async function resolveReminderClinicBranding(
     profileLogoMetadata.clinicSettings?.clinicLogoPath,
     profileLogoMetadata.clinic_settings?.clinicLogoPath,
     data?.logo_url,
-  ]);
+  ], safeClinicId);
   const ownerProfessionalName = sanitizeText(profileNameSource?.full_name, 180);
   const clinicNameIsOwnerName = Boolean(
     clinicName && ownerProfessionalName &&
