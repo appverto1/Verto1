@@ -8,7 +8,14 @@ type ActivationAccessProps = {
     session: any,
     intendedRole?: string,
     credentials?: { email?: string; password?: string },
-    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean; activationEmail?: string | null; invitationId?: string | null },
+    authContext?: {
+      provider?: string | null;
+      activationFlow?: boolean;
+      passwordSetupCompleted?: boolean;
+      activationEmail?: string | null;
+      invitationId?: string | null;
+      deferInvitationAcceptance?: boolean;
+    },
   ) => Promise<any>;
 };
 
@@ -22,6 +29,10 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const isRecoveryRoute =
     typeof window !== 'undefined' &&
     (/^\/reset-password\/?$/.test(window.location.pathname) || authAction === 'recovery');
+  const isInvitationAcceptanceAction =
+    authAction === 'accept_invitation' ||
+    (authAction === 'activate' &&
+      String(new URLSearchParams(window.location.search).get('invite_mode') || '').toLowerCase() === 'existing');
   const [email, setEmail] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -33,7 +44,10 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [isActivationLinkContext, setIsActivationLinkContext] = useState(true);
   const [invitationId, setInvitationId] = useState('');
   const [inviteMode, setInviteMode] = useState<'new' | 'existing'>('new');
-  const isExistingAccountInvite = !isRecoveryRoute && inviteMode === 'existing' && Boolean(invitationId);
+  const isExistingAccountInvite =
+    !isRecoveryRoute &&
+    Boolean(invitationId) &&
+    (inviteMode === 'existing' || isInvitationAcceptanceAction);
 
   useEffect(() => {
     const applyActivationError = (message: unknown) => {
@@ -76,6 +90,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       Boolean(refreshToken) ||
       Boolean(parsedInvitationId) ||
       action === 'activate' ||
+      action === 'accept_invitation' ||
       action === 'recovery' ||
       type === 'signup' ||
       type === 'recovery' ||
@@ -150,7 +165,11 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       setIsActivationLinkContext(true);
       if (hasActivationParams) {
         const continuationParams = new URLSearchParams({
-          auth_action: action === 'recovery' || type === 'recovery' ? 'recovery' : 'activate',
+          auth_action: action === 'recovery' || type === 'recovery'
+            ? 'recovery'
+            : action === 'accept_invitation'
+              ? 'accept_invitation'
+              : 'activate',
         });
         if (parsedInvitationId) continuationParams.set('invitation_id', parsedInvitationId);
         if (parsedInvitationId) continuationParams.set('invite_mode', parsedInviteMode);
@@ -205,6 +224,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     if (invitationParam) {
       setInvitationId(invitationParam);
       localStorage.setItem('verto_activation_invitation_id', invitationParam);
+      if (String(params.get('auth_action') || '').toLowerCase() === 'accept_invitation') {
+        localStorage.setItem('verto_pending_invitation_acceptance', 'true');
+      }
     }
     const resolvedInviteMode = inviteModeParam === 'existing' ? 'existing' : 'new';
     setInviteMode(resolvedInviteMode);
@@ -250,14 +272,21 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (invitationId) {
         localStorage.setItem('verto_activation_invitation_id', invitationId);
         localStorage.setItem('verto_activation_invite_mode', inviteMode);
+        if (isInvitationAcceptanceAction) {
+          localStorage.setItem('verto_pending_invitation_acceptance', 'true');
+        }
       }
       const redirectParams = new URLSearchParams({
-        auth_action: isRecoveryRoute ? 'recovery' : 'activate',
+        auth_action: isRecoveryRoute
+          ? 'recovery'
+          : isInvitationAcceptanceAction
+            ? 'accept_invitation'
+            : 'activate',
         role: intendedRole,
       });
       if (expectedEmail) redirectParams.set('email', expectedEmail);
       if (invitationId) redirectParams.set('invitation_id', invitationId);
-      if (!isRecoveryRoute && invitationId) redirectParams.set('invite_mode', inviteMode);
+      if (!isRecoveryRoute && !isInvitationAcceptanceAction && invitationId) redirectParams.set('invite_mode', inviteMode);
       const supabase = await getSupabase();
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -291,16 +320,17 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           { email: existingEmail, password: newPassword },
           {
             provider: 'email',
-            activationFlow: true,
+            activationFlow: !isInvitationAcceptanceAction,
             passwordSetupCompleted: false,
             activationEmail: existingEmail,
             invitationId,
+            deferInvitationAcceptance: isInvitationAcceptanceAction,
           },
         );
         if (!loginRes?.success) {
           throw new Error(loginRes?.error || 'Não foi possível entrar com este acesso.');
         }
-        setMessage('Acesso confirmado. Vinculando você à clínica...');
+        setMessage('Acesso confirmado. Revise e aceite o novo vínculo.');
         return;
       }
       if (isRecoveryRoute) {

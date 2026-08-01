@@ -1,0 +1,1 @@
+# Diffs integrais por arquivo

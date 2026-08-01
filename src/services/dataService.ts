@@ -7014,7 +7014,11 @@ export const dataService = {
         return await response.json();
       }
       const err = await response.json();
-      return { success: false, error: err.error || 'Failed to accept invitation' };
+      return {
+        success: false,
+        error: err.error || 'Failed to accept invitation',
+        message: err.message || null,
+      };
     } catch (error) {
       console.error('Error accepting invitation:', error);
       return { success: false, error: String(error) };

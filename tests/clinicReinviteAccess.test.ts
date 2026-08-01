@@ -4,6 +4,8 @@ import fs from 'node:fs';
 const server = fs.readFileSync('server.ts', 'utf8');
 const app = fs.readFileSync('src/App.tsx', 'utf8');
 const activation = fs.readFileSync('src/components/ActivationAccess.tsx', 'utf8');
+const invitationAcceptance = fs.readFileSync('src/components/ClinicInvitationAcceptance.tsx', 'utf8');
+const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
 const supabaseClient = fs.readFileSync('src/lib/supabase.ts', 'utf8');
 const migration = fs.readFileSync('supabase/migrations/20260731193000_atomic_clinic_invitation_acceptance.sql', 'utf8');
 
@@ -16,12 +18,15 @@ const section = (source: string, start: string, end: string): string => {
 };
 
 const activationUrl = section(server, 'type ActivationRedirectOptions', 'function getRecoveryRedirectUrl');
+const invitationAcceptanceUrl = section(server, 'function getClinicInvitationAcceptanceUrl', 'function getRecoveryRedirectUrl');
 const inviteRoute = section(server, "app.post('/api/clinic/invite'", "app.get('/api/clinic/invitations'");
 const loginRoute = section(server, "app.post('/api/auth/login'", "app.post('/api/auth/logout'");
 const acceptRoute = section(server, "app.post('/api/clinic/accept-invite'", "app.post('/api/clinic/assign-role'");
 const unlinkRoute = section(server, "app.patch('/api/clinic/members/:memberId/unlink'", "app.get('/api/clinic/anamnesis-template'");
+const billingOnboardingPaths = section(server, 'function isBillingOnboardingAllowedPath', 'function billingAccessBlockedPayload');
+const invitationBillingBypass = section(server, 'function isClinicInvitationAcceptancePath', 'const DEMO_SANDBOX_BILLING_MODEL');
 
-// Link abre a raiz real da SPA e carrega invitation_id, evitando landing page/404.
+// Primeiro convite abre a raiz real da SPA e carrega invitation_id, evitando landing page/404.
 assert.match(activationUrl, /auth_action: 'activate'/);
 assert.match(activationUrl, /params\.set\('invitation_id', invitationId\)/);
 assert.match(activationUrl, /return `\$\{baseUrl\.replace[\s\S]*?\}\/\?\$\{params\.toString\(\)\}`/);
@@ -30,10 +35,33 @@ assert.match(app, /authAction === 'activate'/);
 assert.match(activation, /auth_action/);
 assert.match(supabaseClient, /authAction === 'activate'/);
 
+// Convites posteriores usam uma tela de aceite, sem e-mail ou clínica na URL.
+assert.match(invitationAcceptanceUrl, /auth_action: 'accept_invitation'/);
+assert.match(invitationAcceptanceUrl, /invitation_id: invitationId/);
+assert.doesNotMatch(invitationAcceptanceUrl, /params\.set\('email'|role:/);
+assert.match(app, /authAction === 'accept_invitation'/);
+assert.match(app, /authAction === 'activate' && invitationMode === 'existing'/);
+assert.match(app, /isInvitationAcceptanceRoute && user/);
+assert.match(app, /ClinicInvitationAcceptance/);
+assert.match(activation, /isInvitationAcceptanceAction/);
+assert.match(activation, /auth_action: isRecoveryRoute[\s\S]*?'accept_invitation'/);
+assert.match(activation, /deferInvitationAcceptance: isInvitationAcceptanceAction/);
+assert.match(activation, /verto_pending_invitation_acceptance/);
+assert.match(invitationAcceptance, /dataService\.acceptInvitation\(invitationId\)/);
+assert.match(invitationAcceptance, /onboardingContext: result\.onboardingContext \|\| \{\}/);
+assert.match(invitationAcceptance, /accepted\?\.onboardingContext\?\.clinic\?\.name/);
+assert.match(invitationAcceptance, /Entrar na clínica/);
+assert.match(invitationAcceptance, /Continuar depois/);
+assert.match(invitationAcceptance, /\{!accepted \? \(/);
+assert.doesNotMatch(invitationAcceptance, /accepted \? 'Ver depois'/);
+assert.match(invitationAcceptance, /No clinic,[\s\S]*?role, name, or e-mail comes from the URL/);
+assert.match(dataService, /async acceptInvitation\(invitationId: string\)/);
+
 // Conta existente reutiliza Auth e não recebe nova senha/UUID.
 assert.match(inviteRoute, /const reusedExistingAuthAccess = Boolean/);
-assert.match(inviteRoute, /inviteMode: reusedExistingAuthAccess \? 'existing' : 'new'/);
+assert.match(inviteRoute, /inviteMode: 'new'/);
 assert.match(inviteRoute, /const activationLink = reusedExistingAuthAccess[\s\S]*?\? activationEntryUrl/);
+assert.match(inviteRoute, /getClinicInvitationAcceptanceUrl\(data\?\.id\)/);
 assert.match(inviteRoute, /pendingInvitationPredatesUnlink/);
 assert.match(inviteRoute, /invitationCreatedAt <= membershipUnlinkedAt/);
 assert.match(inviteRoute, /status: 'canceled'/);
@@ -53,8 +81,12 @@ assert.doesNotMatch(
 // URL e OAuth preservam o convite; localStorage é apenas fallback, não a única fonte.
 assert.match(app, /new URLSearchParams\(window\.location\.search\)\.get\('invitation_id'\)/);
 assert.match(app, /const isInvitationContinuation = currentAuthAction === 'activate'/);
+assert.match(app, /currentAuthAction === 'accept_invitation'/);
 assert.match(app, /invitationId: currentInvitationId/);
 assert.match(app, /activationFlow: isInvitationContinuation/);
+assert.match(app, /deferInvitationAcceptance: isInvitationAcceptanceContinuation/);
+assert.match(app, /hasStoredInvitationAcceptance/);
+assert.match(app, /storedInvitationAcceptance/);
 assert.match(app, /publishActivationErrorMessage/);
 assert.match(activation, /verto:activation-error/);
 assert.match(activation, /verto_activation_error/);
@@ -62,6 +94,16 @@ assert.match(activation, /verto_activation_error/);
 // Aceite usa uma única RPC server-side e não aceita clinic_id/role do navegador.
 assert.match(loginRoute, /acceptClinicInvitationAtomically\(\{/);
 assert.match(acceptRoute, /acceptClinicInvitationAtomically\(\{/);
+const loginHandler = section(app, 'const handleLoginSuccess = async', 'const [therapistNotes');
+assert.match(loginHandler, /const shouldDeferInvitationAcceptance = Boolean/);
+assert.match(loginHandler, /invitationId: shouldDeferInvitationAcceptance \? null : authContext\?\.invitationId \|\| null/);
+assert.match(loginHandler, /if \(!shouldDeferInvitationAcceptance\) clearActivationInvitationContext\(\)/);
+assert.match(loginRoute, /const profileExistedBeforeInvitationProvisioning = Boolean\(profile\)/);
+assert.match(loginRoute, /!profileExistedBeforeInvitationProvisioning[\s\S]*?activationFlow[\s\S]*?requestedInvitationId/);
+assert.doesNotMatch(loginRoute, /\.eq\('email', safeAuthEmail\)[\s\S]*?\.eq\('status', 'pending'\)[\s\S]*?invitationForWorkspace = pendingInvite/);
+assert.match(billingOnboardingPaths, /path === '\/api\/clinic\/accept-invite'/);
+assert.match(invitationBillingBypass, /=== '\/api\/clinic\/accept-invite'/);
+assert.match(server, /!isClinicInvitationAcceptancePath\(req\.path \|\| req\.originalUrl\) && await isBillingAccessBlocked/);
 assert.match(server, /supabase\.rpc\('accept_clinic_invitation_v1'/);
 assert.doesNotMatch(acceptRoute, /req\.body\?\.clinicId|req\.body\?\.clinic_id|req\.body\?\.role/);
 assert.match(loginRoute, /\.eq\('id', requestedInvitationId\)/);

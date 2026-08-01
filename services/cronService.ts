@@ -1273,7 +1273,9 @@ async function runAppointmentReminderJob(
             ? clinicBranding.clinicName
             : appointment.clinicName
         ) || DEFAULT_CLINIC_NOTIFICATION_NAME;
-        const clinicLogoUrl = clinicBranding.clinicLogoUrl || appointment.clinicLogoUrl || null;
+        // The notification image must be derived from the appointment clinic on
+        // the server. Never inherit a logo carried by a collector payload.
+        const clinicLogoUrl = clinicBranding.clinicLogoUrl || null;
         const brandedAppointment = {
           ...appointment,
           clinicName,

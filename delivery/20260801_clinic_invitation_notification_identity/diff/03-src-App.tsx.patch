@@ -1,0 +1,266 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 7a65e8c..442b342 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -65,6 +65,9 @@ const LandingPage = React.lazy(() =>
+ const ActivationAccess = React.lazy(() =>
+   import('./components/ActivationAccess').then((m) => ({ default: m.ActivationAccess }))
+ );
++const ClinicInvitationAcceptance = React.lazy(() =>
++  import('./components/ClinicInvitationAcceptance').then((m) => ({ default: m.ClinicInvitationAcceptance }))
++);
+ const PortalRelationshipConfirmation = React.lazy(() =>
+   import('./components/PortalRelationshipConfirmation').then((m) => ({ default: m.PortalRelationshipConfirmation }))
+ );
+@@ -251,6 +254,7 @@ const rememberAutoRetriedFailedSyncIds = (ids: string[]) => {
+ };
+ 
+ export default function App() {
++  const [, setLocationRevision] = useState(0);
+   const authAction = typeof window !== 'undefined'
+     ? String(new URLSearchParams(window.location.search).get('auth_action') || '').toLowerCase()
+     : '';
+@@ -260,6 +264,15 @@ export default function App() {
+   const isResetPasswordRoute =
+     typeof window !== 'undefined' &&
+     (/^\/reset-password\/?$/.test(window.location.pathname) || authAction === 'recovery');
++  const invitationMode = typeof window !== 'undefined'
++    ? String(new URLSearchParams(window.location.search).get('invite_mode') || '').trim().toLowerCase()
++    : '';
++  const isInvitationAcceptanceRoute =
++    typeof window !== 'undefined' &&
++    (authAction === 'accept_invitation' || (authAction === 'activate' && invitationMode === 'existing'));
++  const invitationAcceptanceId = typeof window !== 'undefined'
++    ? String(new URLSearchParams(window.location.search).get('invitation_id') || '').trim()
++    : '';
+   const isPortalRelationshipRoute =
+     typeof window !== 'undefined' &&
+     /^\/portal\/confirmar-vinculo\/?$/i.test(window.location.pathname);
+@@ -289,7 +302,7 @@ export default function App() {
+       return '';
+     }
+   })();
+-  const isAuthActionRoute = isActivationRoute || isResetPasswordRoute;
++  const isAuthActionRoute = isActivationRoute || isResetPasswordRoute || isInvitationAcceptanceRoute;
+   const [user, setUser] = useState<any>(null); 
+   const userResolutionRef = useRef<{ key: string; promise: Promise<any>; settledAt: number } | null>(null);
+ 
+@@ -888,6 +901,9 @@ export default function App() {
+           professionalProfile?.metadata && typeof professionalProfile.metadata === 'object'
+             ? professionalProfile.metadata
+             : {};
++        const isClinicManagedMember = ['invited_professional', 'clinic_member'].includes(
++          String(restoredUser?.onboardingContext?.onboardingMode || '').trim().toLowerCase(),
++        );
+         const professionalProfileCompleted =
+           professionalProfile?.requires_onboarding === false ||
+           Boolean(professionalProfile?.onboarding_completed_at);
+@@ -955,19 +971,21 @@ export default function App() {
+           },
+           clinicSettings: {
+             ...(restoredUser?.clinicSettings || {}),
+-            ...(professionalProfile?.clinic_name
++            // A professional profile is global. Never let legacy clinic fields
++            // from it overwrite the active membership/workspace context.
++            ...(!isClinicManagedMember && professionalProfile?.clinic_name
+               ? { clinicName: professionalProfile.clinic_name }
+               : {}),
+-            ...(professionalProfile?.clinic_phone
++            ...(!isClinicManagedMember && professionalProfile?.clinic_phone
+               ? { clinicPhone: professionalProfile.clinic_phone }
+               : {}),
+-            ...(professionalMetadata?.clinicEmail
++            ...(!isClinicManagedMember && professionalMetadata?.clinicEmail
+               ? { clinicEmail: professionalMetadata.clinicEmail }
+               : {}),
+-            ...(professionalMetadata?.clinicAddress
++            ...(!isClinicManagedMember && professionalMetadata?.clinicAddress
+               ? { clinicAddress: professionalMetadata.clinicAddress }
+               : {}),
+-            ...(professionalProfile?.clinic_logo_url
++            ...(!isClinicManagedMember && professionalProfile?.clinic_logo_url
+               ? { clinicLogoUrl: professionalProfile.clinic_logo_url }
+               : {}),
+             ...(professionalProfile?.signature_data_url
+@@ -1234,6 +1252,20 @@ export default function App() {
+                   || localStorage.getItem('verto_activation_invitation_id')
+                   || '',
+               ).trim();
++              const hasStoredInvitationAcceptance =
++                currentAuthAction === '' &&
++                localStorage.getItem('verto_pending_invitation_acceptance') === 'true' &&
++                Boolean(activationInvitationId);
++              const isInvitationAcceptanceContinuation =
++                (currentAuthAction === 'accept_invitation' || hasStoredInvitationAcceptance) &&
++                Boolean(activationInvitationId);
++              if (isInvitationAcceptanceContinuation && currentAuthAction !== 'accept_invitation') {
++                const invitationParams = new URLSearchParams({
++                  auth_action: 'accept_invitation',
++                  invitation_id: activationInvitationId,
++                });
++                window.history.replaceState({}, document.title, `/?${invitationParams.toString()}`);
++              }
+               if (isActivationFlow && authProvider !== 'google') {
+                 // Em ativação por e-mail, o acesso só pode seguir após definir senha explicitamente.
+                 setLoading(false);
+@@ -1249,8 +1281,9 @@ export default function App() {
+                 activationFlow: isActivationFlow,
+                 activationEmail: activationEmail || null,
+                 invitationId: activationInvitationId || null,
++                deferInvitationAcceptance: isInvitationAcceptanceContinuation,
+               });
+-              if (!loginResult?.success && isActivationFlow) {
++              if (!loginResult?.success && (isActivationFlow || isInvitationAcceptanceContinuation)) {
+                 publishActivationErrorMessage(loginResult?.error);
+               }
+             } else if (event === 'SIGNED_OUT') {
+@@ -1331,8 +1364,25 @@ export default function App() {
+ 
+         const currentAuthParams = new URLSearchParams(window.location.search);
+         const currentAuthAction = String(currentAuthParams.get('auth_action') || '').toLowerCase();
+-        const currentInvitationId = String(currentAuthParams.get('invitation_id') || '').trim();
++        const storedInvitationAcceptance =
++          currentAuthAction === '' &&
++          localStorage.getItem('verto_pending_invitation_acceptance') === 'true';
++        const currentInvitationId = String(
++          currentAuthParams.get('invitation_id') ||
++          (storedInvitationAcceptance ? localStorage.getItem('verto_activation_invitation_id') : '') ||
++          '',
++        ).trim();
+         const isInvitationContinuation = currentAuthAction === 'activate' && Boolean(currentInvitationId);
++        const isInvitationAcceptanceContinuation =
++          (currentAuthAction === 'accept_invitation' || storedInvitationAcceptance) &&
++          Boolean(currentInvitationId);
++        if (isInvitationAcceptanceContinuation && currentAuthAction !== 'accept_invitation') {
++          const invitationParams = new URLSearchParams({
++            auth_action: 'accept_invitation',
++            invitation_id: currentInvitationId,
++          });
++          window.history.replaceState({}, document.title, `/?${invitationParams.toString()}`);
++        }
+ 
+         if (authData?.user) {
+           if (isInvitationContinuation && session?.access_token) {
+@@ -1360,11 +1410,12 @@ export default function App() {
+           const loginRes = await handleLoginSuccess(session, intendedRole, undefined, {
+             provider: session?.user?.app_metadata?.provider || null,
+             activationFlow: isInvitationContinuation,
+-            activationEmail: isInvitationContinuation ? session?.user?.email || null : null,
+-            invitationId: isInvitationContinuation ? currentInvitationId : null,
++            activationEmail: (isInvitationContinuation || isInvitationAcceptanceContinuation) ? session?.user?.email || null : null,
++            invitationId: (isInvitationContinuation || isInvitationAcceptanceContinuation) ? currentInvitationId : null,
++            deferInvitationAcceptance: isInvitationAcceptanceContinuation,
+           });
+           if (!loginRes?.success) {
+-            if (isInvitationContinuation) publishActivationErrorMessage(loginRes?.error);
++            if (isInvitationContinuation || isInvitationAcceptanceContinuation) publishActivationErrorMessage(loginRes?.error);
+             setUser(null);
+             setProfilePicture(null);
+             setShowWorkspacePicker(false);
+@@ -1384,11 +1435,12 @@ export default function App() {
+             const loginRes = await handleLoginSuccess(session, intendedRole, undefined, {
+               provider: session?.user?.app_metadata?.provider || null,
+               activationFlow: isInvitationContinuation,
+-              activationEmail: isInvitationContinuation ? session?.user?.email || null : null,
+-              invitationId: isInvitationContinuation ? currentInvitationId : null,
++              activationEmail: (isInvitationContinuation || isInvitationAcceptanceContinuation) ? session?.user?.email || null : null,
++              invitationId: (isInvitationContinuation || isInvitationAcceptanceContinuation) ? currentInvitationId : null,
++              deferInvitationAcceptance: isInvitationAcceptanceContinuation,
+             });
+             if (!loginRes?.success) {
+-              if (isInvitationContinuation) publishActivationErrorMessage(loginRes?.error);
++              if (isInvitationContinuation || isInvitationAcceptanceContinuation) publishActivationErrorMessage(loginRes?.error);
+               setUser(null);
+               setProfilePicture(null);
+               setShowWorkspacePicker(false);
+@@ -1529,13 +1581,24 @@ export default function App() {
+     supabaseSession: any,
+     intendedRole?: string,
+     credentials?: { email?: string; password?: string },
+-    authContext?: { provider?: string | null; activationFlow?: boolean; passwordSetupCompleted?: boolean; activationEmail?: string | null; invitationId?: string | null },
++    authContext?: {
++      provider?: string | null;
++      activationFlow?: boolean;
++      passwordSetupCompleted?: boolean;
++      activationEmail?: string | null;
++      invitationId?: string | null;
++      deferInvitationAcceptance?: boolean;
++    },
+   ) => {
++    const shouldDeferInvitationAcceptance = Boolean(
++      authContext?.deferInvitationAcceptance && authContext?.invitationId,
++    );
+     const clearActivationInvitationContext = () => {
+       try {
+         localStorage.removeItem('verto_activation_email');
+         localStorage.removeItem('verto_activation_invitation_id');
+         localStorage.removeItem('verto_activation_invite_mode');
++        localStorage.removeItem('verto_pending_invitation_acceptance');
+       } catch {
+         // Storage is optional; backend authorization does not depend on it.
+       }
+@@ -1554,7 +1617,7 @@ export default function App() {
+               activationFlow: Boolean(authContext?.activationFlow),
+               passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
+               activationEmail: authContext?.activationEmail || null,
+-              invitationId: authContext?.invitationId || null,
++              invitationId: shouldDeferInvitationAcceptance ? null : authContext?.invitationId || null,
+               email: credentials.email,
+               password: credentials.password,
+             })
+@@ -1577,7 +1640,7 @@ export default function App() {
+             };
+           }
+           const resolvedUser = await applyResolvedUserState(result.user, null);
+-          clearActivationInvitationContext();
++          if (!shouldDeferInvitationAcceptance) clearActivationInvitationContext();
+           return { success: true, user: resolvedUser };
+         }
+ 
+@@ -1631,7 +1694,7 @@ export default function App() {
+           activationFlow,
+           passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
+           activationEmail: authContext?.activationEmail || null,
+-          invitationId: authContext?.invitationId || null,
++          invitationId: shouldDeferInvitationAcceptance ? null : authContext?.invitationId || null,
+           email: credentials?.email || null,
+           password: credentials?.password || null,
+         })
+@@ -1698,7 +1761,7 @@ export default function App() {
+           };
+         }
+         const resolvedUser = await applyResolvedUserState(data.user, supabaseSession);
+-        clearActivationInvitationContext();
++        if (!shouldDeferInvitationAcceptance) clearActivationInvitationContext();
+         return { success: true, user: resolvedUser };
+       } else {
+         console.error('Login failed on server:', data.error);
+@@ -7231,6 +7294,28 @@ export default function App() {
+           <SalesActivationAccess token={salesActivationToken} onLogin={handleLoginSuccess} />
+         ) : isPortalRelationshipRoute ? (
+           <PortalRelationshipConfirmation onLogin={handleLoginSuccess} />
++        ) : isInvitationAcceptanceRoute && user ? (
++          <ClinicInvitationAcceptance
++            invitationId={invitationAcceptanceId}
++            onAccepted={async (acceptedUser) => {
++              const resolvedUser = await applyResolvedUserState(acceptedUser, null);
++              try {
++                localStorage.removeItem('verto_activation_email');
++                localStorage.removeItem('verto_activation_invitation_id');
++                localStorage.removeItem('verto_activation_invite_mode');
++                localStorage.removeItem('verto_pending_invitation_acceptance');
++              } catch {
++                // Storage is only a UX fallback; the server owns acceptance.
++              }
++              window.history.replaceState({}, document.title, '/');
++              setLocationRevision((revision) => revision + 1);
++              return resolvedUser;
++            }}
++            onDismiss={() => {
++              window.history.replaceState({}, document.title, '/');
++              setLocationRevision((revision) => revision + 1);
++            }}
++          />
+         ) : !user || userNeedsPatientActivation ? (
+           isAuthActionRoute || userNeedsPatientActivation ? (
+             <ActivationAccess onLogin={handleLoginSuccess} />

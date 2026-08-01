@@ -1332,6 +1332,7 @@ function isBillingOnboardingAllowedPath(pathname: any): boolean {
     path === '/api/auth/logout' ||
     path === '/api/workspaces' ||
     path === '/api/workspaces/select' ||
+    path === '/api/clinic/accept-invite' ||
     path === '/api/supabase-config' ||
     path.startsWith('/api/profile/') ||
     path.startsWith('/api/stripe/') ||
@@ -1339,6 +1340,10 @@ function isBillingOnboardingAllowedPath(pathname: any): boolean {
     path.startsWith('/api/storage/') ||
     path.startsWith('/api/config')
   );
+}
+
+function isClinicInvitationAcceptancePath(pathname: any): boolean {
+  return sanitizeString(pathname, 240).toLowerCase() === '/api/clinic/accept-invite';
 }
 
 function billingAccessBlockedPayload(user: any) {
@@ -3667,6 +3672,28 @@ function getActivationRedirectUrl(
 
   // A entrada pela raiz evita 404 em hospedagens estáticas sem rewrite de SPA
   // para rotas profundas como `/ativar`.
+  return `${baseUrl.replace(/\/+$/, '')}/?${params.toString()}`;
+}
+
+function getClinicInvitationAcceptanceUrl(invitationIdValue: unknown): string {
+  const baseUrl = sanitizeString(
+    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
+    500
+  );
+  const invitationId = sanitizeString(invitationIdValue, 120);
+  if (!baseUrl) {
+    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para aceitar convites.');
+  }
+  if (!isUuid(invitationId)) {
+    throw new Error('O convite precisa de um identificador v\u00e1lido para gerar o acesso.');
+  }
+
+  // Deliberately omit the e-mail and clinic from the URL. The authenticated
+  // server-side acceptance route remains the sole authority for both values.
+  const params = new URLSearchParams({
+    auth_action: 'accept_invitation',
+    invitation_id: invitationId,
+  });
   return `${baseUrl.replace(/\/+$/, '')}/?${params.toString()}`;
 }
 
@@ -18277,7 +18304,7 @@ async function startServer() {
       if (!hasActiveClinicBillingAccess(req.session.user) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
         return res.status(402).json(billingAccessBlockedPayload(req.session.user));
       }
-      if (await isBillingAccessBlocked(req.session.user)) {
+      if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) && await isBillingAccessBlocked(req.session.user)) {
         return res.status(402).json({
           error: 'BILLING_ACCESS_BLOCKED',
           message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.'
@@ -18393,7 +18420,7 @@ async function startServer() {
             if (!hasActiveClinicBillingAccess(req.session.user) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
               return res.status(402).json(billingAccessBlockedPayload(req.session.user));
             }
-            if (await isBillingAccessBlocked(req.session.user)) {
+            if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) && await isBillingAccessBlocked(req.session.user)) {
               return res.status(402).json({
                 error: 'BILLING_ACCESS_BLOCKED',
                 message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.'
@@ -22603,6 +22630,8 @@ async function startServer() {
         }
       }
 
+      const profileExistedBeforeInvitationProvisioning = Boolean(profile);
+
       // If profile still doesn't exist (first time Google login), create it
       let commercialPaidActivation: {
         email: string;
@@ -22625,20 +22654,11 @@ async function startServer() {
           });
         }
 
-        // Convites existentes continuam sendo a autorização server-side para provisionamento.
-        let invitations: any[] = requestedClinicInvitation ? [requestedClinicInvitation] : [];
-        let inviteError: any = null;
-        if (!requestedClinicInvitation) {
-          const inviteResult = await supabase
-            .from('invitations')
-            .select(INVITATION_SELECT)
-            .eq('email', safeAuthEmail)
-            .eq('status', 'pending')
-            .order('created_at', { ascending: true })
-            .limit(1);
-          invitations = inviteResult.data || [];
-          inviteError = inviteResult.error;
-        }
+        // Provisioning by invitation requires an explicit invitation id carried
+        // through the verified activation flow. A generic login must never
+        // discover and accept a pending invitation solely by e-mail.
+        const invitations: any[] = requestedClinicInvitation ? [requestedClinicInvitation] : [];
+        const inviteError: any = null;
 
         let clinicId: string | null = null;
 
@@ -22837,19 +22857,16 @@ async function startServer() {
       }
 
       let workspaces = await fetchUserWorkspaces(user.id);
-      let invitationForWorkspace = requestedClinicInvitation || invitationPendingAcceptance;
-      if (!invitationForWorkspace && workspaces.length === 0 && safeAuthEmail) {
-        const { data: pendingInvite, error: pendingInviteError } = await supabase
-          .from('invitations')
-          .select(INVITATION_SELECT)
-          .eq('email', safeAuthEmail)
-          .eq('status', 'pending')
-          .order('created_at', { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        if (pendingInviteError) throw pendingInviteError;
-        invitationForWorkspace = pendingInvite || null;
-      }
+      // Existing professionals accept invitations from the dedicated, explicit
+      // screen. Automatic acceptance remains only for a first-account
+      // activation link, which carries its own verified invitation id.
+      const invitationForWorkspace =
+        !profileExistedBeforeInvitationProvisioning &&
+        activationFlow &&
+        requestedInvitationId &&
+        requestedClinicInvitation
+          ? requestedClinicInvitation
+          : null;
 
       let invitedWorkspaceId = '';
       if (invitationForWorkspace && ensureClinicRole(invitationForWorkspace.role)) {
@@ -24121,10 +24138,12 @@ async function startServer() {
         authUser = createResult.data?.user || null;
       }
 
-      const activationEntryUrl = getActivationRedirectUrl('coordinator', email, {
-        invitationId: data?.id,
-        inviteMode: reusedExistingAuthAccess ? 'existing' : 'new'
-      });
+      const activationEntryUrl = reusedExistingAuthAccess
+        ? getClinicInvitationAcceptanceUrl(data?.id)
+        : getActivationRedirectUrl('coordinator', email, {
+            invitationId: data?.id,
+            inviteMode: 'new'
+          });
       const activationLink = reusedExistingAuthAccess
         ? activationEntryUrl
         : (await withTimeoutOrFallback(
@@ -36464,6 +36483,21 @@ async function startServer() {
       const existingMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
         ? existingProfile.metadata
         : {};
+      const globalSpecialty = normalizeClinicalSpecialty(
+        existingProfile?.specialty || existingMetadata?.specialty,
+      ) || specialty;
+      const globalWorkSchedule = isClinicManagedMember
+        ? readProfessionalWorkingScheduleFromMetadata(existingMetadata, sessionDurationMinutes) || workSchedule
+        : workSchedule;
+      const profileClinicName = isClinicManagedMember
+        ? sanitizeString(existingProfile?.clinic_name, 160) || null
+        : clinicName || null;
+      const profileClinicLogoUrl = isClinicManagedMember
+        ? sanitizeUrl(existingProfile?.clinic_logo_url)
+        : clinicLogoUrl;
+      const profileClinicPhone = isClinicManagedMember
+        ? sanitizePhone(existingProfile?.clinic_phone)
+        : clinicPhone;
       const { error: professionalProfileError } = await supabase
         .from('professional_profiles')
         .upsert([cleanObject({
@@ -36474,10 +36508,10 @@ async function startServer() {
           country_code: countryCode || null,
           phone,
           profile_photo_url: profilePicture,
-          clinic_name: clinicName || null,
-          clinic_logo_url: clinicLogoUrl,
-          clinic_phone: clinicPhone,
-          specialty,
+          clinic_name: profileClinicName,
+          clinic_logo_url: profileClinicLogoUrl,
+          clinic_phone: profileClinicPhone,
+          specialty: globalSpecialty,
           council,
           council_number: councilNumber,
           signature_data_url: signatureDataUrl,
@@ -36489,16 +36523,18 @@ async function startServer() {
             role,
             sessionDurationMinutes,
             defaultSessionDurationMinutes: sessionDurationMinutes,
-            workSchedule,
-            work_schedule: workSchedule,
+            workSchedule: globalWorkSchedule,
+            work_schedule: globalWorkSchedule,
             cpf: cpf || null,
             miniCurriculum: miniCurriculum || null,
             mini_curriculum: miniCurriculum || null,
-            specialty,
-            professionalTitle: specialty,
-            professional_title: specialty,
-            clinicId,
-            clinicAuthority: isClinicManagedMember ? 'clinic_membership' : 'clinic_owner',
+            specialty: globalSpecialty,
+            professionalTitle: globalSpecialty,
+            professional_title: globalSpecialty,
+            ...(isClinicManagedMember ? {} : {
+              clinicId,
+              clinicAuthority: 'clinic_owner',
+            }),
             clinicOperationType: isClinicManagedMember ? existingMetadata?.clinicOperationType : clinicOperationType,
             clinicCnpj: isClinicManagedMember ? existingMetadata?.clinicCnpj || null : clinicCnpj || null,
             profilePicturePath: profilePicturePath || null,

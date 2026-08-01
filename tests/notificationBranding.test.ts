@@ -81,6 +81,11 @@ assert.match(cron, /verifyStableClinicNotificationLogoSignature/);
 assert.match(cron, /\/api\/public\/notification-assets\/clinic-logo/);
 assert.doesNotMatch(cron, /createSignedUrl\(/);
 
+const reminderCron = section(cron, 'for (const appointment of appointments)', 'if (result.sent > 0)');
+assert.match(reminderCron, /resolveReminderClinicBranding\(options, appointment\.clinicId\)/);
+assert.match(reminderCron, /const clinicLogoUrl = clinicBranding\.clinicLogoUrl \|\| null/);
+assert.doesNotMatch(reminderCron, /appointment\.clinicLogoUrl/);
+
 const publicLogoRoute = section(
   server,
   "app.get('/api/public/notification-assets/clinic-logo'",
