@@ -75,7 +75,8 @@ assert.match(invitationAcceptance, /No clinic,[\s\S]*?role, name, or e-mail come
 assert.match(dataService, /async acceptInvitation\(invitationId: string\)/);
 
 // Conta existente reutiliza Auth e não recebe nova senha/UUID.
-assert.match(inviteRoute, /const reusedExistingAuthAccess = Boolean/);
+assert.match(inviteRoute, /const invitedProfileExists = Boolean\(invitedProfileResult\.data\?\.id\)/);
+assert.match(inviteRoute, /const reusedExistingAuthAccess = Boolean\([\s\S]*?authUserHadVerifiedEmail && invitedProfileExists/);
 assert.match(inviteRoute, /inviteMode: 'new'/);
 assert.match(inviteRoute, /const activationLink = reusedExistingAuthAccess[\s\S]*?\? activationEntryUrl/);
 assert.match(inviteRoute, /getClinicInvitationAcceptanceUrl\(data\?\.id\)/);
@@ -92,7 +93,8 @@ assert.match(activation, /redirectParams\.set\('invitation_id', invitationId\)/)
 assert.match(activation, /window\.history\.replaceState[\s\S]*?continuationParams\.toString\(\)/);
 assert.match(activation, /userMetadata\?\.invitation_id/);
 assert.match(activation, /resolvedInvitationId/);
-assert.match(activation, /setIntendedRole\('coordinator'\)/);
+assert.match(activation, /actionParam === 'accept_invitation'[\s\S]*?setIntendedRole\('coordinator'\)/);
+assert.match(activation, /Boolean\(invitationParam\)/);
 assert.match(activation, /if \(code \|\| tokenHash \|\| accessToken \|\| refreshToken\)/);
 assert.doesNotMatch(
   section(activation, 'const establishSessionFromUrl', 'const requestActivationBootstrap'),
@@ -118,8 +120,12 @@ assert.match(loginRoute, /acceptClinicInvitationAtomically\(\{/);
 assert.match(acceptRoute, /acceptClinicInvitationAtomically\(\{/);
 const loginHandler = section(app, 'const handleLoginSuccess = async', 'const [therapistNotes');
 assert.match(loginHandler, /const shouldDeferInvitationAcceptance = Boolean/);
-assert.match(loginHandler, /invitationId: shouldDeferInvitationAcceptance \? null : authContext\?\.invitationId \|\| null/);
+assert.match(loginHandler, /invitationId: authContext\?\.invitationId \|\| null/);
+assert.match(loginHandler, /result\?\.message \|\| result\?\.error \|\| 'Erro no login'/);
+assert.doesNotMatch(loginHandler, /invitationId: shouldDeferInvitationAcceptance \? null/);
 assert.match(loginHandler, /if \(!shouldDeferInvitationAcceptance\) clearActivationInvitationContext\(\)/);
+assert.match(activation, /activationFlow: Boolean\(invitationId\)/);
+assert.match(activation, /invitationId: invitationId \|\| null/);
 assert.match(loginRoute, /const profileExistedBeforeInvitationProvisioning = Boolean\(profile\)/);
 assert.match(loginRoute, /!profileExistedBeforeInvitationProvisioning[\s\S]*?activationFlow[\s\S]*?requestedInvitationId/);
 assert.doesNotMatch(loginRoute, /\.eq\('email', safeAuthEmail\)[\s\S]*?\.eq\('status', 'pending'\)[\s\S]*?invitationForWorkspace = pendingInvite/);

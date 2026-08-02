@@ -24779,10 +24779,10 @@ async function startServer() {
       const data = insertedInvitation;
 
       // Garante usuário Auth para fluxo de ativação por senha/google sem depender do e-mail do Supabase.
-      const reusedExistingAuthAccess = Boolean(
+      const authUserAlreadyExisted = Boolean(authUser?.id);
+      const authUserHadVerifiedEmail = Boolean(
         authUser?.id && (authUser?.email_confirmed_at || authUser?.confirmed_at)
       );
-      const authUserAlreadyExisted = Boolean(authUser?.id);
       if (!authUser?.id) {
         const tempPassword = generateTemporaryPassword();
         const createResult = await supabase.auth.admin.createUser({
@@ -24800,6 +24800,15 @@ async function startServer() {
         if (createResult.error) throw createResult.error;
         authUser = createResult.data?.user || null;
       }
+
+      const invitedProfileResult = authUser?.id
+        ? await supabase.from('users').select('id,name').eq('id', authUser.id).maybeSingle()
+        : { data: null, error: null } as any;
+      if (invitedProfileResult.error) throw invitedProfileResult.error;
+      const invitedProfileExists = Boolean(invitedProfileResult.data?.id);
+      const reusedExistingAuthAccess = Boolean(
+        authUserHadVerifiedEmail && invitedProfileExists
+      );
 
       if (authUser?.id && !reusedExistingAuthAccess) {
         const currentMetadata = authUser?.user_metadata && typeof authUser.user_metadata === 'object'
@@ -24841,10 +24850,6 @@ async function startServer() {
             'generateSupabaseActionLink(clinic_invite)'
           )) || activationEntryUrl;
 
-      const invitedProfileResult = authUser?.id
-        ? await supabase.from('users').select('name').eq('id', authUser.id).maybeSingle()
-        : { data: null, error: null } as any;
-      if (invitedProfileResult.error) throw invitedProfileResult.error;
       const invitedProfessionalName = sanitizeString(
         invitedProfileResult.data?.name || authUser?.user_metadata?.full_name || authUser?.user_metadata?.name,
         180

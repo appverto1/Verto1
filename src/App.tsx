@@ -1795,7 +1795,7 @@ export default function App() {
               activationFlow: Boolean(authContext?.activationFlow),
               passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
               activationEmail: authContext?.activationEmail || null,
-              invitationId: shouldDeferInvitationAcceptance ? null : authContext?.invitationId || null,
+              invitationId: authContext?.invitationId || null,
               email: credentials.email,
               password: credentials.password,
             })
@@ -1805,7 +1805,7 @@ export default function App() {
           }
           const result = await response.json().catch(() => ({}));
           if (!response.ok || !result?.success) {
-            return { success: false, error: result?.error || 'Erro no login' };
+            return { success: false, error: result?.message || result?.error || 'Erro no login' };
           }
           if (result.twoFactorRequired) {
             return {
@@ -1872,7 +1872,7 @@ export default function App() {
           activationFlow,
           passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
           activationEmail: authContext?.activationEmail || null,
-          invitationId: shouldDeferInvitationAcceptance ? null : authContext?.invitationId || null,
+          invitationId: authContext?.invitationId || null,
           email: credentials?.email || null,
           password: credentials?.password || null,
         })

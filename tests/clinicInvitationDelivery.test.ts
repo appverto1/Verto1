@@ -42,6 +42,8 @@ assert.match(inviteRoute, /templateKind: 'clinic_invitation'/);
 assert.match(inviteRoute, /templateData: invitationEmail\.variables/);
 assert.match(inviteRoute, /preferHtml: true/);
 assert.doesNotMatch(inviteRoute, /email\.split\('@'\)\[0\]/);
+assert.match(inviteRoute, /const invitedProfileExists = Boolean\(invitedProfileResult\.data\?\.id\)/);
+assert.match(inviteRoute, /authUserHadVerifiedEmail && invitedProfileExists/);
 
 const personalized = buildClinicInvitationEmailTemplate({
   clinic_name: 'Espaço Guiar',

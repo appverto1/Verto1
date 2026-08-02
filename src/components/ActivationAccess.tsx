@@ -58,7 +58,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [intendedRole, setIntendedRole] = useState<'patient' | 'coordinator'>('patient');
+  const [intendedRole, setIntendedRole] = useState<'patient' | 'coordinator'>(() =>
+    isInvitationAcceptanceAction ? 'coordinator' : 'patient',
+  );
   const [isActivationLinkContext, setIsActivationLinkContext] = useState(true);
   const [invitationId, setInvitationId] = useState('');
   const [inviteMode, setInviteMode] = useState<'new' | 'existing'>('new');
@@ -243,6 +245,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const roleParam = String(params.get('role') || '').toLowerCase();
+    const actionParam = String(params.get('auth_action') || '').toLowerCase();
     const emailParam = String(params.get('email') || '').trim().toLowerCase();
     const codeParam = String(params.get('code') || '').trim();
     const invitationParam = String(
@@ -269,7 +272,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     if (codeParam) {
       setRecoveryCode(codeParam);
     }
-    if (roleParam === 'coordinator' || roleParam === 'therapist' || roleParam === 'receptionist') {
+    if (
+      roleParam === 'coordinator' ||
+      roleParam === 'therapist' ||
+      roleParam === 'receptionist' ||
+      actionParam === 'accept_invitation' ||
+      Boolean(invitationParam)
+    ) {
       setIntendedRole('coordinator');
       return;
     }
@@ -404,7 +413,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           null,
           intendedRole,
           { email: loginEmail, password: newPassword },
-          { provider: 'email', activationFlow: false, passwordSetupCompleted: true, activationEmail: loginEmail },
+          {
+            provider: 'email',
+            activationFlow: Boolean(invitationId),
+            passwordSetupCompleted: true,
+            activationEmail: loginEmail,
+            invitationId: invitationId || null,
+          },
         );
         if (!loginRes?.success) {
           throw new Error(loginRes?.error || 'Senha redefinida, mas nao foi possivel concluir o login.');
