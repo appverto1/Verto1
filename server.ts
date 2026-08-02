@@ -1282,6 +1282,7 @@ async function loadBillingPlansFromSnapshots(params: { allowSync?: boolean; forc
 
 const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients';
 const CLINIC_ACCESS_ACTIVE_STATUSES = new Set(['active', 'trial_active', 'trialing', 'demo', 'demo_sandbox']);
+const CLINIC_MEMBER_BILLING_READY_SYNC_STATUSES = new Set(['synced', 'within_current_limit']);
 const CLINIC_ACCESS_BLOCKED_STATUSES = new Set([
   '',
   'pending',
@@ -13644,6 +13645,7 @@ async function fetchClinicOnboardingSnapshot(clinicId: string) {
     'logo_url',
     'subscription_status',
     'billing_model',
+    'billing_sync_status',
     'address',
     'clinic_address',
     'city',
@@ -13912,9 +13914,16 @@ async function resolveOnboardingContextForUser(params: {
         : 'standard';
   const clinicSubscriptionStatus = normalizeClinicAccessStatus(clinicRow?.subscription_status);
   const billingModel = sanitizeString(clinicRow?.billing_model, 60).toLowerCase();
+  const billingSyncStatus = sanitizeString(clinicRow?.billing_sync_status, 80).toLowerCase();
+  const clinicBillingAccessReady =
+    !clinicSubscriptionStatus ||
+    CLINIC_ACCESS_ACTIVE_STATUSES.has(clinicSubscriptionStatus) ||
+    billingModel === 'demo' ||
+    billingModel === 'demo_sandbox' ||
+    CLINIC_MEMBER_BILLING_READY_SYNC_STATUSES.has(billingSyncStatus);
   const canAccessDashboard = onboardingMode === 'clinic_owner'
     ? CLINIC_ACCESS_ACTIVE_STATUSES.has(clinicSubscriptionStatus) || billingModel === 'demo' || billingModel === 'demo_sandbox'
-    : !clinicSubscriptionStatus || CLINIC_ACCESS_ACTIVE_STATUSES.has(clinicSubscriptionStatus) || billingModel === 'demo' || billingModel === 'demo_sandbox';
+    : Boolean(membership) && clinicBillingAccessReady;
 
   return {
     onboardingMode,
