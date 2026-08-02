@@ -18,6 +18,7 @@ const section = (source: string, start: string, end: string): string => {
   return source.slice(startIndex, endIndex);
 };
 
+const invitationAppBaseUrl = section(server, 'function getInvitationAppBaseUrl', 'type ActivationRedirectOptions');
 const activationUrl = section(server, 'type ActivationRedirectOptions', 'function getRecoveryRedirectUrl');
 const invitationAcceptanceUrl = section(server, 'function getClinicInvitationAcceptanceUrl', 'function getRecoveryRedirectUrl');
 const inviteRoute = section(server, "app.post('/api/clinic/invite'", "app.get('/api/clinic/invitations'");
@@ -28,6 +29,14 @@ const accessContextRoute = section(server, "app.post('/api/access-contexts/selec
 const legacyWorkspaceRoute = section(server, "app.post('/api/workspaces/select'", 'const PORTAL_RESCHEDULE_WEEK_WINDOW_DAYS');
 const billingOnboardingPaths = section(server, 'function isBillingOnboardingAllowedPath', 'function billingAccessBlockedPayload');
 const invitationBillingBypass = section(server, 'function isClinicInvitationAcceptancePath', 'const DEMO_SANDBOX_BILLING_MODEL');
+
+// Convites usam diretamente o host canonico; o redirecionamento do dominio raiz nao pode perder a query.
+assert.match(invitationAppBaseUrl, /url\.hostname\.toLowerCase\(\) === 'appverto\.com\.br'/);
+assert.match(invitationAppBaseUrl, /url\.hostname = 'www\.appverto\.com\.br'/);
+assert.match(invitationAppBaseUrl, /url\.search = ''/);
+assert.match(invitationAppBaseUrl, /url\.hash = ''/);
+assert.match(activationUrl, /const baseUrl = getInvitationAppBaseUrl\(\)/);
+assert.match(invitationAcceptanceUrl, /const baseUrl = getInvitationAppBaseUrl\(\)/);
 
 // Primeiro convite abre a raiz real da SPA e carrega invitation_id, evitando landing page/404.
 assert.match(activationUrl, /auth_action: 'activate'/);

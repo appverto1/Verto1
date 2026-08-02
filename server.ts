@@ -3660,6 +3660,37 @@ function getAuthRedirectUrl(): string {
   return `${baseUrl.replace(/\/+$/, '')}/auth/callback`;
 }
 
+function getInvitationAppBaseUrl(): string {
+  const configuredBaseUrl = sanitizeString(
+    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
+    500
+  );
+  if (!configuredBaseUrl) {
+    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para convites.');
+  }
+
+  let url: URL;
+  try {
+    url = new URL(configuredBaseUrl);
+  } catch {
+    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) possui uma URL invalida.');
+  }
+
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve utilizar HTTP ou HTTPS.');
+  }
+
+  // O dominio raiz redireciona para www fora da aplicacao. Gerar o link
+  // diretamente no host canonico evita perder invitation_id nesse redirecionamento.
+  if (url.hostname.toLowerCase() === 'appverto.com.br') {
+    url.hostname = 'www.appverto.com.br';
+  }
+
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/+$/, '');
+}
+
 type ActivationRedirectOptions = {
   invitationId?: unknown;
   inviteMode?: 'new' | 'existing';
@@ -3670,13 +3701,7 @@ function getActivationRedirectUrl(
   email?: unknown,
   options: ActivationRedirectOptions = {}
 ): string {
-  const baseUrl = sanitizeString(
-    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
-    500
-  );
-  if (!baseUrl) {
-    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para ativação de conta.');
-  }
+  const baseUrl = getInvitationAppBaseUrl();
   const normalizedRole = sanitizeString(role, 40).toLowerCase();
   const roleParam = normalizedRole === 'patient' ? 'patient' : 'coordinator';
   const safeEmail = sanitizeEmail(email);
@@ -3696,14 +3721,8 @@ function getActivationRedirectUrl(
 }
 
 function getClinicInvitationAcceptanceUrl(invitationIdValue: unknown): string {
-  const baseUrl = sanitizeString(
-    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
-    500
-  );
+  const baseUrl = getInvitationAppBaseUrl();
   const invitationId = sanitizeString(invitationIdValue, 120);
-  if (!baseUrl) {
-    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para aceitar convites.');
-  }
   if (!isUuid(invitationId)) {
     throw new Error('O convite precisa de um identificador v\u00e1lido para gerar o acesso.');
   }
