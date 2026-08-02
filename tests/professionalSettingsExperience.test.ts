@@ -21,6 +21,10 @@ assert.match(coordinator, /settings: isTherapist \? "Configurações Profissiona
 assert.match(coordinator, /label: isTherapist \? "Profissional" : "Clínica"/);
 assert.match(coordinator, /maxSavedTemplates=\{isTherapist \? 20 : 5\}/);
 assert.match(coordinator, /templateScope: isTherapist \? 'personal' : 'clinic'/);
+assert.match(coordinator, /dataService\.getUserProfile\(professionalId\)/);
+assert.match(coordinator, /globalProfile\?\.full_name[\s\S]*billingProfile\?\.display_name/);
+assert.match(coordinator, /globalProfile\?\.council_number[\s\S]*billingProfile\?\.council_number/);
+assert.match(coordinator, /globalProfile\?\.mini_curriculum[\s\S]*globalMetadata\?\.miniCurriculum/);
 
 assert.match(anamnesis, /maxSavedTemplates\?: number/);
 assert.match(anamnesis, /savedTemplates\.length >= maxSavedTemplates/);

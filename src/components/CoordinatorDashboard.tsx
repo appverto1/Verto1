@@ -2704,26 +2704,154 @@ export function CoordinatorDashboard({
     const professionalId = String(user?.id || "").trim();
     if (!professionalId) return;
     let cancelled = false;
-    const loadOwnBillingProfile = async () => {
-      const result = await dataService.getOwnProfessionalBillingProfile();
-      if (cancelled || !result?.success || !result.data) return;
-      const profile = result.data || {};
-      const documentType = String(profile.document_type || profile.documentType || "CPF").toUpperCase();
-      setTherapistDocumentType(documentType);
-      setTherapistCpf(formatDocument(profile.document_number || profile.documentNumber || "", documentType));
-      setTherapistFullName(String(profile.display_name || profile.displayName || user?.name || ""));
-      setTherapistCouncilType(String(profile.council_type || profile.councilType || ""));
-      setTherapistCrp(String(profile.council_number || profile.councilNumber || ""));
-      setTherapistCouncilState(String(profile.council_state || profile.councilState || "").toUpperCase().slice(0, 2));
-      setTherapistCboCode(onlyDigits(profile.cbo_code || profile.cboCode || "", 12));
-      setTherapistSpecialtyName(String(profile.specialty_name || profile.specialtyName || ""));
-      setTherapistProviderCode(String(profile.provider_code || profile.providerCode || ""));
+    const loadOwnProfessionalSettings = async () => {
+      const [globalResult, billingResult] = await Promise.all([
+        dataService.getUserProfile(professionalId),
+        dataService.getOwnProfessionalBillingProfile(),
+      ]);
+      if (cancelled) return;
+
+      const globalUser = globalResult?.success && globalResult?.data ? globalResult.data : {};
+      const globalProfile = globalUser?.professional_profile || globalUser?.professionalProfile || {};
+      const globalMetadata = globalProfile?.metadata && typeof globalProfile.metadata === "object"
+        ? globalProfile.metadata
+        : {};
+      const billingProfile = billingResult?.success && billingResult?.data ? billingResult.data : {};
+      const firstText = (...values: any[]) => {
+        for (const value of values) {
+          const normalized = String(value ?? "").trim();
+          if (normalized) return normalized;
+        }
+        return "";
+      };
+
+      const documentType = firstText(
+        globalMetadata?.documentType,
+        globalMetadata?.document_type,
+        billingProfile?.document_type,
+        billingProfile?.documentType,
+        user?.professionalProfile?.documentType,
+        user?.professional_profile?.document_type,
+        "CPF",
+      ).toUpperCase();
+      const documentNumber = firstText(
+        globalUser?.cpf,
+        globalMetadata?.cpf,
+        globalMetadata?.professionalCpf,
+        billingProfile?.document_number,
+        billingProfile?.documentNumber,
+        user?.cpf,
+      );
+      const fullName = firstText(
+        globalProfile?.full_name,
+        globalProfile?.fullName,
+        globalUser?.name,
+        billingProfile?.display_name,
+        billingProfile?.displayName,
+        user?.name,
+      );
+      const phone = firstText(
+        globalProfile?.phone,
+        globalUser?.phone,
+        globalMetadata?.phone,
+        globalMetadata?.professionalPhone,
+        user?.phone,
+      );
+      const email = firstText(
+        globalUser?.email,
+        globalMetadata?.email,
+        globalMetadata?.professionalEmail,
+        user?.email,
+      );
+      const council = firstText(
+        globalProfile?.council,
+        globalMetadata?.council,
+        globalMetadata?.councilType,
+        billingProfile?.council_type,
+        billingProfile?.councilType,
+      );
+      const councilNumber = firstText(
+        globalProfile?.council_number,
+        globalProfile?.crp,
+        billingProfile?.council_number,
+        billingProfile?.councilNumber,
+        globalUser?.crp,
+        user?.crp,
+      );
+      const specialty = firstText(
+        globalProfile?.specialty,
+        globalMetadata?.specialty,
+        globalMetadata?.professionalTitle,
+        billingProfile?.specialty_name,
+        billingProfile?.specialtyName,
+        globalUser?.specialties,
+        user?.specialties,
+      );
+      const miniCurriculum = firstText(
+        globalProfile?.mini_curriculum,
+        globalProfile?.miniCurriculum,
+        globalMetadata?.miniCurriculum,
+        globalMetadata?.mini_curriculum,
+        globalUser?.mini_curriculum,
+        globalUser?.miniCurriculum,
+        user?.miniCurriculum,
+      );
+      const roleTitle = firstText(
+        globalMetadata?.roleTitle,
+        globalMetadata?.professionalRoleTitle,
+        user?.professionalRoleTitle,
+      );
+
+      setTherapistDocumentType(documentType || "CPF");
+      setTherapistCpf(formatDocument(documentNumber, documentType || "CPF"));
+      if (fullName) setTherapistFullName(fullName);
+      if (phone) setTherapistPhone(formatPhoneInput(phone));
+      if (email) setTherapistEmail(email);
+      if (roleTitle) setTherapistRoleTitle(roleTitle);
+      if (council) setTherapistCouncilType(council);
+      if (councilNumber) setTherapistCrp(councilNumber);
+      setTherapistCouncilState(firstText(
+        globalProfile?.council_state,
+        globalMetadata?.councilState,
+        globalMetadata?.council_state,
+        billingProfile?.council_state,
+        billingProfile?.councilState,
+        user?.professionalProfile?.councilState,
+        user?.professional_profile?.council_state,
+      ).toUpperCase().slice(0, 2));
+      setTherapistCboCode(onlyDigits(firstText(
+        globalProfile?.cbo_code,
+        globalMetadata?.cboCode,
+        globalMetadata?.cbo_code,
+        billingProfile?.cbo_code,
+        billingProfile?.cboCode,
+        user?.professionalProfile?.cboCode,
+        user?.professional_profile?.cbo_code,
+      ), 12));
+      if (specialty) {
+        setTherapistSpecialtyName(specialty);
+        setTherapistSpecialties(specialty);
+      }
+      setTherapistProviderCode(firstText(
+        globalProfile?.provider_code,
+        globalMetadata?.providerCode,
+        globalMetadata?.provider_code,
+        billingProfile?.provider_code,
+        billingProfile?.providerCode,
+        user?.professionalProfile?.providerCode,
+        user?.professional_profile?.provider_code,
+      ));
+      if (miniCurriculum) setTherapistMiniCurriculum(miniCurriculum);
+      const profilePhoto = firstText(globalProfile?.profile_photo_url, globalProfile?.profilePhotoUrl);
+      const signature = firstText(globalProfile?.signature_data_url, globalProfile?.signatureDataUrl);
+      if (profilePhoto) setTherapistProfilePhotoUrl(profilePhoto);
+      if (signature) setTherapistSignatureDataUrl(signature);
     };
-    void loadOwnBillingProfile();
+    void loadOwnProfessionalSettings();
     return () => {
       cancelled = true;
     };
-  }, [activeTab, isTherapist, user?.id, user?.name]);
+  }, [activeTab, isTherapist, user?.id]);
 
   const refreshSignedMediaUrls = useCallback(async () => {
     try {
