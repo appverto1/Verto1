@@ -398,7 +398,25 @@ export default function App() {
       return '';
     }
   })();
-  const isAuthActionRoute = isActivationRoute || isResetPasswordRoute || isInvitationAcceptanceRoute;
+  const hasSupabaseAuthReturnParams = typeof window !== 'undefined' && (() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    return Boolean(
+      searchParams.get('code') ||
+      searchParams.get('token_hash') ||
+      searchParams.get('access_token') ||
+      searchParams.get('refresh_token') ||
+      hashParams.get('token_hash') ||
+      hashParams.get('access_token') ||
+      hashParams.get('refresh_token') ||
+      ['signup', 'invite', 'recovery'].includes(String(searchParams.get('type') || hashParams.get('type') || '').toLowerCase())
+    );
+  })();
+  const isAuthActionRoute =
+    isActivationRoute ||
+    isResetPasswordRoute ||
+    isInvitationAcceptanceRoute ||
+    hasSupabaseAuthReturnParams;
   const [user, setUser] = useState<any>(null); 
   const userResolutionRef = useRef<{ key: string; promise: Promise<any>; settledAt: number } | null>(null);
 
@@ -1380,15 +1398,38 @@ export default function App() {
               const currentAuthAction = typeof window !== 'undefined'
                 ? String(new URLSearchParams(window.location.search).get('auth_action') || '').toLowerCase()
                 : '';
-              const isActivationFlow = /^\/(ativar|reset-password)\/?$/i.test(currentPath) || ['activate', 'recovery'].includes(currentAuthAction);
+              const metadataInvitationIdCandidate = String(
+                session?.user?.user_metadata?.invitation_id ||
+                session?.user?.user_metadata?.clinic_invitation_id ||
+                '',
+              ).trim();
+              const metadataInvitationId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(metadataInvitationIdCandidate)
+                ? metadataInvitationIdCandidate
+                : '';
+              const isActivationFlow =
+                /^\/(ativar|reset-password)\/?$/i.test(currentPath) ||
+                ['activate', 'recovery'].includes(currentAuthAction) ||
+                hasSupabaseAuthReturnParams ||
+                Boolean(metadataInvitationId);
               const authProvider = String(session?.user?.app_metadata?.provider || '').toLowerCase();
               const isPasswordSignIn = authProvider === 'email' || authProvider === '';
               const activationEmail = String(localStorage.getItem('verto_activation_email') || '').trim().toLowerCase();
               const activationInvitationId = String(
                 new URLSearchParams(window.location.search).get('invitation_id')
                   || localStorage.getItem('verto_activation_invitation_id')
+                  || metadataInvitationId
                   || '',
               ).trim();
+              if (activationInvitationId && hasSupabaseAuthReturnParams && currentAuthAction === '') {
+                localStorage.setItem('verto_activation_invitation_id', activationInvitationId);
+                localStorage.setItem('verto_activation_invite_mode', 'new');
+                const invitationParams = new URLSearchParams({
+                  auth_action: 'activate',
+                  invitation_id: activationInvitationId,
+                  invite_mode: 'new',
+                });
+                window.history.replaceState({}, document.title, `/?${invitationParams.toString()}`);
+              }
               const hasStoredInvitationAcceptance =
                 currentAuthAction === '' &&
                 localStorage.getItem('verto_pending_invitation_acceptance') === 'true' &&

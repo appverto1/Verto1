@@ -35,6 +35,11 @@ assert.match(activationUrl, /params\.set\('invitation_id', invitationId\)/);
 assert.match(activationUrl, /return `\$\{baseUrl\.replace[\s\S]*?\}\/\?\$\{params\.toString\(\)\}`/);
 assert.doesNotMatch(activationUrl, /\/ativar\?role=/);
 assert.match(app, /authAction === 'activate'/);
+assert.match(app, /const hasSupabaseAuthReturnParams/);
+assert.match(app, /searchParams\.get\('code'\)/);
+assert.match(app, /hasSupabaseAuthReturnParams/);
+assert.match(app, /session\?\.user\?\.user_metadata\?\.invitation_id/);
+assert.match(app, /metadataInvitationId/);
 assert.match(activation, /auth_action/);
 assert.match(supabaseClient, /authAction === 'activate'/);
 
@@ -65,6 +70,8 @@ assert.match(inviteRoute, /const reusedExistingAuthAccess = Boolean/);
 assert.match(inviteRoute, /inviteMode: 'new'/);
 assert.match(inviteRoute, /const activationLink = reusedExistingAuthAccess[\s\S]*?\? activationEntryUrl/);
 assert.match(inviteRoute, /getClinicInvitationAcceptanceUrl\(data\?\.id\)/);
+assert.match(inviteRoute, /invitation_id: data\?\.id/);
+assert.match(inviteRoute, /updateUserById\(/);
 assert.match(inviteRoute, /pendingInvitationPredatesUnlink/);
 assert.match(inviteRoute, /invitationCreatedAt <= membershipUnlinkedAt/);
 assert.match(inviteRoute, /status: 'canceled'/);
@@ -74,6 +81,9 @@ assert.match(activation, /passwordSetupCompleted: false/);
 assert.match(activation, /signInWithOAuth/);
 assert.match(activation, /redirectParams\.set\('invitation_id', invitationId\)/);
 assert.match(activation, /window\.history\.replaceState[\s\S]*?continuationParams\.toString\(\)/);
+assert.match(activation, /userMetadata\?\.invitation_id/);
+assert.match(activation, /resolvedInvitationId/);
+assert.match(activation, /setIntendedRole\('coordinator'\)/);
 assert.match(activation, /if \(code \|\| tokenHash \|\| accessToken \|\| refreshToken\)/);
 assert.doesNotMatch(
   section(activation, 'const establishSessionFromUrl', 'const requestActivationBootstrap'),

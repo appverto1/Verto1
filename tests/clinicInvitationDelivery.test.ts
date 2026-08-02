@@ -40,6 +40,7 @@ assert.match(inviteRoute, /responsible_professional_name: responsibleProfessiona
 assert.match(inviteRoute, /invited_email: email/);
 assert.match(inviteRoute, /templateKind: 'clinic_invitation'/);
 assert.match(inviteRoute, /templateData: invitationEmail\.variables/);
+assert.match(inviteRoute, /preferHtml: true/);
 assert.doesNotMatch(inviteRoute, /email\.split\('@'\)\[0\]/);
 
 const personalized = buildClinicInvitationEmailTemplate({
@@ -50,7 +51,7 @@ const personalized = buildClinicInvitationEmailTemplate({
   invited_role_label: 'Psicóloga',
   link_ativacao: 'https://www.appverto.com.br/?auth_action=activate&invitation_id=00000000-0000-4000-8000-000000000001',
 });
-assert.equal(personalized.subject, 'Convite da clínica Espaço Guiar para acessar a Verto');
+assert.equal(personalized.subject, 'Bem-vindo à Verto');
 assert.match(personalized.html, /Olá, Marina Souza!/);
 assert.match(personalized.html, /clínica <strong>Espaço Guiar<\/strong>/);
 assert.match(personalized.html, /Mateus Montoro<\/strong> realizou este convite em nome da clínica/);

@@ -208,7 +208,7 @@ export const buildClinicInvitationEmailTemplate = (
     .replace('</h2>', `</h2>${invitationCopy}`);
 
   return {
-    subject: `Convite da clínica ${String(input.clinic_name || '').trim()} para acessar a Verto`,
+    subject: 'Bem-vindo à Verto',
     html,
     variables: {
       clinic_name: String(input.clinic_name || '').trim(),

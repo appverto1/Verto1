@@ -4270,6 +4270,7 @@ type TransactionalEmailParams = {
   replyTo?: string;
   templateKind?: ResendTemplateKind;
   templateData?: Record<string, unknown>;
+  preferHtml?: boolean;
   metadata?: Record<string, unknown>;
 };
 
@@ -4289,7 +4290,7 @@ function classifyResendDeliveryError(error: any): string {
 async function sendTransactionalEmailWithResultSafe(
   params: TransactionalEmailParams
 ): Promise<ResendEmailDeliveryResult> {
-  const templateId = resolveResendTemplateId(params.templateKind);
+  const templateId = params.preferHtml ? null : resolveResendTemplateId(params.templateKind);
   try {
     const result = await sendEmailViaResend({
       to: params.to,
@@ -24773,11 +24774,33 @@ async function startServer() {
             invited_role: role,
             professional_title: professionalTitle,
             specialty,
-            clinic_id: clinicId
+            clinic_id: clinicId,
+            invitation_id: data?.id
           }
         });
         if (createResult.error) throw createResult.error;
         authUser = createResult.data?.user || null;
+      }
+
+      if (authUser?.id && !reusedExistingAuthAccess) {
+        const currentMetadata = authUser?.user_metadata && typeof authUser.user_metadata === 'object'
+          ? authUser.user_metadata
+          : {};
+        const { data: updatedAuthData, error: updateAuthContextError } = await supabase.auth.admin.updateUserById(
+          authUser.id,
+          {
+            user_metadata: {
+              ...currentMetadata,
+              invited_role: role,
+              professional_title: professionalTitle,
+              specialty,
+              clinic_id: clinicId,
+              invitation_id: data?.id
+            }
+          }
+        );
+        if (updateAuthContextError) throw updateAuthContextError;
+        authUser = updatedAuthData?.user || authUser;
       }
 
       const activationEntryUrl = reusedExistingAuthAccess
@@ -24822,7 +24845,7 @@ async function startServer() {
         provider: 'resend',
         providerMessageId: null,
         deliveryMode: null,
-        templateId: resolveResendTemplateId('clinic_invitation'),
+        templateId: null,
         templateFallbackReason: null,
         errorCode: 'RESEND_TIMEOUT'
       };
@@ -24836,6 +24859,7 @@ async function startServer() {
           replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
           templateKind: 'clinic_invitation',
           templateData: invitationEmail.variables,
+          preferHtml: true,
           metadata: {
             invitationId: data?.id || null,
             clinicId,

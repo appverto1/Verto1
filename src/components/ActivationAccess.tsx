@@ -178,10 +178,32 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
 
     const sessionEmail = String(session?.user?.email || '').trim().toLowerCase();
     if (sessionEmail) {
+      const userMetadata = session?.user?.user_metadata && typeof session.user.user_metadata === 'object'
+        ? session.user.user_metadata
+        : {};
+      const metadataInvitationId = String(
+        userMetadata?.invitation_id || userMetadata?.clinic_invitation_id || '',
+      ).trim();
+      const resolvedInvitationId = parsedInvitationId ||
+        (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(metadataInvitationId)
+          ? metadataInvitationId
+          : '');
+      const resolvedInviteMode = parsedInvitationId ? parsedInviteMode : resolvedInvitationId ? 'new' : parsedInviteMode;
+      const metadataInvitedRole = String(userMetadata?.invited_role || '').trim().toLowerCase();
+
       setIdentifiedEmail(sessionEmail);
       setEmail(sessionEmail);
       setIsActivationLinkContext(true);
-      if (hasActivationParams) {
+      if (resolvedInvitationId || ['coordinator', 'admin', 'therapist', 'receptionist'].includes(metadataInvitedRole)) {
+        setIntendedRole('coordinator');
+      }
+      if (resolvedInvitationId) {
+        setInvitationId(resolvedInvitationId);
+        setInviteMode(resolvedInviteMode);
+        localStorage.setItem('verto_activation_invitation_id', resolvedInvitationId);
+        localStorage.setItem('verto_activation_invite_mode', resolvedInviteMode);
+      }
+      if (hasActivationParams || resolvedInvitationId) {
         const continuationParams = new URLSearchParams({
           auth_action: action === 'recovery' || type === 'recovery'
             ? 'recovery'
@@ -189,8 +211,8 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
               ? 'accept_invitation'
               : 'activate',
         });
-        if (parsedInvitationId) continuationParams.set('invitation_id', parsedInvitationId);
-        if (parsedInvitationId) continuationParams.set('invite_mode', parsedInviteMode);
+        if (resolvedInvitationId) continuationParams.set('invitation_id', resolvedInvitationId);
+        if (resolvedInvitationId) continuationParams.set('invite_mode', resolvedInviteMode);
         window.history.replaceState({}, document.title, `/?${continuationParams.toString()}`);
       }
       return session;
