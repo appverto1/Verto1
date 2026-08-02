@@ -1218,7 +1218,7 @@ export function CoordinatorDashboard({
     patientAuthorizations: "Autorizações dos pacientes",
     rooms: "Reservas de Sala",
     protocols: "Protocolos",
-    settings: "Configurações da Clínica",
+    settings: isTherapist ? "Configurações Profissionais" : "Configurações da Clínica",
     logs: "Log de Atividades",
     billing: "Assinatura e Cobrança",
   };
@@ -1760,7 +1760,7 @@ export function CoordinatorDashboard({
   const canManageProtocolLibrary = capabilityStatusForRole("protocol-library") === "full";
   const canManageClinicSettings = capabilityStatusForRole("clinic-settings") !== "none";
   const canManageBilling = !isDemoAccount && capabilityStatusForRole("billing-management") !== "none";
-  const canEditAnamnesisTemplate = canManageClinicSettings;
+  const canEditAnamnesisTemplate = canManageClinicSettings || isTherapist;
   const DAY_GRID_SLOT_HEIGHT_PX = 66;
   const DAY_GRID_START_HOUR = 7;
   const DAY_GRID_END_HOUR = 20;
@@ -7606,6 +7606,10 @@ export function CoordinatorDashboard({
     ageMinMonths: template?.ageMinMonths ?? template?.age_min_months ?? null,
     ageMaxMonths: template?.ageMaxMonths ?? template?.age_max_months ?? null,
     patientProfileType: template?.patientProfileType || template?.patient_profile_type || null,
+    templateScope: template?.templateScope || template?.scope || (isTherapist ? "personal" : "clinic"),
+    scope: template?.templateScope || template?.scope || (isTherapist ? "personal" : "clinic"),
+    ownerUserId: template?.ownerUserId || template?.owner_user_id || null,
+    visibility: template?.visibility || (isTherapist ? "private" : "clinic"),
   });
 
   const loadClinicAnamnesisTemplate = async () => {
@@ -7614,7 +7618,11 @@ export function CoordinatorDashboard({
       const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
       const listResult = await dataService.getClinicAnamnesisTemplates(workspaceId || undefined);
       if (listResult?.success && Array.isArray(listResult.data)) {
-        const normalizedList = listResult.data.map(normalizeAnamnesisTemplateForEditor);
+        const normalizedAll = listResult.data.map(normalizeAnamnesisTemplateForEditor);
+        const normalizedList = normalizedAll.filter((item: any) => {
+          const scope = String(item?.templateScope || item?.scope || '').toLowerCase();
+          return isTherapist ? scope === 'personal' : scope === 'clinic';
+        });
         setAnamnesisTemplates(normalizedList);
         if (normalizedList.length > 0) {
           const currentId = String(anamnesisTemplate?.selectedTemplateId || "");
@@ -7622,11 +7630,26 @@ export function CoordinatorDashboard({
           setAnamnesisTemplate(currentStillExists || normalizedList[0]);
           return;
         }
+        if (isTherapist) {
+          setAnamnesisTemplate(normalizeAnamnesisTemplateForEditor({
+            ...getDefaultAnamnesisTemplate(),
+            templateName: 'Minha ficha profissional',
+            templateScope: 'personal',
+            scope: 'personal',
+            visibility: 'private',
+          }));
+          return;
+        }
       }
 
       const result = await dataService.getClinicAnamnesisTemplate(workspaceId || undefined);
       if (result?.success) {
-        setAnamnesisTemplate(normalizeAnamnesisTemplateForEditor(result.data || getDefaultAnamnesisTemplate()));
+        setAnamnesisTemplate(normalizeAnamnesisTemplateForEditor({
+          ...(result.data || getDefaultAnamnesisTemplate()),
+          templateScope: 'clinic',
+          scope: 'clinic',
+          visibility: 'clinic',
+        }));
       }
     } catch (error) {
       console.error("Falha ao carregar template da anamnese:", error);
@@ -7637,28 +7660,34 @@ export function CoordinatorDashboard({
 
   const handleSaveClinicAnamnesisTemplate = async (template: any) => {
     if (!canEditAnamnesisTemplate) {
-      showToast("Apenas a coordenação pode alterar o template de anamnese.", "error");
+      showToast("Você não possui permissão para alterar esta ficha.", "error");
       throw new Error("Permissão insuficiente para editar template.");
     }
-    showProcessing("Salvando personalização da ficha...");
+    showProcessing(isTherapist ? "Salvando ficha profissional..." : "Salvando personalização da ficha...");
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
-    const result = await dataService.saveClinicAnamnesisTemplateRecord(template, workspaceId || undefined);
+    const scopedTemplate = {
+      ...template,
+      templateScope: isTherapist ? 'personal' : 'clinic',
+      scope: isTherapist ? 'personal' : 'clinic',
+      visibility: isTherapist ? 'private' : 'clinic',
+    };
+    const result = await dataService.saveClinicAnamnesisTemplateRecord(scopedTemplate, workspaceId || undefined);
     if (!result?.success) {
       hideProcessing();
-      throw new Error(
-        result?.error || "Não foi possível salvar o template da anamnese.",
-      );
+      throw new Error(result?.message || result?.error || "Não foi possível salvar o template da anamnese.");
     }
-    const normalizedSavedTemplate = normalizeAnamnesisTemplateForEditor(result?.data || template);
+    const normalizedSavedTemplate = normalizeAnamnesisTemplateForEditor(result?.data || scopedTemplate);
     setAnamnesisTemplate(normalizedSavedTemplate);
     setAnamnesisTemplates((prev) => {
       const templateId = String((normalizedSavedTemplate as any)?.selectedTemplateId || (normalizedSavedTemplate as any)?.id || "");
       const withoutCurrent = prev.filter((item: any) => String(item?.selectedTemplateId || item?.id || "") !== templateId);
-      return [normalizedSavedTemplate, ...withoutCurrent].slice(0, 5);
+      return [normalizedSavedTemplate, ...withoutCurrent].slice(0, isTherapist ? 20 : 5);
     });
     onAddActivityLog(
-      "Template de anamnese atualizado",
-      "A coordenação personalizou perguntas e campos da ficha de anamnese.",
+      isTherapist ? "Ficha profissional atualizada" : "Template de anamnese atualizado",
+      isTherapist
+        ? "O profissional atualizou uma ficha pessoal reutilizável em seus vínculos."
+        : "A coordenação personalizou perguntas e campos da ficha de anamnese.",
       "management",
     );
     hideProcessing();
@@ -7672,7 +7701,7 @@ export function CoordinatorDashboard({
 
   const handleDeleteClinicAnamnesisTemplate = async (templateId: string) => {
     if (!canEditAnamnesisTemplate) {
-      showToast("Apenas a coordenação pode remover fichas de anamnese.", "error");
+      showToast("Você não possui permissão para remover esta ficha.", "error");
       return;
     }
     showProcessing("Removendo ficha personalizada...");
@@ -7684,7 +7713,13 @@ export function CoordinatorDashboard({
     }
     const nextTemplates = anamnesisTemplates.filter((item: any) => String(item?.selectedTemplateId || item?.id || "") !== String(templateId));
     setAnamnesisTemplates(nextTemplates);
-    setAnamnesisTemplate(nextTemplates[0] || normalizeAnamnesisTemplateForEditor(getDefaultAnamnesisTemplate()));
+    setAnamnesisTemplate(nextTemplates[0] || normalizeAnamnesisTemplateForEditor({
+      ...getDefaultAnamnesisTemplate(),
+      templateScope: isTherapist ? 'personal' : 'clinic',
+      scope: isTherapist ? 'personal' : 'clinic',
+      visibility: isTherapist ? 'private' : 'clinic',
+      ownerUserId: isTherapist ? String(user?.id || '') : null,
+    }));
     hideProcessing();
     showToast("Ficha removida da lista ativa.");
   };
@@ -9209,7 +9244,7 @@ export function CoordinatorDashboard({
         label: "Configurações",
         icon: ShieldCheck,
         children: [
-          { id: "settings-clinic", label: "Clínica", icon: ShieldCheck, tab: "settings" },
+          { id: "settings-clinic", label: isTherapist ? "Profissional" : "Clínica", icon: ShieldCheck, tab: "settings" },
           { id: "settings-team", label: "Profissionais", icon: Users, tab: "team" },
           { id: "settings-rooms", label: "Salas", icon: DoorOpen, tab: "rooms" },
           { id: "settings-billing", label: "Assinatura", icon: CreditCard, tab: "billing" },
@@ -12633,7 +12668,7 @@ export function CoordinatorDashboard({
               <div className="animate-fade-in">
                 {!canManageProtocolLibrary && (
                   <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-700 rounded-2xl p-4 text-xs font-semibold">
-                    Modo terapeuta: execução permitida. A gestão da biblioteca de protocolos (criar, editar e excluir) está restrita à coordenação.
+                    Os protocolos institucionais continuam administrados pela coordenação. Seus modelos terapêuticos pessoais podem ser criados, editados e reutilizados em qualquer clínica ativa.
                   </div>
                 )}
                 <ProtocolManagementSystem
@@ -12743,6 +12778,7 @@ export function CoordinatorDashboard({
               >
                 <ClinicGlobalSettingsPanel
                   isTherapist={isTherapist}
+                  currentUserId={String(user?.id || '')}
                   canEditAnamnesisTemplate={canEditAnamnesisTemplate}
                   loadingAnamnesisTemplate={loadingAnamnesisTemplate}
                   onOpenAnamnesisTemplate={() => setIsAnamnesisTemplateModalOpen(true)}
@@ -12844,7 +12880,7 @@ export function CoordinatorDashboard({
               >
                 <div className="flex items-center justify-between mb-8">
                   <h3 className="text-xl font-bold text-slate-900">
-                    {isTherapist ? "Meu Perfil Profissional" : "Meu Perfil e Configurações da Clínica"}
+                    {isTherapist ? "Configurações profissionais" : "Meu Perfil e Configurações da Clínica"}
                   </h3>
                   <div className="flex items-center gap-3">
                     {canEditAnamnesisTemplate && (
@@ -13356,12 +13392,15 @@ export function CoordinatorDashboard({
       <AnamnesisModal
         isOpen={isAnamnesisTemplateModalOpen}
         onClose={() => setIsAnamnesisTemplateModalOpen(false)}
-        initialData={{ nome: "Template da Clínica" }}
+        initialData={{ nome: isTherapist ? "Template Profissional" : "Template da Clínica", manageTemplate: true }}
         mode="edit"
         onSave={() => setIsAnamnesisTemplateModalOpen(false)}
         template={anamnesisTemplate}
         savedTemplates={anamnesisTemplates}
         canEditTemplate={canEditAnamnesisTemplate}
+        loadLatestTemplate={false}
+        templateManagerLabel={isTherapist ? "Ficha profissional" : "Ficha da clínica"}
+        maxSavedTemplates={isTherapist ? 20 : 5}
         onTemplateSave={handleSaveClinicAnamnesisTemplate}
         onTemplateSelect={handleSelectClinicAnamnesisTemplate}
         onTemplateDelete={handleDeleteClinicAnamnesisTemplate}

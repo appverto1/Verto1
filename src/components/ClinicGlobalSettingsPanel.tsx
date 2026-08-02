@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, CalendarClock, CheckCircle2, Loader2, Plus, X } from "lucide-react";
+import { AlertCircle, CalendarClock, CheckCircle2, ClipboardList, Library, Loader2, Plus, Save, X } from "lucide-react";
 import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { SubscriptionDiscountSummary } from "./SubscriptionDiscountSummary";
@@ -12,6 +12,7 @@ type SettingsValues = Record<string, any>;
 
 type ClinicGlobalSettingsPanelProps = {
   isTherapist: boolean;
+  currentUserId: string;
   canEditAnamnesisTemplate: boolean;
   loadingAnamnesisTemplate: boolean;
   onOpenAnamnesisTemplate: () => void;
@@ -27,8 +28,8 @@ type ClinicGlobalSettingsPanelProps = {
 };
 
 const inputClass =
-  "mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-[#7a32fc]/40 focus:ring-2 focus:ring-[#7a32fc]/10";
-const labelClass = "block text-xs font-bold text-slate-600";
+  "mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-normal text-slate-800 outline-none transition-all focus:border-[#7a32fc]/40 focus:ring-2 focus:ring-[#7a32fc]/10";
+const labelClass = "block text-xs font-medium text-slate-600";
 const BRAZILIAN_UFS = [
   "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS",
   "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC",
@@ -43,7 +44,7 @@ function StatusBadge({ complete, hasAnyData }: { complete: boolean; hasAnyData: 
       ? "bg-amber-50 text-amber-700 ring-amber-100"
       : "bg-slate-100 text-slate-500 ring-slate-200";
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-black ring-1 ${className}`}>
+    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ${className}`}>
       {complete ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
       {label}
     </span>
@@ -69,8 +70,8 @@ function SectionCard({
     <section id={id} className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h4 className="text-base font-black text-slate-900">{title}</h4>
-          <p className="mt-1 text-sm font-medium text-slate-500">{description}</p>
+          <h4 className="text-base font-semibold text-slate-900">{title}</h4>
+          <p className="mt-1 text-sm font-normal text-slate-500">{description}</p>
         </div>
         <StatusBadge complete={complete} hasAnyData={hasAnyData} />
       </div>
@@ -84,10 +85,294 @@ function SaveButton({ children, onSave }: { children: React.ReactNode; onSave: (
     <button
       type="button"
       onClick={() => void onSave()}
-      className="rounded-xl bg-[#7a32fc] px-5 py-2.5 text-sm font-black text-white transition-all hover:opacity-90"
+      className="rounded-xl bg-[#7a32fc] px-5 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90"
     >
       {children}
     </button>
+  );
+}
+
+
+const PROFESSIONAL_WEEKDAYS = [
+  ['monday', 'Segunda'],
+  ['tuesday', 'Terça'],
+  ['wednesday', 'Quarta'],
+  ['thursday', 'Quinta'],
+  ['friday', 'Sexta'],
+  ['saturday', 'Sábado'],
+  ['sunday', 'Domingo'],
+] as const;
+
+const defaultProfessionalSchedule = () => ({
+  active: true,
+  stepMinutes: 50,
+  defaultSessionDurationMinutes: 50,
+  minLeadMinutes: 120,
+  maxSlotsPerDay: 8,
+  sessionBufferMinutes: 0,
+  days: Object.fromEntries(PROFESSIONAL_WEEKDAYS.map(([key], index) => [
+    key,
+    {
+      enabled: index < 5,
+      periods: [{ start: '08:00', end: '18:00' }],
+      intervals: [],
+    },
+  ])),
+  exceptions: [],
+});
+
+const normalizeProfessionalSchedule = (value: any) => {
+  const fallback = defaultProfessionalSchedule();
+  const source = value && typeof value === 'object' ? value : {};
+  const sourceDays = source.days && typeof source.days === 'object' ? source.days : {};
+  return {
+    ...fallback,
+    ...source,
+    active: source.active !== false,
+    stepMinutes: Number(source.stepMinutes ?? source.step_minutes ?? source.defaultSessionDurationMinutes ?? 50) || 50,
+    defaultSessionDurationMinutes: Number(source.defaultSessionDurationMinutes ?? source.default_session_duration_minutes ?? source.stepMinutes ?? 50) || 50,
+    sessionBufferMinutes: Math.max(0, Number(source.sessionBufferMinutes ?? source.session_buffer_minutes ?? 0) || 0),
+    days: Object.fromEntries(PROFESSIONAL_WEEKDAYS.map(([key], index) => {
+      const existing = sourceDays[key] && typeof sourceDays[key] === 'object' ? sourceDays[key] : {};
+      const periods = Array.isArray(existing.periods) && existing.periods.length > 0
+        ? existing.periods.map((period: any) => ({
+            start: String(period?.start || '08:00').slice(0, 5),
+            end: String(period?.end || '18:00').slice(0, 5),
+          }))
+        : [{ start: '08:00', end: '18:00' }];
+      return [key, {
+        ...fallback.days[key],
+        ...existing,
+        enabled: typeof existing.enabled === 'boolean' ? existing.enabled : index < 5,
+        periods,
+        intervals: Array.isArray(existing.intervals) ? existing.intervals : [],
+      }];
+    })),
+    exceptions: Array.isArray(source.exceptions) ? source.exceptions : [],
+  };
+};
+
+function ProfessionalScheduleSettings({ memberId }: { memberId: string }) {
+  const [schedule, setSchedule] = useState<any>(() => defaultProfessionalSchedule());
+  const [state, setState] = useState({ loading: true, saving: false, configured: false, error: '', message: '' });
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      if (!memberId) {
+        setState({ loading: false, saving: false, configured: false, error: 'Não foi possível identificar o profissional.', message: '' });
+        return;
+      }
+      setState((current) => ({ ...current, loading: true, error: '', message: '' }));
+      const result = await dataService.getMemberWorkSchedule(memberId);
+      if (cancelled) return;
+      if (!result?.success) {
+        setState({ loading: false, saving: false, configured: false, error: result?.message || result?.error || 'Não foi possível carregar sua disponibilidade.', message: '' });
+        return;
+      }
+      setSchedule(normalizeProfessionalSchedule(result?.data?.workSchedule));
+      setState({ loading: false, saving: false, configured: result?.data?.configured === true, error: '', message: '' });
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [memberId]);
+
+  const updateDay = (dayKey: string, patch: Record<string, any>) => {
+    setSchedule((current: any) => ({
+      ...current,
+      days: {
+        ...current.days,
+        [dayKey]: {
+          ...current.days[dayKey],
+          ...patch,
+        },
+      },
+    }));
+  };
+
+  const updatePeriod = (dayKey: string, periodIndex: number, field: 'start' | 'end', value: string) => {
+    setSchedule((current: any) => {
+      const currentDay = current.days[dayKey] || {};
+      const periods = Array.isArray(currentDay.periods) && currentDay.periods.length > 0
+        ? [...currentDay.periods]
+        : [{ start: '08:00', end: '18:00' }];
+      periods[periodIndex] = { ...periods[periodIndex], [field]: value };
+      return {
+        ...current,
+        days: {
+          ...current.days,
+          [dayKey]: { ...currentDay, periods },
+        },
+      };
+    });
+  };
+
+  const addPeriod = (dayKey: string) => {
+    setSchedule((current: any) => {
+      const currentDay = current.days[dayKey] || {};
+      const periods = Array.isArray(currentDay.periods) ? [...currentDay.periods] : [];
+      if (periods.length >= 3) return current;
+      const lastEnd = String(periods[periods.length - 1]?.end || '12:00').slice(0, 5);
+      periods.push({ start: lastEnd, end: lastEnd < '18:00' ? '18:00' : '20:00' });
+      return {
+        ...current,
+        days: {
+          ...current.days,
+          [dayKey]: { ...currentDay, periods },
+        },
+      };
+    });
+  };
+
+  const removePeriod = (dayKey: string, periodIndex: number) => {
+    setSchedule((current: any) => {
+      const currentDay = current.days[dayKey] || {};
+      const periods = (Array.isArray(currentDay.periods) ? currentDay.periods : [])
+        .filter((_: any, index: number) => index !== periodIndex);
+      return {
+        ...current,
+        days: {
+          ...current.days,
+          [dayKey]: {
+            ...currentDay,
+            periods: periods.length > 0 ? periods : [{ start: '08:00', end: '18:00' }],
+          },
+        },
+      };
+    });
+  };
+
+  const saveSchedule = async () => {
+    if (state.saving || state.loading) return;
+    const enabledDays = PROFESSIONAL_WEEKDAYS.filter(([key]) => schedule?.days?.[key]?.enabled);
+    if (enabledDays.length === 0) {
+      setState((current) => ({ ...current, error: 'Selecione ao menos um dia de trabalho.', message: '' }));
+      return;
+    }
+    const invalidDay = enabledDays.find(([key]) => {
+      const periods = Array.isArray(schedule?.days?.[key]?.periods) ? schedule.days[key].periods : [];
+      if (periods.length === 0) return true;
+      const ordered = [...periods].sort((left: any, right: any) => String(left?.start || '').localeCompare(String(right?.start || '')));
+      return ordered.some((period: any, index: number) => (
+        !period?.start
+        || !period?.end
+        || period.start >= period.end
+        || (index > 0 && ordered[index - 1]?.end > period.start)
+      ));
+    });
+    if (invalidDay) {
+      setState((current) => ({ ...current, error: 'Revise os horários: cada período precisa ter início, fim e não pode se sobrepor a outro.', message: '' }));
+      return;
+    }
+    setState((current) => ({ ...current, saving: true, error: '', message: '' }));
+    const result = await dataService.updateMemberWorkSchedule(memberId, schedule);
+    if (!result?.success) {
+      setState((current) => ({
+        ...current,
+        saving: false,
+        error: result?.message || result?.error || 'Não foi possível salvar sua disponibilidade.',
+        message: '',
+      }));
+      return;
+    }
+    setSchedule(normalizeProfessionalSchedule(result?.data?.workSchedule || schedule));
+    setState({ loading: false, saving: false, configured: true, error: '', message: 'Disponibilidade atualizada para esta clínica.' });
+  };
+
+  return (
+    <SectionCard
+      title="Disponibilidade nesta clínica"
+      description="Defina os dias e horários em que você atende neste vínculo. A agenda usa estas informações para evitar conflitos entre clínicas."
+      complete={state.configured}
+      hasAnyData={Boolean(schedule)}
+    >
+      {state.loading ? (
+        <div className="flex items-center gap-2 py-8 text-sm text-slate-500"><Loader2 size={17} className="animate-spin" /> Carregando disponibilidade...</div>
+      ) : (
+        <div className="space-y-5">
+          <div className="flex flex-wrap gap-2">
+            {PROFESSIONAL_WEEKDAYS.map(([key, label]) => {
+              const enabled = Boolean(schedule?.days?.[key]?.enabled);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => updateDay(key, { enabled: !enabled })}
+                  className={`min-h-10 rounded-xl border px-4 text-sm font-medium transition ${enabled ? 'border-violet-300 bg-violet-50 text-violet-700' : 'border-slate-200 bg-white text-slate-500'}`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            {PROFESSIONAL_WEEKDAYS.filter(([key]) => schedule?.days?.[key]?.enabled).map(([key, label]) => {
+              const periods = Array.isArray(schedule?.days?.[key]?.periods) && schedule.days[key].periods.length > 0
+                ? schedule.days[key].periods
+                : [{ start: '08:00', end: '18:00' }];
+              return (
+                <div key={key} className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-medium text-slate-800">{label}</p>
+                    <button type="button" onClick={() => addPeriod(key)} disabled={periods.length >= 3} className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-40">
+                      <Plus size={13} /> Adicionar período
+                    </button>
+                  </div>
+                  <div className="mt-3 space-y-3">
+                    {periods.map((period: any, periodIndex: number) => (
+                      <div key={`${key}-${periodIndex}`} className="grid grid-cols-[1fr_1fr_auto] items-end gap-3">
+                        <label className={labelClass}>Início<input type="time" value={period.start} onChange={(event) => updatePeriod(key, periodIndex, 'start', event.target.value)} className={inputClass} /></label>
+                        <label className={labelClass}>Fim<input type="time" value={period.end} onChange={(event) => updatePeriod(key, periodIndex, 'end', event.target.value)} className={inputClass} /></label>
+                        <button type="button" onClick={() => removePeriod(key, periodIndex)} disabled={periods.length === 1} aria-label={`Remover período de ${label}`} className="mb-0.5 flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 hover:border-rose-200 hover:text-rose-600 disabled:opacity-30">
+                          <X size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className={labelClass}>
+              Duração padrão da sessão
+              <select
+                value={String(schedule.defaultSessionDurationMinutes || 50)}
+                onChange={(event) => setSchedule((current: any) => ({
+                  ...current,
+                  stepMinutes: Number(event.target.value),
+                  defaultSessionDurationMinutes: Number(event.target.value),
+                }))}
+                className={inputClass}
+              >
+                {[30, 45, 50, 60, 90].map((minutes) => <option key={minutes} value={minutes}>{minutes} minutos</option>)}
+              </select>
+            </label>
+            <label className={labelClass}>
+              Intervalo entre atendimentos
+              <select
+                value={String(schedule.sessionBufferMinutes || 0)}
+                onChange={(event) => setSchedule((current: any) => ({ ...current, sessionBufferMinutes: Number(event.target.value) }))}
+                className={inputClass}
+              >
+                {[0, 5, 10, 15, 20, 30].map((minutes) => <option key={minutes} value={minutes}>{minutes === 0 ? 'Sem intervalo' : `${minutes} minutos`}</option>)}
+              </select>
+            </label>
+          </div>
+
+          {state.error && <p role="alert" className="text-sm text-rose-600">{state.error}</p>}
+          {state.message && <p role="status" className="text-sm text-emerald-700">{state.message}</p>}
+          <div className="flex justify-end">
+            <button type="button" onClick={() => void saveSchedule()} disabled={state.saving} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-[#7a32fc] px-5 text-sm font-semibold text-white disabled:opacity-50">
+              {state.saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              {state.saving ? 'Salvando...' : 'Salvar disponibilidade'}
+            </button>
+          </div>
+        </div>
+      )}
+    </SectionCard>
   );
 }
 
@@ -334,7 +619,7 @@ function AbaPromptTypesSettings() {
             <label className={labelClass}>Pontuação<input type="number" min={0} max={100} value={newPrompt.independenceScore} onChange={(event) => setNewPrompt((prev) => ({ ...prev, independenceScore: Number(event.target.value) }))} className={inputClass} /></label>
             <label className={labelClass}>Ordem<input type="number" min={0} value={newPrompt.intrusivenessOrder} onChange={(event) => setNewPrompt((prev) => ({ ...prev, intrusivenessOrder: Number(event.target.value) }))} className={inputClass} /></label>
           </div>
-          <button type="button" onClick={() => void addPromptType()} className="mt-4 rounded-xl bg-[#7a32fc] px-5 py-2.5 text-sm font-black text-white">
+          <button type="button" onClick={() => void addPromptType()} className="mt-4 rounded-xl bg-[#7a32fc] px-5 py-2.5 text-sm font-semibold text-white">
             Adicionar tipo
           </button>
         </div>
@@ -588,7 +873,7 @@ function AbaPromptTypesClinicalSettings() {
             <button
               type="button"
               onClick={openCreatePrompt}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-black text-white transition-all hover:opacity-90"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90"
             >
               <Plus size={16} />
               Novo tipo de ajuda
@@ -694,7 +979,7 @@ function AbaPromptTypesClinicalSettings() {
           <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
               <div>
-                <h4 className="text-base font-black text-slate-900">{modalMode === 'create' ? 'Novo tipo de ajuda' : 'Editar tipo de ajuda'}</h4>
+                <h4 className="text-base font-semibold text-slate-900">{modalMode === 'create' ? 'Novo tipo de ajuda' : 'Editar tipo de ajuda'}</h4>
                 <p className="mt-1 text-sm font-semibold text-slate-500">Também chamado de prompt na prática ABA.</p>
               </div>
               <button type="button" onClick={() => setEditingPrompt(null)} className="rounded-full p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar">
@@ -771,7 +1056,7 @@ function AbaPromptTypesClinicalSettings() {
                 <button type="button" onClick={() => setEditingPrompt(null)} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-black text-slate-600">
                   Cancelar
                 </button>
-                <button type="button" onClick={() => void saveModalPrompt()} className="rounded-xl bg-[#7a32fc] px-5 py-2.5 text-sm font-black text-white transition-all hover:opacity-90 disabled:opacity-60" disabled={Boolean(savingId)}>
+                <button type="button" onClick={() => void saveModalPrompt()} className="rounded-xl bg-[#7a32fc] px-5 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 disabled:opacity-60" disabled={Boolean(savingId)}>
                   {renderSaveLabel(modalSaveId, modalMode === 'create' ? 'Salvar tipo' : 'Salvar alterações')}
                 </button>
               </div>
@@ -804,12 +1089,12 @@ function MediaDropzone({
 }) {
   return (
     <div>
-      <label className="mb-2 block text-xs font-bold text-slate-600">{label}</label>
+      <label className="mb-2 block text-xs font-medium text-slate-600">{label}</label>
       <label className="flex min-h-[150px] w-full cursor-pointer items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-4 transition-all hover:border-[#7a32fc]">
         {value ? (
           <SecureImage src={value} alt={alt} className={imageClassName} onError={onError} />
         ) : (
-          <span className="text-xs font-semibold text-slate-500">{emptyText}</span>
+          <span className="text-xs font-normal text-slate-500">{emptyText}</span>
         )}
         <input
           type="file"
@@ -827,6 +1112,7 @@ function MediaDropzone({
 
 export function ClinicGlobalSettingsPanel({
   isTherapist,
+  currentUserId,
   canEditAnamnesisTemplate,
   loadingAnamnesisTemplate,
   onOpenAnamnesisTemplate,
@@ -859,13 +1145,13 @@ export function ClinicGlobalSettingsPanel({
   const professionalFields = (
     <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
       {isTherapist && (
-        <p className="md:col-span-2 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-800">
-          Este é o seu cadastro profissional e faturável global. Ele será reutilizado em Pré-guias TISS, pré-faturamento, relatórios e documentos de todos os seus atendimentos.
+        <p className="md:col-span-2 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-normal leading-relaxed text-indigo-800">
+          Este cadastro pertence a você e acompanha seus vínculos. Ele é reutilizado em documentos clínicos, relatórios, Pré-guias TISS e rotinas de faturamento.
         </p>
       )}
       <label className={`${labelClass} md:col-span-2`}>
-        Nome de exibição
-        <input type="text" value={values.therapistFullName} onChange={(event) => setters.setTherapistFullName(event.target.value)} placeholder="Nome do profissional responsável" className={inputClass} />
+        Nome completo ou nome profissional
+        <input type="text" value={values.therapistFullName} onChange={(event) => setters.setTherapistFullName(event.target.value)} placeholder="Nome usado em documentos e relatórios" className={inputClass} />
       </label>
       <div className="grid grid-cols-[130px_1fr] gap-3">
         <label className={labelClass}>
@@ -903,8 +1189,8 @@ export function ClinicGlobalSettingsPanel({
         <input type="text" value={values.therapistPhone} onChange={(event) => setters.setTherapistPhone(maskPhoneBR(event.target.value))} placeholder="(00) 00000-0000" className={inputClass} />
       </label>
       <label className={labelClass}>
-        Cargo / Função
-        <input type="text" value={values.therapistRoleTitle} onChange={(event) => setters.setTherapistRoleTitle(event.target.value)} placeholder="Ex: Coordenador clínico" className={inputClass} />
+        Cargo ou função profissional
+        <input type="text" value={values.therapistRoleTitle} onChange={(event) => setters.setTherapistRoleTitle(event.target.value)} placeholder="Ex.: Fonoaudiólogo clínico" className={inputClass} />
       </label>
       <label className={labelClass}>
         Conselho profissional
@@ -926,8 +1212,8 @@ export function ClinicGlobalSettingsPanel({
         <input type="text" value={values.therapistCboCode} onChange={(event) => setters.setTherapistCboCode(onlyDigits(event.target.value, 12))} placeholder="Código CBO" className={inputClass} />
       </label>
       <label className={labelClass}>
-        Especialidade
-        <input type="text" value={values.therapistSpecialtyName} onChange={(event) => setters.setTherapistSpecialtyName(event.target.value)} placeholder="Especialidade principal" className={inputClass} />
+        Área principal de atuação
+        <input type="text" value={values.therapistSpecialtyName} onChange={(event) => setters.setTherapistSpecialtyName(event.target.value)} placeholder="Ex.: Linguagem, motricidade oral" className={inputClass} />
       </label>
       <label className={labelClass}>
         Código do prestador
@@ -971,17 +1257,60 @@ export function ClinicGlobalSettingsPanel({
     </div>
   );
 
+
+  const professionalResources = (
+    <SectionCard
+      title="Ferramentas profissionais"
+      description="Suas fichas e modelos pessoais ficam vinculados à sua identidade profissional e podem ser reutilizados nos seus vínculos ativos."
+      complete
+      hasAnyData
+    >
+      <div className="grid gap-4 md:grid-cols-2">
+        <button
+          type="button"
+          onClick={onOpenAnamnesisTemplate}
+          disabled={loadingAnamnesisTemplate}
+          className="flex min-h-[132px] items-start gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-5 text-left transition hover:border-violet-300 hover:bg-violet-50/40 disabled:opacity-60"
+        >
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-violet-600 shadow-sm"><ClipboardList size={21} /></span>
+          <span>
+            <span className="block text-base font-semibold text-slate-900">Minhas fichas de anamnese</span>
+            <span className="mt-1 block text-sm font-normal leading-relaxed text-slate-500">Crie, edite e reutilize fichas próprias sem misturar os dados de uma clínica com outra.</span>
+            <span className="mt-3 block text-sm font-medium text-violet-700">{loadingAnamnesisTemplate ? 'Carregando...' : 'Gerenciar fichas'}</span>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            try { sessionStorage.setItem('verto:protocols:library-section', 'programs'); } catch { /* noop */ }
+            navigateToTab('protocols');
+          }}
+          className="flex min-h-[132px] items-start gap-4 rounded-2xl border border-slate-200 bg-slate-50/60 p-5 text-left transition hover:border-violet-300 hover:bg-violet-50/40"
+        >
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-violet-600 shadow-sm"><Library size={21} /></span>
+          <span>
+            <span className="block text-base font-semibold text-slate-900">Minha biblioteca terapêutica</span>
+            <span className="mt-1 block text-sm font-normal leading-relaxed text-slate-500">Edite modelos pessoais e use a mesma estrutura clínica em outras clínicas, sem carregar dados de pacientes.</span>
+            <span className="mt-3 block text-sm font-medium text-violet-700">Abrir biblioteca</span>
+          </span>
+        </button>
+      </div>
+    </SectionCard>
+  );
+
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">Configurações globais</p>
-            <h3 className="mt-1 text-2xl font-black text-slate-900">
-              {isTherapist ? "Meu Perfil Profissional" : "Meu Perfil e Configurações da Clínica"}
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">{isTherapist ? "Identidade profissional" : "Configurações globais"}</p>
+            <h3 className="mt-1 text-2xl font-semibold text-slate-900">
+              {isTherapist ? "Configurações profissionais" : "Meu perfil e configurações da clínica"}
             </h3>
-            <p className="mt-2 max-w-3xl text-sm font-medium text-slate-500">
-              Dados preenchidos uma vez e reutilizados em Pré-guia TISS, Pré-faturamento, Fechamento, documentos, relatórios, notificações e agenda.
+            <p className="mt-2 max-w-3xl text-sm font-normal text-slate-500">
+              {isTherapist
+                ? "Gerencie seu cadastro, credenciais, disponibilidade por clínica e ferramentas clínicas pessoais."
+                : "Dados preenchidos uma vez e reutilizados em Pré-guia TISS, Pré-faturamento, Fechamento, documentos, relatórios, notificações e agenda."}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -990,9 +1319,9 @@ export function ClinicGlobalSettingsPanel({
                 type="button"
                 onClick={onOpenAnamnesisTemplate}
                 disabled={loadingAnamnesisTemplate}
-                className="rounded-xl border border-[#7a32fc]/25 bg-white px-4 py-2.5 text-sm font-bold text-[#7a32fc] transition-all hover:bg-[#f6f0ff] disabled:opacity-60"
+                className="rounded-xl border border-[#7a32fc]/25 bg-white px-4 py-2.5 text-sm font-medium text-[#7a32fc] transition-all hover:bg-[#f6f0ff] disabled:opacity-60"
               >
-                {loadingAnamnesisTemplate ? "Carregando ficha..." : "Editar Ficha Anamnese"}
+                {loadingAnamnesisTemplate ? "Carregando ficha..." : isTherapist ? "Minhas fichas" : "Editar ficha de anamnese"}
               </button>
             )}
             <SaveButton onSave={onSave}>{isTherapist ? "Salvar perfil" : "Salvar cadastro global"}</SaveButton>
@@ -1002,12 +1331,14 @@ export function ClinicGlobalSettingsPanel({
 
       {isTherapist ? (
         <>
-          <SectionCard title="Perfil profissional e faturável" description="Cadastre seus dados profissionais uma vez para reutilizá-los em Pré-guias TISS, relatórios, documentos e pré-faturamento." complete={responsibleComplete && professionalBillingComplete} hasAnyData={Boolean(values.therapistFullName || values.therapistPhone || values.therapistEmail || values.therapistCrp || values.therapistCboCode)}>
+          <SectionCard title="Cadastro e credenciais profissionais" description="Mantenha seus dados de identificação, conselho, especialidade e informações usadas em documentos clínicos e faturamento." complete={responsibleComplete && professionalBillingComplete} hasAnyData={Boolean(values.therapistFullName || values.therapistPhone || values.therapistEmail || values.therapistCrp || values.therapistCboCode)}>
             {professionalFields}
           </SectionCard>
-          <SectionCard title="Dados assistenciais e documentos" description="Assinatura e foto seguem o fluxo existente e continuam sendo usadas em relatórios e documentos." complete={mediaComplete} hasAnyData={mediaComplete}>
+          <ProfessionalScheduleSettings memberId={currentUserId} />
+          <SectionCard title="Assinatura e foto profissional" description="Estes arquivos acompanham seu perfil e são usados em relatórios, documentos e registros assinados." complete={mediaComplete} hasAnyData={mediaComplete}>
             {mediaFields}
           </SectionCard>
+          {professionalResources}
         </>
       ) : (
         <>

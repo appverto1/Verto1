@@ -6298,6 +6298,9 @@ const PATIENT_ANAMNESIS_RESPONSE_SELECT = PATIENT_ANAMNESIS_RESPONSE_SELECT_COLU
 const ANAMNESIS_TEMPLATE_SELECT = [
   'id',
   'organization_id',
+  'scope',
+  'owner_user_id',
+  'visibility',
   'name',
   'description',
   'age_min_months',
@@ -14874,6 +14877,7 @@ function buildPublicAnamnesisTemplate(template: any) {
     patientProfileType: sanitizeString(template?.patientProfileType, 80) || null,
     compatibleTemplates: Array.isArray(template?.compatibleTemplates)
       ? template.compatibleTemplates.map((item: any) => ({
+          id: sanitizeString(item?.id, 120),
           name: sanitizeString(item?.name, 180),
           description: sanitizeString(item?.description, 240) || null,
           ageMinMonths: Number.isFinite(Number(item?.ageMinMonths)) ? Number(item.ageMinMonths) : null,
@@ -14883,6 +14887,7 @@ function buildPublicAnamnesisTemplate(template: any) {
       : [],
     availableTemplates: Array.isArray(template?.availableTemplates)
       ? template.availableTemplates.map((item: any) => ({
+          id: sanitizeString(item?.id, 120),
           name: sanitizeString(item?.name, 180),
           description: sanitizeString(item?.description, 240) || null,
           ageMinMonths: Number.isFinite(Number(item?.ageMinMonths)) ? Number(item.ageMinMonths) : null,
@@ -14905,6 +14910,10 @@ function mapAnamnesisTemplateRowForEditor(row: any) {
     ageMinMonths: Number.isFinite(Number(row?.age_min_months)) ? Number(row.age_min_months) : null,
     ageMaxMonths: Number.isFinite(Number(row?.age_max_months)) ? Number(row.age_max_months) : null,
     patientProfileType: sanitizeString(row?.patient_profile_type, 80) || null,
+    templateScope: sanitizeString(row?.scope, 20) || (row?.owner_user_id ? 'personal' : row?.organization_id ? 'clinic' : 'global'),
+    scope: sanitizeString(row?.scope, 20) || (row?.owner_user_id ? 'personal' : row?.organization_id ? 'clinic' : 'global'),
+    ownerUserId: sanitizeString(row?.owner_user_id, 120) || null,
+    visibility: sanitizeString(row?.visibility, 20) || (row?.owner_user_id ? 'private' : 'clinic'),
     isDefault: Boolean(row?.is_default),
     isActive: row?.is_active !== false,
     updatedAt: sanitizeString(row?.updated_at, 80) || null,
@@ -14938,28 +14947,65 @@ async function fetchAnamnesisTemplateForClinic(clinicId: string) {
   return sanitizeAnamnesisTemplate(templateResult.data?.template_json || getDefaultAnamnesisTemplate());
 }
 
-async function fetchAnamnesisTemplateForPatient(patient: any, clinicId: string, requestedTemplateId?: string | null) {
+async function fetchAnamnesisTemplateForPatient(
+  patient: any,
+  clinicId: string,
+  requestedTemplateId?: string | null,
+  actorId?: string | null,
+  allowPersistedPersonalTemplate = false
+) {
   const fallback = await fetchAnamnesisTemplateForClinic(clinicId);
   const safeClinicId = sanitizeString(clinicId, 120);
   if (!isUuid(safeClinicId)) return fallback;
   const requestedId = sanitizeString(requestedTemplateId, 120);
+  const safeActorId = sanitizeString(actorId, 120);
 
   try {
-    let query = supabase
+    const baseQuery = supabase
       .from('anamnesis_templates')
       .select(ANAMNESIS_TEMPLATE_SELECT)
       .eq('is_active', true)
-      .or(`organization_id.is.null,organization_id.eq.${safeClinicId}`)
+      .or(`scope.eq.global,and(scope.eq.clinic,organization_id.eq.${safeClinicId})`)
       .order('organization_id', { ascending: false })
       .order('is_default', { ascending: false })
       .order('created_at', { ascending: true })
       .limit(120);
-    const { data, error } = await query;
-    if (error) {
-      if (isMissingRelationError(error) || extractMissingColumnName(error)) return fallback;
-      throw error;
+    const personalQuery = isUuid(safeActorId)
+      ? supabase
+          .from('anamnesis_templates')
+          .select(ANAMNESIS_TEMPLATE_SELECT)
+          .eq('scope', 'personal')
+          .eq('owner_user_id', safeActorId)
+          .eq('is_active', true)
+          .order('updated_at', { ascending: false })
+          .limit(20)
+      : Promise.resolve({ data: [], error: null });
+    const persistedTemplateQuery = allowPersistedPersonalTemplate && isUuid(requestedId)
+      ? supabase
+          .from('anamnesis_templates')
+          .select(ANAMNESIS_TEMPLATE_SELECT)
+          .eq('id', requestedId)
+          .eq('is_active', true)
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null });
+
+    const [baseResult, personalResult, persistedResult] = await Promise.all([
+      baseQuery,
+      personalQuery,
+      persistedTemplateQuery
+    ]);
+    const firstError = baseResult.error || personalResult.error || persistedResult.error;
+    if (firstError) {
+      if (isMissingRelationError(firstError) || extractMissingColumnName(firstError)) return fallback;
+      throw firstError;
     }
-    const rows = Array.isArray(data) ? data : [];
+
+    const rows = Array.from(new Map([
+      ...(Array.isArray(personalResult.data) ? personalResult.data : []),
+      ...(persistedResult.data ? [persistedResult.data] : []),
+      ...(Array.isArray(baseResult.data) ? baseResult.data : [])
+    ].map((row: any) => [sanitizeString(row?.id, 120), row])).values());
     const compatible = rows.filter((row: any) => anamnesisTemplateMatchesPatient(row, patient));
     const requestedRow = isUuid(requestedId)
       ? rows.find((row: any) => sanitizeString(row?.id, 120) === requestedId)
@@ -14972,78 +15018,27 @@ async function fetchAnamnesisTemplateForPatient(patient: any, clinicId: string, 
       patientProfileKey &&
       sanitizeString(row?.patient_profile_type, 80).toUpperCase() === patientProfileKey
     ));
+    const isClinicTemplate = (row: any) => (
+      sanitizeString(row?.scope, 20) === 'clinic'
+      && sanitizeString(row?.organization_id, 120) === safeClinicId
+    );
+    const isPersonalTemplate = (row: any) => sanitizeString(row?.scope, 20) === 'personal';
     const selected =
       requestedRow ||
-      exactCompatible.find((row: any) => sanitizeString(row?.organization_id, 120) === safeClinicId) ||
+      exactCompatible.find(isPersonalTemplate) ||
+      exactCompatible.find(isClinicTemplate) ||
       exactCompatible[0] ||
-      compatible.find((row: any) => sanitizeString(row?.organization_id, 120) === safeClinicId) ||
+      compatible.find(isPersonalTemplate) ||
+      compatible.find(isClinicTemplate) ||
       compatible[0] ||
-      rows.find((row: any) => sanitizeString(row?.organization_id, 120) === safeClinicId) ||
+      rows.find(isClinicTemplate) ||
       rows[0];
     return selected ? normalizeAgeBasedAnamnesisTemplate(selected, patient, compatible, rows) : fallback;
-  } catch (error: any) {
-    console.warn('[AnamnesisTemplates] fallback para template legado:', error?.message || String(error));
-    return fallback;
+  } catch (error) {
+    if (isMissingRelationError(error) || extractMissingColumnName(error)) return fallback;
+    throw error;
   }
 }
-
-const PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS = [
-  'id',
-  'name',
-  'email',
-  'cpf',
-  'phone',
-  'age',
-  'birth_date',
-  'social_name',
-  'gender',
-  'insurance_type',
-  'insurance_name',
-  'insurance_card_number',
-  'insurance_card_valid_until',
-  'insurance_plan_category',
-  'insurance_holder_name',
-  'insurance_holder_cpf',
-  'insurance_holder_relationship',
-  'eligibility_notes',
-  'patient_group',
-  'lead_source',
-  'notes',
-  'rg',
-  'cep',
-  'responsible_name',
-  'responsible_birth_date',
-  'responsible_cpf',
-  'responsible_phone',
-  'responsible_email',
-  'responsible_relationship',
-  'metadata',
-  'clinic_id',
-  'therapist_id',
-  'responsible_user_id',
-  'responsible_email',
-  'responsible_relationship',
-  'status',
-  'type',
-  'patient_profile_type',
-  'panel_type',
-  'profile_type',
-  'onboarding_status',
-  'anamnesis_required',
-  'anamnesis_requested_at',
-  'anamnesis_submitted_at',
-  'anamnesis_reviewed_at',
-  'relationship_status'
-];
-
-const PATIENT_ANAMNESIS_RECORD_SELECT_COLUMNS = [
-  'patient_id',
-  'clinic_id',
-  'payload_encrypted',
-  'payload',
-  'payload_preview',
-  'updated_at'
-];
 
 async function fetchPatientForAnamnesis(patientId: string, clinicId?: string | null) {
   let columns = [...PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS];
@@ -15595,7 +15590,9 @@ async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
   const template = await fetchAnamnesisTemplateForPatient(
     patientContext,
     clinicId,
-    sanitizeString(requestResult.data?.template_id || responseResult.data?.template_id, 120)
+    sanitizeString(requestResult.data?.template_id || responseResult.data?.template_id, 120),
+    null,
+    true
   );
   const prefillAnswers = buildPatientRegistrationAnamnesisPrefill(patient, registrationPayload);
 
@@ -25604,28 +25601,65 @@ async function startServer() {
   app.get('/api/clinic/anamnesis-templates', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
-      if (!isUuid(clinicId)) {
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (!isUuid(clinicId) || !isUuid(actorId)) {
         return res.json({ success: true, data: [] });
       }
 
-      const { data, error } = await supabase
-        .from('anamnesis_templates')
-        .select(ANAMNESIS_TEMPLATE_SELECT)
-        .eq('organization_id', clinicId)
-        .eq('is_active', true)
-        .order('updated_at', { ascending: false })
-        .limit(5);
+      const [globalResult, clinicResult, personalResult] = await Promise.all([
+        supabase
+          .from('anamnesis_templates')
+          .select(ANAMNESIS_TEMPLATE_SELECT)
+          .eq('scope', 'global')
+          .eq('is_active', true)
+          .order('updated_at', { ascending: false })
+          .limit(20),
+        supabase
+          .from('anamnesis_templates')
+          .select(ANAMNESIS_TEMPLATE_SELECT)
+          .eq('scope', 'clinic')
+          .eq('organization_id', clinicId)
+          .eq('is_active', true)
+          .order('updated_at', { ascending: false })
+          .limit(5),
+        supabase
+          .from('anamnesis_templates')
+          .select(ANAMNESIS_TEMPLATE_SELECT)
+          .eq('scope', 'personal')
+          .eq('owner_user_id', actorId)
+          .eq('is_active', true)
+          .order('updated_at', { ascending: false })
+          .limit(20)
+      ]);
 
-      if (error) {
-        if (isMissingRelationError(error) || extractMissingColumnName(error)) {
-          return res.json({ success: true, data: [], warning: 'Tabela de fichas personalizadas indisponível.' });
+      const firstError = globalResult.error || clinicResult.error || personalResult.error;
+      if (firstError) {
+        if (isMissingRelationError(firstError) || extractMissingColumnName(firstError)) {
+          return res.status(503).json({
+            success: false,
+            error: 'PROFESSIONAL_PORTABLE_TEMPLATES_MIGRATION_REQUIRED',
+            message: 'A estrutura de fichas profissionais portáteis precisa ser aplicada.'
+          });
         }
-        throw error;
+        throw firstError;
       }
+
+      const rows = [
+        ...(personalResult.data || []),
+        ...(clinicResult.data || []),
+        ...(globalResult.data || [])
+      ];
+      const uniqueRows = Array.from(new Map(rows.map((row: any) => [sanitizeString(row?.id, 120), row])).values());
 
       return res.json({
         success: true,
-        data: (Array.isArray(data) ? data : []).map(mapAnamnesisTemplateRowForEditor)
+        data: uniqueRows.map(mapAnamnesisTemplateRowForEditor),
+        meta: {
+          personalCount: (personalResult.data || []).length,
+          clinicCount: (clinicResult.data || []).length,
+          globalCount: (globalResult.data || []).length,
+          portablePersonalTemplates: true
+        }
       });
     } catch (error) {
       return sendRouteDbError(res, '/api/clinic/anamnesis-templates [GET]', error, {
@@ -25635,43 +25669,72 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/anamnesis-templates', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/clinic/anamnesis-templates', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Ficha de anamnese')) return;
       const clinicId = currentClinicId(req.session.user);
-      if (!isUuid(clinicId)) {
-        return res.status(400).json({ success: false, error: 'Clínica inválida para salvar ficha.' });
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole || req.session.user?.role, 40).toLowerCase();
+      if (!isUuid(clinicId) || !isUuid(actorId)) {
+        return res.status(400).json({ success: false, error: 'Identidade profissional ou clínica inválida.' });
       }
 
-      const actorId = sanitizeString(req.session.user?.id, 120);
-      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+      const canManageClinicTemplates = ['owner', 'admin', 'coordinator'].includes(actorRole);
       const incomingTemplate = req.body?.template && typeof req.body.template === 'object' ? req.body.template : {};
+      const requestedScope = sanitizeString(
+        incomingTemplate?.templateScope || incomingTemplate?.scope || req.body?.templateScope || req.body?.scope,
+        20
+      ).toLowerCase();
+      const templateScope = canManageClinicTemplates && requestedScope === 'clinic' ? 'clinic' : 'personal';
+      const organizationId = templateScope === 'personal' ? actorId : clinicId;
+      const ownerUserId = templateScope === 'personal' ? actorId : null;
+      const visibility = templateScope === 'personal' ? 'private' : 'clinic';
+      const maxActiveTemplates = templateScope === 'personal' ? 20 : 5;
+
       const templateId = sanitizeString(incomingTemplate?.selectedTemplateId || incomingTemplate?.id || req.body?.templateId, 120);
       const name = sanitizeString(incomingTemplate?.templateName || incomingTemplate?.name, 180);
       if (!name) {
         return res.status(400).json({ success: false, error: 'Informe um nome para a ficha.' });
       }
 
-      const activeCountResult = await supabase
+      let activeCountQuery = supabase
         .from('anamnesis_templates')
         .select('id')
-        .eq('organization_id', clinicId)
+        .eq('scope', templateScope)
         .eq('is_active', true)
-        .limit(6);
+        .limit(maxActiveTemplates + 1);
+      activeCountQuery = templateScope === 'personal'
+        ? activeCountQuery.eq('owner_user_id', actorId)
+        : activeCountQuery.eq('organization_id', clinicId);
+      const activeCountResult = await activeCountQuery;
       if (activeCountResult.error) {
         if (isMissingRelationError(activeCountResult.error) || extractMissingColumnName(activeCountResult.error)) {
-          return res.status(400).json({ success: false, error: 'Estrutura de fichas personalizadas indisponível.' });
+          return res.status(503).json({
+            success: false,
+            error: 'PROFESSIONAL_PORTABLE_TEMPLATES_MIGRATION_REQUIRED',
+            message: 'A estrutura de fichas profissionais portáteis precisa ser aplicada.'
+          });
         }
         throw activeCountResult.error;
       }
+
       const activeRows = Array.isArray(activeCountResult.data) ? activeCountResult.data : [];
       const isUpdatingExisting = isUuid(templateId) && activeRows.some((row: any) => sanitizeString(row?.id, 120) === templateId);
-      if (!isUpdatingExisting && activeRows.length >= 5) {
-        return res.status(409).json({ success: false, error: 'Limite de 5 fichas salvas atingido.' });
+      if (!isUpdatingExisting && activeRows.length >= maxActiveTemplates) {
+        return res.status(409).json({
+          success: false,
+          error: templateScope === 'personal'
+            ? 'Limite de 20 fichas profissionais salvas atingido.'
+            : 'Limite de 5 fichas da clínica atingido.'
+        });
       }
 
       const nextTemplate = sanitizeAnamnesisTemplate(incomingTemplate);
-      const payload = cleanObject({
-        organization_id: clinicId,
+      const commonPayload = cleanObject({
+        organization_id: organizationId,
+        scope: templateScope,
+        owner_user_id: ownerUserId,
+        visibility,
         name,
         description: sanitizeString(incomingTemplate?.templateDescription || incomingTemplate?.description, 500) || null,
         age_min_months: normalizeAnamnesisTemplateAgeMonth(incomingTemplate?.ageMinMonths ?? incomingTemplate?.age_min_months),
@@ -25680,17 +25743,20 @@ async function startServer() {
         questions: nextTemplate,
         is_default: false,
         is_active: true,
-        created_by: actorId || null,
         updated_at: new Date().toISOString()
       });
 
       let savedRow: any = null;
       if (isUuid(templateId)) {
-        const { data, error } = await supabase
+        let updateQuery = supabase
           .from('anamnesis_templates')
-          .update(payload)
+          .update(commonPayload)
           .eq('id', templateId)
-          .eq('organization_id', clinicId)
+          .eq('scope', templateScope);
+        updateQuery = templateScope === 'personal'
+          ? updateQuery.eq('owner_user_id', actorId)
+          : updateQuery.eq('organization_id', clinicId);
+        const { data, error } = await updateQuery
           .select(ANAMNESIS_TEMPLATE_SELECT)
           .maybeSingle();
         if (error) throw error;
@@ -25701,30 +25767,42 @@ async function startServer() {
       } else {
         const { data, error } = await supabase
           .from('anamnesis_templates')
-          .insert([payload])
+          .insert([{ ...commonPayload, created_by: actorId }])
           .select(ANAMNESIS_TEMPLATE_SELECT)
           .maybeSingle();
         if (error) throw error;
         savedRow = data;
       }
 
-      if (!savedRow?.id || sanitizeString(savedRow?.organization_id, 120) !== clinicId || savedRow?.is_active === false) {
+      if (!savedRow?.id || savedRow?.is_active === false) {
         return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da ficha.' });
+      }
+      if (templateScope === 'personal' && sanitizeString(savedRow?.owner_user_id, 120) !== actorId) {
+        return res.status(500).json({ success: false, error: 'A ficha profissional não foi associada à identidade correta.' });
+      }
+      if (templateScope === 'clinic' && sanitizeString(savedRow?.organization_id, 120) !== clinicId) {
+        return res.status(500).json({ success: false, error: 'A ficha não foi associada à clínica correta.' });
       }
 
       void persistActivityLog({
         userId: actorId,
         clinicId,
-        actorName,
-        title: 'Template de anamnese atualizado',
-        content: `Ficha "${name}" salva com segmentação de idade.`,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
+        title: templateScope === 'personal' ? 'Ficha profissional atualizada' : 'Template de anamnese da clínica atualizado',
+        content: templateScope === 'personal'
+          ? `Ficha profissional "${name}" salva para reutilização em outros vínculos.`
+          : `Ficha "${name}" salva para uso da clínica.`,
         type: 'audit'
       });
 
       return res.json({ success: true, data: mapAnamnesisTemplateRowForEditor(savedRow) });
     } catch (error: any) {
       if (isMissingRelationError(error) || extractMissingColumnName(error)) {
-        return res.status(400).json({ success: false, error: 'Estrutura de fichas personalizadas indisponível.' });
+        return res.status(503).json({
+          success: false,
+          error: 'PROFESSIONAL_PORTABLE_TEMPLATES_MIGRATION_REQUIRED',
+          message: 'A estrutura de fichas profissionais portáteis precisa ser aplicada.'
+        });
       }
       return sendRouteDbError(res, '/api/clinic/anamnesis-templates [POST]', error, {
         clinicId: sanitizeString(currentClinicId(req.session.user), 120),
@@ -25733,37 +25811,58 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/clinic/anamnesis-templates/:templateId', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/clinic/anamnesis-templates/:templateId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole || req.session.user?.role, 40).toLowerCase();
       const templateId = sanitizeString(req.params?.templateId, 120);
-      if (!isUuid(clinicId) || !isUuid(templateId)) {
+      if (!isUuid(clinicId) || !isUuid(actorId) || !isUuid(templateId)) {
         return res.status(400).json({ success: false, error: 'Ficha inválida.' });
+      }
+
+      const { data: existing, error: existingError } = await supabase
+        .from('anamnesis_templates')
+        .select('id,organization_id,scope,owner_user_id,name')
+        .eq('id', templateId)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (!existing?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
+
+      const scope = sanitizeString(existing.scope, 20) || (existing.owner_user_id ? 'personal' : 'clinic');
+      const canArchive = scope === 'personal'
+        ? sanitizeString(existing.owner_user_id, 120) === actorId
+        : ['owner', 'admin', 'coordinator'].includes(actorRole) && sanitizeString(existing.organization_id, 120) === clinicId;
+      if (!canArchive) {
+        return res.status(403).json({ success: false, error: 'Sem permissão para arquivar esta ficha.' });
       }
 
       const { data, error } = await supabase
         .from('anamnesis_templates')
         .update({ is_active: false, updated_at: new Date().toISOString() })
         .eq('id', templateId)
-        .eq('organization_id', clinicId)
         .select('id')
         .maybeSingle();
       if (error) throw error;
       if (!data?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
 
       void persistActivityLog({
-        userId: sanitizeString(req.session.user?.id, 120),
+        userId: actorId,
         clinicId,
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: 'Ficha de anamnese arquivada',
-        content: 'Uma ficha personalizada de anamnese foi removida da lista ativa.',
+        title: scope === 'personal' ? 'Ficha profissional arquivada' : 'Ficha de anamnese da clínica arquivada',
+        content: `A ficha "${sanitizeString(existing.name, 180) || 'sem nome'}" foi removida da lista ativa.`,
         type: 'audit'
       });
 
       return res.json({ success: true });
     } catch (error: any) {
       if (isMissingRelationError(error) || extractMissingColumnName(error)) {
-        return res.status(400).json({ success: false, error: 'Estrutura de fichas personalizadas indisponível.' });
+        return res.status(503).json({
+          success: false,
+          error: 'PROFESSIONAL_PORTABLE_TEMPLATES_MIGRATION_REQUIRED',
+          message: 'A estrutura de fichas profissionais portáteis precisa ser aplicada.'
+        });
       }
       return sendRouteDbError(res, '/api/clinic/anamnesis-templates/:templateId [DELETE]', error, {
         clinicId: sanitizeString(currentClinicId(req.session.user), 120),
@@ -30284,7 +30383,9 @@ async function startServer() {
       const selectedTemplate = await fetchAnamnesisTemplateForPatient(
         patientContext,
         clinicId,
-        requestedTemplateId
+        requestedTemplateId,
+        actorId,
+        false
       );
       const patientEmail = sanitizeEmail(patient?.responsible_email || patient?.email);
       if (!patientEmail) {
@@ -62945,7 +63046,7 @@ async function startServer() {
       const templateQuery = supabase
         .from('aba_program_templates')
         .select(THERAPEUTIC_TEMPLATE_SELECT)
-        .or(`source_scope.eq.VERTO,organization_id.eq.${organizationId}`)
+        .or(`source_scope.eq.VERTO,organization_id.eq.${organizationId},owner_user_id.eq.${actorId}`)
         .in('status', includeArchived ? ['PUBLISHED', 'DRAFT', 'PENDING_APPROVAL', 'ARCHIVED'] : ['PUBLISHED', 'DRAFT', 'PENDING_APPROVAL'])
         .order('source_scope', { ascending: false })
         .order('name', { ascending: true })
@@ -62976,7 +63077,6 @@ async function startServer() {
         ? await supabase
             .from('users')
             .select('id,name')
-            .eq('clinic_id', clinicId)
             .in('id', authorIds)
             .limit(300)
         : { data: [], error: null };
@@ -63199,7 +63299,7 @@ async function startServer() {
         const templateAllowed = template?.id && (
           (templateScope === 'VERTO' && templateStatus === 'PUBLISHED')
           || (sameOrganization && templateScope === 'CLINIC' && templateStatus !== 'ARCHIVED' && (canApprove || templateStatus === 'PUBLISHED'))
-          || (sameOrganization && templateScope === 'PERSONAL' && templateStatus !== 'ARCHIVED' && String(template.owner_user_id || '') === actorId)
+          || (templateScope === 'PERSONAL' && templateStatus !== 'ARCHIVED' && String(template.owner_user_id || '') === actorId)
         );
         if (templateResult.error || !templateAllowed) return res.status(400).json({ success: false, error: 'O modelo selecionado não está disponível para esta clínica.' });
       }
@@ -63434,6 +63534,8 @@ async function startServer() {
         : 'clinic';
       const visibility = canShareWithClinic ? requestedVisibility : 'private';
       const sourceScope = visibility === 'private' ? 'PERSONAL' : 'CLINIC';
+      const templateOrganizationId = sourceScope === 'PERSONAL' ? actorId : organizationId;
+      const templateClinicId = sourceScope === 'PERSONAL' ? null : clinicId;
       const programId = sanitizeString(req.body?.programId || req.body?.program_id, 180);
       const templateSpecialtyWasProvided = Object.prototype.hasOwnProperty.call(
         req.body || {},
@@ -63476,15 +63578,15 @@ async function startServer() {
             privacyWarnings: directPrivacy.warnings,
           });
         }
-        const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `program-template-direct:${organizationId}:${crypto.randomUUID()}`;
+        const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `program-template-direct:${templateOrganizationId}:${crypto.randomUUID()}`;
         const status = ['DRAFT', 'PENDING_APPROVAL', 'PUBLISHED'].includes(String(req.body?.status || '').toUpperCase())
           ? String(req.body.status).toUpperCase()
           : 'PUBLISHED';
         const now = new Date().toISOString();
         const directPayload = {
-          id: `template-${crypto.createHash('sha256').update(`${organizationId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`,
-          organization_id: organizationId,
-          clinic_id: clinicId,
+          id: `template-${crypto.createHash('sha256').update(`${templateOrganizationId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`,
+          organization_id: templateOrganizationId,
+          clinic_id: templateClinicId,
           source_scope: sourceScope,
           owner_user_id: sourceScope === 'PERSONAL' ? actorId : null,
           name: sanitizeTextField(directPrivacy.sanitized.name, 240),
@@ -63587,9 +63689,9 @@ async function startServer() {
       }
       const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `program-template:${programId}:${sourceScope}:${actorId}`;
       const templatePayload = {
-        id: `template-${crypto.createHash('sha256').update(`${organizationId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`,
-        organization_id: organizationId,
-        clinic_id: clinicId,
+        id: `template-${crypto.createHash('sha256').update(`${templateOrganizationId}:${idempotencyKey}`).digest('hex').slice(0, 32)}`,
+        organization_id: templateOrganizationId,
+        clinic_id: templateClinicId,
         source_scope: sourceScope,
         owner_user_id: sourceScope === 'PERSONAL' ? actorId : null,
         name: sanitizeTextField(templatePrivacy.sanitized.name, 240),
@@ -63639,16 +63741,16 @@ async function startServer() {
         .from('aba_program_templates')
         .select(THERAPEUTIC_TEMPLATE_SELECT)
         .eq('id', templateId)
-        .eq('organization_id', organizationId)
         .neq('source_scope', 'VERTO')
         .limit(1)
         .maybeSingle();
-      if (existingResult.error || !existingResult.data) return res.status(404).json({ success: false, error: 'Modelo não encontrado nesta clínica.' });
+      if (existingResult.error || !existingResult.data) return res.status(404).json({ success: false, error: 'Modelo não encontrado.' });
       const existing: any = existingResult.data;
-      if (
-        actorRole === 'therapist'
-        && (existing.source_scope !== 'PERSONAL' || existing.owner_user_id !== actorId)
-      ) {
+      const existingScope = sanitizeString(existing.source_scope, 40).toUpperCase();
+      const canManageExisting = existingScope === 'PERSONAL'
+        ? sanitizeString(existing.owner_user_id, 120) === actorId
+        : sanitizeString(existing.organization_id, 120) === organizationId && ['owner', 'admin', 'coordinator'].includes(actorRole);
+      if (!canManageExisting) {
         return res.status(403).json({ success: false, error: 'TEMPLATE_ACCESS_DENIED' });
       }
       const saveNewVersion = sanitizeString(req.body?.action, 40) === 'new_version';
@@ -63687,11 +63789,7 @@ async function startServer() {
           privacyWarnings: privacyReview.warnings,
         });
       }
-      const requestedVisibility = sanitizeString(req.body?.visibility ?? existing.visibility, 20) === 'private'
-        ? 'private'
-        : 'clinic';
-      const canShareWithClinic = ['owner', 'admin', 'coordinator'].includes(actorRole);
-      const visibility = canShareWithClinic ? requestedVisibility : 'private';
+      const visibility = existingScope === 'PERSONAL' ? 'private' : 'clinic';
       const templateSpecialtyWasProvided = Object.prototype.hasOwnProperty.call(
         req.body || {},
         'specialty',
@@ -63724,9 +63822,11 @@ async function startServer() {
           ? normalizedTemplateSpecialty
           : sanitizeString(existing.specialty, 120) || null,
         tags: (Array.isArray(req.body?.tags) ? req.body.tags : existing.tags || []).slice(0, 30).map((tag: any) => sanitizeString(tag, 60)).filter(Boolean),
+        organization_id: existingScope === 'PERSONAL' ? actorId : organizationId,
+        clinic_id: existingScope === 'PERSONAL' ? null : clinicId,
         visibility,
-        source_scope: visibility === 'private' ? 'PERSONAL' : 'CLINIC',
-        owner_user_id: visibility === 'private' ? actorId : null,
+        source_scope: existingScope,
+        owner_user_id: existingScope === 'PERSONAL' ? actorId : null,
         contains_identifiable_content: false,
         privacy_warning_acknowledged_at: privacyReview.redacted ? new Date().toISOString() : existing.privacy_warning_acknowledged_at,
         status: requestedStatus,
@@ -63746,8 +63846,8 @@ async function startServer() {
           .from('aba_program_template_versions')
           .upsert([{
             template_id: templateId,
-            organization_id: organizationId,
-            clinic_id: clinicId,
+            organization_id: existingScope === 'PERSONAL' ? actorId : (sanitizeString(existing.organization_id, 120) || organizationId),
+            clinic_id: existingScope === 'PERSONAL' ? null : (sanitizeString(existing.clinic_id, 120) || clinicId),
             version: Number(existing.template_version || 1),
             snapshot: existing,
             change_reason: sanitizeTextField(req.body?.changeReason, 500) || 'Nova versão do modelo',
@@ -63758,8 +63858,10 @@ async function startServer() {
       let updateQuery = supabase
         .from('aba_program_templates')
         .update(patch)
-        .eq('id', templateId)
-        .eq('organization_id', organizationId);
+        .eq('id', templateId);
+      updateQuery = existingScope === 'PERSONAL'
+        ? updateQuery.eq('owner_user_id', actorId)
+        : updateQuery.eq('organization_id', organizationId);
       if (saveNewVersion) updateQuery = updateQuery.eq('template_version', expectedVersion);
       const { data, error } = await updateQuery
         .select(THERAPEUTIC_TEMPLATE_SELECT)

@@ -29,6 +29,9 @@ interface AnamnesisModalProps {
   onTemplateSelect?: (template: any) => void;
   onTemplateDelete?: (templateId: string) => Promise<any> | any;
   canEditTemplate?: boolean;
+  loadLatestTemplate?: boolean;
+  templateManagerLabel?: string;
+  maxSavedTemplates?: number;
 }
 
 interface QuestionDraft {
@@ -248,7 +251,10 @@ export const AnamnesisModal = ({
   onTemplateSave,
   onTemplateSelect,
   onTemplateDelete,
-  canEditTemplate = false
+  canEditTemplate = false,
+  loadLatestTemplate = true,
+  templateManagerLabel = 'Ficha personalizada',
+  maxSavedTemplates = 5
 }: AnamnesisModalProps) => {
   const [profileType, setProfileType] = useState<AnamnesisProfileType>('adult');
   const [view, setView] = useState<ModalView>('fill');
@@ -273,7 +279,8 @@ export const AnamnesisModal = ({
   const [consultationApproach, setConsultationApproach] = useState('');
   const [consultationRoom, setConsultationRoom] = useState('');
   const [consultationProfessional, setConsultationProfessional] = useState('');
-  const templateDraftStorageKey = `verto_anamnesis_template_draft_${profileType}`;
+  const templateScopeKey = String((template as any)?.templateScope || (template as any)?.scope || 'clinic').toLowerCase();
+  const templateDraftStorageKey = `verto_anamnesis_template_draft_${templateScopeKey}_${profileType}`;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -290,7 +297,7 @@ export const AnamnesisModal = ({
       initialData?.formType === 'child' || (typeof initialData?.idade === 'number' && initialData.idade <= 12) ? 'child' : 'adult';
     setProfileType(inferredProfile);
 
-    const nextView: ModalView = canEditTemplate && initialData?.nome === 'Template da Clínica' ? 'template' : 'fill';
+    const nextView: ModalView = canEditTemplate && (initialData?.manageTemplate === true || initialData?.nome === 'Template da Clínica' || initialData?.nome === 'Template Profissional') ? 'template' : 'fill';
     setView(nextView);
 
     const profileTemplate = getProfileTemplate(sourceTemplate, inferredProfile);
@@ -356,9 +363,9 @@ export const AnamnesisModal = ({
   }, [templateState, profileType, isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !loadLatestTemplate) return;
     let isActive = true;
-    const loadLatestTemplate = async () => {
+    const loadLatest = async () => {
       try {
         const result = await dataService.getClinicAnamnesisTemplate();
         if (!isActive || !result?.success || !result?.data) return;
@@ -368,11 +375,11 @@ export const AnamnesisModal = ({
         // usa template atual como fallback silencioso
       }
     };
-    void loadLatestTemplate();
+    void loadLatest();
     return () => {
       isActive = false;
     };
-  }, [isOpen]);
+  }, [isOpen, loadLatestTemplate]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -652,12 +659,12 @@ export const AnamnesisModal = ({
   };
 
   const startBlankTemplate = () => {
-    if (savedTemplates.length >= 5) {
-      showFeedback('error', 'Limite de 5 fichas salvas atingido. Remova uma ficha para criar outra.');
+    if (savedTemplates.length >= maxSavedTemplates) {
+      showFeedback('error', `Limite de ${maxSavedTemplates} fichas salvas atingido. Remova uma ficha para criar outra.`);
       return;
     }
     setTemplateState(createBlankAnamnesisTemplate());
-    setTemplateName(`Ficha personalizada ${Math.min(savedTemplates.length + 1, 5)}`);
+    setTemplateName(`${templateManagerLabel} ${Math.min(savedTemplates.length + 1, maxSavedTemplates)}`);
     setTemplateDescription('');
     setTemplateAgeMinYears('');
     setTemplateAgeMaxYears('');
@@ -728,13 +735,13 @@ export const AnamnesisModal = ({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">Fichas salvas</p>
-                  <p className="text-sm font-semibold text-slate-700">Até 5 modelos ativos por clínica, com segmentação por idade.</p>
+                  <p className="text-sm font-normal text-slate-600">Até {maxSavedTemplates} fichas ativas, com segmentação por idade e perfil.</p>
                 </div>
                 <button
                   type="button"
                   onClick={startBlankTemplate}
-                  disabled={savedTemplates.length >= 5}
-                  className="rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  disabled={savedTemplates.length >= maxSavedTemplates}
+                  className="rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 >
                   <Plus size={14} className="inline mr-2" />
                   Nova ficha do zero

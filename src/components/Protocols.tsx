@@ -308,7 +308,17 @@ export const ProtocolManagementSystem = ({
   canManageLibrary = true,
 }: any) => { 
   const [editingProtocol, setEditingProtocol] = useState<any>(null); 
-  const [librarySection, setLibrarySection] = useState<'protocols' | 'programs'>('protocols');
+  const [librarySection, setLibrarySection] = useState<'protocols' | 'programs'>(() => {
+    try {
+      return sessionStorage.getItem('verto:protocols:library-section') === 'programs' ? 'programs' : 'protocols';
+    } catch {
+      return 'protocols';
+    }
+  });
+
+  useEffect(() => {
+    try { sessionStorage.removeItem('verto:protocols:library-section'); } catch { /* noop */ }
+  }, []);
   const [filterAge, setFilterAge] = useState(""); 
   const [filterType, setFilterType] = useState(""); 
   const [filterDomain, setFilterDomain] = useState(""); 
