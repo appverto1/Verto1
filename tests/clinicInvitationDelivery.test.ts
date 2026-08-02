@@ -25,10 +25,12 @@ const publicInviteResponse = inviteRoute.slice(inviteRoute.indexOf('if (!emailSe
 
 // O backend resolve a identidade da clínica pela clinic_id autenticada.
 assert.match(inviteRoute, /const clinicId = currentClinicId\(user\)/);
-assert.match(inviteRoute, /from\('clinics'\)[\s\S]*?select\('id,name'\)[\s\S]*?eq\('id', clinicId\)/);
-assert.match(inviteRoute, /const clinicName = sanitizeString\(clinic\?\.name, 160\)/);
-assert.match(inviteRoute, /const clinicNameIsPlaceholder = \[/);
-assert.match(inviteRoute, /'minha clinica'/);
+assert.match(inviteRoute, /fetchClinicOnboardingSnapshot\(clinicId\)/);
+assert.match(inviteRoute, /resolveOfficialClinicName\(clinic\)/);
+assert.match(server, /async function resolveOfficialClinicName/);
+assert.match(server, /ownerProfile\?\.clinic_name/);
+assert.match(server, /normalizeClinicOfficialName\(name\) === ownerIdentity/);
+assert.match(server, /isGenericClinicOfficialName/);
 assert.match(inviteRoute, /CLINIC_IDENTITY_NOT_CONFIGURED/);
 assert.doesNotMatch(inviteRoute, /clinic\?\.name\s*\|\|\s*user\.name/);
 assert.doesNotMatch(inviteRoute, /clinicName\s*=\s*sanitizeString\([^\n]*user\.name/);

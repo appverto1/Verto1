@@ -13634,7 +13634,9 @@ async function fetchClinicOnboardingSnapshot(clinicId: string) {
   const requiredColumns = ['id', 'name'];
   const optionalColumns = [
     'display_name',
+    'legal_name',
     'owner_user_id',
+    'created_by',
     'phone_commercial',
     'phone',
     'clinic_phone',
@@ -13664,6 +13666,76 @@ async function fetchClinicOnboardingSnapshot(clinicId: string) {
   }
 
   return { data: null, error: lastError };
+}
+
+function normalizeClinicOfficialName(value: unknown): string {
+  return sanitizeString(value, 180)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function isGenericClinicOfficialName(value: unknown): boolean {
+  const normalized = normalizeClinicOfficialName(value);
+  return !normalized || [
+    'clinica',
+    'sua clinica',
+    'minha clinica',
+    'clinica sem nome',
+    'clinica verto',
+    'verto',
+  ].includes(normalized);
+}
+
+async function resolveOfficialClinicName(clinicRow: any): Promise<string | null> {
+  const clinicId = sanitizeString(clinicRow?.id, 120);
+  const ownerUserId = sanitizeString(
+    clinicRow?.owner_user_id || clinicRow?.created_by || clinicId,
+    120,
+  );
+
+  let ownerProfile: any = null;
+  if (isUuid(ownerUserId)) {
+    const ownerProfileResult = await fetchProfessionalProfileWithSchemaFallback({
+      supabase,
+      userId: ownerUserId,
+      logger: console,
+    });
+    if (ownerProfileResult.error && !isMissingRelationError(ownerProfileResult.error)) {
+      console.warn('[ClinicIdentity] Não foi possível ler o perfil institucional da clínica.', {
+        clinicId,
+        message: sanitizeString(ownerProfileResult.error?.message || ownerProfileResult.error, 240),
+      });
+    } else {
+      ownerProfile = ownerProfileResult.data as any;
+    }
+  }
+
+  const metadata = ownerProfile?.metadata && typeof ownerProfile.metadata === 'object'
+    ? ownerProfile.metadata
+    : {};
+  const ownerProfessionalName = sanitizeString(ownerProfile?.full_name, 180);
+  const ownerIdentity = normalizeClinicOfficialName(ownerProfessionalName);
+  const candidates = [
+    clinicRow?.display_name,
+    clinicRow?.legal_name,
+    ownerProfile?.clinic_name,
+    metadata?.clinicName,
+    metadata?.clinicSettings?.clinicName,
+    metadata?.clinic_settings?.clinicName,
+    clinicRow?.name,
+  ];
+
+  for (const candidate of candidates) {
+    const name = sanitizeString(candidate, 160);
+    if (!name || isGenericClinicOfficialName(name)) continue;
+    if (ownerIdentity && normalizeClinicOfficialName(name) === ownerIdentity) continue;
+    return name;
+  }
+
+  return null;
 }
 
 function clinicOnboardingAddress(row: any): string | null {
@@ -13794,6 +13866,8 @@ async function resolveOnboardingContextForUser(params: {
     };
   }
 
+  const officialClinicName = await resolveOfficialClinicName(clinicRow);
+
   let invitation: any = null;
   if (email) {
     const invitationResult = await fetchClinicInvitationsWithSchemaFallback({
@@ -13851,7 +13925,7 @@ async function resolveOnboardingContextForUser(params: {
     errorCode: null,
     clinic: {
       id: clinicId,
-      name: sanitizeString(clinicRow?.display_name || clinicRow?.name, 160) || 'Clínica',
+      name: officialClinicName || 'Clínica',
       phone: sanitizePhone(clinicRow?.phone_commercial || clinicRow?.clinic_phone || clinicRow?.phone) || null,
       whatsapp: sanitizePhone(clinicRow?.whatsapp) || null,
       logoUrl: sanitizeSessionUrl(clinicRow?.logo_url),
@@ -24589,24 +24663,11 @@ async function startServer() {
       if (!isUuid(clinicId)) {
         return res.status(400).json({ success: false, error: 'Clínica inválida para o convite.' });
       }
-      const { data: clinic, error: clinicError } = await supabase
-        .from('clinics')
-        .select('id,name')
-        .eq('id', clinicId)
-        .maybeSingle();
-      if (clinicError) throw clinicError;
-      const clinicName = sanitizeString(clinic?.name, 160);
-      const normalizedClinicName = clinicName
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .trim()
-        .toLowerCase();
-      const clinicNameIsPlaceholder = [
-        'clinica',
-        'minha clinica',
-        'clinica sem nome'
-      ].includes(normalizedClinicName);
-      if (!clinic?.id || !clinicName || clinicNameIsPlaceholder) {
+      const clinicResult = await fetchClinicOnboardingSnapshot(clinicId);
+      if (clinicResult.error) throw clinicResult.error;
+      const clinic = clinicResult.data as any;
+      const clinicName = clinic?.id ? await resolveOfficialClinicName(clinic) : null;
+      if (!clinic?.id || !clinicName) {
         return res.status(409).json({
           success: false,
           error: 'CLINIC_IDENTITY_NOT_CONFIGURED',

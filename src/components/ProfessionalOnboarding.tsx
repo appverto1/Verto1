@@ -62,6 +62,52 @@ const roleLabel = (role: string) => {
   return 'Profissional de atendimento';
 };
 
+
+const digitsOnly = (value: string) => value.replace(/\D/g, '');
+
+const formatCpf = (value: string) => {
+  const digits = digitsOnly(value).slice(0, 11);
+  return digits
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+};
+
+const formatPhone = (value: string) => {
+  const digits = digitsOnly(value).slice(0, 11);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+  if (digits.length <= 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+};
+
+const formatCountryCode = (value: string) => {
+  const digits = digitsOnly(value).slice(0, 3);
+  return digits ? `+${digits}` : '+';
+};
+
+const formatDateForDisplay = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const [year, month, day] = raw.split('-');
+    return `${day}/${month}/${year}`;
+  }
+  const digits = digitsOnly(raw).slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+};
+
+const formatDateForApi = (value: string) => {
+  const digits = digitsOnly(value).slice(0, 8);
+  if (digits.length !== 8) return '';
+  const day = digits.slice(0, 2);
+  const month = digits.slice(2, 4);
+  const year = digits.slice(4, 8);
+  return `${year}-${month}-${day}`;
+};
+
 export function ProfessionalOnboarding({ user, onComplete, onClose }: ProfessionalOnboardingProps) {
   const initialContext = (user?.onboardingContext || null) as OnboardingContext | null;
   const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || 'global').trim() || 'global';
@@ -75,11 +121,11 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const [loading, setLoading] = useState(false);
 
   const [fullName, setFullName] = useState(user?.name || '');
-  const [phone, setPhone] = useState(user?.phone || '');
-  const [cpf, setCpf] = useState(user?.cpf || '');
-  const [birthDate, setBirthDate] = useState('');
+  const [phone, setPhone] = useState(formatPhone(user?.phone || ''));
+  const [cpf, setCpf] = useState(formatCpf(user?.cpf || ''));
+  const [birthDate, setBirthDate] = useState(formatDateForDisplay(''));
   const [gender, setGender] = useState('');
-  const [countryCode, setCountryCode] = useState('+55');
+  const [countryCode, setCountryCode] = useState(formatCountryCode('+55'));
   const [profilePicture, setProfilePicture] = useState<string | null>(user?.profilePicture || null);
   const [council, setCouncil] = useState('');
   const [councilNumber, setCouncilNumber] = useState(user?.crp || '');
@@ -154,11 +200,11 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         const draftRaw = user?.firstLoginCompleted === false ? localStorage.getItem(draftKey) : null;
         const draft = draftRaw ? JSON.parse(draftRaw) : {};
         setFullName(profile?.full_name || draft.fullName || user?.name || '');
-        setPhone(profile?.phone || draft.phone || user?.phone || '');
-        setCpf(profile?.cpf || metadata?.cpf || draft.cpf || user?.cpf || '');
-        setBirthDate(profile?.birth_date || draft.birthDate || '');
+        setPhone(formatPhone(profile?.phone || draft.phone || user?.phone || ''));
+        setCpf(formatCpf(profile?.cpf || metadata?.cpf || draft.cpf || user?.cpf || ''));
+        setBirthDate(formatDateForDisplay(profile?.birth_date || draft.birthDate || ''));
         setGender(profile?.gender || draft.gender || '');
-        setCountryCode(profile?.country_code || draft.countryCode || '+55');
+        setCountryCode(formatCountryCode(profile?.country_code || draft.countryCode || '+55'));
         setProfilePicture(profile?.profile_photo_url || draft.profilePicture || user?.profilePicture || null);
         setCouncil(profile?.council || draft.council || '');
         setCouncilNumber(formatProfessionalRegistry(profile?.council_number || draft.councilNumber || user?.crp || ''));
@@ -282,11 +328,11 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
       const memberPayload = {
         fullName,
-        birthDate,
+        birthDate: formatDateForApi(birthDate),
         gender,
-        countryCode,
-        phone,
-        cpf,
+        countryCode: formatCountryCode(countryCode),
+        phone: digitsOnly(phone),
+        cpf: digitsOnly(cpf),
         council,
         councilNumber,
         miniCurriculum,
@@ -429,24 +475,42 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                     </label>
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
-                    <input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Nome completo" className="rounded-xl bg-slate-50 px-4 py-3" />
-                    <input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="Telefone ou WhatsApp" className="rounded-xl bg-slate-50 px-4 py-3" />
-                    <input value={cpf} onChange={(event) => setCpf(event.target.value.replace(/\D/g, '').slice(0, 11))} placeholder="CPF (quando aplicável)" className="rounded-xl bg-slate-50 px-4 py-3" />
-                    <input value={birthDate} onChange={(event) => setBirthDate(event.target.value)} type="date" className="rounded-xl bg-slate-50 px-4 py-3" />
-                    <select value={gender} onChange={(event) => setGender(event.target.value)} className="rounded-xl bg-slate-50 px-4 py-3">
-                      <option value="">Gênero (opcional)</option>
-                      <option value="female">Feminino</option>
-                      <option value="male">Masculino</option>
-                      <option value="other">Outro</option>
-                      <option value="prefer_not_to_say">Prefiro não informar</option>
-                    </select>
-                    <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
-                      <p className="text-[11px] font-bold uppercase tracking-wider text-violet-500">Especialidade vinculada</p>
-                      <p className="mt-1 text-sm font-semibold text-violet-900">{specialty || 'Definida pela clínica'}</p>
+                    <label className="space-y-2 text-sm font-medium text-slate-700">
+                      <span>Nome completo</span>
+                      <input value={fullName} onChange={(event) => setFullName(event.target.value)} placeholder="Digite seu nome completo" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                    </label>
+                    <label className="space-y-2 text-sm font-medium text-slate-700">
+                      <span>Telefone ou WhatsApp</span>
+                      <input value={phone} onChange={(event) => setPhone(formatPhone(event.target.value))} placeholder="(11) 99999-9999" inputMode="tel" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                    </label>
+                    <label className="space-y-2 text-sm font-medium text-slate-700">
+                      <span>CPF</span>
+                      <input value={cpf} onChange={(event) => setCpf(formatCpf(event.target.value))} placeholder="000.000.000-00" inputMode="numeric" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                    </label>
+                    <label className="space-y-2 text-sm font-medium text-slate-700">
+                      <span>Data de nascimento</span>
+                      <input value={birthDate} onChange={(event) => setBirthDate(formatDateForDisplay(event.target.value))} placeholder="dd/mm/aaaa" inputMode="numeric" maxLength={10} className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                    </label>
+                    <label className="space-y-2 text-sm font-medium text-slate-700">
+                      <span>Gênero</span>
+                      <select value={gender} onChange={(event) => setGender(event.target.value)} className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900">
+                        <option value="">Selecione (opcional)</option>
+                        <option value="female">Feminino</option>
+                        <option value="male">Masculino</option>
+                        <option value="other">Outro</option>
+                        <option value="prefer_not_to_say">Prefiro não informar</option>
+                      </select>
+                    </label>
+                    <div className="space-y-2">
+                      <p className="text-sm font-medium text-slate-700">Especialidade vinculada</p>
+                      <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
+                        <p className="text-[11px] font-bold uppercase tracking-wider text-violet-500">Definida pela clínica</p>
+                        <p className="mt-1 text-sm font-semibold text-violet-900">{specialty || 'Definida pela clínica'}</p>
+                      </div>
                     </div>
                   </div>
                   <div className="flex justify-end pt-2">
-                    <button disabled={!fullName.trim() || !phone.trim()} onClick={() => setStep(2)} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">Continuar</button>
+                    <button disabled={!fullName.trim() || digitsOnly(phone).length < 10} onClick={() => setStep(2)} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">Continuar</button>
                   </div>
                 </div>
               )}
@@ -456,18 +520,33 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                   <h3 className="text-lg font-bold text-slate-900">Configurações clínicas individuais</h3>
                   <p className="text-sm text-slate-500">Essas informações pertencem ao seu perfil profissional e serão usadas em documentos clínicos.</p>
                   <div className="grid gap-4 md:grid-cols-2">
-                    <input value={council} onChange={(event) => setCouncil(event.target.value)} placeholder="Conselho profissional" className="rounded-xl bg-slate-50 px-4 py-3" />
-                    <input value={councilNumber} onChange={(event) => setCouncilNumber(formatProfessionalRegistry(event.target.value))} placeholder="Número do conselho" className="rounded-xl bg-slate-50 px-4 py-3" />
-                    <select value={sessionDurationMinutes} onChange={(event) => setSessionDurationMinutes(event.target.value)} className="rounded-xl bg-slate-50 px-4 py-3">
-                      <option value="30">Sessões de 30 minutos</option>
-                      <option value="45">Sessões de 45 minutos</option>
-                      <option value="50">Sessões de 50 minutos</option>
-                      <option value="60">Sessões de 60 minutos</option>
-                      <option value="90">Sessões de 90 minutos</option>
-                    </select>
-                    <input value={countryCode} onChange={(event) => setCountryCode(event.target.value)} placeholder="Código do país" className="rounded-xl bg-slate-50 px-4 py-3" />
+                    <label className="space-y-2 text-sm font-medium text-slate-700">
+                      <span>Conselho profissional</span>
+                      <input value={council} onChange={(event) => setCouncil(event.target.value)} placeholder="Ex.: CRP, CREFONO, CRM" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                    </label>
+                    <label className="space-y-2 text-sm font-medium text-slate-700">
+                      <span>Número do conselho</span>
+                      <input value={councilNumber} onChange={(event) => setCouncilNumber(formatProfessionalRegistry(event.target.value))} placeholder="Ex.: 123456" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                    </label>
+                    <label className="space-y-2 text-sm font-medium text-slate-700">
+                      <span>Duração padrão da sessão</span>
+                      <select value={sessionDurationMinutes} onChange={(event) => setSessionDurationMinutes(event.target.value)} className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900">
+                        <option value="30">Sessões de 30 minutos</option>
+                        <option value="45">Sessões de 45 minutos</option>
+                        <option value="50">Sessões de 50 minutos</option>
+                        <option value="60">Sessões de 60 minutos</option>
+                        <option value="90">Sessões de 90 minutos</option>
+                      </select>
+                    </label>
+                    <label className="space-y-2 text-sm font-medium text-slate-700">
+                      <span>Código do país</span>
+                      <input value={countryCode} onChange={(event) => setCountryCode(formatCountryCode(event.target.value))} placeholder="+55" inputMode="numeric" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                    </label>
                   </div>
-                  <textarea value={miniCurriculum} onChange={(event) => setMiniCurriculum(event.target.value.slice(0, 4000))} placeholder="Minicurrículo profissional" rows={5} className="w-full rounded-xl bg-slate-50 px-4 py-3" />
+                  <label className="block space-y-2 text-sm font-medium text-slate-700">
+                    <span>Minicurrículo profissional</span>
+                    <textarea value={miniCurriculum} onChange={(event) => setMiniCurriculum(event.target.value.slice(0, 4000))} placeholder="Resumo breve da sua formação e atuação profissional" rows={5} className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                  </label>
                   <div className="rounded-2xl border border-slate-200 p-4">
                     <div className="flex items-center gap-3">
                       <FileSignature className="text-violet-500" size={22} />
