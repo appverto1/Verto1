@@ -6,6 +6,7 @@ const app = fs.readFileSync('src/App.tsx', 'utf8');
 const activation = fs.readFileSync('src/components/ActivationAccess.tsx', 'utf8');
 const invitationAcceptance = fs.readFileSync('src/components/ClinicInvitationAcceptance.tsx', 'utf8');
 const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
+const settingsMenu = fs.readFileSync('src/components/SettingsMenu.tsx', 'utf8');
 const supabaseClient = fs.readFileSync('src/lib/supabase.ts', 'utf8');
 const migration = fs.readFileSync('supabase/migrations/20260731193000_atomic_clinic_invitation_acceptance.sql', 'utf8');
 
@@ -23,6 +24,8 @@ const inviteRoute = section(server, "app.post('/api/clinic/invite'", "app.get('/
 const loginRoute = section(server, "app.post('/api/auth/login'", "app.post('/api/auth/logout'");
 const acceptRoute = section(server, "app.post('/api/clinic/accept-invite'", "app.post('/api/clinic/assign-role'");
 const unlinkRoute = section(server, "app.patch('/api/clinic/members/:memberId/unlink'", "app.get('/api/clinic/anamnesis-template'");
+const accessContextRoute = section(server, "app.post('/api/access-contexts/select'", "app.post('/api/workspaces/select'");
+const legacyWorkspaceRoute = section(server, "app.post('/api/workspaces/select'", 'const PORTAL_RESCHEDULE_WEEK_WINDOW_DAYS');
 const billingOnboardingPaths = section(server, 'function isBillingOnboardingAllowedPath', 'function billingAccessBlockedPayload');
 const invitationBillingBypass = section(server, 'function isClinicInvitationAcceptancePath', 'const DEMO_SANDBOX_BILLING_MODEL');
 
@@ -112,6 +115,35 @@ assert.match(loginRoute, /sanitizeEmail\(invitation\.email\) !== safeAuthEmail/)
 assert.match(loginRoute, /CLINIC_INVITATION_EMAIL_MISMATCH/);
 assert.match(loginRoute, /workspaces\.find\(\(w: any\) => w\.clinicId === invitedWorkspaceId\)/);
 
+// Uma identidade Auth com acessos profissionais e de paciente escolhe o contexto,
+// sem transformar localStorage, role ou clinic_id enviados pelo navegador em autoridade.
+assert.match(app, /type AccessContextKind = 'clinic_workspace' \| 'patient_portal'/);
+assert.match(app, /candidateUser\?\.mustSelectAccessContext/);
+assert.match(app, /dataService\.selectAccessContext\(/);
+assert.match(app, /getLastActiveAccessContextId\(candidateUser\?\.id\)/);
+assert.match(app, /Preferência local nunca ativa um tenant por conta própria/);
+assert.match(app, /Trabalhar/);
+assert.match(app, /Meu cuidado/);
+assert.match(dataService, /fetch\('\/api\/access-contexts\/select'/);
+assert.match(dataService, /body: JSON\.stringify\(\{ accessContextId: safeAccessContextId \}\)/);
+assert.match(dataService, /\[404, 405\]\.includes\(response\.status\) && safeFallbackClinicId/);
+assert.match(settingsMenu, /Trocar clínica ou acesso/);
+assert.match(settingsMenu, /verto:open-access-contexts/);
+assert.match(settingsMenu, /\(isCoordinator \|\| isOwner\) && !isClinicManagedMember/);
+assert.match(server, /responsible_user_id\.eq\.\$\{safeUserId\},id\.eq\.\$\{safeUserId\}/);
+assert.doesNotMatch(
+  section(server, 'async function fetchPatientPortalAccessContexts', 'async function fetchUserAccessContexts'),
+  /\.ilike\('email'|\.eq\('email'/,
+  'contexto de paciente deve vir do vínculo canônico, não de coincidência de e-mail',
+);
+assert.match(accessContextRoute, /accessContexts\.find\(\(context\) => context\.id === accessContextId\)/);
+assert.match(accessContextRoute, /ACCESS_CONTEXT_NOT_AUTHORIZED/);
+assert.doesNotMatch(accessContextRoute, /req\.body\?\.(?:clinicId|role)/);
+assert.doesNotMatch(accessContextRoute, /\.from\('users'\)[\s\S]*?\.update\(/);
+assert.doesNotMatch(legacyWorkspaceRoute, /\.from\('users'\)[\s\S]*?\.update\(/);
+assert.match(server, /ACCESS_CONTEXT_SELECTION_REQUIRED/);
+assert.match(server, /mustSelectAccessContext === true/);
+
 // Transação bloqueia corrida, duplicidade, convite antigo e e-mail divergente.
 assert.match(migration, /for update/i);
 assert.match(migration, /CLINIC_INVITATION_EMAIL_MISMATCH/);
@@ -126,7 +158,12 @@ assert.match(migration, /grant execute[\s\S]*?to service_role/i);
 
 // Desvincular preserva a identidade e só inativa a membership.
 assert.match(unlinkRoute, /status: 'inactive'/);
-assert.match(unlinkRoute, /userUpdatePayload\.clinic_id = null/);
+assert.match(unlinkRoute, /\.from\('clinic_memberships'\)[\s\S]*?\.update\(\{/);
+assert.doesNotMatch(
+  unlinkRoute,
+  /\.from\('users'\)[\s\S]*?\.(?:update|delete)\(/,
+  'desvincular uma clínica não pode reescrever a identidade global da conta',
+);
 assert.doesNotMatch(unlinkRoute, /auth\.admin\.deleteUser|deleteUser\(/);
 
 console.log('clinicReinviteAccess.test.ts: ok');

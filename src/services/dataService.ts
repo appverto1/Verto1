@@ -7038,6 +7038,39 @@ export const dataService = {
     }
   },
 
+  async selectAccessContext(accessContextId: string, fallbackClinicId?: string) {
+    const safeAccessContextId = String(accessContextId || '').trim();
+    if (!safeAccessContextId) {
+      return { success: false, error: 'Selecione um ambiente válido.' };
+    }
+
+    try {
+      const response = await fetch('/api/access-contexts/select', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ accessContextId: safeAccessContextId })
+      });
+      const result = await safeJson(response);
+      if (response.ok) return result;
+
+      // Compatibilidade temporária com servidores que ainda expõem somente
+      // seleção de workspace. Nunca aplicar esse fallback a portal de paciente.
+      const safeFallbackClinicId = String(fallbackClinicId || '').trim();
+      if ([404, 405].includes(response.status) && safeFallbackClinicId) {
+        return await dataService.selectWorkspace(safeFallbackClinicId);
+      }
+      return {
+        success: false,
+        error: result?.message || 'Não foi possível acessar este ambiente.',
+        code: result?.code || result?.error || null,
+      };
+    } catch (error) {
+      console.error('Error selecting access context:', error);
+      return { success: false, error: 'Não foi possível acessar este ambiente.' };
+    }
+  },
+
   async selectWorkspace(clinicId: string) {
     try {
       const response = await fetch('/api/workspaces/select', {

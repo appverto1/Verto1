@@ -6,7 +6,8 @@ import {
   User, 
   CreditCard,
   ChevronRight,
-  ShoppingBag
+  ShoppingBag,
+  ArrowLeftRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -73,7 +74,17 @@ export function SettingsMenu({
   const isCoordinator = normalizedRole === 'coordinator' || normalizedRole === 'admin';
   const isOwner = normalizedRole === 'owner';
   const canManageTeam = isCoordinator || isOwner;
-  const canSeeBilling = isCoordinator || isOwner;
+  const onboardingMode = String(user?.onboardingContext?.onboardingMode || '').trim().toLowerCase();
+  const isClinicManagedMember = ['invited_professional', 'clinic_member'].includes(onboardingMode);
+  const canSeeBilling = (isCoordinator || isOwner) && !isClinicManagedMember;
+  const accessContextCount = Array.isArray(user?.accessContexts) && user.accessContexts.length > 0
+    ? new Set(user.accessContexts.map((context: any) => String(context?.id || '').trim()).filter(Boolean)).size
+    : new Set(
+        (Array.isArray(user?.workspaces) ? user.workspaces : [])
+          .map((workspace: any) => String(workspace?.clinicId || '').trim())
+          .filter(Boolean)
+      ).size;
+  const canSwitchAccessContext = accessContextCount > 1;
   const roleLabel = normalizedRole === 'coordinator'
     ? 'Coordenador'
     : normalizedRole === 'receptionist'
@@ -192,6 +203,24 @@ export function SettingsMenu({
                 </div>
                 <ChevronRight size={14} className="text-slate-300" />
               </button>
+
+              {canSwitchAccessContext && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsOpen(false);
+                    window.dispatchEvent(new CustomEvent('verto:open-access-contexts'));
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <ArrowLeftRight size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
+                    <span className="text-sm font-medium">Trocar clínica ou acesso</span>
+                  </div>
+                  <ChevronRight size={14} className="text-slate-300" />
+                </button>
+              )}
 
               {canManageTeam && (
                 <button

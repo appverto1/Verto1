@@ -2,7 +2,7 @@ export type EmailTemplateProfile = 'professional' | 'patient';
 
 import { VERTO_EMAIL_HORIZONTAL_LOGO_URL } from '../constants/vertoBranding';
 
-type ActivationTemplateInput = {
+export type ActivationTemplateInput = {
   nome: string;
   link_ativacao: string;
   perfil: EmailTemplateProfile;
@@ -22,13 +22,23 @@ export type ClinicInvitationTemplateInput = {
   link_ativacao: string;
 };
 
-type PasswordRecoveryTemplateInput = {
+export type PasswordRecoveryTemplateInput = {
   nome: string;
-  codigo: string;
+  codigo?: string | null;
   link_recuperacao?: string | null;
   expira_em_minutos: number;
-  perfil: EmailTemplateProfile;
+  perfil?: EmailTemplateProfile;
 };
+
+export type PatientActivationTemplateVariables = {
+  activation_patient: string;
+};
+
+export type PasswordRecoveryTemplateVariables = {
+  reset_link: string;
+};
+
+const DEFAULT_RECOVERY_URL = 'https://www.appverto.com.br/reset-password';
 
 const toSafeName = (value: string): string => {
   const normalized = String(value || '').trim();
@@ -42,6 +52,31 @@ const escapeHtml = (value: string): string =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+
+const toSafeHttpUrl = (value: unknown, fallback: string): string => {
+  const candidate = String(value || '').trim();
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      return parsed.toString();
+    }
+  } catch {
+    // A controlled fallback keeps malformed input out of an href attribute.
+  }
+  return fallback;
+};
+
+export const buildPatientActivationTemplateVariables = (
+  activationLink: unknown,
+): PatientActivationTemplateVariables => ({
+  activation_patient: String(activationLink || '').trim(),
+});
+
+export const buildPasswordRecoveryTemplateVariables = (
+  recoveryLink: unknown,
+): PasswordRecoveryTemplateVariables => ({
+  reset_link: toSafeHttpUrl(recoveryLink, DEFAULT_RECOVERY_URL),
+});
 
 const PROFESSIONAL_WELCOME_HTML = `
   <div style="margin:0;padding:0;background:#f5f3ff;font-family:Arial,Helvetica,sans-serif;color:#2e1065;">
@@ -124,7 +159,7 @@ const PATIENT_WELCOME_HTML = `
   </div>
 `;
 
-const PROFESSIONAL_RECOVERY_HTML = `
+const PASSWORD_RECOVERY_HTML = `
   <div style="font-family:Arial,Helvetica,sans-serif;background:#f5f3ff;margin:0;padding:0;color:#2e1065;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
       <tr>
@@ -132,33 +167,14 @@ const PROFESSIONAL_RECOVERY_HTML = `
           <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px;">
             <tr><td>
               <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 auto 22px;border:0;outline:none;" />
-              <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Recuperação de Senha 🔐</h1>
-              <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Recebemos uma solicitação para redefinir a senha da sua conta Verto. Use o código abaixo no aplicativo para concluir a recuperação:</p>
-              <p style="margin:0 0 8px;color:#4c1d95;font-size:14px;font-weight:700;">Código de recuperação:</p>
-              <p style="margin:0 0 16px;color:#2e1065;font-size:28px;letter-spacing:3px;font-weight:800;">{{codigo}}</p>
-              <p style="margin:0;color:#6d28d9;font-size:13px;line-height:1.45;">Acesse <strong>https://www.appverto.com.br/reset-password</strong>, informe seu e-mail, código e nova senha.</p>
-              <p style="font-size:0.875rem;color:rgb(139,92,246);margin-top:20px;">Se você não solicitou essa alteração, por favor, ignore este e-mail. Sua senha atual permanecerá segura.</p>
-            </td></tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </div>
-`;
-
-const PATIENT_RECOVERY_HTML = `
-  <div style="font-family:Arial,Helvetica,sans-serif;background:#f5f3ff;margin:0;padding:0;color:#2e1065;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-      <tr>
-        <td align="center" style="padding:32px 16px;">
-          <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;padding:28px;">
-            <tr><td>
-              <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 auto 22px;border:0;outline:none;" />
-              <h1 style="margin:0;padding:0;font-size:1.5rem;line-height:1.333;color:rgb(46,16,101);font-weight:700;margin-bottom:1rem;">Esqueceu sua senha?</h1>
-              <p style="margin:0;padding:0;font-size:1.125rem;line-height:1.75rem;color:rgb(91,33,182);margin-bottom:1.5rem;margin-top:16px;">Não se preocupe, {{nome}}! Use o código abaixo no aplicativo para criar sua nova senha:</p>
-              <p style="margin:0 0 8px;color:#4c1d95;font-size:14px;font-weight:700;">Código de recuperação:</p>
-              <p style="margin:0 0 16px;color:#2e1065;font-size:28px;letter-spacing:3px;font-weight:800;">{{codigo}}</p>
-              <p style="margin:0;color:#6d28d9;font-size:13px;line-height:1.45;">Acesse <strong>https://www.appverto.com.br/reset-password</strong>, informe seu e-mail, código e nova senha.</p>
+              <h1 style="margin:0 0 12px;font-size:24px;line-height:1.333;color:#2e1065;font-weight:700;">Redefinição de senha</h1>
+              <p style="margin:0 0 20px;color:#5b21b6;font-size:16px;line-height:1.6;">Olá, {{nome}}. Recebemos uma solicitação para redefinir a senha da sua conta Verto.</p>
+              <p style="margin:0 0 20px;text-align:center;">
+                <a href="{{reset_link}}" style="display:inline-block;background:#7c3aed;color:#ffffff;text-decoration:none;padding:13px 24px;border-radius:999px;font-size:16px;font-weight:700;">Redefinir minha senha</a>
+              </p>
+              {{legacy_code_section}}
+              <p style="margin:18px 0 0;color:#6d28d9;font-size:13px;line-height:1.5;">Este acesso expira em {{expira_em_minutos}} minutos. Se você não solicitou a alteração, ignore este e-mail; sua senha atual continuará válida.</p>
+              <p style="margin:14px 0 0;color:#7c3aed;font-size:12px;line-height:1.45;word-break:break-all;">Se o botão não funcionar, copie e cole no navegador:<br />{{reset_link}}</p>
             </td></tr>
           </table>
         </td>
@@ -209,7 +225,7 @@ export const buildClinicInvitationEmailTemplate = (
 
 export const buildActivationEmailTemplate = (
   input: ActivationTemplateInput
-): { subject: string; html: string } => {
+): { subject: string; html: string; variables: Record<string, string> } => {
   const nome = escapeHtml(toSafeName(input.nome));
   const activationLink = String(input.link_ativacao || '').trim();
 
@@ -218,14 +234,25 @@ export const buildActivationEmailTemplate = (
     const html = PROFESSIONAL_WELCOME_HTML
       .replace(/\{\{saudacao\}\}/g, `Olá, ${nome}! 🎉`)
       .replace(/\{\{link_ativacao\}\}/g, activationLink);
-    return { subject, html };
+    return {
+      subject,
+      html,
+      variables: {
+        nome: String(input.nome || '').trim(),
+        link_ativacao: activationLink,
+      },
+    };
   }
 
   const subject = 'Bem-vindo à Verto! Vamos juntos?';
   const html = PATIENT_WELCOME_HTML
     .replace(/\{\{nome\}\}/g, nome)
     .replace(/\{\{link_ativacao\}\}/g, activationLink);
-  return { subject, html };
+  return {
+    subject,
+    html,
+    variables: buildPatientActivationTemplateVariables(activationLink),
+  };
 };
 
 export const buildWelcomeEmailTemplate = (
@@ -250,21 +277,26 @@ export const buildWelcomeEmailTemplate = (
 
 export const buildPasswordRecoveryEmailTemplate = (
   input: PasswordRecoveryTemplateInput
-): { subject: string; html: string } => {
+): { subject: string; html: string; variables: PasswordRecoveryTemplateVariables } => {
   const nome = escapeHtml(toSafeName(input.nome));
-
-  if (input.perfil === 'professional') {
-    return {
-      subject: 'Recuperação de Senha - Verto',
-      html: PROFESSIONAL_RECOVERY_HTML
-        .replace(/\{\{codigo\}\}/g, escapeHtml(String(input.codigo || '').trim()))
-    };
-  }
+  const codigo = escapeHtml(String(input.codigo || '').trim());
+  const expiryValue = Number(input.expira_em_minutos);
+  const expiryMinutes = Number.isFinite(expiryValue)
+    ? Math.max(1, Math.min(1_440, Math.round(expiryValue)))
+    : 15;
+  const recoveryVariables = buildPasswordRecoveryTemplateVariables(input.link_recuperacao);
+  const safeRecoveryLink = escapeHtml(recoveryVariables.reset_link);
+  const legacyCodeSection = codigo
+    ? `<div style="margin:20px 0;padding:16px;border:1px solid #ddd6fe;border-radius:12px;background:#faf5ff;text-align:center;"><p style="margin:0 0 8px;color:#4c1d95;font-size:13px;font-weight:700;">Código de recuperação</p><p style="margin:0;color:#2e1065;font-size:28px;letter-spacing:3px;font-weight:800;">${codigo}</p></div>`
+    : '';
 
   return {
-    subject: 'Recuperação de Senha - Verto',
-    html: PATIENT_RECOVERY_HTML
+    subject: 'Redefinição de senha — Verto',
+    html: PASSWORD_RECOVERY_HTML
       .replace(/\{\{nome\}\}/g, nome)
-      .replace(/\{\{codigo\}\}/g, escapeHtml(String(input.codigo || '').trim()))
+      .replace(/\{\{reset_link\}\}/g, safeRecoveryLink)
+      .replace(/\{\{legacy_code_section\}\}/g, legacyCodeSection)
+      .replace(/\{\{expira_em_minutos\}\}/g, String(expiryMinutes)),
+    variables: recoveryVariables,
   };
 };

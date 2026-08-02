@@ -188,7 +188,12 @@ assert.match(
 assert.match(specialtyRoute, /\.from\('clinic_memberships'\)/);
 assert.match(specialtyRoute, /\.eq\('clinic_id', clinicId\)/);
 assert.match(specialtyRoute, /membership\.role[\s\S]*?'therapist'/);
-assert.match(specialtyRoute, /\.from\('professional_profiles'\)[\s\S]*?\.upsert/);
+assert.match(specialtyRoute, /\.update\(\{[\s\S]*?specialty,[\s\S]*?settings_updated_at:/);
+assert.doesNotMatch(
+  specialtyRoute,
+  /\.from\('professional_profiles'\)[\s\S]*?\.(?:upsert|update)\(/,
+  'a especialidade exercida em uma clínica pertence à membership, não ao perfil global',
+);
 
 const roleRoute = routeSection(
   "app.patch('/api/clinic/members/:memberId/role'",

@@ -59,6 +59,102 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 };
 
+type AccessContextKind = 'clinic_workspace' | 'patient_portal';
+
+type AccessContextOption = {
+  id: string;
+  kind: AccessContextKind;
+  clinicId: string;
+  patientId: string;
+  clinicName: string;
+  label: string;
+  role: string;
+  [key: string]: any;
+};
+
+const normalizeAccessContextKind = (value: unknown): AccessContextKind | null => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['clinic', 'clinic_workspace', 'workspace'].includes(normalized)) return 'clinic_workspace';
+  if (['patient', 'patient_portal', 'portal'].includes(normalized)) return 'patient_portal';
+  return null;
+};
+
+const normalizeAccessContextOption = (value: any): AccessContextOption | null => {
+  if (!value || typeof value !== 'object') return null;
+
+  const clinicId = String(value.clinicId || value.clinic_id || '').trim();
+  const patientId = String(value.patientId || value.patient_id || '').trim();
+  const rawId = String(value.id || value.accessContextId || value.access_context_id || '').trim();
+  const kind =
+    normalizeAccessContextKind(value.kind || value.type) ||
+    (rawId.startsWith('patient:') || patientId ? 'patient_portal' : clinicId ? 'clinic_workspace' : null);
+  if (!kind) return null;
+
+  const id = rawId || (
+    kind === 'patient_portal'
+      ? patientId && clinicId ? `patient:${patientId}:${clinicId}` : ''
+      : clinicId ? `clinic:${clinicId}` : ''
+  );
+  if (!id || (kind === 'clinic_workspace' && !clinicId) || (kind === 'patient_portal' && !patientId)) {
+    return null;
+  }
+
+  return {
+    ...value,
+    id,
+    kind,
+    clinicId,
+    patientId,
+    clinicName: String(value.clinicName || value.clinic_name || value.workspaceName || '').trim(),
+    label: String(value.label || value.patientName || value.patient_name || '').trim(),
+    role: String(value.role || (kind === 'patient_portal' ? 'patient' : '')).trim().toLowerCase(),
+  };
+};
+
+const getUserAccessContexts = (candidateUser: any): AccessContextOption[] => {
+  const nativeContexts = Array.isArray(candidateUser?.accessContexts)
+    ? candidateUser.accessContexts.map(normalizeAccessContextOption).filter(Boolean) as AccessContextOption[]
+    : [];
+  const rawContexts = nativeContexts.length > 0
+    ? nativeContexts
+    : (Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [])
+      .map((workspace: any) => normalizeAccessContextOption({
+        ...workspace,
+        id: workspace?.id || (workspace?.clinicId ? `clinic:${workspace.clinicId}` : ''),
+        kind: 'clinic_workspace',
+      }))
+      .filter(Boolean) as AccessContextOption[];
+
+  return Array.from(new Map(rawContexts.map((context) => [context.id, context])).values());
+};
+
+const getActiveAccessContext = (candidateUser: any): AccessContextOption | null => {
+  const contexts = getUserAccessContexts(candidateUser);
+  const declaredContext = normalizeAccessContextOption(candidateUser?.activeAccessContext);
+  const declaredId = String(
+    declaredContext?.id || candidateUser?.activeAccessContextId || candidateUser?.active_access_context_id || ''
+  ).trim();
+  if (declaredId) {
+    return contexts.find((context) => context.id === declaredId) || declaredContext;
+  }
+
+  // Backward compatibility while older sessions expose only the active clinic.
+  if (!Array.isArray(candidateUser?.accessContexts) || candidateUser.accessContexts.length === 0) {
+    const activeClinicId = String(candidateUser?.activeWorkspaceId || candidateUser?.clinicId || '').trim();
+    return contexts.find((context) => context.kind === 'clinic_workspace' && context.clinicId === activeClinicId) || null;
+  }
+  return null;
+};
+
+const getAccessContextRoleLabel = (role: unknown) => {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (normalized === 'coordinator') return 'Coordenação';
+  if (normalized === 'therapist') return 'Profissional de atendimento';
+  if (normalized === 'receptionist') return 'Recepção';
+  if (normalized === 'admin' || normalized === 'owner') return 'Gestão da clínica';
+  return 'Equipe da clínica';
+};
+
 const LandingPage = React.lazy(() =>
   import('./components/LandingPage').then((m) => ({ default: m.LandingPage }))
 );
@@ -317,52 +413,80 @@ export default function App() {
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
   const [installPromptUnavailable, setInstallPromptUnavailable] = useState(false);
   const LAST_ACTIVE_WORKSPACE_KEY = 'last_active_workspace_id';
+  const LAST_ACTIVE_ACCESS_CONTEXT_KEY = 'verto.last_active_access_context';
   const INSTALL_PROMPT_DISMISSED_KEY = 'verto_pwa_install_prompt_dismissed_at';
 
-  const getLastActiveWorkspaceId = () =>
-    String(localStorage.getItem(LAST_ACTIVE_WORKSPACE_KEY) || '').trim();
+  const getLastActiveAccessContextId = (userId?: string | null) => {
+    const safeUserId = String(userId || '').trim();
+    if (safeUserId) {
+      return String(localStorage.getItem(`${LAST_ACTIVE_ACCESS_CONTEXT_KEY}:${safeUserId}`) || '').trim();
+    }
+    return String(localStorage.getItem(LAST_ACTIVE_WORKSPACE_KEY) || '').trim();
+  };
 
-  const setLastActiveWorkspaceId = (workspaceId?: string | null) => {
-    const safeId = String(workspaceId || '').trim();
+  const setLastActiveAccessContextId = (contextId?: string | null, userId?: string | null) => {
+    const safeId = String(contextId || '').trim();
+    const safeUserId = String(userId || '').trim();
+    const storageKey = safeUserId
+      ? `${LAST_ACTIVE_ACCESS_CONTEXT_KEY}:${safeUserId}`
+      : LAST_ACTIVE_WORKSPACE_KEY;
     if (!safeId) {
-      localStorage.removeItem(LAST_ACTIVE_WORKSPACE_KEY);
+      localStorage.removeItem(storageKey);
+      if (!safeUserId) localStorage.removeItem(LAST_ACTIVE_WORKSPACE_KEY);
       return;
     }
-    localStorage.setItem(LAST_ACTIVE_WORKSPACE_KEY, safeId);
+    localStorage.setItem(storageKey, safeId);
   };
 
   const shouldPromptWorkspaceSelection = (candidateUser: any) => {
-    const workspaces = Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [];
-    if (workspaces.length <= 1) return false;
+    const contexts = getUserAccessContexts(candidateUser);
+    if (contexts.length === 0) return false;
+    if (typeof candidateUser?.mustSelectAccessContext === 'boolean') {
+      return candidateUser.mustSelectAccessContext;
+    }
+    if (contexts.length <= 1) return false;
     if (typeof candidateUser?.mustSelectWorkspace === 'boolean') {
       return candidateUser.mustSelectWorkspace;
     }
-    const activeWorkspaceId = String(
-      candidateUser?.activeWorkspaceId || candidateUser?.clinicId || ''
-    ).trim();
-    if (!activeWorkspaceId) return true;
-    return !workspaces.some((workspace: any) => workspace?.clinicId === activeWorkspaceId);
+    return !getActiveAccessContext(candidateUser);
   };
 
   const hasValidWorkspaceContext = (candidateUser: any) => {
-    const workspaces = Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [];
-    if (workspaces.length <= 1) return true;
-    const activeWorkspaceId = String(
-      candidateUser?.activeWorkspaceId || candidateUser?.clinicId || ''
-    ).trim();
-    if (!activeWorkspaceId) return false;
-    return workspaces.some((workspace: any) => workspace?.clinicId === activeWorkspaceId);
+    const contexts = getUserAccessContexts(candidateUser);
+    if (contexts.length === 0) return true;
+    const usesNativeContexts = Array.isArray(candidateUser?.accessContexts) && candidateUser.accessContexts.length > 0;
+    if (!usesNativeContexts && contexts.length <= 1) return true;
+    if (candidateUser?.mustSelectAccessContext === true) return false;
+    const activeContext = getActiveAccessContext(candidateUser);
+    return Boolean(activeContext && contexts.some((context) => context.id === activeContext.id));
   };
 
   const alignWorkspaceFromStorage = (candidateUser: any) => {
     if (!candidateUser) return candidateUser;
-    const workspaces = Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [];
+    const contexts = getUserAccessContexts(candidateUser);
+    const usesNativeContexts = Array.isArray(candidateUser?.accessContexts) && candidateUser.accessContexts.length > 0;
+    if (usesNativeContexts) {
+      const activeContext = getActiveAccessContext(candidateUser);
+      if (!activeContext || !contexts.some((context) => context.id === activeContext.id)) return candidateUser;
+      return {
+        ...candidateUser,
+        activeAccessContext: activeContext,
+        activeAccessContextId: activeContext.id,
+        clinicId: activeContext.clinicId || candidateUser?.clinicId,
+        patientId: activeContext.patientId || candidateUser?.patientId,
+        role: activeContext.kind === 'patient_portal' ? 'patient' : activeContext.role || candidateUser?.role,
+      };
+    }
+
     const currentActiveWorkspaceId = String(
       candidateUser?.activeWorkspaceId || candidateUser?.clinicId || ''
     ).trim();
-    const storedWorkspaceId = getLastActiveWorkspaceId();
-    const preferredWorkspaceId = currentActiveWorkspaceId || storedWorkspaceId;
-    const preferredWorkspace = workspaces.find((workspace: any) => workspace?.clinicId === preferredWorkspaceId);
+    // Preferência local nunca ativa um tenant por conta própria; o servidor
+    // precisa confirmar a seleção em restoreWorkspaceContextIfNeeded.
+    const preferredWorkspaceId = currentActiveWorkspaceId;
+    const preferredWorkspace = contexts.find((context) =>
+      context.clinicId === preferredWorkspaceId || context.id === preferredWorkspaceId
+    );
 
     if (!preferredWorkspace) return candidateUser;
     return {
@@ -375,15 +499,20 @@ export default function App() {
 
   const computeWorkspacePickerVisibility = (candidateUser: any) => {
     if (!candidateUser) return false;
-    const inWorkspaceRoute = window.location.pathname.startsWith('/workspaces');
+    const contexts = getUserAccessContexts(candidateUser);
+    const inWorkspaceRoute =
+      window.location.pathname.startsWith('/workspaces') ||
+      window.location.pathname.startsWith('/access-contexts');
     const hasContext = hasValidWorkspaceContext(candidateUser);
+    const mustSelectContext = shouldPromptWorkspaceSelection(candidateUser);
 
-    if (hasContext && inWorkspaceRoute) {
+    if (inWorkspaceRoute && contexts.length > 1) return true;
+    if (hasContext && !mustSelectContext && inWorkspaceRoute) {
       window.history.replaceState({}, document.title, '/');
     }
 
-    if (hasContext) return false;
-    return shouldPromptWorkspaceSelection(candidateUser);
+    if (mustSelectContext) return true;
+    return !hasContext;
   };
 
   const isRunningStandalone = () => {
@@ -434,20 +563,23 @@ export default function App() {
     if (!candidateUser) return candidateUser;
     if (hasValidWorkspaceContext(candidateUser)) return candidateUser;
 
-    const storedWorkspaceId = getLastActiveWorkspaceId();
-    if (!storedWorkspaceId) return candidateUser;
-
-    const available = Array.isArray(candidateUser?.workspaces) ? candidateUser.workspaces : [];
-    const hasStoredWorkspace = available.some((workspace: any) => workspace?.clinicId === storedWorkspaceId);
-    if (!hasStoredWorkspace) return candidateUser;
+    const available = getUserAccessContexts(candidateUser);
+    const storedContextId = getLastActiveAccessContextId(candidateUser?.id);
+    const preferredContext =
+      available.find((context) => context.id === storedContextId || context.clinicId === storedContextId) ||
+      (candidateUser?.mustSelectAccessContext !== true && available.length === 1 ? available[0] : null);
+    if (!preferredContext) return candidateUser;
 
     try {
-      const result = await dataService.selectWorkspace(storedWorkspaceId);
+      const result = await dataService.selectAccessContext(
+        preferredContext.id,
+        preferredContext.kind === 'clinic_workspace' ? preferredContext.clinicId : undefined,
+      );
       if (result?.success && result?.user) {
         return result.user;
       }
     } catch (error) {
-      console.warn('Workspace restore from localStorage failed:', error);
+      console.warn('Access context restore from localStorage failed:', error);
     }
 
     return candidateUser;
@@ -856,9 +988,10 @@ export default function App() {
   };
 
   const applyResolvedUserState = async (candidateUser: any, supabaseSession?: any) => {
+    const candidateActiveContext = getActiveAccessContext(candidateUser);
     const resolutionKey = [
       String(candidateUser?.id || supabaseSession?.user?.id || '').trim(),
-      String(candidateUser?.activeWorkspaceId || candidateUser?.clinicId || '').trim(),
+      String(candidateActiveContext?.id || candidateUser?.activeWorkspaceId || candidateUser?.clinicId || '').trim(),
       String(candidateUser?.role || '').trim().toLowerCase()
     ].join('|');
     const existingResolution = userResolutionRef.current;
@@ -881,7 +1014,11 @@ export default function App() {
       setProfilePicture(nextUser?.profilePicture || nextUser?.profile_picture || null);
       setCrp(formatProfessionalRegistry(nextUser?.crp || ''));
       if (hasValidWorkspaceContext(nextUser)) {
-        setLastActiveWorkspaceId(nextUser?.activeWorkspaceId || nextUser?.clinicId);
+        const activeContext = getActiveAccessContext(nextUser);
+        setLastActiveAccessContextId(
+          activeContext?.id || nextUser?.activeWorkspaceId || nextUser?.clinicId,
+          nextUser?.id,
+        );
       }
       setShowWorkspacePicker(computeWorkspacePickerVisibility(nextUser));
     };
@@ -2273,6 +2410,18 @@ export default function App() {
   const [crp, setCrp] = useState<string>('');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showWorkspacePicker, setShowWorkspacePicker] = useState(false);
+  const [selectingAccessContextId, setSelectingAccessContextId] = useState('');
+  const [accessContextSelectionError, setAccessContextSelectionError] = useState('');
+
+  useEffect(() => {
+    const openAccessContextPicker = () => {
+      if (getUserAccessContexts(user).length <= 1) return;
+      setAccessContextSelectionError('');
+      setShowWorkspacePicker(true);
+    };
+    window.addEventListener('verto:open-access-contexts', openAccessContextPicker);
+    return () => window.removeEventListener('verto:open-access-contexts', openAccessContextPicker);
+  }, [user]);
 
   const decodeStoredText = (value: any) => decodeClinicalTextEntities(value).trim();
 
@@ -2706,7 +2855,7 @@ export default function App() {
         </div>
         <h2 className="mt-5 text-xl font-bold text-slate-900">Acesso administrado pela clínica</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-500">
-          Seu vínculo com {user?.onboardingContext?.clinic?.name || 'a clínica'} está correto. A liberação financeira é feita pelo responsável da clínica e nenhuma cobrança será solicitada ao seu usuário.
+          Seu vínculo com {user?.onboardingContext?.clinic?.name || 'a clínica'} está registrado. O acesso a este local é administrado pela clínica. Fale com o responsável para liberar ou revisar seu vínculo.
         </p>
         <button onClick={onLogout} className="mt-6 rounded-xl bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-200">
           Sair da conta
@@ -3532,7 +3681,7 @@ export default function App() {
 
     void hydrateState(user);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, user?.role, user?.activeWorkspaceId, user?.clinicId]);
+  }, [user?.id, user?.role, user?.activeAccessContextId, user?.activeWorkspaceId, user?.clinicId]);
 
   const resolvePatientIdentityForPortal = (candidate?: any) => {
     const candidateId = String(candidate?.patientId ?? candidate?.patient_id ?? candidate?.id ?? '').trim();
@@ -6921,7 +7070,8 @@ export default function App() {
     } catch (error) {
       console.warn('Sensitive patient cache cleanup failed:', error);
     }
-    setLastActiveWorkspaceId(null);
+    setLastActiveAccessContextId(null, signingOutUserId);
+    setLastActiveAccessContextId(null);
     resetWorkspaceScopedState();
     setClinicStateHydrated(false);
     setResolvedPatientPortalId('');
@@ -6981,18 +7131,42 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  const handleWorkspaceSelect = async (clinicId: string) => {
-    const result = await dataService.selectWorkspace(clinicId);
-    if (result.success && result.user) {
-      const alignedUser = alignWorkspaceFromStorage(result.user);
-      setClinicStateHydrated(false);
-      resetWorkspaceScopedState();
-      setUser(alignedUser);
-      setLastActiveWorkspaceId(alignedUser?.activeWorkspaceId || alignedUser?.clinicId || clinicId);
-      setShowWorkspacePicker(computeWorkspacePickerVisibility(alignedUser));
-      return;
+  const handleAccessContextSelect = async (context: AccessContextOption) => {
+    if (!context?.id || selectingAccessContextId) return;
+    setSelectingAccessContextId(context.id);
+    setAccessContextSelectionError('');
+    try {
+      const result = await dataService.selectAccessContext(
+        context.id,
+        context.kind === 'clinic_workspace' ? context.clinicId : undefined,
+      );
+      if (result.success && result.user) {
+        const alignedUser = alignWorkspaceFromStorage(result.user);
+        const activeContext = getActiveAccessContext(alignedUser);
+        setClinicStateHydrated(false);
+        resetWorkspaceScopedState();
+        setResolvedPatientPortalId('');
+        setPatientContextLoaded(false);
+        setUser(alignedUser);
+        setLastActiveAccessContextId(activeContext?.id || context.id, alignedUser?.id || user?.id);
+        if (
+          window.location.pathname.startsWith('/workspaces') ||
+          window.location.pathname.startsWith('/access-contexts')
+        ) {
+          window.history.replaceState({}, document.title, '/');
+        }
+        setShowWorkspacePicker(computeWorkspacePickerVisibility(alignedUser));
+        return;
+      }
+      setAccessContextSelectionError(
+        String(result.error || result.message || 'Não foi possível acessar este ambiente.'),
+      );
+    } catch (error) {
+      console.error('Access context selection failed:', error);
+      setAccessContextSelectionError('Não foi possível acessar este ambiente. Tente novamente.');
+    } finally {
+      setSelectingAccessContextId('');
     }
-    alert(result.error || 'Nao foi possivel selecionar este workspace.');
   };
 
   const handleAppointmentConfirmationChoice = async (status: 'confirmed' | 'reschedule' | 'canceled') => {
@@ -7109,8 +7283,18 @@ export default function App() {
       <div className="h-7 w-7 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Carregando" />
     </div>
   );
+  const accessContextOptions = getUserAccessContexts(user);
+  const clinicAccessContexts = accessContextOptions.filter((context) => context.kind === 'clinic_workspace');
+  const patientAccessContexts = accessContextOptions.filter((context) => context.kind === 'patient_portal');
+  const activeAccessContext = getActiveAccessContext(user);
+  const isActivePatientPortal = activeAccessContext
+    ? activeAccessContext.kind === 'patient_portal'
+    : accessContextOptions.length === 0 && user?.role === 'patient';
+  const canKeepCurrentAccessContext = Boolean(
+    activeAccessContext && !shouldPromptWorkspaceSelection(user),
+  );
   const userNeedsPatientActivation =
-    user?.role === 'patient' &&
+    isActivePatientPortal &&
     user?.portalVerified !== true &&
     user?.accountState !== 'PORTAL_VERIFIED' &&
     (user?.activationRequired === true || user?.firstLoginCompleted === false);
@@ -7322,29 +7506,124 @@ export default function App() {
           ) : (
             <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
           )
-        ) : showWorkspacePicker && Array.isArray(user.workspaces) && user.workspaces.length > 1 ? (
-          <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
-            <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
-              <h2 className="text-xl font-bold text-slate-900">Escolha o Workspace</h2>
-              <p className="text-sm text-slate-500 mt-1">
-                Seu usuÃ¡rio participa de mais de uma clÃ­nica. Selecione onde deseja trabalhar agora.
-              </p>
-              <div className="mt-6 space-y-3">
-                {user.workspaces.map((workspace: any) => (
-                  <button
-                    key={workspace.clinicId}
-                    onClick={() => handleWorkspaceSelect(workspace.clinicId)}
-                    className="w-full text-left px-4 py-4 rounded-2xl border border-slate-200 hover:border-[#7a32fc] hover:bg-violet-50/40 transition"
-                  >
-                    <p className="text-sm font-bold text-slate-900">{workspace.clinicName}</p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      Papel neste workspace: {workspace.role === 'coordinator' ? 'Coordenador' : workspace.role === 'therapist' ? 'Terapeuta' : 'Recepcionista'}
-                    </p>
-                  </button>
-                ))}
+        ) : showWorkspacePicker && accessContextOptions.length > 0 ? (
+          <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-8 sm:px-6">
+            <section
+              className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"
+              aria-labelledby="access-context-title"
+            >
+              <LogoVerto size={30} showText={true} />
+              <div className="mt-6">
+                <h1 id="access-context-title" className="text-xl font-semibold text-slate-900 sm:text-2xl">
+                  {patientAccessContexts.length > 0 ? 'Como deseja acessar a Verto?' : 'Onde deseja trabalhar?'}
+                </h1>
+                <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                  Cada ambiente mantém pacientes, agenda e permissões separados. Você poderá trocar de ambiente depois.
+                </p>
               </div>
-            </div>
-          </div>
+
+              {accessContextSelectionError && (
+                <div
+                  role="alert"
+                  className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+                >
+                  {accessContextSelectionError}
+                </div>
+              )}
+
+              <div className="mt-6 space-y-6">
+                {clinicAccessContexts.length > 0 && (
+                  <div>
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Trabalhar</h2>
+                    <div className="mt-2 space-y-2">
+                      {clinicAccessContexts.map((context) => {
+                        const isSelecting = selectingAccessContextId === context.id;
+                        return (
+                          <button
+                            key={context.id}
+                            type="button"
+                            onClick={() => handleAccessContextSelect(context)}
+                            disabled={Boolean(selectingAccessContextId)}
+                            className="flex min-h-[72px] w-full items-center gap-3 rounded-2xl border border-slate-200 px-4 py-3 text-left transition hover:border-violet-300 hover:bg-violet-50/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+                          >
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+                              {isSelecting ? <RefreshCw size={18} className="animate-spin" /> : <LayoutDashboard size={18} />}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-semibold text-slate-900">
+                                {context.clinicName || context.label || 'Clínica'}
+                              </span>
+                              <span className="mt-0.5 block text-xs text-slate-500">
+                                {getAccessContextRoleLabel(context.role)}
+                              </span>
+                            </span>
+                            <span aria-hidden="true" className="text-lg text-slate-300">›</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {patientAccessContexts.length > 0 && (
+                  <div>
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Meu cuidado</h2>
+                    <div className="mt-2 space-y-2">
+                      {patientAccessContexts.map((context) => {
+                        const isSelecting = selectingAccessContextId === context.id;
+                        return (
+                          <button
+                            key={context.id}
+                            type="button"
+                            onClick={() => handleAccessContextSelect(context)}
+                            disabled={Boolean(selectingAccessContextId)}
+                            className="flex min-h-[72px] w-full items-center gap-3 rounded-2xl border border-slate-200 px-4 py-3 text-left transition hover:border-emerald-300 hover:bg-emerald-50/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+                          >
+                            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                              {isSelecting ? <RefreshCw size={18} className="animate-spin" /> : <LogoVerto size={22} showText={false} />}
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-semibold text-slate-900">
+                                {context.label || 'Portal do paciente'}
+                              </span>
+                              <span className="mt-0.5 block truncate text-xs text-slate-500">
+                                {context.clinicName ? `Cuidado vinculado a ${context.clinicName}` : 'Acompanhar meu cuidado'}
+                              </span>
+                            </span>
+                            <span aria-hidden="true" className="text-lg text-slate-300">›</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {selectingAccessContextId && (
+                <p className="mt-4 text-center text-xs text-slate-500" aria-live="polite">
+                  Abrindo o ambiente selecionado…
+                </p>
+              )}
+              {canKeepCurrentAccessContext && !selectingAccessContextId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      window.location.pathname.startsWith('/workspaces') ||
+                      window.location.pathname.startsWith('/access-contexts')
+                    ) {
+                      window.history.replaceState({}, document.title, '/');
+                    }
+                    setAccessContextSelectionError('');
+                    setShowWorkspacePicker(false);
+                  }}
+                  className="mx-auto mt-5 block min-h-11 rounded-xl px-4 text-sm font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
+                >
+                  Continuar no ambiente atual
+                </button>
+              )}
+            </section>
+          </main>
         ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && user.firstLoginCompleted === false) || showOnboarding ? (
           <ProfessionalOnboarding 
             user={user} 

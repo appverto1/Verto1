@@ -1,7 +1,8 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { getSupabase } from '../lib/supabase';
 import { GoogleIcon } from './GoogleIcon';
 import { LogoVerto } from './Common';
+import { extractPasswordRecoveryUrlState } from '../utils/passwordRecoveryUrl';
 
 type ActivationAccessProps = {
   onLogin: (
@@ -35,6 +36,23 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       String(new URLSearchParams(window.location.search).get('invite_mode') || '').toLowerCase() === 'existing');
   const [email, setEmail] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
+  const [recoveryToken, setRecoveryToken] = useState('');
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return;
+    const recoveryUrlState = extractPasswordRecoveryUrlState(window.location.href);
+    if (recoveryUrlState.hadRecoveryToken) {
+      if (recoveryUrlState.recoveryToken) {
+        setRecoveryToken(recoveryUrlState.recoveryToken);
+      }
+      window.history.replaceState(
+        window.history.state,
+        document.title,
+        recoveryUrlState.sanitizedRelativeUrl,
+      );
+    }
+  }, []);
+  const [mfaToken, setMfaToken] = useState('');
+  const [requiresMfa, setRequiresMfa] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [identifiedEmail, setIdentifiedEmail] = useState('');
   const [loading, setLoading] = useState(false);
@@ -184,25 +202,20 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
 
   const requestActivationBootstrap = async (targetEmail: string) => {
     const safeEmail = String(targetEmail || '').trim().toLowerCase();
-    if (!safeEmail) return { link: null, alreadyConfirmed: false };
+    if (!safeEmail) return false;
     try {
       const response = await fetch('/api/auth/activation/bootstrap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ email: safeEmail, role: intendedRole }),
+        body: JSON.stringify({ email: safeEmail }),
       });
-      const result = await response.json();
-      if (response.ok && result?.success && result?.activationLink) {
-        return { link: String(result.activationLink), alreadyConfirmed: false };
-      }
-      if (response.status === 409 && String(result?.code || '').toUpperCase() === 'ALREADY_CONFIRMED') {
-        return { link: null, alreadyConfirmed: true };
-      }
+      const result = await response.json().catch(() => ({}));
+      return response.ok && result?.success === true;
     } catch (bootstrapError) {
       console.error('Activation bootstrap error:', bootstrapError);
     }
-    return { link: null, alreadyConfirmed: false };
+    return false;
   };
 
   useEffect(() => {
@@ -336,7 +349,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (isRecoveryRoute) {
         const recoveryEmail = String(identifiedEmail || email).trim().toLowerCase();
         const otpCode = String(recoveryCode || '').trim();
-        if (!recoveryEmail || !otpCode) {
+        if (!recoveryToken && (!recoveryEmail || !otpCode)) {
           throw new Error('Informe e-mail e código de recuperação para redefinir a senha.');
         }
 
@@ -345,13 +358,18 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({
-            email: recoveryEmail,
-            code: otpCode,
+            ...(recoveryToken
+              ? { recoveryToken }
+              : { email: recoveryEmail, code: otpCode }),
             newPassword,
+            ...(mfaToken ? { mfaToken } : {}),
           }),
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result?.success) {
+          if (String(result?.error || '').toUpperCase() === 'MFA_REQUIRED') {
+            setRequiresMfa(true);
+          }
           throw new Error(
             result?.message ||
               result?.error ||
@@ -359,11 +377,12 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           );
         }
 
+        const loginEmail = String(result?.loginEmail || recoveryEmail).trim().toLowerCase();
         const loginRes = await onLogin(
           null,
           intendedRole,
-          { email: recoveryEmail, password: newPassword },
-          { provider: 'email', activationFlow: false, passwordSetupCompleted: true, activationEmail: recoveryEmail },
+          { email: loginEmail, password: newPassword },
+          { provider: 'email', activationFlow: false, passwordSetupCompleted: true, activationEmail: loginEmail },
         );
         if (!loginRes?.success) {
           throw new Error(loginRes?.error || 'Senha redefinida, mas nao foi possivel concluir o login.');
@@ -383,15 +402,12 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (!session?.user) {
         if (!isRecoveryRoute) {
           const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
-          const bootstrapResult = await requestActivationBootstrap(fallbackEmail);
-          if (bootstrapResult?.link) {
-            window.location.href = bootstrapResult.link;
-            return;
-          }
-          if (bootstrapResult?.alreadyConfirmed) {
-            throw new Error(
-              'Esta conta já foi ativada. Faça login normal ou use "Esqueci minha senha".',
+          const resendRequested = await requestActivationBootstrap(fallbackEmail);
+          if (resendRequested) {
+            setMessage(
+              'Se esta conta ainda estiver pendente, enviaremos um novo link de ativação por e-mail.',
             );
+            return;
           }
         }
         throw new Error(
@@ -413,9 +429,11 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         ) {
           const fallbackEmail = String(identifiedEmail || email).trim().toLowerCase();
           if (!isRecoveryRoute && fallbackEmail) {
-            const bootstrapResult = await requestActivationBootstrap(fallbackEmail);
-            if (bootstrapResult?.link) {
-              window.location.href = bootstrapResult.link;
+            const resendRequested = await requestActivationBootstrap(fallbackEmail);
+            if (resendRequested) {
+              setMessage(
+                'Se esta conta ainda estiver pendente, enviaremos um novo link de ativação por e-mail.',
+              );
               return;
             }
           }
@@ -475,20 +493,26 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         </div>
 
         <div className="space-y-4">
-          <button
-            onClick={handleGoogleLogin}
-            disabled={loading}
-            className="w-full h-11 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50 transition disabled:opacity-60"
-          >
-            <GoogleIcon size={18} />
-            {isRecoveryRoute ? 'Continuar com Google' : 'Entrar com Google'}
-          </button>
+          {!isRecoveryRoute ? (
+            <button
+              onClick={handleGoogleLogin}
+              disabled={loading}
+              className="w-full h-11 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50 transition disabled:opacity-60"
+            >
+              <GoogleIcon size={18} />
+              Entrar com Google
+            </button>
+          ) : null}
 
           <div className="border-t border-slate-100 pt-4 space-y-3">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
               {isRecoveryRoute ? 'Redefinir senha' : isExistingAccountInvite ? 'Entrar com acesso existente' : 'Definir senha'}
             </p>
-            {identifiedEmail ? (
+            {isRecoveryRoute && recoveryToken ? (
+              <p className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs leading-relaxed text-violet-700">
+                Link de recuperação identificado. Defina uma nova senha para continuar.
+              </p>
+            ) : identifiedEmail ? (
               <p className="text-xs text-slate-500">
                 E-mail identificado: <span className="font-semibold">{identifiedEmail}</span>
               </p>
@@ -506,7 +530,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
                 />
               </div>
             )}
-            {isRecoveryRoute ? (
+            {isRecoveryRoute && !recoveryToken ? (
               <input
                 type="text"
                 inputMode="numeric"
@@ -515,6 +539,23 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
                 placeholder="Codigo de recuperacao (6 digitos)"
                 className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
               />
+            ) : null}
+            {isRecoveryRoute && requiresMfa ? (
+              <div className="space-y-1">
+                <label htmlFor="recovery-mfa-token" className="text-xs font-medium text-slate-600">
+                  Código do Google Authenticator
+                </label>
+                <input
+                  id="recovery-mfa-token"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={mfaToken}
+                  onChange={(event) => setMfaToken(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="6 dígitos"
+                  className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
+                />
+              </div>
             ) : null}
             <input
               type="password"

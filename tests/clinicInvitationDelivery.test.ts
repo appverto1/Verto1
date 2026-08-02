@@ -27,6 +27,8 @@ const publicInviteResponse = inviteRoute.slice(inviteRoute.indexOf('if (!emailSe
 assert.match(inviteRoute, /const clinicId = currentClinicId\(user\)/);
 assert.match(inviteRoute, /from\('clinics'\)[\s\S]*?select\('id,name'\)[\s\S]*?eq\('id', clinicId\)/);
 assert.match(inviteRoute, /const clinicName = sanitizeString\(clinic\?\.name, 160\)/);
+assert.match(inviteRoute, /const clinicNameIsPlaceholder = \[/);
+assert.match(inviteRoute, /'minha clinica'/);
 assert.match(inviteRoute, /CLINIC_IDENTITY_NOT_CONFIGURED/);
 assert.doesNotMatch(inviteRoute, /clinic\?\.name\s*\|\|\s*user\.name/);
 assert.doesNotMatch(inviteRoute, /clinicName\s*=\s*sanitizeString\([^\n]*user\.name/);

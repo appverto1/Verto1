@@ -61,6 +61,11 @@ import {
   buildClinicInvitationEmailTemplate,
   buildPasswordRecoveryEmailTemplate
 } from './src/services/emailTemplates';
+import {
+  createPasswordRecoveryToken,
+  verifyPasswordRecoveryToken
+} from './src/utils/passwordRecoveryLink';
+import { buildPatientGlobalIdentityUpdate } from './src/utils/patientAccountLinking';
 import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from './src/constants/vertoBranding';
 import {
   resolveAppointmentConfirmationSnapshot
@@ -1332,6 +1337,7 @@ function isBillingOnboardingAllowedPath(pathname: any): boolean {
     path === '/api/auth/logout' ||
     path === '/api/workspaces' ||
     path === '/api/workspaces/select' ||
+    path === '/api/access-contexts/select' ||
     path === '/api/clinic/accept-invite' ||
     path === '/api/supabase-config' ||
     path.startsWith('/api/profile/') ||
@@ -1344,6 +1350,20 @@ function isBillingOnboardingAllowedPath(pathname: any): boolean {
 
 function isClinicInvitationAcceptancePath(pathname: any): boolean {
   return sanitizeString(pathname, 240).toLowerCase() === '/api/clinic/accept-invite';
+}
+
+function isAccessContextSelectionAllowedPath(pathname: any): boolean {
+  const path = sanitizeString(pathname, 240).toLowerCase();
+  return (
+    path === '/api/auth/me' ||
+    path === '/api/auth/logout' ||
+    path === '/api/onboarding/context' ||
+    path === '/api/workspaces' ||
+    path === '/api/workspaces/select' ||
+    path === '/api/access-contexts/select' ||
+    path === '/api/clinic/accept-invite' ||
+    path === '/api/supabase-config'
+  );
 }
 
 function billingAccessBlockedPayload(user: any) {
@@ -3697,7 +3717,7 @@ function getClinicInvitationAcceptanceUrl(invitationIdValue: unknown): string {
   return `${baseUrl.replace(/\/+$/, '')}/?${params.toString()}`;
 }
 
-function getRecoveryRedirectUrl(): string {
+function getRecoveryRedirectUrl(recoveryToken?: unknown): string {
   const baseUrl = sanitizeString(
     process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
     500
@@ -3705,7 +3725,12 @@ function getRecoveryRedirectUrl(): string {
   if (!baseUrl) {
     throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para recuperação de senha.');
   }
-  return `${baseUrl.replace(/\/+$/, '')}/reset-password`;
+  const params = new URLSearchParams({ auth_action: 'recovery' });
+  const token = sanitizeString(recoveryToken, 4096);
+  const tokenFragment = new URLSearchParams();
+  if (token) tokenFragment.set('recovery_token', token);
+  const fragment = tokenFragment.toString();
+  return `${baseUrl.replace(/\/+$/, '')}/reset-password?${params.toString()}${fragment ? `#${fragment}` : ''}`;
 }
 
 function extractSupabaseErrorMessage(error: any): string {
@@ -4150,23 +4175,32 @@ type ResendTemplateKind =
   | 'clinic_invitation'
   | 'welcome_professional'
   | 'welcome_patient'
+  | 'password_recovery'
   | 'recovery_professional'
   | 'recovery_patient';
 
 function resolveResendTemplateId(kind?: ResendTemplateKind): string | null {
   if (!kind) return null;
-  const keyByKind: Record<ResendTemplateKind, string> = {
-    clinic_invitation: 'RESEND_TEMPLATE_CLINIC_INVITATION_ID',
-    welcome_professional: 'RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID',
-    welcome_patient: 'RESEND_TEMPLATE_WELCOME_PATIENT_ID',
-    recovery_professional: 'RESEND_TEMPLATE_RECOVERY_PROFESSIONAL_ID',
-    recovery_patient: 'RESEND_TEMPLATE_RECOVERY_PATIENT_ID'
+  const keysByKind: Record<ResendTemplateKind, string[]> = {
+    clinic_invitation: ['RESEND_TEMPLATE_CLINIC_INVITATION_ID'],
+    welcome_professional: ['RESEND_TEMPLATE_WELCOME_PROFESSIONAL_ID'],
+    welcome_patient: ['RESEND_TEMPLATE_PATIENT_ACTIVATION_ID', 'RESEND_TEMPLATE_WELCOME_PATIENT_ID'],
+    password_recovery: [
+      'RESEND_TEMPLATE_PASSWORD_RESET_ID',
+      'RESEND_TEMPLATE_RECOVERY_PROFESSIONAL_ID',
+      'RESEND_TEMPLATE_RECOVERY_PATIENT_ID'
+    ],
+    recovery_professional: ['RESEND_TEMPLATE_RECOVERY_PROFESSIONAL_ID'],
+    recovery_patient: ['RESEND_TEMPLATE_RECOVERY_PATIENT_ID']
   };
-  const envKey = keyByKind[kind];
-  const id = sanitizeString(process.env[envKey] || '', 200);
+  const id = keysByKind[kind]
+    .map((envKey) => sanitizeString(process.env[envKey] || '', 200))
+    .find(Boolean) || '';
   if (!id && kind === 'welcome_professional') {
     return 'bem-vindo-clnica';
   }
+  if (!id && kind === 'welcome_patient') return 'ativao-paciente';
+  if (!id && kind === 'password_recovery') return 'password-reset';
   return id || null;
 }
 
@@ -4325,6 +4359,16 @@ const activeSessionByUserId = new Map<string, string>();
 let otpTableChecked = false;
 let otpTableAvailable = false;
 
+function requiresPersistentRecoveryStorage(): boolean {
+  return process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT);
+}
+
+function recoveryStorageUnavailableError(): Error & { code: string } {
+  const error = new Error('RECOVERY_STORAGE_UNAVAILABLE') as Error & { code: string };
+  error.code = 'RECOVERY_STORAGE_UNAVAILABLE';
+  return error;
+}
+
 function issueSessionToken(userId: string): string {
   const safeUserId = sanitizeString(userId, 120);
   const token = crypto.randomUUID();
@@ -4417,6 +4461,10 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
 
   const useDb = await ensureOtpTableAvailability();
   if (!useDb) {
+    if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
+      otpStore.delete(normalizedChallenge.key);
+      throw recoveryStorageUnavailableError();
+    }
     return;
   }
 
@@ -4439,16 +4487,29 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
     if (error) {
       console.warn('[OTP] Falha no upsert de otp_challenges, fallback memória:', error.message);
       otpTableAvailable = false;
+      if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
+        otpStore.delete(normalizedChallenge.key);
+        throw recoveryStorageUnavailableError();
+      }
     }
   } catch (error: any) {
+    if (error?.code === 'RECOVERY_STORAGE_UNAVAILABLE') throw error;
     console.warn('[OTP] Exceção no upsert de otp_challenges, fallback memória:', error?.message || String(error));
     otpTableAvailable = false;
+    if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
+      otpStore.delete(normalizedChallenge.key);
+      throw recoveryStorageUnavailableError();
+    }
   }
 }
 
-async function getOtpChallenge(key: string): Promise<OtpChallenge | null> {
+async function getOtpChallenge(
+  key: string,
+  options: { requirePersistent?: boolean } = {}
+): Promise<OtpChallenge | null> {
   const useDb = await ensureOtpTableAvailability();
   if (!useDb) {
+    if (options.requirePersistent) throw recoveryStorageUnavailableError();
     return getInMemoryOtpChallenge(key);
   }
 
@@ -4459,42 +4520,160 @@ async function getOtpChallenge(key: string): Promise<OtpChallenge | null> {
       .eq('key', key)
       .maybeSingle();
     if (error || !data) {
-      if (error) console.warn('[OTP] Falha ao ler otp_challenges, usando fallback memória:', error.message);
+      if (error) {
+        console.warn('[OTP] Falha ao ler otp_challenges, usando fallback memória:', error.message);
+        if (options.requirePersistent) throw recoveryStorageUnavailableError();
+      }
+      if (options.requirePersistent) return null;
       return getInMemoryOtpChallenge(key);
     }
     const challenge = fromDbOtpRow(data);
     if (!challenge) return getInMemoryOtpChallenge(key);
     if (challenge.consumed || Date.now() > challenge.expiresAt) {
-      await consumeOtpChallenge(key);
+      await consumeOtpChallenge(key, { requirePersistent: options.requirePersistent });
       return null;
     }
     return challenge;
   } catch (error: any) {
+    if (error?.code === 'RECOVERY_STORAGE_UNAVAILABLE') throw error;
     console.warn('[OTP] Exceção ao ler otp_challenges, usando fallback memória:', error?.message || String(error));
+    if (options.requirePersistent) throw recoveryStorageUnavailableError();
     return getInMemoryOtpChallenge(key);
   }
 }
 
-async function consumeOtpChallenge(key: string): Promise<void> {
-  otpStore.delete(key);
+async function updateOtpChallengeAttempts(
+  key: string,
+  previousAttempts: number,
+  nextAttempts: number,
+  options: { requirePersistent?: boolean } = {}
+): Promise<boolean> {
   const useDb = await ensureOtpTableAvailability();
   if (!useDb) {
-    return;
+    if (options.requirePersistent) throw recoveryStorageUnavailableError();
+    const current = getInMemoryOtpChallenge(key);
+    if (!current || current.attempts !== previousAttempts) return false;
+    current.attempts = nextAttempts;
+    otpStore.set(key, current);
+    return true;
   }
 
   try {
-    await supabase
+    const { data, error } = await supabase
+      .from('otp_challenges')
+      .update({ attempts: nextAttempts })
+      .eq('key', key)
+      .eq('consumed', false)
+      .eq('attempts', previousAttempts)
+      .select('key')
+      .maybeSingle();
+    if (error) {
+      if (options.requirePersistent) throw recoveryStorageUnavailableError();
+      return false;
+    }
+    if (!data) return false;
+    const current = otpStore.get(key);
+    if (current) otpStore.set(key, { ...current, attempts: nextAttempts });
+    return true;
+  } catch (error: any) {
+    if (error?.code === 'RECOVERY_STORAGE_UNAVAILABLE') throw error;
+    console.warn('[OTP] Falha ao registrar tentativa na base:', error?.message || String(error));
+    if (options.requirePersistent) throw recoveryStorageUnavailableError();
+    return false;
+  }
+}
+
+async function consumeOtpChallenge(
+  key: string,
+  options: { requirePersistent?: boolean; expectedAttempts?: number } = {}
+): Promise<boolean> {
+  const useDb = await ensureOtpTableAvailability();
+  if (!useDb) {
+    if (options.requirePersistent) throw recoveryStorageUnavailableError();
+    const current = getInMemoryOtpChallenge(key);
+    if (!current) return false;
+    if (
+      typeof options.expectedAttempts === 'number' &&
+      current.attempts !== options.expectedAttempts
+    ) {
+      return false;
+    }
+    otpStore.delete(key);
+    return true;
+  }
+
+  try {
+    let query = supabase
       .from('otp_challenges')
       .update({ consumed: true })
       .eq('key', key)
       .eq('consumed', false);
+    if (typeof options.expectedAttempts === 'number') {
+      query = query.eq('attempts', options.expectedAttempts);
+    }
+    const { data, error } = await query.select('key').maybeSingle();
+    if (error) {
+      if (options.requirePersistent) throw recoveryStorageUnavailableError();
+      return false;
+    }
+    if (!data) return false;
+    otpStore.delete(key);
+    return true;
   } catch (error: any) {
+    if (error?.code === 'RECOVERY_STORAGE_UNAVAILABLE') throw error;
     console.warn('[OTP] Falha ao consumir OTP na base:', error?.message || String(error));
+    if (options.requirePersistent) throw recoveryStorageUnavailableError();
+    return false;
   }
 }
 
 function makeOtpChallengeKey(channel: RecoveryChannel, purpose: OtpPurpose, identifier: string): string {
   return hashIdentifier(`${channel}:${purpose}:${identifier.toLowerCase()}`);
+}
+
+function passwordRecoverySigningSecret(): string {
+  const secret = sanitizeString(
+    process.env.PASSWORD_RECOVERY_LINK_SECRET || process.env.SESSION_SECRET || '',
+    2000
+  );
+  if (secret.length < 32) {
+    throw new Error('PASSWORD_RECOVERY_LINK_SECRET_INVALID');
+  }
+  return secret;
+}
+
+async function createPasswordRecoveryLink(params: {
+  email: string;
+  userId: string;
+}): Promise<{ link: string; expiresAt: number }> {
+  const email = sanitizeEmail(params.email);
+  const userId = sanitizeString(params.userId, 120);
+  if (!email || !isUuid(userId)) {
+    throw new Error('PASSWORD_RECOVERY_IDENTITY_INVALID');
+  }
+
+  const challengeKey = makeOtpChallengeKey('email', 'password_recovery', email);
+  const challengeSecret = crypto.randomBytes(32).toString('base64url');
+  const expiresAt = Date.now() + OTP_TTL_MS;
+  await setOtpChallenge({
+    key: challengeKey,
+    channel: 'email',
+    purpose: 'password_recovery',
+    identifier: email,
+    userId,
+    codeHash: hashIdentifier(challengeSecret),
+    expiresAt,
+    attempts: 0,
+    consumed: false,
+    createdAt: Date.now()
+  });
+  const token = createPasswordRecoveryToken({
+    challengeKey,
+    challengeSecret,
+    expiresAt,
+    signingSecret: passwordRecoverySigningSecret()
+  });
+  return { link: getRecoveryRedirectUrl(token), expiresAt };
 }
 
 function validateStrongPassword(password: unknown): string | null {
@@ -8117,7 +8296,7 @@ function listAnamnesisTemplateChanges(previousTemplate: any, nextTemplate: any):
 
 function currentClinicId(user: any): string | null {
   const id = sanitizeString(
-    user?.activeWorkspaceId || user?.clinicId || user?.clinic_id,
+    user?.activeAccessContext?.clinicId || user?.activeWorkspaceId || user?.clinicId || user?.clinic_id,
     120
   );
   return id || null;
@@ -8155,6 +8334,7 @@ function hasGlobalClinicAccess(user: any): boolean {
 async function resolveEffectiveClinicRole(
   user: any
 ): Promise<ClinicAuthorityRole | null> {
+  if (user?.activeAccessContext?.kind === 'patient_portal') return null;
   const actorId = sanitizeString(user?.id || user?.user_id, 120);
   const clinicId = sanitizeString(currentClinicId(user), 120);
   const sessionRole = sanitizeString(user?.role, 40).toLowerCase();
@@ -8703,6 +8883,7 @@ async function resolveDemoRoutePolicyBlock(
   const workspaceRecoveryRoute =
     pathname === '/api/workspaces' ||
     pathname === '/api/workspaces/select' ||
+    pathname === '/api/access-contexts/select' ||
     pathname === '/api/auth/me';
   if (workspaceRecoveryRoute) return null;
 
@@ -13165,13 +13346,14 @@ function normalizeClinicRoomSpecialties(value: any) {
 }
 
 async function fetchUserWorkspaces(userId: string) {
-  const run = (clinicColumns: string) =>
+  const run = (clinicColumns: string, includeMembershipSettings = true) =>
     supabase
       .from('clinic_memberships')
       .select(`
       clinic_id,
       role,
       status,
+      ${includeMembershipSettings ? 'specialty,' : ''}
       clinics:clinic_id (
         ${clinicColumns}
       )
@@ -13181,7 +13363,7 @@ async function fetchUserWorkspaces(userId: string) {
 
   let { data, error } = await run('id,name,logo_url,is_demo,demo_status,demo_expires_at,demo_source,demo_kind,demo_key,demo_last_activity_at,billing_model');
   if (error && extractMissingColumnName(error)) {
-    const fallback = await run('id,name,logo_url');
+    const fallback = await run('id,name,logo_url', false);
     data = fallback.data;
     error = fallback.error;
   }
@@ -13197,6 +13379,7 @@ async function fetchUserWorkspaces(userId: string) {
       clinicName: sanitizeString(clinic.name, 160) || 'Clinica',
       clinicLogoUrl: sanitizeSessionUrl(clinic.logo_url),
       role: ensureRole(membership.role) ? membership.role : 'therapist',
+      specialty: normalizeClinicalSpecialty(membership.specialty) || null,
       isDemo: clinic?.is_demo === true || sanitizeString(clinic?.billing_model, 40).toLowerCase() === DEMO_SANDBOX_BILLING_MODEL,
       demoStatus: sanitizeString(clinic?.demo_status, 40).toLowerCase() || null,
       demoExpiresAt: sanitizeString(clinic?.demo_expires_at, 80) || null,
@@ -13207,6 +13390,149 @@ async function fetchUserWorkspaces(userId: string) {
       billingModel: sanitizeString(clinic?.billing_model, 40).toLowerCase() || null
     };
   }).filter((w: any) => w.clinicId);
+}
+
+type AccessContextKind = 'clinic_workspace' | 'patient_portal';
+
+type UserAccessContext = {
+  id: string;
+  kind: AccessContextKind;
+  clinicId: string;
+  clinicName: string;
+  clinicLogoUrl: string | null;
+  role: AppRole;
+  label: string;
+  patientId: string | null;
+  specialty: string | null;
+};
+
+function clinicAccessContextId(clinicId: unknown): string {
+  return `clinic:${sanitizeString(clinicId, 120)}`;
+}
+
+function patientAccessContextId(patientId: unknown, clinicId: unknown): string {
+  return `patient:${sanitizeString(patientId, 120)}:${sanitizeString(clinicId, 120)}`;
+}
+
+function compactAccessContextsForSession(value: any): UserAccessContext[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.slice(0, 60).map((item: any): UserAccessContext | null => {
+    const kind: AccessContextKind | null = item?.kind === 'patient_portal'
+      ? 'patient_portal'
+      : item?.kind === 'clinic_workspace'
+        ? 'clinic_workspace'
+        : null;
+    const clinicId = sanitizeString(item?.clinicId, 120);
+    const patientId = kind === 'patient_portal' ? sanitizeString(item?.patientId, 120) : '';
+    const id = sanitizeString(
+      item?.id || (kind === 'patient_portal'
+        ? patientAccessContextId(patientId, clinicId)
+        : clinicAccessContextId(clinicId)),
+      380
+    );
+    if (!kind || !id || !isUuid(clinicId) || (kind === 'patient_portal' && !isUuid(patientId)) || seen.has(id)) {
+      return null;
+    }
+    seen.add(id);
+    const resolvedRole = kind === 'patient_portal'
+      ? 'patient'
+      : ensureRole(item?.role) && item.role !== 'patient'
+        ? item.role
+        : 'therapist';
+    return {
+      id,
+      kind,
+      clinicId,
+      clinicName: sanitizeString(item?.clinicName, 160) || 'Clínica',
+      clinicLogoUrl: sanitizeSessionUrl(item?.clinicLogoUrl),
+      role: resolvedRole,
+      label: sanitizeString(item?.label, 180) || (kind === 'patient_portal' ? 'Meu cuidado' : 'Trabalhar'),
+      patientId: patientId || null,
+      specialty: kind === 'clinic_workspace' ? normalizeClinicalSpecialty(item?.specialty) || null : null
+    };
+  }).filter((item: UserAccessContext | null): item is UserAccessContext => Boolean(item));
+}
+
+async function fetchPatientPortalAccessContexts(userId: string): Promise<UserAccessContext[]> {
+  const safeUserId = sanitizeString(userId, 120);
+  if (!isUuid(safeUserId)) return [];
+
+  const patientColumns = 'id,clinic_id,name,status,is_active,deleted_at,responsible_user_id';
+  let patientResult = await supabase
+    .from('patients')
+    .select(patientColumns)
+    .or(`responsible_user_id.eq.${safeUserId},id.eq.${safeUserId}`)
+    .limit(100);
+  if (patientResult.error && extractMissingColumnName(patientResult.error) === 'responsible_user_id') {
+    patientResult = await supabase
+      .from('patients')
+      .select('id,clinic_id,name,status,is_active,deleted_at')
+      .eq('id', safeUserId)
+      .limit(100);
+  }
+  if (patientResult.error) throw patientResult.error;
+
+  const patientRows = (patientResult.data || []).filter((patient: any) => {
+    const status = sanitizeString(patient?.status, 80).trim().toUpperCase();
+    return status !== 'DELETED' && patient?.deleted_at == null && patient?.is_active !== false;
+  });
+  const clinicIds = Array.from(new Set(
+    patientRows
+      .map((patient: any) => sanitizeString(patient?.clinic_id, 120))
+      .filter((clinicId: string) => isUuid(clinicId))
+  ));
+  if (clinicIds.length === 0) return [];
+
+  let clinicResult = await supabase
+    .from('clinics')
+    .select('id,name,logo_url')
+    .in('id', clinicIds);
+  if (clinicResult.error && extractMissingColumnName(clinicResult.error) === 'logo_url') {
+    clinicResult = await supabase.from('clinics').select('id,name').in('id', clinicIds);
+  }
+  if (clinicResult.error) throw clinicResult.error;
+  const clinicsById = new Map(
+    (clinicResult.data || []).map((clinic: any) => [sanitizeString(clinic?.id, 120), clinic])
+  );
+
+  return compactAccessContextsForSession(patientRows.map((patient: any) => {
+    const patientId = sanitizeString(patient?.id, 120);
+    const clinicId = sanitizeString(patient?.clinic_id, 120);
+    const clinic = clinicsById.get(clinicId) as any;
+    const patientName = sanitizeString(patient?.name, 160);
+    return {
+      id: patientAccessContextId(patientId, clinicId),
+      kind: 'patient_portal',
+      clinicId,
+      clinicName: sanitizeString(clinic?.name, 160) || 'Clínica',
+      clinicLogoUrl: sanitizeSessionUrl(clinic?.logo_url),
+      role: 'patient',
+      patientId,
+      label: patientName ? `Cuidado de ${patientName}` : 'Meu cuidado'
+    };
+  }));
+}
+
+async function fetchUserAccessContexts(userId: string, suppliedWorkspaces?: any[]): Promise<UserAccessContext[]> {
+  const workspaces = Array.isArray(suppliedWorkspaces)
+    ? suppliedWorkspaces
+    : await fetchUserWorkspaces(userId);
+  const [patientContexts] = await Promise.all([
+    fetchPatientPortalAccessContexts(userId)
+  ]);
+  const clinicContexts = workspaces.map((workspace: any) => ({
+    id: clinicAccessContextId(workspace?.clinicId),
+    kind: 'clinic_workspace',
+    clinicId: workspace?.clinicId,
+    clinicName: workspace?.clinicName,
+    clinicLogoUrl: workspace?.clinicLogoUrl,
+    role: workspace?.role,
+    patientId: null,
+    specialty: workspace?.specialty,
+    label: workspace?.specialty || 'Equipe da clínica'
+  }));
+  return compactAccessContextsForSession([...clinicContexts, ...patientContexts]);
 }
 
 
@@ -13362,13 +13688,22 @@ async function resolveOnboardingContextForUser(params: {
     };
   }
 
-  const membershipResult = await supabase
+  let membershipResult = await supabase
     .from('clinic_memberships')
-    .select('user_id,clinic_id,role,status,invited_by,created_at')
+    .select('user_id,clinic_id,role,status,invited_by,created_at,specialty')
     .eq('user_id', userId)
     .eq('status', 'active')
     .order('created_at', { ascending: true })
     .limit(30);
+  if (membershipResult.error && extractMissingColumnName(membershipResult.error) === 'specialty') {
+    membershipResult = await supabase
+      .from('clinic_memberships')
+      .select('user_id,clinic_id,role,status,invited_by,created_at')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: true })
+      .limit(30);
+  }
   if (membershipResult.error) throw membershipResult.error;
 
   const memberships = Array.isArray(membershipResult.data) ? membershipResult.data : [];
@@ -13465,6 +13800,7 @@ async function resolveOnboardingContextForUser(params: {
   const professionalProfile = professionalProfileResult.data as any;
   const specialty = role === 'therapist'
     ? normalizeClinicalSpecialty(
+        membership?.specialty ||
         readClinicalSpecialtyFromSource(invitation, '') ||
         readClinicalSpecialtyFromSource(professionalProfile, ''),
       ) || null
@@ -13575,29 +13911,59 @@ function mergeAuthoritativeClinicSettings(sessionSettings: any, context: Resolve
 
 async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
   if (!sessionUser?.id) return buildSessionUserPayload(sessionUser);
+  const workspaces = filterWorkspacesForUser(
+    await fetchUserWorkspaces(sessionUser.id),
+    sessionUser
+  );
+  const accessContexts = await fetchUserAccessContexts(sessionUser.id, workspaces);
+  const baseSessionUser = buildSessionUserPayload({
+    ...sessionUser,
+    workspaces,
+    accessContexts
+  });
+  if (!baseSessionUser.activeAccessContext || baseSessionUser.mustSelectAccessContext) {
+    return baseSessionUser;
+  }
+  if (baseSessionUser.activeAccessContext.kind === 'patient_portal') {
+    return buildSessionUserPayload({
+      ...baseSessionUser,
+      role: 'patient',
+      clinicId: baseSessionUser.activeAccessContext.clinicId,
+      activeWorkspaceId: null,
+      onboardingContext: null,
+      workspaces,
+      accessContexts,
+      activeAccessContextId: baseSessionUser.activeAccessContext.id,
+      accessContextSelectionExplicit: baseSessionUser.accessContextSelectionExplicit
+    });
+  }
   const context = await resolveOnboardingContextForUser({
-    userId: sessionUser.id,
-    email: sessionUser.email,
-    preferredClinicId: sessionUser.activeWorkspaceId || sessionUser.clinicId,
-    role: sessionUser.role,
+    userId: baseSessionUser.id,
+    email: baseSessionUser.email,
+    preferredClinicId: baseSessionUser.activeAccessContext.clinicId,
+    role: baseSessionUser.activeAccessContext.role,
   });
   const clinicManagedBilling = ['invited_professional', 'clinic_member'].includes(context.onboardingMode) && Boolean(context.clinic?.id);
   return buildSessionUserPayload({
-    ...sessionUser,
-    role: context.membership?.role || sessionUser.role,
-    clinicId: context.clinic?.id || sessionUser.clinicId,
-    activeWorkspaceId: context.clinic?.id || sessionUser.activeWorkspaceId,
+    ...baseSessionUser,
+    role: context.membership?.role || baseSessionUser.role,
+    clinicId: context.clinic?.id || baseSessionUser.clinicId,
+    activeWorkspaceId: context.clinic?.id || baseSessionUser.activeWorkspaceId,
     subscriptionStatus: clinicManagedBilling
-      ? context.clinic?.subscriptionStatus || sessionUser.subscriptionStatus
-      : sessionUser.subscriptionStatus,
+      ? context.clinic?.subscriptionStatus || baseSessionUser.subscriptionStatus
+      : baseSessionUser.subscriptionStatus,
     billingModel: clinicManagedBilling
-      ? context.clinic?.billingModel || sessionUser.billingModel
-      : sessionUser.billingModel,
-    specialties: context.membership?.specialty || sessionUser.specialties,
+      ? context.clinic?.billingModel || baseSessionUser.billingModel
+      : baseSessionUser.billingModel,
+    specialties: context.membership?.specialty || baseSessionUser.specialties,
     clinicSettings: clinicManagedBilling
-      ? mergeAuthoritativeClinicSettings(sessionUser.clinicSettings, context)
-      : sessionUser.clinicSettings,
+      ? mergeAuthoritativeClinicSettings(baseSessionUser.clinicSettings, context)
+      : baseSessionUser.clinicSettings,
     onboardingContext: context,
+    workspaces,
+    accessContexts,
+    activeAccessContextId: baseSessionUser.activeAccessContext.id,
+    accessContextSelectionExplicit: baseSessionUser.accessContextSelectionExplicit
   });
 }
 
@@ -13809,6 +14175,7 @@ function compactWorkspacesForSession(workspaces: any[]) {
     clinicName: sanitizeString(w?.clinicName, 160) || 'Clinica',
     clinicLogoUrl: sanitizeSessionUrl(w?.clinicLogoUrl),
     role: ensureRole(w?.role) ? w.role : 'therapist',
+    specialty: normalizeClinicalSpecialty(w?.specialty) || null,
     isDemo: Boolean(w?.isDemo || w?.is_demo),
     demoStatus: sanitizeString(w?.demoStatus || w?.demo_status, 40).toLowerCase() || null,
     demoExpiresAt: sanitizeString(w?.demoExpiresAt || w?.demo_expires_at, 80) || null,
@@ -13828,25 +14195,6 @@ function filterWorkspacesForUser(workspaces: any[], user: any) {
   ));
 }
 
-function resolveActiveWorkspaceId(
-  workspaces: any[],
-  preferredWorkspaceId?: string | null,
-  fallbackClinicId?: string | null
-): string | null {
-  const compacted = compactWorkspacesForSession(workspaces);
-  const preferred = sanitizeString(preferredWorkspaceId, 120);
-  const fallback = sanitizeString(fallbackClinicId, 120);
-
-  if (preferred && compacted.some((w: any) => w.clinicId === preferred)) {
-    return preferred;
-  }
-  if (fallback && compacted.some((w: any) => w.clinicId === fallback)) {
-    return fallback;
-  }
-  if (compacted.length === 1) return compacted[0].clinicId;
-  return null;
-}
-
 function buildSessionUserPayload(input: any) {
   const professionalProfile =
     input?.professionalProfile && typeof input.professionalProfile === 'object'
@@ -13863,21 +14211,41 @@ function buildSessionUserPayload(input: any) {
   const workspaces = explicitDemoUser
     ? compactedWorkspaces.filter((workspace: any) => workspace.isDemo || workspace.billingModel === DEMO_SANDBOX_BILLING_MODEL)
     : compactedWorkspaces;
-  const activeWorkspaceId = resolveActiveWorkspaceId(
-    workspaces,
-    input?.activeWorkspaceId,
-    input?.clinicId || input?.clinic_id
+  const suppliedAccessContexts = compactAccessContextsForSession(input?.accessContexts || []);
+  const accessContexts = suppliedAccessContexts.length > 0
+    ? suppliedAccessContexts
+    : compactAccessContextsForSession(workspaces.map((workspace: any) => ({
+        ...workspace,
+        id: clinicAccessContextId(workspace.clinicId),
+        kind: 'clinic_workspace',
+        patientId: null,
+        label: workspace.specialty || 'Equipe da clínica'
+      })));
+  const requestedAccessContextId = sanitizeString(
+    input?.activeAccessContextId || input?.activeAccessContext?.id,
+    380
   );
+  const activeAccessContext =
+    (requestedAccessContextId
+      ? accessContexts.find((context) => context.id === requestedAccessContextId) || null
+      : null) ||
+    (accessContexts.length === 1 ? accessContexts[0] : null);
+  const activeWorkspaceId = activeAccessContext?.kind === 'clinic_workspace'
+    ? activeAccessContext.clinicId
+    : null;
   const selectedWorkspace = activeWorkspaceId
     ? workspaces.find((w: any) => w.clinicId === activeWorkspaceId) || null
     : null;
   const canonicalInputRole = sanitizeString(input?.role, 40).toLowerCase();
-  const resolvedRole = explicitDemoUser
+  const resolvedRole = activeAccessContext?.kind === 'patient_portal'
+    ? 'patient'
+    : explicitDemoUser
     ? selectedWorkspace?.role || workspaces[0]?.role || 'coordinator'
     : canonicalInputRole === 'owner'
       ? 'owner'
       : selectedWorkspace?.role || input?.role;
-  const mustSelectWorkspace = workspaces.length > 1 && !activeWorkspaceId;
+  const mustSelectWorkspace = !activeAccessContext && workspaces.length > 1 && !activeWorkspaceId;
+  const mustSelectAccessContext = accessContexts.length > 1 && !activeAccessContext;
   const resolvedBillingModel = sanitizeString(
     selectedWorkspace?.billingModel || input?.billingModel || input?.billing_model,
     40
@@ -13907,9 +14275,21 @@ function buildSessionUserPayload(input: any) {
     demoKind: sanitizeString(selectedWorkspace?.demoKind || input?.demoKind || input?.demo_kind, 40).toLowerCase() || null,
     demoKey: sanitizeString(selectedWorkspace?.demoKey || input?.demoKey || input?.demo_key, 80) || null,
     treatmentStatus: sanitizeString(input?.treatmentStatus, 40) || null,
-    clinicId: selectedWorkspace?.clinicId || sanitizeString(input?.clinicId, 120) || null,
+    clinicId: mustSelectAccessContext
+      ? null
+      : activeAccessContext?.clinicId || selectedWorkspace?.clinicId || sanitizeString(input?.clinicId, 120) || null,
     activeWorkspaceId,
     mustSelectWorkspace,
+    accessContexts,
+    activeAccessContext,
+    activeAccessContextId: activeAccessContext?.id || null,
+    accessContextSelectionExplicit: Boolean(
+      activeAccessContext && (requestedAccessContextId || input?.accessContextSelectionExplicit === true)
+    ),
+    mustSelectAccessContext,
+    patientPortalPatientId: activeAccessContext?.kind === 'patient_portal'
+      ? activeAccessContext.patientId
+      : null,
     sessionToken: sanitizeString(input?.sessionToken, 120) || null,
     mfaVerified: input?.mfaVerified === true,
     mfaVerifiedAt: sanitizeString(input?.mfaVerifiedAt, 80) || null,
@@ -15527,10 +15907,13 @@ async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inact
   return status;
 }
 
-async function ensureClinicAndMembershipForCoordinator(userId: string, clinicName?: string | null) {
+async function ensureClinicAndMembershipForCoordinator(userId: string) {
   const safeUserId = sanitizeString(userId, 120);
   if (!safeUserId) return;
-  const safeClinicName = sanitizeString(clinicName, 160) || 'Minha Clinica';
+  // This helper provisions only the technical owner workspace. A person's name
+  // is never an authoritative clinic name; owners edit the official name in the
+  // clinic settings flow.
+  const safeClinicName = 'Minha Clínica';
   const now = new Date().toISOString();
 
   let existingClinic: any = null;
@@ -15559,31 +15942,33 @@ async function ensureClinicAndMembershipForCoordinator(userId: string, clinicNam
     break;
   }
 
-  let clinicPayload: Record<string, any> = cleanObject({
-    id: safeUserId,
-    owner_user_id: safeUserId,
-    name: safeClinicName,
-    created_by: existingClinic?.created_by || (isUuid(safeUserId) ? safeUserId : null),
-    created_at: existingClinic?.created_at || now
-  });
+  if (!existingClinic) {
+    let clinicPayload: Record<string, any> = cleanObject({
+      id: safeUserId,
+      owner_user_id: safeUserId,
+      name: safeClinicName,
+      created_by: isUuid(safeUserId) ? safeUserId : null,
+      created_at: now
+    });
 
-  for (let attempt = 0; attempt < 6 && Object.keys(clinicPayload).length > 0; attempt += 1) {
-    const clinicResult = await supabase
-      .from('clinics')
-      .upsert([clinicPayload], { onConflict: 'id' });
+    for (let attempt = 0; attempt < 6 && Object.keys(clinicPayload).length > 0; attempt += 1) {
+      const clinicResult = await supabase
+        .from('clinics')
+        .insert([clinicPayload]);
 
-    if (!clinicResult.error) break;
+      if (!clinicResult.error || isDuplicateConstraintError(clinicResult.error)) break;
 
-    const missingColumn = extractMissingColumnName(clinicResult.error);
-    if (missingColumn && missingColumn in clinicPayload && missingColumn !== 'id' && missingColumn !== 'name') {
-      delete clinicPayload[missingColumn];
-      continue;
+      const missingColumn = extractMissingColumnName(clinicResult.error);
+      if (missingColumn && missingColumn in clinicPayload && missingColumn !== 'id' && missingColumn !== 'name') {
+        delete clinicPayload[missingColumn];
+        continue;
+      }
+
+      if (!hasMissingFinancialSchema(clinicResult.error) && !isMissingRelationError(clinicResult.error)) {
+        console.warn('[Auth] Não foi possível garantir clínica do coordenador:', clinicResult.error?.message || clinicResult.error);
+      }
+      break;
     }
-
-    if (!hasMissingFinancialSchema(clinicResult.error) && !isMissingRelationError(clinicResult.error)) {
-      console.warn('[Auth] Não foi possível garantir clínica do coordenador:', clinicResult.error?.message || clinicResult.error);
-    }
-    break;
   }
 
   let membershipPayload: Record<string, any> = cleanObject({
@@ -18272,6 +18657,15 @@ async function startServer() {
         });
       }
       syncWorkspaceContextInSession(req, res, () => {});
+      if (
+        req.session.user?.mustSelectAccessContext === true &&
+        !isAccessContextSelectionAllowedPath(req.path || req.originalUrl)
+      ) {
+        return res.status(409).json({
+          error: 'ACCESS_CONTEXT_SELECTION_REQUIRED',
+          message: 'Escolha a clínica ou o acesso de paciente antes de continuar.'
+        });
+      }
       if (isPendingPatientActivation(req.session.user)) {
         return res.status(403).json({
           error: 'PATIENT_ACTIVATION_REQUIRED',
@@ -18355,7 +18749,7 @@ async function startServer() {
                 message: 'Entre novamente com sua senha e confirme o Google Authenticator.'
               });
             }
-              req.session.user = buildSessionUserPayload({
+              req.session.user = await hydrateSessionUserWithOnboardingContext({
                 id: user.id,
                 email: user.email,
                 role: resolvedRole,
@@ -18388,6 +18782,15 @@ async function startServer() {
               clinicSettings: user.user_metadata?.clinic_settings || null,
               workspaces
             });
+            if (
+              req.session.user?.mustSelectAccessContext === true &&
+              !isAccessContextSelectionAllowedPath(req.path || req.originalUrl)
+            ) {
+              return res.status(409).json({
+                error: 'ACCESS_CONTEXT_SELECTION_REQUIRED',
+                message: 'Escolha a clínica ou o acesso de paciente antes de continuar.'
+              });
+            }
             if (isPendingPatientActivation(req.session.user)) {
               return res.status(403).json({
                 error: 'PATIENT_ACTIVATION_REQUIRED',
@@ -21530,7 +21933,7 @@ async function startServer() {
         workspaces,
       });
       const verifiedAt = new Date().toISOString();
-      const userData = buildSessionUserPayload({
+      const userData = await hydrateSessionUserWithOnboardingContext({
         id: boundUserId,
         email: user.email,
         role: roleForSession,
@@ -21694,7 +22097,7 @@ async function startServer() {
     }
 
     if (roleToUse === 'coordinator') {
-      await ensureClinicAndMembershipForCoordinator(authUser.id, name || null);
+      await ensureClinicAndMembershipForCoordinator(authUser.id);
     }
 
     let activationEmailSent = false;
@@ -21718,10 +22121,7 @@ async function startServer() {
         from: roleToUse === 'patient' ? OFFICIAL_FROM_NOREPLY : OFFICIAL_FROM_CONTACT,
         replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
         templateKind: roleToUse === 'patient' ? 'welcome_patient' : 'welcome_professional',
-        templateData: {
-          nome: name || safeEmail.split('@')[0],
-          link_ativacao: activationLink
-        },
+        templateData: activationEmail.variables,
         metadata: {
           email: maskEmail(safeEmail),
           role: roleToUse
@@ -21813,7 +22213,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/resend-confirmation', async (req, res) => {
+  app.post('/api/auth/resend-confirmation', recoveryLimiter, async (req, res) => {
     try {
       const email = sanitizeEmail(req.body?.email);
       if (!email) return res.status(400).json({ error: 'E-mail inválido.' });
@@ -21860,10 +22260,7 @@ async function startServer() {
         from: resolveTemplateProfileByRole(profile?.role) === 'patient' ? OFFICIAL_FROM_NOREPLY : OFFICIAL_FROM_CONTACT,
         replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
         templateKind: resolveTemplateProfileByRole(profile?.role) === 'patient' ? 'welcome_patient' : 'welcome_professional',
-        templateData: {
-          nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
-          link_ativacao: activationLink
-        },
+        templateData: activationEmail.variables,
         metadata: {
           email: maskEmail(email),
           userId: authUser.id
@@ -21889,67 +22286,85 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/activation/bootstrap', async (req, res) => {
+  app.post('/api/auth/activation/bootstrap', recoveryLimiter, async (req, res) => {
+    const genericResponse = {
+      success: true,
+      message: 'Se esta conta estiver pendente, você receberá um novo link de ativação por e-mail.'
+    };
     try {
       const email = sanitizeEmail(req.body?.email);
-      const role = sanitizeString(req.body?.role, 40).toLowerCase();
-      if (!email) {
-        return res.status(400).json({ success: false, error: 'E-mail inválido.' });
-      }
+      if (!email) return res.json(genericResponse);
 
       const authUser = await findAuthUserByEmail(email);
-      if (!authUser?.id) {
-        return res.status(404).json({ success: false, error: 'Conta não encontrada para ativação.' });
-      }
+      if (!authUser?.id) return res.json(genericResponse);
       const isAlreadyConfirmed = Boolean(
         (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
       );
-      if (isAlreadyConfirmed) {
-        return res.status(409).json({
-          success: false,
-          code: 'ALREADY_CONFIRMED',
-          error: 'Conta já ativada. Use login normal ou recuperação de senha.',
-        });
-      }
+      if (isAlreadyConfirmed) return res.json(genericResponse);
 
-      const profileRole = role === 'patient' ? 'patient' : 'coordinator';
-      if (profileRole === 'patient') {
-        await supabase.auth.admin.updateUserById(authUser.id, {
-          user_metadata: {
-            ...((authUser as any)?.user_metadata || {}),
-            role: 'patient',
-            invited_email: email,
-            patient_activation_required: true,
-            first_login_completed: false
-          }
-        });
-      }
+      const { data: profile } = await supabase
+        .from('users')
+        .select('name,role')
+        .eq('id', authUser.id)
+        .maybeSingle();
+      const persistedRole = sanitizeString(
+        profile?.role || (authUser as any)?.user_metadata?.role,
+        40
+      );
+      const templateProfile = resolveTemplateProfileByRole(persistedRole);
       const activationLinkFromSignup = await generateSupabaseActionLink({
         type: 'signup',
         email,
-        redirectTo: getActivationRedirectUrl(profileRole, email),
+        redirectTo: getActivationRedirectUrl(persistedRole, email),
       });
       const activationLink =
         activationLinkFromSignup ||
         (await generateSupabaseActionLink({
           type: 'recovery',
           email,
-          redirectTo: getActivationRedirectUrl(profileRole, email),
+          redirectTo: getActivationRedirectUrl(persistedRole, email),
         }));
 
-      if (!activationLink) {
-        return res.status(500).json({
-          success: false,
-          error: 'Não foi possível gerar novo link de ativação no momento.',
+      if (activationLink) {
+        const activationEmail = buildActivationEmailTemplate({
+          nome: sanitizeString(
+            profile?.name || (authUser as any)?.user_metadata?.full_name || email.split('@')[0],
+            180
+          ),
+          link_ativacao: activationLink,
+          perfil: templateProfile
+        });
+        const emailSent = await sendTransactionalEmailSafe({
+          to: email,
+          subject: activationEmail.subject,
+          html: activationEmail.html,
+          context: 'activation_bootstrap_resend',
+          from: templateProfile === 'patient' ? OFFICIAL_FROM_NOREPLY : OFFICIAL_FROM_CONTACT,
+          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+          templateKind: templateProfile === 'patient' ? 'welcome_patient' : 'welcome_professional',
+          templateData: activationEmail.variables,
+          metadata: {
+            userId: authUser.id,
+            email: maskEmail(email)
+          }
+        });
+        await persistIdentityAuditLog({
+          title: 'Novo link de ativação solicitado',
+          content: `Reenvio de ativação para ${maskEmail(email)} ${emailSent ? 'encaminhado' : 'não concluído'}.`,
+          identifier: email,
+          channel: 'email',
+          userId: authUser.id,
+          request: req,
+          status: emailSent ? 'sent' : 'warning'
         });
       }
 
-      return res.json({ success: true, activationLink });
+      return res.json(genericResponse);
     } catch (error: any) {
-      return res.status(500).json({
-        success: false,
-        error: sanitizeString(error?.message || 'Falha ao recuperar link de ativação.', 500),
+      console.warn('[Auth] activation bootstrap could not resend email:', {
+        message: sanitizeString(error?.message || String(error), 180)
       });
+      return res.json(genericResponse);
     }
   });
 
@@ -21983,35 +22398,20 @@ async function startServer() {
         return res.json(genericResponse);
       }
 
-      const code = generate6DigitOtp();
-      const key = makeOtpChallengeKey('email', 'password_recovery', email);
-      await setOtpChallenge({
-        key,
-        channel: 'email',
-        purpose: 'password_recovery',
-        identifier: email,
-        userId: authUser.id,
-        codeHash: hashIdentifier(code),
-        expiresAt: Date.now() + OTP_TTL_MS,
-        attempts: 0,
-        consumed: false,
-        createdAt: Date.now()
+      const recoveryAccess = await createPasswordRecoveryLink({
+        email,
+        userId: authUser.id
       });
 
       const { data: profile } = await supabase
         .from('users')
-        .select('name, role')
+        .select('name')
         .eq('id', authUser.id)
         .maybeSingle();
-      // Security hardening: never expose OTP in URL query params.
-      // Recovery code must be delivered by e-mail body and entered manually by user.
-      const recoveryLink = `${getRecoveryRedirectUrl()}`;
       const recoveryEmail = buildPasswordRecoveryEmailTemplate({
         nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
-        codigo: code,
-        link_recuperacao: recoveryLink,
+        link_recuperacao: recoveryAccess.link,
         expira_em_minutos: 15,
-        perfil: resolveTemplateProfileByRole(profile?.role)
       });
       const recoveryEmailSent = await sendTransactionalEmailSafe({
         to: email,
@@ -22020,14 +22420,8 @@ async function startServer() {
         context: 'password_recovery_request',
         from: OFFICIAL_FROM_NOREPLY,
         replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-        // For recovery we force server-rendered HTML to guarantee fresh link/code delivery.
-        templateKind: undefined,
-        templateData: {
-          nome: sanitizeString(profile?.name || authUser.user_metadata?.full_name || email.split('@')[0], 180),
-          codigo: code,
-          link_recuperacao: recoveryLink || '',
-          expira_em_minutos: 15
-        },
+        templateKind: 'password_recovery',
+        templateData: recoveryEmail.variables,
         metadata: {
           email: maskEmail(email),
           userId: authUser.id
@@ -22036,7 +22430,7 @@ async function startServer() {
 
       await persistIdentityAuditLog({
         title: 'Recuperação por e-mail solicitada',
-        content: `Código de recuperação gerado para ${maskEmail(email)}. E-mail oficial ${recoveryEmailSent ? 'enviado' : 'com falha de envio'}.`,
+        content: `Link de recuperação gerado para ${maskEmail(email)}. E-mail oficial ${recoveryEmailSent ? 'enviado' : 'com falha de envio'}.`,
         identifier: email,
         channel: 'email',
         userId: authUser.id,
@@ -22228,7 +22622,7 @@ async function startServer() {
         workspaces
       };
       await consumeOtpChallenge(key);
-      req.session.user = buildSessionUserPayload(userData);
+      req.session.user = await hydrateSessionUserWithOnboardingContext(userData);
       await persistIdentityAuditLog({
         title: 'OTP do portal verificado',
         content: `Login por código do portal concluído para ${maskEmail(email)}.`,
@@ -22245,21 +22639,36 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/password/recovery/verify', async (req, res) => {
+  app.post('/api/auth/password/recovery/verify', authMfaLimiter, async (req, res) => {
     const channel: RecoveryChannel = 'email';
     const code = sanitizeString(req.body?.code, 12);
+    const recoveryToken = sanitizeString(req.body?.recoveryToken, 4096);
     const newPassword = validateStrongPassword(req.body?.newPassword);
     const mfaToken = sanitizeString(req.body?.mfaToken, 12);
-    const genericError = { error: 'Código inválido ou expirado.' };
-    const identifier = sanitizeEmail(req.body?.email);
+    const genericError = recoveryToken
+      ? { error: 'RECOVERY_LINK_INVALID', message: 'Link de recuperação inválido ou expirado.' }
+      : { error: 'Código inválido ou expirado.' };
+    let identifier = sanitizeEmail(req.body?.email);
+    const requirePersistentChallenge = requiresPersistentRecoveryStorage();
 
-    if (!identifier || !code || !newPassword) {
+    if ((!recoveryToken && (!identifier || !code)) || !newPassword) {
       return res.status(400).json({ error: 'Dados inválidos para recuperação.' });
     }
 
     try {
-      const key = makeOtpChallengeKey(channel, 'password_recovery', identifier);
-      const challenge = await getOtpChallenge(key);
+      const tokenClaims = recoveryToken
+        ? verifyPasswordRecoveryToken({
+            token: recoveryToken,
+            signingSecret: passwordRecoverySigningSecret()
+          })
+        : null;
+      if (recoveryToken && !tokenClaims) {
+        return res.status(400).json(genericError);
+      }
+      const key = tokenClaims?.challengeKey || makeOtpChallengeKey(channel, 'password_recovery', identifier);
+      const challenge = await getOtpChallenge(key, {
+        requirePersistent: requirePersistentChallenge
+      });
       if (!challenge || challenge.consumed) {
         await persistIdentityAuditLog({
           title: 'Tentativa de verificação de recuperação inválida',
@@ -22271,10 +22680,19 @@ async function startServer() {
         });
         return res.status(400).json(genericError);
       }
-
-      challenge.attempts += 1;
-      if (challenge.attempts > 5) {
+      identifier = sanitizeEmail(challenge.identifier);
+      if (!identifier) {
         await consumeOtpChallenge(key);
+        return res.status(400).json(genericError);
+      }
+
+      const previousAttempts = challenge.attempts;
+      challenge.attempts = previousAttempts + 1;
+      if (challenge.attempts > 5) {
+        await consumeOtpChallenge(key, {
+          requirePersistent: requirePersistentChallenge,
+          expectedAttempts: previousAttempts
+        });
         await persistIdentityAuditLog({
           title: 'Recuperação bloqueada por tentativas excedidas',
           content: `Tentativas excedidas para recuperação por ${channel}.`,
@@ -22284,12 +22702,26 @@ async function startServer() {
           request: req,
           status: 'blocked'
         });
-        return res.status(429).json({ error: 'Muitas tentativas. Solicite um novo código.' });
+        return res.status(429).json({ error: 'Muitas tentativas. Solicite um novo link de recuperação.' });
       }
 
-      const hash = hashIdentifier(code);
-      if (hash !== challenge.codeHash || Date.now() > challenge.expiresAt) {
-        await setOtpChallenge(challenge);
+      const attemptRecorded = await updateOtpChallengeAttempts(
+        key,
+        previousAttempts,
+        challenge.attempts,
+        { requirePersistent: requirePersistentChallenge }
+      );
+      if (!attemptRecorded) {
+        return res.status(400).json(genericError);
+      }
+
+      const suppliedChallengeSecret = tokenClaims?.challengeSecret || code;
+      const hash = hashIdentifier(suppliedChallengeSecret);
+      if (
+        hash !== challenge.codeHash ||
+        Date.now() > challenge.expiresAt ||
+        (tokenClaims && tokenClaims.expiresAt !== challenge.expiresAt)
+      ) {
         await persistIdentityAuditLog({
           title: 'Tentativa de verificação de recuperação inválida',
           content: `Código incorreto informado via ${channel}.`,
@@ -22303,7 +22735,10 @@ async function startServer() {
       }
 
       if (!challenge.userId) {
-        await consumeOtpChallenge(key);
+        await consumeOtpChallenge(key, {
+          requirePersistent: requirePersistentChallenge,
+          expectedAttempts: challenge.attempts
+        });
         return res.status(400).json(genericError);
       }
 
@@ -22360,12 +22795,19 @@ async function startServer() {
         }
       }
 
+      const challengeConsumed = await consumeOtpChallenge(key, {
+        requirePersistent: requirePersistentChallenge,
+        expectedAttempts: challenge.attempts
+      });
+      if (!challengeConsumed) {
+        return res.status(400).json(genericError);
+      }
+
       const { error: updateError } = await supabase.auth.admin.updateUserById(challenge.userId, {
         password: newPassword
       });
       if (updateError) throw updateError;
 
-      await consumeOtpChallenge(key);
       await persistIdentityAuditLog({
         title: 'Senha redefinida por recuperação',
         content: `Senha redefinida com sucesso via ${channel}.`,
@@ -22376,9 +22818,19 @@ async function startServer() {
         status: 'success'
       });
 
-      return res.json({ success: true, message: 'Senha redefinida com sucesso.' });
+      return res.json({
+        success: true,
+        message: 'Senha redefinida com sucesso.',
+        loginEmail: recoveryToken ? identifier : undefined
+      });
     } catch (error: any) {
       console.error('[Auth] recovery verify error:', error.message);
+      if (error?.code === 'RECOVERY_STORAGE_UNAVAILABLE') {
+        return res.status(503).json({
+          error: 'RECOVERY_TEMPORARILY_UNAVAILABLE',
+          message: 'A recuperação de acesso está temporariamente indisponível. Tente novamente em alguns minutos.'
+        });
+      }
       return sendAuthRouteError(res, '/api/auth/password/recovery/verify', 'verify', error, {
         requestId: requestIdForLogs(req),
         email: maskEmail(identifier)
@@ -22811,10 +23263,7 @@ async function startServer() {
         });
 
         if (finalRole === "coordinator") {
-          await ensureClinicAndMembershipForCoordinator(
-            user.id,
-            user.user_metadata?.full_name || null,
-          );
+          await ensureClinicAndMembershipForCoordinator(user.id);
           if (commercialPaidActivation) {
             await finalizeSalesActivationForUser({
               ...commercialPaidActivation,
@@ -22843,7 +23292,7 @@ async function startServer() {
 
       // Legacy compatibility: ensure coordinator always has clinic membership
       if (profile.role === 'coordinator') {
-        await ensureClinicAndMembershipForCoordinator(user.id, profile.name || null);
+        await ensureClinicAndMembershipForCoordinator(user.id);
       } else if (profile.clinic_id && ensureClinicRole(profile.role) && !invitationPendingAcceptance) {
         await supabase
           .from('clinic_memberships')
@@ -22894,25 +23343,6 @@ async function startServer() {
         }
 
         invitedWorkspaceId = acceptedInvitation.clinicId;
-        const now = new Date().toISOString();
-        const { error: invitedProfileUpdateError } = await supabase
-          .from('users')
-          .update({
-            clinic_id: acceptedInvitation.clinicId,
-            role: acceptedInvitation.role,
-            updated_at: now
-          })
-          .eq('id', user.id);
-        if (invitedProfileUpdateError) {
-          console.warn('[Auth] Convite aceito, mas o ponteiro legado users.clinic_id não pôde ser atualizado:', {
-            userId: sanitizeString(user.id, 120),
-            clinicId: acceptedInvitation.clinicId,
-            error: sanitizeString(invitedProfileUpdateError?.message, 240),
-          });
-        }
-
-        profile.clinic_id = acceptedInvitation.clinicId;
-        profile.role = acceptedInvitation.role;
         workspaces = await fetchUserWorkspaces(user.id);
       }
       const preferredWorkspaceId = sanitizeString(
@@ -23175,10 +23605,16 @@ async function startServer() {
           ? mergeAuthoritativeClinicSettings(user.user_metadata?.clinic_settings, onboardingContext)
           : user.user_metadata?.clinic_settings || null,
         onboardingContext,
+        activeAccessContextId: invitedWorkspaceId
+          ? clinicAccessContextId(invitedWorkspaceId)
+          : sanitizeString(req.session?.user?.activeAccessContextId, 380) || null,
+        accessContextSelectionExplicit: Boolean(
+          invitedWorkspaceId || req.session?.user?.accessContextSelectionExplicit
+        ),
         workspaces
       };
 
-      const sessionUser = buildSessionUserPayload(userData);
+      const sessionUser = await hydrateSessionUserWithOnboardingContext(userData);
       req.session.user = sessionUser;
       const loginResponse = { success: true, user: sessionUser, isFirstLogin: Boolean(req.session.isFirstLogin) };
       console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
@@ -23335,13 +23771,82 @@ async function startServer() {
         await fetchUserWorkspaces(req.session.user.id),
         req.session.user
       );
-      req.session.user = buildSessionUserPayload({
+      req.session.user = await hydrateSessionUserWithOnboardingContext({
         ...req.session.user,
         workspaces,
       });
       res.json({ success: true, data: workspaces, user: req.session.user });
     } catch (error) {
       res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/access-contexts/select', checkAuth, async (req: any, res) => {
+    try {
+      const accessContextId = sanitizeString(req.body?.accessContextId, 380);
+      if (!accessContextId) {
+        return res.status(400).json({
+          success: false,
+          error: 'ACCESS_CONTEXT_REQUIRED',
+          message: 'Selecione onde deseja acessar a Verto.'
+        });
+      }
+
+      const workspaces = filterWorkspacesForUser(
+        await fetchUserWorkspaces(req.session.user.id),
+        req.session.user
+      );
+      const accessContexts = await fetchUserAccessContexts(req.session.user.id, workspaces);
+      const selected = accessContexts.find((context) => context.id === accessContextId);
+      if (!selected) {
+        return res.status(403).json({
+          success: false,
+          error: 'ACCESS_CONTEXT_NOT_AUTHORIZED',
+          message: 'Este acesso não está disponível para sua conta.'
+        });
+      }
+      const selectedWorkspace = selected.kind === 'clinic_workspace'
+        ? workspaces.find((workspace: any) => workspace.clinicId === selected.clinicId) || null
+        : null;
+      if (isExplicitDemoUser(req.session.user) && (!selectedWorkspace || !selectedWorkspace.isDemo)) {
+        return res.status(403).json({
+          success: false,
+          error: 'DEMO_REAL_CLINIC_ACCESS_DENIED',
+          message: 'A conta demo só pode acessar ambientes de demonstração.'
+        });
+      }
+
+      req.session.user = await hydrateSessionUserWithOnboardingContext({
+        ...req.session.user,
+        role: selected.role,
+        clinicId: selected.clinicId,
+        activeWorkspaceId: selected.kind === 'clinic_workspace' ? selected.clinicId : null,
+        activeAccessContextId: selected.id,
+        activeAccessContext: selected,
+        accessContextSelectionExplicit: true,
+        accessContexts,
+        workspaces
+      });
+
+      return req.session.save((error: any) => {
+        if (error) {
+          return res.status(500).json({
+            success: false,
+            error: 'ACCESS_CONTEXT_SESSION_SAVE_FAILED',
+            message: 'Não foi possível salvar o acesso selecionado.'
+          });
+        }
+        return res.json({ success: true, user: req.session.user });
+      });
+    } catch (error: any) {
+      logRouteDbError('/api/access-contexts/select [POST]', error, {
+        userId: sanitizeString(req.session?.user?.id, 120)
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'ACCESS_CONTEXT_SELECTION_FAILED',
+        message: 'Não foi possível alternar seu acesso agora.'
+      });
     }
   });
 
@@ -23368,26 +23873,22 @@ async function startServer() {
         });
       }
 
-      await supabase
-        .from('users')
-        .update({
-          clinic_id: clinicId,
-          role: selected.role
-        })
-        .eq('id', req.session.user.id);
-
-      req.session.user.clinicId = clinicId;
-      req.session.user.activeWorkspaceId = clinicId;
-      req.session.user.role = selected.role;
-      req.session.user.billingModel = selected.billingModel || req.session.user.billingModel || null;
-      req.session.user.isDemoUser = isExplicitDemoUser(req.session.user);
-      req.session.user.demoStatus = selected.demoStatus || null;
-      req.session.user.demoExpiresAt = selected.demoExpiresAt || null;
-      req.session.user.demoSource = selected.demoSource || null;
-      req.session.user.demoKind = selected.demoKind || null;
-      req.session.user.demoKey = selected.demoKey || null;
-      req.session.user.workspaces = compactWorkspacesForSession(workspaces);
-      req.session.user = await hydrateSessionUserWithOnboardingContext(req.session.user);
+      req.session.user = await hydrateSessionUserWithOnboardingContext({
+        ...req.session.user,
+        clinicId,
+        activeWorkspaceId: clinicId,
+        role: selected.role,
+        billingModel: selected.billingModel || req.session.user.billingModel || null,
+        isDemoUser: isExplicitDemoUser(req.session.user),
+        demoStatus: selected.demoStatus || null,
+        demoExpiresAt: selected.demoExpiresAt || null,
+        demoSource: selected.demoSource || null,
+        demoKind: selected.demoKind || null,
+        demoKey: selected.demoKey || null,
+        workspaces: compactWorkspacesForSession(workspaces),
+        activeAccessContextId: clinicAccessContextId(clinicId),
+        accessContextSelectionExplicit: true
+      });
 
       req.session.save((err: any) => {
         if (err) {
@@ -23567,13 +24068,80 @@ async function startServer() {
     if (!isUuid(clinicId) || !isUuid(memberId)) return null;
     const { data, error } = await supabase
       .from('clinic_memberships')
-      .select('user_id,clinic_id,role,status')
+      .select('user_id,clinic_id,role,status,specialty,work_schedule,availability_timezone,work_schedule_configured_at')
       .eq('clinic_id', clinicId)
       .eq('user_id', memberId)
       .eq('status', 'active')
       .maybeSingle();
     if (error) throw error;
     return data || null;
+  };
+
+  const effectiveSchedulePeriods = (schedule: any, dayKey: string): Array<{ start: number; end: number }> => {
+    if (!schedule?.active || !schedule?.days?.[dayKey]?.enabled) return [];
+    const toMinutes = (value: unknown) => {
+      const match = sanitizeString(value, 12).match(/^(\d{2}):(\d{2})$/);
+      return match ? (Number(match[1]) * 60) + Number(match[2]) : null;
+    };
+    const periods = (Array.isArray(schedule.days[dayKey].periods) ? schedule.days[dayKey].periods : [])
+      .map((period: any) => ({ start: toMinutes(period?.start), end: toMinutes(period?.end) }))
+      .filter((period: any) => period.start != null && period.end != null && period.start < period.end);
+    const breaks = (Array.isArray(schedule.days[dayKey].intervals) ? schedule.days[dayKey].intervals : [])
+      .map((period: any) => ({ start: toMinutes(period?.start), end: toMinutes(period?.end) }))
+      .filter((period: any) => period.start != null && period.end != null && period.start < period.end);
+    return periods.flatMap((period: any) => {
+      let segments = [period];
+      for (const blocked of breaks) {
+        segments = segments.flatMap((segment: any) => {
+          if (blocked.end <= segment.start || blocked.start >= segment.end) return [segment];
+          return [
+            blocked.start > segment.start ? { start: segment.start, end: blocked.start } : null,
+            blocked.end < segment.end ? { start: blocked.end, end: segment.end } : null
+          ].filter(Boolean) as Array<{ start: number; end: number }>;
+        });
+      }
+      return segments;
+    });
+  };
+
+  const professionalSchedulesOverlap = (left: any, right: any): boolean => {
+    const dayKeys = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    return dayKeys.some((dayKey) => {
+      const leftPeriods = effectiveSchedulePeriods(left, dayKey);
+      const rightPeriods = effectiveSchedulePeriods(right, dayKey);
+      return leftPeriods.some((leftPeriod) => rightPeriods.some((rightPeriod) => (
+        leftPeriod.start < rightPeriod.end && rightPeriod.start < leftPeriod.end
+      )));
+    });
+  };
+
+  const assertNoOtherWorkspaceScheduleOverlap = async (
+    memberId: string,
+    clinicId: string,
+    workSchedule: PortalProfessionalWorkingSchedule
+  ) => {
+    const { data, error } = await supabase
+      .from('clinic_memberships')
+      .select('clinic_id,work_schedule,status')
+      .eq('user_id', memberId)
+      .eq('status', 'active')
+      .neq('clinic_id', clinicId)
+      .not('work_schedule', 'is', null)
+      .limit(30);
+    if (error) throw error;
+    const hasConflict = (data || []).some((membership: any) => {
+      if (!membership?.work_schedule || typeof membership.work_schedule !== 'object') return false;
+      const otherSchedule = sanitizeProfessionalWorkingSchedule(
+        membership.work_schedule,
+        workSchedule.defaultSessionDurationMinutes || 50
+      );
+      return professionalSchedulesOverlap(workSchedule, otherSchedule);
+    });
+    if (hasConflict) {
+      const conflict = new Error('Horário indisponível por compromisso profissional em outro local.') as Error & { code?: string };
+      conflict.code = 'PROFESSIONAL_SCHEDULE_OTHER_WORKSPACE_CONFLICT';
+      throw conflict;
+    }
   };
 
   const fetchProfessionalWorkingSchedule = async (clinicId: string, memberId: string) => {
@@ -23586,13 +24154,22 @@ async function startServer() {
       .maybeSingle();
     if (error && !isMissingRelationError(error)) throw error;
     const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
-    const fallbackDuration = asSafeNumber(metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes, 15, 360) || 50;
+    const membershipSchedule = membership?.work_schedule && typeof membership.work_schedule === 'object'
+      ? sanitizeProfessionalWorkingSchedule(membership.work_schedule, 50)
+      : null;
+    const fallbackDuration = asSafeNumber(
+      membershipSchedule?.defaultSessionDurationMinutes ?? metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes,
+      15,
+      360
+    ) || 50;
+    const legacySchedule = readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration);
     return {
       memberId,
       role: membership.role,
       professionalName: sanitizeString(profile?.full_name, 180) || null,
-      workSchedule: readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration) || buildDefaultProfessionalWorkingSchedule(fallbackDuration),
-      configured: Boolean(readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration))
+      workSchedule: membershipSchedule || legacySchedule || buildDefaultProfessionalWorkingSchedule(fallbackDuration),
+      configured: Boolean(membershipSchedule || legacySchedule),
+      scheduleScope: membershipSchedule ? 'clinic_membership' : legacySchedule ? 'legacy_global' : 'default'
     };
   };
 
@@ -23609,6 +24186,10 @@ async function startServer() {
           role,
           status,
           created_at,
+          specialty,
+          work_schedule,
+          availability_timezone,
+          work_schedule_configured_at,
           users:user_id (
             id,
             name,
@@ -23644,8 +24225,16 @@ async function startServer() {
         const memberId = sanitizeString(m.users?.id || m.user_id, 120);
         const profile = professionalProfilesByUserId.get(memberId) || {};
         const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
-        const fallbackDuration = asSafeNumber(metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes, 15, 360) || 50;
-        const specialty = resolveProfessionalProfileSpecialty(profile) || null;
+        const membershipSchedule = m?.work_schedule && typeof m.work_schedule === 'object'
+          ? sanitizeProfessionalWorkingSchedule(m.work_schedule, 50)
+          : null;
+        const fallbackDuration = asSafeNumber(
+          membershipSchedule?.defaultSessionDurationMinutes ?? metadata?.sessionDurationMinutes ?? metadata?.defaultSessionDurationMinutes,
+          15,
+          360
+        ) || 50;
+        const legacySchedule = readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration);
+        const specialty = normalizeClinicalSpecialty(m?.specialty) || resolveProfessionalProfileSpecialty(profile) || null;
         const professionalTitle = m.role === 'therapist'
           ? specialty || readProfessionalTitleFromSource({ metadata }) || null
           : null;
@@ -23666,8 +24255,10 @@ async function startServer() {
           professionalTitle,
           profileRole: professionalTitle,
           roleLabel: formatClinicAccessRoleLabel(m.role, { professionalTitle }),
-          workSchedule: readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration) || buildDefaultProfessionalWorkingSchedule(fallbackDuration),
-          workScheduleConfigured: Boolean(readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration)),
+          workSchedule: membershipSchedule || legacySchedule || buildDefaultProfessionalWorkingSchedule(fallbackDuration),
+          workScheduleConfigured: Boolean(membershipSchedule || legacySchedule),
+          workScheduleScope: membershipSchedule ? 'clinic_membership' : legacySchedule ? 'legacy_global' : 'default',
+          availabilityTimezone: sanitizeString(m?.availability_timezone, 80) || 'America/Sao_Paulo',
           clinic_id: clinicId,
           created_at: m.created_at
         };
@@ -23679,7 +24270,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/clinic/members/:memberId/work-schedule', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/members/:memberId/work-schedule', checkAuth, requireActiveClinicRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
       const memberId = sanitizeString(req.params.memberId, 120);
@@ -23698,13 +24289,22 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/clinic/members/:memberId/work-schedule', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/clinic/members/:memberId/work-schedule', portalActionLimiter, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Horários de trabalho')) return;
       const clinicId = currentClinicId(req.session.user);
       const memberId = sanitizeString(req.params.memberId, 120);
       const membership = await assertClinicMemberForWorkSchedule(clinicId, memberId);
       if (!membership) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta clínica.' });
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      if (actorId !== memberId && !['coordinator', 'admin', 'owner'].includes(actorRole)) {
+        return res.status(403).json({
+          success: false,
+          error: 'WORK_SCHEDULE_WRITE_FORBIDDEN',
+          message: 'Você só pode editar seus próprios horários neste local.'
+        });
+      }
       const { data: existingProfile, error: profileError } = await supabase
         .from('professional_profiles')
         .select('user_id,full_name,metadata')
@@ -23724,24 +24324,21 @@ async function startServer() {
       ) || 50;
       const rawSchedule = req.body?.workSchedule || req.body?.work_schedule || req.body;
       const workSchedule = sanitizeProfessionalWorkingSchedule(rawSchedule, fallbackDuration);
-      const metadata = cleanObject({
-        ...currentMetadata,
-        workSchedule,
-        work_schedule: workSchedule,
-        defaultSessionDurationMinutes: workSchedule.defaultSessionDurationMinutes || fallbackDuration,
-        sessionDurationMinutes: currentMetadata?.sessionDurationMinutes || workSchedule.defaultSessionDurationMinutes || fallbackDuration,
-        workScheduleUpdatedAt: new Date().toISOString(),
-        workScheduleUpdatedBy: sanitizeString(req.session.user?.id, 120) || null
-      });
+      await assertNoOtherWorkspaceScheduleOverlap(memberId, clinicId, workSchedule);
+      const now = new Date().toISOString();
       const { data, error } = await supabase
-        .from('professional_profiles')
-        .upsert(cleanObject({
-          user_id: memberId,
-          full_name: sanitizeString(existingProfile?.full_name, 180) || undefined,
-          metadata,
-          updated_at: new Date().toISOString()
-        }), { onConflict: 'user_id' })
-        .select('user_id,full_name,metadata')
+        .from('clinic_memberships')
+        .update({
+          work_schedule: workSchedule,
+          availability_timezone: currentClinicTimeZone(req.session.user),
+          work_schedule_configured_at: now,
+          settings_updated_at: now,
+          settings_updated_by: actorId
+        })
+        .eq('clinic_id', clinicId)
+        .eq('user_id', memberId)
+        .eq('status', 'active')
+        .select('user_id,work_schedule,availability_timezone')
         .maybeSingle();
       if (error) throw error;
       return res.json({
@@ -23750,11 +24347,27 @@ async function startServer() {
           memberId,
           workSchedule,
           configured: true,
-          professionalName: sanitizeString(data?.full_name || existingProfile?.full_name, 180) || null
+          professionalName: sanitizeString(existingProfile?.full_name, 180) || null,
+          scheduleScope: 'clinic_membership',
+          availabilityTimezone: sanitizeString(data?.availability_timezone, 80) || currentClinicTimeZone(req.session.user)
         },
         message: 'Horários de trabalho salvos.'
       });
     } catch (error: any) {
+      if (sanitizeString(error?.code, 120) === 'PROFESSIONAL_SCHEDULE_OTHER_WORKSPACE_CONFLICT') {
+        return res.status(409).json({
+          success: false,
+          error: 'PROFESSIONAL_SCHEDULE_OTHER_WORKSPACE_CONFLICT',
+          message: 'Este horário coincide com sua disponibilidade em outro local. Ajuste a escala antes de salvar.'
+        });
+      }
+      if (extractMissingColumnName(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_MEMBERSHIP_SETTINGS_MIGRATION_REQUIRED',
+          message: 'A estrutura de horários por clínica precisa ser aplicada antes desta alteração.'
+        });
+      }
       logRouteDbError('/api/clinic/members/:memberId/work-schedule [PATCH]', error, {
         memberId: sanitizeString(req.params?.memberId, 120)
       });
@@ -23783,7 +24396,7 @@ async function startServer() {
 
       let membershipQuery = supabase
         .from('clinic_memberships')
-        .select('user_id,role,status')
+        .select('user_id,clinic_id,role,status,work_schedule')
         .eq('clinic_id', clinicId)
         .eq('status', 'active');
 
@@ -23822,51 +24435,70 @@ async function startServer() {
       const rawSchedule = req.body?.workSchedule || req.body?.work_schedule || {};
       const workSchedule = sanitizeProfessionalWorkingSchedule(rawSchedule, asSafeNumber(rawSchedule?.defaultSessionDurationMinutes, 15, 360) || 50);
 
-      const profilesByUserId = new Map<string, any>();
-      const { data: existingProfiles, error: profileError } = await supabase
-        .from('professional_profiles')
-        .select('user_id,full_name,metadata')
-        .in('user_id', targetIds);
-      if (profileError && !isMissingRelationError(profileError)) throw profileError;
-      (existingProfiles || []).forEach((profile: any) => {
-        const userId = sanitizeString(profile?.user_id, 120);
-        if (userId) profilesByUserId.set(userId, profile);
-      });
-
       const now = new Date().toISOString();
       const actorId = sanitizeString(req.session.user?.id, 120) || null;
+      const membershipsByUserId = new Map(
+        (targetMemberships || []).map((membership: any) => [sanitizeString(membership?.user_id, 120), membership])
+      );
+      const nextScheduleByUserId = new Map<string, PortalProfessionalWorkingSchedule>();
       const payloads = targetIds.map((targetId) => {
-        const existingProfile = profilesByUserId.get(targetId) || {};
-        const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
-          ? existingProfile.metadata
-          : {};
-        const existingSchedule = readProfessionalWorkingScheduleFromMetadata(currentMetadata, workSchedule.defaultSessionDurationMinutes || 50);
+        const membership = membershipsByUserId.get(targetId) as any;
+        const existingSchedule = membership?.work_schedule && typeof membership.work_schedule === 'object'
+          ? sanitizeProfessionalWorkingSchedule(
+              membership.work_schedule,
+              workSchedule.defaultSessionDurationMinutes || 50
+            )
+          : null;
         const nextSchedule = cleanObject({
           ...workSchedule,
           exceptions: preserveExceptions ? (existingSchedule?.exceptions || []) : (workSchedule.exceptions || [])
-        });
-        return cleanObject({
+        }) as PortalProfessionalWorkingSchedule;
+        nextScheduleByUserId.set(targetId, nextSchedule);
+        return {
           user_id: targetId,
-          full_name: sanitizeString(existingProfile?.full_name, 180) || undefined,
-          metadata: cleanObject({
-            ...currentMetadata,
-            workSchedule: nextSchedule,
-            work_schedule: nextSchedule,
-            defaultSessionDurationMinutes: workSchedule.defaultSessionDurationMinutes,
-            sessionDurationMinutes: currentMetadata?.sessionDurationMinutes || workSchedule.defaultSessionDurationMinutes,
-            workScheduleUpdatedAt: now,
-            workScheduleUpdatedBy: actorId,
-            workScheduleBulkAppliedFrom: sourceMemberId,
-            workScheduleBulkAppliedAt: now,
-            workSchedulePreservedExceptions: preserveExceptions
-          }),
-          updated_at: now
-        });
+          clinic_id: clinicId,
+          role: membership?.role,
+          status: membership?.status || 'active',
+          work_schedule: nextSchedule,
+          availability_timezone: currentClinicTimeZone(req.session.user),
+          work_schedule_configured_at: now,
+          settings_updated_at: now,
+          settings_updated_by: actorId
+        };
       });
 
+      const { data: otherWorkspaceMemberships, error: otherWorkspaceError } = await supabase
+        .from('clinic_memberships')
+        .select('user_id,clinic_id,work_schedule,status')
+        .in('user_id', targetIds)
+        .eq('status', 'active')
+        .neq('clinic_id', clinicId)
+        .not('work_schedule', 'is', null)
+        .limit(1000);
+      if (otherWorkspaceError) throw otherWorkspaceError;
+      const hasCrossWorkspaceConflict = (otherWorkspaceMemberships || []).some((membership: any) => {
+        const targetId = sanitizeString(membership?.user_id, 120);
+        const nextSchedule = nextScheduleByUserId.get(targetId);
+        if (!nextSchedule || !membership?.work_schedule || typeof membership.work_schedule !== 'object') return false;
+        return professionalSchedulesOverlap(
+          nextSchedule,
+          sanitizeProfessionalWorkingSchedule(
+            membership.work_schedule,
+            nextSchedule.defaultSessionDurationMinutes || 50
+          )
+        );
+      });
+      if (hasCrossWorkspaceConflict) {
+        return res.status(409).json({
+          success: false,
+          error: 'PROFESSIONAL_SCHEDULE_OTHER_WORKSPACE_CONFLICT',
+          message: 'A escala coincide com a disponibilidade de um profissional em outro local.'
+        });
+      }
+
       const { error: upsertError } = await supabase
-        .from('professional_profiles')
-        .upsert(payloads, { onConflict: 'user_id' });
+        .from('clinic_memberships')
+        .upsert(payloads, { onConflict: 'user_id,clinic_id' });
       if (upsertError) throw upsertError;
 
       return res.json({
@@ -23944,7 +24576,17 @@ async function startServer() {
         .maybeSingle();
       if (clinicError) throw clinicError;
       const clinicName = sanitizeString(clinic?.name, 160);
-      if (!clinic?.id || !clinicName) {
+      const normalizedClinicName = clinicName
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase();
+      const clinicNameIsPlaceholder = [
+        'clinica',
+        'minha clinica',
+        'clinica sem nome'
+      ].includes(normalizedClinicName);
+      if (!clinic?.id || !clinicName || clinicNameIsPlaceholder) {
         return res.status(409).json({
           success: false,
           error: 'CLINIC_IDENTITY_NOT_CONFIGURED',
@@ -24278,6 +24920,13 @@ async function startServer() {
         role: sanitizeString(req.body?.role, 30),
         requestId: requestIdForLogs(req)
       });
+      if (String(error?.message || '').includes('CLINIC_INVITATION_PENDING_ALREADY_EXISTS')) {
+        return res.status(409).json({
+          success: false,
+          code: 'CLINIC_INVITATION_PENDING_ALREADY_EXISTS',
+          error: 'Já existe um convite pendente para este e-mail nesta clínica. Atualize a lista e use a ação de reenviar.'
+        });
+      }
       res.status(500).json({ success: false, error: 'Falha ao criar o convite.' });
     }
   });
@@ -24476,23 +25125,6 @@ async function startServer() {
         userId: user.id,
         verifiedEmail: user.email,
       });
-      const now = new Date().toISOString();
-      const { error: updateError } = await supabase
-        .from('users')
-        .update({
-          clinic_id: acceptedInvitation.clinicId,
-          role: acceptedInvitation.role,
-          updated_at: now,
-        })
-        .eq('id', user.id);
-      if (updateError) {
-        console.warn('[Clinic invite] Convite aceito, mas o ponteiro legado users.clinic_id não pôde ser atualizado:', {
-          userId: sanitizeString(user.id, 120),
-          clinicId: acceptedInvitation.clinicId,
-          error: sanitizeString(updateError?.message, 240),
-        });
-      }
-
       await persistActivityLog({
         title: 'Convite aceito',
         content: `${maskEmail(sanitizeEmail(user.email) || '***')} aceitou convite e entrou na clínica.`,
@@ -24505,6 +25137,8 @@ async function startServer() {
       req.session.user.clinicId = acceptedInvitation.clinicId;
       req.session.user.activeWorkspaceId = acceptedInvitation.clinicId;
       req.session.user.role = acceptedInvitation.role;
+      req.session.user.activeAccessContextId = clinicAccessContextId(acceptedInvitation.clinicId);
+      req.session.user.accessContextSelectionExplicit = true;
       req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(user.id));
       const context = await resolveOnboardingContextForUser({
         userId: sanitizeString(user.id, 120),
@@ -24549,16 +25183,23 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/assign-role', checkAuth, async (req: any, res) => {
+  app.post('/api/clinic/assign-role', checkAuth, requireActiveClinicRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     const adminUser = req.session.user;
-    if (adminUser.role !== 'coordinator') {
-      return res.status(403).json({ error: 'Apenas coordenadores podem atribuir papeis' });
-    }
 
     const email = sanitizeEmail(req.body?.email);
     const roleRaw = sanitizeString(req.body?.role, 30);
     const role = ensureClinicRole(roleRaw) ? roleRaw : null;
     if (!email || !role) return res.status(400).json({ error: 'Email e papel sao obrigatorios' });
+    const specialty = role === 'therapist'
+      ? normalizeClinicalSpecialty(req.body?.specialty || req.body?.professionalTitle || req.body?.professional_title)
+      : null;
+    if (role === 'therapist' && !specialty) {
+      return res.status(400).json({
+        success: false,
+        error: 'CLINICAL_SPECIALTY_INVALID',
+        message: 'Selecione uma especialidade clínica válida.'
+      });
+    }
 
     try {
       const { data: targetUser, error: findError } = await supabase
@@ -24577,6 +25218,7 @@ async function startServer() {
           user_id: targetUser.id,
           clinic_id: clinicId,
           role,
+          specialty,
           status: 'active',
           invited_by: adminUser.id,
           created_at: new Date().toISOString()
@@ -24621,34 +25263,18 @@ async function startServer() {
         });
       }
 
-      const { data: existingProfile, error: profileError } = await supabase
-        .from('professional_profiles')
-        .select('user_id,full_name,metadata')
-        .eq('user_id', memberId)
-        .limit(1)
-        .maybeSingle();
-      if (profileError && !isMissingRelationError(profileError)) throw profileError;
-      const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
-        ? existingProfile.metadata
-        : {};
       const now = new Date().toISOString();
       const { error: specialtyError } = await supabase
-        .from('professional_profiles')
-        .upsert(cleanObject({
-          user_id: memberId,
-          full_name: sanitizeString(existingProfile?.full_name, 180) || undefined,
+        .from('clinic_memberships')
+        .update({
           specialty,
-          metadata: cleanObject({
-            ...currentMetadata,
-            specialty,
-            professionalTitle: specialty,
-            professional_title: specialty,
-            role: specialty,
-            specialtyUpdatedAt: now,
-            specialtyUpdatedBy: sanitizeString(actor?.id, 120) || null
-          }),
+          settings_updated_at: now,
+          settings_updated_by: sanitizeString(actor?.id, 120) || null,
           updated_at: now
-        }), { onConflict: 'user_id' });
+        })
+        .eq('user_id', memberId)
+        .eq('clinic_id', clinicId)
+        .eq('status', 'active');
       if (specialtyError) throw specialtyError;
 
       await persistActivityLog({
@@ -24720,57 +25346,16 @@ async function startServer() {
         });
       }
 
-      const { data: existingProfile, error: profileError } = await supabase
-        .from('professional_profiles')
-        .select('user_id,full_name,specialty,metadata')
-        .eq('user_id', memberId)
-        .maybeSingle();
-      if (profileError && !isMissingRelationError(profileError)) throw profileError;
-      const currentMetadata = existingProfile?.metadata && typeof existingProfile.metadata === 'object'
-        ? existingProfile.metadata
-        : {};
-      const nextMetadata = role === 'therapist'
-        ? cleanObject({
-            ...currentMetadata,
-            specialty,
-            professionalTitle,
-            professional_title: professionalTitle,
-            role: professionalTitle,
-            professionalTitleUpdatedAt: new Date().toISOString(),
-            professionalTitleUpdatedBy: sanitizeString(adminUser?.id, 120) || null
-          })
-        : cleanObject({
-            ...currentMetadata,
-            professionalTitle: null,
-            professional_title: null,
-            role: null,
-            professionalTitleUpdatedAt: new Date().toISOString(),
-            professionalTitleUpdatedBy: sanitizeString(adminUser?.id, 120) || null
-          });
-      const persistProfessionalProfile = async () => {
-        const { error: titleError } = await supabase
-          .from('professional_profiles')
-          .upsert(cleanObject({
-            user_id: memberId,
-            full_name: sanitizeString(existingProfile?.full_name, 180) || undefined,
-            specialty: role === 'therapist'
-              ? specialty
-              : sanitizeString(existingProfile?.specialty, 120) || undefined,
-            metadata: nextMetadata,
-            updated_at: new Date().toISOString()
-          }), { onConflict: 'user_id' });
-        if (titleError) throw titleError;
-      };
-      // A especialidade canônica é persistida antes de conceder acesso clínico.
-      // Assim uma falha de perfil nunca deixa um novo terapeuta ativo sem
-      // especialidade; a eventual sobra é apenas cadastral e pode ser repetida.
-      if (role === 'therapist') {
-        await persistProfessionalProfile();
-      }
-
+      const now = new Date().toISOString();
       const { data: updatedMembership, error } = await supabase
         .from('clinic_memberships')
-        .update({ role })
+        .update({
+          role,
+          specialty: role === 'therapist' ? specialty : null,
+          settings_updated_at: now,
+          settings_updated_by: sanitizeString(adminUser?.id, 120) || null,
+          updated_at: now
+        })
         .eq('user_id', memberId)
         .eq('clinic_id', clinicId)
         .eq('status', 'active')
@@ -24785,11 +25370,6 @@ async function startServer() {
           error: 'CLINIC_MEMBER_ROLE_NOT_UPDATED',
           message: 'O acesso do membro mudou durante a operação. Recarregue a equipe e tente novamente.'
         });
-      }
-      // Na redução de acesso, primeiro retiramos o papel clínico e só depois
-      // atualizamos os metadados de apresentação.
-      if (role !== 'therapist' && existingProfile?.user_id) {
-        await persistProfessionalProfile();
       }
       await persistActivityLog({
         title: 'Papel de colaborador atualizado',
@@ -24852,34 +25432,6 @@ async function startServer() {
         .eq('status', 'active');
 
       if (unlinkError) throw unlinkError;
-
-      const { data: remainingMemberships, error: remainingError } = await supabase
-        .from('clinic_memberships')
-        .select('clinic_id, role, status')
-        .eq('user_id', memberId)
-        .eq('status', 'active');
-      if (remainingError) throw remainingError;
-
-      const nextMembership = (remainingMemberships || [])[0];
-      const nextClinicId = sanitizeString(nextMembership?.clinic_id, 120) || null;
-      const nextRole = ensureRole(nextMembership?.role) ? nextMembership.role : 'patient';
-
-      const userUpdatePayload: Record<string, any> = {
-        updated_at: new Date().toISOString()
-      };
-      if (nextClinicId) {
-        userUpdatePayload.clinic_id = nextClinicId;
-        userUpdatePayload.role = nextRole;
-      } else {
-        userUpdatePayload.clinic_id = null;
-        userUpdatePayload.role = 'patient';
-      }
-
-      const { error: userUpdateError } = await supabase
-        .from('users')
-        .update(userUpdatePayload)
-        .eq('id', memberId);
-      if (userUpdateError) throw userUpdateError;
 
       await persistActivityLog({
         title: 'Membro desvinculado da clínica',
@@ -31234,7 +31786,8 @@ async function startServer() {
             phone: normalizedPhone || undefined,
             status: 'pending',
             clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
-            therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined
+            therapist_id: isUuid(safeProfessionalId) ? safeProfessionalId : undefined,
+            responsible_user_id: isUuid(authUserId) ? authUserId : undefined
           });
 
         if (existingPatient?.patientId) {
@@ -31277,21 +31830,27 @@ async function startServer() {
           }
         }
 
-        const { data: existingProfileForClinic } = await supabase
-          .from('users')
-          .select('clinic_id')
-          .eq('id', authUserId)
+        const { data: persistedPatientLink, error: persistedPatientLinkError } = await supabase
+          .from('patients')
+          .select('responsible_user_id')
+          .eq('id', linkedPatientId)
+          .eq('clinic_id', safeClinicId)
           .maybeSingle();
-        const existingClinicId = sanitizeString(existingProfileForClinic?.clinic_id, 120);
-        const shouldAttachClinicToProfile = !existingClinicId || existingClinicId === safeClinicId;
+        if (persistedPatientLinkError) throw persistedPatientLinkError;
+        if (sanitizeString(persistedPatientLink?.responsible_user_id, 120) !== authUserId) {
+          const persistenceError: any = new Error('PATIENT_RESPONSIBLE_LINK_NOT_PERSISTED');
+          persistenceError.code = 'PATIENT_RESPONSIBLE_LINK_NOT_PERSISTED';
+          throw persistenceError;
+        }
 
-        let safeUserUpdatePayload: Record<string, any> = cleanObject({
-          role: 'patient',
-          type: normalizedPortalType,
-          clinic_id: shouldAttachClinicToProfile && isUuid(safeClinicId) ? safeClinicId : undefined,
-          status: 'pending_activation',
-          first_login_completed: false
+        const globalIdentityUpdate = buildPatientGlobalIdentityUpdate({
+          existingAccount,
+          portalType: normalizedPortalType,
+          clinicId: isUuid(safeClinicId) ? safeClinicId : null,
         });
+        if (!globalIdentityUpdate) return linkedPatientId;
+
+        let safeUserUpdatePayload: Record<string, any> = cleanObject(globalIdentityUpdate);
 
         while (Object.keys(safeUserUpdatePayload).length > 0) {
           const { error: userUpdateError } = await supabase
@@ -31339,10 +31898,7 @@ async function startServer() {
           from: OFFICIAL_FROM_NOREPLY,
           replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
           templateKind: 'welcome_patient',
-          templateData: {
-            nome: safeName,
-            link_ativacao: activationLink
-          },
+          templateData: activationEmail.variables,
           metadata: {
             email: maskEmail(normalizedEmail),
             clinicId: isUuid(safeClinicId) ? safeClinicId : null
@@ -31359,10 +31915,7 @@ async function startServer() {
             from: OFFICIAL_FROM_NOREPLY,
             replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
             templateKind: 'welcome_patient',
-            templateData: {
-              nome: safeName,
-              link_ativacao: activationLink
-            },
+            templateData: activationEmail.variables,
             metadata: {
               email: maskEmail(normalizedEmail),
               clinicId: isUuid(safeClinicId) ? safeClinicId : null,
@@ -31448,7 +32001,7 @@ async function startServer() {
       // 1. Check if user already exists in 'users' table
       const { data: existingUser, error: checkError } = await supabase
         .from('users')
-        .select('id, role, clinic_id')
+        .select('id')
         .eq('email', normalizedEmail)
         .limit(1)
         .maybeSingle();
@@ -31456,18 +32009,9 @@ async function startServer() {
       if (checkError) throw checkError;
 
       if (existingUser) {
-        const existingRole = sanitizeString(existingUser.role, 40).toLowerCase();
-        if (existingRole && existingRole !== 'patient') {
-          return res.status(409).json({
-            success: false,
-            status: 'CONFLICT_REQUIRES_REVIEW',
-            code: 'CONFLICT_REQUIRES_REVIEW',
-            error: 'Não foi possível confirmar este vínculo automaticamente.'
-          });
-        }
         // E-mail de paciente pode existir em outra clínica para outra especialidade
-        // (ex.: ABA em uma clínica e Fono em outra). O bloqueio já foi feito acima
-        // apenas quando há conflito de mesma especialidade.
+        // ou pertencer a uma identidade profissional. O novo contexto de paciente
+        // fica no vínculo e nunca substitui o papel global da conta existente.
         const linkedPatientId = await ensurePatientLink(existingUser.id, { existingAccount: true });
         const relationshipConfirmation = await sendRelationshipConfirmationForLinkedPatient(
           existingUser.id,
@@ -31543,7 +32087,6 @@ async function startServer() {
           }
 
           if (foundUser?.id) {
-            await upsertPatientProfile(foundUser.id);
             const linkedPatientId = await ensurePatientLink(foundUser.id, { existingAccount: true });
             const relationshipConfirmation = await sendRelationshipConfirmationForLinkedPatient(
               foundUser.id,
@@ -32123,10 +32666,7 @@ async function startServer() {
           from: OFFICIAL_FROM_NOREPLY,
           replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
           templateKind: 'welcome_patient',
-          templateData: {
-            nome: profileName,
-            link_ativacao: activationLink
-          },
+          templateData: activationEmail.variables,
           metadata: {
             patientId,
             email: maskEmail(patientEmail)
@@ -32191,30 +32731,16 @@ async function startServer() {
           return res.status(404).json({ success: false, error: 'Conta de autenticação do paciente não encontrada.' });
         }
 
-        const code = generate6DigitOtp();
-        const key = makeOtpChallengeKey('email', 'password_recovery', patientEmail);
-        await setOtpChallenge({
-          key,
-          channel: 'email',
-          purpose: 'password_recovery',
-          identifier: patientEmail,
-          userId: authUser.id,
-          codeHash: hashIdentifier(code),
-          expiresAt: Date.now() + OTP_TTL_MS,
-          attempts: 0,
-          consumed: false,
-          createdAt: Date.now()
+        const recoveryAccess = await createPasswordRecoveryLink({
+          email: patientEmail,
+          userId: authUser.id
         });
 
         const profileName = sanitizeString(patient?.name, 180) || patientEmail.split('@')[0];
-        // Security hardening: do not leak OTP in query params.
-        const recoveryLink = `${getRecoveryRedirectUrl()}`;
         const recoveryEmail = buildPasswordRecoveryEmailTemplate({
           nome: profileName,
-          codigo: code,
-          link_recuperacao: recoveryLink,
+          link_recuperacao: recoveryAccess.link,
           expira_em_minutos: 15,
-          perfil: 'patient'
         });
 
         const sent = await sendTransactionalEmailSafe({
@@ -32224,13 +32750,8 @@ async function startServer() {
           context: 'patient_manual_resend_recovery',
           from: OFFICIAL_FROM_NOREPLY,
           replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-          templateKind: undefined,
-          templateData: {
-            nome: profileName,
-            codigo: code,
-            link_recuperacao: recoveryLink,
-            expira_em_minutos: 15
-          },
+          templateKind: 'password_recovery',
+          templateData: recoveryEmail.variables,
           metadata: {
             patientId,
             email: maskEmail(patientEmail)
@@ -36438,6 +36959,20 @@ async function startServer() {
           error: 'Não foi possível identificar a especialidade vinculada ao convite. Fale com o responsável da clínica.'
         });
       }
+      if (isClinicManagedMember && role === 'therapist') {
+        try {
+          await assertNoOtherWorkspaceScheduleOverlap(userId, clinicId, workSchedule);
+        } catch (scheduleError: any) {
+          if (sanitizeString(scheduleError?.code, 120) === 'PROFESSIONAL_SCHEDULE_OTHER_WORKSPACE_CONFLICT') {
+            return res.status(409).json({
+              success: false,
+              error: 'PROFESSIONAL_SCHEDULE_OTHER_WORKSPACE_CONFLICT',
+              message: 'Este horário coincide com sua disponibilidade em outro local. Ajuste a escala para continuar.'
+            });
+          }
+          throw scheduleError;
+        }
+      }
 
       const address = { cep, logradouro, number, complement, bairro, cidade, uf: uf || null, cnpj: isClinicManagedMember ? null : clinicCnpj || null };
       const userPatch = cleanObject({
@@ -36486,9 +37021,6 @@ async function startServer() {
       const globalSpecialty = normalizeClinicalSpecialty(
         existingProfile?.specialty || existingMetadata?.specialty,
       ) || specialty;
-      const globalWorkSchedule = isClinicManagedMember
-        ? readProfessionalWorkingScheduleFromMetadata(existingMetadata, sessionDurationMinutes) || workSchedule
-        : workSchedule;
       const profileClinicName = isClinicManagedMember
         ? sanitizeString(existingProfile?.clinic_name, 160) || null
         : clinicName || null;
@@ -36522,9 +37054,11 @@ async function startServer() {
             ...existingMetadata,
             role,
             sessionDurationMinutes,
-            defaultSessionDurationMinutes: sessionDurationMinutes,
-            workSchedule: globalWorkSchedule,
-            work_schedule: globalWorkSchedule,
+            ...(isClinicManagedMember ? {} : {
+              defaultSessionDurationMinutes: sessionDurationMinutes,
+              workSchedule,
+              work_schedule: workSchedule,
+            }),
             cpf: cpf || null,
             miniCurriculum: miniCurriculum || null,
             mini_curriculum: miniCurriculum || null,
@@ -36544,6 +37078,25 @@ async function startServer() {
           updated_at: new Date().toISOString()
         })], { onConflict: 'user_id' });
       if (professionalProfileError) throw professionalProfileError;
+
+      if (isClinicManagedMember) {
+        const membershipNow = new Date().toISOString();
+        const { error: membershipSettingsError } = await supabase
+          .from('clinic_memberships')
+          .update({
+            specialty: role === 'therapist' ? specialty : null,
+            work_schedule: role === 'therapist' ? workSchedule : null,
+            availability_timezone: currentClinicTimeZone(req.session.user),
+            work_schedule_configured_at: role === 'therapist' ? membershipNow : null,
+            settings_updated_at: membershipNow,
+            settings_updated_by: userId,
+            updated_at: membershipNow
+          })
+          .eq('user_id', userId)
+          .eq('clinic_id', clinicId)
+          .eq('status', 'active');
+        if (membershipSettingsError) throw membershipSettingsError;
+      }
 
       if (!isClinicManagedMember && clinicId && (role === 'coordinator' || role === 'admin' || role === 'owner')) {
         const { error: clinicUpdateError } = await supabase
@@ -72254,7 +72807,7 @@ async function startServer() {
         delete updatePayload[missingColumn];
       }
 
-      await ensureClinicAndMembershipForCoordinator(userId, existingUser.name || null);
+      await ensureClinicAndMembershipForCoordinator(userId);
 
       let activationEmailSent = false;
       try {

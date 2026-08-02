@@ -1,8 +1,45 @@
 const apiKey = String(process.env.RESEND_API_KEY || '').trim();
 const fromValue = String(process.env.RESEND_FROM_EMAIL || '').trim();
-const clinicInvitationTemplate = String(
-  process.env.RESEND_TEMPLATE_CLINIC_INVITATION_ID || '',
+const recoveryLinkSecret = String(
+  process.env.PASSWORD_RECOVERY_LINK_SECRET || process.env.SESSION_SECRET || '',
 ).trim();
+const templateChecks = [
+  {
+    key: 'clinicInvitation',
+    label: 'convite de clínica',
+    envKey: 'RESEND_TEMPLATE_CLINIC_INVITATION_ID',
+    configuredId: String(process.env.RESEND_TEMPLATE_CLINIC_INVITATION_ID || '').trim(),
+    expectedAlias: null,
+    requiredVariables: [
+      'clinic_name',
+      'invited_professional_name',
+      'responsible_professional_name',
+      'invited_email',
+      'invited_role_label',
+      'link_ativacao',
+    ],
+  },
+  {
+    key: 'patientActivation',
+    label: 'ativação de paciente',
+    envKey: 'RESEND_TEMPLATE_PATIENT_ACTIVATION_ID',
+    configuredId: String(
+      process.env.RESEND_TEMPLATE_PATIENT_ACTIVATION_ID ||
+        process.env.RESEND_TEMPLATE_WELCOME_PATIENT_ID ||
+        '',
+    ).trim(),
+    expectedAlias: 'ativao-paciente',
+    requiredVariables: ['activation_patient'],
+  },
+  {
+    key: 'passwordReset',
+    label: 'redefinição de senha',
+    envKey: 'RESEND_TEMPLATE_PASSWORD_RESET_ID',
+    configuredId: String(process.env.RESEND_TEMPLATE_PASSWORD_RESET_ID || '').trim(),
+    expectedAlias: 'password-reset',
+    requiredVariables: ['reset_link'],
+  },
+];
 
 const result = {
   ok: false,
@@ -10,6 +47,8 @@ const result = {
   sender: null,
   domain: null,
   template: null,
+  templates: {},
+  warnings: [],
   errors: [],
 };
 
@@ -22,8 +61,15 @@ const extractSenderEmail = (value) => {
 const senderEmail = extractSenderEmail(fromValue);
 if (!apiKey) result.errors.push('RESEND_API_KEY não configurada.');
 if (!senderEmail) result.errors.push('RESEND_FROM_EMAIL ausente ou inválido.');
-if (!clinicInvitationTemplate) {
-  result.errors.push('Template de convite de clínica do Resend não configurado.');
+if (!recoveryLinkSecret) {
+  result.errors.push('PASSWORD_RECOVERY_LINK_SECRET ou SESSION_SECRET deve estar configurado no backend.');
+} else if (!String(process.env.PASSWORD_RECOVERY_LINK_SECRET || '').trim()) {
+  result.warnings.push('PASSWORD_RECOVERY_LINK_SECRET ausente; o backend usará SESSION_SECRET como fallback seguro.');
+}
+for (const templateCheck of templateChecks) {
+  if (!templateCheck.configuredId) {
+    result.errors.push(`${templateCheck.envKey} não configurado para o template de ${templateCheck.label}.`);
+  }
 }
 
 const resendGet = async (path) => {
@@ -82,32 +128,45 @@ try {
     result.errors.push(`O domínio ${senderDomain} ainda não está habilitado para envio.`);
   }
 
-  const template = await resendGet(
-    `/templates/${encodeURIComponent(clinicInvitationTemplate)}`,
-  );
-  const variableKeys = Array.isArray(template?.variables)
-    ? template.variables.map((variable) => String(variable?.key || ''))
-    : [];
-  result.template = {
-    id: String(template?.id || ''),
-    alias: String(template?.alias || ''),
-    status: String(template?.status || ''),
-    variables: variableKeys,
-  };
+  for (const templateCheck of templateChecks) {
+    // This verification is read-only: it only performs GET requests and never sends e-mail.
+    const template = await resendGet(
+      `/templates/${encodeURIComponent(templateCheck.configuredId)}`,
+    );
+    const variableKeys = Array.isArray(template?.variables)
+      ? template.variables
+          .map((variable) => String(variable?.key || variable?.name || '').trim())
+          .filter(Boolean)
+      : [];
+    const templateResult = {
+      id: String(template?.id || ''),
+      alias: String(template?.alias || ''),
+      status: String(template?.status || ''),
+      variables: variableKeys,
+    };
+    result.templates[templateCheck.key] = templateResult;
+    if (templateCheck.key === 'clinicInvitation') {
+      // Backward-compatible output consumed by previous deployment notes.
+      result.template = templateResult;
+    }
 
-  if (String(template?.status || '').toLowerCase() !== 'published') {
-    result.errors.push('O template de convite de clínica existe, mas não está publicado.');
-  }
-  for (const requiredVariable of [
-    'clinic_name',
-    'invited_professional_name',
-    'responsible_professional_name',
-    'invited_email',
-    'invited_role_label',
-    'link_ativacao',
-  ]) {
-    if (!variableKeys.includes(requiredVariable)) {
-      result.errors.push(`O template de convite de clínica não declara a variável ${requiredVariable}.`);
+    if (String(template?.status || '').toLowerCase() !== 'published') {
+      result.errors.push(`O template de ${templateCheck.label} existe, mas não está publicado.`);
+    }
+    if (
+      templateCheck.expectedAlias &&
+      String(template?.alias || '').trim() !== templateCheck.expectedAlias
+    ) {
+      result.errors.push(
+        `O template de ${templateCheck.label} deve usar o alias ${templateCheck.expectedAlias}.`,
+      );
+    }
+    for (const requiredVariable of templateCheck.requiredVariables) {
+      if (!variableKeys.includes(requiredVariable)) {
+        result.errors.push(
+          `O template de ${templateCheck.label} não declara a variável ${requiredVariable}.`,
+        );
+      }
     }
   }
 
