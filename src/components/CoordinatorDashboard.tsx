@@ -9363,7 +9363,7 @@ export function CoordinatorDashboard({
               </>
             )}
           </button>
-          {expanded && hasChildren && isOpen && (
+          {hasChildren && isOpen && (
             <div className="space-y-1">
               {item.children?.map((child) => renderNode(child, depth + 1))}
             </div>
