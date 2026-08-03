@@ -8,6 +8,7 @@ import {
   resolveProfessionalProfileSpecialty
 } from '../utils/patientProfessionalLinks';
 import { formatDateInAppointmentTimezone } from '../utils/scheduling';
+import { SecureImage } from './SecureMedia';
 
 type ProfessionalLink = {
   id: string;
@@ -31,9 +32,35 @@ type ProfessionalLink = {
     name?: string | null;
     email?: string | null;
     specialty?: string | null;
+    profile_photo_url?: string | null;
     membershipActive?: boolean;
   } | null;
 };
+
+const professionalPhotoSource = (professional: any) => String(
+  professional?.profilePicture
+  || professional?.profile_picture
+  || professional?.profilePictureUrl
+  || professional?.profile_picture_url
+  || professional?.profilePhotoUrl
+  || professional?.profile_photo_url
+  || professional?.avatarUrl
+  || professional?.avatar_url
+  || professional?.photoUrl
+  || professional?.photo_url
+  || professional?.imageUrl
+  || professional?.image_url
+  || professional?.professional_profile?.profile_photo_url
+  || professional?.professionalProfile?.profilePhotoUrl
+  || ''
+).trim();
+
+const professionalInitials = (value: unknown) => String(value || 'P')
+  .trim()
+  .split(/\s+/)
+  .slice(0, 2)
+  .map((part) => part.charAt(0).toUpperCase())
+  .join('') || 'P';
 
 const api = async (url: string, init?: RequestInit) => {
   const supabase = await getSupabase();
@@ -118,6 +145,12 @@ export const PatientProfessionalLinksPanel = ({
       (professional) => String(professional?.id || '') === draft.professionalId
     ) || null,
     [available, draft.professionalId]
+  );
+  const professionalById = useMemo(
+    () => new Map(
+      professionals.map((professional) => [String(professional?.id || '').trim(), professional])
+    ),
+    [professionals]
   );
   const selectedSpecialty = resolveProfessionalProfileSpecialty(selectedProfessional);
   const selectedProfessionalIsEligible =
@@ -309,11 +342,23 @@ export const PatientProfessionalLinksPanel = ({
             }`}
           >
             <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="truncate text-xs font-medium">{link.professional?.name || link.professional?.email || 'Profissional'}</p>
+              <div className="flex min-w-0 items-start gap-2.5">
+                {(() => {
+                  const professionalRecord = professionalById.get(String(link.professional_id || '').trim()) || link.professional;
+                  const photoSource = professionalPhotoSource(professionalRecord);
+                  const displayName = link.professional?.name || professionalRecord?.name || link.professional?.email || professionalRecord?.email || 'Profissional';
+                  return photoSource ? (
+                    <SecureImage src={photoSource} alt={`Foto de ${displayName}`} className="h-9 w-9 shrink-0 rounded-full object-cover" />
+                  ) : (
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] ${dark ? 'bg-slate-700 text-slate-200' : 'bg-slate-100 text-slate-600'}`}>{professionalInitials(displayName)}</span>
+                  );
+                })()}
+                <div className="min-w-0">
+                <p className="truncate text-xs font-medium">{link.professional?.name || professionalById.get(String(link.professional_id || '').trim())?.name || link.professional?.email || 'Profissional'}</p>
                 <p className={`mt-1 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
                   {link.specialty || 'Especialidade não informada'} · {patientProfessionalCaseRoleLabel(link.case_role)}
                 </p>
+                </div>
               </div>
               <span className={link.relationship_type === 'primary' ? 'rounded-full bg-violet-50 px-2 py-1 text-[10px] font-medium text-violet-700' : 'rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600'}>
                 {link.relationship_type === 'primary' ? 'Principal' : 'Colaborador'}

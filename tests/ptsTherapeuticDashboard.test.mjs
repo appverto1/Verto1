@@ -26,6 +26,8 @@ assert.match(dashboard, /lg:grid-cols-\[300px_minmax\(0,1fr\)\]/);
 assert.match(panel, /Programa sem evidência registrada/);
 assert.match(panel, /Reavaliação vencida/);
 assert.match(dashboard, /data-testid="pts-therapeutic-dashboard"/);
+assert.match(dashboard, /professionalPhotoSource/);
+assert.match(dashboard, /<SecureImage[\s\S]*Foto de/);
 assert.match(panel, /primaryPtsScope \? \(/);
 assert.doesNotMatch(panel, /primaryPtsScope && !showPlanManager \? \(/);
 assert.match(panel, /data-testid="pts-plan-manager-drawer"/);

@@ -29885,7 +29885,7 @@ async function startServer() {
       const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
       const linksSelect = 'id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,starts_at,ends_at,status,permissions,created_by,ended_by,created_at,updated_at';
       const usersSelect = 'id,name,email';
-      const profilesSelect = 'user_id,specialty,council,council_number';
+      const profilesSelect = 'user_id,specialty,council,council_number,profile_photo_url';
       const membershipsSelect = 'user_id,clinic_id,role,status';
       let stage = 'links';
       let table = 'patient_professional_links';

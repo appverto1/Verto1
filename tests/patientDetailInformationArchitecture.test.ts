@@ -43,6 +43,27 @@ assert.equal(
   'cabeçalho e conteúdo devem compartilhar uma largura máxima legível',
 );
 
+assert.match(
+  patientDetail,
+  /data-testid="therapeutic-plan-mode-switch"[\s\S]*PTS[\s\S]*PEI/,
+  'PTS e PEI devem ser acessíveis no topo do plano, sem empilhar o PEI abaixo do PTS',
+);
+assert.match(
+  patientDetail,
+  /patientPhotoSource\(patient\)[\s\S]*<SecureImage/,
+  'a foto cadastrada do paciente deve aparecer no cabeçalho do prontuário',
+);
+assert.match(
+  patientDetail,
+  /therapeuticPlanMode === 'pts'[\s\S]*<TherapeuticPlanPanel/,
+  'o PTS deve permanecer como visão padrão e preservar o painel existente',
+);
+assert.match(
+  patientDetail,
+  /therapeuticPlanMode === 'pei'[\s\S]*PEI - Plano Educacional Individualizado/,
+  'o PEI deve permanecer funcional em uma visão própria',
+);
+
 assert.doesNotMatch(
   teamPanel,
   /max-w-3xl/,
@@ -52,6 +73,11 @@ assert.match(
   teamPanel,
   /aria-label="Equipe do caso"[\s\S]*xl:grid-cols-3/,
   'vínculos devem aproveitar a largura disponível sem criar espaço morto',
+);
+assert.match(
+  teamPanel,
+  /professionalPhotoSource[\s\S]*<SecureImage/,
+  'a equipe do caso deve reutilizar as fotos cadastradas pelos profissionais',
 );
 
 const evolutionIndex = patientDetail.indexOf('id="patient-history-insights"');

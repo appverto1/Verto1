@@ -10,6 +10,7 @@ import {
   Target,
 } from 'lucide-react';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
+import { SecureImage } from './SecureMedia';
 import { formatTherapeuticPlanDate, normalizeTherapeuticProgramStatus } from '../utils/therapeuticPlan';
 
 type WorkspaceTab = 'programs' | 'maintenance' | 'generalization' | 'history';
@@ -60,6 +61,25 @@ const initials = (value: unknown) => String(value || 'P')
   .slice(0, 2)
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
+
+
+const professionalPhotoSource = (professional: any) => String(
+  professional?.profilePicture
+  || professional?.profile_picture
+  || professional?.profilePictureUrl
+  || professional?.profile_picture_url
+  || professional?.profilePhotoUrl
+  || professional?.profile_photo_url
+  || professional?.avatarUrl
+  || professional?.avatar_url
+  || professional?.photoUrl
+  || professional?.photo_url
+  || professional?.imageUrl
+  || professional?.image_url
+  || professional?.professional_profile?.profile_photo_url
+  || professional?.professionalProfile?.profilePhotoUrl
+  || ''
+).trim();
 
 const objectiveLines = (value: unknown): string[] => {
   const rows = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
@@ -295,7 +315,15 @@ export function PtsTherapeuticDashboard({
 
           {section('reference', 'Responsável de referência', (
             <div className="flex items-center gap-3">
-              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs ${isDark ? 'bg-violet-500/15 text-violet-200' : 'bg-violet-50 text-violet-700'}`}>{initials(responsible?.name)}</span>
+              {professionalPhotoSource(responsible) ? (
+                <SecureImage
+                  src={professionalPhotoSource(responsible)}
+                  alt={`Foto de ${responsible?.name || 'profissional de referência'}`}
+                  className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-violet-100"
+                />
+              ) : (
+                <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs ${isDark ? 'bg-violet-500/15 text-violet-200' : 'bg-violet-50 text-violet-700'}`}>{initials(responsible?.name)}</span>
+              )}
               <div className="min-w-0">
                 <p className={`truncate text-sm ${text}`}>{responsible?.name || 'Não definido'}</p>
                 <p className={`mt-0.5 truncate text-xs ${muted}`}>{responsible?.specialty || 'Especialidade não informada'}</p>
@@ -309,7 +337,15 @@ export function PtsTherapeuticDashboard({
                 const professional = professionalById.get(professionalId);
                 return (
                   <div key={professionalId} className="flex items-center gap-2.5">
-                    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{initials(professional?.name)}</span>
+                    {professionalPhotoSource(professional) ? (
+                      <SecureImage
+                        src={professionalPhotoSource(professional)}
+                        alt={`Foto de ${professional?.name || 'profissional da equipe'}`}
+                        className="h-8 w-8 shrink-0 rounded-full object-cover"
+                      />
+                    ) : (
+                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{initials(professional?.name)}</span>
+                    )}
                     <div className="min-w-0">
                       <p className={`text-sm leading-5 ${text}`}>{professional?.name || 'Profissional da equipe'}</p>
                       <p className={`text-xs ${muted}`}>{professional?.specialty || 'Especialidade não informada'}</p>

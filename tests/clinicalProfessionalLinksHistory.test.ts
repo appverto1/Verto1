@@ -68,7 +68,8 @@ const currentProfile = {
   user_id: professionalId,
   specialty: 'Psicologia',
   council: 'CRP',
-  council_number: '00000'
+  council_number: '00000',
+  profile_photo_url: '/api/storage/patient-photos/view?path=professionals%2Fprofile.webp'
 };
 const activeMembership = {
   user_id: professionalId,
@@ -94,6 +95,11 @@ const activeResult = composePatientProfessionalLinks({
 assert.equal(activeResult.links.length, 1, '1. vínculo ativo válido deve aparecer');
 assert.equal(activeResult.activeCount, 1);
 assert.equal(activeResult.links[0].professional?.id, professionalId);
+assert.equal(
+  activeResult.links[0].professional?.profile_photo_url,
+  currentProfile.profile_photo_url,
+  'a foto do cadastro profissional deve acompanhar o vínculo autorizado'
+);
 assert.equal(activeResult.links[0].specialty, 'Psicologia');
 assert.equal(activeResult.links[0].integrityStatus, null);
 assert.equal(activeResult.links[0].accessEnabled, true);

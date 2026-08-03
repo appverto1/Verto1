@@ -127,6 +127,28 @@ const resolvePatientHistoryRange = (period: PatientHistoryPeriod, customFrom: st
 const isUuidLike = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 
+
+const patientPhotoSource = (patient: any) => String(
+  patient?.profilePicture
+  || patient?.profile_picture
+  || patient?.profilePictureUrl
+  || patient?.profile_picture_url
+  || patient?.photoUrl
+  || patient?.photo_url
+  || patient?.avatarUrl
+  || patient?.avatar_url
+  || patient?.imageUrl
+  || patient?.image_url
+  || ''
+).trim();
+
+const patientInitials = (value: unknown) => String(value || 'P')
+  .trim()
+  .split(/\s+/)
+  .slice(0, 2)
+  .map((part) => part.charAt(0).toUpperCase())
+  .join('') || 'P';
+
 export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
@@ -415,6 +437,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [editingTask, setEditingTask] = useState<any>(null); 
   const [isPlanFilterOpen, setIsPlanFilterOpen] = useState(false);
   const [activePeiPlanSubtab, setActivePeiPlanSubtab] = useState<PeiPlanSubtab>('teaching');
+  const [therapeuticPlanMode, setTherapeuticPlanMode] = useState<'pts' | 'pei'>('pts');
   const [isAddingPEIGoal, setIsAddingPEIGoal] = useState(false);
   const [selectedPEIProtocolId, setSelectedPEIProtocolId] = useState("");
   const [selectedPEIDomainId, setSelectedPEIDomainId] = useState("");
@@ -9114,7 +9137,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <span className="hidden text-xs font-medium uppercase tracking-widest sm:inline">Painel</span>
               </button>
             )}
-            <div id="patient-header-info" className="min-w-0 flex-1">
+            <div id="patient-header-info" className="flex min-w-0 flex-1 items-start gap-3">
+                {patientPhotoSource(patient) ? (
+                  <SecureImage
+                    src={patientPhotoSource(patient)}
+                    alt={`Foto de ${patient?.name || 'paciente'}`}
+                    className="h-12 w-12 shrink-0 rounded-2xl object-cover ring-1 ring-slate-200 sm:h-14 sm:w-14"
+                  />
+                ) : (
+                  <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-sm sm:h-14 sm:w-14 ${isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-violet-50 text-violet-700'}`}>
+                    {patientInitials(patient?.name)}
+                  </span>
+                )}
+                <div className="min-w-0">
                 <div className="flex items-center gap-2">
                     <h1 className={`break-words text-xl font-semibold leading-snug sm:text-2xl ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{patient.name}</h1>
                 </div>
@@ -9131,6 +9166,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     )}
                   </div>
                 )}
+                </div>
             </div> 
           </div> 
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
@@ -10052,6 +10088,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </div>
                 </div>
 
+                <div className={`mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-2 ${isPanelDark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-slate-50'}`} data-testid="therapeutic-plan-mode-switch">
+                  <div className="flex gap-1" role="tablist" aria-label="Tipo de plano terapêutico">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={therapeuticPlanMode === 'pts'}
+                      onClick={() => { setTherapeuticPlanMode('pts'); setActivePeiPlanSubtab('teaching'); }}
+                      className={`min-h-10 rounded-xl px-4 text-sm transition-colors ${therapeuticPlanMode === 'pts' ? 'bg-violet-600 text-white shadow-sm' : isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-white'}`}
+                    >
+                      PTS
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={therapeuticPlanMode === 'pei'}
+                      onClick={() => setTherapeuticPlanMode('pei')}
+                      className={`min-h-10 rounded-xl px-4 text-sm transition-colors ${therapeuticPlanMode === 'pei' ? 'bg-violet-600 text-white shadow-sm' : isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-white'}`}
+                    >
+                      PEI
+                    </button>
+                  </div>
+                  <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    {therapeuticPlanMode === 'pts' ? 'Coordenação clínica compartilhada da equipe.' : 'Metas educacionais e estruturas legadas do paciente.'}
+                  </p>
+                </div>
+
+                {therapeuticPlanMode === 'pei' && (
                 <nav aria-label="Áreas do Plano terapêutico" className={`mb-7 flex gap-2 overflow-x-auto rounded-2xl border p-1.5 shadow-sm ${isPanelDark ? 'bg-slate-900/70 border-slate-700' : 'bg-slate-100/80 border-slate-200'}`} data-therapeutic-plan-navigation>
                   {PEI_PLAN_SUBTABS.map((tab) => {
                     const active = activePeiPlanSubtab === tab.id;
@@ -10089,22 +10152,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     );
                   })}
                 </nav>
+                )}
 
-                {activePeiPlanSubtab === 'teaching' && (
+                {(therapeuticPlanMode === 'pts' || activePeiPlanSubtab === 'teaching') && (
                 <div className="space-y-4 mb-8">
-                  <TherapeuticPlanPanel
-                    patient={patient}
-                    protocols={planProtocolCatalog}
-                    professionals={clinicTherapists}
-                    userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
-                    currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
-                    isDark={isPanelDark}
-                    onStartSession={() => requestSessionStart('fullscreen')}
-                  />
-                  <details className={`rounded-2xl border ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-slate-50/70'}`}>
+                  {therapeuticPlanMode === 'pts' && (
+                    <TherapeuticPlanPanel
+                      patient={patient}
+                      protocols={planProtocolCatalog}
+                      professionals={clinicTherapists}
+                      userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
+                      currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
+                      isDark={isPanelDark}
+                      onStartSession={() => requestSessionStart('fullscreen')}
+                    />
+                  )}
+                  {therapeuticPlanMode === 'pei' && (
+                  <details open className={`rounded-2xl border ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-slate-50/70'}`}>
                     <summary className={`cursor-pointer list-none px-4 py-3 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                      Estruturas legadas do PEI
-                      <span className={`ml-2 text-xs ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Compatibilidade com metas e registros anteriores</span>
+                      PEI - Plano Educacional Individualizado
+                      <span className={`ml-2 text-xs ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Metas educacionais, protocolos e registros anteriores</span>
                     </summary>
                     <div className="space-y-4 border-t p-4 pt-5 dark:border-slate-700">
                   <div className="flex items-center justify-between mb-2">
@@ -10438,11 +10505,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </div>
                     </div>
                   </details>
+                  )}
                 </div>
                 )}
-                {activePeiPlanSubtab === 'maintenance' && renderPeiMaintenancePanel()}
-                {activePeiPlanSubtab === 'generalization' && renderPeiGeneralizationPanel()}
-                {activePeiPlanSubtab === 'history' && renderPeiHistoryPanel()}
+                {therapeuticPlanMode === 'pei' && activePeiPlanSubtab === 'maintenance' && renderPeiMaintenancePanel()}
+                {therapeuticPlanMode === 'pei' && activePeiPlanSubtab === 'generalization' && renderPeiGeneralizationPanel()}
+                {therapeuticPlanMode === 'pei' && activePeiPlanSubtab === 'history' && renderPeiHistoryPanel()}
               </div>
             )}
 
