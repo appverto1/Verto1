@@ -33,6 +33,8 @@ type ProfessionalLink = {
     email?: string | null;
     specialty?: string | null;
     profile_photo_url?: string | null;
+    profile_picture?: string | null;
+    profile_picture_path?: string | null;
     membershipActive?: boolean;
   } | null;
 };

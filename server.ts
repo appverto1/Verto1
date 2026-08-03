@@ -5441,13 +5441,13 @@ async function resolvePatientPhotoUrl(rawUrl: unknown, rawPath?: unknown): Promi
 }
 
 
-async function resolveProfessionalProfilePhotoUrl(profile: any): Promise<string | null> {
+async function resolveProfessionalProfilePhotoUrl(profile: any, user?: any): Promise<string | null> {
   const metadata = profile?.metadata && typeof profile.metadata === 'object'
     ? profile.metadata
     : {};
   return resolvePatientPhotoUrl(
-    profile?.profile_photo_url,
-    metadata?.profilePicturePath || metadata?.profile_picture_path,
+    profile?.profile_photo_url || user?.profile_picture,
+    metadata?.profilePicturePath || metadata?.profile_picture_path || user?.profile_picture_path,
   );
 }
 
@@ -29895,7 +29895,7 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
       const linksSelect = 'id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,starts_at,ends_at,status,permissions,created_by,ended_by,created_at,updated_at';
-      const usersSelect = 'id,name,email';
+      const usersSelect = 'id,name,email,profile_picture';
       const profilesSelect = 'user_id,specialty,council,council_number,profile_photo_url,metadata';
       const membershipsSelect = 'user_id,clinic_id,role,status';
       let stage = 'links';
@@ -29932,7 +29932,12 @@ async function startServer() {
             .select(usersSelect)
             .in('id', professionalIds);
           if (professionalsResult.error) throw professionalsResult.error;
-          professionals = professionalsResult.data || [];
+          professionals = await Promise.all(
+            (professionalsResult.data || []).map(async (professional: any) => ({
+              ...professional,
+              profile_picture: await resolveProfessionalProfilePhotoUrl(null, professional),
+            })),
+          );
 
           if (professionalIds.length > 0) {
             stage = 'profiles';

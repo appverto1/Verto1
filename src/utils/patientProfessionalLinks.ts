@@ -262,7 +262,7 @@ export function composePatientProfessionalLinks(params: {
               specialty: profileSpecialty || snapshotSpecialty || null,
               council: profile?.council ?? null,
               council_number: profile?.council_number ?? null,
-              profile_photo_url: profile?.profile_photo_url ?? null,
+              profile_photo_url: profile?.profile_photo_url ?? user?.profile_picture ?? null,
               membershipActive:
                 cleanText(membership?.status).toLowerCase() === 'active',
               profileAvailable: Boolean(profile),
