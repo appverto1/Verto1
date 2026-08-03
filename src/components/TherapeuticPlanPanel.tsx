@@ -30,6 +30,8 @@ import {
 import { ResponsiveDrawer } from './ui/ResponsiveDrawer';
 import { AlertDialog } from './ui/AlertDialog';
 import { dataService } from '../services/dataService';
+import { PtsWorkspaceEditor } from './PtsWorkspaceEditor';
+import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
 import { decodeClinicalTextEntities, normalizeClinicalTextRecord } from '../utils/clinicalText';
 import {
   THERAPEUTIC_MEASUREMENT_OPTIONS,
@@ -1096,6 +1098,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   };
 
   const startEditingScope = (scope: any) => {
+    setEditingScopeId(String(scope.id));
+    if (scope.mode === 'interdisciplinary') return;
     const common = Array.isArray(scope.common_objectives) ? scope.common_objectives : [];
     const specific = scope.specialty_objectives && typeof scope.specialty_objectives === 'object'
       ? scope.specialty_objectives
@@ -1104,7 +1108,6 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       ...(scope.participant_specialties || []),
       ...Object.keys(specific),
     ].map(String).filter(Boolean)));
-    setEditingScopeId(String(scope.id));
     setScopeEditDraft({
       commonObjectives: common.map((objective: any) => typeof objective === 'string' ? objective : objective?.title || objective?.description || '').filter(Boolean).join('\n'),
       specialtyObjectives: Object.fromEntries(specialties.map((specialty) => [specialty, (Array.isArray(specific[specialty]) ? specific[specialty] : []).map((objective: any) => typeof objective === 'string' ? objective : objective?.title || '').filter(Boolean).join('\n')])),
@@ -1136,6 +1139,20 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     }
     setEditingScopeId('');
     setNotice('Escopo atualizado em uma nova versão, sem alterar o histórico.');
+    await loadPlan(true);
+  };
+
+  const savePtsScope = async (scopeId: string, payload: any) => {
+    if (!scopeId || scopeSaving) return;
+    setScopeSaving(true);
+    const response = await dataService.updatePatientTherapeuticPlanScope(patientId, scopeId, payload);
+    setScopeSaving(false);
+    if (response?.success === false) {
+      setNotice(response?.message || response?.error || 'Não foi possível salvar o Projeto Terapêutico Singular.');
+      return;
+    }
+    setEditingScopeId('');
+    setNotice('PTS atualizado em uma nova versão, sem alterar o histórico anterior.');
     await loadPlan(true);
   };
 
@@ -2137,7 +2154,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                 scope.specialty_objectives,
               );
               return (
-                <article key={scope.id} className={`rounded-xl border p-4 ${panel}`}>
+                <article key={scope.id} className={`rounded-xl border p-4 ${panel} ${isPts ? 'md:col-span-2' : ''}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className={`text-sm font-medium ${text}`}>
@@ -2158,6 +2175,18 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                   <p className={`mt-3 text-xs ${muted}`}>
                     {(scope.participant_professional_ids || []).length} participante(s) · {statusLabel}
                   </p>
+                  {isPts && (() => {
+                    const pts = hydratePtsClinicalPayloadFromPlan(scope);
+                    const openGoals = pts.goals.filter((goal) => !['achieved', 'cancelled'].includes(goal.status)).length;
+                    const achievedGoals = pts.goals.filter((goal) => goal.status === 'achieved').length;
+                    return (
+                      <div className={`mt-3 grid gap-2 rounded-xl border p-3 sm:grid-cols-3 ${isDark ? 'border-slate-700 bg-slate-950/30' : 'border-violet-100 bg-violet-50/60'}`}>
+                        <div><p className={`text-[11px] ${muted}`}>Metas em acompanhamento</p><p className={`mt-1 text-sm font-semibold ${text}`}>{openGoals}</p></div>
+                        <div><p className={`text-[11px] ${muted}`}>Metas alcançadas</p><p className={`mt-1 text-sm font-semibold ${text}`}>{achievedGoals}</p></div>
+                        <div><p className={`text-[11px] ${muted}`}>Próxima reavaliação</p><p className={`mt-1 text-sm font-semibold ${text}`}>{pts.nextReviewDate ? new Date(`${pts.nextReviewDate}T12:00:00`).toLocaleDateString('pt-BR') : 'Não definida'}</p></div>
+                      </div>
+                    );
+                  })()}
                   <div className={`mt-3 space-y-3 border-t pt-3 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
                     {commonObjectives.length > 0 && (
                       <div>
@@ -2199,39 +2228,53 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                     <button
                       type="button"
                       className="mt-3 min-h-10 rounded-lg px-2 text-xs font-medium text-violet-600 hover:bg-violet-500/10"
-                      onClick={() => startEditingScope(scope)}
+                      onClick={() => editingScopeId === String(scope.id) ? setEditingScopeId('') : startEditingScope(scope)}
                     >
-                      Editar objetivos e estado
+                      {isPts ? (editingScopeId === String(scope.id) ? 'Fechar PTS' : 'Abrir e editar PTS') : 'Editar objetivos e estado'}
                     </button>
                   )}
                   {editingScopeId === String(scope.id) && (
-                    <div className={`mt-3 space-y-3 border-t pt-3 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
-                      <label className={`block text-xs ${muted}`}>
-                        Objetivos comuns, um por linha
-                        <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.commonObjectives} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, commonObjectives: event.target.value }))} />
-                      </label>
-                      {Object.keys(scopeEditDraft.specialtyObjectives || {}).map((specialty) => (
-                        <label key={specialty} className={`block text-xs ${muted}`}>
-                          Objetivos de {specialty}, um por linha
-                          <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.specialtyObjectives[specialty]} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, specialtyObjectives: { ...current.specialtyObjectives, [specialty]: event.target.value } }))} />
-                        </label>
-                      ))}
-                      <label className={`block text-xs ${muted}`}>
-                        Estado
-                        <select className={`${field} mt-1.5`} value={scopeEditDraft.status} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, status: event.target.value }))}>
-                          <option value="draft">Rascunho</option>
-                          <option value="active">Ativo</option>
-                          <option value="paused">Pausado</option>
-                          <option value="completed">Concluído</option>
-                          <option value="archived">Arquivado</option>
-                        </select>
-                      </label>
-                      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                        <button type="button" className={secondaryButton} onClick={() => setEditingScopeId('')}>Cancelar</button>
-                        <button type="button" disabled={scopeSaving} className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50" onClick={() => void savePlanScope()}>
-                          {scopeSaving ? 'Salvando...' : 'Salvar nova versão'}
-                        </button>
-                      </div>
+                    <div className={`mt-3 border-t pt-4 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                      {isPts ? (
+                        <PtsWorkspaceEditor
+                          key={`${scope.id}:${scope.edit_version}`}
+                          scope={scope}
+                          professionals={linkedProfessionals}
+                          programs={programs}
+                          isDark={isDark}
+                          saving={scopeSaving}
+                          onSave={(payload) => savePtsScope(String(scope.id), payload)}
+                        />
+                      ) : (
+                        <div className="space-y-3">
+                          <label className={`block text-xs ${muted}`}>
+                            Objetivos comuns, um por linha
+                            <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.commonObjectives} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, commonObjectives: event.target.value }))} />
+                          </label>
+                          {Object.keys(scopeEditDraft.specialtyObjectives || {}).map((specialty) => (
+                            <label key={specialty} className={`block text-xs ${muted}`}>
+                              Objetivos de {specialty}, um por linha
+                              <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.specialtyObjectives[specialty]} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, specialtyObjectives: { ...current.specialtyObjectives, [specialty]: event.target.value } }))} />
+                            </label>
+                          ))}
+                          <label className={`block text-xs ${muted}`}>
+                            Estado
+                            <select className={`${field} mt-1.5`} value={scopeEditDraft.status} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, status: event.target.value }))}>
+                              <option value="draft">Rascunho</option>
+                              <option value="active">Ativo</option>
+                              <option value="paused">Pausado</option>
+                              <option value="completed">Concluído</option>
+                              <option value="archived">Arquivado</option>
+                            </select>
+                          </label>
+                          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                            <button type="button" className={secondaryButton} onClick={() => setEditingScopeId('')}>Cancelar</button>
+                            <button type="button" disabled={scopeSaving} className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50" onClick={() => void savePlanScope()}>
+                              {scopeSaving ? 'Salvando...' : 'Salvar nova versão'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </article>

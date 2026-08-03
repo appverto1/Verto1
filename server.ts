@@ -364,6 +364,11 @@ import {
   resolveHistoricalTherapeuticPlanReadCutoff
 } from './src/utils/therapeuticPlanAccess';
 import {
+  emptyPtsClinicalPayload,
+  normalizePtsClinicalPayload,
+  ptsLastReviewedAt
+} from './src/utils/ptsClinicalWorkspace';
+import {
   resolveEffectiveClinicRoleFromMembership,
   type ClinicAuthorityRole
 } from './src/utils/clinicMembershipAuthority';
@@ -3738,16 +3743,19 @@ function getClinicInvitationAcceptanceUrl(invitationIdValue: unknown): string {
 }
 
 function getRecoveryRedirectUrl(recoveryToken?: unknown): string {
-  const baseUrl = getInvitationAppBaseUrl();
+  const baseUrl = sanitizeString(
+    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
+    500
+  );
+  if (!baseUrl) {
+    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para recuperação de senha.');
+  }
   const params = new URLSearchParams({ auth_action: 'recovery' });
   const token = sanitizeString(recoveryToken, 4096);
   const tokenFragment = new URLSearchParams();
   if (token) tokenFragment.set('recovery_token', token);
   const fragment = tokenFragment.toString();
-
-  // A recuperação entra pela raiz da SPA no host canônico. Isso evita 404 em
-  // provedores que não reescrevem rotas profundas como /reset-password.
-  return `${baseUrl.replace(/\/+$/, '')}/?${params.toString()}${fragment ? `#${fragment}` : ''}`;
+  return `${baseUrl.replace(/\/+$/, '')}/reset-password?${params.toString()}${fragment ? `#${fragment}` : ''}`;
 }
 
 function extractSupabaseErrorMessage(error: any): string {
@@ -33007,110 +33015,24 @@ async function startServer() {
       const role = req.session.user.role as AppRole;
       const scopedClinicId = currentClinicId(req.session.user);
 
-      const actorUserId = sanitizeString(req.session.user?.id, 120);
-      const normalizedRole = sanitizeString(role, 40).toLowerCase();
-      const isTherapistList = normalizedRole === 'therapist';
-      let therapistProfessionalLinks: any[] | null = null;
-
-      if (isTherapistList && scopedClinicId && isUuid(actorUserId)) {
-        const therapistLinkResult = await supabase
-          .from('patient_professional_links')
-          .select('patient_id,professional_id,relationship_type,status')
-          .eq('organization_id', scopedClinicId)
-          .eq('professional_id', actorUserId)
-          .eq('status', 'active')
-          .limit(limit);
-
-        if (therapistLinkResult.error) {
-          if (!isMissingRelationError(therapistLinkResult.error)) {
-            throw therapistLinkResult.error;
-          }
-        } else {
-          therapistProfessionalLinks = Array.isArray(therapistLinkResult.data)
-            ? therapistLinkResult.data
-            : [];
-        }
-      }
-
       const result = await fetchPatientsWithSchemaFallback({
         supabase,
         role,
-        userId: actorUserId,
+        userId: sanitizeString(req.session.user?.id, 120),
         clinicId: scopedClinicId,
         limit,
         logger: console
       });
 
       if (result.error) throw result.error;
-      let patientRows = Array.isArray(result.data) ? result.data : [];
-
-      if (therapistProfessionalLinks && scopedClinicId) {
-        const alreadyLoadedPatientIds = new Set(
-          patientRows
-            .map((patient: any) => sanitizeString(patient?.id, 120))
-            .filter(Boolean)
-        );
-        const linkedPatientIds = Array.from(new Set(
-          therapistProfessionalLinks
-            .map((link: any) => sanitizeString(link?.patient_id, 120))
-            .filter((patientId: string) => isUuid(patientId) && !alreadyLoadedPatientIds.has(patientId))
-        )).slice(0, limit);
-
-        if (linkedPatientIds.length > 0) {
-          let linkedPatientsQuery = supabase
-            .from('patients')
-            .select(result.select)
-            .eq('clinic_id', scopedClinicId)
-            .in('id', linkedPatientIds)
-            .order('created_at', { ascending: false })
-            .limit(linkedPatientIds.length);
-
-          if (result.select.includes('is_active')) {
-            linkedPatientsQuery = linkedPatientsQuery.eq('is_active', true);
-          }
-          if (result.select.includes('deleted_at')) {
-            linkedPatientsQuery = linkedPatientsQuery.is('deleted_at', null);
-          }
-          if (result.select.includes('status')) {
-            linkedPatientsQuery = linkedPatientsQuery
-              .neq('status', 'ARCHIVED')
-              .neq('status', 'archived');
-          }
-
-          const linkedPatientsResult = await linkedPatientsQuery;
-          if (linkedPatientsResult.error) throw linkedPatientsResult.error;
-
-          const patientsById = new Map<string, any>();
-          for (const patient of [...patientRows, ...(linkedPatientsResult.data || [])]) {
-            const patientId = sanitizeString(patient?.id, 120);
-            if (patientId && !patientsById.has(patientId)) patientsById.set(patientId, patient);
-          }
-          patientRows = Array.from(patientsById.values()).slice(0, limit);
-        }
-      }
-
       const patients = isExplicitDemoUser(req.session.user)
-        ? patientRows.filter((patient: any) => patient?.is_demo === true)
-        : patientRows;
+        ? (result.data || []).filter((patient: any) => patient?.is_demo === true)
+        : result.data || [];
       const patientIds = patients
         .map((patient: any) => sanitizeString(patient?.id, 120))
         .filter(Boolean);
       let activeProfessionalLinksByPatient: Map<string, any[]> | null = null;
-
-      if (therapistProfessionalLinks) {
-        activeProfessionalLinksByPatient = new Map<string, any[]>();
-        for (const link of therapistProfessionalLinks) {
-          const patientId = sanitizeString(link?.patient_id, 120);
-          if (!patientId || !patientIds.includes(patientId)) continue;
-          const current = activeProfessionalLinksByPatient.get(patientId) || [];
-          current.push({
-            professional_id: sanitizeString(link?.professional_id, 120),
-            relationship_type: sanitizeString(link?.relationship_type, 40),
-            status: 'active',
-          });
-          activeProfessionalLinksByPatient.set(patientId, current);
-        }
-      } else if (scopedClinicId && patientIds.length > 0) {
+      if (scopedClinicId && patientIds.length > 0) {
         const professionalLinkResult = await supabase
           .from('patient_professional_links')
           .select('patient_id,professional_id,relationship_type,status')
@@ -33141,12 +33063,10 @@ async function startServer() {
         data: patients.map((patient: any) => {
           const serialized = serializePatientMediaForClient(patient);
           if (!activeProfessionalLinksByPatient) return serialized;
-          const professionalLinks =
-            activeProfessionalLinksByPatient.get(sanitizeString(patient?.id, 120)) || [];
-          if (professionalLinks.length === 0) return serialized;
           return {
             ...serialized,
-            professional_links: professionalLinks,
+            professional_links:
+              activeProfessionalLinksByPatient.get(sanitizeString(patient?.id, 120)) || [],
           };
         }),
       });
@@ -62493,7 +62413,7 @@ async function startServer() {
           .limit(500),
         supabase
           .from('patient_therapeutic_plans')
-          .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,scope_snapshot,source_template_id,source_template_version,status,edit_version,created_by,updated_by,created_at,updated_at')
+          .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,pts_payload,pts_schema_version,review_due_date,last_reviewed_at,scope_snapshot,source_template_id,source_template_version,status,edit_version,created_by,updated_by,created_at,updated_at')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .order('updated_at', { ascending: false })
@@ -62683,7 +62603,7 @@ async function startServer() {
 
   app.post('/api/aba/patients/:patientId/therapeutic-plans', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
-      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Escopo do Plano terapêutico')) return;
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Escopo do Plano terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
@@ -62935,6 +62855,28 @@ async function startServer() {
       const specialtyObjectives = sanitizeClinicalPayload(
         normalizedSpecialtyObjectives,
       );
+      const ptsPayload = mode === 'interdisciplinary'
+        ? normalizePtsClinicalPayload(
+            req.body?.ptsPayload ?? req.body?.pts_payload ?? emptyPtsClinicalPayload({
+              participantIds: participantProfessionalIds,
+              specialties: participantSpecialties,
+              defaultCaseManagerId: responsibleProfessionalId,
+              defaultStartedAt: now.slice(0, 10),
+            }),
+            {
+              participantIds: participantProfessionalIds,
+              specialties: participantSpecialties,
+              defaultCaseManagerId: responsibleProfessionalId,
+              defaultStartedAt: now.slice(0, 10),
+            },
+          )
+        : {};
+      const reviewDueDate = mode === 'interdisciplinary' && ptsPayload.nextReviewDate
+        ? ptsPayload.nextReviewDate
+        : null;
+      const lastReviewedAt = mode === 'interdisciplinary'
+        ? ptsLastReviewedAt(ptsPayload)
+        : null;
       const requestHash = crypto
         .createHash('sha256')
         .update(
@@ -62949,6 +62891,9 @@ async function startServer() {
             participantSpecialties: [...participantSpecialties].sort(),
             commonObjectives,
             specialtyObjectives,
+            ptsPayload,
+            reviewDueDate,
+            lastReviewedAt,
             sourceTemplateId,
             sourceTemplateVersion
           })
@@ -62991,6 +62936,10 @@ async function startServer() {
         participant_specialties: participantSpecialties,
         common_objectives: commonObjectives,
         specialty_objectives: specialtyObjectives,
+        pts_payload: sanitizeClinicalPayload(ptsPayload),
+        pts_schema_version: 1,
+        review_due_date: reviewDueDate,
+        last_reviewed_at: lastReviewedAt,
         scope_snapshot: sanitizeClinicalPayload({
           mode,
           specialty,
@@ -63058,7 +63007,7 @@ async function startServer() {
 
   app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
-      if (!enforcePayloadLimit(req, res, 48 * 1024, 'Escopo do Plano terapêutico')) return;
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Escopo do Plano terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const planId = sanitizeString(req.params.planId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -63075,8 +63024,12 @@ async function startServer() {
         .maybeSingle();
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });
+
       const canManageAny = ['owner', 'admin', 'coordinator'].includes(role);
-      const permittedIds = new Set([String(existing.responsible_professional_id), ...(existing.participant_professional_ids || []).map(String)]);
+      const permittedIds = new Set([
+        String(existing.responsible_professional_id),
+        ...(existing.participant_professional_ids || []).map(String),
+      ]);
       if (!canManageAny && !permittedIds.has(actorId)) {
         return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_EDIT_DENIED' });
       }
@@ -63095,6 +63048,7 @@ async function startServer() {
           return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_EDIT_DENIED' });
         }
       }
+
       const expectedVersion = Number(req.body?.expectedVersion ?? req.body?.expected_version);
       if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== Number(existing.edit_version)) {
         return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_VERSION_CONFLICT', message: 'Este plano foi atualizado por outra pessoa. Recarregue antes de salvar.' });
@@ -63103,14 +63057,13 @@ async function startServer() {
       if (!['draft', 'active', 'paused', 'completed', 'archived'].includes(nextStatus)) {
         return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_STATUS_INVALID' });
       }
+
       const hasSpecialtyObjectivesUpdate =
         Object.prototype.hasOwnProperty.call(req.body || {}, 'specialtyObjectives') ||
         Object.prototype.hasOwnProperty.call(req.body || {}, 'specialty_objectives');
       const allowedSpecialties = String(existing.mode || '').toLowerCase() === 'specialty'
         ? [existing.specialty]
-        : (Array.isArray(existing.participant_specialties)
-          ? existing.participant_specialties
-          : []);
+        : (Array.isArray(existing.participant_specialties) ? existing.participant_specialties : []);
       const normalizedSpecialtyObjectives = hasSpecialtyObjectivesUpdate
         ? normalizeTherapeuticSpecialtyObjectives(
             req.body?.specialtyObjectives ?? req.body?.specialty_objectives,
@@ -63124,39 +63077,92 @@ async function startServer() {
           message: 'Os objetivos por especialidade precisam pertencer somente às especialidades participantes deste plano.',
         });
       }
+
+      const participantIds = Array.from(new Set([
+        String(existing.responsible_professional_id || ''),
+        ...(Array.isArray(existing.participant_professional_ids) ? existing.participant_professional_ids.map(String) : []),
+      ].filter(Boolean)));
+      const isPts = String(existing.mode || '').toLowerCase() === 'interdisciplinary';
+      const ptsPayload = isPts
+        ? normalizePtsClinicalPayload(
+            req.body?.ptsPayload ?? req.body?.pts_payload ?? existing.pts_payload,
+            {
+              participantIds,
+              specialties: allowedSpecialties,
+              defaultCaseManagerId: String(existing.responsible_professional_id || ''),
+              defaultStartedAt: String(existing.created_at || '').slice(0, 10),
+            },
+          )
+        : (existing.pts_payload && typeof existing.pts_payload === 'object' && !Array.isArray(existing.pts_payload)
+            ? existing.pts_payload
+            : {});
+      if (isPts) {
+        const existingPtsPayload = normalizePtsClinicalPayload(existing.pts_payload, {
+          participantIds,
+          specialties: allowedSpecialties,
+          defaultCaseManagerId: String(existing.responsible_professional_id || ''),
+          defaultStartedAt: String(existing.created_at || '').slice(0, 10),
+        });
+        const existingReviewAuthorById = new Map(
+          existingPtsPayload.reviews.map((review: any) => [String(review.id), String(review.recordedBy || '')]),
+        );
+        ptsPayload.reviews = ptsPayload.reviews.map((review: any) => ({
+          ...review,
+          recordedBy: existingReviewAuthorById.get(String(review.id)) || actorId,
+        }));
+      }
+      const requestedReviewDueDate = sanitizeString(
+        req.body?.reviewDueDate ?? req.body?.review_due_date ?? ptsPayload.nextReviewDate ?? existing.review_due_date,
+        10,
+      );
+      const reviewDueDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedReviewDueDate)
+        ? requestedReviewDueDate
+        : null;
+      const requestedLastReviewedAt = sanitizeString(
+        req.body?.lastReviewedAt ?? req.body?.last_reviewed_at ?? ptsLastReviewedAt(ptsPayload) ?? existing.last_reviewed_at,
+        40,
+      );
+      const lastReviewedAt = requestedLastReviewedAt && !Number.isNaN(new Date(requestedLastReviewedAt).getTime())
+        ? new Date(requestedLastReviewedAt).toISOString()
+        : null;
+      const commonObjectives = sanitizeClinicalPayload(
+        req.body?.commonObjectives ?? req.body?.common_objectives ?? existing.common_objectives,
+      );
+      const specialtyObjectives = sanitizeClinicalPayload(normalizedSpecialtyObjectives);
       const now = new Date().toISOString();
-      const { error: versionError } = await supabase.from('patient_therapeutic_plan_versions').upsert({
-        plan_id: planId,
-        organization_id: organizationId,
-        patient_id: patientId,
-        version: Number(existing.edit_version),
-        snapshot: existing,
-        authored_by: actorId,
-        authorized_reader_ids: Array.from(new Set([
-          String(existing.responsible_professional_id || ''),
-          ...(existing.participant_professional_ids || []).map(String)
-        ])).filter(Boolean),
-        created_at: now
-      }, { onConflict: 'plan_id,version', ignoreDuplicates: true });
-      if (versionError) throw versionError;
-      const { data, error } = await supabase
-        .from('patient_therapeutic_plans')
-        .update({
-          common_objectives: sanitizeClinicalPayload(req.body?.commonObjectives ?? req.body?.common_objectives ?? existing.common_objectives),
-          specialty_objectives: sanitizeClinicalPayload(normalizedSpecialtyObjectives),
-          status: nextStatus,
-          edit_version: expectedVersion + 1,
-          updated_by: actorId,
-          updated_at: now
-        })
-        .eq('id', planId)
-        .eq('organization_id', organizationId)
-        .eq('edit_version', expectedVersion)
-        .select('*')
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_VERSION_CONFLICT', message: 'Este plano foi atualizado por outra pessoa. Recarregue antes de salvar.' });
-      return res.json({ success: true, data, message: 'Plano versionado sem alterar versões anteriores.' });
+
+      const { data, error } = await supabase.rpc('update_patient_therapeutic_plan_v3', {
+        p_plan_id: planId,
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_expected_version: expectedVersion,
+        p_common_objectives: commonObjectives,
+        p_specialty_objectives: specialtyObjectives,
+        p_pts_payload: sanitizeClinicalPayload(ptsPayload),
+        p_review_due_date: reviewDueDate,
+        p_last_reviewed_at: lastReviewedAt,
+        p_status: nextStatus,
+        p_actor_id: actorId,
+        p_now: now,
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 300);
+        if (code.includes('THERAPEUTIC_PLAN_VERSION_CONFLICT')) {
+          return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_VERSION_CONFLICT', message: 'Este plano foi atualizado por outra pessoa. Recarregue antes de salvar.' });
+        }
+        if (code.includes('THERAPEUTIC_PLAN_PAYLOAD_INVALID')) {
+          return res.status(422).json({ success: false, error: 'THERAPEUTIC_PLAN_PAYLOAD_INVALID', message: 'Revise os campos do PTS antes de salvar.' });
+        }
+        if (code.includes('PGRST202') || code.includes('update_patient_therapeutic_plan_v3')) {
+          return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED', message: 'A atualização estrutural do PTS ainda não foi aplicada no banco.' });
+        }
+        throw error;
+      }
+      const updated = Array.isArray(data) ? data[0] : data;
+      if (!updated?.id) {
+        return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_VERSION_CONFLICT', message: 'Este plano foi atualizado por outra pessoa. Recarregue antes de salvar.' });
+      }
+      return res.json({ success: true, data: updated, message: isPts ? 'PTS versionado sem alterar o histórico anterior.' : 'Plano versionado sem alterar versões anteriores.' });
     } catch (error) {
       return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId [PATCH]', error, {
         fallbackMessage: 'Não foi possível atualizar o escopo do Plano terapêutico.'
