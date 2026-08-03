@@ -62478,7 +62478,7 @@ async function startServer() {
         ? await Promise.all([
             supabase
               .from('professional_profiles')
-              .select('user_id,full_name,specialty')
+              .select('user_id,full_name,specialty,profile_photo_url')
               .in('user_id', linkedProfessionalIds)
               .limit(5),
             supabase
@@ -62518,6 +62518,7 @@ async function startServer() {
         return {
           ...link,
           name: sanitizeString(profile?.full_name, 180) || 'Profissional',
+          profile_photo_url: sanitizeUrl(profile?.profile_photo_url) || null,
           specialty:
             canonicalSpecialty ||
             sanitizeTextField(link?.specialty, 120) ||

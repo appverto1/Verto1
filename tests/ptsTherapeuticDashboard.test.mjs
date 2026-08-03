@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 const dashboard = fs.readFileSync('src/components/PtsTherapeuticDashboard.tsx', 'utf8');
 const panel = fs.readFileSync('src/components/TherapeuticPlanPanel.tsx', 'utf8');
+const server = fs.readFileSync('server.ts', 'utf8');
 
 for (const label of [
   'PTS - Plano Terapêutico Singular',
@@ -35,5 +36,9 @@ assert.match(panel, /title="Planos da equipe"/);
 assert.match(panel, /startCreationForScope\(String\(primaryPtsScope\.id\)\)/);
 assert.match(panel, /Nova versão do PTS/);
 assert.match(panel, /renderPtsProgramCard/);
+assert.match(panel, /profile_photo_url:\s*[\s\S]*link\.profile_photo_url/);
+assert.match(server, /user_id,full_name,specialty,profile_photo_url/);
+assert.match(server, /profile_photo_url:\s*sanitizeUrl\(profile\?\.profile_photo_url\) \|\| null/);
+
 
 console.log('ptsTherapeuticDashboard.test.mjs: ok');

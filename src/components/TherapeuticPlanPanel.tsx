@@ -416,6 +416,12 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         ...provided,
         id,
         name: provided.name || link.name || 'Profissional',
+        profile_photo_url:
+          provided.profile_photo_url ||
+          provided.profilePhotoUrl ||
+          provided.profilePicture ||
+          link.profile_photo_url ||
+          null,
         specialty: link.specialty || provided.specialty || null,
         permissions: link.permissions || {},
         planEligible: link.planEligible === true,
