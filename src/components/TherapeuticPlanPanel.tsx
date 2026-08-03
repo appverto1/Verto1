@@ -2100,33 +2100,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     );
   }
 
-  return (
-    <section className="space-y-5" data-testid="therapeutic-plan-panel">
-      {notice && <div className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div>}
-      {error && <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}<button type="button" className="ml-2 underline" onClick={() => void loadPlan(true)}>Tentar novamente</button></div>}
-
-      {primaryPtsScope && !showPlanManager ? (
-        <PtsTherapeuticDashboard
-          scope={primaryPtsScope}
-          availableScopes={ptsScopes}
-          professionals={linkedProfessionals}
-          programs={primaryPtsPrograms}
-          loading={loading}
-          isDark={isDark}
-          canCreateProgram={canCreateProgram && (canManageStructure || primaryPtsScope.canEdit === true)}
-          canEditScope={primaryPtsScope.canEdit === true && primaryPtsScope.status !== 'archived'}
-          canManagePlans={canCreatePlanScope || planScopes.length > 1}
-          onScopeChange={setWorkspaceScopeId}
-          onAddProgram={() => startCreationForScope(String(primaryPtsScope.id))}
-          onNewVersion={() => startEditingScope(primaryPtsScope)}
-          onManagePlans={() => setShowPlanManager(true)}
-          renderProgramCard={renderPtsProgramCard}
-        />
-      ) : (
-        <>
+  const renderPlanManagementWorkspace = () => (
+    <>
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div><h2 className={`text-lg font-medium ${text}`}>Plano terapêutico</h2><p className={`mt-1 text-sm leading-relaxed ${muted}`}>Objetivos gerais, programas individualizados e alvos usados nas sessões.</p></div>
-        <div className="flex flex-wrap gap-2">{primaryPtsScope && showPlanManager && <button type="button" className={secondaryButton} onClick={() => setShowPlanManager(false)}>Voltar ao PTS</button>}{typeof onStartSession === 'function' && programs.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status))) && <button type="button" className={secondaryButton} onClick={onStartSession}><Play size={16} /> Iniciar sessão</button>}{canCreateProgram && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={startCreation}><Plus size={17} /> Adicionar programa</button>}</div>
+        <div className="flex flex-wrap gap-2">{typeof onStartSession === 'function' && programs.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status))) && <button type="button" className={secondaryButton} onClick={onStartSession}><Play size={16} /> Iniciar sessão</button>}{canCreateProgram && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={startCreation}><Plus size={17} /> Adicionar programa</button>}</div>
       </div>
 
 
@@ -2472,7 +2450,48 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
       {loading ? <div className={`flex items-center justify-center gap-2 rounded-2xl border border-dashed py-12 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><Loader2 size={18} className="animate-spin" /> Carregando Plano terapêutico...</div> : visiblePrograms.length ? <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">{visiblePrograms.map(renderProgramCard)}</div> : <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}><Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} /><p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas individualizados neste plano.'}</p>{canCreateProgram && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={startCreation}>Adicionar o primeiro programa</button>}</div>}
 
+    </>
+  );
+
+  return (
+    <section className="space-y-5" data-testid="therapeutic-plan-panel">
+      {notice && <div className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div>}
+      {error && <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}<button type="button" className="ml-2 underline" onClick={() => void loadPlan(true)}>Tentar novamente</button></div>}
+
+      {primaryPtsScope ? (
+        <>
+        <PtsTherapeuticDashboard
+          scope={primaryPtsScope}
+          availableScopes={ptsScopes}
+          professionals={linkedProfessionals}
+          programs={primaryPtsPrograms}
+          loading={loading}
+          isDark={isDark}
+          canCreateProgram={canCreateProgram && (canManageStructure || primaryPtsScope.canEdit === true)}
+          canEditScope={primaryPtsScope.canEdit === true && primaryPtsScope.status !== 'archived'}
+          canManagePlans={canCreatePlanScope || planScopes.length > 1}
+          onScopeChange={setWorkspaceScopeId}
+          onAddProgram={() => startCreationForScope(String(primaryPtsScope.id))}
+          onNewVersion={() => startEditingScope(primaryPtsScope)}
+          onManagePlans={() => setShowPlanManager(true)}
+          renderProgramCard={renderPtsProgramCard}
+        />
+
+          <ResponsiveDrawer
+            open={showPlanManager}
+            title="Planos da equipe"
+            titleId="pts-plan-manager-title"
+            description="Crie e gerencie planos por especialidade sem sair do centro de comando do PTS."
+            onRequestClose={() => setShowPlanManager(false)}
+            isDark={isDark}
+          >
+            <div className="space-y-5" data-testid="pts-plan-manager-drawer">
+              {renderPlanManagementWorkspace()}
+            </div>
+          </ResponsiveDrawer>
         </>
+      ) : (
+        renderPlanManagementWorkspace()
       )}
 
       {primaryPtsScope && !showPlanManager && editingScopeId === String(primaryPtsScope.id) && (
