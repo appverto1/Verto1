@@ -5207,6 +5207,54 @@ export const dataService = {
     }
   },
 
+  async saveClinicalObservation(patientId: string, payload: any = {}) {
+    const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/clinical-observations`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {}),
+      }, {
+        helperName: 'saveClinicalObservation',
+        operation: 'write',
+        table: 'clinical_observations,patient_therapeutic_plans,patient_professional_links',
+        hasExplicitColumns: true,
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível registrar a evidência clínica.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível registrar a evidência clínica.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async getClinicalOutcomesDashboard(patientId: string, options: any = {}) {
+    const endpoint = endpointWithQuery(`/api/patients/${encodeURIComponent(String(patientId))}/clinical-outcomes-dashboard`, {
+      days: options.days,
+      planId: options.planId,
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include',
+      }, {
+        helperName: 'getClinicalOutcomesDashboard',
+        operation: 'list',
+        table: 'patient_therapeutic_plans,clinical_measure_definitions,clinical_observations,clinical_goal_contributions,clinical_plan_phases,aba_session_metric_snapshots',
+        hasExplicitColumns: true,
+      });
+      return await safeJson(response);
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar os gráficos clínicos agora.');
+      return {
+        success: false,
+        data: { plans: [], programs: [], observations: [], contributions: [], phases: [], specialties: [], schemaAvailable: false },
+        error: message,
+        message,
+      };
+    }
+  },
+
   async getAbaClinicalChart(patientId: string, chart: 'targets' | 'behaviors' | 'mastery' | 'maintenance' | 'session-changes' | 'overview', options: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ points: [], insights: [], annotations: [] });
     const safeChart = ['targets', 'behaviors', 'mastery', 'maintenance', 'session-changes', 'overview'].includes(String(chart))

@@ -9,7 +9,7 @@ import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { RadarDomainAssessmentChart } from './RadarDomainAssessmentChart';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
-import { AbaClinicalChartsPanel } from './AbaClinicalChartsPanel';
+import { ClinicalChartsWorkspace } from './ClinicalChartsWorkspace';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
 import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
@@ -9298,8 +9298,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           {canAccessTab('session') && isKidsProfile && (
             <button id="tab-session" onClick={() => requestSessionStart('fullscreen')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
           )}
-          {abaV2Enabled && canAccessTab('aba-charts') && isKidsProfile && (
-            <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-11 min-w-[7rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos ABA</button>
+          {canAccessTab('aba-charts') && (
+            <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-11 min-w-[7rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos</button>
           )}
           {canAccessTab('school') && <button id="tab-school" aria-current={activeTab === 'school' ? 'page' : undefined} onClick={() => setActiveTab('school')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'school' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Escola</button>}
           {canAccessTab('files') && <button id="tab-files" aria-current={activeTab === 'files' ? 'page' : undefined} onClick={() => setActiveTab('files')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'files' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Arquivos</button>}
@@ -10926,8 +10926,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             )}
  
           </div> 
-        ) : activeTab === 'aba-charts' && isKidsProfile && abaV2Enabled ? (
-          <AbaClinicalChartsPanel patientId={String(patient.id)} isPanelDark={isPanelDark} />
+        ) : activeTab === 'aba-charts' ? (
+          <ClinicalChartsWorkspace patientId={String(patient.id)} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} />
         ) : activeTab === 'session' && isKidsProfile ? (
           null
         ) : activeTab === 'school' ? (

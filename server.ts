@@ -68248,6 +68248,361 @@ async function startServer() {
     }
   });
 
+
+
+  app.post('/api/patients/:patientId/clinical-observations', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Observação clínica')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const planId = sanitizeString(req.body?.planId || req.body?.plan_id, 120);
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180);
+      const metricKey = sanitizeString(req.body?.metricKey || req.body?.metric_key, 120);
+      const metricLabel = sanitizeTextField(req.body?.metricLabel || req.body?.metric_label, 180);
+      const direction = sanitizeString(req.body?.direction, 40).toLowerCase() || 'higher_is_better';
+      const missingReason = sanitizeString(req.body?.missingReason || req.body?.missing_reason, 60).toLowerCase() || null;
+      const allowedDirections = new Set(['higher_is_better', 'lower_is_better', 'target_value', 'target_range', 'event']);
+      const allowedMissingReasons = new Set(['not_collected', 'session_cancelled', 'not_applicable', 'incomplete', 'patient_absent', 'instrument_unavailable', 'invalid']);
+      if (!isUuid(patientId) || !isUuid(planId) || idempotencyKey.length < 16 || !metricKey || !metricLabel || !allowedDirections.has(direction)) {
+        return res.status(422).json({ success: false, error: 'CLINICAL_OBSERVATION_PAYLOAD_INVALID', message: 'Revise os dados da observação clínica.' });
+      }
+      if (missingReason && !allowedMissingReasons.has(missingReason)) {
+        return res.status(422).json({ success: false, error: 'CLINICAL_OBSERVATION_MISSING_REASON_INVALID', message: 'Motivo de ausência de dado inválido.' });
+      }
+      const value = req.body?.value === null || req.body?.value === undefined || req.body?.value === '' ? null : Number(req.body.value);
+      const numerator = req.body?.numerator === null || req.body?.numerator === undefined || req.body?.numerator === '' ? null : Number(req.body.numerator);
+      const denominator = req.body?.denominator === null || req.body?.denominator === undefined || req.body?.denominator === '' ? null : Number(req.body.denominator);
+      if ((!missingReason && !Number.isFinite(value)) || (numerator !== null && !Number.isFinite(numerator)) || (denominator !== null && (!Number.isFinite(denominator) || denominator <= 0))) {
+        return res.status(422).json({ success: false, error: 'CLINICAL_OBSERVATION_VALUE_INVALID', message: 'Informe um valor válido ou registre o motivo da ausência de dado.' });
+      }
+
+      const [planResult, linkResult] = await Promise.all([
+        supabase
+          .from('patient_therapeutic_plans')
+          .select('id,patient_id,organization_id,clinic_id,mode,specialty,participant_specialties,responsible_professional_id,participant_professional_ids,edit_version')
+          .eq('id', planId)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from('patient_professional_links')
+          .select('patient_id,professional_id,status,permissions')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('professional_id', actorId)
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle()
+      ]);
+      if (planResult.error) throw planResult.error;
+      if (linkResult.error) throw linkResult.error;
+      if (!planResult.data || !canEditTherapeuticPlanScope(planResult.data, { actorId, actorRole, professionalLinks: linkResult.data ? [linkResult.data] : [] })) {
+        return res.status(403).json({ success: false, error: 'CLINICAL_OBSERVATION_ACCESS_DENIED', message: 'Você não possui permissão para registrar evidências neste plano.' });
+      }
+
+      const observedAtRaw = sanitizeString(req.body?.observedAt || req.body?.observed_at, 50);
+      const observedAtDate = observedAtRaw && !Number.isNaN(new Date(observedAtRaw).getTime()) ? new Date(observedAtRaw) : new Date();
+      if (observedAtDate.getTime() > Date.now() + 5 * 60_000 || observedAtDate.getTime() < Date.now() - 20 * 365 * 86_400_000) {
+        return res.status(422).json({ success: false, error: 'CLINICAL_OBSERVATION_DATE_INVALID', message: 'A data da observação clínica está fora do intervalo permitido.' });
+      }
+      const observedAt = observedAtDate.toISOString();
+      const requestedSpecialty = normalizeClinicalSpecialty(req.body?.specialty);
+      const planSpecialty = normalizeClinicalSpecialty(planResult.data.specialty);
+      const allowedPlanSpecialties = new Set((Array.isArray(planResult.data.participant_specialties) ? planResult.data.participant_specialties : []).map((item: unknown) => normalizeClinicalSpecialty(item)).filter(Boolean));
+      const authoritativeSpecialty = planResult.data.mode === 'specialty'
+        ? planSpecialty
+        : requestedSpecialty && allowedPlanSpecialties.has(requestedSpecialty)
+          ? requestedSpecialty
+          : null;
+      const context = sanitizeString(req.body?.context, 80).toLowerCase() || 'clinic';
+      const source = sanitizeString(req.body?.source, 80).toLowerCase() || 'professional_observation';
+      const metricType = sanitizeString(req.body?.metricType || req.body?.metric_type, 60).toLowerCase() || 'numeric';
+      const allowedContexts = new Set(['clinic', 'home', 'school', 'community', 'telehealth', 'other']);
+      const allowedSources = new Set(['professional_observation', 'patient_report', 'family_report', 'school_report', 'standardized_instrument', 'imported']);
+      const allowedMetricTypes = new Set(['numeric', 'percentage', 'frequency', 'rate', 'duration', 'latency', 'ordinal', 'scale', 'binary']);
+      if (!allowedContexts.has(context) || !allowedSources.has(source) || !allowedMetricTypes.has(metricType)) {
+        return res.status(422).json({ success: false, error: 'CLINICAL_OBSERVATION_CLASSIFICATION_INVALID', message: 'Contexto, fonte ou tipo de métrica inválido.' });
+      }
+      const payload = {
+        organization_id: organizationId,
+        clinic_id: clinicId,
+        patient_id: patientId,
+        plan_id: planId,
+        plan_version: Math.max(1, Number(req.body?.planVersion || req.body?.plan_version || planResult.data.edit_version || 1)),
+        goal_id: sanitizeString(req.body?.goalId || req.body?.goal_id, 100) || null,
+        program_id: sanitizeString(req.body?.programId || req.body?.program_id, 120) || null,
+        session_id: sanitizeString(req.body?.sessionId || req.body?.session_id, 120) || null,
+        professional_id: actorId,
+        specialty: authoritativeSpecialty || null,
+        measure_definition_id: isUuid(req.body?.measureDefinitionId || req.body?.measure_definition_id) ? sanitizeString(req.body?.measureDefinitionId || req.body?.measure_definition_id, 120) : null,
+        metric_key: metricKey,
+        metric_label: metricLabel,
+        metric_type: metricType,
+        unit: sanitizeTextField(req.body?.unit, 40) || null,
+        direction,
+        value: Number.isFinite(value) ? value : null,
+        numerator: Number.isFinite(numerator) ? numerator : null,
+        denominator: Number.isFinite(denominator) ? denominator : null,
+        observed_at: observedAt,
+        context,
+        source,
+        instrument_id: sanitizeString(req.body?.instrumentId || req.body?.instrument_id, 120) || null,
+        instrument_version: sanitizeString(req.body?.instrumentVersion || req.body?.instrument_version, 80) || null,
+        definition_version: Math.max(1, Math.min(1000, Number(req.body?.definitionVersion || req.body?.definition_version || 1))),
+        missing_reason: missingReason,
+        metadata: sanitizeClinicalPayload(req.body?.metadata && typeof req.body.metadata === 'object' && !Array.isArray(req.body.metadata) ? req.body.metadata : {}),
+        idempotency_key: idempotencyKey,
+        created_by: actorId
+      };
+      const { data, error } = await supabase
+        .from('clinical_observations')
+        .upsert(payload, { onConflict: 'organization_id,idempotency_key', ignoreDuplicates: true })
+        .select('id,plan_id,plan_version,goal_id,program_id,session_id,professional_id,specialty,metric_key,metric_label,metric_type,unit,direction,value,numerator,denominator,observed_at,context,source,instrument_id,instrument_version,definition_version,missing_reason,metadata,created_at')
+        .maybeSingle();
+      if (error) {
+        if (isMissingRelationError(error) || hasMissingFinancialSchema(error)) {
+          return res.status(503).json({ success: false, error: 'CLINICAL_OUTCOMES_SCHEMA_REQUIRED', message: 'A estrutura de resultados clínicos ainda não foi aplicada no banco.' });
+        }
+        throw error;
+      }
+      return res.status(201).json({ success: true, data, idempotent: !data });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/clinical-observations [POST]', error, {
+        fallbackMessage: 'Não foi possível registrar a evidência clínica agora.'
+      });
+    }
+  });
+
+  app.get('/api/patients/:patientId/clinical-outcomes-dashboard', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      if (!isUuid(patientId)) {
+        return res.json({ success: true, data: { plans: [], observations: [], contributions: [], phases: [], specialties: [] } });
+      }
+      const requestedDays = Math.max(7, Math.min(730, Number(req.query?.days || 90) || 90));
+      const dateTo = new Date();
+      const dateFrom = new Date(dateTo.getTime() - requestedDays * 86_400_000);
+      const dateFromIso = dateFrom.toISOString();
+      const dateToIso = dateTo.toISOString();
+
+      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult] = await Promise.all([
+        supabase
+          .from('patient_therapeutic_plans')
+          .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,pts_payload,pts_schema_version,review_due_date,last_reviewed_at,status,edit_version,created_at,updated_at')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .order('updated_at', { ascending: false })
+          .limit(50),
+        supabase
+          .from('patient_professional_links')
+          .select('patient_id,professional_id,status,permissions')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('status', 'active')
+          .limit(20),
+        supabase
+          .from('aba_programs')
+          .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,name,status,measurement_type,responsible_professional_ids,created_by')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .limit(300),
+        supabase
+          .from('aba_targets')
+          .select('id,program_id,name,measurement_type,phase')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .limit(1000),
+        applyAbaChartTenantScope(
+          supabase
+            .from('aba_session_metric_snapshots')
+            .select(ABA_SESSION_METRIC_SNAPSHOT_SELECT)
+            .eq('patient_id', patientId)
+            .gte('changed_at', dateFromIso)
+            .lte('changed_at', dateToIso)
+            .order('changed_at', { ascending: true })
+            .limit(1000),
+          req.session.user,
+          clinicId,
+          organizationId
+        ),
+        supabase
+          .from('clinical_measure_definitions')
+          .select('id,plan_id,goal_id,program_id,specialty,name,metric_key,metric_type,unit,direction,target_type,target_value,target_min,target_max,instrument_id,instrument_version,definition_version,minimum_data_points,aggregation_method,recency_window_days,active')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('active', true)
+          .limit(500),
+        supabase
+          .from('clinical_observations')
+          .select('id,plan_id,plan_version,goal_id,program_id,session_id,professional_id,specialty,measure_definition_id,metric_key,metric_label,metric_type,unit,direction,value,numerator,denominator,observed_at,context,source,instrument_id,instrument_version,definition_version,missing_reason,metadata')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .gte('observed_at', dateFromIso)
+          .lte('observed_at', dateToIso)
+          .order('observed_at', { ascending: true })
+          .limit(2000),
+        supabase
+          .from('clinical_goal_contributions')
+          .select('id,pts_plan_id,pts_goal_id,specialty_plan_id,specialty_goal_id,specialty,contribution_type,status,validated_by,validated_at,updated_at')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .limit(500),
+        supabase
+          .from('clinical_plan_phases')
+          .select('id,plan_id,goal_id,program_id,metric_key,phase_type,label,reason,started_at,ended_at,plan_version,created_by,created_at')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .lte('started_at', dateToIso)
+          .order('started_at', { ascending: true })
+          .limit(500)
+      ]);
+
+      const criticalError = [planResult.error, linkResult.error, programResult.error, targetResult.error, snapshotResult.error].find(Boolean);
+      if (criticalError) throw criticalError;
+      const clinicalSchemaResults = [definitionResult, observationResult, contributionResult, phaseResult];
+      const clinicalSchemaAvailable = clinicalSchemaResults.every((result: any) => !result.error);
+      const unexpectedClinicalError = clinicalSchemaResults.map((result: any) => result.error).find((error: any) => error && !isMissingRelationError(error) && !hasMissingFinancialSchema(error));
+      if (unexpectedClinicalError) throw unexpectedClinicalError;
+
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const accessContext = { actorId, actorRole, professionalLinks: linkResult.data || [] };
+      const allPlans = planResult.data || [];
+      const visiblePlans = filterTherapeuticPlanScopesForActor(allPlans, accessContext).map((plan: any) => ({
+        ...plan,
+        canEdit: canEditTherapeuticPlanScope(plan, accessContext)
+      }));
+      const visiblePlanIds = new Set(visiblePlans.map((plan: any) => String(plan.id)));
+      const visiblePrograms = filterTherapeuticPlanProgramsForActor(programResult.data || [], allPlans, accessContext);
+      const visibleProgramIds = new Set(visiblePrograms.map((program: any) => String(program.id)));
+      const programById = new Map(visiblePrograms.map((program: any) => [String(program.id), program]));
+      const targetById = new Map((targetResult.data || []).filter((target: any) => visibleProgramIds.has(String(target.program_id))).map((target: any) => [String(target.id), target]));
+      const definitionById = new Map((definitionResult.error ? [] : definitionResult.data || []).filter((definition: any) => visiblePlanIds.has(String(definition.plan_id))).map((definition: any) => [String(definition.id), definition]));
+
+      const structuredObservations = (observationResult.error ? [] : observationResult.data || [])
+        .filter((row: any) => visiblePlanIds.has(String(row.plan_id)))
+        .map((row: any) => {
+          const definition: any = definitionById.get(String(row.measure_definition_id || '')) || {};
+          return {
+            id: String(row.id),
+            planId: row.plan_id,
+            planVersion: row.plan_version,
+            goalId: row.goal_id,
+            programId: row.program_id,
+            sessionId: row.session_id,
+            professionalId: row.professional_id,
+            specialty: row.specialty || definition.specialty || null,
+            metricKey: row.metric_key || definition.metric_key,
+            metricLabel: row.metric_label || definition.name || row.metric_key,
+            metricType: row.metric_type || definition.metric_type || 'numeric',
+            unit: row.unit ?? definition.unit ?? '',
+            direction: row.direction || definition.direction || 'higher_is_better',
+            value: row.value === null || row.value === undefined ? null : Number(row.value),
+            numerator: row.numerator === null || row.numerator === undefined ? null : Number(row.numerator),
+            denominator: row.denominator === null || row.denominator === undefined ? null : Number(row.denominator),
+            observedAt: row.observed_at,
+            context: row.context || 'clinic',
+            source: row.source || 'professional_observation',
+            instrumentId: row.instrument_id || definition.instrument_id || null,
+            instrumentVersion: row.instrument_version || definition.instrument_version || null,
+            definitionVersion: Number(row.definition_version || definition.definition_version || 1),
+            missingReason: row.missing_reason || null,
+            metadata: row.metadata || {},
+            minimumDataPoints: Number(definition.minimum_data_points || 4),
+            recencyWindowDays: Number(definition.recency_window_days || 30),
+            sourceRecordType: 'clinical_observation'
+          };
+        });
+
+      const abaObservations = (snapshotResult.data || []).map((row: any) => {
+        const point = normalizeAbaSnapshotPoint(row);
+        const target: any = targetById.get(String(point.targetId || '')) || null;
+        const program: any = target ? programById.get(String(target.program_id || '')) : null;
+        const planId = program?.therapeutic_plan_id ? String(program.therapeutic_plan_id) : null;
+        if (planId && !visiblePlanIds.has(planId)) return null;
+        return {
+          id: String(point.id),
+          planId,
+          planVersion: null,
+          goalId: program?.therapeutic_objective_id || null,
+          programId: program?.id || null,
+          sessionId: point.sessionId || null,
+          professionalId: point.professionalId || null,
+          specialty: point.specialty || null,
+          itemId: point.targetId || point.behaviorId || null,
+          itemLabel: target?.name || point.metricLabel || null,
+          metricKey: point.metricType,
+          metricLabel: point.metricLabel || point.metricType,
+          metricType: point.metricType,
+          unit: abaMetricUnit(String(point.metricType || '')).trim(),
+          direction: String(point.metricDirection || '').toLowerCase() === 'lower_is_better' ? 'lower_is_better' : 'higher_is_better',
+          value: Number.isFinite(Number(point.value)) ? Number(point.value) : null,
+          numerator: null,
+          denominator: point.attemptsCount || null,
+          observedAt: point.changedAt,
+          context: 'clinic',
+          source: 'aba_session_metric_snapshot',
+          instrumentId: null,
+          instrumentVersion: null,
+          definitionVersion: 1,
+          missingReason: null,
+          metadata: { changeStatus: point.changeStatus, statusLabel: point.statusLabel, specialtySource: point.specialtySource },
+          minimumDataPoints: 4,
+          recencyWindowDays: 30,
+          sourceRecordType: 'aba_snapshot'
+        };
+      }).filter(Boolean);
+
+      const visibleContributions = (contributionResult.error ? [] : contributionResult.data || []).filter((row: any) => (
+        visiblePlanIds.has(String(row.pts_plan_id)) && visiblePlanIds.has(String(row.specialty_plan_id))
+      ));
+      const visiblePhases = (phaseResult.error ? [] : phaseResult.data || []).filter((row: any) => visiblePlanIds.has(String(row.plan_id)));
+      const specialties = Array.from(new Set([
+        ...visiblePlans.map((plan: any) => sanitizeTextField(plan.specialty, 120)),
+        ...structuredObservations.map((row: any) => sanitizeTextField(row.specialty, 120)),
+        ...abaObservations.map((row: any) => sanitizeTextField(row?.specialty, 120))
+      ].filter(Boolean))).sort((left, right) => left.localeCompare(right, 'pt-BR'));
+
+      return res.json({
+        success: true,
+        data: {
+          plans: visiblePlans,
+          programs: visiblePrograms.map((program: any) => ({
+            id: program.id,
+            name: program.name,
+            status: program.status,
+            therapeuticPlanId: program.therapeutic_plan_id || null,
+            therapeuticObjectiveId: program.therapeutic_objective_id || null,
+            measurementType: program.measurement_type || null
+          })),
+          observations: [...structuredObservations, ...abaObservations],
+          contributions: visibleContributions,
+          phases: visiblePhases,
+          specialties,
+          schemaAvailable: clinicalSchemaAvailable
+        },
+        meta: {
+          queryCount: 9,
+          batched: true,
+          periodDays: requestedDays,
+          dateFrom: dateFromIso,
+          dateTo: dateToIso,
+          doesNotAverageSpecialties: true
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patients/:patientId/clinical-outcomes-dashboard [GET]', error, {
+        fallbackMessage: 'Não foi possível carregar os gráficos clínicos agora.'
+      });
+    }
+  });
+
   app.get('/api/aba/patients/:patientId/charts/targets', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
     try {
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
