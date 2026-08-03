@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, ChevronLeft, ChevronRight, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature, FileText } from 'lucide-react';
 import { EvolutionBarChart } from './Charts';
@@ -42,6 +42,19 @@ const firstPortalPatientName = (...values: unknown[]) => {
   };
   return candidates.find((value) => !isGeneric(value)) || 'Paciente não identificado';
 };
+
+const STAR_CONFETTI_COLORS = ['#7a32fc', '#facc15', '#fb7185', '#22c55e', '#38bdf8', '#f97316'];
+const STAR_CONFETTI_PARTICLES = Array.from({ length: 84 }, (_, index) => ({
+  id: index,
+  left: (index * 37 + 7) % 100,
+  drift: ((index * 53) % 180) - 90,
+  delay: (index % 14) * 0.045,
+  duration: 3.1 + (index % 7) * 0.18,
+  rotate: 360 + (index % 5) * 180,
+  size: 7 + (index % 5) * 2,
+  color: STAR_CONFETTI_COLORS[index % STAR_CONFETTI_COLORS.length],
+  shape: index % 4
+}));
 
 export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
   const FAMILY_DAILY_PHOTO_LIMIT = 5;
@@ -141,9 +154,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showStarCelebration, setShowStarCelebration] = useState(false);
   const [celebrationKey, setCelebrationKey] = useState(0);
+  const [milestoneCelebrationCount, setMilestoneCelebrationCount] = useState(0);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [latestProtocolReference, setLatestProtocolReference] = useState<any>(null);
-  const previousStarsRef = useRef<number>(0);
+  const milestoneCelebrationRequestRef = useRef('');
+  const milestoneCelebrationSessionKeyRef = useRef('');
   const userType = typeof user.type === 'string' ? user.type.toLowerCase() : '';
   const hasExplicitPatientType = Boolean(userType);
   const userAge =
@@ -1947,27 +1962,67 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [portalAppointments]);
   const portalReportTotalMinutes = portalReportRows.reduce((sum: number, row: any) => sum + Number(row.minutes || 0), 0);
 
+  const dismissMilestoneCelebration = () => {
+    setShowStarCelebration(false);
+    const sessionKey = milestoneCelebrationSessionKeyRef.current;
+    if (sessionKey) {
+      try {
+        window.sessionStorage.removeItem(sessionKey);
+      } catch {
+        // sessionStorage is only a render-resilience fallback; the server owns delivery.
+      }
+    }
+  };
+
   useEffect(() => {
-    if (!isKidsProfile) return;
-    const patientKey = String(user?.id || user?.email || 'unknown');
-    const storageKey = `kids_star_seen_total:${patientKey}`;
-    const stored = Number(window.localStorage.getItem(storageKey) || '0');
-    const baseline = Number.isFinite(stored) ? stored : 0;
-    const previous = Math.max(previousStarsRef.current || 0, baseline);
-    const current = Number(kidsGamification.stars || 0);
-    if (current > previous) {
-      setCelebrationKey((v) => v + 1);
+    const userId = String(user?.id || '').trim();
+    const patientId = String(portalPatientId || '').trim();
+    if (!userId || !patientId) return;
+
+    const requestKey = `${userId}:${patientId}`;
+    if (milestoneCelebrationRequestRef.current === requestKey) return;
+    milestoneCelebrationRequestRef.current = requestKey;
+
+    const sessionKey = `verto:milestone-celebration:${requestKey}`;
+    milestoneCelebrationSessionKeyRef.current = sessionKey;
+    let active = true;
+
+    const showCelebration = (count: number) => {
+      if (!active) return;
+      const safeCount = Math.max(1, Math.min(99, Number(count) || 1));
+      setMilestoneCelebrationCount(safeCount);
+      setCelebrationKey((value) => value + 1);
       setShowStarCelebration(true);
-      const timer = window.setTimeout(() => setShowStarCelebration(false), 1800);
-      previousStarsRef.current = current;
-      window.localStorage.setItem(storageKey, String(current));
-      return () => window.clearTimeout(timer);
+    };
+
+    try {
+      const cached = JSON.parse(window.sessionStorage.getItem(sessionKey) || 'null');
+      if (cached?.celebrate === true) {
+        showCelebration(cached?.unseenCount);
+        return () => { active = false; };
+      }
+    } catch {
+      // Ignore invalid temporary cache and request the authoritative server state.
     }
-    previousStarsRef.current = current;
-    if (current >= baseline) {
-      window.localStorage.setItem(storageKey, String(current));
-    }
-  }, [kidsGamification.stars, isKidsProfile, user?.id, user?.email]);
+
+    void dataService.consumePortalMilestoneCelebration().then((result: any) => {
+      if (!active || result?.success !== true || result?.data?.celebrate !== true) return;
+      const payload = {
+        celebrate: true,
+        unseenCount: Math.max(1, Number(result?.data?.unseenCount || 1) || 1),
+        latestAwardId: result?.data?.latestAwardId || null,
+        latestAwardAt: result?.data?.latestAwardAt || null
+      };
+      try {
+        window.sessionStorage.setItem(sessionKey, JSON.stringify(payload));
+      } catch {
+        // The server receipt already guarantees that the same milestone is not delivered twice.
+      }
+      showCelebration(payload.unseenCount);
+    });
+
+    return () => { active = false; };
+  }, [portalPatientId, user?.id]);
 
   const familyPhotoCountToday = useMemo(() => {
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -3787,6 +3842,82 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   return ( 
     <div className={`min-h-screen p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}> 
+      <AnimatePresence>
+        {showStarCelebration && (
+          <motion.div
+            key={`milestone-celebration-${celebrationKey}`}
+            className="fixed inset-0 z-[10000] overflow-hidden bg-gradient-to-br from-violet-700 via-[#7a32fc] to-fuchsia-500"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 1, 1, 1, 0] }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 6.2, times: [0, 0.08, 0.72, 0.92, 1], ease: 'easeInOut' }}
+            onAnimationComplete={dismissMilestoneCelebration}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Comemoração por novo marco validado"
+          >
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.28),transparent_58%)]" />
+            {STAR_CONFETTI_PARTICLES.map((particle) => (
+              <motion.span
+                key={particle.id}
+                className="pointer-events-none absolute top-[-8vh] block shadow-sm"
+                style={{
+                  left: `${particle.left}%`,
+                  width: particle.size,
+                  height: particle.shape === 0 ? particle.size : Math.max(4, particle.size * 0.45),
+                  borderRadius: particle.shape === 0 ? '999px' : particle.shape === 1 ? '2px' : '45%',
+                  backgroundColor: particle.color
+                }}
+                initial={{ x: 0, y: '-8vh', rotate: 0, opacity: 0 }}
+                animate={{
+                  x: [0, particle.drift, particle.drift * -0.35],
+                  y: ['-8vh', '52vh', '112vh'],
+                  rotate: [0, particle.rotate * 0.55, particle.rotate],
+                  opacity: [0, 1, 1, 0]
+                }}
+                transition={{ duration: particle.duration, delay: particle.delay, ease: 'easeIn' }}
+              />
+            ))}
+            <button
+              type="button"
+              onClick={dismissMilestoneCelebration}
+              className="absolute right-5 top-5 z-20 flex h-11 w-11 items-center justify-center rounded-full border border-white/30 bg-white/15 text-white backdrop-blur transition hover:bg-white/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              aria-label="Fechar comemoração"
+            >
+              <X size={22} />
+            </button>
+            <div className="relative z-10 flex min-h-full items-center justify-center p-5">
+              <motion.div
+                initial={{ scale: 0.55, y: 50, opacity: 0 }}
+                animate={{ scale: [0.55, 1.08, 1], y: [50, -8, 0], opacity: 1 }}
+                transition={{ duration: 0.85, delay: 0.2, ease: 'backOut' }}
+                className="w-full max-w-xl rounded-[36px] border border-white/55 bg-white/95 p-7 text-center shadow-[0_30px_100px_rgba(41,12,95,0.45)] backdrop-blur sm:p-10"
+              >
+                <motion.div
+                  animate={{ rotate: [-10, 12, -8, 8, 0], scale: [1, 1.3, 1.05, 1.2, 1] }}
+                  transition={{ duration: 1.5, delay: 0.55 }}
+                  className="mx-auto flex h-28 w-28 items-center justify-center rounded-full bg-gradient-to-br from-amber-200 via-yellow-300 to-amber-400 text-6xl shadow-[0_18px_45px_rgba(245,158,11,0.38)] sm:h-32 sm:w-32 sm:text-7xl"
+                  aria-hidden="true"
+                >
+                  ⭐
+                </motion.div>
+                <p className="mt-6 text-sm font-semibold uppercase tracking-[0.24em] text-violet-500">Marco conquistado</p>
+                <h2 className="mt-2 text-3xl font-semibold leading-tight text-slate-900 sm:text-4xl">
+                  Você ganhou {milestoneCelebrationCount > 1 ? `${milestoneCelebrationCount} novas estrelinhas!` : 'uma nova estrelinha!'}
+                </h2>
+                <p className="mx-auto mt-4 max-w-md text-base leading-7 text-slate-600 sm:text-lg">
+                  Seu esforço foi reconhecido pela equipe. Cada avanço merece ser celebrado — continue brilhando!
+                </p>
+                <div className="mt-6 flex justify-center gap-2 text-2xl" aria-hidden="true">
+                  <motion.span animate={{ y: [0, -12, 0] }} transition={{ duration: 0.8, repeat: 3 }}>🎉</motion.span>
+                  <motion.span animate={{ y: [0, -16, 0] }} transition={{ duration: 0.9, delay: 0.12, repeat: 3 }}>💜</motion.span>
+                  <motion.span animate={{ y: [0, -12, 0] }} transition={{ duration: 0.8, delay: 0.24, repeat: 3 }}>🌟</motion.span>
+                </div>
+              </motion.div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {(showTaskSuccess || showMoodSuccess) && <SuccessOverlay />} 
       <AnimatePresence>{patientSettingsModal}</AnimatePresence>
       {portalAppointmentDetailModal}

@@ -42379,6 +42379,50 @@ async function startServer() {
     }
   });
 
+  app.post('/api/portal/milestone-celebration/consume', checkAuth, requireRoles('patient'), async (req: any, res) => {
+    const requestId = requestIdForLogs(req);
+    try {
+      const context = await resolvePatientPortalContext(req.session.user);
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const patientId = sanitizeString(context?.resolvedPatientId, 120);
+      if (!isUuid(userId) || !isUuid(patientId)) {
+        return res.status(400).json({ success: false, error: 'Vínculo do paciente não identificado.' });
+      }
+
+      const { data, error } = await supabase.rpc('consume_patient_milestone_celebration_v1', {
+        p_user_id: userId,
+        p_patient_id: patientId
+      });
+      if (error) {
+        const errorCode = sanitizeString(error?.code, 40);
+        if (errorCode === 'PGRST202' || errorCode === '42883') {
+          return res.status(503).json({
+            success: false,
+            error: 'MILESTONE_CELEBRATION_MIGRATION_REQUIRED',
+            message: 'A celebração de marcos ainda não está disponível.'
+          });
+        }
+        throw error;
+      }
+
+      const row = Array.isArray(data) ? data[0] : data;
+      return res.json({
+        success: true,
+        data: {
+          celebrate: row?.celebrate === true,
+          unseenCount: Math.max(0, Number(row?.unseen_count || 0) || 0),
+          latestAwardId: sanitizeString(row?.latest_award_id, 120) || null,
+          latestAwardAt: sanitizeString(row?.latest_award_at, 80) || null
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/milestone-celebration/consume [POST]', error, {
+        requestId,
+        actorId: sanitizeString(req.session.user?.id, 120)
+      });
+    }
+  });
+
   const readPortalAppointmentPatientScope = (appointment: any) => {
     const source = parseCalendarSourcePayload(appointment?.source_payload || appointment?.sourcePayload);
     return {

@@ -2286,6 +2286,26 @@ export const dataService = {
     }
   },
 
+  async consumePortalMilestoneCelebration() {
+    try {
+      const response = await fetchClinical('/api/portal/milestone-celebration/consume', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      }, {
+        helperName: 'consumePortalMilestoneCelebration',
+        operation: 'update',
+        table: 'patient_milestone_celebration_receipts,notes',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: null, error: 'Não foi possível carregar a comemoração agora.' };
+    }
+  },
+
   async getPortalNotifications(limit = 12) {
     try {
       const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));

@@ -9134,6 +9134,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </div> 
           </div> 
           <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
+            {isKidsProfile && (
+              <button
+                type="button"
+                onClick={() => document.getElementById('patient-timeline-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                className={`flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-center text-[11px] font-medium leading-tight transition-colors sm:flex-none sm:text-xs ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20' : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'}`}
+                aria-label={`${kidsMilestoneStars} marcos validados. Ir para a linha do tempo.`}
+              >
+                <span>Marcos validados</span>
+                <strong className="text-sm font-semibold">{kidsMilestoneStars} ⭐</strong>
+              </button>
+            )}
             <a 
               id="whatsapp-btn"
               href={`https://wa.me/${(patient.phone || '').replace(/\D/g, '')}`} 
@@ -9547,19 +9558,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   )}
                 </section>
                 <section className="space-y-4" aria-labelledby="patient-timeline-heading">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <h2 id="patient-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                        Linha do tempo
-                      </h2>
-                      <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                        Registros da família e das sessões, organizados por data.
-                      </p>
-                    </div>
-                    <div className={`inline-flex items-center gap-3 self-start rounded-xl border px-3 py-2 sm:self-auto ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-                      <span className="text-xs font-medium">Marcos validados</span>
-                      <strong className="text-base font-semibold">{kidsMilestoneStars} ⭐</strong>
-                    </div>
+                  <div>
+                    <h2 id="patient-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                      Linha do tempo
+                    </h2>
+                    <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      Registros da família e das sessões, organizados por data.
+                    </p>
                   </div>
                   {renderHistoryTimelineControls()}
                 </section>
