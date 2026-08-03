@@ -9127,185 +9127,251 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         </div>
       )}
 
-      <div className={`z-20 border-b px-4 py-4 transition-colors sm:px-6 sm:py-5 ${isPanelDark ? 'border-slate-800 bg-[#0f1b2f]' : 'border-slate-100 bg-white'}`}>
-        <div className="mx-auto w-full max-w-[1480px]">
-        <div className="mb-4 flex min-w-0 flex-col items-stretch gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-            {!hideBackButton && (
-              <button id="back-btn" onClick={onBack} className={`group flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 transition-all hover:text-[#7a32fc] ${isPanelDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-100 text-slate-400 hover:bg-slate-50'}`}>
-                <ChevronLeft size={20} className="group-hover:-translate-x-0.5 transition-transform" />
-                <span className="hidden text-xs font-medium uppercase tracking-widest sm:inline">Painel</span>
-              </button>
-            )}
-            <div id="patient-header-info" className="flex min-w-0 flex-1 items-start gap-3">
+      <div
+        className={`z-20 transition-colors sm:rounded-[28px] sm:border sm:shadow-sm ${
+          isPanelDark
+            ? 'border-slate-800 bg-[#0f1b2f]'
+            : 'border-slate-200/80 bg-white'
+        }`}
+      >
+        <div className="mx-auto w-full max-w-[1480px] px-4 pt-4 sm:px-6 sm:pt-5">
+          <div className="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+              {!hideBackButton && (
+                <button
+                  id="back-btn"
+                  onClick={onBack}
+                  className={`group flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-all hover:text-[#7a32fc] ${
+                    isPanelDark
+                      ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      : 'bg-slate-100 text-slate-500 hover:bg-violet-50'
+                  }`}
+                  aria-label="Voltar ao painel"
+                >
+                  <ChevronLeft size={20} className="transition-transform group-hover:-translate-x-0.5" />
+                </button>
+              )}
+
+              <div id="patient-header-info" className="flex min-w-0 flex-1 items-center gap-3">
                 {patientPhotoSource(patient) ? (
                   <SecureImage
                     src={patientPhotoSource(patient)}
                     alt={`Foto de ${patient?.name || 'paciente'}`}
-                    className="h-12 w-12 shrink-0 rounded-2xl object-cover ring-1 ring-slate-200 sm:h-14 sm:w-14"
+                    className="h-12 w-12 shrink-0 rounded-full object-cover ring-1 ring-slate-200 sm:h-14 sm:w-14"
                   />
                 ) : (
-                  <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl text-sm sm:h-14 sm:w-14 ${isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-violet-50 text-violet-700'}`}>
+                  <span
+                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-sm sm:h-14 sm:w-14 ${
+                      isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-violet-50 text-violet-700'
+                    }`}
+                  >
                     {patientInitials(patient?.name)}
                   </span>
                 )}
+
                 <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                    <h1 className={`break-words text-xl font-semibold leading-snug sm:text-2xl ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{patient.name}</h1>
-                </div>
-                <p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Paciente</p>
-                {canOpenAnamnesis && (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider ${getAnamnesisStatusLabel().includes('revisada') ? 'bg-emerald-100 text-emerald-700' : isPanelDark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-700'}`}>
-                      {getAnamnesisStatusLabel()}
-                    </span>
-                    {anamnesisFlowMessage && (
-                      <span className={`text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                  <h1
+                    className={`break-words text-lg font-semibold leading-snug sm:text-xl ${
+                      isPanelDark ? 'text-slate-50' : 'text-[#6542a8]'
+                    }`}
+                  >
+                    {patient.name}
+                  </h1>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <span className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Paciente</span>
+                    {canOpenAnamnesis && (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
+                          getAnamnesisStatusLabel().includes('revisada')
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : isPanelDark
+                              ? 'bg-amber-500/10 text-amber-200'
+                              : 'bg-amber-50 text-amber-700'
+                        }`}
+                      >
+                        {getAnamnesisStatusLabel()}
+                      </span>
+                    )}
+                    {canOpenAnamnesis && anamnesisFlowMessage && (
+                      <span className={`text-[11px] font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                         {anamnesisFlowMessage}
                       </span>
                     )}
                   </div>
-                )}
-                </div>
-            </div> 
-          </div> 
-          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
-            {isKidsProfile && (
-              <button
-                type="button"
-                onClick={() => document.getElementById('patient-timeline-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                className={`flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-center text-[11px] font-medium leading-tight transition-colors sm:flex-none sm:text-xs ${isPanelDark ? 'border-amber-400/20 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20' : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'}`}
-                aria-label={`${kidsMilestoneStars} marcos validados. Ir para a linha do tempo.`}
-              >
-                <span>Marcos validados</span>
-                <strong className="text-sm font-semibold">{kidsMilestoneStars} ⭐</strong>
-              </button>
-            )}
-            <a 
-              id="whatsapp-btn"
-              href={`https://wa.me/${(patient.phone || '').replace(/\D/g, '')}`} 
-              target="_blank" 
-              rel="noopener noreferrer" 
-              className="flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl bg-green-500 px-3 py-2.5 text-center text-[11px] font-medium leading-tight text-white transition-all hover:opacity-90 sm:flex-none sm:text-xs"
-            >
-              <MessageCircle size={16} /> WhatsApp
-            </a>
-            {canOpenAnamnesis && (
-              <button id="anamnesis-btn" onClick={() => setShowAnamnesis(true)} className={`flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-center text-[11px] font-medium leading-tight transition-colors sm:flex-none sm:text-xs ${isPanelDark ? 'bg-violet-500/10 text-violet-200 border-violet-400/30 hover:bg-violet-500/20' : 'bg-[#F4F7FE] text-[#7a32fc] border-blue-100 hover:bg-[#7a32fc]/10'}`}>
-                <FileText size={16} /> Ficha Anamnese 
-              </button>
-            )}
-            {canOpenAnamnesis && (
-              <button
-                onClick={() => void handleSendAnamnesisRequest()}
-                disabled={isSendingAnamnesisRequest}
-                className={`flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-center text-[11px] font-medium leading-tight transition-colors disabled:opacity-60 sm:flex-none sm:text-xs ${isPanelDark ? 'bg-slate-800 text-violet-200 border-slate-700 hover:bg-slate-700' : 'bg-white text-[#7a32fc] border-purple-100 hover:bg-purple-50'}`}
-              >
-                <Share2 size={16} /> {isSendingAnamnesisRequest ? 'Enviando...' : 'Enviar anamnese'}
-              </button>
-            )}
-            {canOpenAnamnesis && hasSubmittedAnamnesisFlow && (
-              <button
-                onClick={openSubmittedAnamnesisForFiles}
-                className="flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2.5 text-center text-[11px] font-medium leading-tight text-indigo-700 transition-colors hover:bg-indigo-100 sm:flex-none sm:text-xs"
-              >
-                <Eye size={16} /> Ver ficha enviada
-              </button>
-            )}
-            {canOpenAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED' && (
-              <button
-                onClick={() => void handleReviewAnamnesisFlow()}
-                disabled={isReviewingAnamnesis}
-                className="flex min-h-11 min-w-0 items-center justify-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2.5 text-center text-[11px] font-medium leading-tight text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-60 sm:flex-none sm:text-xs"
-              >
-                <CheckCircle2 size={16} /> {isReviewingAnamnesis ? 'Revisando...' : 'Marcar revisada'}
-              </button>
-            )}
-            <button 
-              onClick={() => setIsUnlinkingModalOpen(true)}
-              className="flex h-11 w-11 items-center justify-center justify-self-end rounded-xl text-gray-400 transition-all hover:bg-red-50 hover:text-red-500"
-              title="Desvincular Paciente"
-            >
-              <EyeOff size={20} />
-            </button>
-          </div>
-        </div> 
-        <div
-          id="patient-care-context"
-          className={`mb-4 grid min-w-0 gap-3 ${canManageTherapistAssignment ? 'lg:grid-cols-[minmax(15rem,19rem)_minmax(0,1fr)]' : ''}`}
-        >
-          {canManageTherapistAssignment && (
-            <section
-              className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-slate-50'}`}
-              aria-labelledby="patient-primary-professional-heading"
-            >
-              <div className="flex items-start gap-2">
-                <Activity size={18} className="mt-0.5 shrink-0 text-violet-600" />
-                <div className="min-w-0">
-                  <h2 id="patient-primary-professional-heading" className={`text-sm font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                    Responsável principal
-                  </h2>
-                  <p className={`mt-0.5 text-xs leading-5 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    Referência atual do prontuário.
-                  </p>
                 </div>
               </div>
-              <label className={`mt-3 block text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                Profissional
-                <select
-                  className={`mt-1.5 h-11 w-full min-w-0 rounded-xl border px-3 text-sm outline-none transition focus:border-[#7551FF] focus:ring-2 focus:ring-[#7551FF]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}
-                  value={selectedTherapistId}
-                  onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
-                  disabled={isLoadingTherapists}
+            </div>
+
+            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end">
+              {isKidsProfile && (
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('patient-timeline-heading')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  className={`flex min-h-9 min-w-0 items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-center text-[11px] font-medium leading-tight transition-colors sm:flex-none ${
+                    isPanelDark
+                      ? 'border-amber-400/20 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'
+                      : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                  }`}
+                  aria-label={`${kidsMilestoneStars} marcos validados. Ir para a linha do tempo.`}
                 >
-                  <option value="">{isLoadingTherapists ? 'Carregando profissionais...' : 'Sem profissional responsável'}</option>
-                  {clinicTherapists.map((therapist: any) => (
-                    <option key={String(therapist.id)} value={String(therapist.id)}>
-                      {formatPatientProfessionalOptionLabel(therapist)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </section>
-          )}
-          {patient?.id ? (
-            <PatientProfessionalLinksPanel
-              patientId={String(patient.id)}
-              professionals={clinicTherapists}
-              canManage={canManageTherapistAssignment}
-              dark={isPanelDark}
-            />
-          ) : null}
+                  <span>Marcos validados</span>
+                  <strong className="text-xs font-semibold">{kidsMilestoneStars} ⭐</strong>
+                </button>
+              )}
+
+              <a
+                id="whatsapp-btn"
+                href={`https://wa.me/${(patient.phone || '').replace(/\D/g, '')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg bg-[#7046b8] px-3 py-2 text-center text-[11px] font-medium leading-tight text-white transition-all hover:bg-[#6037a7] sm:flex-none"
+              >
+                <MessageCircle size={15} /> WhatsApp
+              </a>
+
+              {canOpenAnamnesis && (
+                <button
+                  id="anamnesis-btn"
+                  onClick={() => setShowAnamnesis(true)}
+                  className={`flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-center text-[11px] font-medium leading-tight transition-colors sm:flex-none ${
+                    isPanelDark
+                      ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700'
+                      : 'border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <FileText size={15} /> Ficha Anamnese
+                </button>
+              )}
+
+              {canOpenAnamnesis && (
+                <button
+                  onClick={() => void handleSendAnamnesisRequest()}
+                  disabled={isSendingAnamnesisRequest}
+                  className={`flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-center text-[11px] font-medium leading-tight transition-colors disabled:opacity-60 sm:flex-none ${
+                    isPanelDark
+                      ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700'
+                      : 'border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <Share2 size={15} /> {isSendingAnamnesisRequest ? 'Enviando...' : 'Enviar anamnese'}
+                </button>
+              )}
+
+              {canOpenAnamnesis && hasSubmittedAnamnesisFlow && (
+                <button
+                  onClick={openSubmittedAnamnesisForFiles}
+                  className="flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-center text-[11px] font-medium leading-tight text-indigo-700 transition-colors hover:bg-indigo-100 sm:flex-none"
+                >
+                  <Eye size={15} /> Ver ficha enviada
+                </button>
+              )}
+
+              {canOpenAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED' && (
+                <button
+                  onClick={() => void handleReviewAnamnesisFlow()}
+                  disabled={isReviewingAnamnesis}
+                  className="flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-center text-[11px] font-medium leading-tight text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-60 sm:flex-none"
+                >
+                  <CheckCircle2 size={15} /> {isReviewingAnamnesis ? 'Revisando...' : 'Marcar revisada'}
+                </button>
+              )}
+
+              <button
+                onClick={() => setIsUnlinkingModalOpen(true)}
+                className="flex h-9 w-9 items-center justify-center justify-self-end rounded-lg text-slate-400 transition-all hover:bg-red-50 hover:text-red-500"
+                title="Desvincular Paciente"
+                aria-label="Desvincular paciente"
+              >
+                <EyeOff size={18} />
+              </button>
+            </div>
+          </div>
+
+          <div
+            id="patient-care-context"
+            className={`mt-6 grid min-w-0 items-start gap-5 ${
+              canManageTherapistAssignment
+                ? 'lg:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]'
+                : ''
+            }`}
+          >
+            {canManageTherapistAssignment && (
+              <section aria-labelledby="patient-primary-professional-heading" className="min-w-0">
+                <h2
+                  id="patient-primary-professional-heading"
+                  className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}
+                >
+                  Responsável principal
+                </h2>
+                <label className="mt-2 block">
+                  <span className="sr-only">Profissional responsável</span>
+                  <select
+                    className={`h-10 w-full min-w-0 rounded-lg border px-3 text-xs outline-none transition focus:border-[#7551FF] focus:ring-2 focus:ring-[#7551FF]/15 ${
+                      isPanelDark
+                        ? 'border-slate-700 bg-slate-900 text-slate-100'
+                        : 'border-slate-200 bg-white text-slate-800 shadow-sm'
+                    }`}
+                    value={selectedTherapistId}
+                    onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
+                    disabled={isLoadingTherapists}
+                  >
+                    <option value="">{isLoadingTherapists ? 'Carregando profissionais...' : 'Sem profissional responsável'}</option>
+                    {clinicTherapists.map((therapist: any) => (
+                      <option key={String(therapist.id)} value={String(therapist.id)}>
+                        {formatPatientProfessionalOptionLabel(therapist)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </section>
+            )}
+
+            {patient?.id ? (
+              <PatientProfessionalLinksPanel
+                patientId={String(patient.id)}
+                professionals={clinicTherapists}
+                canManage={canManageTherapistAssignment}
+                dark={isPanelDark}
+              />
+            ) : null}
+          </div>
         </div>
+
         <nav
           id="tab-nav"
           aria-label="Áreas do prontuário"
-          className={`flex gap-1 overflow-x-auto rounded-xl p-1 scrollbar-hide no-scrollbar transition-colors lg:grid lg:auto-cols-fr lg:grid-flow-col ${isPanelDark ? 'bg-slate-900/70' : 'bg-gray-100'}`}
+          className={`mt-5 flex gap-1 overflow-x-auto border-t px-4 scrollbar-hide no-scrollbar sm:px-6 ${
+            isPanelDark ? 'border-slate-800' : 'border-slate-200/80'
+          }`}
         >
-          {canAccessTab('history') && <button id="tab-history" aria-current={activeTab === 'history' ? 'page' : undefined} onClick={() => setActiveTab('history')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'history' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Histórico</button>}
-          {canAccessTab('notes') && <button id="tab-notes" aria-current={activeTab === 'notes' ? 'page' : undefined} onClick={() => setActiveTab('notes')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'notes' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Anotações</button>}
-          {canAccessTab('report') && <button id="tab-report" aria-current={activeTab === 'report' ? 'page' : undefined} onClick={() => setActiveTab('report')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'report' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Relatório</button>}
+          {canAccessTab('history') && (
+            <button id="tab-history" aria-current={activeTab === 'history' ? 'page' : undefined} onClick={() => setActiveTab('history')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'history' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Histórico</button>
+          )}
+          {canAccessTab('notes') && (
+            <button id="tab-notes" aria-current={activeTab === 'notes' ? 'page' : undefined} onClick={() => setActiveTab('notes')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'notes' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Anotações</button>
+          )}
+          {canAccessTab('report') && (
+            <button id="tab-report" aria-current={activeTab === 'report' ? 'page' : undefined} onClick={() => setActiveTab('report')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'report' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Relatório</button>
+          )}
           {canAccessTab('plan') && (
-            <button
-              id="tab-plan"
-              aria-current={activeTab === 'plan' ? 'page' : undefined}
-              onClick={() => setActiveTab('plan')}
-              className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'plan' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}
-            >
+            <button id="tab-plan" aria-current={activeTab === 'plan' ? 'page' : undefined} onClick={() => setActiveTab('plan')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'plan' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
           {canAccessTab('session') && isKidsProfile && (
-            <button id="tab-session" onClick={() => requestSessionStart('fullscreen')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'session' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Sessão</button>
+            <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => requestSessionStart('fullscreen')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
           )}
           {canAccessTab('aba-charts') && (
-            <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-11 min-w-[7rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'aba-charts' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Gráficos</button>
+            <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-11 min-w-[7rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'aba-charts' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Gráficos</button>
           )}
-          {canAccessTab('school') && <button id="tab-school" aria-current={activeTab === 'school' ? 'page' : undefined} onClick={() => setActiveTab('school')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'school' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Escola</button>}
-          {canAccessTab('files') && <button id="tab-files" aria-current={activeTab === 'files' ? 'page' : undefined} onClick={() => setActiveTab('files')} className={`min-h-11 min-w-[6rem] shrink-0 rounded-lg px-3 py-2 text-xs font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 lg:min-w-0 ${activeTab === 'files' ? (isPanelDark ? 'bg-slate-800 text-white' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300 hover:text-white' : 'text-gray-500 hover:text-slate-700')}`}>Arquivos</button>}
+          {canAccessTab('school') && (
+            <button id="tab-school" aria-current={activeTab === 'school' ? 'page' : undefined} onClick={() => setActiveTab('school')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'school' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Escola</button>
+          )}
+          {canAccessTab('files') && (
+            <button id="tab-files" aria-current={activeTab === 'files' ? 'page' : undefined} onClick={() => setActiveTab('files')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'files' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Arquivos</button>
+          )}
         </nav>
-        </div>
-      </div> 
+      </div>
       <div className={`min-w-0 p-4 transition-colors sm:p-6 ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}>
         <div className="mx-auto w-full max-w-[1480px]">
         {activeTab === 'history' ? ( 

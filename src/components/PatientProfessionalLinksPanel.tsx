@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, UserRoundCheck, UserRoundX, UsersRound } from 'lucide-react';
+import { Plus, UserRoundCheck, UserRoundX } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import {
   PATIENT_PROFESSIONAL_CASE_ROLE_OPTIONS,
@@ -219,28 +219,23 @@ export const PatientProfessionalLinksPanel = ({
     }
   };
 
-  const shell = dark
-    ? 'border-slate-700 bg-slate-900/60 text-slate-100'
-    : 'border-slate-200 bg-white text-slate-900';
+  const shell = dark ? 'text-slate-100' : 'text-slate-900';
 
   return (
-    <section className={`w-full min-w-0 rounded-2xl border p-4 ${shell}`} aria-label="Equipe do caso">
+    <section className={`w-full min-w-0 ${shell}`} aria-label="Equipe do caso">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex items-start gap-2">
-          <UsersRound size={18} className="mt-0.5 text-violet-600" />
-          <div>
-            <p className="text-sm font-medium">Equipe do caso</p>
+        <div>
+            <p className="text-sm font-semibold">Equipe do caso</p>
             <p className={`mt-0.5 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
               {loading ? 'Carregando...' : `${active.length} de 5 vínculos ativos`}
             </p>
           </div>
-        </div>
         {canManage ? (
           <button
             type="button"
             onClick={() => setShowForm((value) => !value)}
             disabled={active.length >= 5 || loading}
-            className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 text-xs font-medium text-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className={`inline-flex min-h-9 items-center gap-2 rounded-lg border px-3 text-xs font-medium shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${dark ? 'border-slate-700 bg-slate-800 text-violet-200 hover:bg-slate-700' : 'border-slate-200 bg-white text-[#6542a8] hover:bg-violet-50'}`}
           >
             <Plus size={15} /> Adicionar
           </button>
@@ -329,11 +324,11 @@ export const PatientProfessionalLinksPanel = ({
         </div>
       ) : null}
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="mt-2 grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
         {active.map((link) => (
           <article
             key={link.id}
-            className={`rounded-xl border p-3 ${
+            className={`overflow-hidden rounded-xl border shadow-sm ${
               link.integrityStatus
                 ? dark
                   ? 'border-amber-500/40 bg-amber-500/10'
@@ -343,7 +338,7 @@ export const PatientProfessionalLinksPanel = ({
                   : 'border-slate-200 bg-white'
             }`}
           >
-            <div className="flex items-start justify-between gap-2">
+            <div className="flex min-h-[4.75rem] items-start justify-between gap-2 p-3">
               <div className="flex min-w-0 items-start gap-2.5">
                 {(() => {
                   const professionalRecord = professionalById.get(String(link.professional_id || '').trim()) || link.professional;
@@ -367,12 +362,14 @@ export const PatientProfessionalLinksPanel = ({
               </span>
             </div>
             {link.integrityStatus ? (
-              <p className={`mt-2 text-xs leading-5 ${dark ? 'text-amber-200' : 'text-amber-800'}`}>
+              <p className={`mx-3 mb-2 text-xs leading-5 ${dark ? 'text-amber-200' : 'text-amber-800'}`}>
                 Vínculo ativo com cadastro profissional inconsistente. O acesso clínico está bloqueado; encerre o vínculo ou regularize a membership.
               </p>
             ) : null}
             {canManage && link.canBeEnded !== false ? (
-              <button type="button" onClick={() => void end(link)} disabled={busy === `end:${link.id}`} className="mt-2 inline-flex min-h-9 items-center gap-1.5 text-xs font-medium text-rose-600 disabled:opacity-50"><UserRoundX size={14} /> Encerrar vínculo</button>
+              <div className={`border-t px-3 ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
+                <button type="button" onClick={() => void end(link)} disabled={busy === `end:${link.id}`} className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 text-xs font-medium text-rose-600 disabled:opacity-50"><UserRoundX size={14} /> Encerrar vínculo</button>
+              </div>
             ) : null}
           </article>
         ))}

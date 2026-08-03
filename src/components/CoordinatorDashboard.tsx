@@ -9665,7 +9665,7 @@ export function CoordinatorDashboard({
         <div className="h-screen min-w-0 flex-1 overflow-y-auto">
           {/* Header */}
           <header
-            className={`sticky top-0 z-30 flex items-center justify-between gap-2 px-3 py-2.5 backdrop-blur-md sm:px-4 lg:px-6 ${
+            className={`sticky top-0 z-30 flex items-center justify-between gap-2 px-3 py-2 backdrop-blur-md sm:px-4 lg:px-5 ${
               theme === "dark"
                 ? "bg-[#0f172a]/85 border-b border-slate-800/80"
                 : "bg-[#F4F7FE]/85 border-b border-slate-100/90"
@@ -9678,10 +9678,10 @@ export function CoordinatorDashboard({
                   setActiveTab("dashboard");
                   setTabHistory(["dashboard"]);
                 }}
-                className={`shrink-0 rounded-xl border p-2 shadow-sm transition-all ${
+                className={`shrink-0 rounded-full p-2 transition-all ${
                   theme === "dark"
-                    ? "bg-[#0b1a33] text-slate-300 border-slate-700 hover:text-violet-300"
-                    : "bg-white text-slate-400 border-slate-100 hover:text-[#7a32fc]"
+                    ? "bg-slate-800 text-slate-300 hover:text-violet-300"
+                    : "bg-slate-100 text-slate-500 hover:bg-violet-50 hover:text-[#7a32fc]"
                 }`}
               >
                 <ChevronRight size={20} className="rotate-180" />
@@ -9690,18 +9690,14 @@ export function CoordinatorDashboard({
                 <p className="mb-0.5 text-[10px] font-medium uppercase tracking-widest text-slate-400">
                   Prontuário
                 </p>
-                <h1 className="max-w-[13rem] text-base font-semibold leading-snug text-slate-900 sm:max-w-none lg:text-2xl">
+                <h1 className={`max-w-[13rem] text-base font-semibold leading-snug sm:max-w-none lg:text-xl ${theme === "dark" ? "text-slate-100" : "text-slate-900"}`}> 
                   Prontuário do Paciente
                 </h1>
               </div>
             </div>
 
             <div
-              className={`flex shrink-0 items-center gap-1 rounded-2xl border p-1 shadow-sm sm:gap-2 lg:gap-4 lg:p-2 ${
-                theme === "dark"
-                  ? "bg-[#0b1a33] border-slate-700"
-                  : "bg-white border-slate-100"
-              }`}
+              className="flex shrink-0 items-center gap-1 sm:gap-2"
             >
               <button
                 onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
@@ -9788,7 +9784,7 @@ export function CoordinatorDashboard({
             )}
           </AnimatePresence>
 
-          <main className="min-w-0 px-0 pb-20 sm:p-4 lg:p-8">
+          <main className="min-w-0 px-0 pb-20 sm:p-4 lg:p-5">
             <PatientDetailView
               patient={patient}
               themeMode={theme}
