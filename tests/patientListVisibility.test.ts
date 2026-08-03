@@ -95,6 +95,14 @@ assert.equal(
 );
 
 assert.deepEqual(resolvePatientProfessionalIds(patients[0]), ['coordinator-1', 'therapist-1']);
+assert.deepEqual(
+  resolvePatientProfessionalIds({
+    therapist_id: 'legacy-therapist',
+    professional_links: [],
+  }),
+  ['legacy-therapist'],
+  'array canônico vazio não pode apagar vínculo legado ainda válido',
+);
 assert.equal(
   neutralList.filter((patient) => patientMatchesProfessionalFilter(patient, 'coordinator-1')).length,
   2,
@@ -196,13 +204,24 @@ assert.doesNotMatch(
   /for\s*\(\s*const patient of patients/,
   '19. a quantidade de requests da listagem não pode crescer com o número de pacientes',
 );
-assert.equal(
-  (serverSource.slice(
-    serverSource.indexOf("app.get('/api/patients'"),
-    serverSource.indexOf("app.post('/api/patients'"),
-  ).match(/\.from\('patient_professional_links'\)/g) || []).length,
-  1,
-  'vínculos profissionais devem ser carregados em uma única consulta em lote',
+const patientListRouteSource = serverSource.slice(
+  serverSource.indexOf("app.get('/api/patients'"),
+  serverSource.indexOf("app.post('/api/patients'"),
+);
+assert.match(
+  patientListRouteSource,
+  /\.from\('patient_professional_links'\)[\s\S]*?\.eq\('professional_id', actorUserId\)[\s\S]*?\.eq\('status', 'active'\)/,
+  'terapeuta deve carregar em lote os pacientes vinculados pela equipe do caso',
+);
+assert.match(
+  patientListRouteSource,
+  /linkedPatientIds[\s\S]*?\.from\('patients'\)[\s\S]*?\.in\('id', linkedPatientIds\)/,
+  'pacientes do vínculo canônico devem ser buscados em uma consulta filtrada por IDs',
+);
+assert.doesNotMatch(
+  patientListRouteSource,
+  /for\s*\([^)]*patient[^)]*\)[\s\S]{0,400}await\s+supabase/,
+  'a correção não pode introduzir N+1 por paciente',
 );
 
 assert.match(coordinatorSource, /const visiblePatients = useMemo/);

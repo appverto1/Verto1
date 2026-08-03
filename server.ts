@@ -3738,19 +3738,16 @@ function getClinicInvitationAcceptanceUrl(invitationIdValue: unknown): string {
 }
 
 function getRecoveryRedirectUrl(recoveryToken?: unknown): string {
-  const baseUrl = sanitizeString(
-    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
-    500
-  );
-  if (!baseUrl) {
-    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para recuperação de senha.');
-  }
+  const baseUrl = getInvitationAppBaseUrl();
   const params = new URLSearchParams({ auth_action: 'recovery' });
   const token = sanitizeString(recoveryToken, 4096);
   const tokenFragment = new URLSearchParams();
   if (token) tokenFragment.set('recovery_token', token);
   const fragment = tokenFragment.toString();
-  return `${baseUrl.replace(/\/+$/, '')}/reset-password?${params.toString()}${fragment ? `#${fragment}` : ''}`;
+
+  // A recuperação entra pela raiz da SPA no host canônico. Isso evita 404 em
+  // provedores que não reescrevem rotas profundas como /reset-password.
+  return `${baseUrl.replace(/\/+$/, '')}/?${params.toString()}${fragment ? `#${fragment}` : ''}`;
 }
 
 function extractSupabaseErrorMessage(error: any): string {
@@ -33010,24 +33007,110 @@ async function startServer() {
       const role = req.session.user.role as AppRole;
       const scopedClinicId = currentClinicId(req.session.user);
 
+      const actorUserId = sanitizeString(req.session.user?.id, 120);
+      const normalizedRole = sanitizeString(role, 40).toLowerCase();
+      const isTherapistList = normalizedRole === 'therapist';
+      let therapistProfessionalLinks: any[] | null = null;
+
+      if (isTherapistList && scopedClinicId && isUuid(actorUserId)) {
+        const therapistLinkResult = await supabase
+          .from('patient_professional_links')
+          .select('patient_id,professional_id,relationship_type,status')
+          .eq('organization_id', scopedClinicId)
+          .eq('professional_id', actorUserId)
+          .eq('status', 'active')
+          .limit(limit);
+
+        if (therapistLinkResult.error) {
+          if (!isMissingRelationError(therapistLinkResult.error)) {
+            throw therapistLinkResult.error;
+          }
+        } else {
+          therapistProfessionalLinks = Array.isArray(therapistLinkResult.data)
+            ? therapistLinkResult.data
+            : [];
+        }
+      }
+
       const result = await fetchPatientsWithSchemaFallback({
         supabase,
         role,
-        userId: sanitizeString(req.session.user?.id, 120),
+        userId: actorUserId,
         clinicId: scopedClinicId,
         limit,
         logger: console
       });
 
       if (result.error) throw result.error;
+      let patientRows = Array.isArray(result.data) ? result.data : [];
+
+      if (therapistProfessionalLinks && scopedClinicId) {
+        const alreadyLoadedPatientIds = new Set(
+          patientRows
+            .map((patient: any) => sanitizeString(patient?.id, 120))
+            .filter(Boolean)
+        );
+        const linkedPatientIds = Array.from(new Set(
+          therapistProfessionalLinks
+            .map((link: any) => sanitizeString(link?.patient_id, 120))
+            .filter((patientId: string) => isUuid(patientId) && !alreadyLoadedPatientIds.has(patientId))
+        )).slice(0, limit);
+
+        if (linkedPatientIds.length > 0) {
+          let linkedPatientsQuery = supabase
+            .from('patients')
+            .select(result.select)
+            .eq('clinic_id', scopedClinicId)
+            .in('id', linkedPatientIds)
+            .order('created_at', { ascending: false })
+            .limit(linkedPatientIds.length);
+
+          if (result.select.includes('is_active')) {
+            linkedPatientsQuery = linkedPatientsQuery.eq('is_active', true);
+          }
+          if (result.select.includes('deleted_at')) {
+            linkedPatientsQuery = linkedPatientsQuery.is('deleted_at', null);
+          }
+          if (result.select.includes('status')) {
+            linkedPatientsQuery = linkedPatientsQuery
+              .neq('status', 'ARCHIVED')
+              .neq('status', 'archived');
+          }
+
+          const linkedPatientsResult = await linkedPatientsQuery;
+          if (linkedPatientsResult.error) throw linkedPatientsResult.error;
+
+          const patientsById = new Map<string, any>();
+          for (const patient of [...patientRows, ...(linkedPatientsResult.data || [])]) {
+            const patientId = sanitizeString(patient?.id, 120);
+            if (patientId && !patientsById.has(patientId)) patientsById.set(patientId, patient);
+          }
+          patientRows = Array.from(patientsById.values()).slice(0, limit);
+        }
+      }
+
       const patients = isExplicitDemoUser(req.session.user)
-        ? (result.data || []).filter((patient: any) => patient?.is_demo === true)
-        : result.data || [];
+        ? patientRows.filter((patient: any) => patient?.is_demo === true)
+        : patientRows;
       const patientIds = patients
         .map((patient: any) => sanitizeString(patient?.id, 120))
         .filter(Boolean);
       let activeProfessionalLinksByPatient: Map<string, any[]> | null = null;
-      if (scopedClinicId && patientIds.length > 0) {
+
+      if (therapistProfessionalLinks) {
+        activeProfessionalLinksByPatient = new Map<string, any[]>();
+        for (const link of therapistProfessionalLinks) {
+          const patientId = sanitizeString(link?.patient_id, 120);
+          if (!patientId || !patientIds.includes(patientId)) continue;
+          const current = activeProfessionalLinksByPatient.get(patientId) || [];
+          current.push({
+            professional_id: sanitizeString(link?.professional_id, 120),
+            relationship_type: sanitizeString(link?.relationship_type, 40),
+            status: 'active',
+          });
+          activeProfessionalLinksByPatient.set(patientId, current);
+        }
+      } else if (scopedClinicId && patientIds.length > 0) {
         const professionalLinkResult = await supabase
           .from('patient_professional_links')
           .select('patient_id,professional_id,relationship_type,status')
@@ -33058,10 +33141,12 @@ async function startServer() {
         data: patients.map((patient: any) => {
           const serialized = serializePatientMediaForClient(patient);
           if (!activeProfessionalLinksByPatient) return serialized;
+          const professionalLinks =
+            activeProfessionalLinksByPatient.get(sanitizeString(patient?.id, 120)) || [];
+          if (professionalLinks.length === 0) return serialized;
           return {
             ...serialized,
-            professional_links:
-              activeProfessionalLinksByPatient.get(sanitizeString(patient?.id, 120)) || [],
+            professional_links: professionalLinks,
           };
         }),
       });

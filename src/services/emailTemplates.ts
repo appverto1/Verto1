@@ -38,7 +38,7 @@ export type PasswordRecoveryTemplateVariables = {
   reset_link: string;
 };
 
-const DEFAULT_RECOVERY_URL = 'https://www.appverto.com.br/reset-password';
+const DEFAULT_RECOVERY_URL = 'https://www.appverto.com.br/?auth_action=recovery';
 
 const toSafeName = (value: string): string => {
   const normalized = String(value || '').trim();

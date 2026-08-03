@@ -114,7 +114,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
   };
 
   const createPasswordLater = () => {
-    if (typeof window !== 'undefined') window.location.href = '/reset-password';
+    if (typeof window !== 'undefined') window.location.href = '/?auth_action=recovery';
   };
 
   const toggleScope = (key: keyof typeof scope) => {

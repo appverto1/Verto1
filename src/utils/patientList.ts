@@ -58,7 +58,7 @@ const getCanonicalProfessionalLinkArrays = (patient: any): any[][] => [
 export function resolvePatientProfessionalIds(patient: any): string[] {
   const canonicalLinkArrays = getCanonicalProfessionalLinkArrays(patient);
   if (canonicalLinkArrays.length > 0) {
-    return Array.from(
+    const canonicalProfessionalIds = Array.from(
       new Set(
         canonicalLinkArrays
           .flat()
@@ -78,6 +78,7 @@ export function resolvePatientProfessionalIds(patient: any): string[] {
           .filter(Boolean),
       ),
     );
+    if (canonicalProfessionalIds.length > 0) return canonicalProfessionalIds;
   }
 
   const legacyId = String(
