@@ -5440,6 +5440,17 @@ async function resolvePatientPhotoUrl(rawUrl: unknown, rawPath?: unknown): Promi
   return sanitizeSessionUrl(rawUrl);
 }
 
+
+async function resolveProfessionalProfilePhotoUrl(profile: any): Promise<string | null> {
+  const metadata = profile?.metadata && typeof profile.metadata === 'object'
+    ? profile.metadata
+    : {};
+  return resolvePatientPhotoUrl(
+    profile?.profile_photo_url,
+    metadata?.profilePicturePath || metadata?.profile_picture_path,
+  );
+}
+
 type DetectedUploadMime =
   | 'image/png'
   | 'image/jpeg'
@@ -29885,7 +29896,7 @@ async function startServer() {
       const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
       const linksSelect = 'id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,starts_at,ends_at,status,permissions,created_by,ended_by,created_at,updated_at';
       const usersSelect = 'id,name,email';
-      const profilesSelect = 'user_id,specialty,council,council_number,profile_photo_url';
+      const profilesSelect = 'user_id,specialty,council,council_number,profile_photo_url,metadata';
       const membershipsSelect = 'user_id,clinic_id,role,status';
       let stage = 'links';
       let table = 'patient_professional_links';
@@ -29932,7 +29943,12 @@ async function startServer() {
               .select(profilesSelect)
               .in('user_id', professionalIds);
             if (profilesResult.error) throw profilesResult.error;
-            professionalProfiles = profilesResult.data || [];
+            professionalProfiles = await Promise.all(
+              (profilesResult.data || []).map(async (profile: any) => ({
+                ...profile,
+                profile_photo_url: await resolveProfessionalProfilePhotoUrl(profile),
+              })),
+            );
 
             stage = 'memberships';
             table = 'clinic_memberships';
@@ -62478,7 +62494,7 @@ async function startServer() {
         ? await Promise.all([
             supabase
               .from('professional_profiles')
-              .select('user_id,full_name,specialty,profile_photo_url')
+              .select('user_id,full_name,specialty,profile_photo_url,metadata')
               .in('user_id', linkedProfessionalIds)
               .limit(5),
             supabase
@@ -62504,37 +62520,39 @@ async function startServer() {
           String(membership.user_id)
         )
       );
-      const enrichedProfessionalLinks = professionalLinks.map((link: any) => {
-        const profile: any = linkedProfileById.get(String(link.professional_id)) || {};
-        const canonicalSpecialty = normalizeClinicalSpecialty(profile?.specialty);
-        const hasActiveTherapistMembership = linkedMembershipIds.has(
-          String(link.professional_id)
-        );
-        const canWritePlan = link?.permissions?.write !== false;
-        const planEligible =
-          hasActiveTherapistMembership &&
-          Boolean(canonicalSpecialty) &&
-          canWritePlan;
-        return {
-          ...link,
-          name: sanitizeString(profile?.full_name, 180) || 'Profissional',
-          profile_photo_url: sanitizeUrl(profile?.profile_photo_url) || null,
-          specialty:
-            canonicalSpecialty ||
-            sanitizeTextField(link?.specialty, 120) ||
-            null,
-          specialtySnapshot:
-            sanitizeTextField(link?.specialty, 120) || null,
-          planEligible,
-          planEligibilityReason: !hasActiveTherapistMembership
-            ? 'Profissional sem acesso de atendimento ativo nesta clínica.'
-            : !canonicalSpecialty
-              ? 'Especialidade clínica canônica ainda não cadastrada.'
-              : !canWritePlan
-                ? 'Vínculo sem permissão de escrita neste plano.'
-                : null
-        };
-      });
+      const enrichedProfessionalLinks = await Promise.all(
+        professionalLinks.map(async (link: any) => {
+          const profile: any = linkedProfileById.get(String(link.professional_id)) || {};
+          const canonicalSpecialty = normalizeClinicalSpecialty(profile?.specialty);
+          const hasActiveTherapistMembership = linkedMembershipIds.has(
+            String(link.professional_id)
+          );
+          const canWritePlan = link?.permissions?.write !== false;
+          const planEligible =
+            hasActiveTherapistMembership &&
+            Boolean(canonicalSpecialty) &&
+            canWritePlan;
+          return {
+            ...link,
+            name: sanitizeString(profile?.full_name, 180) || 'Profissional',
+            profile_photo_url: await resolveProfessionalProfilePhotoUrl(profile),
+            specialty:
+              canonicalSpecialty ||
+              sanitizeTextField(link?.specialty, 120) ||
+              null,
+            specialtySnapshot:
+              sanitizeTextField(link?.specialty, 120) || null,
+            planEligible,
+            planEligibilityReason: !hasActiveTherapistMembership
+              ? 'Profissional sem acesso de atendimento ativo nesta clínica.'
+              : !canonicalSpecialty
+                ? 'Especialidade clínica canônica ainda não cadastrada.'
+                : !canWritePlan
+                  ? 'Vínculo sem permissão de escrita neste plano.'
+                  : null
+          };
+        }),
+      );
 
       const targetsByProgram = new Map<string, any[]>();
       for (const target of visibleTargetRows) {
