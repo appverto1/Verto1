@@ -62656,31 +62656,24 @@ async function startServer() {
       if (participantProfessionalIds.some((id) => !activeByProfessional.has(id))) {
         return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_PROFESSIONAL_NOT_LINKED', message: 'Todos os participantes precisam possuir vínculo ativo com este paciente.' });
       }
-      const [participantProfilesResult, participantMembershipsResult] = await Promise.all([
-        supabase
-          .from('professional_profiles')
-          .select('user_id,specialty')
-          .in('user_id', participantProfessionalIds)
-          .limit(5),
-        supabase
-          .from('clinic_memberships')
-          .select('user_id,clinic_id,role,status')
-          .eq('clinic_id', clinicId)
-          .eq('role', 'therapist')
-          .eq('status', 'active')
-          .in('user_id', participantProfessionalIds)
-          .limit(5)
-      ]);
-      if (participantProfilesResult.error) throw participantProfilesResult.error;
-      if (participantMembershipsResult.error) throw participantMembershipsResult.error;
-      const participantMembershipIds = new Set(
-        (participantMembershipsResult.data || []).map((membership: any) =>
-          String(membership.user_id)
-        )
+      const { data: participantMemberships, error: participantMembershipsError } = await supabase
+        .from('clinic_memberships')
+        .select('user_id,clinic_id,role,status,specialty')
+        .eq('clinic_id', clinicId)
+        .eq('role', 'therapist')
+        .eq('status', 'active')
+        .in('user_id', participantProfessionalIds)
+        .limit(5);
+      if (participantMembershipsError) throw participantMembershipsError;
+      const membershipByProfessional = new Map(
+        (participantMemberships || []).map((membership: any) => [
+          String(membership.user_id),
+          membership,
+        ])
       );
       if (
         participantProfessionalIds.some(
-          (professionalId) => !participantMembershipIds.has(professionalId)
+          (professionalId) => !membershipByProfessional.has(professionalId)
         )
       ) {
         return res.status(403).json({
@@ -62689,15 +62682,9 @@ async function startServer() {
           message: 'Todos os participantes precisam ser profissionais de atendimento ativos nesta clínica.'
         });
       }
-      const profileByProfessional = new Map(
-        (participantProfilesResult.data || []).map((profile: any) => [
-          String(profile.user_id),
-          profile,
-        ])
-      );
       const participantSpecialties = participantProfessionalIds.map((id) =>
         normalizeClinicalSpecialty(
-          (profileByProfessional.get(id) as any)?.specialty
+          (membershipByProfessional.get(id) as any)?.specialty
         )
       );
       if (participantSpecialties.some((specialty) => !specialty)) {
@@ -62733,7 +62720,7 @@ async function startServer() {
       }
       const specialty = mode === 'specialty'
         ? normalizeClinicalSpecialty(
-            (profileByProfessional.get(responsibleProfessionalId) as any)?.specialty
+            (membershipByProfessional.get(responsibleProfessionalId) as any)?.specialty
           )
         : null;
       if (mode === 'specialty' && !specialty) {

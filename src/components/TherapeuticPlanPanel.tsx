@@ -2295,11 +2295,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         {summary.nextReview && <><span className={muted}>·</span><span className={muted}>revisão em {formatTherapeuticPlanDate(summary.nextReview)}</span></>}
       </div>
 
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="min-w-0">
-          <p className={`mb-2 text-xs ${muted}`}>Status dos programas</p>
-          <div className="flex max-w-full gap-2 overflow-x-auto pb-1" role="group" aria-label="Filtrar programas por status">{[['all', 'Todos'], ['teaching', 'Em ensino'], ['maintenance', 'Em manutenção'], ['paused', 'Pausados'], ['completed', 'Concluídos']].map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value} className={`shrink-0 rounded-full border px-3 py-1.5 text-xs transition-colors ${filter === value ? 'border-violet-600 bg-violet-600 text-white' : isDark ? 'border-slate-700 text-slate-300 hover:border-slate-600 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-600 hover:border-violet-200 hover:bg-violet-50'}`} onClick={() => setFilter(value)}>{label}</button>)}</div>
-        </div>
+      <div className="flex justify-end">
         <label className="relative w-full md:max-w-xs"><Search size={15} className={`absolute left-3.5 top-1/2 -translate-y-1/2 ${muted}`} /><input className={`${field} pl-10`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar programa ou alvo" /></label>
       </div>
 

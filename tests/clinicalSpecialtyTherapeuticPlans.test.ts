@@ -233,11 +233,17 @@ assert.doesNotMatch(
   /req\.body\?\.(?:specialty|specialty_name|specialtyName)(?![A-Za-z_])/,
   'a especialidade do plano não pode vir do navegador',
 );
-assert.match(planCreateRoute, /\.from\('professional_profiles'\)/);
+assert.doesNotMatch(
+  planCreateRoute,
+  /\.from\('professional_profiles'\)/,
+  'a especialidade do plano deve vir da membership da clínica, não do perfil global',
+);
+assert.match(planCreateRoute, /\.from\('clinic_memberships'\)/);
+assert.match(planCreateRoute, /\.select\('user_id,clinic_id,role,status,specialty'\)/);
 assert.match(planCreateRoute, /\.in\('user_id', participantProfessionalIds\)/);
 assert.match(
   planCreateRoute,
-  /profileByProfessional\.get\(responsibleProfessionalId\)[\s\S]*?specialty/,
+  /membershipByProfessional\.get\(responsibleProfessionalId\)[\s\S]*?specialty/,
 );
 assert.match(planCreateRoute, /THERAPEUTIC_PLAN_PARTICIPATION_REQUIRED/);
 assert.match(planCreateRoute, /THERAPEUTIC_PLAN_PARTICIPANT_WRITE_REQUIRED/);
@@ -273,6 +279,11 @@ assert.match(
   /handleUpdateRole\(member\.id, 'therapist', \{ specialty \}\)/,
 );
 assert.match(planPanel, /Projeto Terapêutico Singular \(PTS\)/);
+assert.doesNotMatch(
+  planPanel,
+  /Status dos programas|Filtrar programas por status/,
+  'a navegação principal já separa Programas, Manutenção, Generalização e Histórico',
+);
 assert.doesNotMatch(planPanel, /Plano interdisciplinar/);
 assert.match(planPanel, /Especialidade obtida do cadastro profissional/);
 assert.match(planPanel, /Objetivos comuns do PTS/);
