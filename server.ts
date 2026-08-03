@@ -3743,19 +3743,16 @@ function getClinicInvitationAcceptanceUrl(invitationIdValue: unknown): string {
 }
 
 function getRecoveryRedirectUrl(recoveryToken?: unknown): string {
-  const baseUrl = sanitizeString(
-    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '',
-    500
-  );
-  if (!baseUrl) {
-    throw new Error('VERTO_APP_BASE_URL (ou APP_BASE_URL) deve estar definida para recuperação de senha.');
-  }
+  const baseUrl = getInvitationAppBaseUrl();
   const params = new URLSearchParams({ auth_action: 'recovery' });
   const token = sanitizeString(recoveryToken, 4096);
   const tokenFragment = new URLSearchParams();
   if (token) tokenFragment.set('recovery_token', token);
   const fragment = tokenFragment.toString();
-  return `${baseUrl.replace(/\/+$/, '')}/reset-password?${params.toString()}${fragment ? `#${fragment}` : ''}`;
+
+  // Use the canonical application host and the SPA root. This avoids 404s on
+  // the apex domain and on hosts that do not rewrite deep routes.
+  return `${baseUrl.replace(/\/+$/, '')}/?${params.toString()}${fragment ? `#${fragment}` : ''}`;
 }
 
 function extractSupabaseErrorMessage(error: any): string {

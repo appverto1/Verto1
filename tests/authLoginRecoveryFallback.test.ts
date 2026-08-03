@@ -70,44 +70,45 @@ assert.doesNotMatch(recoveryEmail.html, /Código de recuperação/);
 assert.match(recoveryEmail.html, /Redefinir minha senha/);
 
 const capturedRecoveryUrl = extractPasswordRecoveryUrlState(
-  `https://www.appverto.com.br/?auth_action=recovery&recovery_token=${encodeURIComponent(token)}&source=email#redefinir`,
+  `https://www.appverto.com.br/reset-password?auth_action=recovery&recovery_token=${encodeURIComponent(token)}&source=email#redefinir`,
 );
 assert.equal(capturedRecoveryUrl.recoveryToken, token);
 assert.equal(capturedRecoveryUrl.hadRecoveryToken, true);
 assert.equal(
   capturedRecoveryUrl.sanitizedRelativeUrl,
-  '/?auth_action=recovery&source=email#redefinir',
+  '/reset-password?auth_action=recovery&source=email#redefinir',
 );
 assert.doesNotMatch(capturedRecoveryUrl.sanitizedRelativeUrl, /recovery_token|signed-token/);
 
 const canonicalFragmentRecoveryUrl = extractPasswordRecoveryUrlState(
-  `https://www.appverto.com.br/?auth_action=recovery#recovery_token=${encodeURIComponent(token)}&source=email`,
+  `https://www.appverto.com.br/reset-password?auth_action=recovery#recovery_token=${encodeURIComponent(token)}&source=email`,
 );
 assert.equal(canonicalFragmentRecoveryUrl.recoveryToken, token);
 assert.equal(
   canonicalFragmentRecoveryUrl.sanitizedRelativeUrl,
-  '/?auth_action=recovery#source=email',
+  '/reset-password?auth_action=recovery#source=email',
 );
 
 const oversizedRecoveryUrl = extractPasswordRecoveryUrlState(
-  `https://www.appverto.com.br/?auth_action=recovery&recovery_token=${'a'.repeat(4097)}`, 
+  `https://www.appverto.com.br/reset-password?auth_action=recovery&recovery_token=${'a'.repeat(4097)}`,
 );
 assert.equal(oversizedRecoveryUrl.recoveryToken, '');
 assert.equal(oversizedRecoveryUrl.hadRecoveryToken, true);
-assert.equal(oversizedRecoveryUrl.sanitizedRelativeUrl, '/?auth_action=recovery');
+assert.equal(oversizedRecoveryUrl.sanitizedRelativeUrl, '/reset-password?auth_action=recovery');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 assert.match(server, /const tokenFragment = new URLSearchParams\(\)/);
 assert.match(
   server,
-  /function getRecoveryRedirectUrl[\s\S]*?getInvitationAppBaseUrl\(\)[\s\S]*?\/\?\$\{params\.toString\(\)\}/,
-  'a recuperação deve usar o host canônico e entrar pela raiz da SPA',
+  /return `\$\{baseUrl\.replace\(\/\\\/\+\$\/, ''\)\}\/\?\$\{params\.toString\(\)\}/,
+  'o e-mail deve apontar para a raiz canônica da SPA, sem rota profunda sujeita a 404',
 );
+assert.match(server, /const baseUrl = getInvitationAppBaseUrl\(\)/);
 assert.doesNotMatch(
   server.slice(server.indexOf('function getRecoveryRedirectUrl'), server.indexOf('function extractSupabaseErrorMessage')),
-  /return `\$\{baseUrl[^`]*\/reset-password/,
-  'o e-mail não pode depender de rota profunda sujeita a 404',
+  /\/reset-password\?/,
 );
+
 const activationAccess = fs.readFileSync('src/components/ActivationAccess.tsx', 'utf8');
 const landingPage = fs.readFileSync('src/components/LandingPage.tsx', 'utf8');
 const recoveryRequestStart = server.indexOf("app.post('/api/auth/password/recovery/email/request'");
