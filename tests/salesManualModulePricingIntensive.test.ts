@@ -64,4 +64,10 @@ assert.match(builderSource, /Faturamento após descontos/);
 assert.match(builderSource, /Lucro líquido/);
 assert.match(builderSource, /Margem líquida/);
 assert.match(builderSource, /Todas as simulações usam as premissas intensivas versionadas/);
+
+const serverSource = readFileSync('server.ts', 'utf8');
+assert.match(serverSource, /commercialPricingMode:\s*[\s\S]*manual_module_prices/);
+assert.match(serverSource, /usageProfile:\s*"intensive" as SalesUsageProfile/);
+assert.match(serverSource, /driverOverrides:\s*\{\}/);
+
 console.log('salesManualModulePricingIntensive.test.ts: OK');

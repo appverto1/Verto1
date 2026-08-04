@@ -2599,6 +2599,11 @@ function normalizeSalesModularProposalRequest(
     20,
   );
   return {
+    commercialPricingMode:
+      sanitizeString(source.commercialPricingMode, 40) ===
+      "manual_module_prices"
+        ? "manual_module_prices"
+        : "catalog",
     patientQuantity: Number(source.patientQuantity),
     expectedPatientQuantity12Months: Number(
       source.expectedPatientQuantity12Months,
@@ -2629,13 +2634,8 @@ function normalizeSalesModularProposalRequest(
     discountDurationMonths: Number(source.discountDurationMonths || 0),
     offerValidityDays: Number(source.offerValidityDays || 14),
     onboardingInstallments: Number(source.onboardingInstallments || 1),
-    usageProfile: sanitizeString(
-      source.usageProfile || "standard",
-      30,
-    ) as SalesUsageProfile,
-    driverOverrides: normalizeSalesModularDriverOverrides(
-      source.driverOverrides,
-    ),
+    usageProfile: "intensive" as SalesUsageProfile,
+    driverOverrides: {},
     internalNotes: sanitizeString(source.internalNotes, 2000),
     publicNotes: sanitizeString(source.publicNotes, 1500),
     offerStartsAt: sanitizeString(source.offerStartsAt, 80),
