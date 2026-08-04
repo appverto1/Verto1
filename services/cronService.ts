@@ -10,6 +10,10 @@ import {
 } from '../src/services/notificationBranding';
 import { resolvePortalPatientDisplayName } from '../src/utils/patientDisplayName';
 import { isVertoInstitutionalAsset } from '../src/constants/vertoBranding';
+import {
+  releaseDistributedJobLease,
+  tryAcquireDistributedJobLease
+} from './distributedRuntimeState';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -19,6 +23,8 @@ type CronServiceOptions = {
   vapidPublicKey?: string | null;
   vapidPrivateKey?: string | null;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
+  runtimeOwnerId?: string | null;
+  requireDistributedLease?: boolean;
 };
 
 type ActiveCronServiceOptions = {
@@ -26,6 +32,8 @@ type ActiveCronServiceOptions = {
   vapidPublicKey: string | null;
   vapidPrivateKey: string | null;
   logger: Pick<Console, 'log' | 'warn' | 'error'>;
+  runtimeOwnerId: string;
+  requireDistributedLease: boolean;
 };
 
 export type AppointmentReminderRunSummary = {
@@ -1218,6 +1226,7 @@ async function runAppointmentReminderJob(
     return { skipped: true, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 0 };
   }
   running = true;
+  let distributedLeaseAcquired = false;
 
   let summary: AppointmentReminderRunSummary = {
     skipped: false,
@@ -1227,6 +1236,18 @@ async function runAppointmentReminderJob(
     failed: 0
   };
   try {
+    if (options.requireDistributedLease) {
+      distributedLeaseAcquired = await tryAcquireDistributedJobLease({
+        supabase: options.supabase,
+        jobKey: 'appointment-reminder-scan',
+        ownerId: options.runtimeOwnerId,
+        leaseSeconds: 20 * 60
+      });
+      if (!distributedLeaseAcquired) {
+        options.logger.log('[Appointment Reminder Cron] Execução ignorada; outra réplica possui o lease.', { trigger });
+        return { skipped: true, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 0 };
+      }
+    }
     const nowUtc = dayjs().utc();
     const reminderWindowStartUtc = nowUtc.subtract(CRON_LOOKBACK_MINUTES, 'minute');
     const reminderWindowEndUtc = nowUtc.add(2, 'minute');
@@ -1407,6 +1428,19 @@ async function runAppointmentReminderJob(
     });
     summary.failed += 1;
   } finally {
+    if (distributedLeaseAcquired) {
+      try {
+        await releaseDistributedJobLease({
+          supabase: options.supabase,
+          jobKey: 'appointment-reminder-scan',
+          ownerId: options.runtimeOwnerId
+        });
+      } catch (leaseError: any) {
+        options.logger.warn('[Appointment Reminder Cron] Falha ao liberar lease distribuído.', {
+          message: leaseError?.message || String(leaseError)
+        });
+      }
+    }
     running = false;
   }
   return summary;
@@ -1441,9 +1475,11 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
   started = true;
   activeOptions = {
     supabase: options.supabase,
-    vapidPublicKey: options.vapidPublicKey,
-    vapidPrivateKey: options.vapidPrivateKey,
-    logger
+    vapidPublicKey: options.vapidPublicKey || null,
+    vapidPrivateKey: options.vapidPrivateKey || null,
+    logger,
+    runtimeOwnerId: sanitizeText(options.runtimeOwnerId || crypto.randomUUID(), 200),
+    requireDistributedLease: options.requireDistributedLease === true
   };
 
   cron.schedule(

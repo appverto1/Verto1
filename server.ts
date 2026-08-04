@@ -57,6 +57,15 @@ import {
   sendAppointmentNotification
 } from './services/pushNotificationService';
 import {
+  SupabaseRateLimitStore,
+  checkDistributedRuntimeState,
+  issueDistributedSessionToken,
+  releaseDistributedJobLease,
+  revokeDistributedSessionToken,
+  tryAcquireDistributedJobLease,
+  validateOrClaimDistributedSessionToken
+} from './services/distributedRuntimeState';
+import {
   buildActivationEmailTemplate,
   buildClinicInvitationEmailTemplate,
   buildPasswordRecoveryEmailTemplate
@@ -4389,25 +4398,67 @@ function requiresPersistentRecoveryStorage(): boolean {
   return process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT);
 }
 
+function requiresDistributedRuntimeState(): boolean {
+  return process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT);
+}
+
+function runtimeSessionTtlMs(): number {
+  const days = Math.max(1, Math.min(90, Number(process.env.SESSION_MAX_AGE_DAYS || 30) || 30));
+  return days * 24 * 60 * 60 * 1000;
+}
+
 function recoveryStorageUnavailableError(): Error & { code: string } {
   const error = new Error('RECOVERY_STORAGE_UNAVAILABLE') as Error & { code: string };
   error.code = 'RECOVERY_STORAGE_UNAVAILABLE';
   return error;
 }
 
-function issueSessionToken(userId: string): string {
+async function issueSessionToken(userId: string): Promise<string> {
   const safeUserId = sanitizeString(userId, 120);
-  const token = crypto.randomUUID();
-  if (safeUserId) {
-    activeSessionByUserId.set(safeUserId, token);
+  if (!safeUserId) throw new Error('SESSION_USER_REQUIRED');
+  if (requiresDistributedRuntimeState()) {
+    if (!supabase) throw new Error('DISTRIBUTED_RUNTIME_STATE_UNAVAILABLE');
+    return await issueDistributedSessionToken({
+      supabase,
+      userId: safeUserId,
+      ttlMs: runtimeSessionTtlMs()
+    });
   }
+  const token = crypto.randomUUID();
+  activeSessionByUserId.set(safeUserId, token);
   return token;
 }
 
-function invalidateActiveSession(userId?: unknown, expectedToken?: unknown): void {
+async function isActiveSessionToken(userId?: unknown, token?: unknown): Promise<boolean> {
+  const safeUserId = sanitizeString(userId, 120);
+  const safeToken = sanitizeString(token, 200);
+  if (!safeUserId || !safeToken) return false;
+  if (requiresDistributedRuntimeState()) {
+    if (!supabase) throw new Error('DISTRIBUTED_RUNTIME_STATE_UNAVAILABLE');
+    return await validateOrClaimDistributedSessionToken({
+      supabase,
+      userId: safeUserId,
+      token: safeToken,
+      ttlMs: runtimeSessionTtlMs()
+    });
+  }
+  const current = activeSessionByUserId.get(safeUserId);
+  return !current || current === safeToken;
+}
+
+async function invalidateActiveSession(userId?: unknown, expectedToken?: unknown): Promise<void> {
   const safeUserId = sanitizeString(userId, 120);
   if (!safeUserId) return;
-  const safeExpectedToken = sanitizeString(expectedToken, 120);
+  const safeExpectedToken = sanitizeString(expectedToken, 200);
+  if (requiresDistributedRuntimeState()) {
+    if (!supabase) throw new Error('DISTRIBUTED_RUNTIME_STATE_UNAVAILABLE');
+    await revokeDistributedSessionToken({
+      supabase,
+      userId: safeUserId,
+      expectedToken: safeExpectedToken || null
+    });
+    return;
+  }
   const current = activeSessionByUserId.get(safeUserId);
   if (!safeExpectedToken || current === safeExpectedToken) {
     activeSessionByUserId.delete(safeUserId);
@@ -16326,6 +16377,10 @@ async function startServer() {
   const PORT = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 8080;
   const isProd = process.env.NODE_ENV === 'production';
   const isDeploy = isDeployEnvironment(process.env);
+  const runtimeOwnerId = sanitizeString(
+    `${process.env.RAILWAY_REPLICA_ID || process.env.RAILWAY_DEPLOYMENT_ID || deploymentReleaseId() || 'local'}:${process.pid}:${crypto.randomUUID()}`,
+    200
+  );
   const APPOINTMENT_ACTION_SCHEMA_READY_TTL_MS = 5 * 60_000;
   const APPOINTMENT_ACTION_SCHEMA_MISMATCH_TTL_MS = 15_000;
   const APPOINTMENT_ACTION_SCHEMA_TRANSIENT_TTL_MS = 5_000;
@@ -16616,8 +16671,15 @@ async function startServer() {
   app.use(noStoreOperationalDynamicRoutes);
 
   // Rate Limiting (Prevent Brute Force)
+  const distributedRateLimitStore = (scope: string, windowMs: number) =>
+    requiresDistributedRuntimeState()
+      ? new SupabaseRateLimitStore({ supabase, scope, windowMs })
+      : undefined;
+
   const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
+    store: distributedRateLimitStore('global', 15 * 60 * 1000),
+    passOnStoreError: true,
     max: 1000, // Increased from 100 to 1000 to be more generous for complex SPAs
     message: { error: 'Muitas requisições. Tente novamente mais tarde.' },
     standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
@@ -16632,6 +16694,8 @@ async function startServer() {
 
   const recoveryLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('recovery-request', 10 * 60 * 1000),
+    passOnStoreError: false,
     max: 3,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16644,6 +16708,8 @@ async function startServer() {
 
   const authLoginLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('auth-login', 10 * 60 * 1000),
+    passOnStoreError: false,
     max: 20,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16653,6 +16719,8 @@ async function startServer() {
 
   const authMfaLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('auth-mfa', 10 * 60 * 1000),
+    passOnStoreError: false,
     max: 12,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16665,6 +16733,8 @@ async function startServer() {
 
   const authMeLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
+    store: distributedRateLimitStore('auth-me', 5 * 60 * 1000),
+    passOnStoreError: false,
     max: 300,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16674,6 +16744,8 @@ async function startServer() {
 
   const authSignupLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
+    store: distributedRateLimitStore('auth-signup', 15 * 60 * 1000),
+    passOnStoreError: false,
     max: 10,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16683,6 +16755,8 @@ async function startServer() {
 
   const publicSalesLeadIpLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
+    store: distributedRateLimitStore('sales-lead-ip', 15 * 60 * 1000),
+    passOnStoreError: false,
     max: 20,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16696,6 +16770,8 @@ async function startServer() {
 
   const publicSalesLeadIdentityLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
+    store: distributedRateLimitStore('sales-lead-identity', 60 * 60 * 1000),
+    passOnStoreError: false,
     max: 6,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16716,6 +16792,8 @@ async function startServer() {
 
   const publicSalesActivationLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
+    store: distributedRateLimitStore('sales-activation', 15 * 60 * 1000),
+    passOnStoreError: false,
     max: 12,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16729,6 +16807,8 @@ async function startServer() {
 
   const patientCreateLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
+    store: distributedRateLimitStore('patient-create', 15 * 60 * 1000),
+    passOnStoreError: false,
     max: 60,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16741,6 +16821,8 @@ async function startServer() {
 
   const inviteLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('clinic-invite', 10 * 60 * 1000),
+    passOnStoreError: false,
     max: 20,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16750,6 +16832,8 @@ async function startServer() {
 
   const uploadLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('upload', 10 * 60 * 1000),
+    passOnStoreError: false,
     max: 60,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16759,6 +16843,8 @@ async function startServer() {
 
   const portalActionLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('portal-action', 10 * 60 * 1000),
+    passOnStoreError: false,
     max: 40,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16768,6 +16854,8 @@ async function startServer() {
 
   const appointmentReminderCronLimiter = rateLimit({
     windowMs: 60 * 1000,
+    store: distributedRateLimitStore('appointment-reminder-cron', 60 * 1000),
+    passOnStoreError: false,
     max: 4,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16777,6 +16865,8 @@ async function startServer() {
 
   const resendActivationLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('resend-activation', 10 * 60 * 1000),
+    passOnStoreError: false,
     max: 5,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16786,6 +16876,8 @@ async function startServer() {
 
   const modularCheckoutLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('modular-checkout', 10 * 60 * 1000),
+    passOnStoreError: false,
     max: 12,
     standardHeaders: true,
     legacyHeaders: false,
@@ -16798,6 +16890,8 @@ async function startServer() {
 
   const resendRecoveryLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('resend-recovery', 10 * 60 * 1000),
+    passOnStoreError: false,
     max: 5,
     standardHeaders: true,
     legacyHeaders: false,
@@ -18737,19 +18831,27 @@ async function startServer() {
     // 1. Check Session (Cookie-based)
     if (req.session && req.session.user) {
       const sessionUserId = sanitizeString(req.session.user?.id, 120);
-      const sessionToken = sanitizeString(req.session.user?.sessionToken, 120);
-      const activeToken = sessionUserId ? activeSessionByUserId.get(sessionUserId) : null;
-      if (sessionUserId && activeToken && sessionToken && activeToken !== sessionToken) {
-        req.session.destroy(() => {});
-        return res.status(401).json({
-          error: 'SESSION_REVOKED',
-          message: 'Sua conta foi acessada em outro dispositivo. Faça login novamente.'
+      const sessionToken = sanitizeString(req.session.user?.sessionToken, 200);
+      try {
+        const activeSessionValid = await isActiveSessionToken(sessionUserId, sessionToken);
+        if (!activeSessionValid) {
+          req.session.destroy(() => {});
+          return res.status(401).json({
+            error: 'SESSION_REVOKED',
+            message: 'Sua conta foi acessada em outro dispositivo. Faça login novamente.'
+          });
+        }
+      } catch (sessionStateError: any) {
+        console.error('[Auth] Estado distribuído de sessão indisponível:', sanitizeString(sessionStateError?.message || String(sessionStateError), 240));
+        return res.status(503).json({
+          error: 'SESSION_STATE_UNAVAILABLE',
+          message: 'Não foi possível validar sua sessão agora. Tente novamente em instantes.'
         });
       }
       if (req.session.user?.authPolicyVersion !== OWNER_MFA_POLICY_VERSION) {
         const legacySecurityProfile = await fetchMfaSecurityProfile(sessionUserId);
         if (legacySecurityProfile.error || !legacySecurityProfile.data) {
-          invalidateActiveSession(sessionUserId, sessionToken);
+          await invalidateActiveSession(sessionUserId, sessionToken);
           req.session.destroy(() => {});
           return res.status(503).json({
             error: 'OWNER_MFA_SCHEMA_UNAVAILABLE',
@@ -18760,7 +18862,7 @@ async function startServer() {
           sanitizeString(legacySecurityProfile.data.role, 40).toLowerCase() === 'owner' &&
           !hasVerifiedOwnerMfaSession({ ...req.session.user, role: 'owner' })
         ) {
-          invalidateActiveSession(sessionUserId, sessionToken);
+          await invalidateActiveSession(sessionUserId, sessionToken);
           req.session.destroy(() => {});
           return res.status(401).json({
             error: 'OWNER_MFA_REQUIRED',
@@ -18770,7 +18872,7 @@ async function startServer() {
         req.session.user.authPolicyVersion = OWNER_MFA_POLICY_VERSION;
       }
       if (!hasVerifiedOwnerMfaSession(req.session.user)) {
-        invalidateActiveSession(sessionUserId, sessionToken);
+        await invalidateActiveSession(sessionUserId, sessionToken);
         req.session.destroy(() => {});
         return res.status(401).json({
           error: 'OWNER_MFA_REQUIRED',
@@ -18875,7 +18977,7 @@ async function startServer() {
                 email: user.email,
                 role: resolvedRole,
                 name: profile.name,
-                sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
+                sessionToken: await issueSessionToken(sanitizeString(user.id, 120)),
                 profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
                 profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
                 address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -18971,11 +19073,19 @@ async function startServer() {
 
     if (!req.session?.user) return portalAuthRequired();
     const sessionUserId = sanitizeString(req.session.user?.id, 120);
-    const sessionToken = sanitizeString(req.session.user?.sessionToken, 120);
-    const activeToken = sessionUserId ? activeSessionByUserId.get(sessionUserId) : null;
-    if (sessionUserId && activeToken && sessionToken && activeToken !== sessionToken) {
-      req.session.destroy(() => {});
-      return portalAuthRequired();
+    const sessionToken = sanitizeString(req.session.user?.sessionToken, 200);
+    try {
+      if (!await isActiveSessionToken(sessionUserId, sessionToken)) {
+        req.session.destroy(() => {});
+        return portalAuthRequired();
+      }
+    } catch (sessionStateError: any) {
+      console.error('[PortalAuth] Estado distribuído de sessão indisponível:', sanitizeString(sessionStateError?.message || String(sessionStateError), 240));
+      return res.status(503).json({
+        success: false,
+        error: 'SESSION_STATE_UNAVAILABLE',
+        message: 'Não foi possível validar sua sessão agora. Tente novamente em instantes.'
+      });
     }
     syncWorkspaceContextInSession(req, res, () => {});
     return next();
@@ -21773,7 +21883,8 @@ async function startServer() {
     const checks = {
       supabase: false,
       otpStorage: false,
-      sessionStore: !isProd
+      sessionStore: !isProd,
+      distributedRuntimeState: !requiresDistributedRuntimeState()
     };
 
     try {
@@ -21801,7 +21912,15 @@ async function startServer() {
       }
     }
 
-    const ready = checks.supabase && checks.otpStorage && checks.sessionStore;
+    if (requiresDistributedRuntimeState()) {
+      try {
+        checks.distributedRuntimeState = await checkDistributedRuntimeState(supabase);
+      } catch {
+        checks.distributedRuntimeState = false;
+      }
+    }
+
+    const ready = checks.supabase && checks.otpStorage && checks.sessionStore && checks.distributedRuntimeState;
     return res.status(ready ? 200 : 503).json(cleanObject({
       status: ready ? 'ready' : 'not_ready',
       release,
@@ -22105,7 +22224,7 @@ async function startServer() {
         email: user.email,
         role: roleForSession,
         name: profile.name,
-        sessionToken: issueSessionToken(boundUserId),
+        sessionToken: await issueSessionToken(boundUserId),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -22762,7 +22881,7 @@ async function startServer() {
         email: authUser.email || email,
         role: roleForSession,
         name: profile.name || authUser.user_metadata?.full_name || email.split('@')[0],
-        sessionToken: issueSessionToken(sanitizeString(authUser.id, 120)),
+        sessionToken: await issueSessionToken(sanitizeString(authUser.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -22983,6 +23102,7 @@ async function startServer() {
         password: newPassword
       });
       if (updateError) throw updateError;
+      await invalidateActiveSession(challenge.userId);
 
       await persistIdentityAuditLog({
         title: 'Senha redefinida por recuperação',
@@ -23748,7 +23868,7 @@ async function startServer() {
         email: user.email,
         role: roleForSession,
         name: profile.name,
-        sessionToken: issueSessionToken(sanitizeString(user.id, 120)),
+        sessionToken: await issueSessionToken(sanitizeString(user.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -23833,8 +23953,12 @@ async function startServer() {
     }
   });
 
-  app.post('/api/auth/logout', (req, res) => {
-    invalidateActiveSession(req.session?.user?.id, req.session?.user?.sessionToken);
+  app.post('/api/auth/logout', async (req, res) => {
+    try {
+      await invalidateActiveSession(req.session?.user?.id, req.session?.user?.sessionToken);
+    } catch (sessionStateError: any) {
+      console.error('[Auth] Falha ao revogar sessão distribuída no logout:', sanitizeString(sessionStateError?.message || String(sessionStateError), 240));
+    }
     req.session.destroy((err) => {
       if (err) return res.status(500).json({ error: 'Logout failed' });
       res.clearCookie('verto-session');
@@ -23844,8 +23968,20 @@ async function startServer() {
 
   app.get('/api/auth/me', authMeLimiter, syncWorkspaceContextInSession, async (req: any, res: any) => {
     if (req.session.user) {
+      try {
+        const sessionUserId = sanitizeString(req.session.user?.id, 120);
+        const sessionToken = sanitizeString(req.session.user?.sessionToken, 200);
+        if (!await isActiveSessionToken(sessionUserId, sessionToken)) {
+          req.session.destroy(() => {});
+          res.clearCookie('verto-session');
+          return res.status(401).json({ user: null, error: 'SESSION_REVOKED' });
+        }
+      } catch (sessionStateError: any) {
+        console.error('[Auth] Estado distribuído de sessão indisponível em /auth/me:', sanitizeString(sessionStateError?.message || String(sessionStateError), 240));
+        return res.status(503).json({ user: null, error: 'SESSION_STATE_UNAVAILABLE' });
+      }
       if (!hasVerifiedOwnerMfaSession(req.session.user)) {
-        invalidateActiveSession(req.session.user?.id, req.session.user?.sessionToken);
+        await invalidateActiveSession(req.session.user?.id, req.session.user?.sessionToken);
         req.session.destroy(() => {});
         res.clearCookie('verto-session');
         return res.status(401).json({ user: null, error: 'OWNER_MFA_REQUIRED' });
@@ -79811,6 +79947,39 @@ async function startServer() {
     });
   });
 
+  const runWithDistributedJobLease = async <T,>(
+    jobKey: string,
+    leaseSeconds: number,
+    task: () => Promise<T>
+  ): Promise<T | null> => {
+    if (!requiresDistributedRuntimeState()) return await task();
+    let acquired = false;
+    try {
+      acquired = await tryAcquireDistributedJobLease({
+        supabase,
+        jobKey,
+        ownerId: runtimeOwnerId,
+        leaseSeconds
+      });
+      if (!acquired) {
+        console.log('[Runtime Lease] Job ignorado; outra réplica possui o lease.', { jobKey });
+        return null;
+      }
+      return await task();
+    } finally {
+      if (acquired) {
+        try {
+          await releaseDistributedJobLease({ supabase, jobKey, ownerId: runtimeOwnerId });
+        } catch (leaseError: any) {
+          console.warn('[Runtime Lease] Falha ao liberar lease.', {
+            jobKey,
+            message: sanitizeString(leaseError?.message || String(leaseError), 240)
+          });
+        }
+      }
+    }
+  };
+
   const runQueuedActivePatientReconciliation = async (trigger: string) => {
     const queued = await reconcileActivePatientSyncQueue(trigger);
     await drainActivePatientSyncQueue(`${trigger}:drain`);
@@ -79818,22 +79987,37 @@ async function startServer() {
   };
 
   setTimeout(() => {
-    void runQueuedActivePatientReconciliation('startup_warmup');
+    void runWithDistributedJobLease('active-patient-startup-reconciliation', 15 * 60, () =>
+      runQueuedActivePatientReconciliation('startup_warmup')
+    );
   }, 90 * 1000);
 
   setInterval(() => {
-    void drainActivePatientSyncQueue('scheduled_retry_drain');
+    void runWithDistributedJobLease('active-patient-retry-drain', 4 * 60, () =>
+      drainActivePatientSyncQueue('scheduled_retry_drain')
+    );
   }, 5 * 60 * 1000);
 
   setInterval(() => {
-    void runQueuedActivePatientReconciliation('daily_reconciliation');
+    void runWithDistributedJobLease('active-patient-daily-reconciliation', 60 * 60, () =>
+      runQueuedActivePatientReconciliation('daily_reconciliation')
+    );
+  }, 24 * 60 * 60 * 1000);
+
+  setInterval(() => {
+    void runWithDistributedJobLease('distributed-runtime-cleanup', 10 * 60, async () => {
+      const { error } = await supabase.rpc('runtime_cleanup_distributed_state_v1');
+      if (error) throw error;
+    });
   }, 24 * 60 * 60 * 1000);
 
   startAppointmentReminderCron({
     supabase,
     vapidPublicKey,
     vapidPrivateKey,
-    logger: console
+    logger: console,
+    runtimeOwnerId,
+    requireDistributedLease: requiresDistributedRuntimeState()
   });
 
   const httpServer = app.listen(PORT, '0.0.0.0', () => {
