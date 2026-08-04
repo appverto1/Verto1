@@ -179,7 +179,6 @@ export type SalesModularLineSelection = {
 };
 
 export type SalesModularProposalInput = {
-  commercialPricingMode?: 'catalog' | 'manual_module_prices';
   patientQuantity: number;
   expectedPatientQuantity12Months: number;
   basePackageTierId: string;
@@ -686,6 +685,7 @@ export function deriveSalesCapacityBlockPhases(args: {
         args.policy.capacityMinimumIncrementalMarginBasisPoints,
       stripePercentageBasisPoints: args.percentageCostBasisPoints,
       delinquencyPercentageBasisPoints: 0,
+      refundChargebackPercentageBasisPoints: 0,
       taxPercentageBasisPoints: 0
     });
     const effectivePricePerPatientCents = modules.reduce(
@@ -857,10 +857,7 @@ export function recommendSalesPackageTier(
 }
 
 export function salesModularProposalRequiresVersionedProfitabilityPolicy(
-  input: Pick<
-    SalesModularProposalInput,
-    'basePackageTierId' | 'commercialPricingMode'
-  > | null | undefined,
+  input: Pick<SalesModularProposalInput, 'basePackageTierId'> | null | undefined,
   catalog: Pick<SalesPricingCatalogSnapshot, 'items'> | null | undefined
 ): boolean {
   if (!input?.basePackageTierId || !catalog) return false;
@@ -871,9 +868,8 @@ export function salesModularProposalRequiresVersionedProfitabilityPolicy(
     (tier) => tier.id === input.basePackageTierId
   );
   return Boolean(
-    input.commercialPricingMode === 'manual_module_prices' ||
-      (selectedTier &&
-        (selectedTier.isCustom || selectedTier.maximumQuantity === null))
+    selectedTier &&
+      (selectedTier.isCustom || selectedTier.maximumQuantity === null)
   );
 }
 
@@ -965,8 +961,6 @@ export function applySalesPackageTierSelection(
       : 150
     : null;
   const customPricing = tier.isCustom || tier.maximumQuantity === null;
-  const manualModulePricing =
-    input.commercialPricingMode === 'manual_module_prices';
   return {
     ...input,
     basePackageTierId: tier.id,
@@ -982,8 +976,7 @@ export function applySalesPackageTierSelection(
         : 'automatic',
     lines: input.lines.map((line) => {
       const recurringCustomLine =
-        (customPricing || manualModulePricing) &&
-        line.itemKey !== 'onboarding';
+        customPricing && line.itemKey !== 'onboarding';
       if (line.itemKey === 'clinical_core') {
         return {
           ...line,
@@ -1042,14 +1035,6 @@ export function validateSalesModularProposalInput(
     !['automatic', 'manual'].includes(input.basePackageSelectionMode)
   ) {
     errors.push('basePackageSelectionMode');
-  }
-  if (
-    input.commercialPricingMode !== undefined &&
-    !['catalog', 'manual_module_prices'].includes(
-      input.commercialPricingMode
-    )
-  ) {
-    errors.push('commercialPricingMode');
   }
   if (
     input.customBasePackageLimit !== undefined &&
@@ -2108,6 +2093,10 @@ const calculatePeriod = (
     {
       basisPoints: values.estimatedDelinquencyBasisPoints,
       method: resolvedAllocationMethod(allocation.delinquency, 'net_revenue')
+    },
+    {
+      basisPoints: values.refundChargebackBasisPoints,
+      method: resolvedAllocationMethod(allocation.delinquency, 'net_revenue')
     }
   ];
   if (
@@ -2204,12 +2193,17 @@ const calculatePeriod = (
     });
   }
 
-  const totalEbitda = nullableSum(lines.map((line) => line.ebitdaCents));
+  const preTaxIncomeByLine = lines.map((line) =>
+    line.ebitdaCents === null || line.belowEbitdaCostAllocatedCents === null
+      ? null
+      : line.ebitdaCents - line.belowEbitdaCostAllocatedCents
+  );
+  const totalPreTaxIncome = nullableSum(preTaxIncomeByLine);
   const profitTaxTotal =
-    totalEbitda === null || values.profitTaxBasisPoints === null
+    totalPreTaxIncome === null || values.profitTaxBasisPoints === null
       ? null
       : multiplyBasisPoints(
-          Math.max(0, totalEbitda),
+          Math.max(0, totalPreTaxIncome),
           values.profitTaxBasisPoints
         );
   if (profitTaxTotal === null) {
@@ -2219,7 +2213,7 @@ const calculatePeriod = (
   } else {
     const taxAllocation = allocateSalesCents(
       profitTaxTotal,
-      lines.map((line) => Math.max(0, line.ebitdaCents || 0)),
+      preTaxIncomeByLine.map((value) => Math.max(0, value || 0)),
       baseIndex
     );
     lines.forEach((line, index) => {
@@ -2457,10 +2451,8 @@ export function calculateSalesModularProposal(
       `PROPOSAL_MODULE_DEPENDENCY_MISSING:${missing.itemKey}:${missing.dependency}`
     );
   }
-  const manualModulePricingEnabled =
-    input.commercialPricingMode === 'manual_module_prices';
   const perPatientPricingEnabled =
-    (isCustomBaseTier || manualModulePricingEnabled) &&
+    isCustomBaseTier &&
     ['per_patient', 'monthly_total'].includes(
       String(coreSelections[0].pricingEditMode || '')
     );
@@ -2867,6 +2859,7 @@ export function calculateSalesModularProposal(
     'stripeFixedFeeCents',
     'revenueTaxBasisPoints',
     'estimatedDelinquencyBasisPoints',
+    'refundChargebackBasisPoints',
     'depreciationAmortizationCents',
     'financialExpensesCents',
     'profitTaxBasisPoints',
@@ -3644,6 +3637,7 @@ export function calculateSalesModularProposal(
     const percentageParts = [
       intensiveValues.stripeFeeBasisPoints,
       intensiveValues.estimatedDelinquencyBasisPoints,
+      intensiveValues.refundChargebackBasisPoints,
       intensiveValues.revenueTaxBasisPoints
     ];
     const percentageCostBasisPoints = percentageParts.some(
@@ -3678,6 +3672,8 @@ export function calculateSalesModularProposal(
                 intensiveValues.stripeFeeBasisPoints,
               delinquencyPercentageBasisPoints:
                 intensiveValues.estimatedDelinquencyBasisPoints,
+              refundChargebackPercentageBasisPoints:
+                intensiveValues.refundChargebackBasisPoints,
               taxPercentageBasisPoints:
                 intensiveValues.revenueTaxBasisPoints
             })
@@ -3767,6 +3763,8 @@ export function calculateSalesModularProposal(
         stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
         delinquencyPercentageBasisPoints:
           intensiveValues.estimatedDelinquencyBasisPoints,
+        refundChargebackPercentageBasisPoints:
+          intensiveValues.refundChargebackBasisPoints,
         taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
       });
       const commercialMinimumRevenueCents =
@@ -3780,6 +3778,8 @@ export function calculateSalesModularProposal(
           stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
           delinquencyPercentageBasisPoints:
             intensiveValues.estimatedDelinquencyBasisPoints,
+          refundChargebackPercentageBasisPoints:
+            intensiveValues.refundChargebackBasisPoints,
           taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
         });
       const commercialRecommendedRevenueCents =
@@ -3793,6 +3793,8 @@ export function calculateSalesModularProposal(
           stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
           delinquencyPercentageBasisPoints:
             intensiveValues.estimatedDelinquencyBasisPoints,
+          refundChargebackPercentageBasisPoints:
+            intensiveValues.refundChargebackBasisPoints,
           taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
         });
       const previousDirectCostCents =
@@ -3950,6 +3952,8 @@ export function calculateSalesModularProposal(
         stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
         delinquencyPercentageBasisPoints:
           intensiveValues.estimatedDelinquencyBasisPoints,
+        refundChargebackPercentageBasisPoints:
+          intensiveValues.refundChargebackBasisPoints,
         taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
       });
       capacityEconomics = {
@@ -4078,6 +4082,8 @@ export function calculateSalesModularProposal(
         stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
         delinquencyPercentageBasisPoints:
           intensiveValues.estimatedDelinquencyBasisPoints,
+        refundChargebackPercentageBasisPoints:
+          intensiveValues.refundChargebackBasisPoints,
         taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
       });
       return {
@@ -4268,6 +4274,8 @@ export function calculateSalesModularProposal(
       stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
       delinquencyPercentageBasisPoints:
         intensiveValues.estimatedDelinquencyBasisPoints,
+      refundChargebackPercentageBasisPoints:
+        intensiveValues.refundChargebackBasisPoints,
       taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
     });
     const postMinimumPrice = calculateSalesMinimumPriceCents({
@@ -4282,6 +4290,8 @@ export function calculateSalesModularProposal(
       stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
       delinquencyPercentageBasisPoints:
         intensiveValues.estimatedDelinquencyBasisPoints,
+      refundChargebackPercentageBasisPoints:
+        intensiveValues.refundChargebackBasisPoints,
       taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
     });
     const firstYearMaximumDiscountCents =

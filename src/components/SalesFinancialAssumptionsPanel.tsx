@@ -30,21 +30,6 @@ type AssumptionSetRecord = SalesAssumptionSnapshot & {
 
 const basicFields: FieldDefinition[] = [
   {
-    key: 'stripeFeeBasisPoints',
-    label: 'Tarifa percentual da Stripe',
-    type: 'percent',
-  },
-  {
-    key: 'stripeFixedFeeCents',
-    label: 'Tarifa fixa da Stripe',
-    type: 'currency',
-  },
-  {
-    key: 'revenueTaxBasisPoints',
-    label: 'Impostos sobre faturamento',
-    type: 'percent',
-  },
-  {
     key: 'variablePatientCostCents',
     label: 'Custo variável por paciente',
     type: 'currency',
@@ -74,6 +59,59 @@ const basicFields: FieldDefinition[] = [
     label: 'Faixa de atenção',
     type: 'percent',
   },
+  {
+    key: 'healthyMarginBasisPoints',
+    label: 'Oferta saudável a partir de',
+    type: 'percent',
+  },
+];
+
+const financialStatementFields: FieldDefinition[] = [
+  {
+    key: 'stripeFeeBasisPoints',
+    label: 'Tarifa percentual da Stripe',
+    type: 'percent',
+  },
+  {
+    key: 'stripeFixedFeeCents',
+    label: 'Tarifa fixa da Stripe por cobrança',
+    type: 'currency',
+  },
+  {
+    key: 'revenueTaxBasisPoints',
+    label: 'Impostos sobre faturamento',
+    type: 'percent',
+  },
+  {
+    key: 'estimatedDelinquencyBasisPoints',
+    label: 'Inadimplência estimada',
+    type: 'percent',
+  },
+  {
+    key: 'refundChargebackBasisPoints',
+    label: 'Estornos e chargebacks',
+    type: 'percent',
+  },
+  {
+    key: 'depreciationAmortizationCents',
+    label: 'Depreciação e amortização',
+    type: 'currency',
+  },
+  {
+    key: 'financialExpensesCents',
+    label: 'Despesas financeiras',
+    type: 'currency',
+  },
+  {
+    key: 'profitTaxBasisPoints',
+    label: 'Impostos sobre o lucro',
+    type: 'percent',
+  },
+  {
+    key: 'otherBelowEbitdaCents',
+    label: 'Outras despesas corporativas não atribuídas',
+    type: 'currency',
+  },
 ];
 
 const advancedGroups: Array<{
@@ -81,17 +119,6 @@ const advancedGroups: Array<{
   description: string;
   fields: FieldDefinition[];
 }> = [
-  {
-    title: 'Receita e pagamento',
-    description: 'Condições complementares incidentes sobre a receita.',
-    fields: [
-      {
-        key: 'estimatedDelinquencyBasisPoints',
-        label: 'Inadimplência estimada',
-        type: 'percent',
-      },
-    ],
-  },
   {
     title: 'Infraestrutura',
     description: 'Custos agregados atribuíveis ao uso da plataforma.',
@@ -145,38 +172,6 @@ const advancedGroups: Array<{
       {
         key: 'commercialCommissionBasisPoints',
         label: 'Comissão comercial',
-        type: 'percent',
-      },
-    ],
-  },
-  {
-    title: 'Resultado gerencial',
-    description:
-      'Premissas após o resultado operacional atribuído e limite de oferta saudável.',
-    fields: [
-      {
-        key: 'depreciationAmortizationCents',
-        label: 'Depreciação e amortização',
-        type: 'currency',
-      },
-      {
-        key: 'financialExpensesCents',
-        label: 'Despesas financeiras',
-        type: 'currency',
-      },
-      {
-        key: 'profitTaxBasisPoints',
-        label: 'Impostos sobre lucro',
-        type: 'percent',
-      },
-      {
-        key: 'otherBelowEbitdaCents',
-        label: 'Outras despesas',
-        type: 'currency',
-      },
-      {
-        key: 'healthyMarginBasisPoints',
-        label: 'Oferta saudável a partir de',
         type: 'percent',
       },
     ],
@@ -659,6 +654,25 @@ export const SalesFinancialAssumptionsPanel = () => {
                   type: 'currency',
                 })
               : null}
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-violet-200 bg-violet-50/40 p-4 sm:p-5">
+            <div className="flex items-start gap-3">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-white text-violet-700 shadow-sm">
+                <Database size={18} />
+              </span>
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  DRE gerencial, perdas e lucro líquido
+                </h3>
+                <p className="mt-1 text-xs font-normal leading-5 text-slate-600">
+                  Estes valores entram no cálculo do faturamento líquido, resultado operacional e lucro gerencial de cada clínica e de cada módulo. Impostos sobre o lucro são aplicados somente após depreciação, despesas financeiras e demais despesas corporativas.
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {financialStatementFields.map(renderField)}
+            </div>
           </div>
 
           <details className="group mt-6 rounded-xl border border-slate-200 bg-slate-50/50">

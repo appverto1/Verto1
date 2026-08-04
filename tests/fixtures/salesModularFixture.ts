@@ -187,6 +187,7 @@ const assumptions: SalesAssumptionValues = {
   stripeFixedFeeCents: 50,
   revenueTaxBasisPoints: 500,
   estimatedDelinquencyBasisPoints: 100,
+  refundChargebackBasisPoints: 0,
   variablePatientCostCents: 0,
   variableClinicCostCents: 0,
   storageCostCents: 0,

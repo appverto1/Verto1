@@ -203,7 +203,7 @@ const inputWithModules = (
 };
 
 // Fórmula de preço mínimo: custos fixos/diretos/taxa fixa divididos pelo
-// saldo após margem, Stripe, inadimplência e imposto.
+// saldo após margem, Stripe, inadimplência, estornos e imposto.
 assert.equal(
   calculateSalesMinimumPriceCents({
     fixedAllocatedCostCents: 10_000,
@@ -212,6 +212,7 @@ assert.equal(
     targetEbitdaMarginBasisPoints: 6000,
     stripePercentageBasisPoints: 300,
     delinquencyPercentageBasisPoints: 100,
+    refundChargebackPercentageBasisPoints: 0,
     taxPercentageBasisPoints: 500
   }),
   Math.ceil((30_100 * 10_000) / 3100)
@@ -224,6 +225,7 @@ assert.equal(
     targetEbitdaMarginBasisPoints: 9500,
     stripePercentageBasisPoints: 300,
     delinquencyPercentageBasisPoints: 100,
+    refundChargebackPercentageBasisPoints: 0,
     taxPercentageBasisPoints: 500
   }),
   null,

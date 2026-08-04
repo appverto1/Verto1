@@ -256,6 +256,7 @@ export type SalesMinimumPriceInput = {
   targetEbitdaMarginBasisPoints: number;
   stripePercentageBasisPoints: number | null;
   delinquencyPercentageBasisPoints: number | null;
+  refundChargebackPercentageBasisPoints: number | null;
   taxPercentageBasisPoints: number | null;
 };
 
@@ -270,6 +271,7 @@ export const calculateSalesMinimumPriceCents = (
   const percentageParts = [
     input.stripePercentageBasisPoints,
     input.delinquencyPercentageBasisPoints,
+    input.refundChargebackPercentageBasisPoints,
     input.taxPercentageBasisPoints
   ];
   if (

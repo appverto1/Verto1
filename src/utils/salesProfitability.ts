@@ -19,6 +19,7 @@ export type SalesAssumptionValues = {
   stripeFixedFeeCents: number | null;
   revenueTaxBasisPoints: number | null;
   estimatedDelinquencyBasisPoints: number | null;
+  refundChargebackBasisPoints: number | null;
   variablePatientCostCents: number | null;
   variableClinicCostCents: number | null;
   storageCostCents: number | null;
@@ -71,6 +72,7 @@ export type MonthlyProfitabilityResult = {
   unitAmountCents: number;
   revenueCents: number;
   estimatedDelinquencyCents: number | null;
+  refundChargebackCents: number | null;
   stripeCostCents: number | null;
   revenueTaxCents: number | null;
   variableCostsCents: number | null;
@@ -80,6 +82,9 @@ export type MonthlyProfitabilityResult = {
   contributionMarginBasisPoints: number | null;
   ebitdaCents: number | null;
   ebitdaMarginBasisPoints: number | null;
+  ebitCents: number | null;
+  preTaxIncomeCents: number | null;
+  profitTaxCents: number | null;
   netIncomeCents: number | null;
   netMarginBasisPoints: number | null;
   netIncomeToEbitdaBasisPoints: number | null;
@@ -115,12 +120,13 @@ export type SalesProfitabilityResult = {
   warnings: string[];
 };
 
-export const SALES_PROFITABILITY_MODEL_VERSION = '2026-07-24-v1';
+export const SALES_PROFITABILITY_MODEL_VERSION = '2026-08-04-v2';
 
 const nullableMoneyKeys: Array<keyof SalesAssumptionValues> = [
   'stripeFeeBasisPoints',
   'stripeFixedFeeCents',
   'revenueTaxBasisPoints',
+  'refundChargebackBasisPoints',
   'variablePatientCostCents',
   'variableClinicCostCents',
   'storageCostCents',
@@ -198,8 +204,11 @@ const calculateMonthly = (
 ): MonthlyProfitabilityResult => {
   const revenueCents = quantity * unitAmountCents;
   const estimatedDelinquencyCents = values.estimatedDelinquencyBasisPoints === null
-    ? 0
+    ? null
     : multiplyBasisPoints(revenueCents, values.estimatedDelinquencyBasisPoints);
+  const refundChargebackCents = values.refundChargebackBasisPoints === null
+    ? null
+    : multiplyBasisPoints(revenueCents, values.refundChargebackBasisPoints);
   const stripeCostCents = values.stripeFeeBasisPoints === null || values.stripeFixedFeeCents === null
     ? null
     : multiplyBasisPoints(revenueCents, values.stripeFeeBasisPoints) + values.stripeFixedFeeCents;
@@ -234,6 +243,7 @@ const calculateMonthly = (
   const fixedCostsAllocatedCents = resolveFixedAllocation(values, quantity);
   const contributionDeductions = sumNullable([
     estimatedDelinquencyCents,
+    refundChargebackCents,
     stripeCostCents,
     revenueTaxCents,
     variableCostsCents
@@ -247,22 +257,28 @@ const calculateMonthly = (
     fixedCostsAllocatedCents
   ]);
   const ebitdaCents = ebitdaDeductions === null ? null : revenueCents - ebitdaDeductions;
-  const belowEbitdaCosts = sumNullable([
-    values.depreciationAmortizationCents,
+  const ebitCents = ebitdaCents === null || values.depreciationAmortizationCents === null
+    ? null
+    : ebitdaCents - values.depreciationAmortizationCents;
+  const preTaxDeductions = sumNullable([
     values.financialExpensesCents,
     values.otherBelowEbitdaCents
   ]);
-  const profitTaxCents = ebitdaCents === null || values.profitTaxBasisPoints === null
+  const preTaxIncomeCents = ebitCents === null || preTaxDeductions === null
     ? null
-    : multiplyBasisPoints(Math.max(0, ebitdaCents), values.profitTaxBasisPoints);
-  const netIncomeCents = ebitdaCents === null || belowEbitdaCosts === null || profitTaxCents === null
+    : ebitCents - preTaxDeductions;
+  const profitTaxCents = preTaxIncomeCents === null || values.profitTaxBasisPoints === null
     ? null
-    : ebitdaCents - belowEbitdaCosts - profitTaxCents;
+    : multiplyBasisPoints(Math.max(0, preTaxIncomeCents), values.profitTaxBasisPoints);
+  const netIncomeCents = preTaxIncomeCents === null || profitTaxCents === null
+    ? null
+    : preTaxIncomeCents - profitTaxCents;
 
   return {
     unitAmountCents,
     revenueCents,
     estimatedDelinquencyCents,
+    refundChargebackCents,
     stripeCostCents,
     revenueTaxCents,
     variableCostsCents,
@@ -276,6 +292,9 @@ const calculateMonthly = (
     ebitdaMarginBasisPoints: ebitdaCents === null
       ? null
       : ratioBasisPoints(ebitdaCents, revenueCents),
+    ebitCents,
+    preTaxIncomeCents,
+    profitTaxCents,
     netIncomeCents,
     netMarginBasisPoints: netIncomeCents === null
       ? null
@@ -445,6 +464,8 @@ export function calculateSalesProfitability(
     'stripeFeeBasisPoints',
     'stripeFixedFeeCents',
     'revenueTaxBasisPoints',
+    'estimatedDelinquencyBasisPoints',
+    'refundChargebackBasisPoints',
     'variablePatientCostCents',
     'variableClinicCostCents',
     'storageCostCents',
@@ -489,6 +510,9 @@ export function calculateSalesProfitability(
   }
   if (values.estimatedDelinquencyBasisPoints === null) {
     warnings.push('A inadimplência não foi incluída por ausência de premissa.');
+  }
+  if (values.refundChargebackBasisPoints === null) {
+    warnings.push('Estornos e chargebacks não foram incluídos por ausência de premissa.');
   }
   if (missingAssumptions.length > 0) {
     warnings.push('Dados insuficientes para calcular todas as margens.');
