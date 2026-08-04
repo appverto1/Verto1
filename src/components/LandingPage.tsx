@@ -33,7 +33,6 @@ import { GoogleIcon } from './GoogleIcon';
 import { SalesInterestForm } from './SalesInterestForm';
 import { getSupabase } from '../lib/supabase';
 import { dataService } from '../services/dataService';
-import { PUBLIC_ACTIVE_PATIENT_PRICE_LABEL } from '../constants/salesCommercial';
 
 const heroStories = [
   {
@@ -816,9 +815,6 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
                     <ArrowRight size={18} />
                   </button>
                 </div>
-                <p className="mt-4 text-sm font-normal leading-6 text-slate-500">
-                  {PUBLIC_ACTIVE_PATIENT_PRICE_LABEL}. Condições especiais podem ser disponibilizadas após uma apresentação da Verto.
-                </p>
               </div>
 
               <div className="mt-10 hidden gap-3 lg:grid lg:grid-cols-3">
