@@ -345,6 +345,16 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     }
   };
 
+  const validateRecoveryPassword = (value: string): string | null => {
+    if (value.length < 12 || value.length > 128) {
+      return 'Use uma senha entre 12 e 128 caracteres.';
+    }
+    if (!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value) || !/[^A-Za-z0-9]/.test(value)) {
+      return 'Inclua letra maiúscula, letra minúscula, número e símbolo.';
+    }
+    return null;
+  };
+
   const handleSetPassword = async () => {
     setLoading(true);
     setError('');
@@ -378,6 +388,10 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         return;
       }
       if (isRecoveryRoute) {
+        const passwordValidationError = validateRecoveryPassword(newPassword);
+        if (passwordValidationError) {
+          throw new Error(passwordValidationError);
+        }
         const recoveryEmail = String(identifiedEmail || email).trim().toLowerCase();
         const otpCode = String(recoveryCode || '').trim();
         if (!recoveryToken && (!recoveryEmail || !otpCode)) {

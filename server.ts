@@ -4381,6 +4381,9 @@ const otpStore = new Map<string, OtpChallenge>();
 const activeSessionByUserId = new Map<string, string>();
 let otpTableChecked = false;
 let otpTableAvailable = false;
+let otpTableCheckedAt = 0;
+const OTP_TABLE_AVAILABLE_TTL_MS = 5 * 60_000;
+const OTP_TABLE_UNAVAILABLE_RETRY_MS = 15_000;
 
 function requiresPersistentRecoveryStorage(): boolean {
   return process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT);
@@ -4411,21 +4414,33 @@ function invalidateActiveSession(userId?: unknown, expectedToken?: unknown): voi
   }
 }
 
-async function ensureOtpTableAvailability(): Promise<boolean> {
-  if (otpTableChecked) return otpTableAvailable;
+function markOtpTableAvailability(available: boolean): void {
   otpTableChecked = true;
+  otpTableAvailable = available;
+  otpTableCheckedAt = Date.now();
+}
+
+async function ensureOtpTableAvailability(force = false): Promise<boolean> {
+  const now = Date.now();
+  const ttlMs = otpTableAvailable
+    ? OTP_TABLE_AVAILABLE_TTL_MS
+    : OTP_TABLE_UNAVAILABLE_RETRY_MS;
+  if (!force && otpTableChecked && now - otpTableCheckedAt < ttlMs) {
+    return otpTableAvailable;
+  }
+
   try {
     const { error } = await supabase
       .from('otp_challenges')
       .select(OTP_CHALLENGE_SELECT)
       .limit(1);
-    otpTableAvailable = !error;
+    markOtpTableAvailability(!error);
     if (error) {
-      console.warn('[OTP] otp_challenges indisponível, usando fallback em memória:', error.message);
+      console.warn('[OTP] otp_challenges indisponível; uma nova verificação será feita automaticamente:', error.message);
     }
   } catch (error: any) {
-    otpTableAvailable = false;
-    console.warn('[OTP] Falha ao validar tabela otp_challenges, usando fallback em memória:', error?.message || String(error));
+    markOtpTableAvailability(false);
+    console.warn('[OTP] Falha ao validar tabela otp_challenges; uma nova verificação será feita automaticamente:', error?.message || String(error));
   }
   return otpTableAvailable;
 }
@@ -4509,7 +4524,7 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
       .upsert(payload, { onConflict: 'key' });
     if (error) {
       console.warn('[OTP] Falha no upsert de otp_challenges, fallback memória:', error.message);
-      otpTableAvailable = false;
+      markOtpTableAvailability(false);
       if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
         otpStore.delete(normalizedChallenge.key);
         throw recoveryStorageUnavailableError();
@@ -4518,7 +4533,7 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
   } catch (error: any) {
     if (error?.code === 'RECOVERY_STORAGE_UNAVAILABLE') throw error;
     console.warn('[OTP] Exceção no upsert de otp_challenges, fallback memória:', error?.message || String(error));
-    otpTableAvailable = false;
+    markOtpTableAvailability(false);
     if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
       otpStore.delete(normalizedChallenge.key);
       throw recoveryStorageUnavailableError();
@@ -18549,6 +18564,7 @@ async function startServer() {
   // Database Session Store
   // Use PostgreSQL store in production if DATABASE_URL is available
   let sessionStore: any = undefined;
+  let sessionPool: any = null;
   if (process.env.DATABASE_URL && process.env.DATABASE_URL !== 'undefined' && process.env.DATABASE_URL !== '') {
     try {
       const dbUrl = process.env.DATABASE_URL.trim();
@@ -18590,8 +18606,9 @@ async function startServer() {
           }
 
           const PostgresStore = pgSession(session);
+          sessionPool = pool;
           sessionStore = new PostgresStore({
-            pool: pool,
+            pool: sessionPool,
             tableName: 'session',
             createTableIfMissing: true
           });
@@ -18599,6 +18616,7 @@ async function startServer() {
         } catch (connErr: any) {
           console.error('Failed to connect to PostgreSQL for session store. Falling back to MemoryStore.', connErr.message);
           sessionStore = undefined;
+          sessionPool = null;
           await pool.end().catch(() => {});
         }
       } else {
@@ -18607,6 +18625,7 @@ async function startServer() {
     } catch (err: any) {
       console.error('Error initializing PostgreSQL session store:', err.message);
       sessionStore = undefined; // Ensure fallback to MemoryStore
+      sessionPool = null
     }
   } else {
     console.log('Usando armazenamento de sessão em memória (MemoryStore).');
@@ -21744,12 +21763,58 @@ async function startServer() {
   // Security hardening:
   // - Production must not expose internal env/integration details.
   // - Detailed diagnostics are available only outside production.
-  app.get('/api/health', async (req, res) => {
+  app.get('/api/health', async (_req, res) => {
     const release = deploymentReleaseId();
-    if (isProd) {
-      return res.json(cleanObject({ status: 'ok', release }));
+    return res.json(cleanObject({ status: 'ok', release }));
+  });
+
+  app.get('/api/ready', async (_req, res) => {
+    const release = deploymentReleaseId();
+    const checks = {
+      supabase: false,
+      otpStorage: false,
+      sessionStore: !isProd
+    };
+
+    try {
+      const { error } = await supabase
+        .from('users')
+        .select('id')
+        .limit(1);
+      checks.supabase = !error;
+    } catch {
+      checks.supabase = false;
     }
 
+    try {
+      checks.otpStorage = await ensureOtpTableAvailability(true);
+    } catch {
+      checks.otpStorage = false;
+    }
+
+    if (sessionPool) {
+      try {
+        await sessionPool.query('select 1');
+        checks.sessionStore = true;
+      } catch {
+        checks.sessionStore = false;
+      }
+    }
+
+    const ready = checks.supabase && checks.otpStorage && checks.sessionStore;
+    return res.status(ready ? 200 : 503).json(cleanObject({
+      status: ready ? 'ready' : 'not_ready',
+      release,
+      ...(isProd ? {} : { checks })
+    }));
+  });
+
+  app.get('/api/health/details', async (_req, res) => {
+    if (isProd) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    const release = deploymentReleaseId();
     const status: any = {
       release,
       supabase: 'unknown',
@@ -22753,8 +22818,17 @@ async function startServer() {
     let identifier = sanitizeEmail(req.body?.email);
     const requirePersistentChallenge = requiresPersistentRecoveryStorage();
 
-    if ((!recoveryToken && (!identifier || !code)) || !newPassword) {
-      return res.status(400).json({ error: 'Dados inválidos para recuperação.' });
+    if (!recoveryToken && (!identifier || !code)) {
+      return res.status(400).json({
+        error: 'RECOVERY_REQUEST_INVALID',
+        message: 'Os dados de recuperação estão incompletos. Solicite um novo link e tente novamente.'
+      });
+    }
+    if (!newPassword) {
+      return res.status(400).json({
+        error: 'PASSWORD_POLICY_INVALID',
+        message: 'Use no mínimo 12 caracteres, incluindo maiúscula, minúscula, número e símbolo.'
+      });
     }
 
     try {
@@ -79762,9 +79836,41 @@ async function startServer() {
     logger: console
   });
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+  httpServer.requestTimeout = 120_000;
+  httpServer.headersTimeout = 125_000;
+  httpServer.keepAliveTimeout = 65_000;
+
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[Shutdown] ${signal} recebido. Encerrando novas conexões.`);
+
+    const forcedExit = setTimeout(() => {
+      console.error('[Shutdown] Tempo limite excedido. Encerrando processo.');
+      process.exit(1);
+    }, 30_000);
+    forcedExit.unref();
+
+    httpServer.close(async (error) => {
+      if (error) {
+        console.error('[Shutdown] Falha ao encerrar servidor HTTP:', error.message);
+      }
+      try {
+        if (sessionPool) await sessionPool.end();
+      } catch (poolError: any) {
+        console.error('[Shutdown] Falha ao encerrar pool PostgreSQL:', poolError?.message || String(poolError));
+      }
+      clearTimeout(forcedExit);
+      process.exit(error ? 1 : 0);
+    });
+  };
+
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
 startServer().catch(err => {
