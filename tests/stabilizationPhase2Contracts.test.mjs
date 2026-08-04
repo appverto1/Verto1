@@ -22,7 +22,7 @@ assert.match(cron, /outra réplica possui o lease/);
 assert.match(runtime, /createHash\('sha256'\)/);
 assert.match(runtime, /runtime_active_sessions/);
 assert.match(runtime, /runtime_rate_limit_increment_v1/);
-assert.match(runtime, /timingSafeEqual/);
+assert.match(runtime, /runtime_validate_active_session_v2/);
 assert.doesNotMatch(runtime, /token:\s*token[,}]/);
 
 assert.match(schema, /create table if not exists public\.runtime_active_sessions/);

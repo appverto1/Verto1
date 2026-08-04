@@ -108,53 +108,21 @@ export async function issueDistributedSessionToken(params: {
   return token;
 }
 
-async function readDistributedSessionRow(supabase: SupabaseLike, userId: string) {
-  const { data, error } = await supabase
-    .from('runtime_active_sessions')
-    .select('user_id,token_hash,expires_at,revoked_at,last_seen_at')
-    .eq('user_id', userId)
-    .maybeSingle();
-  if (error) throw new Error(`DISTRIBUTED_SESSION_READ_FAILED: ${error.message || error}`);
-  return data || null;
-}
-
-export async function validateOrClaimDistributedSessionToken(params: {
+export async function validateDistributedSessionToken(params: {
   supabase: SupabaseLike;
   userId: string;
   token: string;
-  ttlMs: number;
 }) {
   const userId = String(params.userId || '').trim().slice(0, 160);
   const token = String(params.token || '').trim().slice(0, 200);
   if (!userId || !token) return false;
 
-  const tokenHash = hashRuntimeSessionToken(token);
-  let row = await readDistributedSessionRow(params.supabase, userId);
-  if (!row) {
-    const now = new Date();
-    const ttlMs = Math.max(60_000, Math.floor(Number(params.ttlMs) || 30 * 24 * 60 * 60 * 1000));
-    const { error: insertError } = await params.supabase
-      .from('runtime_active_sessions')
-      .insert([{
-        user_id: userId,
-        token_hash: tokenHash,
-        issued_at: now.toISOString(),
-        last_seen_at: now.toISOString(),
-        expires_at: new Date(now.getTime() + ttlMs).toISOString(),
-        revoked_at: null,
-        updated_at: now.toISOString()
-      }]);
-    if (!insertError) return true;
-    if (String(insertError?.code || '') !== '23505') {
-      throw new Error(`DISTRIBUTED_SESSION_CLAIM_FAILED: ${insertError.message || insertError}`);
-    }
-    row = await readDistributedSessionRow(params.supabase, userId);
-  }
-
-  if (!row || row.revoked_at) return false;
-  const expiresAt = new Date(String(row.expires_at || '')).getTime();
-  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return false;
-  return tokenHashesMatch(String(row.token_hash || ''), tokenHash);
+  const { data, error } = await params.supabase.rpc('runtime_validate_active_session_v2', {
+    p_user_id: userId,
+    p_token_hash: hashRuntimeSessionToken(token)
+  });
+  if (error) throw new Error(`DISTRIBUTED_SESSION_VALIDATE_FAILED: ${error.message || error}`);
+  return data === true;
 }
 
 export async function revokeDistributedSessionToken(params: {
@@ -208,5 +176,9 @@ export async function checkDistributedRuntimeState(supabase: SupabaseLike) {
     const { error } = await supabase.from(table).select('*').limit(1);
     if (error) return false;
   }
-  return true;
+  const { data, error } = await supabase.rpc('runtime_validate_active_session_v2', {
+    p_user_id: '',
+    p_token_hash: ''
+  });
+  return !error && data === false;
 }

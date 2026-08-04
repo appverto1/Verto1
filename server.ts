@@ -63,7 +63,7 @@ import {
   releaseDistributedJobLease,
   revokeDistributedSessionToken,
   tryAcquireDistributedJobLease,
-  validateOrClaimDistributedSessionToken
+  validateDistributedSessionToken
 } from './services/distributedRuntimeState';
 import {
   buildActivationEmailTemplate,
@@ -4435,11 +4435,10 @@ async function isActiveSessionToken(userId?: unknown, token?: unknown): Promise<
   if (!safeUserId || !safeToken) return false;
   if (requiresDistributedRuntimeState()) {
     if (!supabase) throw new Error('DISTRIBUTED_RUNTIME_STATE_UNAVAILABLE');
-    return await validateOrClaimDistributedSessionToken({
+    return await validateDistributedSessionToken({
       supabase,
       userId: safeUserId,
-      token: safeToken,
-      ttlMs: runtimeSessionTtlMs()
+      token: safeToken
     });
   }
   const current = activeSessionByUserId.get(safeUserId);
@@ -18930,7 +18929,17 @@ async function startServer() {
       return next();
     }
 
-    // 2. Fallback: Check Authorization Header (Token-based)
+    // 2. Token fallback is development-only. In production, a Supabase bearer
+    // token must never recreate a revoked server session, otherwise two browsers
+    // can alternately reclaim the single active-session record.
+    if (requiresDistributedRuntimeState()) {
+      return res.status(401).json({
+        error: 'SERVER_SESSION_REQUIRED',
+        message: 'Sua sessão não está mais ativa. Faça login novamente.'
+      });
+    }
+
+    // 3. Development fallback: Check Authorization Header (Token-based)
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.split(' ')[1];
