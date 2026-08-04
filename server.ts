@@ -33254,9 +33254,87 @@ async function startServer() {
       });
 
       if (result.error) throw result.error;
-      const patients = isExplicitDemoUser(req.session.user)
+      let patients = isExplicitDemoUser(req.session.user)
         ? (result.data || []).filter((patient: any) => patient?.is_demo === true)
         : result.data || [];
+
+      if (role === 'therapist' && scopedClinicId) {
+        const professionalId = sanitizeString(req.session.user?.id, 120);
+        const linkedPatientIdsResult = await supabase
+          .from('patient_professional_links')
+          .select('patient_id')
+          .eq('organization_id', scopedClinicId)
+          .eq('professional_id', professionalId)
+          .eq('status', 'active');
+
+        if (linkedPatientIdsResult.error) {
+          if (!isMissingRelationError(linkedPatientIdsResult.error)) {
+            console.warn('[Patients] therapist patient scope links unavailable; using legacy patient identifiers.');
+          }
+        } else {
+          const existingPatientIds = new Set(
+            patients
+              .map((patient: any) => sanitizeString(patient?.id, 120))
+              .filter(Boolean),
+          );
+          const linkedPatientIds = Array.from(new Set(
+            (linkedPatientIdsResult.data || [])
+              .map((link: any) => sanitizeString(link?.patient_id, 120))
+              .filter((patientId: string) => Boolean(patientId) && !existingPatientIds.has(patientId)),
+          ));
+
+          if (linkedPatientIds.length > 0) {
+            const selectedPatientColumns = new Set(
+              sanitizeString(result.select, 4000)
+                .split(',')
+                .map((column) => column.trim())
+                .filter(Boolean),
+            );
+            const linkedPatients: any[] = [];
+
+            for (let offset = 0; offset < linkedPatientIds.length; offset += 100) {
+              const patientIdBatch = linkedPatientIds.slice(offset, offset + 100);
+              let linkedPatientsQuery: any = supabase
+                .from('patients')
+                .select(result.select)
+                .in('id', patientIdBatch);
+
+              if (selectedPatientColumns.has('clinic_id')) {
+                linkedPatientsQuery = linkedPatientsQuery.eq('clinic_id', scopedClinicId);
+              }
+              if (selectedPatientColumns.has('is_active')) {
+                linkedPatientsQuery = linkedPatientsQuery.eq('is_active', true);
+              }
+              if (selectedPatientColumns.has('deleted_at')) {
+                linkedPatientsQuery = linkedPatientsQuery.is('deleted_at', null);
+              }
+              if (selectedPatientColumns.has('status')) {
+                linkedPatientsQuery = linkedPatientsQuery
+                  .neq('status', 'ARCHIVED')
+                  .neq('status', 'archived');
+              }
+
+              const linkedPatientsResult = await linkedPatientsQuery;
+              if (linkedPatientsResult.error) throw linkedPatientsResult.error;
+              linkedPatients.push(...(linkedPatientsResult.data || []));
+            }
+
+            const mergedPatients = new Map<string, any>();
+            for (const patient of [...patients, ...linkedPatients]) {
+              const patientId = sanitizeString(patient?.id, 120);
+              if (patientId) mergedPatients.set(patientId, patient);
+            }
+            patients = Array.from(mergedPatients.values())
+              .sort((left: any, right: any) => {
+                const leftTimestamp = Date.parse(String(left?.created_at || '')) || 0;
+                const rightTimestamp = Date.parse(String(right?.created_at || '')) || 0;
+                return rightTimestamp - leftTimestamp;
+              })
+              .slice(0, limit);
+          }
+        }
+      }
+
       const patientIds = patients
         .map((patient: any) => sanitizeString(patient?.id, 120))
         .filter(Boolean);
