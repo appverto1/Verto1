@@ -101,11 +101,11 @@ const commercialResult = {
 const originalResult = structuredClone(commercialResult);
 const review = classifySalesProposalReview(commercialResult);
 assert.equal(review.technicalBlockingCodes.length, 0);
-assert.equal(review.requiresCommercialApproval, true);
+assert.equal(review.requiresCommercialApproval, false);
 assert.equal(
   review.canGeneratePublicOfferWithoutApproval,
-  false,
-  'margem abaixo da meta sem aprovação não publica'
+  true,
+  'margem abaixo da meta gera aviso, mas não bloqueia publicação'
 );
 assert.equal(
   review.canSaveDraft,
@@ -302,10 +302,15 @@ assert.match(
 );
 assert.doesNotMatch(server, /PROPOSAL_EBITDA_POLICY_BLOCKED/);
 assert.doesNotMatch(server, /MODULAR_CHECKOUT_EBITDA_POLICY_BLOCKED/);
-assert.doesNotMatch(
+assert.match(
   `${builder}\n${catalogPanel}\n${legacySimulator}`,
-  /['"`>][^'"`<\n]*\bEBITDA\b[^'"`<\n]*['"`<]/i,
-  'o fluxo comercial não deve apresentar EBITDA ao usuário'
+  /EBITDA atribuído/i,
+  'a área interna deve explicar o EBITDA atribuído da proposta'
+);
+assert.match(
+  builder,
+  /Lucro líquido estimado/i,
+  'a área interna deve usar a terminologia de lucro líquido estimado'
 );
 assert.doesNotMatch(
   `${server}\n${builder}`,

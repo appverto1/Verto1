@@ -237,12 +237,12 @@ assert.match(
   /stripeFixed: profitabilityPolicy[\s\S]*'base_package'/
 );
 assert.match(engine, /SALES_MODULAR_ECONOMICS_MODEL_VERSION/);
-assert.match(engine, /economics\?\.requiresJustification/);
-assert.match(engine, /CLINIC_MARGIN_BELOW_MINIMUM/);
-assert.match(engine, /POST_PROMOTION_MARGIN_BELOW_MINIMUM/);
-assert.match(engine, /MODULE_MARGIN_BELOW_MINIMUM:/);
-assert.match(engine, /CAPACITY_MARGIN_BELOW_MINIMUM/);
-assert.match(engine, /EXPANSION_MARGIN_BELOW_MINIMUM:/);
+assert.match(engine, /requiresJustification: false/);
+assert.match(engine, /CLINIC_MARGIN_BELOW_TARGET/);
+assert.match(engine, /POST_PROMOTION_MARGIN_BELOW_TARGET/);
+assert.match(engine, /MODULE_MARGIN_BELOW_TARGET:/);
+assert.match(engine, /CAPACITY_MARGIN_BELOW_TARGET/);
+assert.match(engine, /EXPANSION_MARGIN_BELOW_TARGET:/);
 assert.doesNotMatch(engine, /CLINIC_MARGIN_BELOW_60/);
 assert.doesNotMatch(engine, /POST_PROMOTION_MARGIN_BELOW_70/);
 assert.doesNotMatch(engine, /MODULE_MARGIN_BELOW_75/);
@@ -256,6 +256,17 @@ assert.match(
   economics,
   /1 - targetEbitdaMargin|denominatorBasisPoints/
 );
+assert.match(engine, /targetRevenueForEbitdaMargin/);
+assert.match(engine, /breakEvenRecurringRevenueCents/);
+assert.match(engine, /targetGapAnnualCents/);
+assert.match(server, /stored\.breakEvenRecurringRevenueCents/);
+assert.match(server, /stored\.targetRecurringRevenueCents/);
+assert.match(server, /stored\.targetEbitdaMarginBasisPoints/);
+assert.match(server, /stored\.markupOnEbitdaCostBasisPoints/);
+assert.match(server, /nullableNumberMatches/);
+assert.match(builder, /Preço de equilíbrio EBITDA/);
+assert.match(builder, /Markup sobre custos/);
+assert.match(builder, /proposta pode continuar/i);
 assert.match(economics, /calculateSalesDriverExpansion/);
 assert.match(economics, /calculateSalesModuleEffect/);
 assert.match(economics, /SALES_EXPANSION_DRIVER_BY_ITEM/);

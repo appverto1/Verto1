@@ -70,4 +70,79 @@ assert.equal(netIncomeResult.promotional.preTaxIncomeCents, 88500);
 assert.equal(netIncomeResult.promotional.profitTaxCents, 8850);
 assert.equal(netIncomeResult.promotional.netIncomeCents, 79650);
 
+
+const targetOnlyAssumptions = {
+  ...modularAssumptionsFixture,
+  values: {
+    ...modularAssumptionsFixture.values,
+    stripeFeeBasisPoints: 0,
+    stripeFixedFeeCents: 0,
+    revenueTaxBasisPoints: 0,
+    estimatedDelinquencyBasisPoints: 0,
+    refundChargebackBasisPoints: 0,
+    variablePatientCostCents: 0,
+    variableClinicCostCents: 0,
+    storageCostCents: 0,
+    egressCostCents: 0,
+    processingCostCents: 0,
+    notificationCostCents: 0,
+    otherVariableCostCents: 0,
+    monthlySupportClinicCostCents: 0,
+    supportPatientCostCents: 0,
+    fixedAllocationMethod: 'none' as const,
+    monthlyOperationalCostCents: 40_000,
+    commercialCommissionBasisPoints: 0,
+    depreciationAmortizationCents: 0,
+    financialExpensesCents: 0,
+    otherBelowEbitdaCents: 0,
+    profitTaxBasisPoints: 0,
+    minimumMarginBasisPoints: 6_000,
+    attentionMarginBasisPoints: 6_000,
+    healthyMarginBasisPoints: 7_000
+  }
+};
+const belowTargetLegacyResult = calculateSalesProfitability(
+  {
+    initialActivePatientQuantity: 1,
+    baseUnitAmountCents: 100_000,
+    discountBasisPoints: 0,
+    discountDurationMonths: 0,
+    offerValidityDays: 14,
+    usageProfile: 'standard',
+    customMonthlyCostCents: 0,
+    onboardingCostCents: 0
+  },
+  targetOnlyAssumptions
+);
+assert.equal(belowTargetLegacyResult.promotional.ebitdaMarginBasisPoints, 6_000);
+assert.equal(belowTargetLegacyResult.rating, 'attention');
+assert.equal(belowTargetLegacyResult.requiresJustification, false);
+assert.ok(
+  belowTargetLegacyResult.warnings.some((warning) =>
+    warning.includes('não bloqueia a proposta')
+  )
+);
+
+const negativeLegacyResult = calculateSalesProfitability(
+  {
+    initialActivePatientQuantity: 1,
+    baseUnitAmountCents: 100_000,
+    discountBasisPoints: 0,
+    discountDurationMonths: 0,
+    offerValidityDays: 14,
+    usageProfile: 'standard',
+    customMonthlyCostCents: 0,
+    onboardingCostCents: 0
+  },
+  {
+    ...targetOnlyAssumptions,
+    values: {
+      ...targetOnlyAssumptions.values,
+      monthlyOperationalCostCents: 110_000
+    }
+  }
+);
+assert.equal(negativeLegacyResult.rating, 'not_recommended');
+assert.ok(Number(negativeLegacyResult.promotional.ebitdaCents) < 0);
+
 console.log('salesProfitability.test.ts: OK');

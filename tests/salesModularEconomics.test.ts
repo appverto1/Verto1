@@ -202,7 +202,7 @@ const inputWithModules = (
   return input;
 };
 
-// Fórmula de preço mínimo: custos fixos/diretos/taxa fixa divididos pelo
+// Fórmula de preço-alvo: custos fixos/diretos/taxa fixa divididos pelo
 // saldo após margem, Stripe, inadimplência, estornos e imposto.
 assert.equal(
   calculateSalesMinimumPriceCents({
@@ -229,7 +229,7 @@ assert.equal(
     taxPercentageBasisPoints: 500
   }),
   null,
-  'denominador não positivo deve bloquear o preço mínimo'
+  'denominador não positivo deve impedir o cálculo do preço-alvo'
 );
 assert.equal(calculateMaximumSupportedCostCents(100_000, 7500, 900), 16_000);
 
@@ -307,6 +307,10 @@ for (const code of [
   'CAPACITY_MARGIN_BELOW_MINIMUM',
   'EXPANSION_MARGIN_BELOW_MINIMUM:insurance_tiss',
   'CLINIC_MARGIN_BELOW_TARGET',
+  'POST_PROMOTION_MARGIN_BELOW_TARGET',
+  'MODULE_MARGIN_BELOW_TARGET:school_management',
+  'CAPACITY_MARGIN_BELOW_TARGET',
+  'EXPANSION_MARGIN_BELOW_TARGET:insurance_tiss',
   'CLINIC_MARGIN_BELOW_60',
   'POST_PROMOTION_MARGIN_BELOW_70',
   'MODULE_MARGIN_BELOW_75:school_management',
@@ -327,7 +331,13 @@ const coreResult = calculateSalesModularProposal(
 );
 assert.ok(coreResult.economics, 'core isolado deve calcular economia');
 assert.equal(coreResult.economics?.pricingProfile, 'intensive');
-assert.equal(coreResult.modelVersion, '2026-07-28-v5');
+assert.equal(coreResult.modelVersion, '2026-08-04-v6');
+assert.ok(
+  coreResult.warnings.some((warning) =>
+    warning.includes('custo unitário estimado em zero')
+  ),
+  'custos unitários estimados em zero com uso previsto devem gerar aviso de qualidade'
+);
 assert.equal(
   coreResult.economics?.items[0].fixedAllocatedCostCents,
   1000,
@@ -397,14 +407,76 @@ const coreThreshold70 =
   coreResult.economics?.items[0].priceMinimumCents[7000];
 assert.ok(coreThreshold60 && coreThreshold70);
 
-const belowFloor = calculateSalesModularProposal(
-  inputWithModules([], Math.floor(Number(coreThreshold60) * 0.95)),
+const targetFormulaResult = calculateSalesModularProposal(
+  inputWithModules([], 49_900),
   catalogWithEconomics(),
   modularAssumptionsFixture
 );
-assert.equal(belowFloor.economics?.canSend, false);
+assert.equal(
+  targetFormulaResult.targetEbitdaMarginBasisPoints,
+  DEFAULT_SALES_PROFITABILITY_POLICY.recurringTargetEbitdaMarginBasisPoints
+);
+const expectedTargetPrice = calculateSalesMinimumPriceCents({
+  directCostCents: targetFormulaResult.promotional.directCostCents,
+  fixedAllocatedCostCents:
+    targetFormulaResult.promotional.sharedPlatformCostAllocatedCents,
+  fixedPaymentFeeCents:
+    targetFormulaResult.promotional.fixedPaymentFeeAllocatedCents,
+  targetEbitdaMarginBasisPoints:
+    DEFAULT_SALES_PROFITABILITY_POLICY.recurringTargetEbitdaMarginBasisPoints,
+  stripePercentageBasisPoints:
+    modularAssumptionsFixture.values.stripeFeeBasisPoints,
+  delinquencyPercentageBasisPoints:
+    modularAssumptionsFixture.values.estimatedDelinquencyBasisPoints,
+  refundChargebackPercentageBasisPoints:
+    modularAssumptionsFixture.values.refundChargebackBasisPoints,
+  taxPercentageBasisPoints:
+    modularAssumptionsFixture.values.revenueTaxBasisPoints
+});
+assert.equal(
+  targetFormulaResult.targetRecurringRevenueCents,
+  expectedTargetPrice,
+  'preço-alvo deve recalcular custos percentuais sobre a própria receita-alvo'
+);
+assert.equal(
+  targetFormulaResult.minimumRecommendedRecurringRevenueCents,
+  targetFormulaResult.targetRecurringRevenueCents,
+  'campo histórico deve espelhar o preço-alvo'
+);
 assert.ok(
-  belowFloor.economics?.blockingCodes.includes('CLINIC_MARGIN_BELOW_MINIMUM')
+  Number(targetFormulaResult.targetRecurringRevenueCents) >
+    Number(targetFormulaResult.breakEvenRecurringRevenueCents),
+  'preço-alvo deve superar o equilíbrio EBITDA'
+);
+assert.equal(
+  targetFormulaResult.targetGapAnnualCents,
+  Number(targetFormulaResult.targetGapCents) * 12
+);
+assert.notEqual(targetFormulaResult.markupMultiplier, null);
+assert.notEqual(targetFormulaResult.markupOnEbitdaCostBasisPoints, null);
+
+const marginOnlyCatalog = catalogWithEconomics();
+marginOnlyCatalog.modularCostSettings.ownershipJustifications
+  .fixedMonthlyEligibleCost =
+    'Rateio compartilhado validado para isolar somente o aviso de margem.';
+const belowFloor = calculateSalesModularProposal(
+  inputWithModules([], Math.floor(Number(coreThreshold60) * 0.95)),
+  marginOnlyCatalog,
+  modularAssumptionsFixture
+);
+assert.equal(belowFloor.economics?.canSend, true);
+assert.equal(belowFloor.economics?.requiresJustification, false);
+assert.ok(
+  belowFloor.economics?.alertCodes.includes('CLINIC_MARGIN_BELOW_TARGET')
+);
+assert.equal(
+  belowFloor.economics?.blockingCodes.some((code) => code.includes('MARGIN_BELOW')),
+  false,
+  'margem abaixo da meta deve ser aviso, nunca bloqueio técnico'
+);
+assert.equal(
+  classifySalesProposalReview(belowFloor).canGeneratePublicOfferWithoutApproval,
+  true
 );
 
 const normalPrice = Number(coreThreshold70) + 5000;
@@ -432,7 +504,7 @@ const temporaryResult = calculateSalesModularProposal(
   modularAssumptionsFixture
 );
 assert.equal(temporaryResult.economics?.canSend, true);
-assert.equal(temporaryResult.economics?.requiresJustification, true);
+assert.equal(temporaryResult.economics?.requiresJustification, false);
 assert.ok(
   Number(temporaryResult.economics?.postPromotion.marginBasisPoints) >= 7000
 );
@@ -443,10 +515,11 @@ const unsustainablePost = calculateSalesModularProposal(
   modularAssumptionsFixture
 );
 assert.ok(
-  unsustainablePost.economics?.blockingCodes.includes(
-    'POST_PROMOTION_MARGIN_BELOW_MINIMUM'
+  unsustainablePost.economics?.alertCodes.includes(
+    'POST_PROMOTION_MARGIN_BELOW_TARGET'
   )
 );
+assert.equal(unsustainablePost.economics?.canSend, true);
 
 const cheapAgenda = moduleItem(
   'appointments_communication',
@@ -460,10 +533,11 @@ const cheapAgendaResult = calculateSalesModularProposal(
   modularAssumptionsFixture
 );
 assert.ok(
-  cheapAgendaResult.economics?.blockingCodes.includes(
-    'MODULE_MARGIN_BELOW_MINIMUM:appointments_communication'
+  cheapAgendaResult.economics?.alertCodes.includes(
+    'MODULE_MARGIN_BELOW_TARGET:appointments_communication'
   )
 );
+assert.equal(cheapAgendaResult.economics?.canSend, true);
 
 const customCatalog = catalogWithEconomics([cheapAgenda]);
 customCatalog.profitabilityPolicy = structuredClone(customProfitabilityPolicy);
@@ -485,13 +559,13 @@ const customLowResult = calculateSalesModularProposal(
   modularAssumptionsFixture
 );
 const customWarnings = customLowResult.economics?.warnings.join(' ') || '';
-assert.match(customWarnings, /55%/);
 assert.match(customWarnings, /65%/);
 assert.match(customWarnings, /70%/);
 const customGeneratedMarginCodes = (
-  customLowResult.economics?.blockingCodes || []
+  customLowResult.economics?.alertCodes || []
 ).filter((code) => code.includes('MARGIN_BELOW'));
 assert.ok(customGeneratedMarginCodes.length > 0);
+assert.equal(customLowResult.economics?.blockingCodes.length, 0);
 for (const code of customGeneratedMarginCodes) {
   assert.doesNotMatch(
     code,
@@ -523,7 +597,7 @@ const freeAgendaResult = calculateSalesModularProposal(
   catalogWithEconomics([agenda]),
   modularAssumptionsFixture
 );
-assert.equal(freeAgendaResult.economics?.requiresJustification, true);
+assert.equal(freeAgendaResult.economics?.requiresJustification, false);
 assert.ok(
   Number(freeAgendaResult.economics?.promotional.marginBasisPoints) >= 6000,
   'módulo gratuito só é admissível se o consolidado preservar o piso'
@@ -620,7 +694,7 @@ assert.equal(
     Number(
       modularAssumptionsFixture.values.estimatedDelinquencyBasisPoints
     ),
-  'Stripe, impostos e inadimplência devem compor o preço mínimo'
+  'Stripe, impostos e inadimplência devem compor o preço-alvo'
 );
 assert.equal(agendaResult.totalsReconciled, true);
 assert.equal(

@@ -83,10 +83,10 @@ const assumptionLabels: Partial<
   financialExpensesCents: 'despesas financeiras',
   profitTaxBasisPoints: 'impostos sobre lucro',
   otherBelowEbitdaCents:
-    'outras despesas após o resultado operacional atribuído',
-  minimumMarginBasisPoints: 'margem mínima',
-  healthyMarginBasisPoints: 'faixa de oferta saudável',
-  attentionMarginBasisPoints: 'faixa de atenção',
+    'outras despesas abaixo do EBITDA atribuído',
+  minimumMarginBasisPoints: 'referência histórica de margem',
+  healthyMarginBasisPoints: 'meta de EBITDA atribuída',
+  attentionMarginBasisPoints: 'referência histórica de atenção',
 };
 
 const sourceLabels = {
@@ -102,15 +102,15 @@ const ratingCopy: Record<
   { label: string; className: string }
 > = {
   healthy: {
-    label: 'Oferta saudável',
+    label: 'Dentro da margem-alvo',
     className: 'border-emerald-200 bg-emerald-50 text-emerald-800',
   },
   attention: {
-    label: 'Oferta exige atenção',
+    label: 'Abaixo da margem-alvo',
     className: 'border-amber-200 bg-amber-50 text-amber-800',
   },
   not_recommended: {
-    label: 'Oferta não recomendada',
+    label: 'EBITDA atribuído negativo',
     className: 'border-rose-200 bg-rose-50 text-rose-800',
   },
   insufficient_data: {
@@ -768,7 +768,7 @@ const LegacySalesProfitabilitySimulator = ({
                       </h3>
                       <p className="mt-1 text-sm font-normal leading-5 text-amber-900">
                         Configure as premissas financeiras uma única vez para
-                        calcular margem, resultado operacional atribuído e lucro desta proposta.
+                        calcular margem, EBITDA atribuído e lucro desta proposta.
                       </p>
                     </div>
                   </div>
@@ -1071,17 +1071,17 @@ const LegacySalesProfitabilitySimulator = ({
                       )
                     )}
                     {renderMetric(
-                      'Resultado operacional atribuído incremental',
+                      'EBITDA atribuído incremental',
                       formatCurrency(preview.promotional.ebitdaCents)
                     )}
                     {renderMetric(
-                      'Margem operacional atribuída',
+                      'Margem EBITDA atribuída',
                       formatPercent(
                         preview.promotional.ebitdaMarginBasisPoints
                       )
                     )}
                     {renderMetric(
-                      'Lucro líquido estimado',
+                      'Lucro líquido estimado — LL',
                       formatCurrency(preview.promotional.netIncomeCents),
                       formatPercent(preview.promotional.netMarginBasisPoints)
                     )}
@@ -1118,7 +1118,7 @@ const LegacySalesProfitabilitySimulator = ({
                         </div>
                         <div className="flex justify-between gap-3">
                           <dt className="font-normal text-slate-500">
-                            Margem operacional atribuída
+                            Margem EBITDA atribuída
                           </dt>
                           <dd className="font-medium text-slate-900">
                             {formatPercent(
@@ -1164,7 +1164,7 @@ const LegacySalesProfitabilitySimulator = ({
                         </div>
                         <div className="flex justify-between gap-3">
                           <dt className="font-normal text-slate-500">
-                            Margem operacional atribuída
+                            Margem EBITDA atribuída
                           </dt>
                           <dd className="font-medium text-slate-900">
                             {formatPercent(
@@ -1220,7 +1220,7 @@ const LegacySalesProfitabilitySimulator = ({
                             formatCurrency(
                               preview.horizons[horizon].ebitdaCents
                             ),
-                            `Resultado operacional atribuído estimado · receita ${formatCurrency(
+                            `EBITDA atribuído estimado · receita ${formatCurrency(
                               preview.horizons[horizon].revenueCents
                             )}`
                           )
@@ -1246,13 +1246,13 @@ const LegacySalesProfitabilitySimulator = ({
                             : `${preview.breakEven.contributionPositiveQuantity} pacientes`
                         )}
                         {renderMetric(
-                          'Resultado operacional atribuído não negativo',
+                          'EBITDA atribuído não negativo',
                           preview.breakEven.nonNegativeEbitdaQuantity == null
                             ? 'Não alcançável'
                             : `${preview.breakEven.nonNegativeEbitdaQuantity} pacientes`
                         )}
                         {renderMetric(
-                          'Margem mínima',
+                          'Referência histórica de margem',
                           preview.breakEven.minimumMarginQuantity == null
                             ? 'Não calculável'
                             : `${preview.breakEven.minimumMarginQuantity} pacientes`
@@ -1376,7 +1376,7 @@ const LegacySalesProfitabilitySimulator = ({
                           após o desconto.
                         </p>
                         <p>
-                          Margem, resultado operacional atribuído e lucro usam o snapshot da versão de
+                          Margem, EBITDA atribuído e lucro usam o snapshot da versão de
                           premissas vinculada à simulação.
                         </p>
                         <p>
@@ -1495,14 +1495,14 @@ const LegacySalesProfitabilitySimulator = ({
                               )
                             )}
                             {renderMetric(
-                              'Margem operacional atribuída',
+                              'Margem EBITDA atribuída',
                               formatPercent(
                                 result.promotional
                                   .ebitdaMarginBasisPoints
                               )
                             )}
                             {renderMetric(
-                              'Lucro líquido',
+                              'Lucro líquido estimado — LL',
                               formatCurrency(
                                 result.promotional.netIncomeCents
                               )
@@ -1574,7 +1574,7 @@ const LegacySalesProfitabilitySimulator = ({
                         <th className="px-2 py-2 font-medium">Condição</th>
                         <th className="px-2 py-2 font-medium">Receita</th>
                         <th className="px-2 py-2 font-medium">
-                          Resultado operacional atribuído
+                          EBITDA atribuído
                         </th>
                         <th className="px-2 py-2 font-medium">Margem</th>
                         <th className="px-2 py-2 font-medium">Classificação</th>

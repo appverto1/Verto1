@@ -218,6 +218,8 @@ export type SalesModularDirectCostBreakdown = {
 export type SalesModularPeriodLineResult = {
   netRevenueCents: number;
   directCostCents: number | null;
+  percentageCostAllocatedCents: number | null;
+  fixedPaymentFeeAllocatedCents: number | null;
   transactionAndTaxCostAllocatedCents: number | null;
   sharedPlatformCostAllocatedCents: number | null;
   contributionMarginCents: number | null;
@@ -294,6 +296,8 @@ export type SalesModularProposalLineResult = {
 export type SalesModularConsolidatedPeriod = {
   recurringRevenueCents: number;
   directCostCents: number | null;
+  percentageCostAllocatedCents: number | null;
+  fixedPaymentFeeAllocatedCents: number | null;
   transactionAndTaxCostAllocatedCents: number | null;
   sharedPlatformCostAllocatedCents: number | null;
   totalEstimatedCostCents: number | null;
@@ -375,7 +379,15 @@ export type SalesModularProposalResult = {
   oneTimeRevenueCents: number;
   oneTimeDirectCostCents: number | null;
   oneTimeContributionMarginCents: number | null;
+  /** Compatibilidade histórica: equivale ao preço-alvo de EBITDA. */
   minimumRecommendedRecurringRevenueCents: number | null;
+  breakEvenRecurringRevenueCents: number | null;
+  targetRecurringRevenueCents: number | null;
+  targetEbitdaMarginBasisPoints: number | null;
+  targetGapCents: number | null;
+  targetGapAnnualCents: number | null;
+  markupOnEbitdaCostBasisPoints: number | null;
+  markupMultiplier: number | null;
   maximumRecommendedDiscountBasisPoints: number | null;
   rating: OfferProfitabilityRating;
   requiresJustification: boolean;
@@ -438,9 +450,9 @@ export type SalesModularProposalResult = {
 };
 
 export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-28-v4';
-export const SALES_MODULAR_ECONOMICS_MODEL_VERSION = '2026-07-28-v5';
+export const SALES_MODULAR_ECONOMICS_MODEL_VERSION = '2026-08-04-v6';
 export const SALES_MODULAR_PER_PATIENT_MODEL_VERSION = '2026-07-28-v6';
-export const SALES_MODULAR_CAPACITY_BLOCK_MODEL_VERSION = '2026-07-30-v7';
+export const SALES_MODULAR_CAPACITY_BLOCK_MODEL_VERSION = '2026-08-04-v8';
 
 export const SALES_COMMERCIAL_MODULE_DEPENDENCIES: Readonly<
   Record<string, readonly string[]>
@@ -2056,6 +2068,8 @@ type MutablePeriodLine = {
   directCostCents: number | null;
   weight: number;
   isBase: boolean;
+  percentageCostAllocatedCents: number | null;
+  fixedPaymentFeeAllocatedCents: number | null;
   transactionAndTaxCostAllocatedCents: number | null;
   sharedPlatformCostAllocatedCents: number | null;
   contributionMarginCents: number | null;
@@ -2083,6 +2097,8 @@ const calculatePeriod = (
 ) => {
   const lines: MutablePeriodLine[] = sourceLines.map((line) => ({
     ...line,
+    percentageCostAllocatedCents: 0,
+    fixedPaymentFeeAllocatedCents: 0,
     transactionAndTaxCostAllocatedCents: 0,
     sharedPlatformCostAllocatedCents: 0,
     contributionMarginCents: null,
@@ -2120,6 +2136,8 @@ const calculatePeriod = (
     stripeFixed === null
   ) {
     lines.forEach((line) => {
+      line.percentageCostAllocatedCents = null;
+      line.fixedPaymentFeeAllocatedCents = null;
       line.transactionAndTaxCostAllocatedCents = null;
     });
   } else {
@@ -2138,11 +2156,14 @@ const calculatePeriod = (
       baseIndex
     );
     lines.forEach((line, index) => {
+      line.percentageCostAllocatedCents = allocatedComponents.reduce(
+        (sum, component) => sum + component[index],
+        0
+      );
+      line.fixedPaymentFeeAllocatedCents = fixedAllocation[index];
       line.transactionAndTaxCostAllocatedCents =
-        allocatedComponents.reduce(
-          (sum, component) => sum + component[index],
-          fixedAllocation[index]
-        );
+        line.percentageCostAllocatedCents +
+        line.fixedPaymentFeeAllocatedCents;
     });
   }
 
@@ -2251,6 +2272,8 @@ const calculatePeriod = (
   const mapped: SalesModularPeriodLineResult[] = lines.map((line) => ({
     netRevenueCents: line.netRevenueCents,
     directCostCents: line.directCostCents,
+    percentageCostAllocatedCents: line.percentageCostAllocatedCents,
+    fixedPaymentFeeAllocatedCents: line.fixedPaymentFeeAllocatedCents,
     transactionAndTaxCostAllocatedCents:
       line.transactionAndTaxCostAllocatedCents,
     sharedPlatformCostAllocatedCents:
@@ -2283,6 +2306,12 @@ const calculatePeriod = (
       0
     ),
     directCostCents: nullableSum(mapped.map((line) => line.directCostCents)),
+    percentageCostAllocatedCents: nullableSum(
+      mapped.map((line) => line.percentageCostAllocatedCents)
+    ),
+    fixedPaymentFeeAllocatedCents: nullableSum(
+      mapped.map((line) => line.fixedPaymentFeeAllocatedCents)
+    ),
     transactionAndTaxCostAllocatedCents: nullableSum(
       mapped.map((line) => line.transactionAndTaxCostAllocatedCents)
     ),
@@ -2373,22 +2402,49 @@ const calculatePeriod = (
   return { lines: mapped, consolidated };
 };
 
-const minimumRevenueForMargin = (
-  period: SalesModularConsolidatedPeriod,
-  minimumMarginBasisPoints: number | null
+const targetRevenueForEbitdaMargin = (
+  period: Pick<
+    SalesModularConsolidatedPeriod | SalesModularPeriodLineResult,
+    | 'directCostCents'
+    | 'sharedPlatformCostAllocatedCents'
+    | 'fixedPaymentFeeAllocatedCents'
+  >,
+  targetMarginBasisPoints: number | null,
+  values: SalesAssumptionValues
 ) => {
-  if (
-    period.totalEstimatedCostCents === null ||
-    minimumMarginBasisPoints === null ||
-    minimumMarginBasisPoints >= 10_000
-  ) {
-    return null;
-  }
-  return Math.ceil(
-    (period.totalEstimatedCostCents * 10_000) /
-      (10_000 - minimumMarginBasisPoints)
-  );
+  if (targetMarginBasisPoints === null) return null;
+  return calculateSalesMinimumPriceCents({
+    directCostCents: period.directCostCents,
+    fixedAllocatedCostCents: period.sharedPlatformCostAllocatedCents,
+    fixedPaymentFeeCents: period.fixedPaymentFeeAllocatedCents,
+    targetEbitdaMarginBasisPoints: targetMarginBasisPoints,
+    stripePercentageBasisPoints: values.stripeFeeBasisPoints,
+    delinquencyPercentageBasisPoints:
+      values.estimatedDelinquencyBasisPoints,
+    refundChargebackPercentageBasisPoints:
+      values.refundChargebackBasisPoints,
+    taxPercentageBasisPoints: values.revenueTaxBasisPoints
+  });
 };
+
+const calculateMarkupMetrics = (
+  revenueCents: number,
+  ebitdaCostCents: number | null
+) => {
+  if (ebitdaCostCents === null || ebitdaCostCents <= 0) {
+    return {
+      markupOnEbitdaCostBasisPoints: null,
+      markupMultiplier: null
+    };
+  }
+  return {
+    markupOnEbitdaCostBasisPoints: Math.round(
+      ((revenueCents - ebitdaCostCents) * 10_000) / ebitdaCostCents
+    ),
+    markupMultiplier: revenueCents / ebitdaCostCents
+  };
+};
+
 
 export function calculateSalesModularProposal(
   input: SalesModularProposalInput,
@@ -2802,6 +2858,9 @@ export function calculateSalesModularProposal(
     assumptionSnapshot,
     input.usageProfile
   );
+  const targetEbitdaMarginBasisPoints =
+    profitabilityPolicy?.recurringTargetEbitdaMarginBasisPoints ??
+    values.healthyMarginBasisPoints;
   const allocationSettings = {
     stripePercentage: resolvedAllocationMethod(
       catalog.allocationSettings?.stripePercentage,
@@ -2919,33 +2978,12 @@ export function calculateSalesModularProposal(
     (line, index) => {
       const promotional = promotionalPeriod.lines[index];
       const postPromotion = postPeriod.lines[index];
-      const minimumRecommendedRevenueCents = minimumRevenueForMargin(
-        {
-          ...promotionalPeriod.consolidated,
-          recurringRevenueCents: promotional.netRevenueCents,
-          directCostCents: promotional.directCostCents,
-          transactionAndTaxCostAllocatedCents:
-            promotional.transactionAndTaxCostAllocatedCents,
-          sharedPlatformCostAllocatedCents:
-            promotional.sharedPlatformCostAllocatedCents,
-          totalEstimatedCostCents: nullableSum([
-            promotional.directCostCents,
-            promotional.transactionAndTaxCostAllocatedCents,
-            promotional.sharedPlatformCostAllocatedCents
-          ]),
-          contributionMarginCents: promotional.contributionMarginCents,
-          contributionMarginBasisPoints:
-            promotional.contributionMarginBasisPoints,
-          ebitdaCents: promotional.ebitdaCents,
-          ebitdaMarginBasisPoints: promotional.ebitdaMarginBasisPoints,
-          belowEbitdaCostAllocatedCents:
-            promotional.belowEbitdaCostAllocatedCents,
-          profitTaxAllocatedCents: promotional.profitTaxAllocatedCents,
-          netIncomeCents: promotional.netIncomeCents,
-          netMarginBasisPoints: promotional.netMarginBasisPoints
-        },
-        values.minimumMarginBasisPoints
-      );
+      const minimumRecommendedRevenueCents =
+        targetRevenueForEbitdaMargin(
+          promotional,
+          targetEbitdaMarginBasisPoints,
+          values
+        );
       const maximumRecommendedDiscountBasisPoints =
         minimumRecommendedRevenueCents === null ||
         line.grossRecurringRevenueCents <= 0
@@ -2975,7 +3013,7 @@ export function calculateSalesModularProposal(
         promotional.ebitdaCents !== null &&
         promotional.ebitdaCents < 0
       ) {
-        warnings.push('Resultado operacional atribuído promocional negativo.');
+        warnings.push('EBITDA atribuído promocional negativo.');
       }
       const estimateClassification = classifyCommercialEstimate(
         line.item.costModel,
@@ -3109,13 +3147,21 @@ export function calculateSalesModularProposal(
     }
   );
 
+  const targetRecurringRevenueCents = targetRevenueForEbitdaMargin(
+    promotionalPeriod.consolidated,
+    targetEbitdaMarginBasisPoints,
+    values
+  );
+  const breakEvenRecurringRevenueCents = targetRevenueForEbitdaMargin(
+    promotionalPeriod.consolidated,
+    0,
+    values
+  );
+  // Campo histórico mantido para leitores antigos; agora representa o preço-alvo.
   const minimumRecommendedRecurringRevenueCents =
-    minimumRevenueForMargin(
-      promotionalPeriod.consolidated,
-      values.minimumMarginBasisPoints
-    );
+    targetRecurringRevenueCents;
   const maximumRecommendedDiscountBasisPoints =
-    minimumRecommendedRecurringRevenueCents === null ||
+    targetRecurringRevenueCents === null ||
     resolved.reduce(
       (sum, line) => sum + line.grossRecurringRevenueCents,
       0
@@ -3130,7 +3176,7 @@ export function calculateSalesModularProposal(
                 (sum, line) => sum + line.grossRecurringRevenueCents,
                 0
               ) -
-                minimumRecommendedRecurringRevenueCents) *
+                targetRecurringRevenueCents) *
                 10_000) /
                 resolved.reduce(
                   (sum, line) => sum + line.grossRecurringRevenueCents,
@@ -3142,10 +3188,21 @@ export function calculateSalesModularProposal(
   const ratingMargin =
     promotionalPeriod.consolidated.ebitdaMarginBasisPoints ??
     promotionalPeriod.consolidated.contributionMarginBasisPoints;
-  const requiresJustification =
-    ratingMargin !== null &&
-    values.minimumMarginBasisPoints !== null &&
-    ratingMargin < values.minimumMarginBasisPoints;
+  const requiresJustification = false;
+  const targetGapCents =
+    targetRecurringRevenueCents === null
+      ? null
+      : Math.max(
+          0,
+          targetRecurringRevenueCents -
+            promotionalPeriod.consolidated.recurringRevenueCents
+        );
+  const targetGapAnnualCents =
+    targetGapCents === null ? null : targetGapCents * 12;
+  const markupMetrics = calculateMarkupMetrics(
+    promotionalPeriod.consolidated.recurringRevenueCents,
+    promotionalPeriod.consolidated.totalEstimatedCostCents
+  );
   const oneTimeRevenueCents = lines.reduce(
     (sum, line) => sum + line.oneTimeRevenueCents,
     0
@@ -3179,10 +3236,19 @@ export function calculateSalesModularProposal(
       'Há custos indisponíveis. Margens incompletas não são tratadas como zero.'
     );
   }
-  if (requiresJustification) {
+  if (
+    ratingMargin !== null &&
+    targetEbitdaMarginBasisPoints !== null &&
+    ratingMargin < targetEbitdaMarginBasisPoints
+  ) {
     warnings.push(
-      'A margem está abaixo do mínimo e exige justificativa administrativa.'
+      `A margem EBITDA atribuída está abaixo da meta de ${formatSalesBasisPointsPercent(
+        targetEbitdaMarginBasisPoints
+      )}. Este é um aviso comercial e não bloqueia a proposta.`
     );
+  }
+  if (ratingMargin !== null && ratingMargin < 0) {
+    warnings.push('O EBITDA atribuído está negativo no cenário atual.');
   }
   if (possibleDuplicateCosts.length > 0) {
     warnings.push(
@@ -3191,6 +3257,25 @@ export function calculateSalesModularProposal(
         .join(', ')}.`
     );
   }
+
+  resolved.forEach((line) => {
+    const model = line.item.costModel;
+    if (!model || !['estimated', 'manual'].includes(model.costSource)) return;
+    const hasPositiveDriver = Object.values(
+      line.costResolution.resolvedDrivers
+    ).some((driver) => validDriverDatum(driver) && driver.value > 0);
+    const hasEstimatedZeroUnitCost = [
+      model.directCostPerUsageUnitCents,
+      model.notificationCostPerUnitCents,
+      model.processingCostPerUnitCents,
+      ...Object.values(model.driverConfig?.unitCostsCents || {})
+    ].some((value) => value === 0);
+    if (hasPositiveDriver && hasEstimatedZeroUnitCost) {
+      warnings.push(
+        `${line.item.publicName}: há custo unitário estimado em zero com uso previsto. Valide a fonte antes de tratar a margem como calibrada.`
+      );
+    }
+  });
 
   const assertExactTotal = (
     field: string,
@@ -3231,6 +3316,8 @@ export function calculateSalesModularProposal(
   ] as const) {
     for (const field of [
       'directCostCents',
+      'percentageCostAllocatedCents',
+      'fixedPaymentFeeAllocatedCents',
       'transactionAndTaxCostAllocatedCents',
       'sharedPlatformCostAllocatedCents',
       'contributionMarginCents',
@@ -3487,28 +3574,15 @@ export function calculateSalesModularProposal(
   const phaseRating: OfferProfitabilityRating =
     missingCosts.length > 0 ||
     minimumPhaseMargin === null ||
-    values.healthyMarginBasisPoints === null ||
-    values.attentionMarginBasisPoints === null
+    targetEbitdaMarginBasisPoints === null
       ? 'insufficient_data'
-      : minimumPhaseMargin >= values.healthyMarginBasisPoints
+      : minimumPhaseMargin >= targetEbitdaMarginBasisPoints
         ? 'healthy'
-        : minimumPhaseMargin >= values.attentionMarginBasisPoints
+        : minimumPhaseMargin >= 0
           ? 'attention'
           : 'not_recommended';
-  const anyPhaseRequiresJustification =
-    minimumPhaseMargin !== null &&
-    values.minimumMarginBasisPoints !== null &&
-    minimumPhaseMargin < values.minimumMarginBasisPoints;
-  const finalRequiresJustification =
-    requiresJustification || anyPhaseRequiresJustification;
-  if (
-    anyPhaseRequiresJustification &&
-    !warnings.some((warning) => warning.includes('margem está abaixo'))
-  ) {
-    warnings.push(
-      'Ao menos uma fase comercial está abaixo da margem mínima e exige justificativa administrativa.'
-    );
-  }
+  const finalRequiresJustification = false;
+
 
   const commercialLineEconomics = new Map<
     string,
@@ -4085,9 +4159,7 @@ export function calculateSalesModularProposal(
     const economicsPhases = commercialPhases.map((phase, index) => {
       const intensive = intensivePhasePeriods[index].consolidated;
       const target =
-        index === commercialPhases.length - 1
-          ? profitabilityPolicy.postPromotionMinimumEbitdaMarginBasisPoints
-          : profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints;
+        profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints;
       const directAndShared = nullableSum([
         intensive.directCostCents,
         intensive.sharedPlatformCostAllocatedCents
@@ -4131,6 +4203,7 @@ export function calculateSalesModularProposal(
       };
     });
     const blockingCodes: string[] = [];
+    const alertCodes: string[] = [];
     const economicsWarnings: string[] = [];
     if (
       perPatientPricingEnabled &&
@@ -4165,15 +4238,22 @@ export function calculateSalesModularProposal(
     ) {
       blockingCodes.push('ECONOMICS_DENOMINATOR_INVALID');
       economicsWarnings.push(
-        'A soma da margem alvo, Stripe, inadimplência e impostos invalida o denominador do preço mínimo.'
+        'A soma da margem alvo, Stripe, inadimplência e impostos invalida o denominador do preço-alvo.'
       );
     }
-    if (economicsPhases.some((phase) => phase.belowAbsoluteMinimum)) {
-      blockingCodes.push('CLINIC_MARGIN_BELOW_MINIMUM');
+    if (
+      economicsPhases.some(
+        (phase) =>
+          phase.marginBasisPoints !== null &&
+          phase.marginBasisPoints <
+            profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
+      )
+    ) {
+      alertCodes.push('CLINIC_MARGIN_BELOW_TARGET');
       economicsWarnings.push(
-        `Ao menos uma fase está abaixo da margem operacional atribuída mínima de ${formatSalesBasisPointsPercent(
-          profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints
-        )}.`
+        `Ao menos uma fase está abaixo da meta de EBITDA atribuído de ${formatSalesBasisPointsPercent(
+          profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
+        )}. A proposta pode continuar com aviso.`
       );
     }
     const finalPhase = economicsPhases[economicsPhases.length - 1];
@@ -4181,13 +4261,13 @@ export function calculateSalesModularProposal(
       finalPhase &&
       finalPhase.marginBasisPoints !== null &&
       finalPhase.marginBasisPoints <
-        profitabilityPolicy.postPromotionMinimumEbitdaMarginBasisPoints
+        profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
     ) {
-      blockingCodes.push('POST_PROMOTION_MARGIN_BELOW_MINIMUM');
+      alertCodes.push('POST_PROMOTION_MARGIN_BELOW_TARGET');
       economicsWarnings.push(
-        `A condição posterior precisa alcançar margem operacional atribuída de pelo menos ${formatSalesBasisPointsPercent(
-          profitabilityPolicy.postPromotionMinimumEbitdaMarginBasisPoints
-        )}.`
+        `A condição posterior está abaixo da meta de EBITDA atribuído de ${formatSalesBasisPointsPercent(
+          profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
+        )}. A proposta pode continuar com aviso.`
       );
     }
     const phaseNeedsJustification = economicsPhases.some(
@@ -4209,13 +4289,13 @@ export function calculateSalesModularProposal(
         !phaseHasTemporaryDiscount(commercialPhases[index])
     );
     if (phaseNeedsJustification && phaseMissingTemporaryDiscount) {
-      blockingCodes.push('TEMPORARY_DISCOUNT_REQUIRED');
+      alertCodes.push('TEMPORARY_DISCOUNT_RECOMMENDED');
       economicsWarnings.push(
         `Margens entre ${formatSalesBasisPointsPercent(
           profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints
         )} e ${formatSalesBasisPointsPercent(
           profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
-        )} exigem desconto temporário com término definido.`
+        )} recomendam uma condição temporária com término definido, sem bloqueio automático.`
       );
     }
     const firstCommercialPhase = commercialPhases[0];
@@ -4232,9 +4312,9 @@ export function calculateSalesModularProposal(
       promotionalModuleNeedsJustification &&
       !promotionalModuleHasTemporaryDiscount
     ) {
-      blockingCodes.push('MODULE_PROMOTION_TERMS_REQUIRED');
+      alertCodes.push('MODULE_PROMOTION_TERMS_RECOMMENDED');
       economicsWarnings.push(
-        'Módulo abaixo do piso incremental exige benefício temporário explícito e justificativa.'
+        'Módulo abaixo da referência incremental recomenda benefício temporário explícito e registro da decisão.'
       );
     }
     economicsItems
@@ -4245,20 +4325,20 @@ export function calculateSalesModularProposal(
           item.postPromotionMarginBasisPoints <
             profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints
         ) {
-          blockingCodes.push(
-            `MODULE_MARGIN_BELOW_MINIMUM:${item.itemKey}`
+          alertCodes.push(
+            `MODULE_MARGIN_BELOW_TARGET:${item.itemKey}`
           );
           economicsWarnings.push(
-            `${item.publicName} está abaixo da margem incremental mínima de ${formatSalesBasisPointsPercent(
+            `${item.publicName} está abaixo da referência de margem incremental de ${formatSalesBasisPointsPercent(
               profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints
             )}.`
           );
         }
       });
     if (capacityEconomics?.meetsMinimumMargin === false) {
-      blockingCodes.push('CAPACITY_MARGIN_BELOW_MINIMUM');
+      alertCodes.push('CAPACITY_MARGIN_BELOW_TARGET');
       economicsWarnings.push(
-        `Os blocos de capacidade não preservam a margem incremental mínima de ${formatSalesBasisPointsPercent(
+        `Os blocos de capacidade estão abaixo da referência de margem incremental de ${formatSalesBasisPointsPercent(
           profitabilityPolicy.capacityMinimumIncrementalMarginBasisPoints
         )}.`
       );
@@ -4269,11 +4349,11 @@ export function calculateSalesModularProposal(
           `EXPANSION_INSUFFICIENT_DATA:${expansion.itemKey}`
         );
       } else if (expansion.status === 'blocked') {
-        blockingCodes.push(
-          `EXPANSION_MARGIN_BELOW_MINIMUM:${expansion.itemKey}`
+        alertCodes.push(
+          `EXPANSION_MARGIN_BELOW_TARGET:${expansion.itemKey}`
         );
         economicsWarnings.push(
-          `${expansion.publicName} está abaixo da margem incremental mínima de ${formatSalesBasisPointsPercent(
+          `${expansion.publicName} está abaixo da referência de margem incremental de ${formatSalesBasisPointsPercent(
             profitabilityPolicy.capacityMinimumIncrementalMarginBasisPoints
           )} para excedentes por driver.`
         );
@@ -4288,7 +4368,7 @@ export function calculateSalesModularProposal(
       fixedAllocatedCostCents: 0,
       fixedPaymentFeeCents: intensiveValues.stripeFixedFeeCents,
       targetEbitdaMarginBasisPoints:
-        profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints,
+        profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints,
       stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
       delinquencyPercentageBasisPoints:
         intensiveValues.estimatedDelinquencyBasisPoints,
@@ -4304,7 +4384,7 @@ export function calculateSalesModularProposal(
       fixedAllocatedCostCents: 0,
       fixedPaymentFeeCents: intensiveValues.stripeFixedFeeCents,
       targetEbitdaMarginBasisPoints:
-        profitabilityPolicy.postPromotionMinimumEbitdaMarginBasisPoints,
+        profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints,
       stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
       delinquencyPercentageBasisPoints:
         intensiveValues.estimatedDelinquencyBasisPoints,
@@ -4366,9 +4446,9 @@ export function calculateSalesModularProposal(
       phases: economicsPhases,
       firstYearMaximumDiscountCents,
       canSend: blockingCodes.length === 0,
-      requiresJustification:
-        phaseNeedsJustification || promotionalModuleNeedsJustification,
+      requiresJustification: false,
       blockingCodes: Array.from(new Set(blockingCodes)),
+      alertCodes: Array.from(new Set(alertCodes)),
       warnings: economicsWarnings
     };
     warnings.push(...economicsWarnings);
@@ -4461,6 +4541,27 @@ export function calculateSalesModularProposal(
         : lineEstimateStatuses.includes('estimated')
           ? 'estimated'
           : 'calibrated';
+  const economicsKnownMargins = (economics?.phases || [])
+    .map((phase) => phase.marginBasisPoints)
+    .filter((margin): margin is number => margin !== null);
+  const economicsMinimumMargin =
+    economicsKnownMargins.length > 0
+      ? Math.min(...economicsKnownMargins)
+      : null;
+  const economicsRating: OfferProfitabilityRating =
+    economics === null
+      ? phaseRating
+      : economics.blockingCodes.length > 0 ||
+          missingCommercialPriceItemKeys.length > 0 ||
+          economicsMinimumMargin === null
+        ? 'insufficient_data'
+        : economicsMinimumMargin >=
+            economics.policy.recurringTargetEbitdaMarginBasisPoints
+          ? 'healthy'
+          : economicsMinimumMargin >= 0
+            ? 'attention'
+            : 'not_recommended';
+
   const canonicalInput: SalesModularProposalInput = perPatientPricingEnabled
     ? {
         ...input,
@@ -4539,17 +4640,17 @@ export function calculateSalesModularProposal(
     oneTimeDirectCostCents,
     oneTimeContributionMarginCents,
     minimumRecommendedRecurringRevenueCents,
+    breakEvenRecurringRevenueCents,
+    targetRecurringRevenueCents,
+    targetEbitdaMarginBasisPoints,
+    targetGapCents,
+    targetGapAnnualCents,
+    markupOnEbitdaCostBasisPoints:
+      markupMetrics.markupOnEbitdaCostBasisPoints,
+    markupMultiplier: markupMetrics.markupMultiplier,
     maximumRecommendedDiscountBasisPoints,
-    rating: economics
-      ? economics.blockingCodes.includes('ECONOMICS_INSUFFICIENT_DATA') ||
-        missingCommercialPriceItemKeys.length > 0
-        ? 'insufficient_data'
-        : economics.canSend
-          ? 'healthy'
-          : 'not_recommended'
-      : phaseRating,
-    requiresJustification:
-      finalRequiresJustification || economics?.requiresJustification === true,
+    rating: economicsRating,
+    requiresJustification: finalRequiresJustification,
     missingCosts: Array.from(new Set(missingCosts)),
     missingDrivers,
     possibleDuplicateCosts,

@@ -51,17 +51,17 @@ const basicFields: FieldDefinition[] = [
   },
   {
     key: 'minimumMarginBasisPoints',
-    label: 'Margem mínima',
+    label: 'Referência histórica de margem',
     type: 'percent',
   },
   {
     key: 'attentionMarginBasisPoints',
-    label: 'Faixa de atenção',
+    label: 'Referência histórica de atenção',
     type: 'percent',
   },
   {
     key: 'healthyMarginBasisPoints',
-    label: 'Oferta saudável a partir de',
+    label: 'Meta de EBITDA atribuída',
     type: 'percent',
   },
 ];
@@ -109,7 +109,7 @@ const financialStatementFields: FieldDefinition[] = [
   },
   {
     key: 'otherBelowEbitdaCents',
-    label: 'Outras despesas corporativas não atribuídas',
+    label: 'Outras despesas abaixo do EBITDA',
     type: 'currency',
   },
 ];
@@ -591,6 +591,14 @@ export const SalesFinancialAssumptionsPanel = () => {
           <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-normal leading-5 text-amber-900">
             Valores vazios permanecem indisponíveis. A Verto não cria
             estimativas automáticas nem mistura simulações com a DRE realizada.
+          </div>
+
+          <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs font-normal leading-5 text-violet-900">
+            Nas propostas modulares novas, a meta de EBITDA atribuída é um
+            preço-alvo não bloqueante. Valores abaixo da meta geram aviso, mas
+            não impedem salvar, publicar, aceitar ou enviar ao Stripe. As
+            referências históricas permanecem disponíveis para simulações
+            antigas.
           </div>
 
           <label className="mt-5 block text-xs font-medium text-slate-700">

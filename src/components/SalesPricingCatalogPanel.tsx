@@ -705,7 +705,7 @@ export const SalesPricingCatalogPanel = () => {
     { key: 'revenueTax', label: 'Imposto sobre faturamento' },
     { key: 'delinquency', label: 'Inadimplência' },
     { key: 'sharedPlatformCosts', label: 'Custos compartilhados' },
-    { key: 'belowEbitda', label: 'Despesas após o resultado operacional atribuído' }
+    { key: 'belowEbitda', label: 'Despesas abaixo do EBITDA atribuído' }
   ];
   const allocationOptions: Array<{
     value: SalesSharedAllocationMethod;
@@ -1016,7 +1016,7 @@ export const SalesPricingCatalogPanel = () => {
                 <p className="mt-1 font-normal leading-5">
                   Promocional atual: {money(159900)} · intermediário:{' '}
                   {money(199900)} · referência de tabela: {money(219900)}.
-                  São referências comerciais; o preço mínimo exibido na proposta
+                  São referências comerciais; o preço-alvo exibido na proposta
                   é sempre recalculado com custos e premissas publicados.
                 </p>
               </div>
@@ -2188,7 +2188,7 @@ export const SalesPricingCatalogPanel = () => {
                   <th className="px-3 py-2 font-medium">Receita média</th>
                   <th className="px-3 py-2 font-medium">Custo direto</th>
                   <th className="px-3 py-2 font-medium">
-                    Resultado operacional atribuído
+                    EBITDA atribuído
                   </th>
                   <th className="px-3 py-2 font-medium">Margem média</th>
                   <th className="px-3 py-2 font-medium">Faixa</th>

@@ -491,6 +491,7 @@ export type SalesModularEconomicsResult = {
   canSend: boolean;
   requiresJustification: boolean;
   blockingCodes: string[];
+  alertCodes: string[];
   warnings: string[];
 };
 
@@ -579,8 +580,14 @@ const COMMERCIAL_REVIEW_CODE_PREFIXES = [
   'CAPACITY_MARGIN_BELOW_MINIMUM',
   'EXPANSION_MARGIN_BELOW_MINIMUM:',
   'CLINIC_MARGIN_BELOW_TARGET',
+  'POST_PROMOTION_MARGIN_BELOW_TARGET',
+  'MODULE_MARGIN_BELOW_TARGET:',
+  'CAPACITY_MARGIN_BELOW_TARGET',
+  'EXPANSION_MARGIN_BELOW_TARGET:',
   'TEMPORARY_DISCOUNT_REQUIRED',
+  'TEMPORARY_DISCOUNT_RECOMMENDED',
   'MODULE_PROMOTION_TERMS_REQUIRED',
+  'MODULE_PROMOTION_TERMS_RECOMMENDED',
   // Compatibilidade exclusiva para leitura de snapshots históricos.
   'CLINIC_MARGIN_BELOW_60',
   'POST_PROMOTION_MARGIN_BELOW_70',
@@ -608,6 +615,9 @@ export const classifySalesProposalReview = (
   for (const code of economics?.blockingCodes || []) {
     if (isSalesCommercialReviewCode(code)) commercialAlertCodes.push(code);
     else technicalBlockingCodes.push(code);
+  }
+  for (const code of economics?.alertCodes || []) {
+    commercialAlertCodes.push(code);
   }
 
   for (const itemKey of result.missingCosts || []) {
@@ -671,9 +681,9 @@ export const classifySalesProposalReview = (
     technicalBlockingCodes: technical,
     commercialAlertCodes: commercial,
     canSaveDraft: technical.length === 0,
-    canGeneratePublicOfferWithoutApproval:
-      technical.length === 0 && commercial.length === 0,
-    requiresCommercialApproval: commercial.length > 0
+    // Margens abaixo da meta são alertas comerciais, nunca bloqueios.
+    canGeneratePublicOfferWithoutApproval: technical.length === 0,
+    requiresCommercialApproval: false
   };
 };
 

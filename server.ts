@@ -2650,6 +2650,16 @@ function salesModularResultMatches(
   stored: any,
   recalculated: ReturnType<typeof calculateSalesModularProposal>,
 ) {
+  const nullableNumberMatches = (
+    storedValue: unknown,
+    recalculatedValue: number | null | undefined,
+  ) => {
+    if (recalculatedValue === null || recalculatedValue === undefined) {
+      return storedValue === null || storedValue === undefined;
+    }
+    return Number.isFinite(Number(storedValue))
+      && Number(storedValue) === recalculatedValue;
+  };
   if (
     !stored
     || typeof stored !== "object"
@@ -2661,6 +2671,37 @@ function salesModularResultMatches(
     || Number(stored.postPromotionRecurringRevenueCents)
       !== recalculated.postPromotionRecurringRevenueCents
     || Number(stored.oneTimeRevenueCents) !== recalculated.oneTimeRevenueCents
+    || !nullableNumberMatches(
+      stored.breakEvenRecurringRevenueCents,
+      recalculated.breakEvenRecurringRevenueCents,
+    )
+    || !nullableNumberMatches(
+      stored.targetRecurringRevenueCents,
+      recalculated.targetRecurringRevenueCents,
+    )
+    || !nullableNumberMatches(
+      stored.targetEbitdaMarginBasisPoints,
+      recalculated.targetEbitdaMarginBasisPoints,
+    )
+    || !nullableNumberMatches(
+      stored.targetGapCents,
+      recalculated.targetGapCents,
+    )
+    || !nullableNumberMatches(
+      stored.targetGapAnnualCents,
+      recalculated.targetGapAnnualCents,
+    )
+    || !nullableNumberMatches(
+      stored.markupOnEbitdaCostBasisPoints,
+      recalculated.markupOnEbitdaCostBasisPoints,
+    )
+    || !nullableNumberMatches(
+      stored.markupMultiplier,
+      recalculated.markupMultiplier,
+    )
+    || sanitizeString(stored.rating, 40) !== recalculated.rating
+    || Boolean(stored.requiresJustification)
+      !== recalculated.requiresJustification
     || stored.basePackage?.limitQuantity
       !== recalculated.basePackage.limitQuantity
     || stored.basePackage?.includedStorageMb

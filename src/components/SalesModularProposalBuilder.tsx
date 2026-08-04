@@ -7,6 +7,7 @@ import {
   Copy,
   ExternalLink,
   GitCompareArrows,
+  Info,
   Layers3,
   Link2,
   Loader2,
@@ -174,11 +175,22 @@ const ratingStyle: Record<SalesModularProposalResult['rating'], string> = {
 };
 
 const ratingLabel: Record<SalesModularProposalResult['rating'], string> = {
-  healthy: 'Proposta saudável',
-  attention: 'Proposta exige atenção',
-  not_recommended: 'Proposta não recomendada',
+  healthy: 'Dentro da margem-alvo',
+  attention: 'Abaixo da margem-alvo',
+  not_recommended: 'EBITDA atribuído negativo',
   insufficient_data: 'Custos ainda incompletos'
 };
+
+const markup = (
+  multiplier: number | null | undefined,
+  basisPoints: number | null | undefined
+) =>
+  multiplier == null || basisPoints == null
+    ? 'Dados insuficientes'
+    : `${multiplier.toLocaleString('pt-BR', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      })}× (${percent(basisPoints)})`;
 
 const costSourceLabel: Record<string, string> = {
   actual: 'Real',
@@ -219,6 +231,31 @@ const commercialAlertLabel = (
         policy.recurringTargetEbitdaMarginBasisPoints
       )
     : null;
+  if (code === 'CLINIC_MARGIN_BELOW_TARGET') {
+    return recurringTarget
+      ? `A margem EBITDA atribuída está abaixo da meta de ${recurringTarget}. Este aviso não bloqueia a proposta.`
+      : 'A margem EBITDA atribuída está abaixo da meta. Este aviso não bloqueia a proposta.';
+  }
+  if (code === 'POST_PROMOTION_MARGIN_BELOW_TARGET') {
+    return recurringTarget
+      ? `A condição posterior está abaixo da meta de ${recurringTarget}.`
+      : 'A condição posterior está abaixo da meta de EBITDA atribuída.';
+  }
+  if (code.startsWith('MODULE_MARGIN_BELOW_TARGET:')) {
+    return moduleMinimum
+      ? `Um módulo está abaixo da referência incremental de ${moduleMinimum}.`
+      : 'Um módulo está abaixo da referência de margem incremental.';
+  }
+  if (code === 'CAPACITY_MARGIN_BELOW_TARGET') {
+    return capacityMinimum
+      ? `Os blocos de capacidade estão abaixo da referência incremental de ${capacityMinimum}.`
+      : 'Os blocos de capacidade estão abaixo da referência incremental.';
+  }
+  if (code.startsWith('EXPANSION_MARGIN_BELOW_TARGET:')) {
+    return capacityMinimum
+      ? `Um excedente por driver está abaixo da referência incremental de ${capacityMinimum}.`
+      : 'Um excedente por driver está abaixo da referência incremental.';
+  }
   if (
     code === 'CLINIC_MARGIN_BELOW_MINIMUM' ||
     code === 'CLINIC_MARGIN_BELOW_60'
@@ -259,22 +296,17 @@ const commercialAlertLabel = (
       ? `Um excedente por driver está abaixo da margem incremental mínima de ${capacityMinimum}.`
       : 'Um excedente por driver está abaixo da margem incremental prevista.';
   }
-  if (code === 'CLINIC_MARGIN_BELOW_TARGET') {
-    return recurringTarget
-      ? `A margem da clínica está abaixo da meta comercial de ${recurringTarget}.`
-      : 'A margem da clínica está abaixo da meta comercial.';
-  }
   if (code === 'PROMOTIONAL_PHASE_DEFICIT') {
-    return 'A fase promocional possui resultado operacional atribuído negativo.';
+    return 'A fase promocional possui EBITDA atribuído negativo.';
   }
   if (code.startsWith('FREE_MODULE_WITH_COST:')) {
     return 'Um módulo gratuito mantém custo operacional durante o benefício.';
   }
-  if (code === 'TEMPORARY_DISCOUNT_REQUIRED') {
-    return 'A condição requer benefício temporário com término definido.';
+  if (code === 'TEMPORARY_DISCOUNT_REQUIRED' || code === 'TEMPORARY_DISCOUNT_RECOMMENDED') {
+    return 'A condição recomenda benefício temporário com término definido.';
   }
-  if (code === 'MODULE_PROMOTION_TERMS_REQUIRED') {
-    return 'A promoção de um módulo precisa de prazo e condição posterior.';
+  if (code === 'MODULE_PROMOTION_TERMS_REQUIRED' || code === 'MODULE_PROMOTION_TERMS_RECOMMENDED') {
+    return 'A promoção de um módulo recomenda prazo e condição posterior explícitos.';
   }
   return 'A composição requer revisão da política comercial.';
 };
@@ -1889,7 +1921,7 @@ export const SalesModularProposalBuilder = ({
                       </div>
                       {coreSelection?.pricingEditMode === 'monthly_total' ? (
                         <label className="mt-3 block text-xs font-medium text-slate-600">
-                          Total mensal proposto
+                          Mensalidade recorrente proposta
                           <input
                             type="number"
                             min={0}
@@ -2133,7 +2165,7 @@ export const SalesModularProposalBuilder = ({
                               )
                             ],
                             [
-                              'Preço mínimo recomendado',
+                              'Preço-alvo de margem',
                               currency(
                                 currentCapacityBlockPhase
                                   ?.blockMinimumPriceCents
@@ -2598,14 +2630,14 @@ export const SalesModularProposalBuilder = ({
                                             Preço por paciente
                                           </option>
                                           <option value="monthly_total">
-                                            Total mensal
+                                            Mensalidade total
                                           </option>
                                         </select>
                                       </label>
                                       {line.pricingEditMode ===
                                       'monthly_total' ? (
                                         <label className="text-xs font-medium text-slate-600">
-                                          Total mensal proposto
+                                          Mensalidade recorrente proposta
                                           <input
                                             type="number"
                                             min={0}
@@ -2998,7 +3030,7 @@ export const SalesModularProposalBuilder = ({
                                 </div>
                                 <div>
                                   <p className="text-[11px] font-normal text-slate-500">
-                                    Resultado operacional atribuído
+                                    EBITDA atribuído
                                   </p>
                                   <p className="mt-0.5 text-xs font-medium text-slate-800">
                                     {currency(
@@ -3341,7 +3373,7 @@ export const SalesModularProposalBuilder = ({
                           <th className="px-3 py-2 font-medium">Implantação</th>
                           <th className="px-3 py-2 font-medium">Desconto acumulado</th>
                           <th className="px-3 py-2 font-medium">
-                            Resultado operacional atribuído
+                            EBITDA atribuído
                           </th>
                           <th className="px-3 py-2 font-medium">Lucro</th>
                         </tr>
@@ -3392,7 +3424,7 @@ export const SalesModularProposalBuilder = ({
                     </div>
                     <div className="rounded-xl bg-slate-50 p-3">
                       <dt className="text-xs text-slate-500">
-                        Preço mínimo recomendado
+                        Preço-alvo de margem
                       </dt>
                       <dd className="mt-1 text-sm font-semibold text-slate-900">
                         {currency(
@@ -3402,7 +3434,7 @@ export const SalesModularProposalBuilder = ({
                     </div>
                     <div className="rounded-xl bg-slate-50 p-3">
                       <dt className="text-xs text-slate-500">
-                        Desconto máximo saudável
+                        Folga para desconto até a meta
                       </dt>
                       <dd className="mt-1 text-sm font-semibold text-slate-900">
                         {percent(
@@ -3435,18 +3467,16 @@ export const SalesModularProposalBuilder = ({
                         className={`inline-flex min-h-8 items-center rounded-full px-3 text-xs font-medium ${
                           proposalReview?.technicalBlockingCodes.length
                             ? 'bg-rose-100 text-rose-800'
-                            : proposalReview?.requiresCommercialApproval
+                            : proposalReview?.commercialAlertCodes.length
                               ? 'bg-amber-100 text-amber-900'
-                              : preview.economics.canSend
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-rose-100 text-rose-800'
+                              : 'bg-emerald-100 text-emerald-800'
                         }`}
                       >
                         {proposalReview?.technicalBlockingCodes.length
                           ? 'Dados obrigatórios pendentes'
-                          : proposalReview?.requiresCommercialApproval
-                            ? 'Revisão comercial'
-                            : 'Dentro da política'}
+                          : proposalReview?.commercialAlertCodes.length
+                            ? 'Abaixo da meta · aviso'
+                            : 'Dentro da margem-alvo'}
                       </span>
                     </div>
                   </div>
@@ -3468,7 +3498,7 @@ export const SalesModularProposalBuilder = ({
                           )
                         ],
                         [
-                          'Desconto máximo',
+                          'Folga para desconto até a meta',
                           currency(
                             preview.economics.promotional
                               .maximumDiscountCents
@@ -3481,7 +3511,7 @@ export const SalesModularProposalBuilder = ({
                           )
                         ],
                         [
-                          'Resultado operacional atribuído posterior',
+                          'EBITDA atribuído posterior',
                           currency(
                             preview.economics.postPromotion.ebitdaCents
                           )
@@ -3493,7 +3523,7 @@ export const SalesModularProposalBuilder = ({
                           )
                         ],
                         [
-                          'Desconto máximo no 1º ano',
+                          'Folga para desconto até a meta no 1º ano',
                           currency(
                             preview.economics.firstYearMaximumDiscountCents
                           )
@@ -3512,7 +3542,9 @@ export const SalesModularProposalBuilder = ({
                         </div>
                       ))}
                     </dl>
-                    {!preview.economics.canSend ? (
+                    {proposalReview?.technicalBlockingCodes.length ||
+                    proposalReview?.commercialAlertCodes.length ||
+                    preview.economics.warnings.length ? (
                       <div
                         role="alert"
                         className={`mt-4 rounded-xl border p-3 text-xs leading-5 ${
@@ -3524,18 +3556,27 @@ export const SalesModularProposalBuilder = ({
                         <p className="font-medium">
                           {proposalReview?.technicalBlockingCodes.length
                             ? 'Dados obrigatórios antes do envio'
-                            : 'Alertas para aprovação comercial'}
+                            : 'Avisos econômicos não bloqueantes'}
                         </p>
+                        {!proposalReview?.technicalBlockingCodes.length ? (
+                          <p className="mt-1 font-normal">
+                            Estes avisos registram a distância para a meta, mas
+                            não impedem salvar, publicar, aceitar ou cobrar a
+                            proposta no Stripe.
+                          </p>
+                        ) : null}
                         <ul className="mt-1 list-disc space-y-1 pl-5 font-normal">
                           {preview.economics.warnings.map((warning) => (
                             <li key={warning}>{warning}</li>
                           ))}
-                          {proposalReview?.commercialAlertCodes
-                            .map((code) => (
-                              <li key={code}>
-                                {commercialAlertLabel(code, preview.economics.policy)}
-                              </li>
-                            ))}
+                          {proposalReview?.commercialAlertCodes.map((code) => (
+                            <li key={code}>
+                              {commercialAlertLabel(
+                                code,
+                                preview.economics.policy
+                              )}
+                            </li>
+                          ))}
                         </ul>
                       </div>
                     ) : null}
@@ -3662,7 +3703,7 @@ export const SalesModularProposalBuilder = ({
                           ) : null}
                         </span>
                         <span>
-                          Preço mínimo
+                          Preço-alvo de margem
                           <strong className="mt-1 block text-slate-900">
                             {currency(
                               preview.economics.capacity.minimumPriceCents
@@ -3844,7 +3885,7 @@ export const SalesModularProposalBuilder = ({
                         </div>
                         <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg bg-slate-50 p-2 text-xs">
                           <span>Receita<br /><strong>{currency(phase.recurringRevenueCents)}</strong></span>
-                          <span>Resultado operacional atribuído<br /><strong>{currency(phase.ebitdaCents)}</strong></span>
+                          <span>EBITDA atribuído<br /><strong>{currency(phase.ebitdaCents)}</strong></span>
                           <span>Margem<br /><strong>{percent(phase.marginBasisPoints)}</strong></span>
                         </div>
                       </article>
@@ -4019,7 +4060,7 @@ export const SalesModularProposalBuilder = ({
                           <th className="px-3 py-2 font-medium">Desconto</th>
                           <th className="px-3 py-2 font-medium">Custos</th>
                           <th className="px-3 py-2 font-medium">
-                            Resultado operacional atribuído
+                            EBITDA atribuído
                           </th>
                           <th className="px-3 py-2 font-medium">Margem</th>
                           <th className="px-3 py-2 font-medium">Lucro</th>
@@ -4113,7 +4154,7 @@ export const SalesModularProposalBuilder = ({
                   <>
                     <div className="mt-4 rounded-2xl bg-slate-950 p-4 text-white">
                       <p className="text-xs font-normal text-slate-300">
-                        Total mensal
+                        Mensalidade recorrente proposta
                       </p>
                       <p className="mt-1 text-2xl font-semibold">
                         {currency(
@@ -4133,64 +4174,147 @@ export const SalesModularProposalBuilder = ({
                     </div>
                     <dl className="mt-4 grid grid-cols-2 gap-3">
                       {[
-                        [
-                          'Custo gerencial total',
-                          preview.promotional.netIncomeCents === null
-                            ? 'Dados insuficientes'
-                            : currency(
-                                preview.promotionalRecurringRevenueCents -
-                                  preview.promotional.netIncomeCents
-                              )
-                        ],
-                        [
-                          'Contribuição',
-                          currency(preview.promotional.contributionMarginCents)
-                        ],
-                        [
-                          'Margem de contribuição',
-                          percent(
+                        {
+                          label: 'Custos totais estimados até o LL',
+                          value:
+                            preview.promotional.netIncomeCents === null
+                              ? 'Dados insuficientes'
+                              : currency(
+                                  preview.promotionalRecurringRevenueCents -
+                                    preview.promotional.netIncomeCents
+                                ),
+                          help:
+                            'Soma dos custos variáveis, operacionais atribuídos, despesas abaixo do EBITDA e imposto sobre o lucro estimado.'
+                        },
+                        {
+                          label: 'Margem de contribuição — R$',
+                          value: currency(
+                            preview.promotional.contributionMarginCents
+                          ),
+                          help:
+                            'Receita restante após Stripe, impostos sobre faturamento, inadimplência, chargebacks e custos variáveis diretamente associados ao contrato.'
+                        },
+                        {
+                          label: 'Margem de contribuição — %',
+                          value: percent(
                             preview.promotional.contributionMarginBasisPoints
-                          )
-                        ],
-                        [
-                          'Resultado operacional atribuído',
-                          currency(preview.promotional.ebitdaCents)
-                        ],
-                        [
-                          'Margem operacional atribuída',
-                          percent(preview.promotional.ebitdaMarginBasisPoints)
-                        ],
-                        [
-                          'Lucro líquido gerencial',
-                          currency(preview.promotional.netIncomeCents)
-                        ],
-                        [
-                          'Margem líquida gerencial',
-                          percent(preview.promotional.netMarginBasisPoints)
-                        ],
-                        [
-                          'Preço mínimo',
-                          currency(
-                            preview.minimumRecommendedRecurringRevenueCents
-                          )
-                        ],
-                        [
-                          'Desconto máximo',
-                          percent(
+                          ),
+                          help:
+                            'Margem de contribuição dividida pela mensalidade recorrente proposta.'
+                        },
+                        {
+                          label: 'EBITDA atribuído',
+                          value: currency(preview.promotional.ebitdaCents),
+                          help:
+                            'Resultado operacional estimado da proposta após custos variáveis, suporte, operação e custos fixos atribuídos. Não representa o EBITDA contábil completo da Verto.'
+                        },
+                        {
+                          label: 'Margem EBITDA atribuída',
+                          value: percent(
+                            preview.promotional.ebitdaMarginBasisPoints
+                          ),
+                          help:
+                            'EBITDA atribuído dividido pela mensalidade recorrente proposta.'
+                        },
+                        {
+                          label: 'Lucro líquido estimado — LL',
+                          value: currency(preview.promotional.netIncomeCents),
+                          help:
+                            'Resultado após EBITDA, depreciação, amortização, despesas financeiras, demais despesas abaixo do EBITDA e imposto sobre o lucro.'
+                        },
+                        {
+                          label: 'Margem líquida estimada',
+                          value: percent(preview.promotional.netMarginBasisPoints),
+                          help:
+                            'Lucro líquido estimado dividido pela mensalidade recorrente proposta.'
+                        },
+                        {
+                          label: 'Preço de equilíbrio EBITDA',
+                          value: currency(preview.breakEvenRecurringRevenueCents),
+                          help:
+                            'Mensalidade estimada em que o EBITDA atribuído é igual a zero, considerando custos percentuais que crescem com a receita.'
+                        },
+                        {
+                          label: `Preço-alvo para ${percent(
+                            preview.targetEbitdaMarginBasisPoints
+                          )} de EBITDA`,
+                          value: currency(preview.targetRecurringRevenueCents),
+                          help:
+                            'Mensalidade estimada para alcançar a margem EBITDA atribuída definida como meta. A fórmula recalcula Stripe, impostos, inadimplência e chargebacks sobre o próprio preço-alvo.'
+                        },
+                        {
+                          label: 'Diferença mensal para o alvo',
+                          value: currency(preview.targetGapCents),
+                          help:
+                            'Valor mensal que falta para alcançar o preço-alvo. Zero indica que a proposta já está dentro ou acima da meta.'
+                        },
+                        {
+                          label: 'Diferença anual para o alvo',
+                          value: currency(preview.targetGapAnnualCents),
+                          help:
+                            'Diferença mensal para o preço-alvo multiplicada por 12 meses.'
+                        },
+                        {
+                          label: 'Markup sobre custos',
+                          value: markup(
+                            preview.markupMultiplier,
+                            preview.markupOnEbitdaCostBasisPoints
+                          ),
+                          help:
+                            'Relação entre a mensalidade e os custos estimados até o EBITDA no cenário atual. Markup não é a mesma coisa que margem.'
+                        },
+                        {
+                          label: 'Folga para desconto até a meta',
+                          value: percent(
                             preview.maximumRecommendedDiscountBasisPoints
-                          )
-                        ]
-                      ].map(([label, formattedValue]) => (
-                        <div key={String(label)} className="rounded-xl bg-slate-50 p-3">
-                          <dt className="text-xs font-normal text-slate-500">
-                            {label}
+                          ),
+                          help:
+                            'Percentual de desconto ainda disponível antes de a mensalidade cair abaixo do preço-alvo. Quando a proposta já está abaixo da meta, o valor é zero.'
+                        }
+                      ].map(({ label, value, help }) => (
+                        <div key={label} className="rounded-xl bg-slate-50 p-3">
+                          <dt
+                            className="flex items-start gap-1.5 text-xs font-normal text-slate-500"
+                            title={help}
+                          >
+                            <span>{label}</span>
+                            <Info
+                              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400"
+                              aria-label={help}
+                            />
                           </dt>
                           <dd className="mt-1 text-sm font-semibold text-slate-900">
-                            {formattedValue}
+                            {value}
                           </dd>
                         </div>
                       ))}
                     </dl>
+                    {preview.rating === 'attention' ||
+                    preview.rating === 'not_recommended' ? (
+                      <div
+                        className={`mt-4 rounded-xl border p-3 text-xs ${
+                          preview.rating === 'not_recommended'
+                            ? 'border-rose-200 bg-rose-50 text-rose-800'
+                            : 'border-amber-200 bg-amber-50 text-amber-800'
+                        }`}
+                      >
+                        <p className="font-semibold">
+                          {preview.rating === 'not_recommended'
+                            ? 'O EBITDA atribuído está negativo.'
+                            : 'A proposta está abaixo da margem-alvo.'}
+                        </p>
+                        <p className="mt-1 leading-relaxed">
+                          Margem atual:{' '}
+                          {percent(preview.promotional.ebitdaMarginBasisPoints)}.
+                          Meta:{' '}
+                          {percent(preview.targetEbitdaMarginBasisPoints)}.
+                          Diferença: {currency(preview.targetGapCents)} por mês
+                          e {currency(preview.targetGapAnnualCents)} por ano. A
+                          proposta pode continuar; este aviso não bloqueia o
+                          orçamento nem o Stripe.
+                        </p>
+                      </div>
+                    ) : null}
                     <div className="mt-4 rounded-xl border border-slate-200 p-3">
                       <p className="text-xs font-medium text-slate-700">
                         Dados do cenário
@@ -4331,7 +4455,7 @@ export const SalesModularProposalBuilder = ({
                                 )
                           ],
                           [
-                            'Resultado operacional atribuído em 12 meses',
+                            'EBITDA atribuído em 12 meses',
                             currency(preview.horizons['12'].ebitdaCents)
                           ],
                           [
@@ -4368,7 +4492,7 @@ export const SalesModularProposalBuilder = ({
                             )
                           ],
                           [
-                            'Preço mínimo do próximo bloco',
+                            'Preço-alvo do próximo bloco',
                             currency(
                               currentCapacityBlockPhase
                                 ?.blockMinimumPriceCents
@@ -4486,7 +4610,7 @@ export const SalesModularProposalBuilder = ({
                         role="alert"
                       >
                         <p className="font-medium">
-                          Total mensal incompatível com o preço por paciente
+                          Mensalidade incompatível com o preço por paciente
                         </p>
                         <p className="mt-1 font-normal">
                           O valor informado foi preservado. Aceite o valor
@@ -4599,7 +4723,7 @@ export const SalesModularProposalBuilder = ({
                           <th className="px-3 py-2 font-medium">Compartilhado alocado</th>
                           <th className="px-3 py-2 font-medium">Contribuição</th>
                           <th className="px-3 py-2 font-medium">
-                            Resultado operacional atribuído
+                            EBITDA atribuído
                           </th>
                           <th className="px-3 py-2 font-medium">Lucro</th>
                         </tr>

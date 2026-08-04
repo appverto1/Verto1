@@ -388,9 +388,14 @@ const belowFloor = calculateSalesModularProposal(
   catalog(),
   modularAssumptionsFixture
 );
-assert.equal(belowFloor.economics?.canSend, false);
+assert.equal(belowFloor.economics?.canSend, true);
+assert.equal(belowFloor.economics?.requiresJustification, false);
 assert.ok(
-  belowFloor.economics?.blockingCodes.includes('CLINIC_MARGIN_BELOW_MINIMUM')
+  belowFloor.economics?.alertCodes.includes('CLINIC_MARGIN_BELOW_TARGET')
+);
+assert.equal(
+  belowFloor.economics?.blockingCodes.some((code) => code.includes('MARGIN_BELOW')),
+  false
 );
 
 const legacyResult = calculateSalesModularProposal(

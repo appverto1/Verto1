@@ -120,7 +120,7 @@ export type SalesProfitabilityResult = {
   warnings: string[];
 };
 
-export const SALES_PROFITABILITY_MODEL_VERSION = '2026-08-04-v2';
+export const SALES_PROFITABILITY_MODEL_VERSION = '2026-08-04-v3';
 
 const nullableMoneyKeys: Array<keyof SalesAssumptionValues> = [
   'stripeFeeBasisPoints',
@@ -450,14 +450,13 @@ export function calculateSalesProfitability(
     : promotional.contributionMarginBasisPoints !== null
       ? 'contribution_margin'
       : 'unavailable';
-  const healthyMargin = values.healthyMarginBasisPoints;
-  const attentionMargin = values.attentionMarginBasisPoints;
+  const targetMargin = values.healthyMarginBasisPoints;
   const rating: OfferProfitabilityRating =
-    ratingMargin === null || healthyMargin === null || attentionMargin === null
+    ratingMargin === null || targetMargin === null
       ? 'insufficient_data'
-      : ratingMargin >= healthyMargin
+      : ratingMargin >= targetMargin
         ? 'healthy'
-        : ratingMargin >= attentionMargin
+        : ratingMargin >= 0
           ? 'attention'
           : 'not_recommended';
   const requiredAssumptionKeys: Array<keyof SalesAssumptionValues> = [
@@ -517,6 +516,21 @@ export function calculateSalesProfitability(
   if (missingAssumptions.length > 0) {
     warnings.push('Dados insuficientes para calcular todas as margens.');
   }
+  if (
+    ratingMargin !== null
+    && targetMargin !== null
+    && ratingMargin < targetMargin
+  ) {
+    warnings.push(
+      `A margem EBITDA atribuída está abaixo da meta de ${(targetMargin / 100).toLocaleString('pt-BR', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      })}%. Este aviso não bloqueia a proposta.`
+    );
+  }
+  if (ratingMargin !== null && ratingMargin < 0) {
+    warnings.push('O EBITDA atribuído está negativo no cenário atual.');
+  }
 
   return {
     modelVersion: SALES_PROFITABILITY_MODEL_VERSION,
@@ -539,10 +553,8 @@ export function calculateSalesProfitability(
     breakEven,
     rating,
     ratingMetric,
-    requiresJustification:
-      minimumMargin !== null
-      && ratingMargin !== null
-      && ratingMargin < minimumMargin,
+    // A meta de margem é informativa; apenas dados técnicos incompletos bloqueiam.
+    requiresJustification: false,
     missingAssumptions,
     warnings
   };
