@@ -34,12 +34,6 @@ import {
   type SalesPricingCatalogTier
 } from '../utils/salesModularProposal';
 import {
-  SALES_MODULAR_DRIVER_DEFINITIONS,
-  type SalesModularDriverKey,
-  type SalesModularDriverValue,
-  type SalesModularProfile
-} from '../utils/salesModularCostDrivers';
-import {
   calculateCustomCapacity,
   validateCustomCapacityPolicy,
   type OfferItemDiscountType
@@ -56,10 +50,7 @@ import {
   type SalesProfitabilityPolicy,
   type SalesProposalReviewClassification
 } from '../utils/salesModularEconomics';
-import type {
-  SalesAssumptionSnapshot,
-  SalesUsageProfile
-} from '../utils/salesProfitability';
+import type { SalesAssumptionSnapshot } from '../utils/salesProfitability';
 import {
   ModularOfferDetails,
   type ModularPublicOffer
@@ -117,6 +108,8 @@ const percent = (value: number | null | undefined) =>
 const requestKey = (prefix: string) =>
   `${prefix}:${crypto.randomUUID()}`;
 
+const ECONOMY_SIMULATOR_PATIENT_PRESETS = [150, 160, 170, 200] as const;
+
 const itemTierForQuantity = (
   item: SalesPricingCatalogItem,
   quantity: number
@@ -148,6 +141,8 @@ const selectionForItem = (
     item.itemKey === 'clinical_core'
       ? baseTier
       : itemTierForQuantity(item, quantity);
+  const catalogMonthlyAmountCents =
+    linkedTier?.recurringAmountCents ?? item.recurringAmountCents ?? 0;
   return {
     itemKey: item.itemKey,
     tierId: linkedTier?.id || null,
@@ -155,13 +150,13 @@ const selectionForItem = (
     itemDiscountBasisPoints: 0,
     customRecurringAmountCents:
       perPatientPricing && item.billingInterval !== 'one_time'
-        ? null
+        ? catalogMonthlyAmountCents
         : linkedTier?.isCustom
           ? 0
           : null,
     pricingEditMode:
       perPatientPricing && item.billingInterval !== 'one_time'
-        ? 'per_patient'
+        ? 'monthly_total'
         : undefined,
     proposedPricePerPatientCents:
       perPatientPricing && item.billingInterval !== 'one_time'
@@ -304,11 +299,7 @@ export const SalesModularProposalBuilder = ({
   const [useLegacyFallback, setUseLegacyFallback] = useState(false);
   const [showEconomySimulator, setShowEconomySimulator] = useState(false);
   const [economySimulatorPatients, setEconomySimulatorPatients] =
-    useState<150 | 160 | 170 | 200>(150);
-  const [economySimulatorProfile, setEconomySimulatorProfile] =
-    useState<Extract<SalesUsageProfile, 'light' | 'standard' | 'intensive'>>(
-      'intensive'
-    );
+    useState(150);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -427,6 +418,7 @@ export const SalesModularProposalBuilder = ({
         );
         if (!core) throw new Error('PRICING_ITEM_NOT_FOUND');
         const initialInput: SalesModularProposalInput = {
+          commercialPricingMode: 'manual_module_prices',
           patientQuantity,
           expectedPatientQuantity12Months: patientQuantity,
           basePackageTierId: recommendedTier.id,
@@ -442,15 +434,14 @@ export const SalesModularProposalBuilder = ({
               core,
               patientQuantity,
               recommendedTier,
-              recommendedTier.isCustom ||
-                recommendedTier.maximumQuantity === null
+              true
             )
           ],
           globalDiscountBasisPoints: 0,
           discountDurationMonths: 0,
           offerValidityDays: 14,
           onboardingInstallments: 1,
-          usageProfile: 'standard',
+          usageProfile: 'intensive',
           driverOverrides: {},
           internalNotes: '',
           publicNotes: ''
@@ -764,7 +755,7 @@ export const SalesModularProposalBuilder = ({
           lines: allModuleDraftLines,
           globalDiscountBasisPoints: 0,
           discountDurationMonths: 0,
-          usageProfile: economySimulatorProfile,
+          usageProfile: 'intensive',
           driverOverrides: {}
         },
         catalog,
@@ -835,7 +826,7 @@ export const SalesModularProposalBuilder = ({
             lines,
             globalDiscountBasisPoints: 0,
             discountDurationMonths: 0,
-            usageProfile: economySimulatorProfile,
+            usageProfile: 'intensive',
             driverOverrides: {}
           },
           catalog,
@@ -863,7 +854,6 @@ export const SalesModularProposalBuilder = ({
     assumptions,
     catalog,
     economySimulatorPatients,
-    economySimulatorProfile,
     input,
     hasValidVersionedProfitabilityPolicy,
     showEconomySimulator
@@ -1154,7 +1144,7 @@ export const SalesModularProposalBuilder = ({
       item,
       input.patientQuantity,
       baseTier,
-      baseTier.isCustom || baseTier.maximumQuantity === null
+      true
     );
     if (
       item.itemKey === 'onboarding' &&
@@ -1176,97 +1166,6 @@ export const SalesModularProposalBuilder = ({
         line.itemKey === itemKey ? { ...line, ...patch } : line
       )
     });
-  };
-
-  const configuredDriverDatum = (
-    item: SalesPricingCatalogItem,
-    driverKey: SalesModularDriverKey
-  ): SalesModularDriverValue | null => {
-    if (!input || !catalog) return null;
-    const override = input.driverOverrides?.[item.itemKey]?.[driverKey];
-    if (override) return override;
-    if (input.usageProfile !== 'custom') {
-      const profile = input.usageProfile as SalesModularProfile;
-      if (driverKey === 'storageUtilizationBasisPoints') {
-        const value =
-          item.costModel?.driverConfig?.usageProfileOverrides?.[profile]
-            ?.storageUtilizationBasisPoints ??
-          catalog.modularCostSettings.usageProfiles[profile]
-            .storageUtilizationBasisPoints;
-        return {
-          value,
-          source: value == null ? 'unavailable' : 'estimated',
-          sourceDetail: `Perfil ${profile} versionado no catálogo.`,
-          effectiveAt: item.costModel?.effectiveAt || catalog.effectiveAt,
-          version: item.costModel?.version || catalog.version
-        };
-      }
-      if (driverKey === 'expectedEgressMultiplier') {
-        const value =
-          item.costModel?.driverConfig?.usageProfileOverrides?.[profile]
-            ?.expectedEgressMultiplier ??
-          catalog.modularCostSettings.usageProfiles[profile]
-            .expectedEgressMultiplier;
-        return {
-          value,
-          source: value == null ? 'unavailable' : 'estimated',
-          sourceDetail: `Perfil ${profile} versionado no catálogo.`,
-          effectiveAt: item.costModel?.effectiveAt || catalog.effectiveAt,
-          version: item.costModel?.version || catalog.version
-        };
-      }
-      const configured =
-        item.costModel?.driverConfig?.profiles?.[profile]?.[driverKey];
-      if (configured) return configured;
-    }
-    if (driverKey === 'tissGuides') {
-      const line = input.lines.find(
-        (candidate) => candidate.itemKey === item.itemKey
-      );
-      return {
-        value: line?.quantity ?? null,
-        source: line ? 'calculated' : 'unavailable',
-        sourceDetail: 'Quantidade de guias informada na proposta.',
-        effectiveAt: new Date().toISOString(),
-        version: catalog.version
-      };
-    }
-    return null;
-  };
-
-  const updateProposalDriver = (
-    item: SalesPricingCatalogItem,
-    driverKey: SalesModularDriverKey,
-    patch: Partial<SalesModularDriverValue>
-  ) => {
-    if (!input || !catalog) return;
-    const current = configuredDriverDatum(item, driverKey);
-    const next: SalesModularDriverValue = {
-      value: current?.value ?? null,
-      source:
-        current?.source && current.source !== 'unavailable'
-          ? current.source
-          : 'manual',
-      sourceDetail:
-        current?.sourceDetail || 'Premissa ajustada manualmente na proposta.',
-      effectiveAt: current?.effectiveAt || new Date().toISOString(),
-      version: current?.version || catalog.version,
-      ...patch
-    };
-    updateInput({
-      driverOverrides: {
-        ...(input.driverOverrides || {}),
-        [item.itemKey]: {
-          ...(input.driverOverrides?.[item.itemKey] || {}),
-          [driverKey]: next
-        }
-      }
-    });
-    if (driverKey === 'tissGuides' && next.value !== null) {
-      updateLine(item.itemKey, {
-        quantity: Math.max(1, Math.round(next.value))
-      });
-    }
   };
 
   const saveSimulation = async () => {
@@ -1422,13 +1321,36 @@ export const SalesModularProposalBuilder = ({
         : 'manual');
     setInput({
       ...snapshotInput,
+      commercialPricingMode: 'manual_module_prices',
+      usageProfile: 'intensive',
+      driverOverrides: {},
       basePackageSelectionMode: inferredMode,
       customBasePackageLimit:
         snapshotTier?.isCustom || snapshotTier?.maximumQuantity === null
           ? snapshotInput.customBasePackageLimit ??
             simulation.results_snapshot?.basePackage?.limitQuantity ??
             snapshotDemand
-          : null
+          : null,
+      lines: snapshotInput.lines.map((line) => {
+        const item = catalog?.items.find(
+          (candidate) => candidate.itemKey === line.itemKey
+        );
+        if (!item || item.billingInterval === 'one_time') return line;
+        const tier = item.tiers.find(
+          (candidate) => candidate.id === line.tierId
+        );
+        return {
+          ...line,
+          pricingEditMode: line.pricingEditMode || 'monthly_total',
+          customRecurringAmountCents:
+            line.pricingEditMode === 'per_patient'
+              ? line.customRecurringAmountCents ?? null
+              : line.customRecurringAmountCents ??
+                tier?.recurringAmountCents ??
+                item.recurringAmountCents ??
+                0
+        };
+      })
     });
     setScenarioName(
       `Cópia de ${simulation.scenario_name || 'cenário modular'}`
@@ -1647,11 +1569,7 @@ export const SalesModularProposalBuilder = ({
     (line) => line.itemKey === 'clinical_core'
   );
   const customPerPatientPricing =
-    Boolean(
-      selectedBaseTier &&
-      (selectedBaseTier.isCustom ||
-        selectedBaseTier.maximumQuantity === null)
-    ) &&
+    input?.commercialPricingMode === 'manual_module_prices' &&
     ['per_patient', 'monthly_total'].includes(
       String(coreSelection?.pricingEditMode || '')
     );
@@ -1836,6 +1754,68 @@ export const SalesModularProposalBuilder = ({
                   ) : null}
                 </div>
                 {selectedBaseTier &&
+                !selectedBaseTier.isCustom &&
+                selectedBaseTier.maximumQuantity !== null ? (
+                  <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50/40 p-4">
+                    <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(320px,1.2fr)] sm:items-end">
+                      <label className="text-sm font-medium text-slate-700">
+                        Valor mensal do Verto Clínica
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          placeholder="Informe o valor"
+                          value={
+                            coreSelection?.customRecurringAmountCents == null
+                              ? ''
+                              : coreSelection.customRecurringAmountCents / 100
+                          }
+                          onChange={(event) =>
+                            updateLine('clinical_core', {
+                              pricingEditMode: 'monthly_total',
+                              proposedPricePerPatientCents: null,
+                              customRecurringAmountCents:
+                                event.target.value === ''
+                                  ? null
+                                  : Math.round(Number(event.target.value) * 100)
+                            })
+                          }
+                          className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                        />
+                        <span className="mt-1 block text-xs font-normal text-slate-500">
+                          Valor comercial definido para esta clínica. Os custos usam o perfil intensivo.
+                        </span>
+                      </label>
+                      <dl className="grid gap-2 text-xs sm:grid-cols-3">
+                        {[
+                          [
+                            'Custo total estimado',
+                            currency(
+                              coreResult &&
+                              [
+                                coreResult.promotional.directCostCents,
+                                coreResult.promotional.transactionAndTaxCostAllocatedCents,
+                                coreResult.promotional.sharedPlatformCostAllocatedCents
+                              ].every((value) => value !== null)
+                                ? Number(coreResult.promotional.directCostCents) +
+                                  Number(coreResult.promotional.transactionAndTaxCostAllocatedCents) +
+                                  Number(coreResult.promotional.sharedPlatformCostAllocatedCents)
+                                : null
+                            )
+                          ],
+                          ['Lucro líquido', currency(coreResult?.promotional.netIncomeCents)],
+                          ['Margem líquida', percent(coreResult?.promotional.netMarginBasisPoints)]
+                        ].map(([label, value]) => (
+                          <div key={label} className="rounded-lg bg-white p-3">
+                            <dt className="font-normal text-slate-500">{label}</dt>
+                            <dd className="mt-1 font-semibold text-slate-900">{value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </div>
+                  </div>
+                ) : null}
+                {selectedBaseTier &&
                 (selectedBaseTier.isCustom ||
                   selectedBaseTier.maximumQuantity === null) ? (
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -1904,7 +1884,7 @@ export const SalesModularProposalBuilder = ({
                           className="min-h-9 rounded-lg border border-slate-200 bg-white px-2 text-xs font-normal text-slate-700"
                         >
                           <option value="per_patient">Por paciente</option>
-                          <option value="monthly_total">Total mensal</option>
+                          <option value="monthly_total">Faturamento mensal</option>
                         </select>
                       </div>
                       {coreSelection?.pricingEditMode === 'monthly_total' ? (
@@ -2413,234 +2393,6 @@ export const SalesModularProposalBuilder = ({
                     </span>
                   </div>
                 ) : null}
-              </section>
-
-              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h2 className="text-base font-semibold text-slate-900">
-                      Previsão de uso por driver
-                    </h2>
-                    <p className="mt-1 text-sm font-normal leading-6 text-slate-500">
-                      Uso esperado, origem e critério ficam congelados no
-                      cenário. Dados ausentes aparecem como Dados insuficientes.
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700">
-                    Perfil{' '}
-                    {input.usageProfile === 'light'
-                      ? 'leve'
-                      : input.usageProfile === 'standard'
-                        ? 'padrão'
-                        : input.usageProfile === 'intensive'
-                          ? 'intensivo'
-                          : 'personalizado'}
-                  </span>
-                </div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  {[
-                    ['Uso atual', `${input.patientQuantity} pacientes`],
-                    [
-                      'Uso esperado',
-                      `${input.expectedPatientQuantity12Months} pacientes`
-                    ],
-                    [
-                      'Limite comercial',
-                       selectedBaseTier?.maximumQuantity == null
-                        ? `${input.customBasePackageLimit ?? 'Dados insuficientes'} pacientes`
-                        : `${selectedBaseTier.maximumQuantity} pacientes`
-                    ],
-                    [
-                      'Cenário agressivo',
-                      aggressivePreview
-                        ? `${aggressivePreview.forecast.aggressivePatients ?? input.expectedPatientQuantity12Months} pacientes · ${currency(
-                            aggressivePreview.promotional.totalEstimatedCostCents
-                          )} de custo`
-                        : 'Dados insuficientes'
-                    ]
-                  ].map(([label, value]) => (
-                    <div
-                      key={label}
-                      className="rounded-xl border border-slate-200 bg-slate-50 p-3"
-                    >
-                      <p className="text-[11px] font-normal text-slate-500">
-                        {label}
-                      </p>
-                      <p className="mt-1 text-sm font-medium text-slate-800">
-                        {value}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-3 text-xs font-normal leading-5 text-slate-500">
-                  O cenário agressivo usa o limite integral do pacote e os
-                  parâmetros intensivos versionados; pacientes escolares não
-                  são substituídos pelo total da clínica.
-                </p>
-                <div className="mt-4 space-y-4">
-                  {input.lines.map((line) => {
-                    const item = catalog.items.find(
-                      (candidate) => candidate.itemKey === line.itemKey
-                    );
-                    if (!item) return null;
-                    const required = new Set<SalesModularDriverKey>(
-                      item.costModel?.driverConfig?.requiredDrivers || []
-                    );
-                    if (
-                      ['clinical_core', 'additional_storage'].includes(
-                        item.itemKey
-                      )
-                    ) {
-                      required.add('storageUtilizationBasisPoints');
-                    }
-                    if (
-                      [
-                        'clinical_core',
-                        'additional_storage',
-                        'insurance_tiss',
-                        'school_management'
-                      ].includes(item.itemKey)
-                    ) {
-                      required.add('expectedEgressMultiplier');
-                    }
-                    const definitions = SALES_MODULAR_DRIVER_DEFINITIONS.filter(
-                      (definition) =>
-                        definition.itemKeys.includes(item.itemKey) &&
-                        required.has(definition.key)
-                    );
-                    if (definitions.length === 0) return null;
-                    return (
-                      <fieldset
-                        key={`${item.itemKey}:${line.tierId || 'item'}`}
-                        className="rounded-xl border border-slate-200 p-3"
-                      >
-                        <legend className="px-1 text-sm font-medium text-slate-800">
-                          {item.publicName}
-                        </legend>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          {definitions.map((definition) => {
-                            const datum = configuredDriverDatum(
-                              item,
-                              definition.key
-                            );
-                            const rawValue = datum?.value;
-                            const displayedValue =
-                              definition.key ===
-                                'storageUtilizationBasisPoints' &&
-                              rawValue !== null &&
-                              rawValue !== undefined
-                                ? rawValue / 100
-                                : definition.monetaryValue &&
-                                    rawValue !== null &&
-                                    rawValue !== undefined
-                                  ? rawValue / 100
-                                  : (rawValue ?? '');
-                            return (
-                              <div
-                                key={definition.key}
-                                className="rounded-xl bg-slate-50 p-3"
-                              >
-                                <label className="text-xs font-medium text-slate-700">
-                                  {definition.label}
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    step={definition.valueStep || 1}
-                                    placeholder="Dados insuficientes"
-                                    value={displayedValue}
-                                    onChange={(event) => {
-                                      const visibleValue =
-                                        event.target.value === ''
-                                          ? null
-                                          : Number(event.target.value);
-                                      const storedValue =
-                                        visibleValue === null
-                                          ? null
-                                          : definition.key ===
-                                                'storageUtilizationBasisPoints' ||
-                                              definition.monetaryValue
-                                            ? Math.round(visibleValue * 100)
-                                            : visibleValue;
-                                      updateProposalDriver(
-                                        item,
-                                        definition.key,
-                                        {
-                                          value: storedValue,
-                                          source:
-                                            storedValue === null
-                                              ? 'unavailable'
-                                              : 'manual',
-                                          sourceDetail:
-                                            'Valor informado pelo owner nesta proposta.',
-                                          effectiveAt: new Date().toISOString()
-                                        }
-                                      );
-                                    }}
-                                    className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal"
-                                  />
-                                  <span className="mt-1 block font-normal text-slate-500">
-                                    {definition.unit}
-                                  </span>
-                                </label>
-                                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                                  <label className="text-[11px] text-slate-500">
-                                    Origem
-                                    <select
-                                      value={datum?.source || 'unavailable'}
-                                      onChange={(event) =>
-                                        updateProposalDriver(
-                                          item,
-                                          definition.key,
-                                          {
-                                            source: event.target
-                                              .value as SalesModularDriverValue['source']
-                                          }
-                                        )
-                                      }
-                                      className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-2 font-normal"
-                                    >
-                                      <option value="unavailable">Indisponível</option>
-                                      <option value="actual">Real</option>
-                                      <option value="calculated">Calculado</option>
-                                      <option value="estimated">Estimado</option>
-                                      <option value="manual">Manual</option>
-                                    </select>
-                                  </label>
-                                  <label className="text-[11px] text-slate-500">
-                                    Fonte e critério
-                                    <input
-                                      maxLength={500}
-                                      value={datum?.sourceDetail || ''}
-                                      onChange={(event) =>
-                                        updateProposalDriver(
-                                          item,
-                                          definition.key,
-                                          {
-                                            sourceDetail: event.target.value
-                                          }
-                                        )
-                                      }
-                                      className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-2 font-normal"
-                                    />
-                                  </label>
-                                </div>
-                                <p className="mt-2 text-[10px] font-normal text-slate-400">
-                                  Versão {datum?.version || catalog.version} ·
-                                  vigência{' '}
-                                  {datum?.effectiveAt
-                                    ? new Date(
-                                        datum.effectiveAt
-                                      ).toLocaleDateString('pt-BR')
-                                    : 'não informada'}
-                                </p>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </fieldset>
-                    );
-                  })}
-                </div>
               </section>
 
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -3283,6 +3035,61 @@ export const SalesModularProposalBuilder = ({
                 </div>
               </section>
 
+              {preview ? (
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h2 className="text-base font-semibold text-slate-900">Resultado por módulo</h2>
+                      <p className="mt-1 text-sm font-normal text-slate-500">
+                        Faturamento, custo total, resultado operacional e lucro líquido de cada funcionalidade.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-800">Uso intensivo</span>
+                  </div>
+                  <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
+                    <table className="w-full min-w-[980px] text-left text-xs">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Módulo</th>
+                          <th className="px-3 py-2 font-medium">Valor definido</th>
+                          <th className="px-3 py-2 font-medium">Faturamento após descontos</th>
+                          <th className="px-3 py-2 font-medium">Custo total</th>
+                          <th className="px-3 py-2 font-medium">Resultado operacional</th>
+                          <th className="px-3 py-2 font-medium">Margem operacional</th>
+                          <th className="px-3 py-2 font-medium">Lucro líquido</th>
+                          <th className="px-3 py-2 font-medium">Margem líquida</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {preview.lines.map((line) => {
+                          const totalCostCents = [
+                            line.promotional.directCostCents,
+                            line.promotional.transactionAndTaxCostAllocatedCents,
+                            line.promotional.sharedPlatformCostAllocatedCents
+                          ].every((value) => value !== null)
+                            ? Number(line.promotional.directCostCents) +
+                              Number(line.promotional.transactionAndTaxCostAllocatedCents) +
+                              Number(line.promotional.sharedPlatformCostAllocatedCents)
+                            : null;
+                          return (
+                            <tr key={line.lineKey}>
+                              <td className="px-3 py-3 font-medium text-slate-800">{line.publicName}</td>
+                              <td className="px-3 py-3">{line.grossRecurringRevenueCents > 0 ? `${currency(line.grossRecurringRevenueCents)}/mês` : currency(line.grossOneTimeRevenueCents)}</td>
+                              <td className="px-3 py-3">{line.grossRecurringRevenueCents > 0 ? `${currency(line.promotional.netRevenueCents)}/mês` : currency(line.oneTimeRevenueCents)}</td>
+                              <td className="px-3 py-3">{currency(line.grossRecurringRevenueCents > 0 ? totalCostCents : line.oneTimeDirectCostCents)}</td>
+                              <td className="px-3 py-3">{currency(line.promotional.ebitdaCents)}</td>
+                              <td className="px-3 py-3">{percent(line.promotional.ebitdaMarginBasisPoints)}</td>
+                              <td className="px-3 py-3 font-medium text-slate-900">{currency(line.grossRecurringRevenueCents > 0 ? line.promotional.netIncomeCents : line.oneTimeContributionMarginCents)}</td>
+                              <td className="px-3 py-3">{line.grossRecurringRevenueCents > 0 ? percent(line.promotional.netMarginBasisPoints) : '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              ) : null}
+
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                 <h2 className="text-base font-semibold text-slate-900">
                   Condição comercial
@@ -3351,23 +3158,13 @@ export const SalesModularProposalBuilder = ({
                       ))}
                     </select>
                   </label>
-                  <label className="text-sm font-medium text-slate-700">
-                    Perfil de uso
-                    <select
-                      value={input.usageProfile}
-                      onChange={(event) =>
-                        updateInput({
-                          usageProfile: event.target.value as SalesUsageProfile
-                        })
-                      }
-                      className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal"
-                    >
-                      <option value="light">Leve</option>
-                      <option value="standard">Padrão</option>
-                      <option value="intensive">Intensivo</option>
-                      <option value="custom">Personalizado</option>
-                    </select>
-                  </label>
+                  <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-3">
+                    <p className="text-sm font-medium text-slate-700">Base de custo</p>
+                    <p className="mt-1 text-sm font-semibold text-violet-800">Uso intensivo</p>
+                    <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
+                      Todas as simulações usam as premissas intensivas versionadas.
+                    </p>
+                  </div>
                   <label className="text-sm font-medium text-slate-700 sm:col-span-2">
                     Nome do cenário
                     <input
@@ -3944,46 +3741,29 @@ export const SalesModularProposalBuilder = ({
                         <div className="mt-3 rounded-xl border border-slate-200 p-3">
                           <div className="flex flex-wrap gap-3">
                             <label className="text-xs font-medium text-slate-600">
-                              Capacidade
-                              <select
+                              Pacientes simulados
+                              <input
+                                type="number"
+                                min={1}
+                                max={100000}
                                 value={economySimulatorPatients}
+                                list="economy-simulator-patient-presets"
                                 onChange={(event) =>
                                   setEconomySimulatorPatients(
-                                    Number(event.target.value) as
-                                      | 150
-                                      | 160
-                                      | 170
-                                      | 200
+                                    Math.max(1, Math.min(100000, Math.trunc(Number(event.target.value) || 1)))
                                   )
                                 }
-                                className="ml-2 min-h-9 rounded-lg border border-slate-200 bg-white px-2 font-normal"
-                              >
-                                {[150, 160, 170, 200].map((value) => (
-                                  <option key={value} value={value}>
-                                    {value} pacientes
-                                  </option>
+                                className="ml-2 min-h-9 w-28 rounded-lg border border-slate-200 bg-white px-2 font-normal"
+                              />
+                              <datalist id="economy-simulator-patient-presets">
+                                {ECONOMY_SIMULATOR_PATIENT_PRESETS.map((value) => (
+                                  <option key={value} value={value} />
                                 ))}
-                              </select>
+                              </datalist>
                             </label>
-                            <label className="text-xs font-medium text-slate-600">
-                              Perfil
-                              <select
-                                value={economySimulatorProfile}
-                                onChange={(event) =>
-                                  setEconomySimulatorProfile(
-                                    event.target.value as
-                                      | 'light'
-                                      | 'standard'
-                                      | 'intensive'
-                                  )
-                                }
-                                className="ml-2 min-h-9 rounded-lg border border-slate-200 bg-white px-2 font-normal"
-                              >
-                                <option value="light">Leve</option>
-                                <option value="standard">Padrão</option>
-                                <option value="intensive">Intensivo</option>
-                              </select>
-                            </label>
+                            <span className="inline-flex min-h-9 items-center rounded-lg border border-violet-200 bg-violet-50 px-3 text-xs font-medium text-violet-800">
+                              Uso intensivo
+                            </span>
                           </div>
                           {economySimulatorRows.length > 0 ? (
                             <div className="mt-3 max-h-72 overflow-auto">
@@ -4353,33 +4133,13 @@ export const SalesModularProposalBuilder = ({
                     </div>
                     <dl className="mt-4 grid grid-cols-2 gap-3">
                       {[
-                        [
-                          'Custos estimados',
-                          currency(preview.promotional.totalEstimatedCostCents)
-                        ],
-                        [
-                          'Contribuição',
-                          currency(preview.promotional.contributionMarginCents)
-                        ],
-                        [
-                          'Margem de contribuição',
-                          percent(
-                            preview.promotional
-                              .contributionMarginBasisPoints
-                          )
-                        ],
-                        [
-                          'Margem operacional atribuída',
-                          currency(preview.promotional.ebitdaCents)
-                        ],
-                        [
-                          'Percentual operacional atribuído',
-                          percent(preview.promotional.ebitdaMarginBasisPoints)
-                        ],
-                        [
-                          'Lucro gerencial',
-                          currency(preview.promotional.netIncomeCents)
-                        ],
+                        ['Custo total estimado', currency(preview.promotional.totalEstimatedCostCents)],
+                        ['Margem de contribuição', currency(preview.promotional.contributionMarginCents)],
+                        ['Percentual de contribuição', percent(preview.promotional.contributionMarginBasisPoints)],
+                        ['Resultado operacional', currency(preview.promotional.ebitdaCents)],
+                        ['Margem operacional', percent(preview.promotional.ebitdaMarginBasisPoints)],
+                        ['Lucro líquido', currency(preview.promotional.netIncomeCents)],
+                        ['Margem líquida', percent(preview.promotional.netMarginBasisPoints)],
                         [
                           'Preço mínimo',
                           currency(

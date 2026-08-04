@@ -179,6 +179,7 @@ export type SalesModularLineSelection = {
 };
 
 export type SalesModularProposalInput = {
+  commercialPricingMode?: 'catalog' | 'manual_module_prices';
   patientQuantity: number;
   expectedPatientQuantity12Months: number;
   basePackageTierId: string;
@@ -856,7 +857,10 @@ export function recommendSalesPackageTier(
 }
 
 export function salesModularProposalRequiresVersionedProfitabilityPolicy(
-  input: Pick<SalesModularProposalInput, 'basePackageTierId'> | null | undefined,
+  input: Pick<
+    SalesModularProposalInput,
+    'basePackageTierId' | 'commercialPricingMode'
+  > | null | undefined,
   catalog: Pick<SalesPricingCatalogSnapshot, 'items'> | null | undefined
 ): boolean {
   if (!input?.basePackageTierId || !catalog) return false;
@@ -867,8 +871,9 @@ export function salesModularProposalRequiresVersionedProfitabilityPolicy(
     (tier) => tier.id === input.basePackageTierId
   );
   return Boolean(
-    selectedTier &&
-      (selectedTier.isCustom || selectedTier.maximumQuantity === null)
+    input.commercialPricingMode === 'manual_module_prices' ||
+      (selectedTier &&
+        (selectedTier.isCustom || selectedTier.maximumQuantity === null))
   );
 }
 
@@ -960,6 +965,8 @@ export function applySalesPackageTierSelection(
       : 150
     : null;
   const customPricing = tier.isCustom || tier.maximumQuantity === null;
+  const manualModulePricing =
+    input.commercialPricingMode === 'manual_module_prices';
   return {
     ...input,
     basePackageTierId: tier.id,
@@ -975,7 +982,8 @@ export function applySalesPackageTierSelection(
         : 'automatic',
     lines: input.lines.map((line) => {
       const recurringCustomLine =
-        customPricing && line.itemKey !== 'onboarding';
+        (customPricing || manualModulePricing) &&
+        line.itemKey !== 'onboarding';
       if (line.itemKey === 'clinical_core') {
         return {
           ...line,
@@ -1034,6 +1042,14 @@ export function validateSalesModularProposalInput(
     !['automatic', 'manual'].includes(input.basePackageSelectionMode)
   ) {
     errors.push('basePackageSelectionMode');
+  }
+  if (
+    input.commercialPricingMode !== undefined &&
+    !['catalog', 'manual_module_prices'].includes(
+      input.commercialPricingMode
+    )
+  ) {
+    errors.push('commercialPricingMode');
   }
   if (
     input.customBasePackageLimit !== undefined &&
@@ -2441,8 +2457,10 @@ export function calculateSalesModularProposal(
       `PROPOSAL_MODULE_DEPENDENCY_MISSING:${missing.itemKey}:${missing.dependency}`
     );
   }
+  const manualModulePricingEnabled =
+    input.commercialPricingMode === 'manual_module_prices';
   const perPatientPricingEnabled =
-    isCustomBaseTier &&
+    (isCustomBaseTier || manualModulePricingEnabled) &&
     ['per_patient', 'monthly_total'].includes(
       String(coreSelections[0].pricingEditMode || '')
     );
