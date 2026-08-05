@@ -1131,7 +1131,7 @@ export function ClinicGlobalSettingsPanel({
   };
   const clinicDocumentDigits = parseDocumentForStorage(values.clinicCnpj);
   const clinicCoreComplete = Boolean(values.clinicDisplayName?.trim() && clinicDocumentDigits && (values.clinicPhone?.trim() || values.clinicEmail?.trim()));
-  const clinicFiscalComplete = Boolean(values.clinicLegalName?.trim() && clinicDocumentDigits && (values.clinicCnesCode?.trim() || values.clinicProviderCode?.trim()));
+  const clinicFiscalComplete = Boolean(values.clinicLegalName?.trim() && clinicDocumentDigits && values.clinicCnesCode?.trim());
   const contactComplete = Boolean(values.clinicEmail?.trim() || values.clinicPhone?.trim() || values.clinicWhatsapp?.trim());
   const responsibleComplete = Boolean(values.therapistFullName?.trim() && values.therapistRoleTitle?.trim() && (values.therapistEmail?.trim() || values.therapistPhone?.trim()));
   const professionalBillingComplete = Boolean(
@@ -1371,10 +1371,12 @@ export function ClinicGlobalSettingsPanel({
                     CNES
                     <input type="text" value={values.clinicCnesCode} onChange={(event) => setters.setClinicCnesCode(onlyDigits(event.target.value, 12))} placeholder="CNES da clínica" className={inputClass} />
                   </label>
-                  <label className={labelClass}>
-                    Código do prestador
-                    <input type="text" value={values.clinicProviderCode} onChange={(event) => setters.setClinicProviderCode(event.target.value)} placeholder="Código no convênio/operadora" className={inputClass} />
-                  </label>
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-normal leading-relaxed text-indigo-800">
+                    O código contratual do prestador é específico de cada operadora. Configure-o em
+                    <button type="button" onClick={() => navigateToTab("payers")} className="ml-1 font-semibold underline underline-offset-2">
+                      Convênios e TISS
+                    </button>.
+                  </div>
                   <div className="md:col-span-2">
                     <MediaDropzone
                       label="Logotipo da Clínica"
@@ -1410,9 +1412,9 @@ export function ClinicGlobalSettingsPanel({
                 </div>
               </SectionCard>
 
-              <SectionCard title="Dados fiscais e documentais" description="Dados fiscais/TISS globais da clínica usados pela Pré-guia e futuras guias." complete={clinicFiscalComplete} hasAnyData={Boolean(values.clinicLegalName || values.clinicCnesCode || values.clinicProviderCode)}>
+              <SectionCard title="Dados fiscais e documentais" description="Dados fiscais e estruturais globais da clínica usados em documentos e Pré-guias." complete={clinicFiscalComplete} hasAnyData={Boolean(values.clinicLegalName || values.clinicCnesCode)}>
                 <p className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-800">
-                  Estes campos também são sincronizados com o perfil TISS do prestador. A Pré-guia consome este cadastro global, não dados preenchidos atendimento por atendimento.
+                  Razão social, documento e CNES são globais. O código atribuído à clínica pelo convênio deve ser configurado dentro de cada operadora.
                 </p>
               </SectionCard>
 

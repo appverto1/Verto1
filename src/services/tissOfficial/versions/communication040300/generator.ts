@@ -271,9 +271,7 @@ function pickProviderIdentifier(snapshot: any, row: any): ProviderIdentifier | n
   const contractedCode = normalizeNumberText(firstValue(
     payer.contractedProviderCode,
     payer.providerCode,
-    payer.operatorProviderCode,
-    provider.contractedProviderCode,
-    provider.providerCode
+    payer.operatorProviderCode
   ), 200);
   if (contractedCode.length > 14) return null;
   if (contractedCode && !isPlaceholder(contractedCode)) {
@@ -514,9 +512,7 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
   const providerCodeCandidate = normalizeNumberText(firstValue(
     payer.contractedProviderCode,
     payer.providerCode,
-    payer.operatorProviderCode,
-    provider.contractedProviderCode,
-    provider.providerCode
+    payer.operatorProviderCode
   ), 200);
   if (providerCodeCandidate.length > TISS_PROVIDER_CODE_MAX_LENGTH) {
     addIssue({ issues, preGuideId, entity: "provider", field: "providerIdentifier", code: "TISS_OFFICIAL_PROVIDER_CODE_TOO_LONG", message: `Código do prestador deve ter no máximo ${TISS_PROVIDER_CODE_MAX_LENGTH} caracteres; o XML nunca trunca esse identificador.` });

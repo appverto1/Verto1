@@ -464,9 +464,6 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
     if (!text(clinicProfile.document_type) || !text(clinicProfile.document_number)) {
       addIssue(errors, 'PROVIDER_DOCUMENT_MISSING', 'provider_document', tissPreGuideIssueLabel('PROVIDER_DOCUMENT_MISSING'), 'provider');
     }
-    if (payerProfile.requires_provider_code && !text(clinicProfile.provider_code || clinicProfile.ans_provider_code)) {
-      addIssue(errors, 'PROVIDER_CODE_MISSING', 'provider_code', tissPreGuideIssueLabel('PROVIDER_CODE_MISSING'), 'provider');
-    }
     if (payerProfile.requires_cnes && !text(clinicProfile.cnes_code)) {
       addIssue(errors, 'CNES_MISSING', 'cnes_code', tissPreGuideIssueLabel('CNES_MISSING'), 'provider');
     }
@@ -766,6 +763,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         documentNumber: text(clinicProfile.document_number) || null,
         cnesCode: text(clinicProfile.cnes_code) || null,
         providerCode: text(clinicProfile.provider_code || clinicProfile.ans_provider_code) || null,
+        providerCodeSource: text(clinicProfile.provider_code || clinicProfile.ans_provider_code) ? 'CLINIC_LEGACY' : null,
       },
       payer: {
         id: payerId || null,

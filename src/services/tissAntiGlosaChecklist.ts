@@ -295,10 +295,11 @@ const CATALOG: Array<Omit<TissAntiGlosaChecklistItem, "status" | "relatedIssueCo
   },
   {
     code: "provider_code",
-    label: "Código/CNES do prestador informado quando exigido",
-    riskClass: "risco de identificação do prestador",
-    suggestedAction: "Editar Dados da clínica",
-    okWhen: (snapshot) => Boolean(snapshot.provider?.providerCode || snapshot.provider?.cnesCode),
+    label: "Código contratual do prestador informado na operadora",
+    riskClass: "risco de identificação contratual do prestador",
+    suggestedAction: "Configurar o código dentro do convênio",
+    requirementPath: "requiresProviderCode",
+    okWhen: (snapshot) => Boolean(snapshot.payer?.contractedProviderCode || snapshot.payer?.operatorProviderCode),
   },
   {
     code: "authorization_valid",
@@ -488,8 +489,8 @@ function addUniversalTissBillingIssues(params: {
   if (!numberOrNull(snapshot.procedure?.totalAmountCents) || Number(snapshot.procedure?.totalAmountCents || 0) <= 0) {
     addBlocking("MISSING_NEGOTIATED_PRICE", "Pré-guia de convênio precisa de valor negociado positivo antes do XML.", "amount_calculated");
   }
-  if (!text(snapshot.provider?.providerCode) && !text(snapshot.payer?.contractedProviderCode) && !text(snapshot.payer?.operatorProviderCode)) {
-    addBlocking("MISSING_PROVIDER_CODE", "Código do prestador/contratado na operadora precisa estar configurado.", "provider_code");
+  if (!text(snapshot.payer?.contractedProviderCode) && !text(snapshot.payer?.operatorProviderCode)) {
+    addBlocking("MISSING_PROVIDER_CODE", "Código contratual do prestador precisa estar configurado dentro da operadora.", "payer_contracted_provider_code");
   }
   if (!text(snapshot.provider?.cnesCode)) {
     addBlocking("MISSING_CNES", "CNES do prestador precisa estar configurado para a conferência TISS.", "provider_code");

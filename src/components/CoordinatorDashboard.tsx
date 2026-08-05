@@ -1639,9 +1639,6 @@ export function CoordinatorDashboard({
   const [clinicCnesCode, setClinicCnesCode] = useState<string>(
     onlyDigits(user?.clinicSettings?.clinicCnesCode || user?.clinicSettings?.cnesCode || "", 12),
   );
-  const [clinicProviderCode, setClinicProviderCode] = useState<string>(
-    String(user?.clinicSettings?.clinicProviderCode || user?.clinicSettings?.providerCode || ""),
-  );
   const buildInitialAvatarDataUrl = (name?: string) => {
     const initial = (name || "P").trim().charAt(0).toUpperCase() || "P";
     const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><rect width='100%' height='100%' rx='18' fill='#7a32fc'/><text x='50%' y='56%' text-anchor='middle' font-size='42' font-family='Arial,sans-serif' fill='white'>${initial}</text></svg>`;
@@ -2623,7 +2620,6 @@ export function CoordinatorDashboard({
     setClinicCnpj(formatDocument(String(user?.clinicSettings?.clinicDocumentNumber || user?.clinicSettings?.clinicCnpj || ""), nextClinicDocumentType));
     setClinicLegalName(String(user?.clinicSettings?.clinicLegalName || user?.clinicSettings?.legalName || ""));
     setClinicCnesCode(onlyDigits(user?.clinicSettings?.clinicCnesCode || user?.clinicSettings?.cnesCode || "", 12));
-    setClinicProviderCode(String(user?.clinicSettings?.clinicProviderCode || user?.clinicSettings?.providerCode || ""));
     setClinicDisplayName(String(user?.clinicSettings?.clinicName || user?.workspaceName || ""));
     setClinicPhone(formatPhoneInput(String(user?.clinicSettings?.clinicPhone || "")));
     setClinicWhatsapp(formatPhoneInput(String(user?.clinicSettings?.clinicWhatsapp || user?.clinicSettings?.whatsapp || "")));
@@ -2672,8 +2668,6 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.legalName,
     user?.clinicSettings?.clinicCnesCode,
     user?.clinicSettings?.cnesCode,
-    user?.clinicSettings?.clinicProviderCode,
-    user?.clinicSettings?.providerCode,
     user?.clinicSettings?.clinicName,
     user?.clinicSettings?.clinicPhone,
     user?.clinicSettings?.clinicWhatsapp,
@@ -7543,7 +7537,6 @@ export function CoordinatorDashboard({
         .filter(Boolean)
         .join(", ");
     const cleanClinicCnesCode = onlyDigits(clinicCnesCode, 12);
-    const cleanClinicProviderCode = clinicProviderCode.trim();
     const isCrpValid =
       !cleanCrp ||
       /^[A-Za-z0-9À-ÿ .\/-]{2,80}$/u.test(cleanCrp);
@@ -7610,7 +7603,6 @@ export function CoordinatorDashboard({
       clinicState: cleanClinicState || null,
       clinicPostalCode: cleanClinicPostalCode || null,
       clinicCnesCode: cleanClinicCnesCode || null,
-      clinicProviderCode: cleanClinicProviderCode || null,
     };
 
     if (!isTherapist && canManageClinicSettings) {
@@ -7621,7 +7613,6 @@ export function CoordinatorDashboard({
           documentType: normalizedClinicDocumentType,
           documentNumber: cleanClinicDocumentNumber || null,
           cnesCode: cleanClinicCnesCode || null,
-          providerCode: cleanClinicProviderCode || null,
           addressLine: cleanClinicAddressLine || null,
           addressNumber: cleanClinicAddressNumber || null,
           addressComplement: cleanClinicAddressComplement || null,
@@ -12933,7 +12924,6 @@ export function CoordinatorDashboard({
                     clinicDocumentType,
                     clinicCnpj,
                     clinicCnesCode,
-                    clinicProviderCode,
                     clinicLogoDataUrl,
                     clinicEmail,
                     clinicPhone,
@@ -12972,7 +12962,6 @@ export function CoordinatorDashboard({
                     setClinicDocumentType,
                     setClinicCnpj,
                     setClinicCnesCode,
-                    setClinicProviderCode,
                     setClinicLogoDataUrl,
                     setClinicEmail,
                     setClinicPhone,
