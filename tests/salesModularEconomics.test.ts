@@ -331,7 +331,7 @@ const coreResult = calculateSalesModularProposal(
 );
 assert.ok(coreResult.economics, 'core isolado deve calcular economia');
 assert.equal(coreResult.economics?.pricingProfile, 'intensive');
-assert.equal(coreResult.modelVersion, '2026-08-04-v6');
+assert.equal(coreResult.modelVersion, '2026-08-04-v7');
 assert.ok(
   coreResult.warnings.some((warning) =>
     warning.includes('custo unitário estimado em zero')
@@ -339,9 +339,15 @@ assert.ok(
   'custos unitários estimados em zero com uso previsto devem gerar aviso de qualidade'
 );
 assert.equal(
-  coreResult.economics?.items[0].fixedAllocatedCostCents,
+  coreResult.lines.find((line) => line.itemKey === 'platform_foundation')
+    ?.promotional.sharedPlatformCostAllocatedCents,
   1000,
-  'custo compartilhado deve ser alocado uma única vez no core'
+  'custo compartilhado deve ser alocado uma única vez na Fundação Verto'
+);
+assert.equal(
+  coreResult.economics?.items[0].fixedAllocatedCostCents,
+  0,
+  'o módulo clínico deve permanecer incremental'
 );
 
 const agendaResult = calculateSalesModularProposal(
@@ -360,7 +366,7 @@ assert.equal(
 );
 assert.equal(agendaEconomics?.fixedPaymentFeeCents, 0);
 assert.equal(
-  agendaResult.lines.find((line) => line.itemKey === 'clinical_core')
+  agendaResult.lines.find((line) => line.itemKey === 'platform_foundation')
     ?.promotional.sharedPlatformCostAllocatedCents,
   1000
 );
@@ -767,11 +773,11 @@ assert.equal(
 );
 assert.equal(
   salesModularProposalRequiresVersionedProfitabilityPolicy(
-    {
+    ({
       ...standardHistoricalInput,
       patientQuantity: 150,
       expectedPatientQuantity12Months: 150
-    },
+    } as SalesModularProposalInput),
     standardHistoricalCatalog
   ),
   false,
@@ -863,11 +869,11 @@ assert.equal(
 );
 assert.equal(
   salesModularProposalRequiresVersionedProfitabilityPolicy(
-    {
+    ({
       ...switchedInput,
       basePackageTierId: PACKAGE_TIERS.custom.id,
       customBasePackageLimit: 150
-    },
+    } as SalesModularProposalInput),
     historicalCatalog
   ),
   true,
@@ -878,7 +884,7 @@ const historical = calculateSalesModularProposal(
   historicalCatalog,
   modularAssumptionsFixture
 );
-assert.equal(historical.modelVersion, '2026-07-28-v4');
+assert.equal(historical.modelVersion, '2026-08-04-v5');
 assert.equal(historical.economics, null);
 assert.equal(
   historicalCatalog.profitabilityPolicy,

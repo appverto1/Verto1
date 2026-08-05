@@ -777,7 +777,7 @@ const legacyResult = calculateSalesModularProposal(
   structuredClone(modularCatalogFixture),
   modularAssumptionsFixture
 );
-assert.equal(legacyResult.modelVersion, '2026-07-28-v4');
+assert.equal(legacyResult.modelVersion, '2026-08-04-v5');
 assert.deepEqual(
   legacyResult.commercialPricing.capacityBlockPhases,
   [],

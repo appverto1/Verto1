@@ -230,11 +230,11 @@ assert.match(
 
 assert.match(
   engine,
-  /sharedPlatformCosts: profitabilityPolicy[\s\S]*'base_package'/
+  /sharedPlatformCosts: 'base_package' as const/
 );
 assert.match(
   engine,
-  /stripeFixed: profitabilityPolicy[\s\S]*'base_package'/
+  /stripeFixed: 'base_package' as const/
 );
 assert.match(engine, /SALES_MODULAR_ECONOMICS_MODEL_VERSION/);
 assert.match(engine, /requiresJustification: false/);
@@ -283,7 +283,7 @@ assert.match(economics, /Compatibilidade exclusiva para leitura de snapshots his
 assert.match(builder, /Economia da clínica/);
 assert.match(builder, /Simular escala e módulos/);
 assert.match(builder, /\[150, 160, 170, 200\]/);
-assert.match(builder, /Apenas Verto Clínica/);
+assert.match(builder, /SALES_PLATFORM_FOUNDATION_PUBLIC_NAME/);
 assert.match(builder, /profitabilityThresholdColumns/);
 assert.match(builder, /formatSalesIncrementalMarginStatusLabel/);
 assert.match(builder, /profitabilityPolicyRequired/);
@@ -322,7 +322,7 @@ assert.doesNotMatch(
   `${engine}\n${builder}`,
   /margem mínima de 60%|pelo menos 70%|margem incremental mínima de 75%/i
 );
-assert.match(catalogPanel, /Política de margem operacional atribuída/);
+assert.match(catalogPanel, /Política de metas e referências de margem/);
 assert.match(catalogPanel, /Franquias e excedentes por driver/);
 assert.match(catalogPanel, /margem operacional modular/);
 

@@ -170,6 +170,12 @@ export const ModularOfferDetails = ({
   const oneTimeItems = offer.items.filter(
     (item) => item.oneTimeAmountCents > 0
   );
+  const hasPlatformFoundation = recurringItems.some(
+    (item) => item.itemKey === 'platform_foundation'
+  );
+  const recurringModuleCount = recurringItems.filter(
+    (item) => item.itemKey !== 'platform_foundation'
+  ).length;
   const hasPromotion =
     offer.promotionalMonthlyAmountCents !==
     offer.postDiscountMonthlyAmountCents;
@@ -197,12 +203,14 @@ export const ModularOfferDetails = ({
         <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
           <p className="text-xs font-medium text-slate-500">Estrutura escolhida</p>
           <p className="mt-1 text-sm font-semibold text-slate-900">
-            {offer.basePackage?.name || 'Verto Clínica'}
+            Composição modular Verto
           </p>
           <p className="mt-1 text-xs font-normal text-slate-500">
+            {hasPlatformFoundation ? 'Fundação da plataforma + ' : ''}
+            {recurringModuleCount} módulo(s) ·{' '}
             {offer.initialActivePatientQuantity} pacientes estimados
             {offer.basePackage?.limitQuantity
-              ? ` · limite de ${offer.basePackage.limitQuantity}`
+              ? ` · capacidade de ${offer.basePackage.limitQuantity}`
               : ''}
           </p>
         </div>
@@ -308,7 +316,7 @@ export const ModularOfferDetails = ({
 
       {offer.basePackage?.capacity ? (
         <div className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/70 p-4">
-          <p className="text-sm font-medium text-violet-950">Capacidade contratada do Verto Clínica</p>
+          <p className="text-sm font-medium text-violet-950">Capacidade técnica contratada da composição Verto</p>
           <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-3">
             <span>Limite-base: {offer.basePackage.capacity.baseLimitPatients} pacientes</span>
             <span>Quantidade reservada: {offer.basePackage.capacity.selectedBlocks} bloco(s)</span>
@@ -468,8 +476,8 @@ export const ModularOfferDetails = ({
             mantendo os mesmos módulos contratados e os preços por paciente
             vigentes em cada fase. Há{' '}
             {publicGracePeriodDays} dias de
-            tolerância para ajuste no próximo ciclo. O atendimento clínico
-            nunca é bloqueado.
+            tolerância para ajuste no próximo ciclo. A ampliação de capacidade
+            não bloqueia o acesso contratado.
           </p>
         </div>
       ) : null}
@@ -545,9 +553,9 @@ export const ModularOfferDetails = ({
       <div className="mt-4 flex items-start gap-3 rounded-2xl border border-violet-100 bg-violet-50 p-4">
         <Layers3 size={18} className="mt-0.5 shrink-0 text-violet-700" />
         <p className="text-sm font-normal leading-6 text-violet-950">
-          Comece com a estrutura que sua clínica precisa hoje e adicione novos
-          módulos conforme sua operação crescer. Toda a estrutura clínica e ABA
-          está incluída no Verto Clínica.
+          Comece com a Fundação Verto e os módulos necessários hoje. Novos
+          módulos e blocos de capacidade podem ser adicionados conforme a
+          operação crescer, sem duplicar a base da plataforma.
         </p>
       </div>
 

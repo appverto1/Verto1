@@ -2604,6 +2604,24 @@ function normalizeSalesModularProposalRequest(
       "manual_module_prices"
         ? "manual_module_prices"
         : "catalog",
+    // Snapshots anteriores à Fundação não possuem estes campos. Para não
+    // recalcular propostas históricas com uma cobrança nova, ausência significa
+    // Fundação manual zero. A interface atual envia automatic_target de forma
+    // explícita em cenários novos e em duplicações modernizadas.
+    platformFoundationPricingMode:
+      sanitizeString(source.platformFoundationPricingMode, 40) ===
+      "automatic_target"
+        ? "automatic_target"
+        : "manual",
+    platformFoundationMonthlyAmountCents:
+      source.platformFoundationMonthlyAmountCents === null
+      || source.platformFoundationMonthlyAmountCents === undefined
+      || source.platformFoundationMonthlyAmountCents === ""
+        ? sanitizeString(source.platformFoundationPricingMode, 40) ===
+            "automatic_target"
+          ? null
+          : 0
+        : Number(source.platformFoundationMonthlyAmountCents),
     patientQuantity: Number(source.patientQuantity),
     expectedPatientQuantity12Months: Number(
       source.expectedPatientQuantity12Months,
@@ -2706,6 +2724,38 @@ function salesModularResultMatches(
       !== recalculated.basePackage.limitQuantity
     || stored.basePackage?.includedStorageMb
       !== recalculated.basePackage.includedStorageMb
+    || Number(stored.platformFoundation?.schemaVersion)
+      !== recalculated.platformFoundation.schemaVersion
+    || sanitizeString(stored.platformFoundation?.itemKey, 80)
+      !== recalculated.platformFoundation.itemKey
+    || sanitizeString(stored.platformFoundation?.publicName, 120)
+      !== recalculated.platformFoundation.publicName
+    || sanitizeString(stored.platformFoundation?.pricingMode, 40)
+      !== recalculated.platformFoundation.pricingMode
+    || Number(stored.platformFoundation?.recurringAmountCents)
+      !== recalculated.platformFoundation.recurringAmountCents
+    || !nullableNumberMatches(
+      stored.platformFoundation?.recommendedRecurringAmountCents,
+      recalculated.platformFoundation.recommendedRecurringAmountCents,
+    )
+    || !nullableNumberMatches(
+      stored.platformFoundation?.targetTotalRecurringRevenueCents,
+      recalculated.platformFoundation.targetTotalRecurringRevenueCents,
+    )
+    || !nullableNumberMatches(
+      stored.platformFoundation?.moduleRecurringRevenueCents,
+      recalculated.platformFoundation.moduleRecurringRevenueCents,
+    )
+    || !nullableNumberMatches(
+      stored.platformFoundation?.sharedCostCents,
+      recalculated.platformFoundation.sharedCostCents,
+    )
+    || !nullableNumberMatches(
+      stored.platformFoundation?.fixedPaymentFeeCents,
+      recalculated.platformFoundation.fixedPaymentFeeCents,
+    )
+    || Boolean(stored.platformFoundation?.automaticAmountAvailable)
+      !== recalculated.platformFoundation.automaticAmountAvailable
     || (
       recalculated.commercialPricing.enabled
       && (
@@ -75713,7 +75763,7 @@ async function startServer() {
               : capacityPolicyInvalid
                 ? "Revise a política de blocos: informe valores válidos, ajuste no próximo ciclo e acesso clínico sempre preservado."
                 : profitabilityPolicyInvalid
-                  ? "Revise os pisos de margem e complete as franquias de expansão habilitadas."
+                  ? "Revise as metas e referências de margem e complete as franquias de expansão habilitadas."
                 : "Revise os valores informados.",
         });
       }
@@ -76239,11 +76289,7 @@ async function startServer() {
           commercialReview: {
             ...review,
             canGeneratePublicOffer:
-              review.technicalBlockingCodes.length === 0 &&
-              (
-                review.commercialAlertCodes.length === 0 ||
-                approvalResult.approval !== null
-              ),
+              review.canGeneratePublicOfferWithoutApproval,
           },
           commercialExceptionApproval: approvalResult.approval,
         };
@@ -76266,6 +76312,8 @@ async function startServer() {
           )
           .digest("hex");
         const baseLine = results.lines.find(
+          (line) => line.itemKey === "platform_foundation",
+        ) || results.lines.find(
           (line) => line.itemKey === "clinical_core",
         );
         if (!baseLine) throw new Error("PRICING_ITEM_NOT_FOUND");
@@ -76314,7 +76362,10 @@ async function startServer() {
             },
             p_items: resultSnapshot.lines.map((line) => ({
               ...line,
-              sortOrder: catalogSortOrder.get(line.itemKey) || 0,
+              sortOrder:
+                line.itemKey === "platform_foundation"
+                  ? -100
+                  : catalogSortOrder.get(line.itemKey) || 0,
             })),
           },
         );

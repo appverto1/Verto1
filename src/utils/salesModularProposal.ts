@@ -70,6 +70,10 @@ export type SalesCommercialPricingEditMode =
   | 'per_patient'
   | 'monthly_total';
 
+export type SalesPlatformFoundationPricingMode =
+  | 'automatic_target'
+  | 'manual';
+
 export type SalesCommercialEstimateStatus =
   | 'calibrated'
   | 'estimated'
@@ -180,6 +184,8 @@ export type SalesModularLineSelection = {
 
 export type SalesModularProposalInput = {
   commercialPricingMode?: 'catalog' | 'manual_module_prices';
+  platformFoundationPricingMode?: SalesPlatformFoundationPricingMode;
+  platformFoundationMonthlyAmountCents?: number | null;
   patientQuantity: number;
   expectedPatientQuantity12Months: number;
   basePackageTierId: string;
@@ -367,6 +373,19 @@ export type SalesModularProposalResult = {
     availableQuantity: number | null;
     capacity: CustomCapacitySnapshot | null;
   };
+  platformFoundation: {
+    schemaVersion: 1;
+    itemKey: 'platform_foundation';
+    publicName: 'Fundação Verto';
+    pricingMode: SalesPlatformFoundationPricingMode;
+    recurringAmountCents: number;
+    recommendedRecurringAmountCents: number | null;
+    targetTotalRecurringRevenueCents: number | null;
+    moduleRecurringRevenueCents: number;
+    sharedCostCents: number | null;
+    fixedPaymentFeeCents: number | null;
+    automaticAmountAvailable: boolean;
+  };
   lines: SalesModularProposalLineResult[];
   promotional: SalesModularConsolidatedPeriod;
   postPromotion: SalesModularConsolidatedPeriod;
@@ -449,20 +468,26 @@ export type SalesModularProposalResult = {
   };
 };
 
-export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-07-28-v4';
-export const SALES_MODULAR_ECONOMICS_MODEL_VERSION = '2026-08-04-v6';
+export const SALES_MODULAR_PROPOSAL_MODEL_VERSION = '2026-08-04-v5';
+export const SALES_MODULAR_ECONOMICS_MODEL_VERSION = '2026-08-04-v7';
 export const SALES_MODULAR_PER_PATIENT_MODEL_VERSION = '2026-07-28-v6';
-export const SALES_MODULAR_CAPACITY_BLOCK_MODEL_VERSION = '2026-08-04-v8';
+export const SALES_MODULAR_CAPACITY_BLOCK_MODEL_VERSION = '2026-08-04-v9';
+
+export const SALES_PLATFORM_FOUNDATION_ITEM_KEY =
+  'platform_foundation' as const;
+export const SALES_PLATFORM_FOUNDATION_PUBLIC_NAME =
+  'Fundação Verto' as const;
 
 export const SALES_COMMERCIAL_MODULE_DEPENDENCIES: Readonly<
   Record<string, readonly string[]>
 > = Object.freeze({
-  appointments_communication: ['clinical_core'],
-  financial_management: ['clinical_core'],
-  insurance_tiss: ['clinical_core'],
-  school_management: ['clinical_core'],
-  additional_storage: ['clinical_core'],
-  onboarding: ['clinical_core']
+  clinical_core: [],
+  appointments_communication: [],
+  financial_management: [],
+  insurance_tiss: [],
+  school_management: [],
+  additional_storage: [],
+  onboarding: []
 });
 
 export const findMissingSalesModuleDependencies = (
@@ -526,6 +551,21 @@ const nullableSum = (values: Array<number | null>): number | null =>
     ? values.reduce((sum, value) => sum + Number(value), 0)
     : null;
 
+const emptySalesDirectCostBreakdown = (): SalesModularDirectCostBreakdown => ({
+  fixedCostCents: 0,
+  patientCostCents: 0,
+  usageCostCents: 0,
+  storageCostCents: 0,
+  egressCostCents: 0,
+  notificationCostCents: 0,
+  otherVariableCostCents: 0,
+  supportCostCents: 0,
+  operationalCostCents: 0,
+  includedStorageGb: 0,
+  estimatedUsedStorageGb: 0,
+  estimatedEgressGb: 0
+});
+
 const lineIdentity = (selection: SalesModularLineSelection) =>
   `${selection.itemKey}:${selection.tierId || 'item'}`;
 
@@ -578,7 +618,9 @@ export function deriveSalesCapacityBlockPhases(args: {
   );
   return args.phases.map((phase) => {
     const recurringPhaseLines = phase.lines.filter(
-      (line) => line.billingInterval === 'monthly'
+      (line) =>
+        line.billingInterval === 'monthly' &&
+        sourceByItemKey.has(line.itemKey)
     );
     const preliminaryModules = recurringPhaseLines.map((phaseLine) => {
       const source = sourceByItemKey.get(phaseLine.itemKey);
@@ -707,7 +749,11 @@ export function deriveSalesCapacityBlockPhases(args: {
     );
     const contractedMonthlyRevenueCents =
       effectivePricePerPatientCents * contractedCapacityPatients;
-    if (contractedMonthlyRevenueCents !== phase.recurringRevenueCents) {
+    const phaseModuleRecurringRevenueCents = recurringPhaseLines.reduce(
+      (sum, line) => sum + line.activePriceCents,
+      0
+    );
+    if (contractedMonthlyRevenueCents !== phaseModuleRecurringRevenueCents) {
       throw new Error(
         `PRICING_PHASE_TOTAL_MISMATCH:${phase.phaseNumber}`
       );
@@ -819,7 +865,10 @@ export function canonicalizeSalesCapacityBlockPhasesForReconciliation(
             module?.blockIncrementalMarginBasisPoints
           )
         }))
-        .sort((left, right) => left.itemKey.localeCompare(right.itemKey))
+        .sort(
+          (left: { itemKey: string }, right: { itemKey: string }) =>
+            left.itemKey.localeCompare(right.itemKey)
+        )
     }))
     .sort(
       (left, right) =>
@@ -1063,6 +1112,31 @@ export function validateSalesModularProposalInput(
     )
   ) {
     errors.push('commercialPricingMode');
+  }
+  if (
+    input.platformFoundationPricingMode !== undefined &&
+    !['automatic_target', 'manual'].includes(
+      input.platformFoundationPricingMode
+    )
+  ) {
+    errors.push('platformFoundationPricingMode');
+  }
+  if (
+    input.platformFoundationMonthlyAmountCents !== undefined &&
+    input.platformFoundationMonthlyAmountCents !== null &&
+    (
+      !Number.isInteger(input.platformFoundationMonthlyAmountCents) ||
+      input.platformFoundationMonthlyAmountCents < 0 ||
+      input.platformFoundationMonthlyAmountCents > 1_000_000_000
+    )
+  ) {
+    errors.push('platformFoundationMonthlyAmountCents');
+  }
+  if (
+    input.platformFoundationPricingMode === 'manual' &&
+    !Number.isInteger(input.platformFoundationMonthlyAmountCents)
+  ) {
+    errors.push('platformFoundationMonthlyAmountCents');
   }
   if (
     input.customBasePackageLimit !== undefined &&
@@ -1478,7 +1552,7 @@ const estimatedDriver = (
 
 const validDriverDatum = (
   value: SalesModularDriverValue | null | undefined
-): value is SalesModularDriverValue =>
+): value is SalesModularDriverValue & { value: number } =>
   Boolean(
     value &&
       value.source !== 'unavailable' &&
@@ -2511,8 +2585,15 @@ export function calculateSalesModularProposal(
   const coreSelections = selections.filter(
     (selection) => selection.itemKey === 'clinical_core'
   );
-  if (coreSelections.length !== 1) {
+  if (coreSelections.length > 1) {
     throw new Error('PROPOSAL_SIMULATION_INVALID:clinical_core');
+  }
+  const recurringSelections = selections.filter((selection) => {
+    const item = itemsByKey.get(selection.itemKey);
+    return item && item.billingInterval !== 'one_time';
+  });
+  if (recurringSelections.length < 1) {
+    throw new Error('PROPOSAL_RECURRING_MODULE_REQUIRED');
   }
   const missingDependencies = findMissingSalesModuleDependencies(
     selections.map((selection) => selection.itemKey)
@@ -2527,17 +2608,11 @@ export function calculateSalesModularProposal(
     input.commercialPricingMode === 'manual_module_prices';
   const perPatientPricingEnabled =
     (isCustomBaseTier || manualModulePricingEnabled) &&
-    ['per_patient', 'monthly_total'].includes(
-      String(coreSelections[0].pricingEditMode || '')
+    recurringSelections.some((selection) =>
+      ['per_patient', 'monthly_total'].includes(
+        String(selection.pricingEditMode || '')
+      )
     );
-  if (
-    isCustomBaseTier &&
-    !perPatientPricingEnabled &&
-    (!Number.isInteger(coreSelections[0].customRecurringAmountCents) ||
-      Number(coreSelections[0].customRecurringAmountCents) <= 0)
-  ) {
-    throw new Error('PROPOSAL_SIMULATION_INVALID:customRecurringAmountCents');
-  }
   if (
     isCustomBaseTier &&
     (!Number.isInteger(input.customBasePackageLimit) ||
@@ -2558,13 +2633,23 @@ export function calculateSalesModularProposal(
           expectedPatients: input.expectedPatientQuantity12Months,
           baseLimitPatients: Number(input.customBasePackageLimit),
           basePriceCents: perPatientPricingEnabled
-            ? typeof coreSelections[0].proposedPricePerPatientCents === 'number'
-              ? Math.round(
-                  Number(input.customBasePackageLimit) *
-                    Number(coreSelections[0].proposedPricePerPatientCents)
-                )
-              : 0
-            : Number(coreSelections[0].customRecurringAmountCents),
+            ? Math.round(
+                Number(input.customBasePackageLimit) *
+                  recurringSelections.reduce(
+                    (sum, selection) =>
+                      sum +
+                      (typeof selection.proposedPricePerPatientCents ===
+                      'number'
+                        ? selection.proposedPricePerPatientCents
+                        : 0),
+                    0
+                  )
+              )
+            : recurringSelections.reduce(
+                (sum, selection) =>
+                  sum + Number(selection.customRecurringAmountCents || 0),
+                0
+              ),
           selection: {
             mode:
               input.customCapacitySelectionMode === 'manual'
@@ -2593,11 +2678,13 @@ export function calculateSalesModularProposal(
   if (!isCustomBaseTier && demand > basePackageContractedLimit) {
     throw new Error('PRICING_PACKAGE_LIMIT_EXCEEDED');
   }
-  coreSelections[0] = {
-    ...coreSelections[0],
-    tierId: baseTier.id,
-    quantity: input.patientQuantity
-  };
+  if (coreSelections[0]) {
+    coreSelections[0] = {
+      ...coreSelections[0],
+      tierId: baseTier.id,
+      quantity: input.patientQuantity
+    };
+  }
   const duplicateNonStorage = new Set<string>();
   const resolved = selections.map((selection) => {
     const item = itemsByKey.get(selection.itemKey);
@@ -2631,6 +2718,16 @@ export function calculateSalesModularProposal(
       effectiveSelection.quantity > Number(tier?.maximumQuantity)
     ) {
       throw new Error(`PRICING_PACKAGE_LIMIT_EXCEEDED:${item.itemKey}`);
+    }
+    if (
+      !perPatientPricingEnabled &&
+      item.billingInterval !== 'one_time' &&
+      (item.pricingMode === 'custom' || tier?.isCustom) &&
+      effectiveSelection.customRecurringAmountCents == null
+    ) {
+      throw new Error(
+        `PROPOSAL_SIMULATION_INVALID:${item.itemKey}.customRecurringAmountCents`
+      );
     }
     const resolvedAmounts = resolveGrossAmounts(
       item,
@@ -2791,18 +2888,25 @@ export function calculateSalesModularProposal(
         )
       : null;
   if (capacity && perPatientPricingEnabled) {
-    const corePerPatient = resolved.find(
-      (line) => line.item.itemKey === 'clinical_core'
-    )?.commercialPricing.proposedPricePerPatientCents;
+    const selectedPerPatientTotal = resolved
+      .filter((line) => line.item.billingInterval !== 'one_time')
+      .reduce<number | null>((sum, line) => {
+        const amount =
+          line.commercialPricing.proposedPricePerPatientCents;
+        return sum === null || amount === null ? null : sum + amount;
+      }, 0);
     capacity = calculateCustomCapacity(
       {
         currentPatients: input.patientQuantity,
         expectedPatients: input.expectedPatientQuantity12Months,
         baseLimitPatients: Number(input.customBasePackageLimit),
         basePriceCents:
-          corePerPatient === null || corePerPatient === undefined
+          selectedPerPatientTotal === null
             ? 0
-            : Math.round(Number(input.customBasePackageLimit) * corePerPatient),
+            : Math.round(
+                Number(input.customBasePackageLimit) *
+                  selectedPerPatientTotal
+              ),
         blockPriceCentsOverride:
           totalProposedPricePerPatientCents === null
             ? null
@@ -2824,36 +2928,6 @@ export function calculateSalesModularProposal(
     );
   }
 
-  const baseIndex = Math.max(
-    0,
-    resolved.findIndex((line) => line.item.itemKey === 'clinical_core')
-  );
-  const globalDiscountBase = resolved.reduce(
-    (sum, line) => sum + line.promotionalItemRevenueCents,
-    0
-  );
-  const globalAllocations = perPatientPricingEnabled
-    ? resolved.map((line) =>
-        line.promotionalPricePerPatientCents === null
-          ? 0
-          : basePackageContractedLimit *
-            multiplyBasisPoints(
-              line.promotionalPricePerPatientCents,
-              input.globalDiscountBasisPoints
-            )
-      )
-    : allocateSalesCents(
-        multiplyBasisPoints(
-          globalDiscountBase,
-          input.globalDiscountBasisPoints
-        ),
-        resolved.map((line) => line.promotionalItemRevenueCents),
-        baseIndex
-      );
-  const globalDiscountTotal = globalAllocations.reduce(
-    (sum, amount) => sum + amount,
-    0
-  );
   const values = resolveProfileAssumptions(
     assumptionSnapshot,
     input.usageProfile
@@ -2866,12 +2940,8 @@ export function calculateSalesModularProposal(
       catalog.allocationSettings?.stripePercentage,
       'net_revenue'
     ),
-    stripeFixed: profitabilityPolicy
-      ? 'base_package' as const
-      : resolvedAllocationMethod(
-          catalog.allocationSettings?.stripeFixed,
-          'base_package'
-        ),
+    // A tarifa fixa pertence uma única vez à Fundação Verto.
+    stripeFixed: 'base_package' as const,
     revenueTax: resolvedAllocationMethod(
       catalog.allocationSettings?.revenueTax,
       'net_revenue'
@@ -2880,45 +2950,162 @@ export function calculateSalesModularProposal(
       catalog.allocationSettings?.delinquency,
       'net_revenue'
     ),
-    sharedPlatformCosts: profitabilityPolicy
-      ? 'base_package' as const
-      : resolvedAllocationMethod(
-          catalog.allocationSettings?.sharedPlatformCosts,
-          'configured_weight'
-        ),
+    // Custos compartilhados pertencem uma única vez à Fundação Verto.
+    sharedPlatformCosts: 'base_package' as const,
     belowEbitda: resolvedAllocationMethod(
       catalog.allocationSettings?.belowEbitda,
       'configured_weight'
     )
   };
 
+  const recurringResolvedLines = resolved.filter(
+    (line) => line.item.billingInterval !== 'one_time'
+  );
+  const recurringDirectCostCents = nullableSum(
+    recurringResolvedLines.map((line) => line.directCostCents)
+  );
+  const platformSharedCostCents = sharedPlatformCosts(
+    values,
+    input.expectedPatientQuantity12Months,
+    costSettings,
+    recurringResolvedLines.map((line) => line.item.itemKey)
+  );
+  const targetTotalRecurringRevenueBeforeFoundationCents =
+    targetEbitdaMarginBasisPoints === null
+      ? null
+      : calculateSalesMinimumPriceCents({
+          fixedAllocatedCostCents: platformSharedCostCents,
+          directCostCents: recurringDirectCostCents,
+          fixedPaymentFeeCents: values.stripeFixedFeeCents,
+          targetEbitdaMarginBasisPoints,
+          stripePercentageBasisPoints: values.stripeFeeBasisPoints,
+          delinquencyPercentageBasisPoints:
+            values.estimatedDelinquencyBasisPoints,
+          refundChargebackPercentageBasisPoints:
+            values.refundChargebackBasisPoints,
+          taxPercentageBasisPoints: values.revenueTaxBasisPoints
+        });
+  const modulePostPromotionRecurringRevenueCents =
+    recurringResolvedLines.reduce(
+      (sum, line) => sum + line.postPromotionRecurringRevenueCents,
+      0
+    );
+  const recommendedPlatformFoundationRecurringAmountCents =
+    targetTotalRecurringRevenueBeforeFoundationCents === null
+      ? null
+      : Math.max(
+          0,
+          targetTotalRecurringRevenueBeforeFoundationCents -
+            modulePostPromotionRecurringRevenueCents
+        );
+  // Inputs anteriores ao modelo de Fundação não possuíam estes campos.
+  // Mantemos esses snapshots como Fundação manual zero; novos cenários criados
+  // pela interface informam explicitamente automatic_target.
+  const platformFoundationPricingMode:
+    SalesPlatformFoundationPricingMode =
+      input.platformFoundationPricingMode === 'automatic_target'
+        ? 'automatic_target'
+        : 'manual';
+  const platformFoundationRecurringAmountCents =
+    platformFoundationPricingMode === 'manual'
+      ? nonNegativeInteger(input.platformFoundationMonthlyAmountCents ?? 0)
+      : recommendedPlatformFoundationRecurringAmountCents ?? 0;
+  const globalDiscountBases = [
+    platformFoundationRecurringAmountCents,
+    ...resolved.map((line) =>
+      line.item.billingInterval === 'one_time'
+        ? 0
+        : line.promotionalItemRevenueCents
+    )
+  ];
+  const globalDiscountTotal = multiplyBasisPoints(
+    globalDiscountBases.reduce((sum, amount) => sum + amount, 0),
+    input.globalDiscountBasisPoints
+  );
+  const allGlobalAllocations = allocateSalesCents(
+    globalDiscountTotal,
+    globalDiscountBases,
+    0
+  );
+  const foundationGlobalDiscountCents = allGlobalAllocations[0] || 0;
+  const globalAllocations = allGlobalAllocations.slice(1);
+  const platformFoundationPeriodSource = {
+    itemKey: SALES_PLATFORM_FOUNDATION_ITEM_KEY,
+    netRevenueCents: platformFoundationRecurringAmountCents,
+    grossRevenueCents: platformFoundationRecurringAmountCents,
+    directCostCents: 0,
+    directCostBreakdown: emptySalesDirectCostBreakdown(),
+    weight: 1,
+    isBase: true
+  };
+
   const promotionalPeriod = calculatePeriod(
-    resolved.map((line, index) => ({
-      itemKey: line.item.itemKey,
-      netRevenueCents:
-        line.promotionalItemRevenueCents -
-        globalAllocations[index],
-      grossRevenueCents: line.grossRecurringRevenueCents,
-      directCostCents: line.directCostCents,
-      directCostBreakdown: line.costResolution.breakdown,
-      weight: line.item.costModel?.sharedCostAllocationWeight || 0,
-      isBase: line.item.itemKey === 'clinical_core'
-    })),
+    [
+      {
+        ...platformFoundationPeriodSource,
+        netRevenueCents:
+          platformFoundationRecurringAmountCents -
+          foundationGlobalDiscountCents
+      },
+      ...resolved.map((line, index) => ({
+        itemKey: line.item.itemKey,
+        netRevenueCents:
+          line.item.billingInterval === 'one_time'
+            ? 0
+            : line.promotionalItemRevenueCents -
+              globalAllocations[index],
+        grossRevenueCents:
+          line.item.billingInterval === 'one_time'
+            ? 0
+            : line.grossRecurringRevenueCents,
+        directCostCents:
+          line.item.billingInterval === 'one_time'
+            ? 0
+            : line.directCostCents,
+        directCostBreakdown:
+          line.item.billingInterval === 'one_time'
+            ? emptySalesDirectCostBreakdown()
+            : line.costResolution.breakdown,
+        weight:
+          line.item.billingInterval === 'one_time'
+            ? 0
+            : line.item.costModel?.sharedCostAllocationWeight || 0,
+        isBase: false
+      }))
+    ],
     values,
     allocationSettings,
     input.expectedPatientQuantity12Months,
     costSettings
   );
   const postPeriod = calculatePeriod(
-    resolved.map((line) => ({
-      itemKey: line.item.itemKey,
-      netRevenueCents: line.postPromotionRecurringRevenueCents,
-      grossRevenueCents: line.grossRecurringRevenueCents,
-      directCostCents: line.directCostCents,
-      directCostBreakdown: line.costResolution.breakdown,
-      weight: line.item.costModel?.sharedCostAllocationWeight || 0,
-      isBase: line.item.itemKey === 'clinical_core'
-    })),
+    [
+      platformFoundationPeriodSource,
+      ...resolved.map((line) => ({
+        itemKey: line.item.itemKey,
+        netRevenueCents:
+          line.item.billingInterval === 'one_time'
+            ? 0
+            : line.postPromotionRecurringRevenueCents,
+        grossRevenueCents:
+          line.item.billingInterval === 'one_time'
+            ? 0
+            : line.grossRecurringRevenueCents,
+        directCostCents:
+          line.item.billingInterval === 'one_time'
+            ? 0
+            : line.directCostCents,
+        directCostBreakdown:
+          line.item.billingInterval === 'one_time'
+            ? emptySalesDirectCostBreakdown()
+            : line.costResolution.breakdown,
+        weight:
+          line.item.billingInterval === 'one_time'
+            ? 0
+            : line.item.costModel?.sharedCostAllocationWeight || 0,
+        isBase: false
+      }))
+    ],
     values,
     allocationSettings,
     input.expectedPatientQuantity12Months,
@@ -2931,6 +3118,12 @@ export function calculateSalesModularProposal(
       line.oneTimeDirectCostCents === null
     )
     .map((line) => line.item.publicName);
+  if (
+    platformFoundationPricingMode === 'automatic_target' &&
+    recommendedPlatformFoundationRecurringAmountCents === null
+  ) {
+    missingCosts.push(SALES_PLATFORM_FOUNDATION_PUBLIC_NAME);
+  }
   const requiredShared: Array<keyof SalesAssumptionValues> = [
     'stripeFeeBasisPoints',
     'stripeFixedFeeCents',
@@ -2974,10 +3167,150 @@ export function calculateSalesModularProposal(
         .length >= 12
   }));
 
-  const lines: SalesModularProposalLineResult[] = resolved.map(
+  const foundationPromotional = promotionalPeriod.lines[0];
+  const foundationPostPromotion = postPeriod.lines[0];
+  const foundationLine: SalesModularProposalLineResult = {
+    lineKey: SALES_PLATFORM_FOUNDATION_ITEM_KEY,
+    // A fundação é uma linha econômica virtual versionada. O item clínico
+    // permanece como âncora física do catálogo até a migração estrutural do
+    // cadastro de produtos, sem conceder funcionalidades clínicas.
+    catalogItemId: clinicalCore.id,
+    tierId: null,
+    itemKey: SALES_PLATFORM_FOUNDATION_ITEM_KEY,
+    publicName: SALES_PLATFORM_FOUNDATION_PUBLIC_NAME,
+    description:
+      'Base segura da plataforma: autenticação, infraestrutura, auditoria, operação e suporte-base.',
+    pricingMode: 'flat_monthly',
+    quantity: 1,
+    limitQuantity: basePackageContractedLimit,
+    includedQuantity: basePackageContractedLimit,
+    grossRecurringRevenueCents: platformFoundationRecurringAmountCents,
+    grossOneTimeRevenueCents: 0,
+    itemDiscountBasisPoints: 0,
+    offerDiscount: null,
+    itemDiscountCents: 0,
+    oneTimeDiscountCents: 0,
+    allocatedGlobalDiscountCents: foundationGlobalDiscountCents,
+    promotionalRecurringRevenueCents:
+      foundationPromotional.netRevenueCents,
+    postPromotionRecurringRevenueCents:
+      foundationPostPromotion.netRevenueCents,
+    oneTimeRevenueCents: 0,
+    oneTimeDirectCostCents: 0,
+    oneTimeContributionMarginCents: 0,
+    promotional: foundationPromotional,
+    postPromotion: foundationPostPromotion,
+    costSource:
+      recommendedPlatformFoundationRecurringAmountCents === null
+        ? 'unavailable'
+        : 'calculated',
+    costSourceDetail:
+      recommendedPlatformFoundationRecurringAmountCents === null
+        ? 'A fundação depende de custos compartilhados e premissas ainda indisponíveis.'
+        : 'Preço calculado para completar a meta EBITDA atribuída do pacote, sem duplicar custos dos módulos.',
+    costModelSnapshot: null,
+    resolvedDrivers: {},
+    missingDrivers: [],
+    directCostBreakdown: emptySalesDirectCostBreakdown(),
+    commercialPricing: {
+      enabled: false,
+      editMode: 'legacy_monthly_total',
+      contractedCapacityPatients: basePackageContractedLimit,
+      proposedPricePerPatientCents:
+        basePackageContractedLimit > 0
+          ? roundSalesMoneyCents(
+              platformFoundationRecurringAmountCents /
+                basePackageContractedLimit
+            )
+          : null,
+      derivedMonthlyRevenueCents:
+        platformFoundationRecurringAmountCents,
+      requestedMonthlyRevenueCents:
+        platformFoundationPricingMode === 'manual'
+          ? platformFoundationRecurringAmountCents
+          : null,
+      monthlyTotalRepresentable: true,
+      nearestRepresentableMonthlyRevenueCents:
+        platformFoundationRecurringAmountCents,
+      monthlyTotalAdjustmentCents: 0,
+      estimatedMonthlyCostCents:
+        platformSharedCostCents === null
+          ? null
+          : platformSharedCostCents + Number(values.stripeFixedFeeCents || 0),
+      effectiveCostPerPatientCents:
+        platformSharedCostCents === null || basePackageContractedLimit <= 0
+          ? null
+          : roundSalesMoneyCents(
+              (platformSharedCostCents +
+                Number(values.stripeFixedFeeCents || 0)) /
+                basePackageContractedLimit
+            ),
+      marginalCostPerPatientCents: null,
+      minimumPricePerPatientCents: null,
+      recommendedPricePerPatientCents: null,
+      contributionCents: foundationPromotional.contributionMarginCents,
+      contributionMarginBasisPoints:
+        foundationPromotional.contributionMarginBasisPoints,
+      estimateStatus:
+        recommendedPlatformFoundationRecurringAmountCents === null
+          ? 'insufficient_data'
+          : 'calibrated',
+      confidenceLevel:
+        recommendedPlatformFoundationRecurringAmountCents === null
+          ? 'unavailable'
+          : 'medium',
+      costModelVersion: null,
+      assumptionsVersion: assumptionSnapshot.version,
+      estimatedAt: assumptionSnapshot.effectiveAt
+    },
+    minimumRecommendedRevenueCents:
+      recommendedPlatformFoundationRecurringAmountCents,
+    maximumRecommendedDiscountBasisPoints:
+      recommendedPlatformFoundationRecurringAmountCents === null ||
+      platformFoundationRecurringAmountCents <= 0
+        ? null
+        : Math.max(
+            0,
+            Math.min(
+              10_000,
+              Math.floor(
+                ((platformFoundationRecurringAmountCents -
+                  recommendedPlatformFoundationRecurringAmountCents) *
+                  10_000) /
+                  platformFoundationRecurringAmountCents
+              )
+            )
+          ),
+    breakEvenQuantity: null,
+    warnings:
+      recommendedPlatformFoundationRecurringAmountCents === null
+        ? ['Custos compartilhados insuficientes para calcular a fundação.']
+        : platformFoundationPricingMode === 'manual' &&
+            platformFoundationRecurringAmountCents <
+              recommendedPlatformFoundationRecurringAmountCents
+          ? ['Fundação definida abaixo do valor necessário para a meta EBITDA.']
+          : [],
+    publicMetadata: {
+      virtualFoundation: true,
+      pricingMode: platformFoundationPricingMode,
+      recommendedRecurringAmountCents:
+        recommendedPlatformFoundationRecurringAmountCents,
+      targetTotalRecurringRevenueCents:
+        targetTotalRecurringRevenueBeforeFoundationCents,
+      billedCapacityPatients: basePackageContractedLimit,
+      pricingBasis: 'platform_foundation_target_gap',
+      features: [
+        'Base segura da plataforma',
+        'Autenticação e controle de acesso',
+        'Infraestrutura, auditoria e operação-base'
+      ]
+    }
+  };
+
+  const moduleLines: SalesModularProposalLineResult[] = resolved.map(
     (line, index) => {
-      const promotional = promotionalPeriod.lines[index];
-      const postPromotion = postPeriod.lines[index];
+      const promotional = promotionalPeriod.lines[index + 1];
+      const postPromotion = postPeriod.lines[index + 1];
       const minimumRecommendedRevenueCents =
         targetRevenueForEbitdaMargin(
           promotional,
@@ -3146,6 +3479,10 @@ export function calculateSalesModularProposal(
       };
     }
   );
+  const lines: SalesModularProposalLineResult[] = [
+    foundationLine,
+    ...moduleLines
+  ];
 
   const targetRecurringRevenueCents = targetRevenueForEbitdaMargin(
     promotionalPeriod.consolidated,
@@ -3162,8 +3499,12 @@ export function calculateSalesModularProposal(
     targetRecurringRevenueCents;
   const maximumRecommendedDiscountBasisPoints =
     targetRecurringRevenueCents === null ||
-    resolved.reduce(
-      (sum, line) => sum + line.grossRecurringRevenueCents,
+    lines.reduce(
+      (sum, line) =>
+        sum +
+        (line.pricingMode === 'one_time'
+          ? 0
+          : line.grossRecurringRevenueCents),
       0
     ) <= 0
       ? null
@@ -3172,14 +3513,22 @@ export function calculateSalesModularProposal(
           Math.min(
             10_000,
             Math.floor(
-              ((resolved.reduce(
-                (sum, line) => sum + line.grossRecurringRevenueCents,
+              ((lines.reduce(
+                (sum, line) =>
+                  sum +
+                  (line.pricingMode === 'one_time'
+                    ? 0
+                    : line.grossRecurringRevenueCents),
                 0
               ) -
                 targetRecurringRevenueCents) *
                 10_000) /
-                resolved.reduce(
-                  (sum, line) => sum + line.grossRecurringRevenueCents,
+                lines.reduce(
+                  (sum, line) =>
+                    sum +
+                    (line.pricingMode === 'one_time'
+                      ? 0
+                      : line.grossRecurringRevenueCents),
                   0
                 )
             )
@@ -3289,10 +3638,11 @@ export function calculateSalesModularProposal(
   assertExactTotal(
     'grossRecurringRevenueCents',
     lines.reduce((sum, line) => sum + line.grossRecurringRevenueCents, 0),
-    resolved.reduce(
-      (sum, line) => sum + line.grossRecurringRevenueCents,
-      0
-    )
+    platformFoundationRecurringAmountCents +
+      resolved.reduce(
+        (sum, line) => sum + line.grossRecurringRevenueCents,
+        0
+      )
   );
   assertExactTotal(
     'promotionalRecurringRevenueCents',
@@ -3368,10 +3718,10 @@ export function calculateSalesModularProposal(
 
   const initialCommercialPhases = buildOfferCommercialPhases({
     startsAt: commercialStartsAt,
-    globalDiscountBasisPoints: perPatientPricingEnabled
-      ? 0
-      : input.globalDiscountBasisPoints,
-    globalDiscountBaseItemKey: 'clinical_core',
+    // O desconto global já foi congelado e distribuído por linha acima.
+    // Reaplicá-lo percentualmente aqui causaria desconto duplicado.
+    globalDiscountBasisPoints: 0,
+    globalDiscountBaseItemKey: SALES_PLATFORM_FOUNDATION_ITEM_KEY,
     globalDiscountStartsAt: input.globalDiscountBasisPoints > 0 ? commercialStartsAt : null,
     globalDiscountEndsAt:
       input.globalDiscountBasisPoints > 0 && input.discountDurationMonths > 0
@@ -3395,7 +3745,7 @@ export function calculateSalesModularProposal(
           ? line.oneTimeDirectCostCents
           : line.promotional.directCostCents,
       discount: line.offerDiscount,
-      globalDiscountCents: globalAllocations[index]
+      globalDiscountCents: allGlobalAllocations[index]
     }))
   });
   const commercialPhasePeriods = new Map<
@@ -3404,24 +3754,33 @@ export function calculateSalesModularProposal(
   >();
   const commercialPhases = initialCommercialPhases.map((phase) => {
     const recalculated = calculatePeriod(
-      resolved.map((line, index) => {
-        const isRecurring = line.item.billingInterval !== 'one_time';
-        return {
-          itemKey: line.item.itemKey,
-          netRevenueCents: isRecurring
-            ? phase.lines[index].activePriceCents
-            : 0,
-          grossRevenueCents: isRecurring
-            ? line.grossRecurringRevenueCents
-            : 0,
-          directCostCents: isRecurring ? line.directCostCents : 0,
-          directCostBreakdown: line.costResolution.breakdown,
-          weight: isRecurring
-            ? line.item.costModel?.sharedCostAllocationWeight || 0
-            : 0,
-          isBase: line.item.itemKey === 'clinical_core'
-        };
-      }),
+      [
+        {
+          ...platformFoundationPeriodSource,
+          netRevenueCents: phase.lines[0]?.activePriceCents ??
+            platformFoundationRecurringAmountCents
+        },
+        ...resolved.map((line, index) => {
+          const isRecurring = line.item.billingInterval !== 'one_time';
+          return {
+            itemKey: line.item.itemKey,
+            netRevenueCents: isRecurring
+              ? phase.lines[index + 1].activePriceCents
+              : 0,
+            grossRevenueCents: isRecurring
+              ? line.grossRecurringRevenueCents
+              : 0,
+            directCostCents: isRecurring ? line.directCostCents : 0,
+            directCostBreakdown: isRecurring
+              ? line.costResolution.breakdown
+              : emptySalesDirectCostBreakdown(),
+            weight: isRecurring
+              ? line.item.costModel?.sharedCostAllocationWeight || 0
+              : 0,
+            isBase: false
+          };
+        })
+      ],
       values,
       allocationSettings,
       input.expectedPatientQuantity12Months,
@@ -3457,7 +3816,11 @@ export function calculateSalesModularProposal(
     commercialPhases[0]
   ) {
     const phasePricePerPatientCents = commercialPhases[0].lines
-      .filter((line) => line.billingInterval === 'monthly')
+      .filter(
+        (line) =>
+          line.billingInterval === 'monthly' &&
+          line.itemKey !== SALES_PLATFORM_FOUNDATION_ITEM_KEY
+      )
       .reduce(
         (sum, line) =>
           sum +
@@ -3695,24 +4058,38 @@ export function calculateSalesModularProposal(
     );
     const intensivePeriodForPhase = (phase: OfferCommercialPhase) =>
       calculatePeriod(
-        resolved.map((line, index) => ({
-          itemKey: line.item.itemKey,
-          netRevenueCents:
-            line.item.billingInterval === 'one_time'
-              ? 0
-              : phase.lines[index].activePriceCents,
-          grossRevenueCents:
-            line.item.billingInterval === 'one_time'
-              ? 0
-              : line.grossRecurringRevenueCents,
-          directCostCents:
-            line.item.billingInterval === 'one_time'
-              ? 0
-              : intensiveCosts[index].monthlyCostCents,
-          directCostBreakdown: intensiveCosts[index].breakdown,
-          weight: line.item.itemKey === 'clinical_core' ? 1 : 0,
-          isBase: line.item.itemKey === 'clinical_core'
-        })),
+        [
+          {
+            ...platformFoundationPeriodSource,
+            netRevenueCents:
+              phase.lines[0]?.activePriceCents ??
+              platformFoundationRecurringAmountCents
+          },
+          ...resolved.map((line, index) => ({
+            itemKey: line.item.itemKey,
+            netRevenueCents:
+              line.item.billingInterval === 'one_time'
+                ? 0
+                : phase.lines[index + 1].activePriceCents,
+            grossRevenueCents:
+              line.item.billingInterval === 'one_time'
+                ? 0
+                : line.grossRecurringRevenueCents,
+            directCostCents:
+              line.item.billingInterval === 'one_time'
+                ? 0
+                : intensiveCosts[index].monthlyCostCents,
+            directCostBreakdown:
+              line.item.billingInterval === 'one_time'
+                ? emptySalesDirectCostBreakdown()
+                : intensiveCosts[index].breakdown,
+            weight:
+              line.item.billingInterval === 'one_time'
+                ? 0
+                : line.item.costModel?.sharedCostAllocationWeight || 0,
+            isBase: false
+          }))
+        ],
         intensiveValues,
         allocationSettings,
         input.expectedPatientQuantity12Months,
@@ -3740,12 +4117,6 @@ export function calculateSalesModularProposal(
           (sum, value) => sum + Number(value),
           0
         );
-    const intensiveSharedCostCents = sharedPlatformCosts(
-      intensiveValues,
-      input.expectedPatientQuantity12Months,
-      costSettings,
-      resolved.map((line) => line.item.itemKey)
-    );
     const minimumPrices = (
       directCostCents: number | null,
       fixedAllocatedCostCents: number | null,
@@ -3782,31 +4153,31 @@ export function calculateSalesModularProposal(
       ]);
 
     let accumulatedRevenueCents =
-      intensivePostPeriod.lines[baseIndex]?.netRevenueCents || 0;
+      intensivePostPeriod.lines[0]?.netRevenueCents || 0;
     let accumulatedCostCents = lineTotalCost(
-      intensivePostPeriod.lines[baseIndex]
+      intensivePostPeriod.lines[0]
     );
     const effects = new Map<
       number,
       ReturnType<typeof calculateSalesModuleEffect>
     >();
     resolved.forEach((line, index) => {
-      if (index === baseIndex || line.item.billingInterval === 'one_time') {
+      if (line.item.billingInterval === 'one_time') {
         return;
       }
       const moduleCostCents = lineTotalCost(
-        intensivePostPeriod.lines[index]
+        intensivePostPeriod.lines[index + 1]
       );
       const effect = calculateSalesModuleEffect({
         revenueBeforeCents: accumulatedRevenueCents,
         costBeforeCents: accumulatedCostCents,
         moduleRevenueCents:
-          intensivePostPeriod.lines[index].netRevenueCents,
+          intensivePostPeriod.lines[index + 1].netRevenueCents,
         moduleCostCents
       });
       effects.set(index, effect);
       accumulatedRevenueCents +=
-        intensivePostPeriod.lines[index].netRevenueCents;
+        intensivePostPeriod.lines[index + 1].netRevenueCents;
       accumulatedCostCents =
         accumulatedCostCents === null || moduleCostCents === null
           ? null
@@ -3814,28 +4185,24 @@ export function calculateSalesModularProposal(
     });
 
     const economicsItems = resolved.map((line, index) => {
-      const isBasePackage = index === baseIndex;
-      const fixedAllocatedCostCents = isBasePackage
-        ? intensiveSharedCostCents
-        : 0;
-      const fixedPaymentFeeCents = isBasePackage
-        ? intensiveValues.stripeFixedFeeCents
-        : 0;
+      const isBasePackage = false;
+      const fixedAllocatedCostCents = 0;
+      const fixedPaymentFeeCents = 0;
       const thresholds = minimumPrices(
         intensiveCosts[index].monthlyCostCents,
         fixedAllocatedCostCents,
         fixedPaymentFeeCents
       );
       const promotionalCostCents = lineTotalCost(
-        intensivePromotionalPeriod.lines[index]
+        intensivePromotionalPeriod.lines[index + 1]
       );
       const postPromotionCostCents = lineTotalCost(
-        intensivePostPeriod.lines[index]
+        intensivePostPeriod.lines[index + 1]
       );
       const promotionalRevenueCents =
-        intensivePromotionalPeriod.lines[index].netRevenueCents;
+        intensivePromotionalPeriod.lines[index + 1].netRevenueCents;
       const postPromotionRevenueCents =
-        intensivePostPeriod.lines[index].netRevenueCents;
+        intensivePostPeriod.lines[index + 1].netRevenueCents;
       const promotionalMarginBasisPoints = marginBasisPoints(
         promotionalRevenueCents,
         promotionalCostCents
@@ -3844,9 +4211,8 @@ export function calculateSalesModularProposal(
         postPromotionRevenueCents,
         postPromotionCostCents
       );
-      const target = isBasePackage
-        ? profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
-        : profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints;
+      const target =
+        profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints;
       const targetMinimum = calculateSalesMinimumPriceCents({
         directCostCents: intensiveCosts[index].monthlyCostCents,
         fixedAllocatedCostCents,
@@ -3864,9 +4230,8 @@ export function calculateSalesModularProposal(
           directCostCents: intensiveCosts[index].monthlyCostCents,
           fixedAllocatedCostCents,
           fixedPaymentFeeCents,
-          targetEbitdaMarginBasisPoints: isBasePackage
-            ? profitabilityPolicy.clinicMinimumEbitdaMarginBasisPoints
-            : profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints,
+          targetEbitdaMarginBasisPoints:
+            profitabilityPolicy.moduleMinimumIncrementalMarginBasisPoints,
           stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
           delinquencyPercentageBasisPoints:
             intensiveValues.estimatedDelinquencyBasisPoints,
@@ -3879,9 +4244,8 @@ export function calculateSalesModularProposal(
           directCostCents: intensiveCosts[index].monthlyCostCents,
           fixedAllocatedCostCents,
           fixedPaymentFeeCents,
-          targetEbitdaMarginBasisPoints: isBasePackage
-            ? profitabilityPolicy.recurringTargetEbitdaMarginBasisPoints
-            : profitabilityPolicy.moduleTargetIncrementalMarginBasisPoints,
+          targetEbitdaMarginBasisPoints:
+            profitabilityPolicy.moduleTargetIncrementalMarginBasisPoints,
           stripePercentageBasisPoints: intensiveValues.stripeFeeBasisPoints,
           delinquencyPercentageBasisPoints:
             intensiveValues.estimatedDelinquencyBasisPoints,
@@ -3956,27 +4320,36 @@ export function calculateSalesModularProposal(
 
     let capacityEconomics: SalesModularEconomicsResult['capacity'] = null;
     if (capacity) {
-      const coreLine = resolved[baseIndex];
-      const baseOnlyCost = directMonthlyCost(
-        coreLine.item,
-        coreLine.tier,
-        Math.min(coreLine.quantity, capacity.baseLimitPatients),
-        {
-          ...intensiveInput,
-          patientQuantity: Math.min(
-            input.patientQuantity,
+      const coreLineIndex = resolved.findIndex(
+        (line) => line.item.itemKey === 'clinical_core'
+      );
+      const coreLine =
+        coreLineIndex >= 0 ? resolved[coreLineIndex] : null;
+      const baseOnlyCost = coreLine
+        ? directMonthlyCost(
+            coreLine.item,
+            coreLine.tier,
+            Math.min(coreLine.quantity, capacity.baseLimitPatients),
+            {
+              ...intensiveInput,
+              patientQuantity: Math.min(
+                input.patientQuantity,
+                capacity.baseLimitPatients
+              ),
+              expectedPatientQuantity12Months: Math.min(
+                input.expectedPatientQuantity12Months,
+                capacity.baseLimitPatients
+              ),
+              customCapacityBlocks: 0
+            },
+            costSettings,
             capacity.baseLimitPatients
-          ),
-          expectedPatientQuantity12Months: Math.min(
-            input.expectedPatientQuantity12Months,
-            capacity.baseLimitPatients
-          ),
-          customCapacityBlocks: 0
-        },
-        costSettings,
-        capacity.baseLimitPatients
-      ).monthlyCostCents;
-      const totalCoreCost = intensiveCosts[baseIndex].monthlyCostCents;
+          ).monthlyCostCents
+        : 0;
+      const totalCoreCost =
+        coreLineIndex >= 0
+          ? intensiveCosts[coreLineIndex].monthlyCostCents
+          : 0;
       let capacityDirectCostCents =
         totalCoreCost === null || baseOnlyCost === null
           ? null
@@ -4501,7 +4874,11 @@ export function calculateSalesModularProposal(
           phases: commercialPhases,
           capacity,
           recurringLines: finalizedLines
-            .filter((line) => line.pricingMode !== 'one_time')
+            .filter(
+              (line) =>
+                line.pricingMode !== 'one_time' &&
+                line.itemKey !== SALES_PLATFORM_FOUNDATION_ITEM_KEY
+            )
             .map((line) => ({
               itemKey: line.itemKey,
               publicName: line.publicName,
@@ -4565,6 +4942,11 @@ export function calculateSalesModularProposal(
   const canonicalInput: SalesModularProposalInput = perPatientPricingEnabled
     ? {
         ...input,
+        platformFoundationPricingMode,
+        platformFoundationMonthlyAmountCents:
+          platformFoundationPricingMode === 'manual'
+            ? platformFoundationRecurringAmountCents
+            : null,
         lines: input.lines.map((selection) => {
           const resultLine = finalizedLines.find(
             (line) => line.lineKey === lineIdentity(selection)
@@ -4591,7 +4973,14 @@ export function calculateSalesModularProposal(
           };
         })
       }
-    : input;
+    : {
+        ...input,
+        platformFoundationPricingMode,
+        platformFoundationMonthlyAmountCents:
+          platformFoundationPricingMode === 'manual'
+            ? platformFoundationRecurringAmountCents
+            : null
+      };
 
   return {
     modelVersion: perPatientPricingEnabled
@@ -4618,6 +5007,23 @@ export function calculateSalesModularProposal(
         basePackageContractedLimit - input.patientQuantity
       ),
       capacity
+    },
+    platformFoundation: {
+      schemaVersion: 1,
+      itemKey: SALES_PLATFORM_FOUNDATION_ITEM_KEY,
+      publicName: SALES_PLATFORM_FOUNDATION_PUBLIC_NAME,
+      pricingMode: platformFoundationPricingMode,
+      recurringAmountCents: platformFoundationRecurringAmountCents,
+      recommendedRecurringAmountCents:
+        recommendedPlatformFoundationRecurringAmountCents,
+      targetTotalRecurringRevenueCents:
+        targetTotalRecurringRevenueBeforeFoundationCents,
+      moduleRecurringRevenueCents:
+        modulePostPromotionRecurringRevenueCents,
+      sharedCostCents: platformSharedCostCents,
+      fixedPaymentFeeCents: values.stripeFixedFeeCents,
+      automaticAmountAvailable:
+        recommendedPlatformFoundationRecurringAmountCents !== null
     },
     lines: finalizedLines,
     promotional: promotionalPeriod.consolidated,

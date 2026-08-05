@@ -280,7 +280,8 @@ const totalMode = calculateSalesModularProposal(
   modularAssumptionsFixture
 );
 assert.equal(
-  totalMode.lines[0].commercialPricing.proposedPricePerPatientCents,
+  totalMode.lines.find((line) => line.itemKey === 'clinical_core')
+    ?.commercialPricing.proposedPricePerPatientCents,
   1500
 );
 assert.equal(
@@ -408,18 +409,13 @@ const legacyResult = calculateSalesModularProposal(
   structuredClone(modularCatalogFixture),
   modularAssumptionsFixture
 );
-assert.equal(legacyResult.modelVersion, '2026-07-28-v4');
+assert.equal(legacyResult.modelVersion, '2026-08-04-v5');
 assert.equal(legacyResult.commercialPricing.enabled, false);
 assert.equal(legacyResult.promotionalRecurringRevenueCents, 159_900);
 
 assert.deepEqual(
   findMissingSalesModuleDependencies(['appointments_communication']),
-  [
-    {
-      itemKey: 'appointments_communication',
-      dependency: 'clinical_core'
-    }
-  ]
+  []
 );
 assert.deepEqual(
   findMissingSalesModuleDependencies([
@@ -428,26 +424,30 @@ assert.deepEqual(
   ]),
   []
 );
-assert.throws(
-  () =>
-    calculateSalesModularProposal(
+const agendaOnly = calculateSalesModularProposal(
+  {
+    ...unitInput(150),
+    lines: [
       {
-        ...unitInput(150),
-        lines: [
-          {
-            itemKey: 'appointments_communication',
-            tierId: null,
-            quantity: 1,
-            itemDiscountBasisPoints: 0,
-            pricingEditMode: 'per_patient',
-            proposedPricePerPatientCents: 200
-          }
-        ]
-      },
-      catalog(),
-      modularAssumptionsFixture
-    ),
-  /PROPOSAL_SIMULATION_INVALID:clinical_core/
+        itemKey: 'appointments_communication',
+        tierId: null,
+        quantity: 1,
+        itemDiscountBasisPoints: 0,
+        pricingEditMode: 'per_patient',
+        proposedPricePerPatientCents: 200
+      }
+    ]
+  },
+  catalog(),
+  modularAssumptionsFixture
+);
+assert.equal(
+  agendaOnly.lines.some((line) => line.itemKey === 'clinical_core'),
+  false
+);
+assert.equal(
+  agendaOnly.lines.some((line) => line.itemKey === 'platform_foundation'),
+  true
 );
 
 const serverSource = readFileSync('server.ts', 'utf8');

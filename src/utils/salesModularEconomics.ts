@@ -397,7 +397,7 @@ export const formatSalesIncrementalMarginStatusLabel = (
       thresholds.minimumBasisPoints
     )}`;
   }
-  return `Abaixo do piso · < ${formatSalesBasisPointsPercent(
+  return `Abaixo da referência · < ${formatSalesBasisPointsPercent(
     thresholds.attentionBasisPoints
   )}`;
 };

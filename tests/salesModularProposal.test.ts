@@ -148,7 +148,9 @@ const intensiveResult = calculateSalesModularProposal(
   modularCatalogFixture,
   modularAssumptionsFixture
 );
-const intensiveCore = intensiveResult.lines[0];
+const intensiveCore = intensiveResult.lines.find(
+  (line) => line.itemKey === 'clinical_core'
+)!;
 assert.equal(intensiveCore.directCostBreakdown.estimatedUsedStorageGb, 15000 / 1024);
 assert.equal(intensiveCore.directCostBreakdown.estimatedEgressGb, (15000 / 1024) * 5);
 assert.ok(

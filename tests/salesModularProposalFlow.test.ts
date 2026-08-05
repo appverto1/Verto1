@@ -14,7 +14,7 @@ const publicOffer = read('src/components/PublicSalesOffer.tsx');
 assert.match(builder, /Usar faixa recomendada/);
 assert.match(builder, /Seleção automática/);
 assert.match(builder, /Seleção manual/);
-assert.match(builder, /Limite contratado do pacote-base/);
+assert.match(builder, /Limite técnico de capacidade/);
 assert.match(builder, /customBasePackageLimit/);
 assert.match(builder, /basePackageSelectionMode/);
 assert.match(builder, /modularCheckoutEnabled: false/);

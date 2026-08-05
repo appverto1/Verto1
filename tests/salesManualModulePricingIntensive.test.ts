@@ -46,8 +46,12 @@ const result = calculateSalesModularProposal(
 assert.equal(result.commercialPricing.enabled, true);
 assert.equal(result.input.commercialPricingMode, 'manual_module_prices');
 assert.equal(result.input.usageProfile, 'intensive');
-assert.equal(result.lines[0].commercialPricing.editMode, 'monthly_total');
-assert.equal(result.lines[0].grossRecurringRevenueCents, 25_000);
+const clinicalLine = result.lines.find(
+  (line) => line.itemKey === 'clinical_core'
+);
+assert.ok(clinicalLine);
+assert.equal(clinicalLine.commercialPricing.editMode, 'monthly_total');
+assert.equal(clinicalLine.grossRecurringRevenueCents, 25_000);
 assert.equal(result.promotionalRecurringRevenueCents, 22_500);
 assert.notEqual(result.promotional.totalEstimatedCostCents, null);
 assert.notEqual(result.promotional.netIncomeCents, null);

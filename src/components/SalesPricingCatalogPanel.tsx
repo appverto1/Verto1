@@ -159,18 +159,18 @@ const profitabilityMarginFields: Array<{
 }> = [
   {
     key: 'clinicMinimumEbitdaMarginBasisPoints',
-    label: 'Piso absoluto da clínica',
-    hint: 'Nenhuma fase pode ficar abaixo.'
+    label: 'Referência histórica da clínica',
+    hint: 'Compatibilidade e classificação; não bloqueia a proposta.'
   },
   {
     key: 'recurringTargetEbitdaMarginBasisPoints',
-    label: 'Meta recorrente',
-    hint: 'Obrigatória após promoções.'
+    label: 'Meta EBITDA recorrente',
+    hint: 'Preço-alvo da composição; abaixo disso gera aviso.'
   },
   {
     key: 'moduleMinimumIncrementalMarginBasisPoints',
-    label: 'Piso dos módulos',
-    hint: 'Custo incremental, sem rateio duplicado.'
+    label: 'Referência dos módulos',
+    hint: 'Referência incremental, sem rateio duplicado e sem bloqueio.'
   },
   {
     key: 'moduleTargetIncrementalMarginBasisPoints',
@@ -179,13 +179,13 @@ const profitabilityMarginFields: Array<{
   },
   {
     key: 'capacityMinimumIncrementalMarginBasisPoints',
-    label: 'Piso da capacidade',
-    hint: 'Blocos e excedentes.'
+    label: 'Referência da capacidade',
+    hint: 'Blocos e excedentes; abaixo disso gera aviso.'
   },
   {
     key: 'postPromotionMinimumEbitdaMarginBasisPoints',
-    label: 'Piso posterior',
-    hint: 'Condição normal congelada.'
+    label: 'Referência pós-benefício',
+    hint: 'Condição normal congelada; abaixo disso gera aviso.'
   }
 ];
 
@@ -942,12 +942,12 @@ export const SalesPricingCatalogPanel = () => {
           {profitabilityPolicyDraft ? (
             <fieldset className="mt-4 border-t border-amber-200 pt-4">
               <legend className="text-sm font-medium text-slate-800">
-                Política de margem operacional atribuída
+                Política de metas e referências de margem
               </legend>
               <p className="mt-1 max-w-3xl text-xs font-normal leading-5 text-slate-600">
-                O perfil intensivo define os preços mínimos. Infraestrutura,
+                O perfil intensivo orienta os preços-alvo. Infraestrutura,
                 operação-base, suporte-base e taxa fixa são absorvidos uma única
-                vez pelo Verto Clínica.
+                vez pela Fundação Verto.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {profitabilityMarginFields.map((field) => (
@@ -1154,7 +1154,7 @@ export const SalesPricingCatalogPanel = () => {
                 profitabilityPolicyDraft
               ) ? (
                 <p role="alert" className="mt-3 text-xs text-rose-700">
-                  Revise os pisos de margem e complete cada franquia habilitada.
+                  Revise as metas e referências de margem e complete cada franquia habilitada.
                 </p>
               ) : null}
             </fieldset>

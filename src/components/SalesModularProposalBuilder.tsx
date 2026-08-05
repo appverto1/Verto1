@@ -25,6 +25,7 @@ import {
   isSalesPackageTierCompatible,
   recommendSalesPackageTier,
   resolveSalesPackageTierSelection,
+  SALES_PLATFORM_FOUNDATION_PUBLIC_NAME,
   salesModularProposalRequiresVersionedProfitabilityPolicy,
   salesPackageDemand,
   type SalesModularLineSelection,
@@ -238,63 +239,63 @@ const commercialAlertLabel = (
   }
   if (code === 'POST_PROMOTION_MARGIN_BELOW_TARGET') {
     return recurringTarget
-      ? `A condição posterior está abaixo da meta de ${recurringTarget}.`
-      : 'A condição posterior está abaixo da meta de EBITDA atribuída.';
+      ? `A condição posterior está abaixo da meta de ${recurringTarget}. Este aviso não bloqueia a proposta.`
+      : 'A condição posterior está abaixo da meta de EBITDA atribuída. Este aviso não bloqueia a proposta.';
   }
   if (code.startsWith('MODULE_MARGIN_BELOW_TARGET:')) {
     return moduleMinimum
-      ? `Um módulo está abaixo da referência incremental de ${moduleMinimum}.`
-      : 'Um módulo está abaixo da referência de margem incremental.';
+      ? `Um módulo está abaixo da referência incremental de ${moduleMinimum}. Este aviso não bloqueia a proposta.`
+      : 'Um módulo está abaixo da referência de margem incremental. Este aviso não bloqueia a proposta.';
   }
   if (code === 'CAPACITY_MARGIN_BELOW_TARGET') {
     return capacityMinimum
-      ? `Os blocos de capacidade estão abaixo da referência incremental de ${capacityMinimum}.`
-      : 'Os blocos de capacidade estão abaixo da referência incremental.';
+      ? `Os blocos de capacidade estão abaixo da referência incremental de ${capacityMinimum}. Este aviso não bloqueia a proposta.`
+      : 'Os blocos de capacidade estão abaixo da referência incremental. Este aviso não bloqueia a proposta.';
   }
   if (code.startsWith('EXPANSION_MARGIN_BELOW_TARGET:')) {
     return capacityMinimum
-      ? `Um excedente por driver está abaixo da referência incremental de ${capacityMinimum}.`
-      : 'Um excedente por driver está abaixo da referência incremental.';
+      ? `Um excedente por driver está abaixo da referência incremental de ${capacityMinimum}. Este aviso não bloqueia a proposta.`
+      : 'Um excedente por driver está abaixo da referência incremental. Este aviso não bloqueia a proposta.';
   }
   if (
     code === 'CLINIC_MARGIN_BELOW_MINIMUM' ||
     code === 'CLINIC_MARGIN_BELOW_60'
   ) {
     return clinicMinimum
-      ? `A margem da clínica está abaixo do piso comercial de ${clinicMinimum}.`
-      : 'A margem da clínica está abaixo do piso comercial.';
+      ? `A margem da clínica está abaixo da referência histórica de ${clinicMinimum}. Este aviso não bloqueia a proposta.`
+      : 'A margem da clínica está abaixo da referência histórica. Este aviso não bloqueia a proposta.';
   }
   if (
     code === 'POST_PROMOTION_MARGIN_BELOW_MINIMUM' ||
     code === 'POST_PROMOTION_MARGIN_BELOW_70'
   ) {
     return postPromotionMinimum
-      ? `A condição posterior está abaixo do piso de ${postPromotionMinimum}.`
-      : 'A condição posterior está abaixo da meta comercial.';
+      ? `A condição posterior está abaixo da referência pós-benefício de ${postPromotionMinimum}. Este aviso não bloqueia a proposta.`
+      : 'A condição posterior está abaixo da referência pós-benefício. Este aviso não bloqueia a proposta.';
   }
   if (
     code.startsWith('MODULE_MARGIN_BELOW_MINIMUM:') ||
     code.startsWith('MODULE_MARGIN_BELOW_75:')
   ) {
     return moduleMinimum
-      ? `Um módulo está abaixo da margem incremental mínima de ${moduleMinimum}.`
-      : 'Um módulo está abaixo da margem incremental prevista.';
+      ? `Um módulo está abaixo da referência incremental de ${moduleMinimum}. Este aviso não bloqueia a proposta.`
+      : 'Um módulo está abaixo da referência incremental. Este aviso não bloqueia a proposta.';
   }
   if (
     code === 'CAPACITY_MARGIN_BELOW_MINIMUM' ||
     code === 'CAPACITY_MARGIN_BELOW_75'
   ) {
     return capacityMinimum
-      ? `Os blocos de capacidade estão abaixo da margem incremental mínima de ${capacityMinimum}.`
-      : 'Os blocos de capacidade estão abaixo da margem incremental prevista.';
+      ? `Os blocos de capacidade estão abaixo da referência incremental de ${capacityMinimum}. Este aviso não bloqueia a proposta.`
+      : 'Os blocos de capacidade estão abaixo da referência incremental. Este aviso não bloqueia a proposta.';
   }
   if (
     code.startsWith('EXPANSION_MARGIN_BELOW_MINIMUM:') ||
     code.startsWith('EXPANSION_MARGIN_BELOW_75:')
   ) {
     return capacityMinimum
-      ? `Um excedente por driver está abaixo da margem incremental mínima de ${capacityMinimum}.`
-      : 'Um excedente por driver está abaixo da margem incremental prevista.';
+      ? `Um excedente por driver está abaixo da referência incremental de ${capacityMinimum}. Este aviso não bloqueia a proposta.`
+      : 'Um excedente por driver está abaixo da referência incremental. Este aviso não bloqueia a proposta.';
   }
   if (code === 'PROMOTIONAL_PHASE_DEFICIT') {
     return 'A fase promocional possui EBITDA atribuído negativo.';
@@ -451,6 +452,8 @@ export const SalesModularProposalBuilder = ({
         if (!core) throw new Error('PRICING_ITEM_NOT_FOUND');
         const initialInput: SalesModularProposalInput = {
           commercialPricingMode: 'manual_module_prices',
+          platformFoundationPricingMode: 'automatic_target',
+          platformFoundationMonthlyAmountCents: null,
           patientQuantity,
           expectedPatientQuantity12Months: patientQuantity,
           basePackageTierId: recommendedTier.id,
@@ -552,15 +555,24 @@ export const SalesModularProposalBuilder = ({
     if (!selectedTier || (!selectedTier.isCustom && selectedTier.maximumQuantity !== null)) {
       return;
     }
-    const coreLine = input.lines.find((line) => line.itemKey === 'clinical_core');
-    const coreBasePriceCents =
-      coreLine?.pricingEditMode === 'per_patient' &&
-      typeof coreLine.proposedPricePerPatientCents === 'number'
-        ? Math.round(
-            Number(input.customBasePackageLimit || 0) *
-              coreLine.proposedPricePerPatientCents
-          )
-        : Number(coreLine?.customRecurringAmountCents || 0);
+    const recurringLines = input.lines.filter((line) => {
+      const item = catalog.items.find(
+        (candidate) => candidate.itemKey === line.itemKey
+      );
+      return item?.billingInterval !== 'one_time';
+    });
+    const basePriceCents = recurringLines.reduce((sum, line) => {
+      if (
+        line.pricingEditMode === 'per_patient' &&
+        typeof line.proposedPricePerPatientCents === 'number'
+      ) {
+        return sum + Math.round(
+          Number(input.customBasePackageLimit || 0) *
+            line.proposedPricePerPatientCents
+        );
+      }
+      return sum + Number(line.customRecurringAmountCents || 0);
+    }, 0);
     if (
       !Number.isInteger(input.customBasePackageLimit) ||
       Number(input.customBasePackageLimit) < 1 ||
@@ -574,7 +586,7 @@ export const SalesModularProposalBuilder = ({
         currentPatients: input.patientQuantity,
           expectedPatients: input.expectedPatientQuantity12Months,
           baseLimitPatients: Number(input.customBasePackageLimit),
-          basePriceCents: coreBasePriceCents,
+          basePriceCents,
         selection: {
           mode: input.customCapacitySelectionMode === 'manual' ? 'manual' : 'automatic',
           selectedBlocks: input.customCapacityBlocks
@@ -632,11 +644,11 @@ export const SalesModularProposalBuilder = ({
     const policy = preview?.economics?.policy;
     if (!policy) return [];
     const definitions = [
-      ['Piso clínica', policy.clinicMinimumEbitdaMarginBasisPoints],
+      ['Referência clínica', policy.clinicMinimumEbitdaMarginBasisPoints],
       ['Meta recorrente', policy.recurringTargetEbitdaMarginBasisPoints],
-      ['Piso pós-promo', policy.postPromotionMinimumEbitdaMarginBasisPoints],
-      ['Piso módulo', policy.moduleMinimumIncrementalMarginBasisPoints],
-      ['Piso capacidade', policy.capacityMinimumIncrementalMarginBasisPoints],
+      ['Referência pós-benefício', policy.postPromotionMinimumEbitdaMarginBasisPoints],
+      ['Referência módulo', policy.moduleMinimumIncrementalMarginBasisPoints],
+      ['Referência capacidade', policy.capacityMinimumIncrementalMarginBasisPoints],
       ['Meta módulo', policy.moduleTargetIncrementalMarginBasisPoints]
     ] as const;
     const grouped = new Map<number, string[]>();
@@ -719,93 +731,52 @@ export const SalesModularProposalBuilder = ({
     const customTier = coreItem?.tiers.find(
       (tier) => tier.isCustom || tier.maximumQuantity === null
     );
-    const currentCore = input.lines.find(
-      (line) => line.itemKey === 'clinical_core'
-    );
     const baseLimit = Number(input.customBasePackageLimit);
-    const currentCorePricePerPatientCents =
-      currentCore?.pricingEditMode === 'per_patient'
-        ? currentCore.proposedPricePerPatientCents
-        : currentCore?.pricingEditMode === 'monthly_total' &&
-            Number(currentCore.customRecurringAmountCents) >= 0 &&
-            baseLimit > 0
-          ? Number(currentCore.customRecurringAmountCents) / baseLimit
-          : Number(currentCore?.customRecurringAmountCents) > 0 &&
-              baseLimit > 0
-            ? Number(currentCore?.customRecurringAmountCents) / baseLimit
-            : null;
     if (
       !coreItem ||
       !customTier ||
-      currentCorePricePerPatientCents === null ||
-      !Number.isFinite(currentCorePricePerPatientCents) ||
-      currentCorePricePerPatientCents <= 0 ||
       !Number.isInteger(baseLimit) ||
       baseLimit < 1
     ) {
       return [];
     }
-    const moduleKeys = [
-      'appointments_communication',
-      'financial_management',
-      'insurance_tiss',
-      'school_management'
-    ] as const;
-    const moduleItems = moduleKeys
-      .map((itemKey) =>
-        catalog.items.find(
-          (item) => item.itemKey === itemKey && item.isActive
-        )
+    const recurringModuleItems = catalog.items
+      .filter(
+        (item) =>
+          item.isActive &&
+          item.billingInterval !== 'one_time' &&
+          item.pricingMode !== 'storage_block'
       )
-      .filter(Boolean) as SalesPricingCatalogItem[];
-    const allModuleDraftLines: SalesModularLineSelection[] = [
-      {
-        itemKey: 'clinical_core',
-        tierId: customTier.id,
-        quantity: economySimulatorPatients,
-        itemDiscountBasisPoints: 0,
-        customRecurringAmountCents: null,
-        customOneTimeAmountCents: null,
-        pricingEditMode: 'per_patient',
-        proposedPricePerPatientCents: currentCorePricePerPatientCents
-      },
-      ...moduleItems.map((item) =>
-        selectionForItem(item, economySimulatorPatients, customTier, true)
-      )
-    ];
-    let suggestedPrices = new Map<string, number>();
-    try {
-      const recommendationPreview = calculateSalesModularProposal(
-        {
-          ...input,
-          patientQuantity: economySimulatorPatients,
-          expectedPatientQuantity12Months: economySimulatorPatients,
-          basePackageTierId: customTier.id,
-          customBasePackageLimit: baseLimit,
-          customCapacityBlocks: null,
-          customCapacitySelectionMode: 'automatic',
-          lines: allModuleDraftLines,
-          globalDiscountBasisPoints: 0,
-          discountDurationMonths: 0,
-          usageProfile: 'intensive',
-          driverOverrides: {}
-        },
-        catalog,
-        assumptions
+      .sort((left, right) => left.sortOrder - right.sortOrder);
+    if (recurringModuleItems.length < 1) return [];
+
+    const selectionForSimulator = (
+      item: SalesPricingCatalogItem
+    ): SalesModularLineSelection => {
+      const current = input.lines.find(
+        (line) => line.itemKey === item.itemKey
       );
-      suggestedPrices = new Map(
-        recommendationPreview.lines.flatMap((line) =>
-          line.commercialPricing.recommendedPricePerPatientCents === null
-            ? []
-            : [[
-                line.itemKey,
-                line.commercialPricing.recommendedPricePerPatientCents
-              ]]
-        )
+      if (current) {
+        return {
+          ...current,
+          tierId:
+            item.itemKey === 'clinical_core'
+              ? customTier.id
+              : current.tierId,
+          quantity:
+            item.itemKey === 'insurance_tiss'
+              ? current.quantity
+              : economySimulatorPatients
+        };
+      }
+      return selectionForItem(
+        item,
+        economySimulatorPatients,
+        customTier,
+        true
       );
-    } catch {
-      suggestedPrices = new Map();
-    }
+    };
+
     const rows: Array<{
       key: string;
       label: string;
@@ -814,40 +785,20 @@ export const SalesModularProposalBuilder = ({
       marginBasisPoints: number | null;
       canSend: boolean;
     }> = [];
-    for (let mask = 0; mask < 2 ** moduleItems.length; mask += 1) {
-      const selectedModules = moduleItems.filter(
+    for (
+      let mask = 1;
+      mask < 2 ** recurringModuleItems.length;
+      mask += 1
+    ) {
+      const selectedModules = recurringModuleItems.filter(
         (_item, index) => (mask & (1 << index)) !== 0
       );
-      const lines: SalesModularLineSelection[] = [
-        {
-          itemKey: 'clinical_core',
-          tierId: customTier.id,
-          quantity: economySimulatorPatients,
-          itemDiscountBasisPoints: 0,
-          customRecurringAmountCents: null,
-          customOneTimeAmountCents: null,
-          pricingEditMode: 'per_patient',
-          proposedPricePerPatientCents:
-            currentCorePricePerPatientCents
-        },
-        ...selectedModules.map((item) => ({
-          ...selectionForItem(
-            item,
-            economySimulatorPatients,
-            customTier,
-            true
-          ),
-          proposedPricePerPatientCents:
-            input.lines.find((line) => line.itemKey === item.itemKey)
-              ?.proposedPricePerPatientCents ??
-            suggestedPrices.get(item.itemKey) ??
-            null
-        }))
-      ];
       try {
         const result = calculateSalesModularProposal(
           {
             ...input,
+            platformFoundationPricingMode: 'automatic_target',
+            platformFoundationMonthlyAmountCents: null,
             patientQuantity: economySimulatorPatients,
             expectedPatientQuantity12Months: economySimulatorPatients,
             basePackageTierId: customTier.id,
@@ -855,7 +806,7 @@ export const SalesModularProposalBuilder = ({
             customBasePackageLimit: baseLimit,
             customCapacityBlocks: null,
             customCapacitySelectionMode: 'automatic',
-            lines,
+            lines: selectedModules.map(selectionForSimulator),
             globalDiscountBasisPoints: 0,
             discountDurationMonths: 0,
             usageProfile: 'intensive',
@@ -866,12 +817,9 @@ export const SalesModularProposalBuilder = ({
         );
         rows.push({
           key: String(mask),
-          label:
-            selectedModules.length === 0
-              ? 'Apenas Verto Clínica'
-              : `Verto + ${selectedModules
-                  .map((item) => item.publicName)
-                  .join(' + ')}`,
+          label: `${SALES_PLATFORM_FOUNDATION_PUBLIC_NAME} + ${selectedModules
+            .map((item) => item.publicName)
+            .join(' + ')}`,
           revenueCents: result.postPromotion.recurringRevenueCents,
           costCents: result.postPromotion.totalEstimatedCostCents,
           marginBasisPoints: result.postPromotion.ebitdaMarginBasisPoints,
@@ -1159,7 +1107,18 @@ export const SalesModularProposalBuilder = ({
     if (!input || !catalog) return;
     const exists = input.lines.some((line) => line.itemKey === item.itemKey);
     if (exists) {
-      if (item.isRequired) return;
+      if (item.isRequired && item.itemKey !== 'clinical_core') return;
+      const remainingRecurringItems = input.lines.filter((line) => {
+        if (line.itemKey === item.itemKey) return false;
+        const catalogItem = catalog.items.find(
+          (candidate) => candidate.itemKey === line.itemKey
+        );
+        return catalogItem?.billingInterval !== 'one_time';
+      });
+      if (remainingRecurringItems.length < 1) {
+        setError('Selecione pelo menos um módulo recorrente além da Fundação Verto.');
+        return;
+      }
       updateInput({
         lines: input.lines.filter((line) => line.itemKey !== item.itemKey)
       });
@@ -1354,6 +1313,10 @@ export const SalesModularProposalBuilder = ({
     setInput({
       ...snapshotInput,
       commercialPricingMode: 'manual_module_prices',
+      // Duplicar um cenário histórico é a ação explícita que o moderniza para
+      // a Fundação automática; o snapshot original permanece inalterado.
+      platformFoundationPricingMode: 'automatic_target',
+      platformFoundationMonthlyAmountCents: null,
       usageProfile: 'intensive',
       driverOverrides: {},
       basePackageSelectionMode: inferredMode,
@@ -1602,8 +1565,10 @@ export const SalesModularProposalBuilder = ({
   );
   const customPerPatientPricing =
     input?.commercialPricingMode === 'manual_module_prices' &&
-    ['per_patient', 'monthly_total'].includes(
-      String(coreSelection?.pricingEditMode || '')
+    input.lines.some((line) =>
+      ['per_patient', 'monthly_total'].includes(
+        String(line.pricingEditMode || '')
+      )
     );
   const commercialPricingMissing =
     preview?.commercialPricing.enabled === true &&
@@ -1692,10 +1657,12 @@ export const SalesModularProposalBuilder = ({
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h2 className="text-base font-semibold text-slate-900">
-                      Clínica e pacote-base
+                      Fundação, capacidade e módulo clínico
                     </h2>
                     <p className="mt-1 text-sm font-normal text-slate-500">
-                      A menor faixa compatível é recomendada automaticamente.
+                      A Fundação Verto entra uma única vez. A faixa abaixo
+                      dimensiona pacientes e armazenamento, mesmo quando o
+                      cliente contrata somente outro módulo.
                     </p>
                   </div>
                   <button
@@ -1705,6 +1672,114 @@ export const SalesModularProposalBuilder = ({
                   >
                     <Settings2 size={16} /> Premissas financeiras
                   </button>
+                </div>
+                <div className="mt-4 rounded-2xl border border-violet-200 bg-violet-50/70 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-violet-950">
+                        {SALES_PLATFORM_FOUNDATION_PUBLIC_NAME}
+                      </p>
+                      <p className="mt-1 text-xs font-normal leading-5 text-violet-800">
+                        Base segura, infraestrutura, auditoria, operação e
+                        suporte-base. O modo automático completa o valor
+                        necessário para a meta EBITDA do conjunto, sem repetir
+                        os custos dentro de cada módulo.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-violet-200 bg-white px-3 py-1 text-xs font-semibold text-violet-800">
+                      {currency(preview?.platformFoundation.recurringAmountCents)}
+                      /mês
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="text-sm font-medium text-slate-700">
+                      Formação do valor da fundação
+                      <select
+                        value={
+                          input.platformFoundationPricingMode === 'manual'
+                            ? 'manual'
+                            : 'automatic_target'
+                        }
+                        onChange={(event) =>
+                          updateInput({
+                            platformFoundationPricingMode:
+                              event.target.value === 'manual'
+                                ? 'manual'
+                                : 'automatic_target',
+                            platformFoundationMonthlyAmountCents:
+                              event.target.value === 'manual'
+                                ? preview?.platformFoundation
+                                    .recurringAmountCents ?? 0
+                                : null
+                          })
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                      >
+                        <option value="automatic_target">
+                          Automático para a meta EBITDA
+                        </option>
+                        <option value="manual">
+                          Valor comercial manual
+                        </option>
+                      </select>
+                    </label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Mensalidade da fundação
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        disabled={
+                          input.platformFoundationPricingMode !== 'manual'
+                        }
+                        value={
+                          input.platformFoundationPricingMode === 'manual'
+                            ? Number(
+                                input.platformFoundationMonthlyAmountCents || 0
+                              ) / 100
+                            : Number(
+                                preview?.platformFoundation
+                                  .recurringAmountCents || 0
+                              ) / 100
+                        }
+                        onChange={(event) =>
+                          updateInput({
+                            platformFoundationMonthlyAmountCents: Math.max(
+                              0,
+                              Math.round(Number(event.target.value || 0) * 100)
+                            )
+                          })
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none disabled:bg-violet-100/60 disabled:text-violet-700 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-3 grid gap-2 text-xs text-violet-900 sm:grid-cols-3">
+                    <span>
+                      Valor recomendado:{' '}
+                      <strong>
+                        {currency(
+                          preview?.platformFoundation
+                            .recommendedRecurringAmountCents
+                        )}
+                      </strong>
+                    </span>
+                    <span>
+                      Custos compartilhados:{' '}
+                      <strong>
+                        {currency(preview?.platformFoundation.sharedCostCents)}
+                      </strong>
+                    </span>
+                    <span>
+                      Receita dos módulos:{' '}
+                      <strong>
+                        {currency(
+                          preview?.platformFoundation
+                            .moduleRecurringRevenueCents
+                        )}
+                      </strong>
+                    </span>
+                  </div>
                 </div>
                 <div className="mt-4 grid gap-4 sm:grid-cols-3">
                   <label className="text-sm font-medium text-slate-700">
@@ -1739,7 +1814,7 @@ export const SalesModularProposalBuilder = ({
                     />
                   </label>
                   <label className="text-sm font-medium text-slate-700">
-                    Pacote Verto Clínica
+                    Faixa técnica de capacidade
                     <span className="relative mt-1 block">
                       <select
                         value={input.basePackageTierId}
@@ -1785,7 +1860,31 @@ export const SalesModularProposalBuilder = ({
                     </span>
                   ) : null}
                 </div>
-                {selectedBaseTier &&
+                {coreItem ? (
+                  <div className="mt-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">
+                        Verto Clínica + ABA
+                      </p>
+                      <p className="mt-1 text-xs font-normal text-slate-500">
+                        Módulo clínico opcional. A Fundação Verto e a faixa de
+                        capacidade permanecem mesmo quando ele não é contratado.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleItem(coreItem)}
+                      className={`min-h-10 rounded-xl border px-4 text-sm font-semibold transition ${
+                        coreSelection
+                          ? 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50'
+                          : 'border-violet-200 bg-violet-600 text-white hover:bg-violet-700'
+                      }`}
+                    >
+                      {coreSelection ? 'Remover módulo clínico' : 'Incluir módulo clínico'}
+                    </button>
+                  </div>
+                ) : null}
+                {coreSelection && selectedBaseTier &&
                 !selectedBaseTier.isCustom &&
                 selectedBaseTier.maximumQuantity !== null ? (
                   <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50/40 p-4">
@@ -1851,8 +1950,10 @@ export const SalesModularProposalBuilder = ({
                 (selectedBaseTier.isCustom ||
                   selectedBaseTier.maximumQuantity === null) ? (
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                    <label className="text-sm font-medium text-slate-700">
-                      Limite contratado do pacote-base
+                    <label className={`text-sm font-medium text-slate-700 ${
+                      coreSelection ? '' : 'sm:col-span-2'
+                    }`}>
+                      Limite técnico de capacidade
                       <input
                         type="number"
                         min={1}
@@ -1882,17 +1983,18 @@ export const SalesModularProposalBuilder = ({
                         className="mt-1 block font-normal leading-5 text-slate-500"
                       >
                         {hasVersionedCustomCapacityPolicy
-                          ? 'Capacidade incluída no preço-base. Blocos cobrem a demanda acima deste limite.'
-                          : 'Capacidade contratada congelada nesta proposta. Este catálogo não possui blocos versionados.'}
+                          ? 'Capacidade incluída na composição. Blocos cobrem a demanda acima deste limite.'
+                          : 'Capacidade técnica congelada nesta proposta. Este catálogo não possui blocos versionados.'}
                       </span>
                     </label>
+                    {coreSelection ? (
                     <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-sm font-medium text-slate-800">
-                          Preço comercial do pacote-base
+                          Preço comercial do Verto Clínica + ABA
                         </p>
                         <select
-                          aria-label="Modo de edição do preço do pacote-base"
+                          aria-label="Modo de edição do preço do módulo clínico"
                           value={coreSelection?.pricingEditMode || 'per_patient'}
                           onChange={(event) => {
                             const pricingEditMode = event.target.value as
@@ -2004,7 +2106,8 @@ export const SalesModularProposalBuilder = ({
                         ) : null}
                       </div>
                     </div>
-                    {coreResult ? (
+                    ) : null}
+                    {coreSelection && coreResult ? (
                       <dl className="grid gap-px overflow-hidden rounded-xl border border-slate-200 bg-slate-200 text-xs sm:col-span-2 sm:grid-cols-3">
                         {[
                           [
@@ -2029,7 +2132,7 @@ export const SalesModularProposalBuilder = ({
                             )
                           ],
                           [
-                            'Piso por paciente',
+                            'Referência por paciente',
                             currency(
                               coreResult.commercialPricing
                                 .minimumPricePerPatientCents
@@ -2079,7 +2182,7 @@ export const SalesModularProposalBuilder = ({
                             {customPerPatientPricing
                               ? 'O preço é derivado da soma dos preços por paciente dos módulos contratados.'
                               : `Preço versionado: ${currency(catalog.customCapacityPolicy.blockPriceCents)}/mês.`}{' '}
-                            O acesso clínico nunca é bloqueado.
+                            A capacidade adicional não bloqueia o acesso aos módulos contratados.
                           </p>
                         </div>
                         <label className="text-xs font-medium text-slate-700">
@@ -2106,7 +2209,7 @@ export const SalesModularProposalBuilder = ({
                           {[
                             ['Limite-base', `${preview.basePackage.capacity.baseLimitPatients} pacientes`],
                             [
-                              'Preço-base',
+                              'Receita-base dos módulos',
                               `${currency(
                                 commercialPricingMissing
                                   ? null
@@ -2148,7 +2251,7 @@ export const SalesModularProposalBuilder = ({
                               )}/mês`
                             ],
                             [
-                              'Mensalidade consolidada nesta fase',
+                              'Receita dos módulos nesta fase',
                               `${currency(
                                 customPerPatientPricing
                                   ? currentCapacityBlockPhase
@@ -2304,7 +2407,7 @@ export const SalesModularProposalBuilder = ({
                     ) : (
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-normal leading-5 text-slate-600 sm:col-span-2">
                         O catálogo selecionado não possui política versionada de
-                        blocos. O limite e o preço personalizados continuam
+                        blocos. O limite técnico e os valores dos módulos continuam
                         válidos, sem acréscimo automático de capacidade.
                       </div>
                     )}
@@ -2314,7 +2417,7 @@ export const SalesModularProposalBuilder = ({
                 currentPackageDemand > selectedBaseTier.maximumQuantity ? (
                   <p className="mt-3 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
                     <AlertTriangle size={17} className="mt-0.5 shrink-0" />
-                    O pacote escolhido comporta até{' '}
+                    A faixa técnica escolhida comporta até{' '}
                     {selectedBaseTier.maximumQuantity} pacientes e não atende a
                     demanda informada.
                   </p>
@@ -2333,36 +2436,42 @@ export const SalesModularProposalBuilder = ({
                         : preview.basePackage.availableQuantity}
                     </span>
                     <span>
-                      Mensalidade do pacote:{' '}
+                      Fundação Verto:{' '}
                       {currency(
-                        preview.lines.find(
-                          (line) => line.itemKey === 'clinical_core'
-                        )?.grossRecurringRevenueCents
+                        preview.platformFoundation.recurringAmountCents
                       )}
+                    </span>
+                    <span>
+                      Módulos após benefícios:{' '}
+                      {currency(
+                        preview.platformFoundation.moduleRecurringRevenueCents
+                      )}
+                    </span>
+                    <span>
+                      Mensalidade inicial:{' '}
+                      {currency(preview.promotionalRecurringRevenueCents)}
+                    </span>
+                    <span>
+                      Mensalidade após benefícios:{' '}
+                      {currency(preview.postPromotionRecurringRevenueCents)}
                     </span>
                     {preview.basePackage.limitQuantity ? (
                       <span>
-                        Por paciente no limite:{' '}
+                        Valor consolidado por paciente no limite:{' '}
                         {currency(
                           Math.round(
-                            Number(
-                              preview.lines.find(
-                                (line) => line.itemKey === 'clinical_core'
-                              )?.grossRecurringRevenueCents || 0
-                            ) / preview.basePackage.limitQuantity
+                            preview.postPromotionRecurringRevenueCents /
+                              preview.basePackage.limitQuantity
                           )
                         )}
                       </span>
                     ) : null}
                     <span>
-                      Por paciente na utilização atual:{' '}
+                      Valor consolidado por paciente atual:{' '}
                       {currency(
                         Math.round(
-                          Number(
-                            preview.lines.find(
-                              (line) => line.itemKey === 'clinical_core'
-                            )?.grossRecurringRevenueCents || 0
-                          ) / input.patientQuantity
+                          preview.postPromotionRecurringRevenueCents /
+                            input.patientQuantity
                         )
                       )}
                     </span>
@@ -2373,49 +2482,24 @@ export const SalesModularProposalBuilder = ({
                       ) || 'personalizado'}{' '}
                       MB
                     </span>
-                    <span>
-                      GB incluídos:{' '}
-                      {preview.lines
-                        .find((line) => line.itemKey === 'clinical_core')
-                        ?.directCostBreakdown.includedStorageGb.toLocaleString(
-                          'pt-BR',
-                          { maximumFractionDigits: 3 }
-                        )}
-                    </span>
-                    <span>
-                      GB estimados em uso:{' '}
-                      {preview.lines
-                        .find((line) => line.itemKey === 'clinical_core')
-                        ?.directCostBreakdown.estimatedUsedStorageGb?.toLocaleString(
-                          'pt-BR',
-                          { maximumFractionDigits: 3 }
-                        ) || 'Dados insuficientes'}
-                    </span>
-                    <span>
-                      GB estimados de egress:{' '}
-                      {preview.lines
-                        .find((line) => line.itemKey === 'clinical_core')
-                        ?.directCostBreakdown.estimatedEgressGb?.toLocaleString(
-                          'pt-BR',
-                          { maximumFractionDigits: 3 }
-                        ) || 'Dados insuficientes'}
-                    </span>
-                    <span>
-                      Custo de armazenamento:{' '}
-                      {currency(
-                        preview.lines.find(
-                          (line) => line.itemKey === 'clinical_core'
-                        )?.directCostBreakdown.storageCostCents
-                      )}
-                    </span>
-                    <span>
-                      Custo de egress:{' '}
-                      {currency(
-                        preview.lines.find(
-                          (line) => line.itemKey === 'clinical_core'
-                        )?.directCostBreakdown.egressCostCents
-                      )}
-                    </span>
+                    {coreResult ? (
+                      <>
+                        <span>
+                          GB estimados em uso clínico:{' '}
+                          {coreResult.directCostBreakdown.estimatedUsedStorageGb?.toLocaleString(
+                            'pt-BR',
+                            { maximumFractionDigits: 3 }
+                          ) || 'Dados insuficientes'}
+                        </span>
+                        <span>
+                          GB estimados de egress clínico:{' '}
+                          {coreResult.directCostBreakdown.estimatedEgressGb?.toLocaleString(
+                            'pt-BR',
+                            { maximumFractionDigits: 3 }
+                          ) || 'Dados insuficientes'}
+                        </span>
+                      </>
+                    ) : null}
                     <span>
                       Crescimento previsto:{' '}
                       {input.expectedPatientQuantity12Months.toLocaleString(
@@ -2432,7 +2516,9 @@ export const SalesModularProposalBuilder = ({
                   Módulos e adicionais
                 </h2>
                 <p className="mt-1 text-sm font-normal text-slate-500">
-                  A estrutura clínica e ABA completa já faz parte do pacote-base.
+                  Escolha apenas os módulos necessários. A Fundação Verto entra
+                  uma única vez e o módulo clínico também pode ser contratado ou
+                  removido separadamente.
                 </p>
                 <div className="mt-4 space-y-3">
                   {catalog.items
@@ -2473,7 +2559,7 @@ export const SalesModularProposalBuilder = ({
                             role="checkbox"
                             aria-checked={enabled}
                             aria-label={`${enabled ? 'Remover' : 'Adicionar'} ${item.publicName}`}
-                            disabled={item.isRequired}
+                            disabled={item.isRequired && item.itemKey !== 'clinical_core'}
                             onClick={() => toggleItem(item)}
                             className={`mt-0.5 flex min-h-10 min-w-10 items-center justify-center rounded-xl border ${
                               enabled
@@ -2487,9 +2573,13 @@ export const SalesModularProposalBuilder = ({
                             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                               <p className="text-sm font-medium text-slate-900">
                                 {item.publicName}
-                                {item.isRequired ? (
+                                {item.isRequired && item.itemKey !== 'clinical_core' ? (
                                   <span className="ml-2 text-xs font-normal text-violet-700">
                                     incluído obrigatoriamente
+                                  </span>
+                                ) : item.itemKey === 'clinical_core' ? (
+                                  <span className="ml-2 text-xs font-normal text-slate-500">
+                                    opcional
                                   </span>
                                 ) : null}
                               </p>
@@ -2749,7 +2839,7 @@ export const SalesModularProposalBuilder = ({
                                           )
                                         ],
                                         [
-                                          'Piso por paciente',
+                                          'Referência por paciente',
                                           currency(
                                             resultLine?.commercialPricing
                                               .minimumPricePerPatientCents
@@ -3458,8 +3548,8 @@ export const SalesModularProposalBuilder = ({
                           Economia da clínica
                         </h2>
                         <p className="mt-1 max-w-2xl text-sm font-normal leading-6 text-slate-600">
-                          O Verto Clínica absorve os custos compartilhados uma
-                          única vez. Cada módulo mostra apenas seu custo e sua
+                          A Fundação Verto absorve os custos compartilhados e a tarifa
+                          fixa uma única vez. Cada módulo mostra apenas seu custo e sua
                           margem incremental.
                         </p>
                       </div>
@@ -3723,7 +3813,7 @@ export const SalesModularProposalBuilder = ({
                               <th className="px-3 py-2 font-medium">Blocos</th>
                               <th className="px-3 py-2 font-medium">Receita</th>
                               <th className="px-3 py-2 font-medium">
-                                Margem · piso{' '}
+                                Margem · referência{' '}
                                 {formatSalesBasisPointsPercent(
                                   preview.economics.policy
                                     .capacityMinimumIncrementalMarginBasisPoints

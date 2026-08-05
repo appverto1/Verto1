@@ -231,6 +231,8 @@ export const proposalInputFixture = (
   customLimit: number | null = null,
   customPriceCents: number | null = null
 ): SalesModularProposalInput => ({
+  platformFoundationPricingMode: 'manual',
+  platformFoundationMonthlyAmountCents: 0,
   patientQuantity: patients,
   expectedPatientQuantity12Months: patients,
   basePackageTierId: tierId,
