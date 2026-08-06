@@ -905,6 +905,8 @@ export default function App() {
       dataNascimento: resolvedBirthDate,
       genero: coalescePatientText(source?.gender, source?.genero, existing?.genero),
       convenioTipo: insuranceEligibility.convenioTipo,
+      convenioPayerId: insuranceEligibility.insurancePayerId,
+      convenio_payer_id: insuranceEligibility.insurancePayerId,
       convenioNome: insuranceEligibility.convenioNome,
       convenioCarteirinha: insuranceEligibility.convenioCarteirinha,
       convenioCarteirinhaValidade: insuranceEligibility.convenioCarteirinhaValidade,
@@ -914,6 +916,8 @@ export default function App() {
       convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao,
       convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs,
       insuranceType: insuranceEligibility.insuranceType,
+      insurancePayerId: insuranceEligibility.insurancePayerId,
+      insurance_payer_id: insuranceEligibility.insurancePayerId,
       insuranceName: insuranceEligibility.insuranceName,
       insuranceCardNumber: insuranceEligibility.insuranceCardNumber,
       cardNumber: insuranceEligibility.insuranceCardNumber,
@@ -5107,6 +5111,10 @@ export default function App() {
       age: data.anamnesisData?.idade || data.age || calculateAgeFromBirthDate(resolvedBirthDate) || 0,
       gender: data.gender || data.genero || null,
       insuranceType: data.insuranceType || data.convenioTipo || 'particular',
+      insurancePayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || null,
+      insurance_payer_id: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || null,
+      convenioPayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || null,
+      convenio_payer_id: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || null,
       insuranceName: data.insuranceName || data.convenioNome || null,
       cardNumber: data.cardNumber || data.convenioCarteirinha || null,
       insuranceCardValidUntil: data.insuranceCardValidUntil || data.insurance_card_valid_until || data.convenioCarteirinhaValidade || null,
@@ -5196,6 +5204,9 @@ export default function App() {
           birth_date: resolvedBirthDate,
           gender: data.gender || data.genero || '',
           insuranceType: data.insuranceType || data.convenioTipo || 'particular',
+          insurancePayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || '',
+          insurance_payer_id: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || '',
+          convenioPayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || '',
           insuranceName: data.insuranceName || data.convenioNome || '',
           insuranceCardNumber: data.cardNumber || data.convenioCarteirinha || '',
           group: data.group || data.grupo || '',
@@ -5277,6 +5288,9 @@ export default function App() {
       panelType: resolvedProfileType,
       profileType: resolvedProfileType,
       insuranceType: data.insuranceType || data.convenioTipo || 'particular',
+      insurancePayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || null,
+      insurance_payer_id: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || null,
+      convenioPayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || null,
       insuranceName: data.insuranceName || data.convenioNome || '',
       insuranceCardNumber: data.cardNumber || data.convenioCarteirinha || '',
       group: data.group || data.grupo || '',
@@ -5507,6 +5521,10 @@ export default function App() {
     const updatedInsuranceEligibility = normalizePatientInsuranceEligibility(mergedIdentityPatient, { useResponsibleFallback: true });
     const hasInsuranceEligibilityPatch = [
       'insuranceType',
+      'insurancePayerId',
+      'insurance_payer_id',
+      'convenioPayerId',
+      'convenio_payer_id',
       'insuranceName',
       'insuranceCardNumber',
       'insuranceCardValidUntil',
@@ -5565,6 +5583,10 @@ export default function App() {
           ...(hasInsuranceEligibilityPatch
             ? {
                 insuranceType: updatedInsuranceEligibility.insuranceType,
+                insurancePayerId: updatedInsuranceEligibility.insurancePayerId,
+                insurance_payer_id: updatedInsuranceEligibility.insurancePayerId,
+                convenioPayerId: updatedInsuranceEligibility.insurancePayerId,
+                convenio_payer_id: updatedInsuranceEligibility.insurancePayerId,
                 insuranceName: updatedInsuranceEligibility.insuranceName,
                 cardNumber: updatedInsuranceEligibility.insuranceCardNumber,
                 insuranceCardNumber: updatedInsuranceEligibility.insuranceCardNumber,
@@ -5643,6 +5665,21 @@ export default function App() {
           panelType: updatedProfileType,
           profileType: updatedProfileType,
           insuranceType: updatedData.insuranceType || updatedData.convenioTipo,
+          insurancePayerId:
+            updatedData.insurancePayerId ??
+            updatedData.insurance_payer_id ??
+            updatedData.convenioPayerId ??
+            updatedData.convenio_payer_id,
+          insurance_payer_id:
+            updatedData.insurancePayerId ??
+            updatedData.insurance_payer_id ??
+            updatedData.convenioPayerId ??
+            updatedData.convenio_payer_id,
+          convenioPayerId:
+            updatedData.insurancePayerId ??
+            updatedData.insurance_payer_id ??
+            updatedData.convenioPayerId ??
+            updatedData.convenio_payer_id,
           insuranceName: updatedData.insuranceName || updatedData.convenioNome,
           insuranceCardNumber: updatedData.cardNumber || updatedData.convenioCarteirinha,
           insuranceCardValidUntil: updatedData.insuranceCardValidUntil || updatedData.insurance_card_valid_until || updatedData.convenioCarteirinhaValidade,
@@ -5729,6 +5766,10 @@ export default function App() {
           ...(updatedData?.billingMethod !== undefined && { billingMethod: updatedData.billingMethod || null }),
           ...(hasInsuranceEligibilityPatch && {
             insuranceType: updatedInsuranceEligibility.insuranceType,
+            insurancePayerId: updatedInsuranceEligibility.insurancePayerId,
+            insurance_payer_id: updatedInsuranceEligibility.insurancePayerId,
+            convenioPayerId: updatedInsuranceEligibility.insurancePayerId,
+            convenio_payer_id: updatedInsuranceEligibility.insurancePayerId,
             insuranceName: updatedInsuranceEligibility.insuranceName,
             insuranceCardNumber: updatedInsuranceEligibility.insuranceCardNumber,
             cardNumber: updatedInsuranceEligibility.insuranceCardNumber,
@@ -5843,6 +5884,21 @@ export default function App() {
     );
     let effectivePayerId = String(sess.payerId || sess.payer_id || '').trim();
     let effectivePayerName = String(sess.payerName || sess.payer_name_snapshot || '').trim();
+    const patientInsuranceEligibility = normalizePatientInsuranceEligibility(patientForSession || {});
+    const canonicalPatientPayerId = String(
+      patientInsuranceEligibility.insurancePayerId ||
+        patientInsuranceEligibility.convenioPayerId ||
+        (patientForSession as any)?.insurance_payer_id ||
+        (patientForSession as any)?.insurancePayerId ||
+        '',
+    ).trim();
+    if (!effectivePayerId && canonicalPatientPayerId) {
+      effectivePayerId = canonicalPatientPayerId;
+      effectivePayerName =
+        effectivePayerName ||
+        String(patientInsuranceEligibility.insuranceName || '').trim();
+      financialContextType = 'INSURANCE';
+    }
     const patientFinancialPlans = Array.isArray(patientForSession?.financialPlans)
       ? patientForSession.financialPlans
       : Array.isArray((patientForSession as any)?.financial_plans)
@@ -5895,7 +5951,6 @@ export default function App() {
     }
     if (!financialContextType && effectivePayerId) financialContextType = 'INSURANCE';
     const usesInsuranceContext = financialContextType.toUpperCase() === 'INSURANCE';
-    const patientInsuranceEligibility = normalizePatientInsuranceEligibility(patientForSession || {});
     const effectiveInsurancePlan = patientInsurancePlans.find((plan: any) => {
       const planPayerId = String(plan?.payerId || plan?.payer_id || '').trim();
       const planPayerName = String(plan?.payerNameSnapshot || plan?.payer_name_snapshot || plan?.insuranceName || plan?.insurance_name || '').trim();

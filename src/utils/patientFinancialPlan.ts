@@ -312,6 +312,12 @@ export const normalizePatientFinancialPlans = (plans: any, fallback: any = {}) =
       amount: legacyAmount,
       dueDay: fallback.billingDueDay || fallback.billing_due_day || '',
       paymentMethod: fallback.billingMethod || fallback.billing_method || '',
+      payerId:
+        fallback.insurancePayerId ||
+        fallback.insurance_payer_id ||
+        fallback.convenioPayerId ||
+        fallback.convenio_payer_id ||
+        '',
       payerNameSnapshot: legacyInsuranceName,
       insuranceName: legacyInsuranceName,
       insurancePlanName: fallback.convenioPlanoCategoria || fallback.insurancePlanCategory || fallback.insurance_plan_category || '',

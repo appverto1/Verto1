@@ -6368,6 +6368,7 @@ const PATIENT_MUTATION_SELECT = [
   'patient_profile_type',
   'panel_type',
   'profile_type',
+  'insurance_payer_id',
   'insurance_type',
   'insurance_name',
   'insurance_card_number',
@@ -15895,6 +15896,134 @@ function buildPatientProfileTypeFields(body: any) {
   };
 }
 
+function normalizePatientInsuranceTypeForPersistence(value: any) {
+  const normalized = sanitizeString(value, 60)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+  if (normalized === 'convenio' || normalized === 'insurance') return 'convenio';
+  if (normalized === 'particular' || normalized === 'private') return 'particular';
+  return normalized || 'particular';
+}
+
+function readPatientInsurancePayerId(body: any): { provided: boolean; value: string | null; invalid: boolean } {
+  const keys = [
+    'insurancePayerId',
+    'insurance_payer_id',
+    'convenioPayerId',
+    'convenio_payer_id',
+  ];
+  const providedKey = keys.find((key) => Object.prototype.hasOwnProperty.call(body || {}, key));
+  if (!providedKey) return { provided: false, value: null, invalid: false };
+  const raw = body?.[providedKey];
+  if (raw === null || raw === undefined || String(raw).trim() === '') {
+    return { provided: true, value: null, invalid: false };
+  }
+  const value = sanitizeString(raw, 120);
+  return { provided: true, value: isUuid(value) ? value : null, invalid: !isUuid(value) };
+}
+
+function normalizePayerNameForPatientLink(value: any) {
+  return sanitizeString(value, 180)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function resolvePatientInsurancePayerSelection(params: {
+  clinicId: string;
+  body: any;
+  requireSelection: boolean;
+  allowInactivePayerId?: string | null;
+}) {
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const body = params.body || {};
+  const insuranceType = normalizePatientInsuranceTypeForPersistence(
+    body?.insuranceType || body?.insurance_type || body?.convenioTipo,
+  );
+  if (insuranceType !== 'convenio') {
+    return { ok: true as const, payerId: null, payerName: null, insuranceType };
+  }
+  if (!isUuid(clinicId)) {
+    return { ok: false as const, status: 400, error: 'Clínica inválida para vincular o convênio.' };
+  }
+
+  const requestedPayer = readPatientInsurancePayerId(body);
+  if (requestedPayer.invalid) {
+    return { ok: false as const, status: 422, error: 'Selecione um convênio válido cadastrado pela clínica.' };
+  }
+
+  if (requestedPayer.value) {
+    const { data, error } = await supabase
+      .from('clinic_payers')
+      .select('id,name,payer_type,status,organization_id')
+      .eq('organization_id', clinicId)
+      .eq('id', requestedPayer.value)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    const status = sanitizeString(data?.status, 40).toUpperCase();
+    const payerType = sanitizeString(data?.payer_type, 40).toUpperCase();
+    const allowedHistoricalInactiveId = sanitizeString(params.allowInactivePayerId, 120);
+    const preservesHistoricalInactiveLink =
+      status === 'INACTIVE' &&
+      allowedHistoricalInactiveId &&
+      sanitizeString(data?.id, 120) === allowedHistoricalInactiveId;
+    if (
+      !data?.id ||
+      payerType !== 'INSURANCE' ||
+      (status === 'INACTIVE' && !preservesHistoricalInactiveLink)
+    ) {
+      return { ok: false as const, status: 422, error: 'O convênio selecionado não está ativo nesta clínica.' };
+    }
+    return {
+      ok: true as const,
+      payerId: sanitizeString(data.id, 120),
+      payerName: sanitizeString(data.name, 180),
+      insuranceType,
+    };
+  }
+
+  const payerName = sanitizeString(
+    body?.insuranceName || body?.insurance_name || body?.convenioNome,
+    180,
+  );
+  const normalizedName = normalizePayerNameForPatientLink(payerName);
+  if (normalizedName) {
+    const { data, error } = await supabase
+      .from('clinic_payers')
+      .select('id,name,payer_type,status,organization_id')
+      .eq('organization_id', clinicId)
+      .eq('payer_type', 'INSURANCE')
+      .in('status', ['ACTIVE', 'active', 'Ativo', 'ativo'])
+      .ilike('name', payerName)
+      .limit(10);
+    if (error) throw error;
+    const matches = (Array.isArray(data) ? data : []).filter(
+      (row: any) => normalizePayerNameForPatientLink(row?.name) === normalizedName,
+    );
+    if (matches.length === 1) {
+      return {
+        ok: true as const,
+        payerId: sanitizeString(matches[0]?.id, 120),
+        payerName: sanitizeString(matches[0]?.name, 180),
+        insuranceType,
+      };
+    }
+    if (matches.length > 1) {
+      return { ok: false as const, status: 409, error: 'Há mais de um convênio com esse nome. Selecione o cadastro correto.' };
+    }
+  }
+
+  if (params.requireSelection) {
+    return { ok: false as const, status: 422, error: 'Selecione um convênio ativo cadastrado pela clínica.' };
+  }
+  return { ok: true as const, payerId: null, payerName: payerName || null, insuranceType };
+}
+
 function buildPatientIdentityPersistenceFields(body: any) {
   const address = body?.address && typeof body.address === 'object' ? body.address : {};
   const guardian = body?.guardian && typeof body.guardian === 'object' ? body.guardian : {};
@@ -15945,6 +16074,11 @@ function buildPatientIdentityPersistenceFields(body: any) {
     social_name: sanitizeString(body?.socialName || body?.social_name || body?.nomeSocial, 160),
     birth_date: sanitizeIsoDateOnly(body?.birthDate || body?.birth_date || body?.dataNascimento),
     gender: sanitizeString(body?.gender || body?.genero, 60),
+    insurance_payer_id: (() => {
+      const payer = readPatientInsurancePayerId(body);
+      if (!payer.provided) return undefined;
+      return payer.value;
+    })(),
     insurance_type: sanitizeString(body?.insuranceType || body?.insurance_type || body?.convenioTipo, 60),
     insurance_name: sanitizeString(body?.insuranceName || body?.insurance_name || body?.convenioNome, 160),
     insurance_card_number: sanitizeString(body?.insuranceCardNumber || body?.insurance_card_number || body?.cardNumber || body?.convenioCarteirinha, 120),
@@ -16004,6 +16138,16 @@ function normalizePatientInsuranceEligibilityPayload(input: any) {
     anamnese?.insuranceType,
     anamnese?.convenioTipo,
   ));
+  const insurancePayerId = firstText(
+    payload?.insurancePayerId,
+    payload?.insurance_payer_id,
+    payload?.convenioPayerId,
+    payload?.convenio_payer_id,
+    anamnese?.insurancePayerId,
+    anamnese?.insurance_payer_id,
+    anamnese?.convenioPayerId,
+    anamnese?.convenio_payer_id,
+  );
   const insuranceName = firstText(payload?.insuranceName, payload?.convenioNome, payload?.insurance_name, anamnese?.insuranceName, anamnese?.convenioNome);
   const insuranceCardNumber = firstText(payload?.insuranceCardNumber, payload?.convenioCarteirinha, payload?.cardNumber, payload?.insurance_card_number, anamnese?.insuranceCardNumber, anamnese?.convenioCarteirinha);
   const insuranceCardValidUntil = sanitizeIsoDateOnly(firstText(payload?.insuranceCardValidUntil, payload?.convenioCarteirinhaValidade, payload?.insurance_card_valid_until, anamnese?.insuranceCardValidUntil, anamnese?.convenioCarteirinhaValidade)) || '';
@@ -16014,6 +16158,8 @@ function normalizePatientInsuranceEligibilityPayload(input: any) {
   const insuranceEligibilityNotes = sanitizeTextField(firstText(payload?.insuranceEligibilityNotes, payload?.convenioElegibilidadeObs, payload?.eligibilityNotes, payload?.eligibility_notes, anamnese?.insuranceEligibilityNotes, anamnese?.convenioElegibilidadeObs), 1000);
 
   const mirrored = cleanObject({
+    insurancePayerId,
+    insurance_payer_id: insurancePayerId,
     insuranceType,
     insuranceName,
     insuranceCardNumber,
@@ -16025,6 +16171,8 @@ function normalizePatientInsuranceEligibilityPayload(input: any) {
     insuranceHolderRelationship,
     insuranceEligibilityNotes,
     eligibilityNotes: insuranceEligibilityNotes,
+    convenioPayerId: insurancePayerId,
+    convenio_payer_id: insurancePayerId,
     convenioTipo: insuranceType,
     convenioNome: insuranceName,
     convenioCarteirinha: insuranceCardNumber,
@@ -33483,7 +33631,7 @@ async function startServer() {
   app.post('/api/patients', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
     try {
       const safeName = sanitizeString(req.body?.name || req.body?.nome, 160);
-      const safeClinicId = sanitizeString(req.session.user?.clinicId || req.session.user?.id, 100);
+      const safeClinicId = sanitizeString(currentClinicId(req.session.user), 100);
       const demoClinicState = await fetchClinicDemoState(safeClinicId);
       const safeTherapistId = sanitizeString(req.body?.therapist_id || req.session.user?.id, 100);
       const rawEmail = req.body?.email;
@@ -33510,6 +33658,36 @@ async function startServer() {
         ? PATIENT_STATUS_ACTIVE
         : PATIENT_STATUS_PENDING_ANAMNESIS;
       const requestedPatientStatus = sanitizeString(req.body?.status, 40);
+      const payerSelection = await resolvePatientInsurancePayerSelection({
+        clinicId: safeClinicId,
+        body: req.body || {},
+        requireSelection:
+          normalizePatientInsuranceTypeForPersistence(
+            req.body?.insuranceType || req.body?.insurance_type || req.body?.convenioTipo,
+          ) === 'convenio',
+      });
+      if (!payerSelection.ok) {
+        return res.status(payerSelection.status).json({
+          success: false,
+          error: payerSelection.error,
+          code: 'PATIENT_INSURANCE_PAYER_INVALID',
+        });
+      }
+      const identityPayload = {
+        ...(req.body || {}),
+        insurancePayerId: payerSelection.payerId,
+        insurance_payer_id: payerSelection.payerId,
+        convenioPayerId: payerSelection.payerId,
+        convenio_payer_id: payerSelection.payerId,
+        insuranceType: payerSelection.insuranceType,
+        convenioTipo: payerSelection.insuranceType,
+        ...(payerSelection.payerName
+          ? {
+              insuranceName: payerSelection.payerName,
+              convenioNome: payerSelection.payerName,
+            }
+          : {}),
+      };
       const safeBody = cleanObject({
         id: isUuid(sanitizeString(req.body?.id, 120)) ? sanitizeString(req.body?.id, 120) : undefined,
         name: safeName,
@@ -33518,7 +33696,7 @@ async function startServer() {
         phone: safePhone || sanitizePhone(rawPhone),
         age: asSafeNumber(req.body?.age, 0, 130),
         diagnosis: sanitizeString(req.body?.diagnosis, 2000),
-        ...buildPatientIdentityPersistenceFields(req.body),
+        ...buildPatientIdentityPersistenceFields(identityPayload),
         status: !anamnesisRequired ? (requestedPatientStatus || initialPatientStatus) : initialPatientStatus,
         onboarding_status: initialOnboardingStatus,
         anamnesis_required: anamnesisRequired,
@@ -34298,8 +34476,92 @@ async function startServer() {
         'profilePicture',
         'profile_picture',
         'profilePicturePath',
-        'profile_picture_path'
+        'profile_picture_path',
+        'insurancePayerId',
+        'insurance_payer_id',
+        'convenioPayerId',
+        'convenio_payer_id'
       ].some((key) => req.body?.[key] !== undefined);
+      const hasInsuranceCoveragePatch = [
+        'insuranceType',
+        'insurance_type',
+        'convenioTipo',
+        'insuranceName',
+        'insurance_name',
+        'convenioNome',
+        'insurancePayerId',
+        'insurance_payer_id',
+        'convenioPayerId',
+        'convenio_payer_id',
+      ].some((key) => Object.prototype.hasOwnProperty.call(req.body || {}, key));
+      let patientIdentityPayload = req.body || {};
+      if (hasInsuranceCoveragePatch) {
+        const targetClinicId = sanitizeString(
+          canChangeClinic && req.body?.clinic_id !== undefined
+            ? req.body.clinic_id
+            : scopedClinicId,
+          120,
+        );
+        let existingInsurancePayerId = '';
+        let currentInsuranceQuery = supabase
+          .from('patients')
+          .select('id,clinic_id,therapist_id,insurance_payer_id')
+          .eq('id', req.params.id)
+          .eq('is_active', true)
+          .is('deleted_at', null);
+        if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+          currentInsuranceQuery = currentInsuranceQuery.eq('clinic_id', scopedClinicId);
+        }
+        if (explicitDemoUser) {
+          currentInsuranceQuery = currentInsuranceQuery.eq('is_demo', true);
+        }
+        if (role === 'therapist') {
+          currentInsuranceQuery = currentInsuranceQuery.eq(
+            'therapist_id',
+            sanitizeString(req.session.user?.id, 120),
+          );
+        }
+        const { data: currentInsurancePatient, error: currentInsuranceError } =
+          await currentInsuranceQuery.maybeSingle();
+        if (currentInsuranceError && !extractMissingColumnName(currentInsuranceError)) {
+          throw currentInsuranceError;
+        }
+        existingInsurancePayerId = sanitizeString(
+          currentInsurancePatient?.insurance_payer_id,
+          120,
+        );
+        const payerSelection = await resolvePatientInsurancePayerSelection({
+          clinicId: targetClinicId,
+          body: req.body || {},
+          requireSelection:
+            normalizePatientInsuranceTypeForPersistence(
+              req.body?.insuranceType || req.body?.insurance_type || req.body?.convenioTipo,
+            ) === 'convenio',
+          allowInactivePayerId: existingInsurancePayerId || null,
+        });
+        if (!payerSelection.ok) {
+          return res.status(payerSelection.status).json({
+            success: false,
+            error: payerSelection.error,
+            code: 'PATIENT_INSURANCE_PAYER_INVALID',
+          });
+        }
+        patientIdentityPayload = {
+          ...(req.body || {}),
+          insurancePayerId: payerSelection.payerId,
+          insurance_payer_id: payerSelection.payerId,
+          convenioPayerId: payerSelection.payerId,
+          convenio_payer_id: payerSelection.payerId,
+          insuranceType: payerSelection.insuranceType,
+          convenioTipo: payerSelection.insuranceType,
+          ...(payerSelection.payerName
+            ? {
+                insuranceName: payerSelection.payerName,
+                convenioNome: payerSelection.payerName,
+              }
+            : {}),
+        };
+      }
       const updates = cleanObject({
         name: req.body?.name !== undefined && !preserveExistingFullName ? (requestedPatientName || undefined) : undefined,
         email: safeEmail,
@@ -34307,7 +34569,7 @@ async function startServer() {
         cpf: safeCpf !== undefined ? safeCpf : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
-        ...(hasIdentityPersistencePatch ? buildPatientIdentityPersistenceFields(req.body) : {}),
+        ...(hasIdentityPersistencePatch ? buildPatientIdentityPersistenceFields(patientIdentityPayload) : {}),
         profile_picture: safeProfilePicture !== undefined ? safeProfilePicture : undefined,
         profile_picture_path: safeProfilePicturePath !== undefined ? safeProfilePicturePath : undefined,
         therapist_id:
@@ -55955,6 +56217,40 @@ async function startServer() {
 
   app.post('/api/tiss/pre-guides/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleTissPreGuideRevalidation);
   app.post('/api/appointments/:appointmentId/tiss-pre-guide/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleTissPreGuideRevalidation);
+
+  app.get('/api/payer-options', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(organizationId)) {
+        return res.status(400).json({ success: false, error: 'Clínica inválida.' });
+      }
+      const limit = parseBoundedListLimit(req.query?.limit, 80, 100);
+      const { data, error } = await supabase
+        .from('clinic_payers')
+        .select('id,name,payer_type,status')
+        .eq('organization_id', organizationId)
+        .eq('payer_type', 'INSURANCE')
+        .in('status', ['ACTIVE', 'active', 'Ativo', 'ativo'])
+        .order('name', { ascending: true })
+        .limit(limit);
+      if (error) {
+        if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: [] });
+        throw error;
+      }
+      return res.json({
+        success: true,
+        data: (Array.isArray(data) ? data : []).map((payer: any) => ({
+          id: sanitizeString(payer?.id, 120),
+          name: sanitizeString(payer?.name, 180),
+          payerType: normalizePayerType(payer?.payer_type),
+          status: 'ACTIVE',
+        })),
+      });
+    } catch (error: any) {
+      console.warn('[PayerOptions] list failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar os convênios da clínica.' });
+    }
+  });
 
   app.get('/api/admin/payers', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {

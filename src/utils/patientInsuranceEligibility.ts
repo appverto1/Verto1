@@ -1,4 +1,5 @@
 export type PatientInsuranceEligibility = {
+  insurancePayerId: string;
   insuranceType: string;
   insuranceName: string;
   insuranceCardNumber: string;
@@ -8,6 +9,7 @@ export type PatientInsuranceEligibility = {
   insuranceHolderCpf: string;
   insuranceHolderRelationship: string;
   insuranceEligibilityNotes: string;
+  convenioPayerId: string;
   convenioTipo: string;
   convenioNome: string;
   convenioCarteirinha: string;
@@ -87,6 +89,29 @@ export function normalizePatientInsuranceEligibility(
     anamnesisData.insuranceType,
     anamnesisData.convenioTipo,
   ));
+
+  const insurancePayerId = firstText(
+    root.insurancePayerId,
+    root.insurance_payer_id,
+    root.convenioPayerId,
+    root.convenio_payer_id,
+    payload.insurancePayerId,
+    payload.insurance_payer_id,
+    payload.convenioPayerId,
+    payload.convenio_payer_id,
+    payloadAnamnese.insurancePayerId,
+    payloadAnamnese.insurance_payer_id,
+    payloadAnamnese.convenioPayerId,
+    payloadAnamnese.convenio_payer_id,
+    rootAnamnese.insurancePayerId,
+    rootAnamnese.insurance_payer_id,
+    rootAnamnese.convenioPayerId,
+    rootAnamnese.convenio_payer_id,
+    anamnesisData.insurancePayerId,
+    anamnesisData.insurance_payer_id,
+    anamnesisData.convenioPayerId,
+    anamnesisData.convenio_payer_id,
+  );
 
   const insuranceName = firstText(
     root.insuranceName,
@@ -264,6 +289,7 @@ export function normalizePatientInsuranceEligibility(
   );
 
   return {
+    insurancePayerId,
     insuranceType,
     insuranceName,
     insuranceCardNumber,
@@ -273,6 +299,7 @@ export function normalizePatientInsuranceEligibility(
     insuranceHolderCpf,
     insuranceHolderRelationship,
     insuranceEligibilityNotes,
+    convenioPayerId: insurancePayerId,
     convenioTipo: insuranceType,
     convenioNome: insuranceName,
     convenioCarteirinha: insuranceCardNumber,
@@ -293,6 +320,8 @@ export function mirrorPatientInsuranceEligibilityAliases<T extends Record<string
   const normalized = normalizePatientInsuranceEligibility(input, options);
   return {
     ...input,
+    insurancePayerId: normalized.insurancePayerId,
+    insurance_payer_id: normalized.insurancePayerId,
     insuranceType: normalized.insuranceType,
     insuranceName: normalized.insuranceName,
     insuranceCardNumber: normalized.insuranceCardNumber,
@@ -304,6 +333,8 @@ export function mirrorPatientInsuranceEligibilityAliases<T extends Record<string
     insuranceHolderRelationship: normalized.insuranceHolderRelationship,
     insuranceEligibilityNotes: normalized.insuranceEligibilityNotes,
     eligibilityNotes: normalized.insuranceEligibilityNotes,
+    convenioPayerId: normalized.convenioPayerId,
+    convenio_payer_id: normalized.convenioPayerId,
     convenioTipo: normalized.convenioTipo,
     convenioNome: normalized.convenioNome,
     convenioCarteirinha: normalized.convenioCarteirinha,

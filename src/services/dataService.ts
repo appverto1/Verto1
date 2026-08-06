@@ -2547,6 +2547,27 @@ export const dataService = {
     }
   },
 
+  async getPayerOptions(options: { limit?: number } = {}) {
+    const endpoint = endpointWithQuery('/api/payer-options', {
+      limit: normalizeListLimit(options.limit, 80, 100)
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getPayerOptions',
+        operation: 'list',
+        table: 'clinic_payers',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch {
+      return { success: false, data: [], error: 'Não foi possível carregar os convênios da clínica agora.' };
+    }
+  },
+
   async getPayers(options: { status?: string; limit?: number } = {}) {
     const endpoint = endpointWithQuery('/api/admin/payers', {
       status: options.status,

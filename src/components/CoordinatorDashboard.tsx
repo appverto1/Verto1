@@ -1409,6 +1409,10 @@ export function CoordinatorDashboard({
     quote: any | null;
   }>({ loading: false, error: "", quote: null });
   const [clinicPayers, setClinicPayers] = useState<any[]>([]);
+  const [clinicPayerOptionsState, setClinicPayerOptionsState] = useState<{
+    loading: boolean;
+    error: string;
+  }>({ loading: false, error: "" });
   const lastAutoPayerPatientKeyRef = useRef("");
   const sessionSubmitInFlightRef = useRef(false);
   const clinicSettingsSaveInFlightRef = useRef(false);
@@ -1933,6 +1937,7 @@ export function CoordinatorDashboard({
     dataNascimento: "",
     genero: "",
     convenioTipo: "particular",
+    convenioPayerId: "",
     convenioNome: "",
     convenioCarteirinha: "",
     convenioCarteirinhaValidade: "",
@@ -2015,37 +2020,44 @@ export function CoordinatorDashboard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const insuranceOptions = [
-    "Particular",
-    "Unimed",
-    "Amil",
-    "Bradesco Saúde",
-    "SulAmérica",
-    "Hapvida",
-    "NotreDame Intermédica",
-    "Care Plus",
-    "Omint",
-    "Porto Seguro Saúde",
-    "Golden Cross",
-    "Seguros Unimed",
-    "Samp",
-    "São Cristóvão Saúde",
-    "CASSI",
-    "Geap",
-    "IPSEMG",
-    "Cabesp",
-    "Afresp",
-    "Outro",
-  ];
-
   const normalizeLookupText = (value: any) =>
     normalizeUtf8Text(String(value || "")).trim().toLowerCase();
 
   const selectedPatientInsurancePayer = useMemo(() => {
+    const payerId = String(newPatientForm.convenioPayerId || "").trim();
     const payerName = normalizeLookupText(newPatientForm.convenioNome);
-    if (newPatientForm.convenioTipo !== "convenio" || !payerName) return null;
-    return clinicPayers.find((payer: any) => normalizeLookupText(payer?.name) === payerName) || null;
-  }, [clinicPayers, newPatientForm.convenioNome, newPatientForm.convenioTipo]);
+    if (newPatientForm.convenioTipo !== "convenio") return null;
+    if (payerId) {
+      const byId = clinicPayers.find((payer: any) => String(payer?.id || "") === payerId);
+      if (byId) return byId;
+      if (editingPatientId && payerName) {
+        return {
+          id: payerId,
+          name: String(newPatientForm.convenioNome || "").trim(),
+          payerType: "INSURANCE",
+          status: "INACTIVE",
+          historical: true,
+        };
+      }
+    }
+    if (!payerName) return null;
+    const matches = clinicPayers.filter(
+      (payer: any) => normalizeLookupText(payer?.name) === payerName,
+    );
+    return matches.length === 1 ? matches[0] : null;
+  }, [
+    clinicPayers,
+    editingPatientId,
+    newPatientForm.convenioNome,
+    newPatientForm.convenioPayerId,
+    newPatientForm.convenioTipo,
+  ]);
+
+  const selectedPatientInsurancePayerIsActive = Boolean(
+    selectedPatientInsurancePayer?.id &&
+      selectedPatientInsurancePayer?.historical !== true &&
+      String(selectedPatientInsurancePayer?.status || "ACTIVE").toUpperCase() !== "INACTIVE",
+  );
 
   const resolveFinancialPlanPayer = (plan: any) => {
     const payerId = String(plan?.payerId || plan?.payer_id || "").trim();
@@ -2055,7 +2067,10 @@ export function CoordinatorDashboard({
     }
     const payerName = normalizeLookupText(plan?.payerNameSnapshot || plan?.payer_name_snapshot || plan?.insuranceName || plan?.insurance_name || newPatientForm.convenioNome);
     if (!payerName) return null;
-    return clinicPayers.find((payer: any) => normalizeLookupText(payer?.name) === payerName) || null;
+    const payerMatches = clinicPayers.filter(
+      (payer: any) => normalizeLookupText(payer?.name) === payerName,
+    );
+    return payerMatches.length === 1 ? payerMatches[0] : null;
   };
 
   const patientAuthorizationBillingConfigurations = useMemo(() => {
@@ -2281,8 +2296,8 @@ export function CoordinatorDashboard({
       showToast("Salve o cadastro do paciente antes de criar uma autorização TISS.", "error");
       return;
     }
-    if (!selectedPatientInsurancePayer?.id) {
-      showToast("Configure o convênio do paciente antes de criar uma autorização TISS.", "error");
+    if (!selectedPatientInsurancePayerIsActive) {
+      showToast("Selecione um convênio ativo antes de criar uma autorização TISS.", "error");
       return;
     }
     if (patientAuthorizationBillingConfigurations.length === 0) {
@@ -2350,7 +2365,7 @@ export function CoordinatorDashboard({
     if (!editingPatientId || patientTissAuthorizationFeedback.type === "saving") return;
     const configuration = selectedPatientAuthorizationConfiguration;
     const quantity = Number(patientTissAuthorizationForm.authorizedQuantity || 0);
-    if (!selectedPatientInsurancePayer?.id || !configuration?.isOperational) {
+    if (!selectedPatientInsurancePayerIsActive || !configuration?.isOperational) {
       setPatientTissAuthorizationFeedback({ type: "error", message: "Selecione uma configuração ativa com De/Para e valor negociado." });
       return;
     }
@@ -2507,17 +2522,53 @@ export function CoordinatorDashboard({
   }, [activeTab, canAccessClinicFinance, isReceptionist]);
 
   useEffect(() => {
-    if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
-    if (clinicPayers.length > 0) return;
+    if (!isPatientRegistrationModalOpen || !canCreatePatients) return;
     let cancelled = false;
-    dataService.getPayers({ status: "ACTIVE", limit: 80 }).then((result: any) => {
+    setClinicPayerOptionsState({ loading: true, error: "" });
+    dataService.getPayerOptions({ limit: 80 }).then((result: any) => {
       if (cancelled) return;
-      if (result?.success) setClinicPayers(Array.isArray(result.data) ? result.data : []);
+      if (result?.success) {
+        setClinicPayers(Array.isArray(result.data) ? result.data : []);
+        setClinicPayerOptionsState({ loading: false, error: "" });
+        return;
+      }
+      setClinicPayerOptionsState({
+        loading: false,
+        error: String(result?.error || "Não foi possível carregar os convênios da clínica."),
+      });
     });
     return () => {
       cancelled = true;
     };
-  }, [canAccessClinicFinance, clinicPayers.length, isPatientRegistrationModalOpen]);
+  }, [canCreatePatients, isPatientRegistrationModalOpen]);
+
+  useEffect(() => {
+    if (
+      !isPatientRegistrationModalOpen ||
+      newPatientForm.convenioTipo !== "convenio" ||
+      String(newPatientForm.convenioPayerId || "").trim() ||
+      !String(newPatientForm.convenioNome || "").trim() ||
+      clinicPayers.length === 0
+    ) {
+      return;
+    }
+    const normalizedName = normalizeLookupText(newPatientForm.convenioNome);
+    const matches = clinicPayers.filter(
+      (payer: any) => normalizeLookupText(payer?.name) === normalizedName,
+    );
+    if (matches.length !== 1) return;
+    setNewPatientForm((prev: any) => ({
+      ...prev,
+      convenioPayerId: String(matches[0]?.id || ""),
+      convenioNome: String(matches[0]?.name || prev.convenioNome || ""),
+    }));
+  }, [
+    clinicPayers,
+    isPatientRegistrationModalOpen,
+    newPatientForm.convenioNome,
+    newPatientForm.convenioPayerId,
+    newPatientForm.convenioTipo,
+  ]);
 
   useEffect(() => {
     if (!["conference", "patientAuthorizations", "payers"].includes(activeTab) || isTherapist || clinicPayers.length > 0) return;
@@ -2532,12 +2583,17 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
-    if (!selectedPatientInsurancePayer?.id) {
+    if (!selectedPatientInsurancePayerIsActive) {
       setPatientTissAuthorizationCatalog({ services: [], codes: [], mappings: [], prices: [] });
       return;
     }
     void loadPatientTissAuthorizationCatalog(selectedPatientInsurancePayer.id);
-  }, [canAccessClinicFinance, isPatientRegistrationModalOpen, selectedPatientInsurancePayer?.id]);
+  }, [
+    canAccessClinicFinance,
+    isPatientRegistrationModalOpen,
+    selectedPatientInsurancePayer?.id,
+    selectedPatientInsurancePayerIsActive,
+  ]);
 
   useEffect(() => {
     if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
@@ -3515,6 +3571,14 @@ export function CoordinatorDashboard({
         patient?.convenioTipo ||
         patient?.anamnesisData?.convenioTipo,
     );
+    const insurancePayerId = String(
+      insuranceEligibility.insurancePayerId ||
+        insuranceEligibility.convenioPayerId ||
+        patient?.insurance_payer_id ||
+        patient?.insurancePayerId ||
+        patient?.convenioPayerId ||
+        "",
+    ).trim();
     const insuranceName = normalizeUtf8Text(
       String(
         patient?.insuranceName ||
@@ -3524,11 +3588,11 @@ export function CoordinatorDashboard({
           "",
       ),
     ).trim();
-    if (!insuranceName || insuranceType === "particular" || insuranceType === "private") {
+    if ((!insurancePayerId && !insuranceName) || insuranceType === "particular" || insuranceType === "private") {
       return emptyPatientInsurancePayer();
     }
     return {
-      payerId: "",
+      payerId: insurancePayerId,
       payerName: insuranceName,
       insurancePlanName: String(insuranceEligibility.insurancePlanCategory || "").trim(),
       insuranceCardNumber: String(insuranceEligibility.insuranceCardNumber || "").trim(),
@@ -3540,11 +3604,15 @@ export function CoordinatorDashboard({
   const resolveClinicPayerForPatientInsurance = (patientPayer: any) => {
     const payerId = String(patientPayer?.payerId || "").trim();
     const payerNameKey = normalizePayerLookup(patientPayer?.payerName);
-    return (
-      clinicPayers.find((payer: any) => payerId && String(payer?.id || "") === payerId) ||
-      clinicPayers.find((payer: any) => payerNameKey && normalizePayerLookup(payer?.name) === payerNameKey) ||
-      null
+    const payerById = clinicPayers.find(
+      (payer: any) => payerId && String(payer?.id || "") === payerId,
     );
+    if (payerById) return payerById;
+    if (!payerNameKey) return null;
+    const payerNameMatches = clinicPayers.filter(
+      (payer: any) => normalizePayerLookup(payer?.name) === payerNameKey,
+    );
+    return payerNameMatches.length === 1 ? payerNameMatches[0] : null;
   };
 
   useEffect(() => {
@@ -3561,7 +3629,7 @@ export function CoordinatorDashboard({
   useEffect(() => {
     if (!isAddSessionModalOpen || isTherapist) return;
     let cancelled = false;
-    dataService.getPayers({ status: "ACTIVE", limit: 80 }).then((result: any) => {
+    dataService.getPayerOptions({ limit: 80 }).then((result: any) => {
       if (cancelled) return;
       setClinicPayers(result?.success && Array.isArray(result.data) ? result.data : []);
     });
@@ -5321,30 +5389,61 @@ export function CoordinatorDashboard({
       return;
     }
     if (field === "convenioTipo") {
-      setNewPatientForm((prev: any) => ({
-        ...applyInsuranceHolderSuggestion({
-          ...prev,
-          convenioTipo: value,
-        }),
-        financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => ({
-          ...plan,
-          ...(value === "convenio" && plan.billingMode === "INSURANCE"
-            ? { payerNameSnapshot: plan.payerNameSnapshot || prev.convenioNome || "" }
-            : {}),
-        })),
-      }));
+      setNewPatientForm((prev: any) => {
+        const isInsurance = value === "convenio";
+        return {
+          ...applyInsuranceHolderSuggestion({
+            ...prev,
+            convenioTipo: value,
+            ...(!isInsurance ? { convenioPayerId: "", convenioNome: "" } : {}),
+          }),
+          // Existing financial plans are historical/versioned records. Switching the
+          // patient coverage does not delete or rewrite those rows implicitly.
+          financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev),
+        };
+      });
       return;
     }
-    if (field === "convenioNome") {
-      setNewPatientForm((prev: any) => ({
-        ...prev,
-        convenioNome: value,
-        financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => ({
-          ...plan,
-          payerNameSnapshot: plan.billingMode === "INSURANCE" ? value : plan.payerNameSnapshot,
-          insuranceName: plan.billingMode === "INSURANCE" ? value : plan.insuranceName,
-        })),
-      }));
+    if (field === "convenioPayerId") {
+      const selectedPayer = clinicPayers.find(
+        (payer: any) => String(payer?.id || "") === String(value || "").trim(),
+      );
+      const payerId = String(selectedPayer?.id || "").trim();
+      const payerName = String(selectedPayer?.name || "").trim();
+      setNewPatientForm((prev: any) => {
+        const plans = normalizePatientFinancialPlans(prev.financialPlans, prev);
+        const activeInsuranceIndexes = plans
+          .map((plan: any, index: number) => ({ plan, index }))
+          .filter(({ plan }: any) =>
+            plan.billingMode === "INSURANCE" &&
+            String(plan.status || "ACTIVE").toUpperCase() === "ACTIVE",
+          );
+        const primaryIndexes = activeInsuranceIndexes.filter(({ plan }: any) =>
+          Boolean(plan.isPrimaryInsurance),
+        );
+        const targetIndex =
+          primaryIndexes.length === 1
+            ? primaryIndexes[0].index
+            : activeInsuranceIndexes.length === 1
+              ? activeInsuranceIndexes[0].index
+              : -1;
+        const nextPlans = plans.map((plan: any, index: number) =>
+          index === targetIndex
+            ? createPatientFinancialPlan({
+                ...plan,
+                payerId,
+                payerNameSnapshot: payerName,
+                insuranceName: payerName,
+              })
+            : plan,
+        );
+        return {
+          ...prev,
+          convenioPayerId: payerId,
+          convenioNome: payerName,
+          financialPlans: nextPlans,
+        };
+      });
       return;
     }
     if (field === "convenioTitularNome" || field === "convenioTitularRelacao") {
@@ -5375,7 +5474,10 @@ export function CoordinatorDashboard({
           ...plan,
           [field]: value,
           ...(field === "billingMode" && value === "INSURANCE"
-            ? { payerNameSnapshot: plan.payerNameSnapshot || prev.convenioNome || "" }
+            ? {
+                payerId: plan.payerId || prev.convenioPayerId || "",
+                payerNameSnapshot: plan.payerNameSnapshot || prev.convenioNome || "",
+              }
             : {}),
           ...(field === "billingMode" && value !== "INSURANCE"
             ? {
@@ -5419,6 +5521,7 @@ export function CoordinatorDashboard({
         ...normalizePatientFinancialPlans(prev.financialPlans, prev),
         createPatientFinancialPlan({
           billingMode: prev.convenioTipo === "convenio" ? "INSURANCE" : "PRIVATE",
+          payerId: prev.convenioTipo === "convenio" ? prev.convenioPayerId || "" : "",
           payerNameSnapshot: prev.convenioTipo === "convenio" ? prev.convenioNome || "" : "",
         }),
       ],
@@ -5447,6 +5550,7 @@ export function CoordinatorDashboard({
       dataNascimento: "",
       genero: "",
       convenioTipo: "particular",
+      convenioPayerId: "",
       convenioNome: "",
       convenioCarteirinha: "",
       convenioCarteirinhaValidade: "",
@@ -5538,6 +5642,11 @@ export function CoordinatorDashboard({
       showToast("E-mail do responsável inválido.", "error");
       return;
     }
+    if (newPatientForm.convenioTipo === "convenio" && !String(selectedPatientInsurancePayer?.id || "").trim()) {
+      showToast("Selecione um convênio ativo cadastrado pela clínica.", "error");
+      setActivePatientRegistrationTab("insurance");
+      return;
+    }
     showProcessing(
       editingPatientId
         ? "Salvando alterações do paciente..."
@@ -5573,9 +5682,25 @@ export function CoordinatorDashboard({
       dataNascimento: normalizedBirthDate || null,
       gender: newPatientForm.genero || null,
       insuranceType: newPatientForm.convenioTipo || "particular",
+      insurancePayerId:
+        newPatientForm.convenioTipo === "convenio"
+          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+          : null,
+      insurance_payer_id:
+        newPatientForm.convenioTipo === "convenio"
+          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+          : null,
+      convenioPayerId:
+        newPatientForm.convenioTipo === "convenio"
+          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+          : null,
+      convenio_payer_id:
+        newPatientForm.convenioTipo === "convenio"
+          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+          : null,
       insuranceName:
         newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioNome || null
+          ? String(selectedPatientInsurancePayer?.name || newPatientForm.convenioNome || "").trim() || null
           : null,
       cardNumber:
         newPatientForm.convenioTipo === "convenio"
@@ -5819,6 +5944,7 @@ export function CoordinatorDashboard({
       ),
       genero: patient.gender || "",
       convenioTipo: insuranceEligibility.convenioTipo === "convenio" ? "convenio" : "particular",
+      convenioPayerId: insuranceEligibility.insurancePayerId || insuranceEligibility.convenioPayerId || "",
       convenioNome: insuranceEligibility.convenioNome || "",
       convenioCarteirinha: insuranceEligibility.convenioCarteirinha || "",
       convenioCarteirinhaValidade: insuranceEligibility.convenioCarteirinhaValidade || "",
@@ -9512,7 +9638,7 @@ export function CoordinatorDashboard({
   );
   const patientRegistrationInsuranceIncomplete =
     newPatientForm.convenioTipo === "convenio" &&
-    (!String(newPatientForm.convenioNome || "").trim() ||
+    (!String(newPatientForm.convenioPayerId || "").trim() ||
       !String(newPatientForm.convenioCarteirinha || "").trim() ||
       !String(newPatientForm.convenioPlanoCategoria || "").trim());
   const patientRegistrationTabs: Array<{ id: PatientRegistrationTab; label: string; badge?: string }> = [
@@ -15185,14 +15311,62 @@ export function CoordinatorDashboard({
                   </FormField>
                   <FormField
                     label="Pagador / convênio"
-                    helperText="Usado nas regras de cobrança, pré-faturamento e validação TISS/TUSS quando aplicável."
+                    helperText={
+                      clinicPayerOptionsState.error
+                        ? clinicPayerOptionsState.error
+                        : newPatientForm.convenioTipo !== "convenio"
+                          ? "Selecione Convênio no campo de cobertura para habilitar esta lista."
+                          : clinicPayerOptionsState.loading
+                            ? "Carregando os convênios ativos cadastrados pela clínica..."
+                            : clinicPayers.length === 0
+                              ? "Nenhum convênio ativo cadastrado pela clínica. Cadastre em Convênios e TISS → Convênios."
+                              : "Usado nas regras de cobrança, pré-faturamento e validação TISS/TUSS quando aplicável."
+                    }
                   >
-                    <select className={patientFormInputClass} value={newPatientForm.convenioNome} onChange={(e) => handlePatientFormChange("convenioNome", e.target.value)}>
-                      <option value="">Selecione o convênio</option>
-                      {insuranceOptions.map((ins) => (
-                        <option key={ins} value={ins}>{ins}</option>
-                      ))}
+                    <select
+                      className={patientFormInputClass}
+                      value={newPatientForm.convenioPayerId}
+                      disabled={
+                        newPatientForm.convenioTipo !== "convenio" ||
+                        clinicPayerOptionsState.loading
+                      }
+                      onChange={(e) => handlePatientFormChange("convenioPayerId", e.target.value)}
+                    >
+                      <option value="">
+                        {clinicPayerOptionsState.loading
+                          ? "Carregando convênios..."
+                          : clinicPayers.length === 0
+                            ? "Nenhum convênio ativo cadastrado"
+                            : "Selecione o convênio"}
+                      </option>
+                      {editingPatientId &&
+                        String(newPatientForm.convenioPayerId || "").trim() &&
+                        !clinicPayers.some(
+                          (payer: any) =>
+                            String(payer?.id || "") ===
+                            String(newPatientForm.convenioPayerId || "").trim(),
+                        ) && (
+                          <option value={String(newPatientForm.convenioPayerId)} disabled>
+                            {String(newPatientForm.convenioNome || "Convênio histórico")} (histórico inativo)
+                          </option>
+                        )}
+                      {[...clinicPayers]
+                        .sort((left: any, right: any) =>
+                          String(left?.name || "").localeCompare(String(right?.name || ""), "pt-BR"),
+                        )
+                        .map((payer: any) => (
+                          <option key={String(payer.id)} value={String(payer.id)}>
+                            {String(payer.name || "Convênio sem nome")}
+                          </option>
+                        ))}
                     </select>
+                    {newPatientForm.convenioTipo === "convenio" &&
+                      !newPatientForm.convenioPayerId &&
+                      String(newPatientForm.convenioNome || "").trim() && (
+                        <p className="mt-2 text-xs font-medium text-amber-700">
+                          Convênio histórico não vinculado: {newPatientForm.convenioNome}. Selecione o cadastro ativo correto.
+                        </p>
+                      )}
                   </FormField>
                 </div>
 
