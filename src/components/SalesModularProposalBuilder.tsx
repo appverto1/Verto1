@@ -53,6 +53,7 @@ import {
   type SalesProposalReviewClassification
 } from '../utils/salesModularEconomics';
 import type { SalesAssumptionSnapshot } from '../utils/salesProfitability';
+import { buildSalesRecurringMoneyFlow } from '../utils/salesFinancialExplanation';
 import {
   ModularOfferDetails,
   type ModularPublicOffer
@@ -636,6 +637,15 @@ export const SalesModularProposalBuilder = ({
       return null;
     }
   }, [assumptions, catalog, input, profitabilityPolicyRequired]);
+  const promotionalMoneyFlow = useMemo(() => {
+    if (!preview || !assumptions || !input) return null;
+    return buildSalesRecurringMoneyFlow({
+      period: preview.promotional,
+      assumptions,
+      usageProfile: input.usageProfile,
+      lines: preview.lines
+    });
+  }, [assumptions, input, preview]);
   const proposalReview = useMemo(
     () => preview ? classifySalesProposalReview(preview) : null,
     [preview]
@@ -4230,7 +4240,7 @@ export const SalesModularProposalBuilder = ({
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="text-base font-semibold text-slate-900">
-                    Resultado consolidado
+                    Resumo financeiro da proposta
                   </h2>
                   {preview ? (
                     <span
@@ -4244,7 +4254,7 @@ export const SalesModularProposalBuilder = ({
                   <>
                     <div className="mt-4 rounded-2xl bg-slate-950 p-4 text-white">
                       <p className="text-xs font-normal text-slate-300">
-                        Mensalidade recorrente proposta
+                        Valor mensal cobrado do cliente
                       </p>
                       <p className="mt-1 text-2xl font-semibold">
                         {currency(
@@ -4262,123 +4272,372 @@ export const SalesModularProposalBuilder = ({
                         </p>
                       ) : null}
                     </div>
-                    <dl className="mt-4 grid grid-cols-2 gap-3">
-                      {[
-                        {
-                          label: 'Custos totais estimados até o LL',
-                          value:
-                            preview.promotional.netIncomeCents === null
-                              ? 'Dados insuficientes'
-                              : currency(
-                                  preview.promotionalRecurringRevenueCents -
-                                    preview.promotional.netIncomeCents
-                                ),
-                          help:
-                            'Soma dos custos variáveis, operacionais atribuídos, despesas abaixo do EBITDA e imposto sobre o lucro estimado.'
-                        },
-                        {
-                          label: 'Margem de contribuição — R$',
-                          value: currency(
-                            preview.promotional.contributionMarginCents
-                          ),
-                          help:
-                            'Receita restante após Stripe, impostos sobre faturamento, inadimplência, chargebacks e custos variáveis diretamente associados ao contrato.'
-                        },
-                        {
-                          label: 'Margem de contribuição — %',
-                          value: percent(
-                            preview.promotional.contributionMarginBasisPoints
-                          ),
-                          help:
-                            'Margem de contribuição dividida pela mensalidade recorrente proposta.'
-                        },
-                        {
-                          label: 'EBITDA atribuído',
-                          value: currency(preview.promotional.ebitdaCents),
-                          help:
-                            'Resultado operacional estimado da proposta após custos variáveis, suporte, operação e custos fixos atribuídos. Não representa o EBITDA contábil completo da Verto.'
-                        },
-                        {
-                          label: 'Margem EBITDA atribuída',
-                          value: percent(
-                            preview.promotional.ebitdaMarginBasisPoints
-                          ),
-                          help:
-                            'EBITDA atribuído dividido pela mensalidade recorrente proposta.'
-                        },
-                        {
-                          label: 'Lucro líquido estimado — LL',
-                          value: currency(preview.promotional.netIncomeCents),
-                          help:
-                            'Resultado após EBITDA, depreciação, amortização, despesas financeiras, demais despesas abaixo do EBITDA e imposto sobre o lucro.'
-                        },
-                        {
-                          label: 'Margem líquida estimada',
-                          value: percent(preview.promotional.netMarginBasisPoints),
-                          help:
-                            'Lucro líquido estimado dividido pela mensalidade recorrente proposta.'
-                        },
-                        {
-                          label: 'Preço de equilíbrio EBITDA',
-                          value: currency(preview.breakEvenRecurringRevenueCents),
-                          help:
-                            'Mensalidade estimada em que o EBITDA atribuído é igual a zero, considerando custos percentuais que crescem com a receita.'
-                        },
-                        {
-                          label: `Preço-alvo para ${percent(
-                            preview.targetEbitdaMarginBasisPoints
-                          )} de EBITDA`,
-                          value: currency(preview.targetRecurringRevenueCents),
-                          help:
-                            'Mensalidade estimada para alcançar a margem EBITDA atribuída definida como meta. A fórmula recalcula Stripe, impostos, inadimplência e chargebacks sobre o próprio preço-alvo.'
-                        },
-                        {
-                          label: 'Diferença mensal para o alvo',
-                          value: currency(preview.targetGapCents),
-                          help:
-                            'Valor mensal que falta para alcançar o preço-alvo. Zero indica que a proposta já está dentro ou acima da meta.'
-                        },
-                        {
-                          label: 'Diferença anual para o alvo',
-                          value: currency(preview.targetGapAnnualCents),
-                          help:
-                            'Diferença mensal para o preço-alvo multiplicada por 12 meses.'
-                        },
-                        {
-                          label: 'Markup sobre custos',
-                          value: markup(
-                            preview.markupMultiplier,
-                            preview.markupOnEbitdaCostBasisPoints
-                          ),
-                          help:
-                            'Relação entre a mensalidade e os custos estimados até o EBITDA no cenário atual. Markup não é a mesma coisa que margem.'
-                        },
-                        {
-                          label: 'Folga para desconto até a meta',
-                          value: percent(
-                            preview.maximumRecommendedDiscountBasisPoints
-                          ),
-                          help:
-                            'Percentual de desconto ainda disponível antes de a mensalidade cair abaixo do preço-alvo. Quando a proposta já está abaixo da meta, o valor é zero.'
-                        }
-                      ].map(({ label, value, help }) => (
-                        <div key={label} className="rounded-xl bg-slate-50 p-3">
-                          <dt
-                            className="flex items-start gap-1.5 text-xs font-normal text-slate-500"
-                            title={help}
-                          >
-                            <span>{label}</span>
-                            <Info
-                              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400"
-                              aria-label={help}
-                            />
-                          </dt>
-                          <dd className="mt-1 text-sm font-semibold text-slate-900">
-                            {value}
-                          </dd>
-                        </div>
-                      ))}
-                    </dl>
+                    {promotionalMoneyFlow ? (
+                      <>
+                        <dl className="mt-4 grid grid-cols-2 gap-3">
+                          {[
+                            {
+                              label: 'Receita bruta mensal',
+                              value: currency(promotionalMoneyFlow.revenueCents),
+                              help:
+                                'Valor mensal cobrado do cliente antes de taxas, impostos, perdas e custos.'
+                            },
+                            {
+                              label: 'Impostos estimados',
+                              value: currency(promotionalMoneyFlow.totalTaxCents),
+                              help:
+                                'Soma dos impostos sobre faturamento e do imposto sobre o lucro estimado.'
+                            },
+                            {
+                              label: 'Stripe e perdas estimadas',
+                              value: currency(
+                                promotionalMoneyFlow.paymentFeesCents === null ||
+                                  promotionalMoneyFlow.lossProvisionCents === null
+                                  ? null
+                                  : promotionalMoneyFlow.paymentFeesCents +
+                                      promotionalMoneyFlow.lossProvisionCents
+                              ),
+                              help:
+                                'Tarifas do meio de pagamento, inadimplência, estornos e chargebacks.'
+                            },
+                            {
+                              label: 'Custos diretos do serviço',
+                              value: currency(
+                                promotionalMoneyFlow.directCostsTotalCents
+                              ),
+                              help:
+                                'Custos dos módulos, pacientes, uso, armazenamento, tráfego, notificações, suporte e operação direta.'
+                            },
+                            {
+                              label: 'Margem de contribuição',
+                              value: `${currency(
+                                promotionalMoneyFlow.contributionMarginCents
+                              )} · ${percent(
+                                preview.promotional.contributionMarginBasisPoints
+                              )}`,
+                              help:
+                                'O que sobra depois das deduções da receita e dos custos diretos. Esse valor ajuda a pagar a estrutura da Verto.'
+                            },
+                            {
+                              label: 'Estrutura operacional atribuída',
+                              value: currency(
+                                promotionalMoneyFlow.sharedOperatingCostsTotalCents
+                              ),
+                              help:
+                                'Parcela de plataforma, suporte-base, operação e custos compartilhados atribuída a esta proposta. Não é o custo marginal de um paciente.'
+                            },
+                            {
+                              label: 'EBITDA atribuído',
+                              value: `${currency(
+                                promotionalMoneyFlow.ebitdaCents
+                              )} · ${percent(
+                                preview.promotional.ebitdaMarginBasisPoints
+                              )}`,
+                              help:
+                                'Resultado operacional estimado depois dos custos diretos e da estrutura atribuída, antes de depreciação, despesas financeiras e imposto sobre o lucro.'
+                            },
+                            {
+                              label: 'Despesas após o EBITDA',
+                              value: currency(
+                                promotionalMoneyFlow.belowEbitdaExpensesTotalCents ===
+                                  null ||
+                                  promotionalMoneyFlow.profitTaxCents === null
+                                  ? null
+                                  : promotionalMoneyFlow.belowEbitdaExpensesTotalCents +
+                                      promotionalMoneyFlow.profitTaxCents
+                              ),
+                              help:
+                                'Depreciação e amortização, despesas financeiras, outras despesas abaixo do EBITDA e imposto sobre o lucro.'
+                            },
+                            {
+                              label: 'Lucro líquido estimado',
+                              value: `${currency(
+                                promotionalMoneyFlow.netIncomeCents
+                              )} · ${percent(
+                                preview.promotional.netMarginBasisPoints
+                              )}`,
+                              help:
+                                'Resultado estimado depois de todos os custos e impostos modelados. Não equivale automaticamente a dinheiro disponível para retirada.'
+                            }
+                          ].map(({ label, value, help }) => (
+                            <div key={label} className="rounded-xl bg-slate-50 p-3">
+                              <dt
+                                className="flex items-start gap-1.5 text-xs font-normal text-slate-500"
+                                title={help}
+                              >
+                                <span>{label}</span>
+                                <Info
+                                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400"
+                                  aria-label={help}
+                                />
+                              </dt>
+                              <dd className="mt-1 text-sm font-semibold text-slate-900">
+                                {value}
+                              </dd>
+                            </div>
+                          ))}
+                        </dl>
+
+                        <details
+                          open
+                          className="mt-4 rounded-xl border border-slate-200 bg-white"
+                        >
+                          <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold text-slate-900">
+                            Para onde vai a mensalidade
+                            <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                              Acompanhe o dinheiro desde a cobrança até o lucro líquido estimado.
+                            </span>
+                          </summary>
+                          <div className="space-y-4 border-t border-slate-100 p-3 text-xs">
+                            <div className="rounded-lg bg-slate-950 px-3 py-3 text-white">
+                              <div className="flex items-center justify-between gap-3">
+                                <span>Receita bruta mensal</span>
+                                <strong>{currency(promotionalMoneyFlow.revenueCents)}</strong>
+                              </div>
+                              <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                                Valor cobrado do cliente antes de qualquer dedução.
+                              </p>
+                            </div>
+
+                            <section>
+                              <p className="font-semibold text-slate-800">
+                                1. Taxas, impostos e perdas sobre a receita
+                              </p>
+                              <div className="mt-2 space-y-1.5">
+                                {promotionalMoneyFlow.revenueDeductions.map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
+                                    title={item.explanation}
+                                  >
+                                    <span className="font-normal text-slate-600">
+                                      {item.label}
+                                    </span>
+                                    <strong className="shrink-0 text-slate-900">
+                                      − {currency(item.amountCents)}
+                                    </strong>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-3 border-t border-slate-200 pt-2 font-medium text-slate-800">
+                                <span>Receita após essas deduções</span>
+                                <strong>
+                                  {currency(
+                                    promotionalMoneyFlow.revenueAfterDeductionsCents
+                                  )}
+                                </strong>
+                              </div>
+                            </section>
+
+                            <section>
+                              <p className="font-semibold text-slate-800">
+                                2. Custos diretos para entregar o serviço
+                              </p>
+                              <div className="mt-2 space-y-1.5">
+                                {promotionalMoneyFlow.directCosts.map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
+                                    title={item.explanation}
+                                  >
+                                    <span className="font-normal text-slate-600">
+                                      {item.label}
+                                    </span>
+                                    <strong className="shrink-0 text-slate-900">
+                                      − {currency(item.amountCents)}
+                                    </strong>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-emerald-50 px-2.5 py-2 font-medium text-emerald-900">
+                                <span>Margem de contribuição</span>
+                                <strong>
+                                  {currency(promotionalMoneyFlow.contributionMarginCents)} ·{' '}
+                                  {percent(
+                                    preview.promotional
+                                      .contributionMarginBasisPoints
+                                  )}
+                                </strong>
+                              </div>
+                              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                                É o valor que sobra para pagar a estrutura da Verto e gerar resultado.
+                              </p>
+                            </section>
+
+                            <section>
+                              <p className="font-semibold text-slate-800">
+                                3. Estrutura da Verto atribuída à proposta
+                              </p>
+                              <div className="mt-2 space-y-1.5">
+                                {promotionalMoneyFlow.sharedOperatingCosts.map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
+                                    title={item.explanation}
+                                  >
+                                    <span className="font-normal text-slate-600">
+                                      {item.label}
+                                    </span>
+                                    <strong className="shrink-0 text-slate-900">
+                                      − {currency(item.amountCents)}
+                                    </strong>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-violet-50 px-2.5 py-2 font-medium text-violet-900">
+                                <span>EBITDA atribuído</span>
+                                <strong>
+                                  {currency(promotionalMoneyFlow.ebitdaCents)} ·{' '}
+                                  {percent(preview.promotional.ebitdaMarginBasisPoints)}
+                                </strong>
+                              </div>
+                              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                                Resultado operacional estimado antes das despesas contábeis e financeiras abaixo.
+                              </p>
+                            </section>
+
+                            <section>
+                              <p className="font-semibold text-slate-800">
+                                4. Despesas depois do EBITDA
+                              </p>
+                              <div className="mt-2 space-y-1.5">
+                                {promotionalMoneyFlow.belowEbitdaExpenses.map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
+                                    title={item.explanation}
+                                  >
+                                    <span className="font-normal text-slate-600">
+                                      {item.label}
+                                    </span>
+                                    <strong className="shrink-0 text-slate-900">
+                                      − {currency(item.amountCents)}
+                                    </strong>
+                                  </div>
+                                ))}
+                                <div className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2">
+                                  <span className="font-normal text-slate-600">
+                                    Imposto sobre o lucro estimado
+                                  </span>
+                                  <strong className="shrink-0 text-slate-900">
+                                    − {currency(promotionalMoneyFlow.profitTaxCents)}
+                                  </strong>
+                                </div>
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-slate-900 px-2.5 py-2 font-semibold text-white">
+                                <span>Lucro líquido estimado</span>
+                                <strong>
+                                  {currency(promotionalMoneyFlow.netIncomeCents)} ·{' '}
+                                  {percent(preview.promotional.netMarginBasisPoints)}
+                                </strong>
+                              </div>
+                            </section>
+
+                            <section className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-950">
+                              <p className="font-semibold">
+                                Quanto pode ir para retirada dos sócios?
+                              </p>
+                              <p className="mt-1 leading-relaxed">
+                                <strong>Não calculado.</strong>{' '}
+                                {promotionalMoneyFlow.distributableCashReason}
+                              </p>
+                            </section>
+
+                            {!promotionalMoneyFlow.reconciled ? (
+                              <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-900">
+                                O detalhamento não reconciliou com o snapshot. Não use esta composição para decisão até revisar as premissas.
+                              </div>
+                            ) : null}
+                          </div>
+                        </details>
+
+                        <details className="mt-3 rounded-xl border border-slate-200 bg-white">
+                          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
+                            Custos e receitas por componente contratado
+                          </summary>
+                          <div className="space-y-2 border-t border-slate-100 p-3 text-xs">
+                            {promotionalMoneyFlow.moduleCosts.map((item) => (
+                              <div
+                                key={item.itemKey}
+                                className="rounded-lg bg-slate-50 px-3 py-2"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="font-medium text-slate-800">
+                                      {item.publicName}
+                                    </p>
+                                    <p className="mt-0.5 text-[11px] text-slate-500">
+                                      Fonte do custo: {costSourceLabel[item.costSource] || item.costSource}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="font-medium text-slate-900">
+                                      Receita {currency(item.revenueCents)}
+                                    </p>
+                                    <p className="mt-0.5 text-slate-600">
+                                      Custo direto {currency(item.directCostCents)}
+                                    </p>
+                                  </div>
+                                </div>
+                                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                                  {item.costSourceDetail}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+
+                        <details className="mt-3 rounded-xl border border-slate-200 bg-white">
+                          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
+                            Indicadores técnicos de preço e margem
+                          </summary>
+                          <dl className="grid grid-cols-2 gap-2 border-t border-slate-100 p-3 text-xs">
+                            {[
+                              [
+                                'Preço de equilíbrio EBITDA',
+                                currency(preview.breakEvenRecurringRevenueCents)
+                              ],
+                              [
+                                `Preço-alvo para ${percent(
+                                  preview.targetEbitdaMarginBasisPoints
+                                )}`,
+                                currency(preview.targetRecurringRevenueCents)
+                              ],
+                              [
+                                'Diferença mensal para o alvo',
+                                currency(preview.targetGapCents)
+                              ],
+                              [
+                                'Diferença anual para o alvo',
+                                currency(preview.targetGapAnnualCents)
+                              ],
+                              [
+                                'Markup sobre custos até o EBITDA',
+                                markup(
+                                  preview.markupMultiplier,
+                                  preview.markupOnEbitdaCostBasisPoints
+                                )
+                              ],
+                              [
+                                'Folga para desconto até a meta',
+                                percent(
+                                  preview.maximumRecommendedDiscountBasisPoints
+                                )
+                              ]
+                            ].map(([label, value]) => (
+                              <div key={String(label)} className="rounded-lg bg-slate-50 px-2.5 py-2">
+                                <dt className="font-normal text-slate-500">
+                                  {label}
+                                </dt>
+                                <dd className="mt-0.5 font-medium text-slate-900">
+                                  {value}
+                                </dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </details>
+                      </>
+                    ) : null}
                     {preview.rating === 'attention' ||
                     preview.rating === 'not_recommended' ? (
                       <div
@@ -4475,34 +4734,6 @@ export const SalesModularProposalBuilder = ({
                             currency(
                               postBenefitCapacityBlockPhase?.blockPriceCents
                             )
-                          ],
-                          [
-                            'Taxas e impostos variáveis',
-                            currency(
-                              preview.promotional
-                                .transactionAndTaxCostAllocatedCents
-                            )
-                          ],
-                          [
-                            'Custos compartilhados atribuídos',
-                            currency(
-                              preview.promotional
-                                .sharedPlatformCostAllocatedCents
-                            )
-                          ],
-                          [
-                            'D&A, despesas financeiras e corporativas',
-                            currency(
-                              preview.promotional
-                                .belowEbitdaCostAllocatedCents
-                            )
-                          ],
-                          [
-                            'Impostos sobre o lucro',
-                            currency(
-                              preview.promotional
-                                .profitTaxAllocatedCents
-                            )
                           ]
                         ].map(([label, value]) => (
                           <div
@@ -4595,69 +4826,6 @@ export const SalesModularProposalBuilder = ({
                             </dt>
                             <dd className="mt-0.5 font-medium text-slate-800">
                               {value}
-                            </dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </details>
-                    <details className="mt-4 rounded-xl border border-slate-200 bg-white">
-                      <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
-                        Composição consolidada dos custos diretos
-                      </summary>
-                      <dl className="grid grid-cols-2 gap-2 border-t border-slate-100 p-3 text-xs">
-                        {[
-                          [
-                            'Fixo direto',
-                            preview.promotional.directCostBreakdown
-                              .fixedCostCents
-                          ],
-                          [
-                            'Por paciente',
-                            preview.promotional.directCostBreakdown
-                              .patientCostCents
-                          ],
-                          [
-                            'Uso',
-                            preview.promotional.directCostBreakdown
-                              .usageCostCents
-                          ],
-                          [
-                            'Armazenamento',
-                            preview.promotional.directCostBreakdown
-                              .storageCostCents
-                          ],
-                          [
-                            'Egress',
-                            preview.promotional.directCostBreakdown
-                              .egressCostCents
-                          ],
-                          [
-                            'Notificações',
-                            preview.promotional.directCostBreakdown
-                              .notificationCostCents
-                          ],
-                          [
-                            'Outros variáveis diretos',
-                            preview.promotional.directCostBreakdown
-                              .otherVariableCostCents
-                          ],
-                          [
-                            'Suporte',
-                            preview.promotional.directCostBreakdown
-                              .supportCostCents
-                          ],
-                          [
-                            'Operacional',
-                            preview.promotional.directCostBreakdown
-                              .operationalCostCents
-                          ]
-                        ].map(([label, amount]) => (
-                          <div key={String(label)}>
-                            <dt className="font-normal text-slate-500">
-                              {label}
-                            </dt>
-                            <dd className="mt-0.5 font-medium text-slate-800">
-                              {currency(amount as number | null)}
                             </dd>
                           </div>
                         ))}
