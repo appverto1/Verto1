@@ -379,13 +379,26 @@ function ProfessionalScheduleSettings({ memberId }: { memberId: string }) {
 function PatientReschedulePolicySettings() {
   const [state, setState] = useState({
     loading: true,
-    saving: false,
+    savingReschedule: false,
+    savingAttendance: false,
     allowPatientReschedule: true,
+    autoNoShowEnabled: true,
+    noShowToleranceMinutes: 30,
+    noShowMode: "AUTO" as "AUTO" | "REVIEW",
     canManage: false,
     error: "",
     message: ""
   });
-  const idempotencyKeyByValue = useRef(new Map<boolean, string>());
+  const idempotencyKeys = useRef(new Map<string, string>());
+
+  const getIdempotencyKey = (operationKey: string) => {
+    const existing = idempotencyKeys.current.get(operationKey);
+    if (existing) return existing;
+    const generated = globalThis.crypto?.randomUUID?.()
+      || `clinic-policy-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+    idempotencyKeys.current.set(operationKey, generated);
+    return generated;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -401,8 +414,12 @@ function PatientReschedulePolicySettings() {
       }
       setState({
         loading: false,
-        saving: false,
+        savingReschedule: false,
+        savingAttendance: false,
         allowPatientReschedule: result?.data?.allowPatientReschedule !== false,
+        autoNoShowEnabled: result?.data?.autoNoShowEnabled !== false,
+        noShowToleranceMinutes: Math.max(5, Math.min(180, Number(result?.data?.noShowToleranceMinutes || 30))),
+        noShowMode: result?.data?.noShowMode === "REVIEW" ? "REVIEW" : "AUTO",
         canManage: result?.data?.canManage === true,
         error: "",
         message: ""
@@ -413,8 +430,8 @@ function PatientReschedulePolicySettings() {
     };
   }, []);
 
-  const updatePolicy = async () => {
-    if (state.loading || state.saving || !state.canManage) return;
+  const updateReschedulePolicy = async () => {
+    if (state.loading || state.savingReschedule || state.savingAttendance || !state.canManage) return;
     const nextValue = !state.allowPatientReschedule;
     const confirmed = window.confirm(
       nextValue
@@ -422,32 +439,34 @@ function PatientReschedulePolicySettings() {
         : "Desativar novas solicitações de reagendamento feitas por pacientes? Solicitações antigas serão preservadas."
     );
     if (!confirmed) return;
-    let idempotencyKey = idempotencyKeyByValue.current.get(nextValue);
-    if (!idempotencyKey) {
-      idempotencyKey = crypto.randomUUID();
-      idempotencyKeyByValue.current.set(nextValue, idempotencyKey);
-    }
-    setState((current) => ({ ...current, saving: true, error: "", message: "" }));
+    const operationKey = `reschedule:${nextValue}`;
+    setState((current) => ({ ...current, savingReschedule: true, error: "", message: "" }));
     const result = await dataService.updateClinicAppointmentPolicy({
       allowPatientReschedule: nextValue,
+      autoNoShowEnabled: state.autoNoShowEnabled,
+      noShowToleranceMinutes: state.noShowToleranceMinutes,
+      noShowMode: state.noShowMode,
       reason: nextValue
         ? "Reativado nas configurações da agenda"
         : "Desativado nas configurações da agenda",
-      idempotencyKey
+      idempotencyKey: getIdempotencyKey(operationKey)
     });
     if (!result?.success) {
       setState((current) => ({
         ...current,
-        saving: false,
+        savingReschedule: false,
         error: result?.message || result?.error || "Não foi possível salvar esta configuração."
       }));
       return;
     }
-    idempotencyKeyByValue.current.delete(nextValue);
+    idempotencyKeys.current.delete(operationKey);
     setState((current) => ({
       ...current,
-      saving: false,
-          allowPatientReschedule: result?.data?.allowPatientReschedule !== false,
+      savingReschedule: false,
+      allowPatientReschedule: result?.data?.allowPatientReschedule !== false,
+      autoNoShowEnabled: result?.data?.autoNoShowEnabled !== false,
+      noShowToleranceMinutes: Number(result?.data?.noShowToleranceMinutes || current.noShowToleranceMinutes),
+      noShowMode: result?.data?.noShowMode === "REVIEW" ? "REVIEW" : "AUTO",
       error: "",
       message: nextValue
         ? "Pacientes voltaram a poder solicitar reagendamento."
@@ -455,42 +474,174 @@ function PatientReschedulePolicySettings() {
     }));
   };
 
+  const saveAttendancePolicy = async () => {
+    if (state.loading || state.savingReschedule || state.savingAttendance || !state.canManage) return;
+    const tolerance = Number(state.noShowToleranceMinutes);
+    if (!Number.isInteger(tolerance) || tolerance < 5 || tolerance > 180) {
+      setState((current) => ({ ...current, error: "Informe uma tolerância inteira entre 5 e 180 minutos.", message: "" }));
+      return;
+    }
+    const operationKey = `attendance:${state.autoNoShowEnabled}:${tolerance}:${state.noShowMode}`;
+    setState((current) => ({ ...current, savingAttendance: true, error: "", message: "" }));
+    const result = await dataService.updateClinicAppointmentPolicy({
+      allowPatientReschedule: state.allowPatientReschedule,
+      autoNoShowEnabled: state.autoNoShowEnabled,
+      noShowToleranceMinutes: tolerance,
+      noShowMode: state.noShowMode,
+      reason: "Política de presença e falta atualizada nas configurações da clínica",
+      idempotencyKey: getIdempotencyKey(operationKey)
+    });
+    if (!result?.success) {
+      setState((current) => ({
+        ...current,
+        savingAttendance: false,
+        error: result?.message || result?.error || "Não foi possível salvar a política de falta."
+      }));
+      return;
+    }
+    idempotencyKeys.current.delete(operationKey);
+    setState((current) => ({
+      ...current,
+      savingAttendance: false,
+      autoNoShowEnabled: result?.data?.autoNoShowEnabled !== false,
+      noShowToleranceMinutes: Number(result?.data?.noShowToleranceMinutes || tolerance),
+      noShowMode: result?.data?.noShowMode === "REVIEW" ? "REVIEW" : "AUTO",
+      error: "",
+      message: result?.data?.autoNoShowEnabled === false
+        ? "Classificação automática de falta desativada."
+        : `Política salva: ${Number(result?.data?.noShowToleranceMinutes || tolerance)} minutos, modo ${result?.data?.noShowMode === "REVIEW" ? "revisão" : "automático"}.`
+    }));
+  };
+
+  const saving = state.savingReschedule || state.savingAttendance;
+
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#7a32fc] shadow-sm">
-            <CalendarClock size={19} aria-hidden="true" />
-          </span>
-          <div>
-            <p className="text-sm font-semibold text-slate-900">Permitir que pacientes solicitem reagendamento</p>
-            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
-              Quando desativado, o portal e os lembretes oferecem apenas confirmar ou cancelar. A equipe continua podendo reagendar e o histórico permanece intacto.
-            </p>
+    <div className="space-y-4">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#7a32fc] shadow-sm">
+              <CalendarClock size={19} aria-hidden="true" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Permitir que pacientes solicitem reagendamento</p>
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
+                Quando desativado, o portal e os lembretes oferecem apenas confirmar ou cancelar. A equipe continua podendo reagendar e o histórico permanece intacto.
+              </p>
+            </div>
           </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={state.allowPatientReschedule}
+            aria-label="Permitir que pacientes solicitem reagendamento"
+            disabled={state.loading || saving || !state.canManage}
+            onClick={() => void updateReschedulePolicy()}
+            className={`relative min-h-11 w-full shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition sm:w-32 ${
+              state.allowPatientReschedule
+                ? "bg-emerald-600 text-white"
+                : "border border-slate-300 bg-white text-slate-600"
+            } disabled:cursor-wait disabled:opacity-60`}
+          >
+            {state.loading || state.savingReschedule ? (
+              <span className="flex items-center justify-center gap-2"><Loader2 size={15} className="animate-spin" /> {state.loading ? "Carregando" : "Salvando"}</span>
+            ) : state.allowPatientReschedule ? "Ativado" : "Desativado"}
+          </button>
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={state.allowPatientReschedule}
-          aria-label="Permitir que pacientes solicitem reagendamento"
-          disabled={state.loading || state.saving || !state.canManage}
-          onClick={() => void updatePolicy()}
-          className={`relative min-h-11 w-full shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition sm:w-32 ${
-            state.allowPatientReschedule
-              ? "bg-emerald-600 text-white"
-              : "border border-slate-300 bg-white text-slate-600"
-          } disabled:cursor-wait disabled:opacity-60`}
-        >
-          {state.loading || state.saving ? (
-            <span className="flex items-center justify-center gap-2"><Loader2 size={15} className="animate-spin" /> {state.loading ? "Carregando" : "Salvando"}</span>
-          ) : state.allowPatientReschedule ? "Ativado" : "Desativado"}
-        </button>
       </div>
-      {state.error && <p role="alert" className="mt-3 text-xs font-medium text-rose-700">{state.error}</p>}
-      {state.message && <p role="status" className="mt-3 text-xs font-medium text-emerald-700">{state.message}</p>}
+
+      <div className="rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#7a32fc] shadow-sm">
+              <ClipboardList size={19} aria-hidden="true" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Política de ausência e falta</p>
+              <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
+                A regra é executada no servidor, mesmo com o navegador fechado. Uma sessão iniciada e a classificação de falta disputam a mesma operação atômica, evitando estados duplicados.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={state.autoNoShowEnabled}
+            disabled={state.loading || saving || !state.canManage}
+            onClick={() => setState((current) => ({ ...current, autoNoShowEnabled: !current.autoNoShowEnabled, message: "", error: "" }))}
+            className={`min-h-11 w-full shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition lg:w-36 ${
+              state.autoNoShowEnabled
+                ? "bg-[#7a32fc] text-white"
+                : "border border-slate-300 bg-white text-slate-600"
+            } disabled:opacity-60`}
+          >
+            {state.autoNoShowEnabled ? "Regra ativa" : "Regra inativa"}
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <label className={labelClass}>
+            Tolerância após o horário agendado
+            <div className="relative">
+              <input
+                type="number"
+                min={5}
+                max={180}
+                step={1}
+                value={state.noShowToleranceMinutes}
+                disabled={state.loading || saving || !state.canManage || !state.autoNoShowEnabled}
+                onChange={(event) => setState((current) => ({
+                  ...current,
+                  noShowToleranceMinutes: Number(event.target.value),
+                  message: "",
+                  error: ""
+                }))}
+                className={`${inputClass} pr-20`}
+              />
+              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center pt-1.5 text-xs text-slate-400">minutos</span>
+            </div>
+            <span className="mt-1.5 block text-[11px] leading-relaxed text-slate-500">Valor permitido: de 5 a 180 minutos. O padrão inicial é 30.</span>
+          </label>
+
+          <label className={labelClass}>
+            Ação ao atingir a tolerância
+            <select
+              value={state.noShowMode}
+              disabled={state.loading || saving || !state.canManage || !state.autoNoShowEnabled}
+              onChange={(event) => setState((current) => ({
+                ...current,
+                noShowMode: event.target.value === "REVIEW" ? "REVIEW" : "AUTO",
+                message: "",
+                error: ""
+              }))}
+              className={inputClass}
+            >
+              <option value="AUTO">Classificar automaticamente como falta</option>
+              <option value="REVIEW">Sinalizar para revisão da equipe</option>
+            </select>
+            <span className="mt-1.5 block text-[11px] leading-relaxed text-slate-500">
+              Faltas não seguem para faturamento de convênio. Uma eventual taxa particular permanece em fluxo financeiro separado.
+            </span>
+          </label>
+        </div>
+
+        <div className="mt-4 flex justify-end">
+          <button
+            type="button"
+            onClick={() => void saveAttendancePolicy()}
+            disabled={state.loading || saving || !state.canManage}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-wait disabled:opacity-50"
+          >
+            {state.savingAttendance ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            {state.savingAttendance ? "Salvando..." : "Salvar política de falta"}
+          </button>
+        </div>
+      </div>
+
+      {state.error && <p role="alert" className="text-xs font-medium text-rose-700">{state.error}</p>}
+      {state.message && <p role="status" className="text-xs font-medium text-emerald-700">{state.message}</p>}
       {!state.loading && !state.canManage && !state.error && (
-        <p className="mt-3 text-xs text-slate-500">Somente owner, administração ou coordenação podem alterar esta política.</p>
+        <p className="text-xs text-slate-500">Somente owner, administração ou coordenação podem alterar estas políticas.</p>
       )}
     </div>
   );

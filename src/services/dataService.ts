@@ -2122,6 +2122,49 @@ export const dataService = {
     );
   },
 
+  async completeAbaSession(sessionId: string, payload: any) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ id: String(sessionId), ...(payload || {}) });
+    const response = await fetchClinical(
+      `/api/aba/sessions/${encodeURIComponent(String(sessionId))}/complete`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {})
+      },
+      {
+        helperName: 'completeAbaSession',
+        operation: 'write',
+        table: 'aba_sessions,aba_session_summaries,appointments,appointment_attendance_audit_events,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async reopenAppointmentNoShow(appointmentId: string, payload: any) {
+    const response = await fetchClinical(
+      `/api/appointments/${encodeURIComponent(String(appointmentId))}/reopen-no-show`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload || {})
+      },
+      {
+        helperName: 'reopenAppointmentNoShow',
+        operation: 'write',
+        table: 'appointments,appointment_attendance_audit_events,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
   async saveAbaSessionSummary(summary: any) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(summary || {});
     const id = String(summary?.id || summary?.summary_id || summary?.summaryId || generateId());
@@ -7603,7 +7646,7 @@ export const dataService = {
   },
 
   async updateClinicAppointmentPolicy(payload: any) {
-    const response = await fetchClinical('/api/clinic/appointment-policy', { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'updateClinicAppointmentPolicy', operation: 'write', table: 'clinics,clinic_policy_audit_events', hasExplicitColumns: true, requiresPatientOrSession: false });
+    const response = await fetchClinical('/api/clinic/appointment-policy', { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, { helperName: 'updateClinicAppointmentPolicy', operation: 'write', table: 'clinics,clinic_policy_audit_events,appointment_attendance_audit_events', hasExplicitColumns: true, requiresPatientOrSession: false });
     const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
   },
 

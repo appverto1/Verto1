@@ -98,6 +98,38 @@ import {
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
 
+type SessionAttendanceStatus =
+  | 'ATTENDED'
+  | 'LATE'
+  | 'PARTIAL'
+  | 'NO_SHOW'
+  | 'CANCELLED_PATIENT'
+  | 'CANCELLED_CLINIC';
+
+const SESSION_ATTENDANCE_OPTIONS: Array<{
+  value: SessionAttendanceStatus;
+  label: string;
+  description: string;
+}> = [
+  { value: 'ATTENDED', label: 'Compareceu', description: 'Atendimento realizado conforme previsto.' },
+  { value: 'LATE', label: 'Compareceu com atraso', description: 'Atendimento realizado após o horário agendado.' },
+  { value: 'PARTIAL', label: 'Atendimento parcial', description: 'Atendimento iniciado, mas concluído antes do previsto.' },
+  { value: 'NO_SHOW', label: 'Falta', description: 'Paciente não compareceu. Não segue para faturamento de convênio.' },
+  { value: 'CANCELLED_PATIENT', label: 'Cancelado pelo paciente', description: 'Cancelamento atribuído ao paciente ou responsável.' },
+  { value: 'CANCELLED_CLINIC', label: 'Cancelado pela clínica', description: 'Cancelamento atribuído à clínica ou ao profissional.' }
+];
+
+const NON_ATTENDANCE_STATUSES = new Set<SessionAttendanceStatus>([
+  'NO_SHOW',
+  'CANCELLED_PATIENT',
+  'CANCELLED_CLINIC'
+]);
+
+const createSessionCompletionKey = () => (
+  globalThis.crypto?.randomUUID?.()
+  || `session-complete-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`
+);
+
 type SessionRecord = {
   id: string;
   kind: 'trial' | 'behavior';
@@ -711,7 +743,6 @@ export const SessionMode = ({
   activeSession,
   remainingSeconds = 0,
   formatCountdown,
-  onRequestEndSession,
   onConfirmEndSession,
   onSessionSummaryPersisted,
   onSessionRecordSaved,
@@ -871,6 +902,10 @@ export const SessionMode = ({
   const [showSessionSummary, setShowSessionSummary] = useState(false);
   const [sessionEndPreviewAt, setSessionEndPreviewAt] = useState('');
   const [sessionNote, setSessionNote] = useState('');
+  const [attendanceStatus, setAttendanceStatus] = useState<SessionAttendanceStatus>('ATTENDED');
+  const [endingSession, setEndingSession] = useState(false);
+  const [sessionEndError, setSessionEndError] = useState('');
+  const completionIdempotencyKeyRef = useRef('');
   const [sessionCompleted, setSessionCompleted] = useState(false);
   const [postClosureSummary, setPostClosureSummary] = useState<SessionSummary | null>(null);
   const [showPostClosureReport, setShowPostClosureReport] = useState(false);
@@ -3721,8 +3756,20 @@ export const SessionMode = ({
 
   const requestEndSession = () => {
     setSessionWarning('');
-    setSessionEndPreviewAt(new Date().toISOString());
+    setSessionEndError('');
+    if (!sessionEndPreviewAt) setSessionEndPreviewAt(new Date().toISOString());
+    if (!completionIdempotencyKeyRef.current) {
+      completionIdempotencyKeyRef.current = createSessionCompletionKey();
+    }
     setShowSessionSummary(true);
+  };
+
+  const returnToActiveSession = () => {
+    if (endingSession) return;
+    setShowSessionSummary(false);
+    setSessionEndPreviewAt('');
+    setSessionEndError('');
+    completionIdempotencyKeyRef.current = '';
   };
 
   const resolveDurationBeforeEnd = (eventId: string, action: 'end' | 'discard') => {
@@ -3731,7 +3778,7 @@ export const SessionMode = ({
     else discardDuration(eventId);
     if (isLastOpenDuration) {
       setDurationBlockModalOpen(false);
-      setShowSessionSummary(true);
+      requestEndSession();
     }
   };
 
@@ -3775,22 +3822,60 @@ export const SessionMode = ({
       unsavedLocalCount: savingLocally.length,
       incompleteTrial: Boolean(promptSelectionGoal)
     });
+    const blockers: SessionSummaryPendingItem[] = [...closure.blockers];
     const warnings: SessionSummaryPendingItem[] = [];
-    if (abcMissingCounts.RECOMMENDED > 0) warnings.push({ key: 'recommended_abc_missing', label: `ABC recomendado pendente em ${abcMissingCounts.RECOMMENDED} evento(s)`, category: 'warning', count: abcMissingCounts.RECOMMENDED });
-    if (abcMissingCounts.OPTIONAL > 0) warnings.push({ key: 'optional_abc_missing', label: `ABC opcional ausente em ${abcMissingCounts.OPTIONAL} evento(s)`, category: 'warning', count: abcMissingCounts.OPTIONAL });
-    warnings.push({ key: 'guardian_signature_pending', label: 'Assinatura do responsável pendente', category: 'warning', count: 1 });
-    if (!sessionNote.trim()) warnings.push({ key: 'session_note_pending', label: 'Observação da sessão pendente', category: 'warning', count: 1 });
-    if (notSyncedWithServer.length > 0) warnings.push({ key: 'server_sync_pending', label: `${notSyncedWithServer.length} dado(s) ainda não sincronizado(s)`, category: 'warning', count: notSyncedWithServer.length });
-    return { blockers: closure.blockers, warnings };
+    const isNonAttendance = NON_ATTENDANCE_STATUSES.has(attendanceStatus);
+
+    if (notSyncedWithServer.length > 0) {
+      blockers.push({
+        key: 'server_sync_required',
+        label: `${notSyncedWithServer.length} dado(s) precisam ser sincronizado(s) antes do encerramento`,
+        category: 'blocker',
+        blocking: true,
+        count: notSyncedWithServer.length
+      });
+    }
+    if (isNonAttendance && records.filter((record) => !isCancelledIntervalClinicalRecord(record)).length > 0) {
+      blockers.push({
+        key: 'absence_with_clinical_records',
+        label: 'Falta ou cancelamento não pode ser confirmado porque já existem registros clínicos nesta sessão',
+        category: 'blocker',
+        blocking: true,
+        count: 1
+      });
+    }
+    if (isNonAttendance && sessionNote.trim().length < 5) {
+      blockers.push({
+        key: 'absence_reason_required',
+        label: 'Informe o motivo da falta ou do cancelamento com pelo menos 5 caracteres',
+        category: 'blocker',
+        blocking: true,
+        count: 1
+      });
+    }
+
+    if (!isNonAttendance) {
+      if (abcMissingCounts.REQUIRED > 0) {
+        blockers.push({ key: 'required_abc_missing', label: `ABC obrigatório pendente em ${abcMissingCounts.REQUIRED} evento(s)`, category: 'blocker', blocking: true, count: abcMissingCounts.REQUIRED });
+      }
+      if (abcMissingCounts.RECOMMENDED > 0) warnings.push({ key: 'recommended_abc_missing', label: `ABC recomendado pendente em ${abcMissingCounts.RECOMMENDED} evento(s)`, category: 'warning', count: abcMissingCounts.RECOMMENDED });
+      if (abcMissingCounts.OPTIONAL > 0) warnings.push({ key: 'optional_abc_missing', label: `ABC opcional ausente em ${abcMissingCounts.OPTIONAL} evento(s)`, category: 'warning', count: abcMissingCounts.OPTIONAL });
+      warnings.push({ key: 'guardian_signature_pending', label: 'Assinatura do responsável pendente', category: 'warning', count: 1 });
+      if (!sessionNote.trim()) warnings.push({ key: 'session_note_pending', label: 'Observação da sessão pendente', category: 'warning', count: 1 });
+    }
+    return { blockers, warnings };
   };
 
   const confirmEndSession = async () => {
+    if (endingSession) return;
     const closureIssues = buildSessionClosureIssues();
     if (closureIssues.blockers.length > 0) {
       setSessionWarning('Resolva os bloqueios antes de encerrar a sessão.');
+      setSessionEndError('Existem itens obrigatórios pendentes. Revise os bloqueios abaixo.');
       return;
     }
-    const endedAt = new Date().toISOString();
+
+    const endedAt = sessionEndPreviewAt || new Date().toISOString();
     const finalSummary = calculateSessionSummary(sessionId, {
       id: `summary-${sessionId}`,
       sessionId,
@@ -3814,124 +3899,93 @@ export const SessionMode = ({
           activeSession?.location_context_snapshot?.locationTimezone ||
           maintenanceTimeZone,
       },
-      startedAt: activeSession?.startedAt || endedAt,
+      startedAt: activeSession?.startedAt || activeSession?.started_at || endedAt,
       endedAt,
+      createdAt: endedAt,
       trials: records.filter((record) => record.kind === 'trial'),
       behaviorEvents: records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)),
       masterySummary: teachingMasteryRows,
       blockingItems: closureIssues.blockers,
       warningItems: closureIssues.warnings,
       sessionNote,
-      syncStatus: records.some((record) => record.syncStatus === 'error') ? 'error' : records.some((record) => record.syncStatus !== 'synced') ? 'local' : 'synced'
+      syncStatus: 'synced'
     });
     const finalMaintenanceSummary = maintenanceProbeRows;
-    setSessionEndPreviewAt(endedAt);
-    setSessionCompleted(true);
-    setShowPostClosureReport(false);
-    setShowComplementEditor(false);
+    const idempotencyKey = completionIdempotencyKeyRef.current || createSessionCompletionKey();
+    completionIdempotencyKeyRef.current = idempotencyKey;
+
+    setEndingSession(true);
+    setSessionWarning('');
+    setSessionEndError('');
     try {
-      const summarySaveResult = await dataService.saveAbaSessionSummary({
-        ...finalSummary,
-        session_id: finalSummary.sessionId,
-        patient_id: finalSummary.patientId,
+      const completionResult = await dataService.completeAbaSession(sessionId, {
+        patient_id: patientId,
+        patientId,
         clinic_id: resolvedClinicId || undefined,
         clinicId: resolvedClinicId || undefined,
         appointment_id: activeAppointmentId || undefined,
         appointmentId: activeAppointmentId || undefined,
-        therapist_id: finalSummary.therapistId || undefined,
-        source: 'verto_web',
-        started_at: finalSummary.startedAt,
-        ended_at: finalSummary.endedAt,
-        duration_seconds: finalSummary.durationSeconds,
-        total_trials: finalSummary.totalTrials,
-        independent_trials: finalSummary.independentTrials,
-        prompted_trials: finalSummary.promptedTrials,
-        error_trials: finalSummary.errorTrials,
-        accuracy_percent: finalSummary.accuracyPercent,
-        independence_percent: finalSummary.independencePercent,
-        trial_types_used: finalSummary.trialTypesUsed,
-        total_behavior_events: finalSummary.totalBehaviorEvents,
-        frequency_summary: finalSummary.frequencySummary,
-        duration_summary: finalSummary.durationSummary,
-        interval_summary: finalSummary.intervalSummary,
-        abc_summary: finalSummary.abcSummary,
-        mastery_summary: finalSummary.masterySummary,
-        maintenance_summary: finalMaintenanceSummary,
-        blocking_items: finalSummary.blockingItems,
-        warning_items: finalSummary.warningItems,
-        pending_items: finalSummary.pendingItems,
-        pending_warnings: finalSummary.pendingWarnings,
-        session_note: finalSummary.sessionNote,
-        summary_payload: {
-          source: 'verto_web',
-          clinicId: resolvedClinicId || undefined,
-          appointmentId: activeAppointmentId || undefined,
-          careSetting: finalSummary.careSetting || undefined,
-          locationName: finalSummary.locationNameSnapshot || undefined,
-          patientName: finalSummary.patientName,
-          therapistName: finalSummary.therapistName,
-          teachingSummary: finalSummary.teachingSummary,
-          trialTypesUsed: finalSummary.trialTypesUsed,
-          abcSummary: finalSummary.abcSummary,
-          masterySummary: finalSummary.masterySummary,
+        therapist_id: resolvedTherapistId || undefined,
+        therapistId: resolvedTherapistId || undefined,
+        attendance_status: attendanceStatus,
+        attendanceStatus,
+        ended_at: endedAt,
+        endedAt,
+        session_note: sessionNote,
+        sessionNote,
+        idempotencyKey,
+        summary: {
+          ...finalSummary,
           maintenanceSummary: finalMaintenanceSummary,
-          blockingItems: finalSummary.blockingItems,
-          warningItems: finalSummary.warningItems,
-          pendingWarnings: finalSummary.pendingWarnings,
-          sessionNote
+          attendanceStatus,
+          source: 'verto_web'
         }
       });
-      const persistedMasterySummary = Array.isArray(summarySaveResult?.data?.mastery_summary)
-        ? summarySaveResult.data.mastery_summary
-        : Array.isArray(summarySaveResult?.data?.masterySummary)
-          ? summarySaveResult.data.masterySummary
-          : finalSummary.masterySummary;
-      const persistedMaintenanceSummary = Array.isArray(summarySaveResult?.data?.maintenance_summary)
-        ? summarySaveResult.data.maintenance_summary
-        : Array.isArray(summarySaveResult?.data?.maintenanceSummary)
-          ? summarySaveResult.data.maintenanceSummary
-          : finalMaintenanceSummary;
+      if (!completionResult?.success) {
+        throw new Error(completionResult?.message || completionResult?.error || 'Não foi possível encerrar a sessão.');
+      }
+
+      const completionData = completionResult?.data || {};
       const persistedSummary = {
         ...finalSummary,
-        masterySummary: persistedMasterySummary,
-        maintenanceSummary: persistedMaintenanceSummary,
-        id: String(summarySaveResult?.data?.id || finalSummary.id),
-        syncStatus: summarySaveResult?.success && !summarySaveResult?.pending && !summarySaveResult?.offline ? 'synced' : finalSummary.syncStatus,
-        createdAt: summarySaveResult?.data?.created_at || summarySaveResult?.data?.createdAt || finalSummary.createdAt
+        maintenanceSummary: Array.isArray(completionData?.maintenanceSummary)
+          ? completionData.maintenanceSummary
+          : finalMaintenanceSummary,
+        id: String(completionData?.summaryId || finalSummary.id),
+        syncStatus: 'synced',
+        createdAt: completionData?.createdAt || finalSummary.createdAt,
+        attendanceStatus: completionData?.attendanceStatus || attendanceStatus,
+        billingStatus: completionData?.billingStatus || (NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'NOT_BILLABLE' : 'PENDING_REVIEW'),
+        operationalClosure: completionData?.closure || null
+      } as SessionSummary & {
+        attendanceStatus: SessionAttendanceStatus;
+        billingStatus: string;
+        operationalClosure?: any;
       };
+
+      setSessionEndPreviewAt(String(completionData?.endedAt || endedAt));
       setPostClosureSummary(persistedSummary);
+      setOperationalClosure(completionData?.closure || null);
+      setSessionCompleted(true);
+      setShowPostClosureReport(false);
+      setShowComplementEditor(false);
+      setShowSessionSummary(false);
+      completionIdempotencyKeyRef.current = '';
+
       if (typeof onSessionSummaryPersisted === 'function') {
         void Promise.resolve(onSessionSummaryPersisted(persistedSummary)).catch((error: any) => {
           console.warn('[ABA] Não foi possível aplicar resumo de maestria no PEI local:', error);
         });
       }
-      await dataService.updateAbaSession(sessionId, {
-        status: 'COMPLETED',
-        ended_at: endedAt,
-        actual_end_at: endedAt,
-        actual_end: endedAt,
-        actual_duration_minutes: Math.ceil(finalSummary.durationSeconds / 60),
-        appointment_id: activeAppointmentId || undefined,
-        appointmentId: activeAppointmentId || undefined,
-        duration_seconds: finalSummary.durationSeconds,
-        duration_minutes: Math.ceil(finalSummary.durationSeconds / 60),
-        record_count: finalSummary.totalTrials + finalSummary.totalBehaviorEvents,
-        notes: sessionNote
-      });
       showClinicalToast(buildClinicalActionToast({ action: 'session_end' }));
-    } catch (error) {
-      console.error('Falha ao persistir encerramento da sessão ABA:', error);
-      const failedSummary = { ...finalSummary, syncStatus: 'error' };
-      setPostClosureSummary(failedSummary);
-      if (typeof onSessionSummaryPersisted === 'function') {
-        void Promise.resolve(onSessionSummaryPersisted(failedSummary)).catch((applyError: any) => {
-          console.warn('[ABA] Não foi possível aplicar resumo local de maestria no PEI:', applyError);
-        });
-      }
-      setSessionWarning('A sessão foi marcada como encerrada localmente, mas houve falha de sincronização.');
+    } catch (error: any) {
+      console.error('Falha ao persistir encerramento atômico da sessão ABA:', error);
+      setSessionEndError(error?.message || 'Não foi possível encerrar a sessão. Nenhum dado foi descartado.');
+      setSessionWarning('A sessão continua em andamento. Corrija o problema e tente novamente.');
       showClinicalToast(buildClinicalSaveErrorToast(), 'error');
+    } finally {
+      setEndingSession(false);
     }
-    setShowSessionSummary(false);
   };
 
   const sessionSummary = useMemo(() => {
@@ -3942,7 +3996,7 @@ export const SessionMode = ({
     return { trialTotal, behaviorTotal, errorTotal, localTotal };
   }, [records]);
 
-  const sessionClosureIssues = useMemo(() => buildSessionClosureIssues(), [records, openDurations, intervalRun, promptSelectionGoal, sessionNote, patient?.abaBehaviorSettings, patient?.abaSettings, patient?.clinicSettings]);
+  const sessionClosureIssues = useMemo(() => buildSessionClosureIssues(), [attendanceStatus, records, openDurations, intervalRun, promptSelectionGoal, sessionNote, patient?.abaBehaviorSettings, patient?.abaSettings, patient?.clinicSettings]);
 
   const sessionClosureSummary: SessionSummary = useMemo(() => {
     const endedAt = sessionEndPreviewAt || new Date().toISOString();
@@ -5409,20 +5463,91 @@ export const SessionMode = ({
     return createPortal(loadingContent, document.body);
   }
 
-  if (sessionGoals.length === 0 && upcomingMaintenanceProbeItems.length === 0 && !sessionMaintenanceProbes?.error && !(sessionCompleted && postClosureSummary && !showSessionSummary)) {
+  if (
+    sessionGoals.length === 0
+    && upcomingMaintenanceProbeItems.length === 0
+    && !sessionMaintenanceProbes?.error
+    && !showSessionSummary
+    && !(sessionCompleted && postClosureSummary)
+  ) {
     const emptyStateContent = (
-      <div className="fixed inset-0 z-[100] bg-white flex flex-col items-center justify-center p-6">
-        <button onClick={onClose} className="absolute top-6 left-6 p-2 hover:bg-gray-100 rounded-full transition-all">
-          <ChevronLeft size={32} className="text-gray-400" />
-        </button>
-        {activeSession && (
-          <button onClick={requestEndSession} className="absolute top-6 right-6 px-4 py-2 bg-red-50 text-red-500 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-red-100 transition-all flex items-center gap-2">
-            <StopCircle size={16} /> Encerrar sessão
-          </button>
-        )}
-        <Zap size={64} className="text-gray-200 mb-4" />
-        <h2 className="text-xl font-bold text-gray-800 text-center">Nenhuma meta em treino ou prioritaria.</h2>
-        {actionToastPortal}
+      <div className="fixed inset-0 z-[100] overflow-y-auto bg-[#F4F7FE]">
+        <header className="sticky top-0 z-10 border-b border-blue-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-6">
+          <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-3">
+            <button onClick={onClose} className="rounded-full p-2 text-gray-500 transition hover:bg-gray-100" aria-label="Voltar ao prontuário">
+              <ChevronLeft size={28} />
+            </button>
+            <div className="min-w-0 flex-1 text-center">
+              <p className="truncate text-sm font-semibold text-gray-900">{patientDisplayName}</p>
+              <p className="text-xs text-gray-500">Sessão em andamento · {formatCountdown?.(remainingSeconds) || formatSessionDuration(remainingSeconds)}</p>
+            </div>
+            {activeSession && (
+              <button onClick={requestEndSession} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-red-50 px-3 text-xs font-semibold uppercase tracking-wider text-red-600 transition hover:bg-red-100 sm:px-4">
+                <StopCircle size={16} /> <span className="hidden sm:inline">Encerrar atendimento</span><span className="sm:hidden">Encerrar</span>
+              </button>
+            )}
+          </div>
+        </header>
+
+        <main className="mx-auto flex min-h-[calc(100dvh-66px)] w-full max-w-5xl flex-col justify-center px-4 py-6 sm:px-6">
+          <section className="rounded-[28px] border border-blue-100 bg-white p-5 shadow-xl shadow-blue-100/40 sm:p-7">
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
+              <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-violet-50 text-[#7a32fc]">
+                <FileText size={28} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">Atendimento clínico</p>
+                <h2 className="mt-1 text-xl font-semibold text-gray-900">Registre a evolução desta sessão</h2>
+                <p className="mt-2 text-sm leading-relaxed text-gray-500">
+                  Este atendimento não possui metas ABA em treino ou prioritárias. A sessão continua válida: registre evolução, intercorrências, condutas, tarefas e próximos passos antes de encerrar.
+                </p>
+              </div>
+            </div>
+
+            <label className="mt-6 block text-xs font-medium text-gray-600">
+              Evolução e observações da sessão
+              <textarea
+                value={sessionNote}
+                onChange={(event) => setSessionNote(event.target.value)}
+                maxLength={4000}
+                placeholder="Objetivo da sessão, intervenções realizadas, resposta do paciente, tarefas combinadas e próximos passos..."
+                className="mt-2 min-h-[220px] w-full resize-y rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm font-normal leading-relaxed text-gray-700 outline-none transition focus:border-[#7a32fc]/50 focus:ring-2 focus:ring-[#7a32fc]/10"
+              />
+              <span className="mt-1.5 block text-right text-[11px] text-gray-400">{sessionNote.length}/4000</span>
+            </label>
+
+            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="rounded-2xl bg-[#F8FAFF] p-3">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Tentativas</p>
+                <p className="mt-1 text-xl font-semibold text-gray-900">{sessionSummary.trialTotal}</p>
+              </div>
+              <div className="rounded-2xl bg-[#F8FAFF] p-3">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Comportamentos</p>
+                <p className="mt-1 text-xl font-semibold text-gray-900">{sessionSummary.behaviorTotal}</p>
+              </div>
+              <div className="rounded-2xl bg-[#F8FAFF] p-3">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Sincronização</p>
+                <p className={`mt-1 text-sm font-semibold ${sessionSummary.errorTotal > 0 || sessionSummary.localTotal > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                  {sessionSummary.errorTotal > 0 ? 'Com erro' : sessionSummary.localTotal > 0 ? 'Pendente' : 'Atualizada'}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-[#F8FAFF] p-3">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Prontuário</p>
+                <p className="mt-1 text-sm font-semibold text-gray-700">Salvamento local ativo</p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+              <button onClick={onClose} className="flex-1 rounded-2xl border border-blue-100 bg-white py-3 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">
+                Voltar ao prontuário
+              </button>
+              <button onClick={requestEndSession} className="flex-1 rounded-2xl bg-[#7a32fc] py-3 text-sm font-semibold text-white shadow-lg shadow-purple-500/20 transition hover:bg-[#6425df]">
+                Revisar e encerrar atendimento
+              </button>
+            </div>
+          </section>
+          {actionToastPortal}
+        </main>
       </div>
     );
     if (typeof document === 'undefined') return emptyStateContent;
@@ -5430,24 +5555,43 @@ export const SessionMode = ({
   }
 
   if (sessionCompleted && postClosureSummary && !showSessionSummary) {
+    const completedAttendanceStatus = String((postClosureSummary as any).attendanceStatus || 'ATTENDED').toUpperCase();
+    const completedBillingStatus = String((postClosureSummary as any).billingStatus || 'PENDING_REVIEW').toUpperCase();
+    const completedWithoutAttendance = NON_ATTENDANCE_STATUSES.has(completedAttendanceStatus as SessionAttendanceStatus);
+    const completionStatusLabel = completedWithoutAttendance
+      ? 'Atendimento encerrado — não faturável'
+      : completedBillingStatus === 'READY'
+        ? 'Atendimento concluído — pronto para faturamento'
+        : 'Atendimento concluído — pendências de faturamento';
+    const completionStatusDescription = completedWithoutAttendance
+      ? 'A falta ou o cancelamento foi registrado e não será enviado ao faturamento de convênio.'
+      : completedBillingStatus === 'READY'
+        ? 'O encerramento clínico foi persistido e a conferência operacional liberou o atendimento para o fluxo de faturamento.'
+        : 'O encerramento clínico foi persistido. A equipe administrativa ainda deve revisar as pendências antes do faturamento.';
     const postClosureContent = (
       <div ref={postClosureScrollRef} className="fixed inset-0 z-[100] bg-[#F4F7FE] overflow-y-auto overflow-x-hidden overscroll-contain scroll-pt-4 animate-fade-in">
         <div className="mx-auto flex min-h-dvh w-full max-w-7xl flex-col px-3 py-4 sm:px-6 sm:py-6">
           <div className="w-full rounded-[24px] sm:rounded-[32px] bg-white border border-blue-100 p-4 sm:p-8 shadow-2xl">
             <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
               <div>
-                <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Sessão concluída</p>
-                <h2 className="mt-2 text-3xl font-bold text-gray-900">{showPostClosureReport ? 'Relatório da sessão' : 'Sessão encerrada com sucesso'}</h2>
+                <p className={`text-[10px] font-semibold uppercase tracking-widest ${completedWithoutAttendance ? 'text-slate-500' : completedBillingStatus === 'READY' ? 'text-emerald-600' : 'text-amber-700'}`}>Encerramento confirmado</p>
+                <h2 className="mt-2 text-3xl font-semibold text-gray-900">{showPostClosureReport ? 'Relatório do atendimento' : completionStatusLabel}</h2>
                 <p className="mt-2 text-sm text-gray-500">
                   {showPostClosureReport
-                    ? 'Relatório clínico estruturado, somente leitura para os dados principais da sessão.'
-                    : 'Os registros clínicos foram bloqueados para novas coletas. Apenas complementos autorizados permanecem disponíveis.'}
+                    ? 'Relatório clínico estruturado, somente leitura para os dados principais do atendimento.'
+                    : completionStatusDescription}
                 </p>
               </div>
-              <CheckCircle2 size={44} className="text-emerald-500" />
+              <CheckCircle2 size={44} className={completedWithoutAttendance ? 'text-slate-400' : completedBillingStatus === 'READY' ? 'text-emerald-500' : 'text-amber-500'} />
             </div>
 
-            <section className="mt-6 rounded-[24px] bg-[#F8FAFF] border border-blue-100 p-5">
+            <section className={`mt-6 rounded-[24px] border p-5 ${completedWithoutAttendance ? 'border-slate-200 bg-slate-50' : completedBillingStatus === 'READY' ? 'border-emerald-100 bg-emerald-50' : 'border-amber-100 bg-amber-50'}`}>
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Situação operacional</p>
+              <p className="mt-1 text-lg font-semibold text-gray-900">{completionStatusLabel}</p>
+              <p className="mt-1 text-sm text-gray-600">{completionStatusDescription}</p>
+            </section>
+
+            <section className="mt-4 rounded-[24px] bg-[#F8FAFF] border border-blue-100 p-5">
               <h3 className="text-lg font-bold text-gray-900">Resumo geral</h3>
               <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="rounded-2xl bg-white border border-gray-100 p-4">
@@ -8529,16 +8673,49 @@ export const SessionMode = ({
           <div className="my-0 sm:my-2 bg-[#F4F7FE] rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-6xl w-full border border-blue-100">
             <div className="flex items-start justify-between gap-4 mb-5">
               <div>
-                <p className="text-[10px] font-bold text-[#7a32fc] uppercase tracking-widest">Encerramento da sessão ABA</p>
-                <h3 className="text-2xl font-semibold text-gray-900 mt-1">Resumo da sessão</h3>
-                <p className="text-sm text-gray-500 mt-1">Revise bloqueios, avisos e dados clínicos antes de confirmar.</p>
+                <p className="text-[10px] font-semibold text-[#7a32fc] uppercase tracking-widest">Encerramento do atendimento</p>
+                <h3 className="text-2xl font-semibold text-gray-900 mt-1">Conferência final</h3>
+                <p className="text-sm text-gray-500 mt-1">Confirme presença, dados clínicos e pendências operacionais antes de finalizar.</p>
               </div>
-              <button onClick={() => setShowSessionSummary(false)} className="p-2 rounded-full hover:bg-white text-gray-500">
+              <button onClick={returnToActiveSession} disabled={endingSession} className="p-2 rounded-full hover:bg-white text-gray-500 disabled:cursor-not-allowed disabled:opacity-50" aria-label="Voltar para o atendimento">
                 <X size={20} />
               </button>
             </div>
 
             <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+              <h4 className="text-lg font-semibold text-gray-900">Presença no atendimento</h4>
+              <p className="mt-1 text-sm text-gray-500">Essa classificação define o fechamento operacional e a elegibilidade para faturamento.</p>
+              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" role="radiogroup" aria-label="Presença no atendimento">
+                {SESSION_ATTENDANCE_OPTIONS.map((option) => {
+                  const selected = attendanceStatus === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      disabled={endingSession}
+                      onClick={() => {
+                        setAttendanceStatus(option.value);
+                        setSessionEndError('');
+                        setSessionWarning('');
+                      }}
+                      className={`rounded-2xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${selected ? 'border-[#7a32fc] bg-violet-50 shadow-sm' : 'border-gray-100 bg-[#F8FAFF] hover:border-violet-200'}`}
+                    >
+                      <span className="block text-sm font-semibold text-gray-900">{option.label}</span>
+                      <span className="mt-1 block text-xs leading-relaxed text-gray-500">{option.description}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {NON_ATTENDANCE_STATUSES.has(attendanceStatus) && (
+                <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  Informe o motivo abaixo. Faltas e cancelamentos não seguem para faturamento de convênio e não podem conter registros clínicos de atendimento realizado.
+                </div>
+              )}
+            </section>
+
+            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <h4 className="text-lg font-bold text-gray-900">Resumo geral</h4>
                 <span className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${sessionClosureSummary.syncStatus === 'synced' ? 'bg-emerald-50 text-emerald-600' : sessionClosureSummary.syncStatus === 'error' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-600'}`}>
@@ -8689,7 +8866,7 @@ export const SessionMode = ({
                         <div className="flex flex-wrap gap-2">
                           <button onClick={() => resolveDurationBeforeEnd(event.id, 'end')} className="rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Encerrar agora</button>
                           <button onClick={() => resolveDurationBeforeEnd(event.id, 'discard')} className="rounded-xl bg-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-600 border border-red-100">Descartar evento</button>
-                          <button onClick={() => setShowSessionSummary(false)} className="rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600">Voltar para sessão</button>
+                          <button onClick={returnToActiveSession} className="rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600">Voltar para sessão</button>
                         </div>
                       </div>
                     </div>
@@ -8704,7 +8881,7 @@ export const SessionMode = ({
                     {intervalRunPaused && <button onClick={resumeIntervalRun} className="rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Retomar coleta</button>}
                     <button onClick={finishIntervalRunNow} className="rounded-xl bg-emerald-500 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Finalizar coleta agora</button>
                     <button onClick={requestCancelIntervalRun} className="rounded-xl bg-white px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-600 border border-red-100">Cancelar coleta</button>
-                    <button onClick={() => setShowSessionSummary(false)} className="rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600">Voltar para sessão</button>
+                    <button onClick={returnToActiveSession} className="rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600">Voltar para sessão</button>
                   </div>
                 </div>
               )}
@@ -8729,25 +8906,37 @@ export const SessionMode = ({
             </section>
 
             <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
-              <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest">
-                Observação da sessão
+              <label className="block text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
+                {NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Motivo da falta ou do cancelamento' : 'Observação do atendimento'}
                 <textarea
                   value={sessionNote}
-                  onChange={(event) => setSessionNote(event.target.value)}
-                  placeholder="Resumo clínico da sessão, intercorrências, resposta do paciente e orientações relevantes..."
-                  className="mt-2 w-full min-h-[104px] rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm text-gray-700 outline-none resize-none focus:border-[#7a32fc]"
+                  onChange={(event) => setSessionNote(event.target.value.slice(0, 4000))}
+                  maxLength={4000}
+                  disabled={endingSession}
+                  placeholder={NON_ATTENDANCE_STATUSES.has(attendanceStatus)
+                    ? 'Descreva o motivo informado pelo paciente, responsável, clínica ou profissional...'
+                    : 'Resumo clínico do atendimento, intercorrências, resposta do paciente e orientações relevantes...'}
+                  className="mt-2 w-full min-h-[104px] rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm text-gray-700 outline-none resize-none focus:border-[#7a32fc] disabled:cursor-not-allowed disabled:opacity-60"
                 />
+                <span className="mt-1 block text-right text-[10px] font-normal normal-case tracking-normal text-gray-400">{sessionNote.length}/4000</span>
               </label>
             </section>
 
+            {sessionEndError && (
+              <div role="alert" className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                {sessionEndError}
+              </div>
+            )}
+
             <div className="mt-6 flex flex-col sm:flex-row gap-3">
-              <button onClick={() => setShowSessionSummary(false)} className="flex-1 py-3 rounded-2xl bg-white border border-blue-100 text-gray-600 font-semibold">Voltar para sessão</button>
+              <button onClick={returnToActiveSession} disabled={endingSession} className="flex-1 py-3 rounded-2xl bg-white border border-blue-100 text-gray-600 font-semibold disabled:cursor-not-allowed disabled:opacity-50">Voltar para o atendimento</button>
               <button
                 onClick={confirmEndSession}
-                disabled={hasClosureBlockers}
-                className={`flex-1 py-3 rounded-2xl font-semibold shadow-lg transition-all ${hasClosureBlockers ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' : 'bg-[#7a32fc] text-white shadow-purple-500/20 hover:bg-[#6425df]'}`}
+                disabled={hasClosureBlockers || endingSession}
+                className={`flex-1 inline-flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold shadow-lg transition-all ${hasClosureBlockers || endingSession ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' : 'bg-[#7a32fc] text-white shadow-purple-500/20 hover:bg-[#6425df]'}`}
               >
-                Confirmar encerramento da sessão
+                {endingSession && <Loader2 size={18} className="animate-spin" />}
+                {endingSession ? 'Encerrando com segurança...' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Confirmar ausência e encerrar' : 'Confirmar encerramento do atendimento'}
               </button>
             </div>
           </div>

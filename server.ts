@@ -32,6 +32,7 @@ import {
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
+import { startAppointmentNoShowCron } from './services/appointmentNoShowService';
 import {
   classifyReservationSchemaProbe,
   checkAppointmentActionResolutionSchema,
@@ -70521,6 +70522,9 @@ async function startServer() {
   };
 
   app.post('/api/aba/sessions', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    let claimedAppointmentId = '';
+    let claimedSessionId = '';
+    let appointmentClaimNeedsRelease = false;
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload da sessão ABA')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
@@ -70642,6 +70646,20 @@ async function startServer() {
           });
           return res.status(409).json({ success: false, error: 'Esta sessão agendada já possui uma Sessão ABA encerrada.' });
         }
+        if (appointmentStatus === 'NO_SHOW' || appointmentStatus === 'MISSED') {
+          logAbaSessionStartDebug({
+            hasAppointmentId: true,
+            appointmentFound: true,
+            appointmentStatus,
+            organizationMatched: true,
+            reasonCode: 'APPOINTMENT_NO_SHOW'
+          });
+          return res.status(409).json({
+            success: false,
+            code: 'APPOINTMENT_NO_SHOW_REOPEN_REQUIRED',
+            error: 'Este atendimento foi classificado como falta. Reabra a falta com justificativa antes de iniciar.'
+          });
+        }
         if (!ABA_SESSION_STARTABLE_APPOINTMENT_STATUSES.has(appointmentStatus)) {
           logAbaSessionStartDebug({
             hasAppointmentId: true,
@@ -70746,6 +70764,47 @@ async function startServer() {
           ? sanitizeIsoDateTime(req.body?.actual_start || req.body?.actualStart || req.body?.actual_start_at || req.body?.actualStartAt)
           : startedAt
       );
+
+      if (appointmentId) {
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const claimResult = await supabase.rpc('claim_appointment_for_session_start_v1', {
+          p_actor_id: actorId,
+          p_clinic_id: clinicId,
+          p_appointment_id: appointmentId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_started_at: resolvedActualStartAt
+        });
+        if (claimResult.error) {
+          const claimMessage = sanitizeString(claimResult.error?.message || claimResult.error?.code, 600);
+          if (/SESSION_START_APPOINTMENT_NO_SHOW/i.test(claimMessage)) {
+            return res.status(409).json({
+              success: false,
+              code: 'APPOINTMENT_NO_SHOW_REOPEN_REQUIRED',
+              error: 'Este atendimento foi classificado como falta. Reabra a falta com justificativa antes de iniciar.'
+            });
+          }
+          if (/SESSION_START_APPOINTMENT_ALREADY_IN_PROGRESS|SESSION_START_APPOINTMENT_STATUS_INVALID|SESSION_START_APPOINTMENT_CANCELLED|SESSION_START_APPOINTMENT_COMPLETED/i.test(claimMessage)) {
+            return res.status(409).json({ success: false, code: 'APPOINTMENT_START_CONFLICT', error: 'O status deste atendimento mudou. Atualize a agenda e tente novamente.' });
+          }
+          if (/SESSION_START_ACCESS_DENIED|SESSION_START_ACTOR_MISMATCH/i.test(claimMessage)) {
+            return res.status(403).json({ success: false, code: 'APPOINTMENT_START_ACCESS_DENIED', error: 'Você não possui permissão para iniciar este atendimento.' });
+          }
+          if (/claim_appointment_for_session_start_v1|active_aba_session_id|session_start_previous_status|PGRST202|42883|42703/i.test(claimMessage)) {
+            return res.status(503).json({
+              success: false,
+              code: 'SESSION_ATTENDANCE_POLICY_MIGRATION_REQUIRED',
+              retryable: false,
+              error: 'A atualização de presença, encerramento e falta ainda precisa ser aplicada no banco.'
+            });
+          }
+          throw claimResult.error;
+        }
+        claimedAppointmentId = appointmentId;
+        claimedSessionId = sessionId;
+        appointmentClaimNeedsRelease = claimResult.data?.claimedNow === true;
+      }
+
       const payload = cleanObject({
         id: sessionId,
         organization_id: sanitizeString(linkedAppointment?.organization_id || linkedAppointment?.clinic_id || clinicId, 120),
@@ -70821,12 +70880,8 @@ async function startServer() {
       });
 
       const result = await writeAbaRowWithSchemaFallback('aba_sessions', payload, 'upsert');
-      if (result.error) {
-        if (hasMissingFinancialSchema(result.error)) {
-          return res.status(503).json({ success: false, error: 'Schema ABA ainda não aplicado.' });
-        }
-        throw result.error;
-      }
+      if (result.error) throw result.error;
+      appointmentClaimNeedsRelease = false;
       if (payload.appointment_id) {
         const appointmentStatus = payload.status === 'completed'
           ? 'COMPLETED'
@@ -70864,7 +70919,30 @@ async function startServer() {
       const data = { ...payload, id: (result.data as any)?.id || payload.id };
       return res.json({ success: true, idempotent: Boolean(existingInProgressSession?.id), data, session: data });
     } catch (error: any) {
+      if (appointmentClaimNeedsRelease && isUuid(claimedAppointmentId) && claimedSessionId) {
+        try {
+          await supabase.rpc('release_appointment_session_start_claim_v1', {
+            p_actor_id: sanitizeString(req.session.user?.id, 120),
+            p_clinic_id: sanitizeString(currentClinicId(req.session.user), 120),
+            p_appointment_id: claimedAppointmentId,
+            p_session_id: claimedSessionId
+          });
+        } catch (releaseError: any) {
+          console.warn('[ABA Sessions] Falha ao liberar reserva de início após erro.', {
+            appointmentId: claimedAppointmentId,
+            message: sanitizeString(releaseError?.message || releaseError, 240)
+          });
+        }
+      }
       console.error('[ABA Sessions] start error:', error?.message || String(error));
+      if (hasMissingFinancialSchema(error) || /claim_appointment_for_session_start_v1|active_aba_session_id|session_start_previous_status|PGRST202|42883|42703/i.test(String(error?.message || error?.code || ''))) {
+        return res.status(503).json({
+          success: false,
+          code: 'SESSION_ATTENDANCE_POLICY_MIGRATION_REQUIRED',
+          retryable: false,
+          error: 'A atualização de presença, encerramento e falta ainda precisa ser aplicada no banco.'
+        });
+      }
       return res.status(500).json({ success: false, error: 'Não foi possível iniciar a sessão agora.' });
     }
   });
@@ -70876,8 +70954,17 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!sessionId) return res.status(400).json({ success: false, error: 'Sessão inválida.' });
 
+      const requestedPatchStatus = req.body?.status !== undefined ? normalizeAbaSessionStatus(req.body?.status) : undefined;
+      if (requestedPatchStatus === 'completed') {
+        return res.status(409).json({
+          success: false,
+          code: 'USE_ATOMIC_SESSION_COMPLETION',
+          error: 'Use o fluxo de encerramento da sessão para concluir atendimento, presença e faturamento de forma atômica.'
+        });
+      }
+
       const patch = cleanObject({
-        status: req.body?.status !== undefined ? normalizeAbaSessionStatus(req.body?.status) : undefined,
+        status: requestedPatchStatus,
         appointment_id: req.body?.appointment_id !== undefined || req.body?.appointmentId !== undefined
           ? (isUuid(sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180)) ? sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 180) : null)
           : undefined,
@@ -70917,12 +71004,6 @@ async function startServer() {
         notes: req.body?.notes !== undefined ? sanitizeTextField(req.body?.notes, 2000) : undefined,
         updated_at: new Date().toISOString()
       });
-      if (patch.status === 'completed') {
-        const completedAt = patch.actual_end_at || patch.ended_at || new Date().toISOString();
-        if (patch.actual_end_at === undefined) patch.actual_end_at = completedAt;
-        if (patch.ended_at === undefined) patch.ended_at = completedAt;
-      }
-
       let safePatch: Record<string, any> = { ...patch };
       while (Object.keys(safePatch).length > 0) {
         let query = supabase.from('aba_sessions').update(safePatch).eq('id', sessionId);
@@ -70989,6 +71070,352 @@ async function startServer() {
       return res.status(400).json({ success: false, error: 'Nada para atualizar.' });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+
+  app.post('/api/aba/sessions/:sessionId/complete', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 192 * 1024, 'Encerramento da sessão ABA')) return;
+      const sessionId = sanitizeString(req.params.sessionId, 180);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+      if (!sessionId) return res.status(400).json({ success: false, error: 'Sessão inválida.' });
+      if (!isUuid(clinicId) || !isUuid(actorId)) return res.status(403).json({ success: false, error: 'Clínica ou usuário não identificado.' });
+      if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+
+      const attendanceStatus = sanitizeString(req.body?.attendance_status || req.body?.attendanceStatus, 40).toUpperCase();
+      const attendanceStatuses = new Set(['ATTENDED', 'LATE', 'PARTIAL', 'NO_SHOW', 'CANCELLED_PATIENT', 'CANCELLED_CLINIC']);
+      if (!attendanceStatuses.has(attendanceStatus)) {
+        return res.status(422).json({
+          success: false,
+          code: 'SESSION_COMPLETION_ATTENDANCE_INVALID',
+          error: 'Selecione uma situação de presença válida.'
+        });
+      }
+
+      const endedAt = sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt || new Date().toISOString());
+      const sessionNote = sanitizeTextField(req.body?.session_note ?? req.body?.sessionNote, 4000);
+      const idempotencyKey = sanitizeString(
+        req.body?.idempotencyKey || req.body?.idempotency_key || req.get?.('Idempotency-Key') || req.headers?.['idempotency-key'],
+        180
+      );
+      if (!idempotencyKey) {
+        return res.status(422).json({
+          success: false,
+          code: 'SESSION_COMPLETION_IDEMPOTENCY_REQUIRED',
+          error: 'A confirmação precisa de uma chave idempotente.'
+        });
+      }
+
+      const requestedAppointmentId = sanitizeString(req.body?.appointment_id || req.body?.appointmentId, 120);
+      if (requestedAppointmentId && !isUuid(requestedAppointmentId)) {
+        return res.status(400).json({ success: false, error: 'Agendamento inválido.' });
+      }
+      const appointmentId = await resolveAbaAppointmentIdForClinicalWrite({
+        requestedAppointmentId: requestedAppointmentId || null,
+        sessionId,
+        patientId,
+        clinicId,
+        user: req.session.user
+      });
+      if (requestedAppointmentId && !appointmentId) {
+        return res.status(403).json({
+          success: false,
+          code: 'SESSION_COMPLETION_APPOINTMENT_SCOPE_INVALID',
+          error: 'O agendamento não pertence a este paciente ou clínica.'
+        });
+      }
+
+      const rawSummary = req.body?.summary && typeof req.body.summary === 'object' && !Array.isArray(req.body.summary)
+        ? req.body.summary
+        : {};
+      const safeArray = (value: any) => sanitizeClinicalPayload(Array.isArray(value) ? value : []);
+      const summaryPayload = sanitizeClinicalPayload({
+        ...rawSummary,
+        id: sanitizeString(`summary-${sessionId}`, 180),
+        sessionId,
+        patientId,
+        therapistId: actorId,
+        totalTrials: asSafeNumber(rawSummary?.totalTrials, 0, 100000) || 0,
+        independentTrials: asSafeNumber(rawSummary?.independentTrials, 0, 100000) || 0,
+        promptedTrials: asSafeNumber(rawSummary?.promptedTrials, 0, 100000) || 0,
+        errorTrials: asSafeNumber(rawSummary?.errorTrials, 0, 100000) || 0,
+        accuracyPercent: asSafeNumber(rawSummary?.accuracyPercent, 0, 100) || 0,
+        independencePercent: asSafeNumber(rawSummary?.independencePercent, 0, 100) || 0,
+        totalBehaviorEvents: asSafeNumber(rawSummary?.totalBehaviorEvents, 0, 100000) || 0,
+        trialTypesUsed: safeArray(rawSummary?.trialTypesUsed),
+        frequencySummary: safeArray(rawSummary?.frequencySummary),
+        durationSummary: safeArray(rawSummary?.durationSummary),
+        intervalSummary: safeArray(rawSummary?.intervalSummary),
+        abcSummary: safeArray(rawSummary?.abcSummary),
+        masterySummary: safeArray(rawSummary?.masterySummary),
+        maintenanceSummary: safeArray(rawSummary?.maintenanceSummary),
+        blockingItems: safeArray(rawSummary?.blockingItems),
+        warningItems: safeArray(rawSummary?.warningItems),
+        pendingItems: safeArray(rawSummary?.pendingItems),
+        pendingWarnings: safeArray(rawSummary?.pendingWarnings),
+        attendanceStatus,
+        endedAt,
+        createdAt: endedAt,
+        sessionNote,
+        source: 'verto_web'
+      });
+      const requestHash = stableHashPayload({
+        clinicId,
+        patientId,
+        sessionId,
+        appointmentId: appointmentId || null,
+        attendanceStatus,
+        endedAt,
+        sessionNote,
+        summary: summaryPayload
+      });
+
+      const completionResult = await supabase.rpc('complete_aba_session_atomic_v1', {
+        p_actor_id: actorId,
+        p_clinic_id: clinicId,
+        p_patient_id: patientId,
+        p_session_id: sessionId,
+        p_appointment_id: appointmentId || null,
+        p_attendance_status: attendanceStatus,
+        p_ended_at: endedAt,
+        p_session_note: sessionNote,
+        p_summary: summaryPayload,
+        p_idempotency_key: idempotencyKey,
+        p_payload_hash: requestHash
+      });
+      if (completionResult.error) throw completionResult.error;
+
+      const rpcResponse = completionResult.data && typeof completionResult.data === 'object'
+        ? completionResult.data as any
+        : {};
+      const completionData = rpcResponse?.data && typeof rpcResponse.data === 'object'
+        ? rpcResponse.data as any
+        : {};
+      const attended = ['ATTENDED', 'LATE', 'PARTIAL'].includes(attendanceStatus);
+      const completionTherapistId = sanitizeString(completionData?.therapistId || actorId, 120);
+      let masterySummary = safeArray(rawSummary?.masterySummary);
+      let maintenanceSummary = safeArray(rawSummary?.maintenanceSummary);
+
+      if (attended) {
+        try {
+          const evaluatedMastery = await evaluateAndPersistSessionMastery({
+            sessionId,
+            patientId,
+            clinicId,
+            therapistId: completionTherapistId,
+            evaluatedAt: completionData?.endedAt || endedAt
+          });
+          if (evaluatedMastery.length > 0) masterySummary = sanitizeClinicalPayload(evaluatedMastery);
+        } catch (masteryError: any) {
+          console.warn('[ABA Mastery] Falha não bloqueante após encerramento atômico:', masteryError?.message || String(masteryError));
+        }
+        try {
+          const evaluatedMaintenance = await evaluateAndPersistSessionMaintenance({
+            sessionId,
+            patientId,
+            clinicId,
+            therapistId: completionTherapistId,
+            evaluatedAt: completionData?.endedAt || endedAt,
+            appointmentId: appointmentId || null
+          });
+          if (evaluatedMaintenance.length > 0) maintenanceSummary = sanitizeClinicalPayload(evaluatedMaintenance);
+        } catch (maintenanceError: any) {
+          console.warn('[ABA Maintenance] Falha não bloqueante após encerramento atômico:', maintenanceError?.message || String(maintenanceError));
+        }
+        try {
+          await buildSessionMetricSnapshots(sessionId);
+        } catch (snapshotError: any) {
+          console.warn('[ABA Charts] Falha não bloqueante ao gerar snapshots:', snapshotError?.message || String(snapshotError));
+        }
+      }
+
+      let closure: any = null;
+      let billingStatus = attendanceStatus === 'NO_SHOW' || attendanceStatus.startsWith('CANCELLED_')
+        ? 'NOT_BILLABLE'
+        : 'PENDING_REVIEW';
+      const completedAppointmentId = sanitizeString(completionData?.appointmentId || appointmentId, 120);
+      if (isUuid(completedAppointmentId)) {
+        await regenerateClosureForAppointments(
+          [completedAppointmentId],
+          req.session.user,
+          'aba_session_completed_atomic'
+        );
+        if (attended) {
+          try {
+            await runTissPipelineForAppointment({
+              appointmentId: completedAppointmentId,
+              user: req.session.user,
+              reason: 'session_completed',
+              mode: 'best_effort',
+              revalidateAppointment: revalidateAppointmentBillingForAppointment,
+              forceClosure: true,
+              logger: console
+            });
+          } catch (tissError: any) {
+            console.warn('[TISS] Falha não bloqueante após encerramento atômico:', tissError?.message || String(tissError));
+          }
+        }
+
+        let closureQuery = supabase
+          .from('appointment_closure_checks')
+          .select(APPOINTMENT_CLOSURE_CHECK_SELECT)
+          .eq('appointment_id', completedAppointmentId)
+          .order('updated_at', { ascending: false })
+          .limit(1);
+        if (!hasGlobalClinicAccess(req.session.user)) closureQuery = closureQuery.eq('organization_id', clinicId);
+        const closureResult = await closureQuery.maybeSingle();
+        if (!closureResult.error) {
+          closure = closureResult.data || null;
+          const readinessStatus = sanitizeString(closure?.readiness_status, 40).toUpperCase();
+          if (readinessStatus === 'READY') billingStatus = 'READY';
+          else if (readinessStatus === 'NOT_BILLABLE') billingStatus = 'NOT_BILLABLE';
+          else if (attended) billingStatus = 'PENDING_REVIEW';
+        } else if (!hasMissingFinancialSchema(closureResult.error) && !isMissingRelationError(closureResult.error)) {
+          console.warn('[Closure] Falha não bloqueante ao ler fechamento após sessão:', closureResult.error.message);
+        }
+      }
+
+      const summaryId = sanitizeString(completionData?.summaryId || summaryPayload?.id, 180);
+      if (summaryId) {
+        const summaryUpdate = await supabase
+          .from('aba_session_summaries')
+          .update({
+            mastery_summary: masterySummary,
+            maintenance_summary: maintenanceSummary,
+            billing_status: billingStatus,
+            summary_payload: sanitizeClinicalPayload({
+              ...summaryPayload,
+              masterySummary,
+              maintenanceSummary,
+              attendanceStatus,
+              billingStatus,
+              therapistId: completionTherapistId,
+              appointmentId: completedAppointmentId || null,
+              sessionNote
+            }),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', summaryId)
+          .eq('clinic_id', clinicId);
+        if (summaryUpdate.error && !hasMissingFinancialSchema(summaryUpdate.error) && !extractMissingColumnName(summaryUpdate.error)) {
+          console.warn('[ABA Sessions] Falha não bloqueante ao complementar resumo atômico:', summaryUpdate.error.message);
+        }
+      }
+
+      return res.json({
+        success: true,
+        idempotentReplay: Boolean(rpcResponse?.idempotentReplay),
+        data: {
+          ...completionData,
+          summaryId: summaryId || completionData?.summaryId,
+          appointmentId: completedAppointmentId || null,
+          attendanceStatus,
+          billingStatus,
+          closure,
+          masterySummary,
+          maintenanceSummary
+        }
+      });
+    } catch (error: any) {
+      const message = String(error?.message || error?.code || '');
+      if (/SESSION_COMPLETION_IDEMPOTENCY_CONFLICT/i.test(message)) {
+        return res.status(409).json({ success: false, code: 'SESSION_COMPLETION_IDEMPOTENCY_CONFLICT', error: 'Esta confirmação já foi enviada com dados diferentes.' });
+      }
+      if (/SESSION_COMPLETION_NO_SHOW_REOPEN_REQUIRED/i.test(message)) {
+        return res.status(409).json({ success: false, code: 'APPOINTMENT_NO_SHOW_REOPEN_REQUIRED', error: 'O atendimento foi classificado como falta. Reabra a falta antes de concluir como comparecimento.' });
+      }
+      if (/SESSION_COMPLETION_ALREADY_FINALIZED/i.test(message)) {
+        return res.status(409).json({ success: false, code: 'SESSION_ALREADY_FINALIZED', error: 'Esta sessão já foi encerrada.' });
+      }
+      if (/SESSION_COMPLETION_ABSENCE_HAS_CLINICAL_RECORDS/i.test(message)) {
+        return res.status(409).json({ success: false, code: 'ABSENCE_HAS_CLINICAL_RECORDS', error: 'Não é possível registrar falta ou cancelamento porque esta sessão já possui registros clínicos.' });
+      }
+      if (/SESSION_COMPLETION_SESSION_NOT_FOUND|SESSION_COMPLETION_APPOINTMENT_NOT_FOUND/i.test(message)) {
+        return res.status(404).json({ success: false, code: 'SESSION_COMPLETION_NOT_FOUND', error: 'Sessão ou agendamento não encontrado.' });
+      }
+      if (/SESSION_COMPLETION_ACCESS_DENIED|SESSION_COMPLETION_ACTOR_MISMATCH/i.test(message)) {
+        return res.status(403).json({ success: false, code: 'SESSION_COMPLETION_ACCESS_DENIED', error: 'Você não possui permissão para encerrar esta sessão.' });
+      }
+      if (/SESSION_COMPLETION_SUMMARY_TOO_LARGE|SESSION_COMPLETION_NOTE_TOO_LARGE/i.test(message)) {
+        return res.status(413).json({ success: false, code: 'SESSION_COMPLETION_PAYLOAD_TOO_LARGE', error: 'O resumo excede o tamanho permitido.' });
+      }
+      if (/SESSION_COMPLETION_ATTENDANCE_INVALID|SESSION_COMPLETION_ABSENCE_REASON_REQUIRED|SESSION_COMPLETION_END_TIME_INVALID|SESSION_COMPLETION_END_BEFORE_START|SESSION_COMPLETION_REQUIRED|SESSION_COMPLETION_IDEMPOTENCY_REQUIRED/i.test(message)) {
+        return res.status(422).json({ success: false, code: 'SESSION_COMPLETION_VALIDATION_FAILED', error: 'Revise presença, motivo e horários antes de encerrar.' });
+      }
+      if (/complete_aba_session_atomic_v1|attendance_status|billing_status|aba_session_completion_operations|appointment_attendance_audit_events|PGRST202|42883|42703/i.test(message)) {
+        return res.status(503).json({
+          success: false,
+          code: 'SESSION_ATTENDANCE_POLICY_MIGRATION_REQUIRED',
+          retryable: false,
+          error: 'A atualização de presença, encerramento e falta ainda precisa ser aplicada no banco.'
+        });
+      }
+      console.error('[ABA Sessions] completion error:', sanitizeString(message, 600));
+      return res.status(500).json({ success: false, error: 'Não foi possível encerrar a sessão agora. Nenhum dado clínico foi descartado.' });
+    }
+  });
+
+
+  app.post('/api/appointments/:appointmentId/reopen-no-show', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Reabertura de falta')) return;
+      const appointmentId = sanitizeString(req.params.appointmentId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const reason = sanitizeTextField(req.body?.reason, 1000).trim();
+      const idempotencyKey = sanitizeString(
+        req.body?.idempotencyKey || req.body?.idempotency_key || req.get?.('Idempotency-Key') || req.headers?.['idempotency-key'],
+        180
+      );
+      if (!isUuid(appointmentId)) return res.status(400).json({ success: false, error: 'Agendamento inválido.' });
+      if (!isUuid(clinicId) || !isUuid(actorId)) return res.status(403).json({ success: false, error: 'Clínica ou usuário não identificado.' });
+      if (reason.length < 5) {
+        return res.status(422).json({ success: false, code: 'NO_SHOW_REOPEN_REASON_REQUIRED', error: 'Informe uma justificativa com pelo menos 5 caracteres.' });
+      }
+      if (!idempotencyKey) {
+        return res.status(422).json({ success: false, code: 'NO_SHOW_REOPEN_IDEMPOTENCY_REQUIRED', error: 'A reabertura precisa de uma chave idempotente.' });
+      }
+
+      const requestHash = stableHashPayload({ clinicId, appointmentId, reason });
+      const result = await supabase.rpc('reopen_appointment_no_show_v1', {
+        p_actor_id: actorId,
+        p_clinic_id: clinicId,
+        p_appointment_id: appointmentId,
+        p_reason: reason,
+        p_idempotency_key: idempotencyKey,
+        p_payload_hash: requestHash
+      });
+      if (result.error) throw result.error;
+
+      await regenerateClosureForAppointments([appointmentId], req.session.user, 'appointment_no_show_reopened');
+      return res.json(result.data || { success: true, data: { appointmentId } });
+    } catch (error: any) {
+      const message = String(error?.message || error?.code || '');
+      if (/NO_SHOW_REOPEN_IDEMPOTENCY_CONFLICT/i.test(message)) {
+        return res.status(409).json({ success: false, code: 'NO_SHOW_REOPEN_IDEMPOTENCY_CONFLICT', error: 'Esta reabertura já foi enviada com dados diferentes.' });
+      }
+      if (/NO_SHOW_REOPEN_APPOINTMENT_NOT_FOUND/i.test(message)) {
+        return res.status(404).json({ success: false, code: 'NO_SHOW_REOPEN_NOT_FOUND', error: 'Agendamento não encontrado.' });
+      }
+      if (/NO_SHOW_REOPEN_ACCESS_DENIED|NO_SHOW_REOPEN_ACTOR_MISMATCH/i.test(message)) {
+        return res.status(403).json({ success: false, code: 'NO_SHOW_REOPEN_ACCESS_DENIED', error: 'Você não possui permissão para reabrir esta falta.' });
+      }
+      if (/NO_SHOW_REOPEN_REASON_REQUIRED|NO_SHOW_REOPEN_REQUIRED|NO_SHOW_REOPEN_IDEMPOTENCY_REQUIRED/i.test(message)) {
+        return res.status(422).json({ success: false, code: 'NO_SHOW_REOPEN_VALIDATION_FAILED', error: 'Revise a justificativa antes de reabrir a falta.' });
+      }
+      if (/reopen_appointment_no_show_v1|no_show_reopened_at|appointment_attendance_audit_events|PGRST202|42883|42703/i.test(message)) {
+        return res.status(503).json({
+          success: false,
+          code: 'SESSION_ATTENDANCE_POLICY_MIGRATION_REQUIRED',
+          retryable: false,
+          error: 'A atualização de presença, encerramento e falta ainda precisa ser aplicada no banco.'
+        });
+      }
+      console.error('[Appointments] reopen no-show error:', sanitizeString(message, 600));
+      return res.status(500).json({ success: false, error: 'Não foi possível reabrir a falta agora.' });
     }
   });
 
@@ -80788,6 +81215,50 @@ async function startServer() {
       if (error) throw error;
     });
   }, 24 * 60 * 60 * 1000);
+
+  startAppointmentNoShowCron({
+    supabase,
+    logger: console,
+    runtimeOwnerId,
+    requireDistributedLease: requiresDistributedRuntimeState(),
+    onAppointmentsClassified: async (rows) => {
+      const groupedByClinic = new Map<string, string[]>();
+      for (const row of Array.isArray(rows) ? rows : []) {
+        const clinicId = sanitizeString(row?.clinicId, 120);
+        const appointmentId = sanitizeString(row?.appointmentId, 120);
+        if (!isUuid(clinicId) || !isUuid(appointmentId)) continue;
+        const current = groupedByClinic.get(clinicId) || [];
+        if (!current.includes(appointmentId)) current.push(appointmentId);
+        groupedByClinic.set(clinicId, current);
+      }
+      const clinicIds = Array.from(groupedByClinic.keys());
+      if (clinicIds.length === 0) return;
+
+      const clinicResult = await supabase
+        .from('clinics')
+        .select('id,owner_user_id')
+        .in('id', clinicIds);
+      if (clinicResult.error) throw clinicResult.error;
+      const ownersByClinic = new Map(
+        (Array.isArray(clinicResult.data) ? clinicResult.data : [])
+          .map((clinic: any) => [sanitizeString(clinic?.id, 120), sanitizeString(clinic?.owner_user_id, 120)] as const)
+          .filter(([clinicId, ownerId]) => isUuid(clinicId) && isUuid(ownerId))
+      );
+
+      for (const [clinicId, appointmentIds] of groupedByClinic.entries()) {
+        const ownerId = ownersByClinic.get(clinicId);
+        if (!ownerId) {
+          console.warn('[Appointment No-show Cron] Fechamento não revalidado: clínica sem proprietário identificável.', { clinicId });
+          continue;
+        }
+        await regenerateClosureForAppointments(
+          appointmentIds,
+          { id: ownerId, user_id: ownerId, clinicId, clinic_id: clinicId, role: 'owner' },
+          'automatic_no_show'
+        );
+      }
+    }
+  });
 
   startAppointmentReminderCron({
     supabase,

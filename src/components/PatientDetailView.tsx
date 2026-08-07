@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { PatientSchoolInformation } from "./PatientSchoolInformation";
-import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock, StopCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
@@ -1047,6 +1047,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const normalizedRole = String(userRole || '').toLowerCase();
     return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
   }, [userRole]);
+  const canReopenAutomaticNoShow = useMemo(() => {
+    const normalizedRole = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').toLowerCase();
+    return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
+  }, [clinicContext?.role, resolvedClinicContext?.role, userRole]);
   const isPanelDark = useMemo(() => {
     if (themeMode === 'dark') return true;
     if (themeMode === 'light') return false;
@@ -1257,10 +1261,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [sessionDurationInput, setSessionDurationInput] = useState(String(configuredDefaultSessionMinutes));
   const [remainingSessionSeconds, setRemainingSessionSeconds] = useState(0);
   const [showSessionStartConfirm, setShowSessionStartConfirm] = useState(false);
-  const [showSessionEndConfirm, setShowSessionEndConfirm] = useState(false);
   const [pendingSessionAction, setPendingSessionAction] = useState<'tab' | 'fullscreen'>('tab');
   const [restoreSessionData, setRestoreSessionData] = useState(false);
   const [clearMaintenanceOnSessionRestore, setClearMaintenanceOnSessionRestore] = useState(false);
+  const [noShowReopenPrompt, setNoShowReopenPrompt] = useState<{
+    appointmentId: string;
+    durationMinutes: number;
+    openSessionMode: boolean;
+  } | null>(null);
+  const [noShowReopenReason, setNoShowReopenReason] = useState('');
+  const [noShowReopenError, setNoShowReopenError] = useState('');
+  const [isReopeningNoShow, setIsReopeningNoShow] = useState(false);
+  const noShowReopenIdempotencyKeyRef = React.useRef('');
   const consumedScheduledSessionStartKeyRef = React.useRef('');
   const [abaSessions, setAbaSessions] = useState<any[]>([]);
   const [abaTrials, setAbaTrials] = useState<any[]>([]);
@@ -1471,7 +1483,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setShowSessionStartConfirm(true);
   };
 
-  const handleConfirmSessionStart = async (options?: { durationMinutes?: number; openSessionMode?: boolean }) => {
+  const handleConfirmSessionStart = async (options?: {
+    durationMinutes?: number;
+    openSessionMode?: boolean;
+    skipSessionPreparation?: boolean;
+  }) => {
     const requestedDuration = options?.durationMinutes ?? Number(sessionDurationInput);
     const parsedDuration = Number(requestedDuration);
     const fallbackDuration = scheduledSessionForPatient ? scheduledSessionDurationMinutes : configuredDefaultSessionMinutes;
@@ -1484,8 +1500,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     );
     const startedAt = new Date();
     const resetAt = startedAt.getTime();
-    const shouldClearMaintenance = Boolean(restoreSessionData && clearMaintenanceOnSessionRestore && isKidsProfile && patient?.id);
-    if (restoreSessionData && isKidsProfile && Array.isArray(patient?.pei) && onUpdatePatient) {
+    const shouldPrepareSession = !options?.skipSessionPreparation;
+    const shouldClearMaintenance = Boolean(
+      shouldPrepareSession && restoreSessionData && clearMaintenanceOnSessionRestore && isKidsProfile && patient?.id
+    );
+    if (shouldPrepareSession && restoreSessionData && isKidsProfile && Array.isArray(patient?.pei) && onUpdatePatient) {
       const updatedPei = buildPeiSessionProgressReset(patient.pei, resetAt, {
         clearMaintenance: shouldClearMaintenance
       });
@@ -1723,6 +1742,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       });
       if (saveResult?.success === false && !saveResult?.offline && nextSession.appointment_id) {
         clearActiveSession();
+        if (saveResult?.code === 'APPOINTMENT_NO_SHOW_REOPEN_REQUIRED') {
+          noShowReopenIdempotencyKeyRef.current =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+              ? crypto.randomUUID()
+              : `reopen-no-show-${nextSession.appointment_id}-${Date.now()}`;
+          setNoShowReopenReason('');
+          setNoShowReopenError('');
+          setNoShowReopenPrompt({
+            appointmentId: String(nextSession.appointment_id),
+            durationMinutes,
+            openSessionMode: Boolean(options?.openSessionMode || pendingSessionAction === 'fullscreen')
+          });
+          setShowSessionStartConfirm(false);
+          return;
+        }
         const errorText = String(saveResult?.error || '');
         const humanError =
           saveResult?.code === 'INVALID_APPOINTMENT_ID' || saveResult?.code === 'APPOINTMENT_NOT_PERSISTED'
@@ -1758,6 +1792,52 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       'clinical'
     );
     if (options?.openSessionMode || pendingSessionAction === 'fullscreen') setIsSessionModeOpen(true);
+  };
+
+  const handleReopenNoShowAndStart = async () => {
+    if (!noShowReopenPrompt || isReopeningNoShow) return;
+    const reason = noShowReopenReason.trim();
+    if (!canReopenAutomaticNoShow) {
+      setNoShowReopenError('Somente coordenação ou administração pode reabrir uma falta.');
+      return;
+    }
+    if (reason.length < 5) {
+      setNoShowReopenError('Informe uma justificativa com pelo menos 5 caracteres.');
+      return;
+    }
+
+    setIsReopeningNoShow(true);
+    setNoShowReopenError('');
+    try {
+      if (!noShowReopenIdempotencyKeyRef.current) {
+        noShowReopenIdempotencyKeyRef.current =
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `reopen-no-show-${noShowReopenPrompt.appointmentId}-${Date.now()}`;
+      }
+      const result = await dataService.reopenAppointmentNoShow(noShowReopenPrompt.appointmentId, {
+        reason,
+        patientId: patient?.id,
+        idempotencyKey: noShowReopenIdempotencyKeyRef.current
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || result?.message || 'Não foi possível reabrir a falta agora.');
+      }
+
+      const retry = noShowReopenPrompt;
+      setNoShowReopenPrompt(null);
+      setNoShowReopenReason('');
+      noShowReopenIdempotencyKeyRef.current = '';
+      await handleConfirmSessionStart({
+        durationMinutes: retry.durationMinutes,
+        openSessionMode: retry.openSessionMode,
+        skipSessionPreparation: true
+      });
+    } catch (error: any) {
+      setNoShowReopenError(error?.message || 'Não foi possível reabrir a falta agora.');
+    } finally {
+      setIsReopeningNoShow(false);
+    }
   };
 
   const applySessionMasterySummaryToPei = async (sessionSummary: any) => {
@@ -2022,51 +2102,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   ]);
 
   const handleConfirmSessionEnd = (options?: { alreadyPersisted?: boolean; summary?: any }) => {
-    const endedSession = activeSession;
-    if (!options?.alreadyPersisted && endedSession && typeof window !== 'undefined') {
-      try {
-        const sessionState = JSON.parse(
-          window.localStorage.getItem(`verto.aba_session_state:${String(patient?.id || '')}:${String(endedSession.id || '')}`) || '{}'
-        );
-        if (Array.isArray(sessionState?.openDurations) && sessionState.openDurations.length > 0) {
-          alert('Finalize os eventos de duração em aberto antes de encerrar a sessão.');
-          return;
-        }
-      } catch {
-        // Se o estado auxiliar falhar, seguimos com a confirmação padrão.
-      }
-    }
+    if (!options?.alreadyPersisted) return;
     clearActiveSession();
-    setShowSessionEndConfirm(false);
     setIsSessionModeOpen(false);
-    if (options?.alreadyPersisted) {
-      void applySessionMasterySummaryToPei(options.summary);
-    }
-    if (endedSession) {
-      if (!options?.alreadyPersisted) {
-        if (abaV2Enabled) {
-          void dataService.updateAbaSession(String(endedSession.id), {
-            status: 'completed',
-            ended_at: new Date().toISOString(),
-            actual_end: new Date().toISOString(),
-            actual_duration_minutes: Math.max(0, Math.ceil((Date.now() - new Date(endedSession.startedAt || Date.now()).getTime()) / 60000)),
-            appointment_id: endedSession.appointment_id || endedSession.appointmentId || undefined,
-            record_count: Number(endedSession.recordCount || 0)
-          });
-        }
-        onAddNote?.(
-          patient.id,
-          `Sessão encerrada.\nInício: ${new Date(endedSession.startedAt).toLocaleString('pt-BR')}\nTérmino: ${new Date().toLocaleString('pt-BR')}\nRegistros nesta sessão: ${Number(endedSession.recordCount || 0)}`,
-          'private',
-          'Sessão'
-        );
-        onAddActivityLog?.(
-          'Sessão encerrada',
-          `Sessão de ${patient?.name || 'paciente'} encerrada com ${Number(endedSession.recordCount || 0)} registro(s).`,
-          'clinical'
-        );
-      }
-    }
+    void applySessionMasterySummaryToPei(options.summary);
   };
 
   const incrementActiveSessionRecordCount = () => {
@@ -8408,7 +8447,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           activeSession={activeSession}
           remainingSeconds={remainingSessionSeconds}
           formatCountdown={formatSessionCountdown}
-          onRequestEndSession={() => setShowSessionEndConfirm(true)}
           onConfirmEndSession={handleConfirmSessionEnd}
           onSessionSummaryPersisted={applySessionMasterySummaryToPei}
           onSessionRecordSaved={incrementActiveSessionRecordCount}
@@ -8548,32 +8586,72 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         </div>,
         document.body
       )}
-      {showSessionEndConfirm && typeof document !== 'undefined' && createPortal(
-        <div className="fixed inset-0 z-[130] flex items-start justify-center p-4 pt-6 sm:pt-10 bg-black/30 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-[#101b2e] rounded-[32px] p-7 shadow-2xl max-w-md w-full animate-pop border border-red-100 dark:border-red-500/30">
-            <div className="w-14 h-14 bg-red-50 rounded-2xl flex items-center justify-center mb-5 text-red-500">
-              <StopCircle size={28} />
+      {noShowReopenPrompt && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[130] flex items-start justify-center bg-black/40 p-4 pt-6 backdrop-blur-sm sm:pt-10" role="dialog" aria-modal="true" aria-labelledby="no-show-reopen-title">
+          <div className="w-full max-w-md overflow-y-auto rounded-[28px] border border-amber-200 bg-white p-6 shadow-2xl dark:border-amber-500/30 dark:bg-[#101b2e] sm:p-7">
+            <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-200">
+              <RotateCcw size={26} />
             </div>
-            <h3 className="text-2xl font-semibold text-gray-900 dark:text-slate-50 mb-2">Encerrar sessão?</h3>
-            <p className="text-sm text-gray-500 dark:text-slate-300 leading-relaxed mb-6">
-              Os registros feitos nesta sessão já atualizam o histórico e os gráficos. Ao encerrar, a sessão deixa de aparecer como ativa.
+            <h3 id="no-show-reopen-title" className="text-xl font-semibold text-gray-900 dark:text-slate-50">
+              Atendimento classificado como falta
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-gray-600 dark:text-slate-300">
+              A falta permanece no histórico de auditoria. Para iniciar o atendimento agora, uma pessoa autorizada precisa reabri-la com justificativa.
             </p>
-            <div className="rounded-2xl bg-gray-50 dark:bg-slate-800 border border-gray-100 dark:border-slate-700 p-4 mb-6">
-              <p className="text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase tracking-widest">Tempo restante</p>
-              <p className="text-3xl font-semibold text-gray-900 dark:text-slate-50">{formatSessionCountdown(remainingSessionSeconds)}</p>
+
+            <label htmlFor="no-show-reopen-reason" className="mt-5 block text-xs font-semibold text-gray-600 dark:text-slate-300">
+              Justificativa da reabertura
+            </label>
+            <textarea
+              id="no-show-reopen-reason"
+              value={noShowReopenReason}
+              maxLength={1000}
+              rows={4}
+              disabled={!canReopenAutomaticNoShow || isReopeningNoShow}
+              onChange={(event) => {
+                setNoShowReopenReason(event.target.value);
+                if (noShowReopenError) setNoShowReopenError('');
+              }}
+              placeholder="Ex.: paciente chegou após o limite de tolerância e será atendido."
+              className="mt-2 w-full resize-none rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-amber-500 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-50"
+            />
+            <div className="mt-1 flex items-center justify-between text-xs text-gray-400 dark:text-slate-400">
+              <span>Mínimo de 5 caracteres</span>
+              <span>{noShowReopenReason.length}/1000</span>
             </div>
-            <div className="flex gap-3">
+
+            {!canReopenAutomaticNoShow && (
+              <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                Solicite a reabertura à coordenação ou administração da clínica.
+              </p>
+            )}
+            {noShowReopenError && (
+              <p className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-100" role="alert">
+                {noShowReopenError}
+              </p>
+            )}
+
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row">
               <button
-                onClick={() => setShowSessionEndConfirm(false)}
-                className="flex-1 py-3 rounded-2xl bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-200 font-semibold hover:bg-gray-200 dark:hover:bg-slate-700 transition-all"
+                type="button"
+                disabled={isReopeningNoShow}
+                onClick={() => {
+                  setNoShowReopenPrompt(null);
+                  setNoShowReopenReason('');
+                  setNoShowReopenError('');
+                  noShowReopenIdempotencyKeyRef.current = '';
+                }}
+                className="min-h-12 flex-1 rounded-2xl bg-gray-100 px-4 font-semibold text-gray-700 transition hover:bg-gray-200 disabled:opacity-60 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
               >
-                Continuar
+                Cancelar
               </button>
               <button
-                onClick={handleConfirmSessionEnd}
-                className="flex-1 py-3 rounded-2xl bg-red-500 text-white font-semibold shadow-lg shadow-red-500/20 hover:bg-red-600 transition-all"
+                type="button"
+                disabled={!canReopenAutomaticNoShow || isReopeningNoShow || noShowReopenReason.trim().length < 5}
+                onClick={() => void handleReopenNoShowAndStart()}
+                className="min-h-12 flex-1 rounded-2xl bg-amber-500 px-4 font-semibold text-white shadow-lg shadow-amber-500/20 transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Encerrar
+                {isReopeningNoShow ? 'Reabrindo…' : 'Reabrir e iniciar'}
               </button>
             </div>
           </div>

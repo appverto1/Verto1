@@ -50,7 +50,7 @@ export function registerClinicAppointmentPolicyRoutes(
         if (!clinicId) return res.status(403).json({ success: false, error: 'CLINIC_REQUIRED' });
         const result = await supabase
           .from('clinics')
-          .select('id,allow_patient_reschedule,updated_at')
+          .select('id,allow_patient_reschedule,auto_no_show_enabled,no_show_tolerance_minutes,no_show_mode,updated_at')
           .eq('id', clinicId)
           .limit(1)
           .maybeSingle();
@@ -61,6 +61,9 @@ export function registerClinicAppointmentPolicyRoutes(
           data: {
             clinicId: result.data.id,
             allowPatientReschedule: result.data.allow_patient_reschedule !== false,
+            autoNoShowEnabled: result.data.auto_no_show_enabled !== false,
+            noShowToleranceMinutes: Number(result.data.no_show_tolerance_minutes || 30),
+            noShowMode: String(result.data.no_show_mode || 'AUTO').toUpperCase() === 'REVIEW' ? 'REVIEW' : 'AUTO',
             updatedAt: result.data.updated_at || null,
             canManage: ['owner', 'admin', 'coordinator'].includes(
               sanitizeString(req.session?.user?.role, 40).toLowerCase()
@@ -68,14 +71,23 @@ export function registerClinicAppointmentPolicyRoutes(
           }
         });
       } catch (error: any) {
+        const message = String(error?.message || error?.code || '');
+        if (/auto_no_show_enabled|no_show_tolerance_minutes|no_show_mode|PGRST202|42703/i.test(message)) {
+          return res.status(503).json({
+            success: false,
+            error: 'SESSION_ATTENDANCE_POLICY_MIGRATION_REQUIRED',
+            retryable: false,
+            message: 'A atualização de presença e falta ainda precisa ser aplicada no banco.'
+          });
+        }
         console.warn('[ClinicAppointmentPolicy] read failed', {
           code: sanitizeString(error?.code, 80),
-          message: sanitizeString(error?.message, 200)
+          message: sanitizeString(message, 200)
         });
         return res.status(500).json({
           success: false,
           error: 'CLINIC_POLICY_READ_FAILED',
-          message: 'Não foi possível carregar a política de reagendamento.'
+          message: 'Não foi possível carregar a política operacional da agenda.'
         });
       }
     }
@@ -93,13 +105,6 @@ export function registerClinicAppointmentPolicyRoutes(
         const actorId = sanitizeString(req.session?.user?.id, 120);
         const idempotencyKey = sanitizeString(req.body?.idempotencyKey, 180);
         if (!clinicId || !actorId) return res.status(403).json({ success: false, error: 'CLINIC_REQUIRED' });
-        if (typeof req.body?.allowPatientReschedule !== 'boolean') {
-          return res.status(422).json({
-            success: false,
-            error: 'CLINIC_POLICY_VALUE_REQUIRED',
-            message: 'Informe se pacientes podem solicitar reagendamento.'
-          });
-        }
         if (!idempotencyKey) {
           return res.status(422).json({
             success: false,
@@ -107,15 +112,62 @@ export function registerClinicAppointmentPolicyRoutes(
             message: 'A alteração precisa de uma chave idempotente.'
           });
         }
+
+        const currentResult = await supabase
+          .from('clinics')
+          .select('id,allow_patient_reschedule,auto_no_show_enabled,no_show_tolerance_minutes,no_show_mode')
+          .eq('id', clinicId)
+          .limit(1)
+          .maybeSingle();
+        if (currentResult.error) throw currentResult.error;
+        if (!currentResult.data?.id) {
+          return res.status(404).json({ success: false, error: 'CLINIC_NOT_FOUND' });
+        }
+
+        const allowPatientReschedule = typeof req.body?.allowPatientReschedule === 'boolean'
+          ? req.body.allowPatientReschedule
+          : currentResult.data.allow_patient_reschedule !== false;
+        const autoNoShowEnabled = typeof req.body?.autoNoShowEnabled === 'boolean'
+          ? req.body.autoNoShowEnabled
+          : currentResult.data.auto_no_show_enabled !== false;
+        const noShowToleranceMinutes = req.body?.noShowToleranceMinutes === undefined
+          ? Number(currentResult.data.no_show_tolerance_minutes || 30)
+          : Number(req.body.noShowToleranceMinutes);
+        const noShowMode = sanitizeString(
+          req.body?.noShowMode || currentResult.data.no_show_mode || 'AUTO',
+          20
+        ).toUpperCase();
+
+        if (!Number.isInteger(noShowToleranceMinutes) || noShowToleranceMinutes < 5 || noShowToleranceMinutes > 180) {
+          return res.status(422).json({
+            success: false,
+            error: 'CLINIC_POLICY_NO_SHOW_TOLERANCE_INVALID',
+            message: 'A tolerância para falta deve ser um número inteiro entre 5 e 180 minutos.'
+          });
+        }
+        if (!['AUTO', 'REVIEW'].includes(noShowMode)) {
+          return res.status(422).json({
+            success: false,
+            error: 'CLINIC_POLICY_NO_SHOW_MODE_INVALID',
+            message: 'Escolha classificação automática ou revisão pela equipe.'
+          });
+        }
+
         const operation = {
-          allowPatientReschedule: req.body.allowPatientReschedule,
+          allowPatientReschedule,
+          autoNoShowEnabled,
+          noShowToleranceMinutes,
+          noShowMode,
           reason: sanitizeString(req.body?.reason, 1000) || null,
           idempotencyKey
         };
-        const result = await supabase.rpc('set_clinic_patient_reschedule_policy_v1', {
+        const result = await supabase.rpc('set_clinic_appointment_policy_v2', {
           p_actor_id: actorId,
           p_clinic_id: clinicId,
           p_allow_patient_reschedule: operation.allowPatientReschedule,
+          p_auto_no_show_enabled: operation.autoNoShowEnabled,
+          p_no_show_tolerance_minutes: operation.noShowToleranceMinutes,
+          p_no_show_mode: operation.noShowMode,
           p_reason: operation.reason,
           p_idempotency_key: idempotencyKey,
           p_payload_hash: payloadHash(operation)
@@ -138,6 +190,14 @@ export function registerClinicAppointmentPolicyRoutes(
             message: 'Você não possui permissão para alterar esta configuração.'
           });
         }
+        if (/set_clinic_appointment_policy_v2|auto_no_show_enabled|no_show_tolerance_minutes|no_show_mode|PGRST202|42883|42703/i.test(message)) {
+          return res.status(503).json({
+            success: false,
+            error: 'SESSION_ATTENDANCE_POLICY_MIGRATION_REQUIRED',
+            retryable: false,
+            message: 'A atualização de presença e falta ainda precisa ser aplicada no banco.'
+          });
+        }
         console.warn('[ClinicAppointmentPolicy] write failed', {
           code: sanitizeString(error?.code, 80),
           message: sanitizeString(message, 200)
@@ -145,7 +205,7 @@ export function registerClinicAppointmentPolicyRoutes(
         return res.status(500).json({
           success: false,
           error: 'CLINIC_POLICY_WRITE_FAILED',
-          message: 'Não foi possível salvar a política de reagendamento.'
+          message: 'Não foi possível salvar a política operacional da agenda.'
         });
       }
     }
