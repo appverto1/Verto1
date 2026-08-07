@@ -54,6 +54,10 @@ const blockedReadiness = getPayerSetupReadiness({
   preGuideTestIssues: ['Procedimento sem mapeamento TUSS para este convênio'],
 });
 const blockedTestStep = blockedReadiness.steps.find((step) => step.key === 'test');
+const readyMappingStep = blockedReadiness.steps.find((step) => step.key === 'tuss');
+assert.equal(readyMappingStep?.status, 'ready');
+assert.equal(readyMappingStep?.canContinue, true);
+assert.deepEqual(readyMappingStep?.blockingReasons, []);
 assert.deepEqual(blockedTestStep?.blockingReasons, [
   'Procedimento sem mapeamento TUSS para este convênio',
 ]);

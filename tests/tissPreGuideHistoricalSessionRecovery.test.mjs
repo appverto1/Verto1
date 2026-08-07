@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const panel = fs.readFileSync('src/components/PayerRequirementsPanel.tsx', 'utf8');
+const preGuideEngine = fs.readFileSync('src/services/tissPreGuideEngine.ts', 'utf8');
 
 const route = server.match(/app\.get\('\/api\/tiss\/pre-guides\/test-options'[\s\S]*?const normalizeTissXmlCompetenceMonth/)?.[0] || '';
 assert.ok(route, 'rota de opções da Pré-guia deve existir');
@@ -23,11 +24,11 @@ const historicalIndex = serviceResolver.indexOf('const historicalServiceId');
 const fuzzyIndex = serviceResolver.indexOf('const serviceKey = normalizeBillingServiceMatchKey(serviceType)');
 assert.ok(historicalIndex >= 0 && fuzzyIndex >= 0 && historicalIndex < fuzzyIndex, 'service_catalog_id histórico deve ser preservado antes do match textual');
 
-assert.match(panel, /selectedAppointmentPreGuideErrorCodes\?: string\[\]/);
-assert.match(panel, /PAYER_TUSS_MAPPING_MISSING/);
-assert.match(panel, /PAYER_TUSS_MAPPING_EXPIRED/);
-assert.match(panel, /status: hasLegacyTussCode \|\| selectedAppointmentMappingIssue \? "blocked"/);
-assert.match(panel, /A sessão selecionada não possui De\/Para TUSS válido para este procedimento e data\./);
-assert.match(panel, /selectedSetupAppointmentPreGuideErrorCodes/);
+assert.match(preGuideEngine, /PAYER_TUSS_MAPPING_MISSING/);
+assert.match(preGuideEngine, /PAYER_TUSS_MAPPING_EXPIRED/);
+const readiness = panel.match(/export function getPayerSetupReadiness[\s\S]*?return \{\s*overallStatus/)?.[0] || '';
+assert.ok(readiness, 'readiness da configuração do convênio deve existir');
+assert.match(readiness, /status: hasLegacyTussCode \? "blocked" : allActiveMappingsReady \? "ready" : "incomplete"/);
+assert.doesNotMatch(readiness, /selectedAppointmentPreGuideErrorCodes|selectedAppointmentMappingIssue/);
 
 console.log('tissPreGuideHistoricalSessionRecovery: ok');
