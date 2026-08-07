@@ -48372,6 +48372,108 @@ async function startServer() {
     }).slice(0, limit);
   };
 
+  const loadLegacyClinicStateAppointments = async (clinicIdInput: string) => {
+    const clinicId = sanitizeString(clinicIdInput, 120);
+    if (!isUuid(clinicId)) return [];
+    const stateResult = await fetchClinicStateWithSchemaFallback({ supabase, clinicId, logger: console });
+    if (stateResult.error) {
+      if (hasMissingFinancialSchema(stateResult.error) || isMissingRelationError(stateResult.error)) return [];
+      throw stateResult.error;
+    }
+    return Array.isArray(stateResult.data?.appointments) ? stateResult.data.appointments : [];
+  };
+
+  const normalizeLegacyClosureAppointment = (appointment: any, clinicId: string) => {
+    const sourcePayload = parseStoredJsonObject(appointment);
+    return cleanObject({
+      ...serializePersistedAppointmentForAgenda({
+        ...appointment,
+        organization_id: clinicId,
+        clinic_id: clinicId,
+        source_payload: sourcePayload
+      }),
+      organization_id: clinicId,
+      clinic_id: clinicId,
+      legacy_source: true,
+      source_payload: sourcePayload
+    });
+  };
+
+  const fetchLegacyClosurePeriodAppointmentRows = async (params: {
+    clinicId: string;
+    user: any;
+    fromIso: string;
+    toIso: string;
+    patientId?: string | null;
+    ascending?: boolean;
+    limit?: number;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const fromTime = new Date(params.fromIso).getTime();
+    const toTime = new Date(params.toIso).getTime();
+    if (!isUuid(clinicId) || !Number.isFinite(fromTime) || !Number.isFinite(toTime)) return [];
+
+    const rawAppointments = await loadLegacyClinicStateAppointments(clinicId);
+    const isTherapist = sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist';
+    const therapistId = sanitizeString(params.user?.id, 120);
+    const therapistPatientIds = isTherapist
+      ? new Set(await getClosureTherapistPatientIds(params.user, clinicId))
+      : new Set<string>();
+    const limit = Math.min(Math.max(Number(params.limit || 200), 1), 500);
+    const rows = rawAppointments.flatMap((rawAppointment: any) => {
+      const status = sanitizeString(rawAppointment?.status, 80).toLowerCase();
+      if (
+        rawAppointment?.is_active === false ||
+        rawAppointment?.isActive === false ||
+        rawAppointment?.deleted_at ||
+        rawAppointment?.deletedAt ||
+        status === 'deleted'
+      ) return [];
+
+      const appointment = normalizeLegacyClosureAppointment(rawAppointment, clinicId);
+      const appointmentId = sanitizeString(appointment?.id, 120);
+      const appointmentPatientId = readAppointmentPatientId(appointment);
+      const appointmentProfessionalId = sanitizeString(
+        appointment?.therapist_id || appointment?.professional_id,
+        120
+      );
+      const scheduledAt = buildAppointmentScheduledAt(appointment);
+      const scheduledTime = scheduledAt ? new Date(scheduledAt).getTime() : NaN;
+      if (!isUuid(appointmentId) || !isUuid(appointmentPatientId) || !Number.isFinite(scheduledTime)) return [];
+      if (isUuid(patientId) && appointmentPatientId !== patientId) return [];
+      if (scheduledTime < fromTime || scheduledTime > toTime) return [];
+      if (isTherapist && appointmentProfessionalId !== therapistId && !therapistPatientIds.has(appointmentPatientId)) return [];
+      return [appointment];
+    });
+
+    return rows.sort((left: any, right: any) => {
+      const leftTime = new Date(buildAppointmentScheduledAt(left) || 0).getTime();
+      const rightTime = new Date(buildAppointmentScheduledAt(right) || 0).getTime();
+      return params.ascending === false ? rightTime - leftTime : leftTime - rightTime;
+    }).slice(0, limit);
+  };
+
+  const fetchLegacyClinicStateAppointmentById = async (params: {
+    clinicId: string;
+    appointmentId: string;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    if (!isUuid(clinicId) || !isUuid(appointmentId)) return null;
+    const rawAppointments = await loadLegacyClinicStateAppointments(clinicId);
+    const rawAppointment = rawAppointments.find((appointment: any) => {
+      const status = sanitizeString(appointment?.status, 80).toLowerCase();
+      return sanitizeString(appointment?.id, 120) === appointmentId &&
+        appointment?.is_active !== false &&
+        appointment?.isActive !== false &&
+        !appointment?.deleted_at &&
+        !appointment?.deletedAt &&
+        status !== 'deleted';
+    });
+    return rawAppointment ? normalizeLegacyClosureAppointment(rawAppointment, clinicId) : null;
+  };
+
   const fetchClosureAppointmentRowsByIds = async (params: {
     clinicId: string;
     user: any;
@@ -53220,12 +53322,39 @@ async function startServer() {
       if (!enforcePayloadLimit(req, res, 16 * 1024, 'Revalidação da Pré-guia TISS')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       if (!isUuid(appointmentId)) return res.status(400).json(payerSafeError(400));
-      const generated = await revalidateAppointmentBillingForAppointment({
+      let generated = await revalidateAppointmentBillingForAppointment({
         appointmentId,
         user: req.session.user,
         source: 'tiss_pre_guide_manual_revalidation',
         forceClosure: true
       });
+      if (!generated.ok && Number((generated as any).status || 0) === 404) {
+        const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+        const legacyAppointment = await fetchLegacyClinicStateAppointmentById({
+          clinicId: organizationId,
+          appointmentId
+        });
+        if (legacyAppointment) {
+          const syncResult = await syncAppointmentsTableFromClinicState({
+            clinicId: organizationId,
+            appointments: [legacyAppointment],
+            actorId: sanitizeString(req.session.user?.id, 120)
+          });
+          if (syncResult.mirrored < 1) {
+            return res.status(422).json({
+              success: false,
+              code: 'TISS_HISTORICAL_APPOINTMENT_INCOMPLETE',
+              error: 'A sessão histórica foi encontrada, mas precisa ter paciente, profissional e data válidos antes do teste de Pré-guia.'
+            });
+          }
+          generated = await revalidateAppointmentBillingForAppointment({
+            appointmentId,
+            user: req.session.user,
+            source: 'tiss_pre_guide_historical_session_revalidation',
+            forceClosure: true
+          });
+        }
+      }
       if (!generated.ok) return res.status((generated as any).status || 404).json(payerSafeError((generated as any).status || 404));
       const preGuideResult = (generated as any).tissPreGuideResult || null;
       const preGuide = (generated as any).tissPreGuide || null;
@@ -54464,8 +54593,19 @@ async function startServer() {
         ascending: false,
         limit
       });
+      const legacyPeriodAppointmentRows = patientId || periodAppointmentRows.length === 0
+        ? await fetchLegacyClosurePeriodAppointmentRows({
+            clinicId: organizationId,
+            user: req.session.user,
+            fromIso: range.fromIso,
+            toIso: range.toIso,
+            patientId: patientId || null,
+            ascending: false,
+            limit
+          })
+        : [];
       const periodAppointmentIds = new Set(
-        periodAppointmentRows
+        [...periodAppointmentRows, ...legacyPeriodAppointmentRows]
           .map((row: any) => sanitizeString(row?.id, 120))
           .filter((id: string) => isUuid(id))
       );
@@ -54489,7 +54629,7 @@ async function startServer() {
           .filter(([id]: any) => isUuid(id))
       );
       const appointmentRowsById = new Map<string, any>();
-      [...periodAppointmentRows, ...historicalAppointmentRows].forEach((row: any) => {
+      [...legacyPeriodAppointmentRows, ...periodAppointmentRows, ...historicalAppointmentRows].forEach((row: any) => {
         const id = sanitizeString(row?.id, 120);
         if (isUuid(id)) appointmentRowsById.set(id, row);
       });
@@ -54822,7 +54962,10 @@ async function startServer() {
           payerId,
           payerName,
           source: 'appointments_tiss_authoritative',
+          from: range.fromIso,
+          to: range.toIso,
           limit,
+          recoveredLegacyAppointments: legacyPeriodAppointmentRows.length,
           returnedAppointments: options.length,
           returnedPatients: patientOptions.length
         }
