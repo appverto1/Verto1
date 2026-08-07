@@ -101,6 +101,18 @@ assert.equal(
   'a foto do cadastro profissional deve acompanhar o vínculo autorizado'
 );
 assert.equal(activeResult.links[0].specialty, 'Psicologia');
+const staleActiveSpecialtyResult = composePatientProfessionalLinks({
+  clinicId,
+  links: [{ ...activeLink, specialty: 'Fonoaudiologia' }],
+  users: [currentUser],
+  profiles: [currentProfile],
+  memberships: [activeMembership]
+});
+assert.equal(
+  staleActiveSpecialtyResult.links[0].specialty,
+  'Psicologia',
+  'vínculo ativo sempre deve exibir a especialidade canônica atual do perfil profissional'
+);
 assert.equal(activeResult.links[0].integrityStatus, null);
 assert.equal(activeResult.links[0].accessEnabled, true);
 assert.equal(activeResult.links[0].canBeEnded, true);

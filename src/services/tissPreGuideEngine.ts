@@ -38,6 +38,7 @@ export type TissPreGuideValidationInput = {
   professional?: Record<string, any> | null;
   authorization?: Record<string, any> | null;
   signature?: Record<string, any> | null;
+  clinicalEvidence?: Record<string, any> | null;
 };
 
 export type TissPreGuideValidationResult = {
@@ -378,6 +379,7 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const professional = input.professional || {};
   const authorization = input.authorization || {};
   const signature = input.signature || {};
+  const clinicalEvidence = input.clinicalEvidence || {};
   const errors: TissPreGuideIssue[] = [];
   const warnings: TissPreGuideIssue[] = [];
   const allowsZeroAmountXml = Boolean(
@@ -914,6 +916,19 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         signedAt: text(signature.signed_at || signature.signedAt) || null,
         signatureType: text(signature.signature_type || signature.signatureType) || null,
         status: signatureStatus || null,
+      },
+      clinicalEvidence: {
+        reportPresent: Boolean(
+          clinicalEvidence.reportPresent ??
+          clinicalEvidence.report_present ??
+          clinicalEvidence.reportId ??
+          clinicalEvidence.report_id
+        ),
+        source: text(clinicalEvidence.source) || null,
+        reportId: text(clinicalEvidence.reportId || clinicalEvidence.report_id) || null,
+        sessionSummaryId: text(clinicalEvidence.sessionSummaryId || clinicalEvidence.session_summary_id) || null,
+        requiredDocumentId: text(clinicalEvidence.requiredDocumentId || clinicalEvidence.required_document_id) || null,
+        linkedAt: text(clinicalEvidence.linkedAt || clinicalEvidence.linked_at) || null,
       },
     };
   const antiGlosaChecklist = buildTissAntiGlosaChecklist({

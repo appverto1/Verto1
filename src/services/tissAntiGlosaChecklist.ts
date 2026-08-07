@@ -362,6 +362,10 @@ const CATALOG: Array<Omit<TissAntiGlosaChecklistItem, "status" | "relatedIssueCo
     riskClass: "risco de documentação assistencial ausente",
     suggestedAction: "Vincular relatório/evolução",
     requirementPath: "requiresReport",
+    okWhen: (snapshot) => Boolean(
+      snapshot.clinicalEvidence?.reportPresent ||
+      snapshot.clinical_evidence?.report_present
+    ),
   },
   {
     code: "actual_duration",

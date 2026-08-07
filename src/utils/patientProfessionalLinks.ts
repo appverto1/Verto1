@@ -240,8 +240,9 @@ export function composePatientProfessionalLinks(params: {
         cleanText(membership?.clinic_id) === clinicId &&
         cleanText(membership?.user_id) === professionalId;
       const specialty =
-        snapshotSpecialty ||
-        (membershipBelongsToClinic ? profileSpecialty : '');
+        status === 'active' && membershipBelongsToClinic && profileSpecialty
+          ? profileSpecialty
+          : snapshotSpecialty || (membershipBelongsToClinic ? profileSpecialty : '');
       const resolvedIntegrity = resolvePatientProfessionalLinkIntegrity({
         clinicId,
         professionalId,

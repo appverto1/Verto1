@@ -48301,8 +48301,12 @@ async function startServer() {
     fromIso: string;
     toIso: string;
     limit?: number;
+    patientId?: string | null;
+    ascending?: boolean;
   }) => {
     const clinicId = sanitizeString(params.clinicId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const ascending = params.ascending !== false;
     const rowsById = new Map<string, any>();
     const limit = Math.min(Math.max(Number(params.limit || 800), 1), 1200);
     if (!isUuid(clinicId)) return [];
@@ -48321,9 +48325,10 @@ async function startServer() {
           .select(buildClosureAppointmentSelect(omittedColumns))
           .gte(dateColumn, params.fromIso)
           .lte(dateColumn, params.toIso)
-          .order(dateColumn, { ascending: true })
+          .order(dateColumn, { ascending })
           .limit(limit);
         if (!omittedColumns.has('status')) query = query.neq('status', 'deleted');
+        if (isUuid(patientId)) query = query.eq('patient_id', patientId);
         if (omittedColumns.has('organization_id') && omittedColumns.has('clinic_id')) return [];
         if (!omittedColumns.has('organization_id') && !omittedColumns.has('clinic_id')) {
           query = query.or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`);
@@ -48362,7 +48367,8 @@ async function startServer() {
     return Array.from(rowsById.values()).sort((left: any, right: any) => {
       const leftTime = new Date(left?.scheduled_at || left?.scheduled_start_at || 0).getTime();
       const rightTime = new Date(right?.scheduled_at || right?.scheduled_start_at || 0).getTime();
-      return (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
+      const delta = (Number.isFinite(leftTime) ? leftTime : 0) - (Number.isFinite(rightTime) ? rightTime : 0);
+      return ascending ? delta : -delta;
     }).slice(0, limit);
   };
 
@@ -52256,7 +52262,7 @@ async function startServer() {
     const billingContext = mergeBillingContextMetadata(
       params.billingContext || await fetchAppointmentBillingContextRow(organizationId, appointmentId) || {}
     );
-    const [billingItemResult, existingPreGuideResult, closureCheckResult, appointmentProfessionalsResult] = await Promise.all([
+    const [billingItemResult, existingPreGuideResult, closureCheckResult, appointmentProfessionalsResult, sessionSummaryResult, providedReportResult] = await Promise.all([
       supabase
         .from('appointment_billing_items')
         .select(APPOINTMENT_BILLING_ITEM_SELECT)
@@ -52273,7 +52279,7 @@ async function startServer() {
         .maybeSingle(),
       supabase
         .from('appointment_closure_checks')
-        .select('appointment_id,organization_id,patient_id,professional_id,payer_id')
+        .select('id,appointment_id,organization_id,patient_id,professional_id,payer_id,aba_session_id,readiness_status,checklist')
         .eq('organization_id', organizationId)
         .eq('appointment_id', appointmentId)
         .limit(1)
@@ -52284,7 +52290,26 @@ async function startServer() {
         .eq('organization_id', organizationId)
         .eq('appointment_id', appointmentId)
         .not('professional_id', 'is', null)
-        .limit(8)
+        .limit(8),
+      supabase
+        .from('aba_session_summaries')
+        .select('id,organization_id,appointment_id,session_id,patient_id,session_note,summary_payload,ended_at,updated_at')
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .eq('patient_id', patientId)
+        .order('ended_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from('appointment_required_documents')
+        .select('id,appointment_id,patient_id,document_type,status,file_id,uploaded_at,updated_at')
+        .eq('organization_id', organizationId)
+        .eq('appointment_id', appointmentId)
+        .eq('document_type', 'SESSION_REPORT')
+        .eq('status', 'PROVIDED')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
     ]);
     if (billingItemResult.error && !hasMissingFinancialSchema(billingItemResult.error) && !isMissingRelationError(billingItemResult.error)) {
       throw billingItemResult.error;
@@ -52297,6 +52322,12 @@ async function startServer() {
     }
     if (appointmentProfessionalsResult.error && !hasMissingFinancialSchema(appointmentProfessionalsResult.error) && !isMissingRelationError(appointmentProfessionalsResult.error)) {
       throw appointmentProfessionalsResult.error;
+    }
+    if (sessionSummaryResult.error && !hasMissingFinancialSchema(sessionSummaryResult.error) && !isMissingRelationError(sessionSummaryResult.error) && !extractMissingColumnName(sessionSummaryResult.error)) {
+      throw sessionSummaryResult.error;
+    }
+    if (providedReportResult.error && !hasMissingFinancialSchema(providedReportResult.error) && !isMissingRelationError(providedReportResult.error) && !extractMissingColumnName(providedReportResult.error)) {
+      throw providedReportResult.error;
     }
     const billingItem = billingItemResult.error ? null : billingItemResult.data;
     const existingPreGuide = existingPreGuideResult.error ? null : existingPreGuideResult.data;
@@ -52314,6 +52345,34 @@ async function startServer() {
       };
     }
     const closureCheck = closureCheckResult.error ? null : closureCheckResult.data;
+    const sessionSummaryEvidence = sessionSummaryResult.error ? null : sessionSummaryResult.data;
+    const providedReportEvidence = providedReportResult.error ? null : providedReportResult.data;
+    const closureChecklist = Array.isArray(closureCheck?.checklist) ? closureCheck.checklist : [];
+    const closureReportCheck = closureChecklist.find((item: any) => sanitizeString(item?.key || item?.code, 120) === 'report_present') || null;
+    const summaryPayloadEvidence = sessionSummaryEvidence?.summary_payload && typeof sessionSummaryEvidence.summary_payload === 'object'
+      ? sessionSummaryEvidence.summary_payload
+      : {};
+    const sessionSummaryHasClinicalContent = Boolean(
+      sanitizeTextField(sessionSummaryEvidence?.session_note, 4000) ||
+      Object.keys(summaryPayloadEvidence).length > 0
+    );
+    const providedReportPresent = sanitizeString(providedReportEvidence?.status, 40).toUpperCase() === 'PROVIDED';
+    const closureReportPresent = sanitizeString(closureReportCheck?.status, 40).toUpperCase() === 'PASSED';
+    const clinicalReportPresent = providedReportPresent || sessionSummaryHasClinicalContent || closureReportPresent;
+    const clinicalEvidence = cleanObject({
+      reportPresent: clinicalReportPresent,
+      source: providedReportPresent
+        ? 'appointment_required_document'
+        : sessionSummaryHasClinicalContent
+          ? 'session_summary'
+          : closureReportPresent
+            ? 'closure_check'
+            : null,
+      reportId: sanitizeString(providedReportEvidence?.file_id || providedReportEvidence?.id || sessionSummaryEvidence?.id || closureCheck?.id, 180) || null,
+      sessionSummaryId: sanitizeString(sessionSummaryEvidence?.id, 180) || null,
+      requiredDocumentId: sanitizeString(providedReportEvidence?.id, 120) || null,
+      linkedAt: providedReportEvidence?.uploaded_at || sessionSummaryEvidence?.updated_at || sessionSummaryEvidence?.ended_at || null
+    });
     const appointmentProfessionalRows = appointmentProfessionalsResult.error || !Array.isArray(appointmentProfessionalsResult.data)
       ? []
       : appointmentProfessionalsResult.data;
@@ -52444,7 +52503,8 @@ async function startServer() {
       professionalProfile,
       professional,
       authorization: patientPayerAuthorization,
-      signature: responsibleSignature
+      signature: responsibleSignature,
+      clinicalEvidence
     });
     const snapshot = validation.snapshot || {};
     const procedure = snapshot.procedure || {};
@@ -52497,6 +52557,8 @@ async function startServer() {
       payerProcedurePriceConflict: Boolean(priceResolution.conflict),
       responsibleSignatureFound: Boolean(responsibleSignature?.id),
       responsibleSignatureId: sanitizeString(responsibleSignature?.id, 120) || null,
+      clinicalReportEvidenceFound: clinicalReportPresent,
+      clinicalReportEvidenceSource: sanitizeString(clinicalEvidence?.source, 80) || null,
       usedAbaSessionSignatureFallback: Boolean(responsibleSignature?.id && !responsibleSignature?.appointment_id && abaSessionIdForSignature),
       scheduledStartFound: Boolean(scheduledStart),
       usedAppointmentProfessionalId: isUuid(linkedAppointmentProfessionalId),
@@ -54282,6 +54344,320 @@ async function startServer() {
     } catch (error: any) {
       console.warn('[TissPreGuide] list failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível carregar as Pré-guias TISS agora.' });
+    }
+  });
+
+  app.get('/api/tiss/pre-guides/test-options', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
+      const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+      if (!isUuid(organizationId) || !isUuid(payerId) || (patientId && !isUuid(patientId))) {
+        return res.status(400).json({ success: false, error: 'Convênio ou paciente inválido para testar a Pré-guia TISS.' });
+      }
+      const range = parseClosureDateRange(req.query || {});
+      if (!range.ok) {
+        return res.status(400).json({ success: false, error: 'Período inválido para carregar sessões do teste de Pré-guia.' });
+      }
+      const limit = parseBoundedListLimit(req.query?.limit, 200, 500);
+      const appointmentRows = await fetchClosurePeriodAppointmentRows({
+        clinicId: organizationId,
+        user: req.session.user,
+        fromIso: range.fromIso,
+        toIso: range.toIso,
+        patientId: patientId || null,
+        ascending: false,
+        limit
+      });
+      const appointmentIds = Array.from(new Set(
+        appointmentRows
+          .map((row: any) => sanitizeString(row?.id, 120))
+          .filter((id: string) => isUuid(id))
+      ));
+      const appointmentPatientIds = Array.from(new Set(
+        appointmentRows
+          .map((row: any) => sanitizeString(row?.patient_id || row?.patientId, 120))
+          .filter((id: string) => isUuid(id))
+      ));
+
+      const billingContextPromise = appointmentIds.length > 0
+        ? supabase
+            .from('appointment_billing_contexts')
+            .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+            .eq('organization_id', organizationId)
+            .in('appointment_id', appointmentIds)
+            .limit(appointmentIds.length)
+        : Promise.resolve({ data: [], error: null } as any);
+      const buildPreGuideOptionsQuery = (selectColumns: string) => appointmentIds.length > 0
+        ? supabase
+            .from('appointment_tiss_pre_guides')
+            .select(selectColumns)
+            .eq('organization_id', organizationId)
+            .in('appointment_id', appointmentIds)
+            .limit(appointmentIds.length)
+        : Promise.resolve({ data: [], error: null } as any);
+      const payerPromise = supabase
+        .from('clinic_payers')
+        .select('id,name,payer_type')
+        .eq('organization_id', organizationId)
+        .eq('id', payerId)
+        .limit(1)
+        .maybeSingle();
+      const patientSelectWithCanonicalPayer = 'id,clinic_id,name,insurance_payer_id,insurance_name,insurance_card_number,insurance_card_valid_until,insurance_plan_category';
+      const patientSelectLegacy = 'id,clinic_id,name,insurance_name,insurance_card_number,insurance_card_valid_until,insurance_plan_category';
+      const queryAppointmentPatients = (selectColumns: string) => appointmentPatientIds.length > 0
+        ? supabase
+            .from('patients')
+            .select(selectColumns)
+            .eq('clinic_id', organizationId)
+            .in('id', appointmentPatientIds)
+            .limit(Math.max(appointmentPatientIds.length, 1))
+        : Promise.resolve({ data: [], error: null } as any);
+      const queryCanonicalPayerPatients = (selectColumns: string) => patientId
+        ? supabase
+            .from('patients')
+            .select(selectColumns)
+            .eq('clinic_id', organizationId)
+            .eq('id', patientId)
+            .limit(1)
+        : supabase
+            .from('patients')
+            .select(selectColumns)
+            .eq('clinic_id', organizationId)
+            .eq('insurance_payer_id', payerId)
+            .order('name', { ascending: true })
+            .limit(500);
+
+      let [billingContextResult, preGuideResult, payerResult, appointmentPatientsResult, payerPatientsResult] = await Promise.all([
+        billingContextPromise,
+        buildPreGuideOptionsQuery('id,appointment_id,status,validation_error_codes,stale_reason,snapshot_data,official_document_id,updated_at'),
+        payerPromise,
+        queryAppointmentPatients(patientSelectWithCanonicalPayer),
+        queryCanonicalPayerPatients(patientSelectWithCanonicalPayer)
+      ]);
+      if (preGuideResult.error && isOptionalTissPreGuideColumn(extractMissingColumnName(preGuideResult.error))) {
+        preGuideResult = await buildPreGuideOptionsQuery('id,appointment_id,status,validation_error_codes,stale_reason,snapshot_data,updated_at');
+      }
+      const patientCanonicalColumnMissing = [appointmentPatientsResult.error, payerPatientsResult.error]
+        .some((error: any) => extractMissingColumnName(error) === 'insurance_payer_id');
+      if (patientCanonicalColumnMissing) {
+        [appointmentPatientsResult, payerPatientsResult] = await Promise.all([
+          queryAppointmentPatients(patientSelectLegacy),
+          patientId
+            ? supabase.from('patients').select(patientSelectLegacy).eq('clinic_id', organizationId).eq('id', patientId).limit(1)
+            : Promise.resolve({ data: [], error: null } as any)
+        ]);
+      }
+      for (const result of [billingContextResult, preGuideResult, payerResult, appointmentPatientsResult, payerPatientsResult]) {
+        if (result?.error && !hasMissingFinancialSchema(result.error) && !isMissingRelationError(result.error) && !extractMissingColumnName(result.error)) {
+          throw result.error;
+        }
+      }
+      const payer = payerResult.error ? null : payerResult.data;
+      if (!payer?.id || normalizeAppointmentFinancialContextType(payer?.payer_type) !== 'INSURANCE') {
+        return res.status(404).json({ success: false, error: 'Convênio não encontrado ou não configurado como operadora de saúde.' });
+      }
+      const payerName = sanitizeString(payer?.name, 180) || 'Convênio';
+      const contextsByAppointment = new Map<string, any>(
+        (billingContextResult.error ? [] : billingContextResult.data || [])
+          .map((row: any) => [sanitizeString(row?.appointment_id, 120), mergeBillingContextMetadata(row)])
+          .filter(([id]: any) => isUuid(id))
+      );
+      const preGuidesByAppointment = new Map<string, any>(
+        (preGuideResult.error ? [] : preGuideResult.data || [])
+          .map((row: any) => [sanitizeString(row?.appointment_id, 120), row])
+          .filter(([id]: any) => isUuid(id))
+      );
+      const patientRows = [
+        ...(appointmentPatientsResult.error ? [] : appointmentPatientsResult.data || []),
+        ...(payerPatientsResult.error ? [] : payerPatientsResult.data || [])
+      ];
+      const patientsById = new Map<string, any>();
+      patientRows.forEach((row: any) => {
+        const id = sanitizeString(row?.id, 120);
+        if (isUuid(id)) patientsById.set(id, row);
+      });
+
+      const hardStatusPattern = /cancel|cancell|remarc|resched|recus|refus|no[ _-]?show|falta|faltou|missed|not[ _-]?billable/;
+      const options = appointmentRows.flatMap((appointment: any) => {
+        const appointmentId = sanitizeString(appointment?.id, 120);
+        const rowPatientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
+        const patient = patientsById.get(rowPatientId) || null;
+        const billingContext = contextsByAppointment.get(appointmentId) || {};
+        const preGuide = preGuidesByAppointment.get(appointmentId) || null;
+        const explicitFinancialContext = normalizeAppointmentFinancialContextType(
+          billingContext?.payer_type || appointment?.financial_context_type || appointment?.payer_type
+        );
+        const explicitPayerId = sanitizeString(billingContext?.payer_id || appointment?.payer_id || appointment?.payerId, 120);
+        const patientPayerId = sanitizeString(patient?.insurance_payer_id, 120);
+        const normalizedPatientPayerName = sanitizeString(patient?.insurance_name, 180)
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/\s+/g, ' ')
+          .trim();
+        const normalizedSelectedPayerName = payerName
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/\s+/g, ' ')
+          .trim();
+        const patientPayerNameMatches = Boolean(normalizedPatientPayerName && normalizedPatientPayerName === normalizedSelectedPayerName);
+        const canUsePatientPayerFallback = !explicitFinancialContext || explicitFinancialContext === 'INSURANCE';
+        const effectivePayerId = isUuid(explicitPayerId)
+          ? explicitPayerId
+          : canUsePatientPayerFallback && isUuid(patientPayerId)
+            ? patientPayerId
+            : canUsePatientPayerFallback && patientPayerNameMatches
+              ? payerId
+              : '';
+        const effectiveFinancialContext = explicitFinancialContext || (isUuid(effectivePayerId) ? 'INSURANCE' : '');
+        const payerMatches = effectivePayerId === payerId;
+        if (!patientId && !payerMatches) return [];
+        const statusKey = sanitizeString(appointment?.status, 80)
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase();
+        const officialDocumentId = sanitizeString(preGuide?.official_document_id, 120);
+        const hardReasons: string[] = [];
+        if (effectiveFinancialContext && effectiveFinancialContext !== 'INSURANCE') hardReasons.push('Atendimento não faturável por convênio.');
+        else if (!payerMatches) hardReasons.push('Atendimento vinculado a outro pagador.');
+        if (hardStatusPattern.test(statusKey)) hardReasons.push('Sessão cancelada, ausente, não faturável ou remarcada.');
+        if (officialDocumentId) hardReasons.push('Pré-guia já vinculada a lote XML oficial.');
+
+        const pendingReasons: string[] = [];
+        const professionalId = sanitizeString(appointment?.therapist_id || appointment?.professional_id, 120);
+        const professionalName = sanitizeString(appointment?.therapist_name || appointment?.professional_name, 180);
+        if (!professionalId && !professionalName) pendingReasons.push('Profissional ainda não definido.');
+        const roomId = sanitizeString(appointment?.room_id, 120);
+        const roomName = sanitizeString(appointment?.room_name || appointment?.location_name_snapshot, 180);
+        if (!roomId && !roomName) pendingReasons.push('Sala/local ainda não definido.');
+        const authorizationCode = sanitizeString(billingContext?.authorization_code || appointment?.authorization_code, 120);
+        const guideNumber = sanitizeString(billingContext?.guide_number || appointment?.guide_number, 120);
+        if (!authorizationCode && !guideNumber) pendingReasons.push('Guia/autorização ainda pendente.');
+        const validationErrorCodes = Array.isArray(preGuide?.validation_error_codes) ? preGuide.validation_error_codes : [];
+        if (sanitizeString(preGuide?.stale_reason, 600)) pendingReasons.push('Pré-guia existente precisa ser revalidada.');
+        if (validationErrorCodes.length > 0) pendingReasons.push(`Pré-guia existente possui ${validationErrorCodes.length} pendência(s) técnica(s).`);
+
+        const scheduledStart = appointment?.scheduled_at || appointment?.scheduled_start_at || preGuide?.snapshot_data?.appointment?.scheduledStart || null;
+        const sourcePayload = parseCalendarSourcePayload(appointment?.source_payload);
+        const syncStatus = sanitizeString(
+          sourcePayload?.syncStatus ||
+          sourcePayload?.sync_status ||
+          sourcePayload?.offlineSyncStatus ||
+          sourcePayload?.offline_sync_status,
+          80
+        );
+        return [cleanObject({
+          id: appointmentId,
+          appointmentId,
+          patientId: rowPatientId,
+          patientName: sanitizeString(patient?.name || appointment?.patient_name, 180) || 'Paciente',
+          therapistId: professionalId || null,
+          therapistName: professionalName || null,
+          professionalId: professionalId || null,
+          professionalName: professionalName || null,
+          scheduledStart,
+          start: scheduledStart,
+          scheduledEnd: appointment?.scheduled_end_at || null,
+          serviceType: sanitizeString(billingContext?.service_type || appointment?.service_type || appointment?.approach, 180) || 'Procedimento não informado',
+          roomId: roomId || null,
+          roomName: roomName || null,
+          status: sanitizeString(appointment?.status, 80) || null,
+          payerId: effectivePayerId || null,
+          payerName: payerMatches ? payerName : sanitizeString(billingContext?.payer_name_snapshot || appointment?.payer_name_snapshot, 180) || null,
+          authorizationCode: authorizationCode || null,
+          guideNumber: guideNumber || null,
+          billingContext: cleanObject({
+            payerId: effectivePayerId || null,
+            payerName: payerMatches ? payerName : sanitizeString(billingContext?.payer_name_snapshot, 180) || null,
+            financialContextType: effectiveFinancialContext || null,
+            authorizationCode: authorizationCode || null,
+            guideNumber: guideNumber || null
+          }),
+          preGuide: preGuide ? {
+            id: sanitizeString(preGuide?.id, 120) || null,
+            status: sanitizeString(preGuide?.status, 40) || null,
+            officialDocumentId: officialDocumentId || null,
+            staleReason: sanitizeTextField(preGuide?.stale_reason, 600) || null
+          } : null,
+          officialDocumentId: officialDocumentId || null,
+          preGuideTestState: hardReasons.length > 0
+            ? (officialDocumentId ? 'official_locked' : 'not_applicable')
+            : sanitizeString(preGuide?.status, 40) === 'pending_data' || pendingReasons.length > 0
+              ? 'pending_data'
+              : 'eligible',
+          preGuideHardReasons: hardReasons,
+          preGuidePendingReasons: Array.from(new Set(pendingReasons)),
+          syncStatus: syncStatus || null
+        })];
+      });
+
+      const patientOptions = Array.from(patientsById.values())
+        .filter((patient: any) => {
+          const rowId = sanitizeString(patient?.id, 120);
+          if (patientId) return rowId === patientId;
+          const canonicalPayerId = sanitizeString(patient?.insurance_payer_id, 120);
+          const normalizedInsuranceName = sanitizeString(patient?.insurance_name, 180)
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+          const normalizedPayerName = payerName
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (canonicalPayerId === payerId || (normalizedInsuranceName && normalizedInsuranceName === normalizedPayerName)) return true;
+          return options.some((option: any) => sanitizeString(option?.patientId, 120) === rowId && sanitizeString(option?.payerId, 120) === payerId);
+        })
+        .map((patient: any) => cleanObject({
+          id: sanitizeString(patient?.id, 120),
+          name: sanitizeString(patient?.name, 180) || 'Paciente',
+          insuranceType: 'convenio',
+          insurancePayerId: sanitizeString(patient?.insurance_payer_id, 120) || (
+            sanitizeString(patient?.insurance_name, 180)
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .toLowerCase()
+              .replace(/\s+/g, ' ')
+              .trim() === payerName
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .replace(/\s+/g, ' ')
+                .trim()
+              ? payerId
+              : null
+          ),
+          insuranceName: sanitizeString(patient?.insurance_name, 180) || (sanitizeString(patient?.insurance_payer_id, 120) === payerId ? payerName : null),
+          insuranceCardNumber: sanitizeString(patient?.insurance_card_number, 120) || null,
+          insuranceCardValidUntil: patient?.insurance_card_valid_until || null,
+          insurancePlanCategory: sanitizeString(patient?.insurance_plan_category, 160) || null
+        }))
+        .sort((left: any, right: any) => sanitizeString(left?.name, 180).localeCompare(sanitizeString(right?.name, 180), 'pt-BR'));
+
+      return sendNoStoreJson(res, {
+        success: true,
+        data: options,
+        patients: patientOptions,
+        meta: {
+          payerId,
+          payerName,
+          source: 'appointments_tiss_authoritative',
+          limit,
+          returnedAppointments: options.length,
+          returnedPatients: patientOptions.length
+        }
+      });
+    } catch (error: any) {
+      console.warn('[TissPreGuide] test options failed:', {
+        code: sanitizeString(error?.code, 40) || null,
+        message: sanitizeTextField(error?.message, 300) || String(error)
+      });
+      return res.status(500).json({ success: false, data: [], patients: [], error: 'Não foi possível carregar as sessões para teste de Pré-guia agora.' });
     }
   });
 

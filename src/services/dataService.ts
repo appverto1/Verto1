@@ -3437,6 +3437,31 @@ export const dataService = {
     }
   },
 
+  async getTissPreGuideTestOptions(options: any = {}) {
+    const endpoint = endpointWithQuery('/api/tiss/pre-guides/test-options', {
+      from: options.from,
+      to: options.to,
+      payerId: options.payerId,
+      patientId: options.patientId,
+      limit: normalizeListLimit(options.limit, 200, 500)
+    });
+    try {
+      return await fetchNoStoreJsonWithRetry(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        signal: options.signal
+      }, {
+        helperName: 'getTissPreGuideTestOptions',
+        operation: 'list',
+        table: 'appointments,patients,appointment_billing_contexts,appointment_tiss_pre_guides',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      }, 'As sessões para teste de Pré-guia voltaram do cache. Tente atualizar novamente.');
+    } catch {
+      return { success: false, data: [], patients: [], error: 'Não foi possível carregar as sessões para teste de Pré-guia agora.' };
+    }
+  },
+
   async getTissPreGuideCoverage(options: any = {}) {
     const endpoint = endpointWithQuery('/api/tiss/pre-guides/coverage', {
       from: options.from,

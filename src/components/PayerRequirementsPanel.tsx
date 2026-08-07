@@ -791,13 +791,20 @@ const buildSetupPreGuideEligibilityReasons = (event: any, payerId: string, payer
     (expectedPayerNameKey && eventPayerNameKey === expectedPayerNameKey);
   if (hasExpectedPayer && !eventPayerId && !eventPayerNameKey) reasons.push("Sessão sem pagador de convênio.");
   else if (!payerMatches) reasons.push(`Sessão está com outro pagador${eventPayerName ? ` (${eventPayerName})` : ""}.`);
-  if (/cancel|cancell|remarc|resched|recus|refus/.test(setupEventStatusKey(event))) reasons.push("Sessão cancelada, recusada ou remarcada.");
+  if (/cancel|cancell|remarc|resched|recus|refus|no show|no_show|falta|faltou|missed|not billable|not_billable/.test(setupEventStatusKey(event))) reasons.push("Sessão cancelada, ausente, não faturável ou remarcada.");
   if (/pending sync|pendente.*sincron|offline/.test(setupEventSyncStatusKey(event))) reasons.push("Sessão pendente de sincronização.");
-  if (setupEventOfficialDocumentId(event)) reasons.push("Sessão ou Pré-guia já vinculada a lote XML.");
-  if (!setupEventResolvedProfessionalId(event) && !setupEventResolvedProfessionalName(event)) reasons.push("Sessão sem profissional carregado.");
-  if (!setupEventResolvedRoomId(event) && !setupEventResolvedRoomName(event)) reasons.push("Sessão sem sala/local carregado.");
-  if (!setupEventAuthorizationCode(event) && !setupEventGuideNumber(event)) reasons.push("Sessão sem guia ou autorização vigente vinculada.");
+  if (setupEventOfficialDocumentId(event)) reasons.push("Sessão ou Pré-guia já vinculada a lote XML oficial.");
   return reasons;
+};
+
+const buildSetupPreGuidePendingReasons = (event: any) => {
+  const reasons = Array.isArray(event?.preGuidePendingReasons)
+    ? event.preGuidePendingReasons.map((reason: unknown) => String(reason || "").trim()).filter(Boolean)
+    : [];
+  if (!setupEventResolvedProfessionalId(event) && !setupEventResolvedProfessionalName(event)) reasons.push("Profissional ainda não definido.");
+  if (!setupEventResolvedRoomId(event) && !setupEventResolvedRoomName(event)) reasons.push("Sala/local ainda não definido.");
+  if (!setupEventAuthorizationCode(event) && !setupEventGuideNumber(event)) reasons.push("Guia/autorização ainda pendente.");
+  return Array.from(new Set(reasons));
 };
 
 const summarizeSetupEligibilityDiagnostics = (diagnostics: Array<{ reasons: string[] }>) => {
@@ -1408,7 +1415,8 @@ export function PayerRequirementsPanel({
         const appointmentPayerNameKey = normalizeSetupText(setupEventPayerName(appointment));
         const payerRelated = (selectedPayerId && appointmentPayerId === selectedPayerId) || (payerNameKey && appointmentPayerNameKey === payerNameKey);
         const reasons = buildSetupPreGuideEligibilityReasons(appointment, selectedPayerId, selectedPayer?.name);
-        return { appointment, reasons, eligible: payerRelated && reasons.length === 0, payerRelated };
+        const pendingReasons = buildSetupPreGuidePendingReasons(appointment);
+        return { appointment, reasons, pendingReasons, eligible: payerRelated && reasons.length === 0, payerRelated };
       })
       .sort((left, right) => {
         const leftAppointment = left.appointment;
@@ -2159,16 +2167,18 @@ export function PayerRequirementsPanel({
       setSetupTestLoadState({ loading: true, error: "" });
       const range = setupTestDateRange();
       try {
-        const [patientsResult, appointmentsResult] = await Promise.all([
-          dataService.getPatients(),
-          dataService.getCalendarEvents({ from: range.from, to: range.to, view: "month", limit: 200 }),
-        ]);
+        const result = await dataService.getTissPreGuideTestOptions({
+          from: range.from,
+          to: range.to,
+          payerId: selectedPayerId,
+          limit: 200,
+        });
         if (cancelled) return;
-        setSetupPatients(patientsResult?.success && Array.isArray(patientsResult.data) ? patientsResult.data : []);
-        setSetupAppointments(appointmentsResult?.success && Array.isArray(appointmentsResult.data) ? appointmentsResult.data : []);
+        setSetupPatients(result?.success && Array.isArray(result.patients) ? result.patients : []);
+        setSetupAppointments(result?.success && Array.isArray(result.data) ? result.data : []);
         setSetupTestLoadState({
           loading: false,
-          error: appointmentsResult?.success ? "" : appointmentsResult?.error || "Não foi possível carregar sessões elegíveis agora.",
+          error: result?.success ? "" : result?.error || "Não foi possível carregar sessões para teste agora.",
         });
       } catch {
         if (cancelled) return;
@@ -2188,15 +2198,25 @@ export function PayerRequirementsPanel({
     const controller = new AbortController();
     const loadSelectedPatientAppointments = async () => {
       const range = setupTestDateRange();
-      const result = await dataService.getCalendarEvents({
+      const result = await dataService.getTissPreGuideTestOptions({
         from: range.from,
         to: range.to,
-        view: "month",
+        payerId: selectedPayerId,
         patientId: setupPatientId,
         limit: 200,
         signal: controller.signal,
       });
       if (controller.signal.aborted || !result?.success || !Array.isArray(result.data)) return;
+      if (Array.isArray(result.patients) && result.patients.length > 0) {
+        setSetupPatients((current) => {
+          const mergedPatients = new Map<string, any>();
+          [...current, ...result.patients].forEach((patient) => {
+            const id = setupPatientRecordId(patient);
+            if (id) mergedPatients.set(id, patient);
+          });
+          return Array.from(mergedPatients.values());
+        });
+      }
       setSetupAppointments((current) => {
         const merged = new Map<string, any>();
         [...current, ...result.data].forEach((appointment) => {
@@ -3378,6 +3398,12 @@ export function PayerRequirementsPanel({
             </label>
           </div>
           {setupTestLoadState.error ? <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">{setupTestLoadState.error}</div> : null}
+          {selectedSetupAppointment && buildSetupPreGuidePendingReasons(selectedSetupAppointment).length > 0 ? (
+            <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
+              <p className="font-semibold">Sessão encontrada. A Pré-guia pode ser testada mesmo com pendências:</p>
+              <p className="mt-1 text-xs text-indigo-700">{buildSetupPreGuidePendingReasons(selectedSetupAppointment).join(" · ")}</p>
+            </div>
+          ) : null}
           {!setupTestLoadState.loading && setupPayerAppointments.length === 0 && setupIneligibleAppointments.length > 0 ? (
             <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               <p className="font-semibold">Sessões encontradas, mas não elegíveis:</p>
