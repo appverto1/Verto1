@@ -11,7 +11,7 @@ import {
   isSupportedAttendanceRegime040300,
   isSupportedAttendanceType040300,
 } from "../services/tissOfficial/versions/communication040300/domains";
-import { buildClinicDateRange, buildClinicMonthDateRange } from "../utils/scheduling";
+import { buildClinicDateRange, buildClinicMonthDateRange, formatDateInAppointmentTimezone } from "../utils/scheduling";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
   getTissProviderCodeLengthError,
@@ -1304,6 +1304,7 @@ export function PayerRequirementsPanel({
   const [setupAppointments, setSetupAppointments] = useState<any[]>([]);
   const [setupPatientId, setSetupPatientId] = useState("");
   const [setupAppointmentId, setSetupAppointmentId] = useState("");
+  const [setupCompetenceMonth, setSetupCompetenceMonth] = useState(() => formatDateInAppointmentTimezone(new Date()).slice(0, 7));
   const [setupTestLoadState, setSetupTestLoadState] = useState<{ loading: boolean; error: string }>({ loading: false, error: "" });
   const [setupTestResult, setSetupTestResult] = useState<SetupPreGuideTestResult>({ status: "not_tested", issues: [] });
   const [advancedModeOpen, setAdvancedModeOpen] = useState(false);
@@ -2177,14 +2178,28 @@ export function PayerRequirementsPanel({
     return buildClinicMonthDateRange(new Date());
   };
 
-  const setupTestDateRange = () => {
-    const now = new Date();
-    const from = new Date(now);
-    const to = new Date(now);
-    from.setDate(from.getDate() - 180);
-    to.setDate(to.getDate() + 365);
-    return buildClinicDateRange(from, to);
+  const setupTestDateRange = (monthKey: string) => {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(monthKey || "").trim());
+    if (!match) return buildClinicMonthDateRange(new Date());
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+      return buildClinicMonthDateRange(new Date());
+    }
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    return buildClinicDateRange(
+      `${match[1]}-${match[2]}-01`,
+      `${match[1]}-${match[2]}-${String(lastDay).padStart(2, "0")}`,
+    );
   };
+
+  const setupCompetenceLabel = useMemo(() => {
+    const match = /^(\d{4})-(\d{2})$/.exec(setupCompetenceMonth);
+    if (!match) return "competência selecionada";
+    const reference = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1, 12, 0, 0));
+    const label = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(reference);
+    return label ? label.charAt(0).toUpperCase() + label.slice(1) : "competência selecionada";
+  }, [setupCompetenceMonth]);
 
   useEffect(() => {
     setSetupPatientId("");
@@ -2197,7 +2212,7 @@ export function PayerRequirementsPanel({
     let cancelled = false;
     const loadSetupTestOptions = async () => {
       setSetupTestLoadState({ loading: true, error: "" });
-      const range = setupTestDateRange();
+      const range = setupTestDateRange(setupCompetenceMonth);
       try {
         const result = await dataService.getTissPreGuideTestOptions({
           from: range.from,
@@ -2223,13 +2238,13 @@ export function PayerRequirementsPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeSetupStepKey, selectedPayerId]);
+  }, [activeSetupStepKey, selectedPayerId, setupCompetenceMonth]);
 
   useEffect(() => {
     if (activeSetupStepKey !== "test" || !selectedPayerId || !setupPatientId) return undefined;
     const controller = new AbortController();
     const loadSelectedPatientAppointments = async () => {
-      const range = setupTestDateRange();
+      const range = setupTestDateRange(setupCompetenceMonth);
       const result = await dataService.getTissPreGuideTestOptions({
         from: range.from,
         to: range.to,
@@ -2260,7 +2275,7 @@ export function PayerRequirementsPanel({
     };
     void loadSelectedPatientAppointments();
     return () => controller.abort();
-  }, [activeSetupStepKey, selectedPayerId, setupPatientId]);
+  }, [activeSetupStepKey, selectedPayerId, setupPatientId, setupCompetenceMonth]);
 
   useEffect(() => {
     if (activeSetupStepKey !== "test") return;
@@ -3395,7 +3410,24 @@ export function PayerRequirementsPanel({
               <span className="inline-flex items-center gap-2 text-xs font-semibold text-indigo-700"><Loader2 size={14} className="animate-spin" />Carregando sessões</span>
             ) : null}
           </div>
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Competência</span>
+              <input
+                type="month"
+                value={setupCompetenceMonth}
+                onChange={(event) => {
+                  const nextMonth = event.target.value;
+                  if (!nextMonth) return;
+                  setSetupCompetenceMonth(nextMonth);
+                  setSetupAppointmentId("");
+                  setSetupAppointments([]);
+                  setSetupTestResult({ status: "not_tested", issues: [] });
+                }}
+                className={setupFieldClass}
+                aria-label="Competência mensal para o teste de Pré-guia"
+              />
+            </label>
             <label className="text-xs font-normal text-slate-700">
               <span className="mb-1 block">Paciente</span>
               <select
@@ -3444,9 +3476,11 @@ export function PayerRequirementsPanel({
               </ul>
             </div>
           ) : null}
-          {!setupTestLoadState.loading && setupPayerAppointments.length === 0 && setupIneligibleAppointments.length === 0 ? (
+          {!setupTestLoadState.loading && setupAppointmentsForSelectedPatient.length === 0 && setupIneligibleAppointmentsForSelectedPatient.length === 0 ? (
             <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-              Nenhuma sessão encontrada para este paciente e período.
+              {setupPatientId
+                ? `Nenhuma sessão encontrada para este paciente em ${setupCompetenceLabel}.`
+                : `Nenhuma sessão encontrada em ${setupCompetenceLabel}.`}
             </div>
           ) : null}
           {setupIneligibleAppointmentsForSelectedPatient.length > 0 ? (
