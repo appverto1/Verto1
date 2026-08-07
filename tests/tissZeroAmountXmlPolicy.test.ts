@@ -3,6 +3,10 @@ import fs from 'node:fs';
 import { validateTissPreGuide } from '../src/services/tissPreGuideEngine';
 import { communication040300Strategy } from '../src/services/tissOfficial/versions/communication040300/generator';
 import { generateTissXmlDraft } from '../src/services/tissXmlDraftGenerator';
+import {
+  getOfficialTissAmountBlockReason,
+  isFrozenZeroAmountXmlAllowed,
+} from '../src/utils/tissOfficialBatchEligibility';
 
 
 const migration = fs.readFileSync('supabase/migrations/20260806183000_payer_tiss_zero_amount_xml_policy.sql', 'utf8');
@@ -196,6 +200,36 @@ const preGuideRow = {
   validationErrorCodes: allowedPreGuide.errorCodes,
   validationErrors: allowedPreGuide.errors,
 };
+
+assert.equal(isFrozenZeroAmountXmlAllowed(preGuideRow), true);
+assert.equal(getOfficialTissAmountBlockReason(preGuideRow), null);
+assert.equal(getOfficialTissAmountBlockReason({
+  ...preGuideRow,
+  snapshot: {
+    ...allowedPreGuide.snapshot,
+    procedure: {
+      ...allowedPreGuide.snapshot.procedure,
+      zeroAmountXmlPolicyApplied: false,
+    },
+  },
+}), 'Sem valor');
+assert.equal(getOfficialTissAmountBlockReason({
+  ...preGuideRow,
+  snapshot: {
+    ...allowedPreGuide.snapshot,
+    procedure: {
+      ...allowedPreGuide.snapshot.procedure,
+      zeroAmountXmlReason: '',
+    },
+    payer: {
+      ...allowedPreGuide.snapshot.payer,
+      requirements: {
+        ...allowedPreGuide.snapshot.payer.requirements,
+        zeroAmountXmlReason: '',
+      },
+    },
+  },
+}), 'Sem valor');
 
 const draftResult = generateTissXmlDraft({
   preGuides: [preGuideRow],

@@ -292,12 +292,10 @@ import {
 } from './src/services/tissOfficial/capabilities';
 import {
   guideTypes040300,
-  isSupportedAttendanceCharacter040300,
-  isSupportedAttendanceRegime040300,
-  isSupportedAttendanceType040300,
   normalizeAttendanceCharacter040300,
   normalizeAttendanceRegime040300,
-  normalizeAttendanceType040300
+  normalizeAttendanceType040300,
+  validatePayerAttendanceProfile040300
 } from './src/services/tissOfficial/versions/communication040300/domains';
 import {
   sanitizeOfficialXmlFilePart
@@ -53489,14 +53487,32 @@ async function startServer() {
         });
       }
       const guideType = sanitizeString(req.body?.defaultGuideType ?? req.body?.default_guide_type, 40).toLowerCase();
-      const attendanceType = normalizeAttendanceType040300(req.body?.defaultAttendanceType ?? req.body?.default_attendance_type);
-      const attendanceRegime = normalizeAttendanceRegime040300(req.body?.defaultAttendanceRegime ?? req.body?.default_attendance_regime);
-      const attendanceCharacter = normalizeAttendanceCharacter040300(req.body?.defaultAttendanceCharacter ?? req.body?.default_attendance_character);
+      const attendanceType = normalizeAttendanceType040300(
+        req.body?.defaultAttendanceType ?? req.body?.default_attendance_type ?? existingProfile?.default_attendance_type
+      );
+      const attendanceRegime = normalizeAttendanceRegime040300(
+        req.body?.defaultAttendanceRegime ?? req.body?.default_attendance_regime ?? existingProfile?.default_attendance_regime
+      );
+      const attendanceCharacter = normalizeAttendanceCharacter040300(
+        req.body?.defaultAttendanceCharacter ?? req.body?.default_attendance_character ?? existingProfile?.default_attendance_character
+      );
+      const attendanceProfileIssues = validatePayerAttendanceProfile040300({
+        defaultAttendanceType: attendanceType,
+        defaultAttendanceRegime: attendanceRegime,
+        defaultAttendanceCharacter: attendanceCharacter,
+      });
+      if (req.body?.requireOfficialAttendanceProfile === true && attendanceProfileIssues.length > 0) {
+        return res.status(422).json({
+          success: false,
+          code: 'TISS_PROFILE_OFFICIAL_FIELDS_REQUIRED',
+          error: attendanceProfileIssues.map((issue) => issue.message).join(' ')
+        });
+      }
       const supportedGuideTypes = new Set(guideTypes040300.map((item) => item.code));
       const unsupportedCodes = [
-        attendanceType && !isSupportedAttendanceType040300(attendanceType) ? 'Tipo de atendimento padrão' : '',
-        attendanceRegime && !isSupportedAttendanceRegime040300(attendanceRegime) ? 'Regime de atendimento padrão' : '',
-        attendanceCharacter && !isSupportedAttendanceCharacter040300(attendanceCharacter) ? 'Caráter de atendimento padrão' : '',
+        ...attendanceProfileIssues
+          .filter((issue) => issue.reason === 'unsupported')
+          .map((issue) => issue.message),
         guideType && !supportedGuideTypes.has(guideType) ? 'Tipo de guia' : '',
       ].filter(Boolean);
       if (unsupportedCodes.length > 0) {

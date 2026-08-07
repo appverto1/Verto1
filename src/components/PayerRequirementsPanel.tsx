@@ -10,6 +10,7 @@ import {
   isSupportedAttendanceCharacter040300,
   isSupportedAttendanceRegime040300,
   isSupportedAttendanceType040300,
+  validatePayerAttendanceProfile040300,
 } from "../services/tissOfficial/versions/communication040300/domains";
 import { buildClinicDateRange, buildClinicMonthDateRange, formatDateInAppointmentTimezone } from "../utils/scheduling";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
@@ -1023,7 +1024,9 @@ export function getPayerSetupReadiness(input: {
   const hasPayer = Boolean(payer && isFilled(payer.name));
   const hasProviderCode = isFilled(tiss.contractedProviderCode) || isFilled(tiss.operatorProviderCode) || isFilled(tiss.operatorCode);
   const hasAns = !isInsurance || isFilled(tiss.ansRegistration);
-  const officialIssues = input.officialCodeIssues || [];
+  const officialIssues = input.officialCodeIssues ?? (isInsurance
+    ? validatePayerAttendanceProfile040300(tiss).map((issue) => issue.message)
+    : []);
   const tissMissing = input.tissMissing || [];
   const activeProcedureCount = Number(input.activeProcedureCount || 0);
   const activeMappingCount = Number(input.activeMappingCount || 0);
@@ -1346,14 +1349,22 @@ export function PayerRequirementsPanel({
   const selectedPayerMappingCount = selectedPayerMappings.filter((mapping) => mapping.active === true).length;
   const selectedPayerReadyMappingCount = selectedPayerMappings.filter(isPayerTussMappingReady).length;
   const selectedPayerPriceCount = procedurePrices.filter((price) => price.payerId === selectedPayerId && price.active === true).length;
+  const selectedPayerOfficialProfileIssues = useMemo(
+    () => isInsurancePayer(selectedPayer)
+      ? validatePayerAttendanceProfile040300(payerTissForm)
+      : [],
+    [
+      payerTissForm.defaultAttendanceCharacter,
+      payerTissForm.defaultAttendanceRegime,
+      payerTissForm.defaultAttendanceType,
+      selectedPayer,
+    ],
+  );
   const selectedPayerOfficialCodeIssues = useMemo(() => {
-    const issues: string[] = [];
-    if (payerTissForm.defaultAttendanceType && !isSupportedAttendanceType040300(payerTissForm.defaultAttendanceType)) issues.push("Tipo de atendimento inválido");
-    if (payerTissForm.defaultAttendanceRegime && !isSupportedAttendanceRegime040300(payerTissForm.defaultAttendanceRegime)) issues.push("Regime de atendimento inválido");
-    if (payerTissForm.defaultAttendanceCharacter && !isSupportedAttendanceCharacter040300(payerTissForm.defaultAttendanceCharacter)) issues.push("Caráter de atendimento inválido");
+    const issues = selectedPayerOfficialProfileIssues.map((issue) => issue.message);
     if (payerTissForm.defaultGuideType && !hasOption(guideTypes040300, payerTissForm.defaultGuideType)) issues.push("Tipo de guia inválido");
     return issues;
-  }, [payerTissForm.defaultAttendanceCharacter, payerTissForm.defaultAttendanceRegime, payerTissForm.defaultAttendanceType, payerTissForm.defaultGuideType]);
+  }, [payerTissForm.defaultGuideType, selectedPayerOfficialProfileIssues]);
   const hasAnySpecificAntiGlosaRequirement = useMemo(
     () => antiGlosaRequirementKeys.some((key) => Boolean((payerTissForm as any)[key])),
     [payerTissForm],
@@ -1646,7 +1657,12 @@ export function PayerRequirementsPanel({
         !getTissProviderCodeLengthError(payerTissForm.operatorProviderCode),
       );
     }
-    if (stepKey === "tiss") return Boolean(selectedPayerId && isInsurancePayer(selectedPayer) && payerTissForm.tissVersion === OFFICIAL_TISS_XML_STRATEGY.communicationVersion);
+    if (stepKey === "tiss") return Boolean(
+      selectedPayerId &&
+      isInsurancePayer(selectedPayer) &&
+      payerTissForm.tissVersion === OFFICIAL_TISS_XML_STRATEGY.communicationVersion &&
+      selectedPayerOfficialCodeIssues.length === 0
+    );
     if (stepKey === "anti_glosa") return Boolean(selectedPayerId && isInsurancePayer(selectedPayer));
     if (stepKey === "procedures") return activeTussServices.length > 0 || tussServiceForm.name.trim().length >= 2;
     if (stepKey === "tuss") return (selectedPayerMappingCount > 0 && selectedPayerReadyMappingCount === selectedPayerMappingCount) || Boolean(tussMappingForm.serviceCatalogId && tussMappingForm.tussCodeId && isValidTissCivilDate(tussMappingForm.validFrom));
@@ -1666,7 +1682,7 @@ export function PayerRequirementsPanel({
           const tissSaved = await savePayerTissProfile();
           saved = payerSaved && tissSaved === true;
         } else {
-          saved = await savePayerTissProfile() === true;
+          saved = await savePayerTissProfile(stepKey === "tiss") === true;
         }
       } else if (stepKey === "procedures" && tussServiceForm.name.trim().length >= 2) {
         saved = await createTussService() === true;
@@ -2081,8 +2097,17 @@ export function PayerRequirementsPanel({
     }));
   };
 
-  const savePayerTissProfile = async () => {
+  const savePayerTissProfile = async (requireOfficialAttendanceProfile = false) => {
     if (!selectedPayerId || !isInsurancePayer(selectedPayer)) return false;
+    if (requireOfficialAttendanceProfile && selectedPayerOfficialProfileIssues.length > 0) {
+      const officialFieldErrors = Object.fromEntries(
+        selectedPayerOfficialProfileIssues.map((issue) => [issue.field, issue.message]),
+      ) as Partial<Record<keyof PayerTissForm, string>>;
+      setPayerTissFieldErrors((current) => ({ ...current, ...officialFieldErrors }));
+      setPayerTissMessage("");
+      setError("Complete o tipo, o regime e o caráter de atendimento TISS antes de continuar.");
+      return false;
+    }
     if (payerTissForm.allowsZeroAmountXml && !payerTissForm.zeroAmountXmlReason.trim()) {
       setError("Informe a justificativa operacional para permitir XML com valor R$ 0,00.");
       return false;
@@ -2106,7 +2131,10 @@ export function PayerRequirementsPanel({
     setPayerTissFieldErrors({});
     const savingWithoutAntiGlosaReview = !payerTissForm.antiGlosaReviewed && !payerTissForm.operatorHasNoAdditionalRequirements;
     try {
-      const result = await dataService.updatePayerTissProfile(selectedPayerId, payerTissForm);
+      const result = await dataService.updatePayerTissProfile(selectedPayerId, {
+        ...payerTissForm,
+        requireOfficialAttendanceProfile,
+      });
       if (!result?.success) {
         const message = result?.error || "Não foi possível salvar os dados TISS da operadora agora.";
         if (result?.code === "TISS_PROVIDER_CODE_TOO_LONG") {
@@ -3134,6 +3162,62 @@ export function PayerRequirementsPanel({
               <p className="mt-1 text-sm font-semibold text-slate-900">{OFFICIAL_TISS_XML_STRATEGY.tussVersion}</p>
             </div>
           </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Tipo de atendimento</span>
+              <select
+                value={payerTissForm.defaultAttendanceType}
+                onChange={(event) => updatePayerTiss("defaultAttendanceType", event.target.value)}
+                aria-invalid={Boolean(payerTissFieldErrors.defaultAttendanceType)}
+                aria-describedby={payerTissFieldErrors.defaultAttendanceType ? "setup-attendance-type-error" : undefined}
+                className={`${setupFieldClass} ${payerTissFieldErrors.defaultAttendanceType ? "border-rose-400 focus:border-rose-400 focus:ring-rose-100" : ""}`}
+              >
+                <option value="">Selecione</option>
+                {payerTissForm.defaultAttendanceType && !isSupportedAttendanceType040300(payerTissForm.defaultAttendanceType) ? (
+                  <option value={payerTissForm.defaultAttendanceType}>{legacyInvalidLabel(payerTissForm.defaultAttendanceType)}</option>
+                ) : null}
+                {attendanceTypes040300.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
+              </select>
+              {payerTissFieldErrors.defaultAttendanceType ? <span id="setup-attendance-type-error" className="mt-1 block text-[11px] leading-4 text-rose-600">{payerTissFieldErrors.defaultAttendanceType}</span> : null}
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Regime de atendimento</span>
+              <select
+                value={payerTissForm.defaultAttendanceRegime}
+                onChange={(event) => updatePayerTiss("defaultAttendanceRegime", event.target.value)}
+                aria-invalid={Boolean(payerTissFieldErrors.defaultAttendanceRegime)}
+                aria-describedby={payerTissFieldErrors.defaultAttendanceRegime ? "setup-attendance-regime-error" : undefined}
+                className={`${setupFieldClass} ${payerTissFieldErrors.defaultAttendanceRegime ? "border-rose-400 focus:border-rose-400 focus:ring-rose-100" : ""}`}
+              >
+                <option value="">Selecione</option>
+                {payerTissForm.defaultAttendanceRegime && !isSupportedAttendanceRegime040300(payerTissForm.defaultAttendanceRegime) ? (
+                  <option value={payerTissForm.defaultAttendanceRegime}>{legacyInvalidLabel(payerTissForm.defaultAttendanceRegime)}</option>
+                ) : null}
+                {attendanceRegimes040300.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
+              </select>
+              {payerTissFieldErrors.defaultAttendanceRegime ? <span id="setup-attendance-regime-error" className="mt-1 block text-[11px] leading-4 text-rose-600">{payerTissFieldErrors.defaultAttendanceRegime}</span> : null}
+            </label>
+            <label className="text-xs font-normal text-slate-700">
+              <span className="mb-1 block">Caráter do atendimento</span>
+              <select
+                value={payerTissForm.defaultAttendanceCharacter}
+                onChange={(event) => updatePayerTiss("defaultAttendanceCharacter", event.target.value)}
+                aria-invalid={Boolean(payerTissFieldErrors.defaultAttendanceCharacter)}
+                aria-describedby={payerTissFieldErrors.defaultAttendanceCharacter ? "setup-attendance-character-error" : undefined}
+                className={`${setupFieldClass} ${payerTissFieldErrors.defaultAttendanceCharacter ? "border-rose-400 focus:border-rose-400 focus:ring-rose-100" : ""}`}
+              >
+                <option value="">Selecione</option>
+                {payerTissForm.defaultAttendanceCharacter && !isSupportedAttendanceCharacter040300(payerTissForm.defaultAttendanceCharacter) ? (
+                  <option value={payerTissForm.defaultAttendanceCharacter}>{legacyInvalidLabel(payerTissForm.defaultAttendanceCharacter)}</option>
+                ) : null}
+                {attendanceCharacters040300.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
+              </select>
+              {payerTissFieldErrors.defaultAttendanceCharacter ? <span id="setup-attendance-character-error" className="mt-1 block text-[11px] leading-4 text-rose-600">{payerTissFieldErrors.defaultAttendanceCharacter}</span> : null}
+            </label>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-slate-500">
+            Confirme estes três códigos no contrato ou portal da operadora. Eles são obrigatórios na Pré-guia e no XML e não são preenchidos automaticamente pela Verto.
+          </p>
           <div className="mt-3">
             {renderSetupCheckbox(confirmed, setOfficialTissVersionConfirmation, "Confirmei que a operadora aceita este padrão TISS", "A versão é oficial e gerenciada pelo Verto; esta etapa só registra a confirmação operacional.")}
           </div>
@@ -3962,13 +4046,14 @@ export function PayerRequirementsPanel({
                       ))}
                     </select>
                   </PayerTissField>
-                  <PayerTissField id="payer-default-attendance-type" label="Tipo de atendimento padrão" helperText="Código oficial usado na guia SP/SADT. Para terapias, normalmente use a opção compatível com o contrato.">
+                  <PayerTissField id="payer-default-attendance-type" label="Tipo de atendimento padrão" helperText="Código oficial usado na guia SP/SADT. Para terapias, normalmente use a opção compatível com o contrato." error={payerTissFieldErrors.defaultAttendanceType}>
                     <select
                       id="payer-default-attendance-type"
-                      aria-describedby="payer-default-attendance-type-help"
+                      aria-describedby={payerTissFieldErrors.defaultAttendanceType ? "payer-default-attendance-type-help payer-default-attendance-type-error" : "payer-default-attendance-type-help"}
+                      aria-invalid={Boolean(payerTissFieldErrors.defaultAttendanceType)}
                       value={payerTissForm.defaultAttendanceType}
                       onChange={(event) => updatePayerTiss("defaultAttendanceType", event.target.value)}
-                      className={payerTissFieldClass}
+                      className={`${payerTissFieldClass} ${payerTissFieldErrors.defaultAttendanceType ? "border-rose-400 focus:border-rose-400 focus:ring-rose-100" : ""}`}
                     >
                       <option value="">Selecione</option>
                       {payerTissForm.defaultAttendanceType && !isSupportedAttendanceType040300(payerTissForm.defaultAttendanceType) && (
@@ -3979,13 +4064,14 @@ export function PayerRequirementsPanel({
                       ))}
                     </select>
                   </PayerTissField>
-                  <PayerTissField id="payer-default-attendance-regime" label="Regime de atendimento padrão" helperText="Código oficial de regime de atendimento aceito pelo XML TISS.">
+                  <PayerTissField id="payer-default-attendance-regime" label="Regime de atendimento padrão" helperText="Código oficial de regime de atendimento aceito pelo XML TISS." error={payerTissFieldErrors.defaultAttendanceRegime}>
                     <select
                       id="payer-default-attendance-regime"
-                      aria-describedby="payer-default-attendance-regime-help"
+                      aria-describedby={payerTissFieldErrors.defaultAttendanceRegime ? "payer-default-attendance-regime-help payer-default-attendance-regime-error" : "payer-default-attendance-regime-help"}
+                      aria-invalid={Boolean(payerTissFieldErrors.defaultAttendanceRegime)}
                       value={payerTissForm.defaultAttendanceRegime}
                       onChange={(event) => updatePayerTiss("defaultAttendanceRegime", event.target.value)}
-                      className={payerTissFieldClass}
+                      className={`${payerTissFieldClass} ${payerTissFieldErrors.defaultAttendanceRegime ? "border-rose-400 focus:border-rose-400 focus:ring-rose-100" : ""}`}
                     >
                       <option value="">Selecione</option>
                       {payerTissForm.defaultAttendanceRegime && !isSupportedAttendanceRegime040300(payerTissForm.defaultAttendanceRegime) && (
@@ -3996,13 +4082,14 @@ export function PayerRequirementsPanel({
                       ))}
                     </select>
                   </PayerTissField>
-                  <PayerTissField id="payer-default-attendance-character" label="Caráter de atendimento padrão" helperText="Código oficial que informa se o atendimento é eletivo ou de urgência/emergência.">
+                  <PayerTissField id="payer-default-attendance-character" label="Caráter de atendimento padrão" helperText="Código oficial que informa se o atendimento é eletivo ou de urgência/emergência." error={payerTissFieldErrors.defaultAttendanceCharacter}>
                     <select
                       id="payer-default-attendance-character"
-                      aria-describedby="payer-default-attendance-character-help"
+                      aria-describedby={payerTissFieldErrors.defaultAttendanceCharacter ? "payer-default-attendance-character-help payer-default-attendance-character-error" : "payer-default-attendance-character-help"}
+                      aria-invalid={Boolean(payerTissFieldErrors.defaultAttendanceCharacter)}
                       value={payerTissForm.defaultAttendanceCharacter}
                       onChange={(event) => updatePayerTiss("defaultAttendanceCharacter", event.target.value)}
-                      className={payerTissFieldClass}
+                      className={`${payerTissFieldClass} ${payerTissFieldErrors.defaultAttendanceCharacter ? "border-rose-400 focus:border-rose-400 focus:ring-rose-100" : ""}`}
                     >
                       <option value="">Selecione</option>
                       {payerTissForm.defaultAttendanceCharacter && !isSupportedAttendanceCharacter040300(payerTissForm.defaultAttendanceCharacter) && (
@@ -4165,7 +4252,7 @@ export function PayerRequirementsPanel({
               idleLabel="Salvar alterações"
               loadingLabel="Atualizando Pré-Guia..."
               disabled={!selectedPayerId || saving || payerTissLoading}
-              onClick={() => void savePayerTissProfile()}
+              onClick={() => void savePayerTissProfile(true)}
             />
                 </div>
               </>

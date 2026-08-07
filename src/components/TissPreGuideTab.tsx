@@ -32,6 +32,7 @@ import {
 } from "../services/tissOfficial/versions/communication040300/domains";
 import { validateAntiGlosaBatchForOfficialXml, validateAntiGlosaForPreGuide } from "../services/tissAntiGlosaChecklist";
 import { formatDateTimeInAppointmentTimezone } from "../utils/scheduling";
+import { getOfficialTissAmountBlockReason } from "../utils/tissOfficialBatchEligibility";
 
 type TissPreGuideRow = {
   id?: string | null;
@@ -437,7 +438,8 @@ function officialPreGuideBlockReasons(row: TissPreGuideRow, competenceMonth: str
   if (!row.payerId) reasons.push("Convênio não informado");
   if (row.officialDocumentId || row.snapshot?.officialDocumentId || row.snapshot?.officialDocument?.id) reasons.push("Já vinculada a lote oficial");
   if (preGuideMonth(row) && preGuideMonth(row) !== competenceMonth.slice(0, 7)) reasons.push("Competência diferente");
-  if (Number(row.totalAmountCents || row.snapshot?.procedure?.totalAmountCents || 0) <= 0) reasons.push("Sem valor");
+  const amountBlockReason = getOfficialTissAmountBlockReason(row);
+  if (amountBlockReason) reasons.push(amountBlockReason);
   return Array.from(new Set(reasons.filter(Boolean)));
 }
 
@@ -493,7 +495,17 @@ function isPatientIssue(item?: { code?: string | null; section?: string | null }
 
 function isPayerProfileIssue(item?: { code?: string | null; section?: string | null }) {
   const code = normalizeIssueCode(item?.code);
-  return ["PAYER_TISS_PROFILE_MISSING", "PAYER_CONFIGURATION_INCOMPLETE", "PAYER_TISS_VERSION_MISSING", "PAYER_ANS_REGISTRATION_MISSING", "PAYER_CONTRACTED_PROVIDER_CODE_MISSING", "PAYER_CID_REQUIRED"].includes(code);
+  return [
+    "PAYER_TISS_PROFILE_MISSING",
+    "PAYER_CONFIGURATION_INCOMPLETE",
+    "PAYER_TISS_VERSION_MISSING",
+    "PAYER_ANS_REGISTRATION_MISSING",
+    "PAYER_CONTRACTED_PROVIDER_CODE_MISSING",
+    "PAYER_ATTENDANCE_TYPE_INVALID",
+    "PAYER_ATTENDANCE_REGIME_INVALID",
+    "PAYER_ATTENDANCE_CHARACTER_INVALID",
+    "PAYER_CID_REQUIRED",
+  ].includes(code);
 }
 
 function isProfessionalIssue(item?: { code?: string | null; section?: string | null }) {
@@ -1765,7 +1777,10 @@ export function TissPreGuideTab({
       const result = profileEditor === "provider"
         ? await dataService.updateClinicTissProfile(profileForm)
         : profileEditor === "payer"
-          ? await dataService.updatePayerTissProfile(String(detail?.payerId), profileForm)
+          ? await dataService.updatePayerTissProfile(String(detail?.payerId), {
+              ...profileForm,
+              requireOfficialAttendanceProfile: true,
+            })
           : await dataService.updateProfessionalBillingProfile(String(detail?.professionalId), profileForm);
       if (!result?.success) {
         setError(result?.error || "Não foi possível salvar o cadastro.");

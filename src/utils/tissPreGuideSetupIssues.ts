@@ -22,14 +22,20 @@ export function collectTissPreGuideSetupIssues(preGuide: any, checklistInput?: a
       ? preGuide.antiGlosaChecklist
       : {};
 
-  const detailedIssues = unique(
-    (Array.isArray(checklist?.issues) ? checklist.issues : []).map(issueText),
+  const checklistIssues = Array.isArray(checklist?.issues) ? checklist.issues : [];
+  const blockingDetailedIssues = unique(
+    checklistIssues
+      .filter((issue: any) => text(issue?.severity).toLowerCase() === 'blocking')
+      .map(issueText),
   );
-  if (detailedIssues.length > 0) return detailedIssues;
-
-  const itemIssues = unique(
+  const legacyDetailedIssues = unique(
+    checklistIssues
+      .filter((issue: any) => !text(issue?.severity))
+      .map(issueText),
+  );
+  const blockingItemIssues = unique(
     (Array.isArray(checklist?.items) ? checklist.items : [])
-      .filter((item: any) => ['blocking', 'attention'].includes(text(item?.status).toLowerCase()))
+      .filter((item: any) => text(item?.status).toLowerCase() === 'blocking')
       .flatMap((item: any) => {
         const relatedCodes = Array.isArray(item?.relatedIssueCodes) ? item.relatedIssueCodes : [];
         if (relatedCodes.length > 0) return relatedCodes.map(tissPreGuideIssueLabel);
@@ -38,13 +44,38 @@ export function collectTissPreGuideSetupIssues(preGuide: any, checklistInput?: a
         return [text(item?.label)];
       }),
   );
-  if (itemIssues.length > 0) return itemIssues;
-
   const validationIssues = unique(
-    (Array.isArray(preGuide?.validationErrorCodes) ? preGuide.validationErrorCodes : [])
-      .map(tissPreGuideIssueLabel),
+    [
+      ...(Array.isArray(preGuide?.validationErrors) ? preGuide.validationErrors.map(issueText) : []),
+      ...(Array.isArray(preGuide?.validation_errors) ? preGuide.validation_errors.map(issueText) : []),
+      ...(Array.isArray(preGuide?.validationErrorCodes) ? preGuide.validationErrorCodes.map(tissPreGuideIssueLabel) : []),
+      ...(Array.isArray(preGuide?.validation_error_codes) ? preGuide.validation_error_codes.map(tissPreGuideIssueLabel) : []),
+    ],
   );
-  if (validationIssues.length > 0) return validationIssues;
+  if (blockingDetailedIssues.length > 0) {
+    return unique([...blockingDetailedIssues, ...validationIssues, ...blockingItemIssues]);
+  }
+  // Old checklist snapshots did not persist severity. Preserve their richer
+  // copy, but never let a classified warning hide current validation errors.
+  if (legacyDetailedIssues.length > 0) return legacyDetailedIssues;
+  if (validationIssues.length > 0 || blockingItemIssues.length > 0) {
+    return unique([...validationIssues, ...blockingItemIssues]);
+  }
+
+  const warningIssues = unique([
+    ...checklistIssues
+      .filter((issue: any) => text(issue?.severity).toLowerCase() === 'warning')
+      .map(issueText),
+    ...(Array.isArray(checklist?.items) ? checklist.items : [])
+      .filter((item: any) => text(item?.status).toLowerCase() === 'attention')
+      .flatMap((item: any) => {
+        const relatedCodes = Array.isArray(item?.relatedIssueCodes) ? item.relatedIssueCodes : [];
+        return relatedCodes.length > 0 ? relatedCodes.map(tissPreGuideIssueLabel) : [issueText(item) || text(item?.label)];
+      }),
+    ...(Array.isArray(preGuide?.validationWarningCodes) ? preGuide.validationWarningCodes.map(tissPreGuideIssueLabel) : []),
+    ...(Array.isArray(preGuide?.validation_warning_codes) ? preGuide.validation_warning_codes.map(tissPreGuideIssueLabel) : []),
+  ]);
+  if (warningIssues.length > 0) return warningIssues;
 
   const status = text(preGuide?.status).toLowerCase();
   return status && status !== 'valid'

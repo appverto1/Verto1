@@ -4,6 +4,17 @@ export type TissDomainOption = {
   description?: string;
 };
 
+export type PayerAttendanceProfileField040300 =
+  | "defaultAttendanceType"
+  | "defaultAttendanceRegime"
+  | "defaultAttendanceCharacter";
+
+export type PayerAttendanceProfileIssue040300 = {
+  field: PayerAttendanceProfileField040300;
+  reason: "required" | "unsupported";
+  message: string;
+};
+
 export const attendanceTypes040300: TissDomainOption[] = [
   { code: "01", label: "Remoção" },
   { code: "02", label: "Pequena cirurgia" },
@@ -64,4 +75,56 @@ export function isSupportedAttendanceRegime040300(value: unknown) {
 export function isSupportedAttendanceCharacter040300(value: unknown) {
   const normalized = normalizeAttendanceCharacter040300(value);
   return attendanceCharacters040300.some((item) => item.code === normalized);
+}
+
+/**
+ * Validates the three official SP/SADT attendance defaults as one contract.
+ * An incomplete profile may still be persisted as a draft, but it must never
+ * be presented as ready for pre-guide/XML generation.
+ */
+export function validatePayerAttendanceProfile040300(input: {
+  defaultAttendanceType?: unknown;
+  defaultAttendanceRegime?: unknown;
+  defaultAttendanceCharacter?: unknown;
+}): PayerAttendanceProfileIssue040300[] {
+  const fields = [
+    {
+      field: "defaultAttendanceType" as const,
+      value: normalizeAttendanceType040300(input.defaultAttendanceType),
+      supported: isSupportedAttendanceType040300,
+      label: "tipo de atendimento",
+    },
+    {
+      field: "defaultAttendanceRegime" as const,
+      value: normalizeAttendanceRegime040300(input.defaultAttendanceRegime),
+      supported: isSupportedAttendanceRegime040300,
+      label: "regime de atendimento",
+    },
+    {
+      field: "defaultAttendanceCharacter" as const,
+      value: normalizeAttendanceCharacter040300(input.defaultAttendanceCharacter),
+      supported: isSupportedAttendanceCharacter040300,
+      label: "caráter de atendimento",
+    },
+  ];
+
+  const issues: PayerAttendanceProfileIssue040300[] = [];
+  for (const { field, value, supported, label } of fields) {
+    if (!value) {
+      issues.push({
+        field,
+        reason: "required",
+        message: `Selecione o ${label} TISS oficial.`,
+      });
+      continue;
+    }
+    if (!supported(value)) {
+      issues.push({
+        field,
+        reason: "unsupported",
+        message: `O ${label} informado não é suportado pelo XML TISS 04.03.00.`,
+      });
+    }
+  }
+  return issues;
 }

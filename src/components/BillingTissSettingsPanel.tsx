@@ -10,6 +10,11 @@ import {
   Stethoscope,
 } from "lucide-react";
 import { dataService } from "../services/dataService";
+import {
+  attendanceCharacters040300,
+  attendanceRegimes040300,
+  attendanceTypes040300,
+} from "../services/tissOfficial/versions/communication040300/domains";
 import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStorage } from "../utils/brMasks";
 
 type Payer = {
@@ -159,6 +164,9 @@ function payerMissing(profile: any) {
   const missing = [];
   if (!isFilled(profile?.ans_registration)) missing.push("registro ANS");
   if (!isFilled(profile?.tiss_version)) missing.push("versão TISS");
+  if (!isFilled(profile?.default_attendance_type)) missing.push("tipo de atendimento");
+  if (!isFilled(profile?.default_attendance_regime)) missing.push("regime de atendimento");
+  if (!isFilled(profile?.default_attendance_character)) missing.push("caráter de atendimento");
   return missing;
 }
 
@@ -336,7 +344,10 @@ export function BillingTissSettingsPanel({
     setError("");
     setMessage("");
     try {
-      const result = await dataService.updatePayerTissProfile(selectedPayerId, payerForm);
+      const result = await dataService.updatePayerTissProfile(selectedPayerId, {
+        ...payerForm,
+        requireOfficialAttendanceProfile: true,
+      });
       if (!result?.success) {
         setError(result?.error || "Não foi possível salvar o perfil TISS global do pagador.");
         return;
@@ -482,7 +493,27 @@ export function BillingTissSettingsPanel({
             </label>
             <Field label="Código do contratado na operadora" value={payerForm.contractedProviderCode} onChange={(value) => updatePayer("contractedProviderCode", value)} maxLength={120} />
             <Field label="Contratado executante" value={payerForm.contractedExecutant} onChange={(value) => updatePayer("contractedExecutant", value)} maxLength={160} />
-            <Field label="Tipo de atendimento padrão" value={payerForm.defaultAttendanceType} onChange={(value) => updatePayer("defaultAttendanceType", value)} maxLength={80} />
+            <label className="text-xs font-bold text-slate-600">
+              Tipo de atendimento padrão
+              <select value={payerForm.defaultAttendanceType} onChange={(event) => updatePayer("defaultAttendanceType", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
+                <option value="">Selecione</option>
+                {attendanceTypes040300.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-bold text-slate-600">
+              Regime de atendimento padrão
+              <select value={payerForm.defaultAttendanceRegime} onChange={(event) => updatePayer("defaultAttendanceRegime", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
+                <option value="">Selecione</option>
+                {attendanceRegimes040300.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-bold text-slate-600">
+              Caráter de atendimento padrão
+              <select value={payerForm.defaultAttendanceCharacter} onChange={(event) => updatePayer("defaultAttendanceCharacter", event.target.value)} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium">
+                <option value="">Selecione</option>
+                {attendanceCharacters040300.map((option) => <option key={option.code} value={option.code}>{option.code} - {option.label}</option>)}
+              </select>
+            </label>
           </div>
           <div className="grid gap-2 md:grid-cols-2">
             <Toggle label="Exige autorização" checked={Boolean(payerForm.requiresAuthorization)} onChange={(value) => updatePayer("requiresAuthorization", value)} />
