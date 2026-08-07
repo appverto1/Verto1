@@ -11,14 +11,8 @@ import {
   isSupportedAttendanceRegime040300,
   isSupportedAttendanceType040300,
 } from "../services/tissOfficial/versions/communication040300/domains";
-import { buildClinicMonthDateRange } from "../utils/scheduling";
+import { buildClinicDateRange, buildClinicMonthDateRange } from "../utils/scheduling";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
-import {
-  buildTissPreGuideTestMonthRange,
-  currentTissPreGuideTestMonth,
-  formatTissPreGuideTestMonthLabel,
-  normalizeTissPreGuideTestMonth,
-} from "../utils/tissPreGuideTestPeriod";
 import {
   getTissProviderCodeLengthError,
   isValidTissCivilDate,
@@ -1052,9 +1046,6 @@ export function getPayerSetupReadiness(input: {
     : selectedAppointmentMappingIssue === "missing"
       ? "A sessão selecionada não possui De/Para TUSS válido para este procedimento e data."
       : "";
-  const selectedAppointmentTestIssues = selectedAppointmentMappingMessage
-    ? [`${selectedAppointmentMappingMessage} Revalide a Pré-guia para aplicar a configuração vigente.`]
-    : [];
 
   const steps: PayerSetupStep[] = [
     makeSetupStep({
@@ -1104,27 +1095,33 @@ export function getPayerSetupReadiness(input: {
       key: "tuss",
       title: "TUSS e De/Para",
       shortDescription: "Vincule cada procedimento ao código TUSS aceito pela operadora.",
-      status: hasLegacyTussCode ? "blocked" : allActiveMappingsReady ? "ready" : "incomplete",
+      status: hasLegacyTussCode || selectedAppointmentMappingIssue ? "blocked" : allActiveMappingsReady ? "ready" : "incomplete",
       requiredActions: hasLegacyTussCode
         ? ["Troque códigos legados/inadequados por TUSS oficial ativo."]
-        : allActiveMappingsReady
-          ? [`${readyMappingCount} De/Para ativo(s) com vigência inicial persistida.`]
-          : activeMappingCount > 0
-            ? [`${activeMappingCount} De/Para ativo(s), mas a vigência inicial obrigatória ainda não foi salva.`]
-            : ["Crie De/Para entre procedimento interno e código TUSS oficial."],
+        : selectedAppointmentMappingIssue
+          ? [selectedAppointmentMappingMessage]
+          : allActiveMappingsReady
+            ? [`${readyMappingCount} De/Para ativo(s) com vigência inicial persistida.`]
+            : activeMappingCount > 0
+              ? [`${activeMappingCount} De/Para ativo(s), mas a vigência inicial obrigatória ainda não foi salva.`]
+              : ["Crie De/Para entre procedimento interno e código TUSS oficial."],
       nextActionLabel: hasLegacyTussCode
         ? "Corrigir TUSS legado"
-        : allActiveMappingsReady
-          ? "Avançar para valores"
-          : "Completar De/Para",
-      canContinue: allActiveMappingsReady && !hasLegacyTussCode,
+        : selectedAppointmentMappingIssue
+          ? "Corrigir De/Para da sessão"
+          : allActiveMappingsReady
+            ? "Avançar para valores"
+            : "Completar De/Para",
+      canContinue: allActiveMappingsReady && !hasLegacyTussCode && !selectedAppointmentMappingIssue,
       blockingReasons: hasLegacyTussCode
         ? ["Código TUSS legado/inadequado para XML."]
-        : allActiveMappingsReady
-          ? []
-          : activeMappingCount > 0
-            ? ["Informe e salve a vigência inicial obrigatória do De/Para."]
-            : ["De/Para TUSS ativo é obrigatório para Pré-guia/XML."],
+        : selectedAppointmentMappingIssue
+          ? [selectedAppointmentMappingMessage]
+          : allActiveMappingsReady
+            ? []
+            : activeMappingCount > 0
+              ? ["Informe e salve a vigência inicial obrigatória do De/Para."]
+              : ["De/Para TUSS ativo é obrigatório para Pré-guia/XML."],
     }),
     makeSetupStep({
       key: "prices",
@@ -1166,7 +1163,7 @@ export function getPayerSetupReadiness(input: {
         ? "blocked"
         : preGuideTestStatus === "ready"
           ? "ready"
-          : preGuideTestStatus === "warning" || selectedAppointmentTestIssues.length > 0
+          : preGuideTestStatus === "warning"
             ? "warning"
             : activeBillingConfigurationCount > 0 ? "warning" : "incomplete",
       requiredActions: preGuideTestStatus === "ready"
@@ -1175,15 +1172,7 @@ export function getPayerSetupReadiness(input: {
       nextActionLabel: preGuideTestStatus === "ready" ? "Ver resumo final" : "Ir para Pré-Guias TISS",
       canContinue: preGuideTestStatus !== "blocked",
       blockingReasons: preGuideTestStatus === "blocked" ? preGuideTestIssues : [],
-      warnings: preGuideTestStatus === "ready"
-        ? []
-        : Array.from(new Set([
-            ...preGuideTestIssues,
-            ...selectedAppointmentTestIssues,
-            ...(preGuideTestIssues.length === 0 && selectedAppointmentTestIssues.length === 0
-              ? ["Teste ainda não executado nesta esteira."]
-              : []),
-          ])),
+      warnings: preGuideTestStatus === "ready" ? [] : preGuideTestIssues.length > 0 ? preGuideTestIssues : ["Teste ainda não executado nesta esteira."],
     }),
   ];
 
@@ -1315,7 +1304,6 @@ export function PayerRequirementsPanel({
   const [setupAppointments, setSetupAppointments] = useState<any[]>([]);
   const [setupPatientId, setSetupPatientId] = useState("");
   const [setupAppointmentId, setSetupAppointmentId] = useState("");
-  const [setupTestMonth, setSetupTestMonth] = useState(() => currentTissPreGuideTestMonth());
   const [setupTestLoadState, setSetupTestLoadState] = useState<{ loading: boolean; error: string }>({ loading: false, error: "" });
   const [setupTestResult, setSetupTestResult] = useState<SetupPreGuideTestResult>({ status: "not_tested", issues: [] });
   const [advancedModeOpen, setAdvancedModeOpen] = useState(false);
@@ -1470,6 +1458,10 @@ export function PayerRequirementsPanel({
     () => setupAppointmentDiagnostics.filter((item) => !item.eligible),
     [setupAppointmentDiagnostics],
   );
+  const setupEligibilitySummary = useMemo(
+    () => summarizeSetupEligibilityDiagnostics(setupIneligibleAppointments),
+    [setupIneligibleAppointments],
+  );
   const setupLinkedPatientIdsForPayer = useMemo(
     () => new Set(
       setupPatients
@@ -1499,10 +1491,6 @@ export function PayerRequirementsPanel({
   const setupIneligibleAppointmentsForSelectedPatient = useMemo(
     () => setupIneligibleAppointments.filter((item) => !setupPatientId || setupEventPatientId(item.appointment) === setupPatientId),
     [setupIneligibleAppointments, setupPatientId],
-  );
-  const setupSelectedEligibilitySummary = useMemo(
-    () => summarizeSetupEligibilityDiagnostics(setupIneligibleAppointmentsForSelectedPatient),
-    [setupIneligibleAppointmentsForSelectedPatient],
   );
   const selectedSetupAppointment = useMemo(
     () => setupAppointments.find((appointment) => String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "") === setupAppointmentId) || null,
@@ -1628,21 +1616,6 @@ export function PayerRequirementsPanel({
       return false;
     }
     const preGuide = result.data || {};
-    setSetupAppointments((current) => current.map((appointment) => {
-      const appointmentId = String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "").trim();
-      if (appointmentId !== setupAppointmentId) return appointment;
-      return {
-        ...appointment,
-        preGuide: {
-          ...(appointment?.preGuide || {}),
-          id: preGuide.id || appointment?.preGuide?.id || null,
-          status: preGuide.status || null,
-          staleReason: preGuide.staleReason || null,
-          validationErrorCodes: Array.isArray(preGuide.validationErrorCodes) ? preGuide.validationErrorCodes : [],
-          scheduledStart: preGuide.scheduledStart || appointment?.preGuide?.scheduledStart || null,
-        },
-      };
-    }));
     const checklist = preGuide?.antiGlosaChecklist && typeof preGuide.antiGlosaChecklist === "object" ? preGuide.antiGlosaChecklist : {};
     const blockingCount = Number(checklist.blockingCount ?? preGuide.blockingCount ?? 0) || 0;
     const warningCount = Number(checklist.warningCount ?? checklist.attentionCount ?? preGuide.warningCount ?? 0) || 0;
@@ -2204,7 +2177,14 @@ export function PayerRequirementsPanel({
     return buildClinicMonthDateRange(new Date());
   };
 
-  const setupTestDateRange = () => buildTissPreGuideTestMonthRange(setupTestMonth);
+  const setupTestDateRange = () => {
+    const now = new Date();
+    const from = new Date(now);
+    const to = new Date(now);
+    from.setDate(from.getDate() - 180);
+    to.setDate(to.getDate() + 365);
+    return buildClinicDateRange(from, to);
+  };
 
   useEffect(() => {
     setSetupPatientId("");
@@ -2243,59 +2223,44 @@ export function PayerRequirementsPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeSetupStepKey, selectedPayerId, setupTestMonth]);
+  }, [activeSetupStepKey, selectedPayerId]);
 
   useEffect(() => {
     if (activeSetupStepKey !== "test" || !selectedPayerId || !setupPatientId) return undefined;
     const controller = new AbortController();
     const loadSelectedPatientAppointments = async () => {
-      setSetupTestLoadState({ loading: true, error: "" });
       const range = setupTestDateRange();
-      try {
-        const result = await dataService.getTissPreGuideTestOptions({
-          from: range.from,
-          to: range.to,
-          payerId: selectedPayerId,
-          patientId: setupPatientId,
-          limit: 200,
-          signal: controller.signal,
+      const result = await dataService.getTissPreGuideTestOptions({
+        from: range.from,
+        to: range.to,
+        payerId: selectedPayerId,
+        patientId: setupPatientId,
+        limit: 200,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted || !result?.success || !Array.isArray(result.data)) return;
+      if (Array.isArray(result.patients) && result.patients.length > 0) {
+        setSetupPatients((current) => {
+          const mergedPatients = new Map<string, any>();
+          [...current, ...result.patients].forEach((patient) => {
+            const id = setupPatientRecordId(patient);
+            if (id) mergedPatients.set(id, patient);
+          });
+          return Array.from(mergedPatients.values());
         });
-        if (controller.signal.aborted) return;
-        if (!result?.success || !Array.isArray(result.data)) {
-          setSetupTestLoadState({
-            loading: false,
-            error: result?.error || "Não foi possível carregar as sessões deste paciente agora.",
-          });
-          return;
-        }
-        if (Array.isArray(result.patients) && result.patients.length > 0) {
-          setSetupPatients((current) => {
-            const mergedPatients = new Map<string, any>();
-            [...current, ...result.patients].forEach((patient) => {
-              const id = setupPatientRecordId(patient);
-              if (id) mergedPatients.set(id, patient);
-            });
-            return Array.from(mergedPatients.values());
-          });
-        }
-        setSetupAppointments((current) => {
-          const merged = new Map<string, any>();
-          [...current, ...result.data].forEach((appointment) => {
-            const id = String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "").trim();
-            if (id) merged.set(id, appointment);
-          });
-          return Array.from(merged.values());
-        });
-        setSetupTestLoadState({ loading: false, error: "" });
-      } catch {
-        if (!controller.signal.aborted) {
-          setSetupTestLoadState({ loading: false, error: "Não foi possível carregar as sessões deste paciente agora." });
-        }
       }
+      setSetupAppointments((current) => {
+        const merged = new Map<string, any>();
+        [...current, ...result.data].forEach((appointment) => {
+          const id = String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "").trim();
+          if (id) merged.set(id, appointment);
+        });
+        return Array.from(merged.values());
+      });
     };
     void loadSelectedPatientAppointments();
     return () => controller.abort();
-  }, [activeSetupStepKey, selectedPayerId, setupPatientId, setupTestMonth]);
+  }, [activeSetupStepKey, selectedPayerId, setupPatientId]);
 
   useEffect(() => {
     if (activeSetupStepKey !== "test") return;
@@ -3422,11 +3387,6 @@ export function PayerRequirementsPanel({
           : setupTestResult.status === "ready"
             ? "Pode gerar"
             : "Aguardando teste";
-      const selectedMappingGuidance = selectedSetupAppointmentPreGuideErrorCodes.includes("PAYER_TUSS_MAPPING_EXPIRED")
-        ? "Esta sessão está fora da vigência registrada no De/Para. Ajuste a vigência para incluir a data da sessão e rode o teste novamente."
-        : selectedSetupAppointmentPreGuideErrorCodes.includes("PAYER_TUSS_MAPPING_MISSING")
-          ? "Esta Pré-guia ainda registra uma pendência anterior de De/Para. Rode o teste novamente para aplicar a configuração salva; se persistir, confira procedimento e vigência."
-          : "";
       return (
         <div className="mt-4 rounded-2xl border border-indigo-50 bg-white p-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -3435,25 +3395,7 @@ export function PayerRequirementsPanel({
               <span className="inline-flex items-center gap-2 text-xs font-semibold text-indigo-700"><Loader2 size={14} className="animate-spin" />Carregando sessões</span>
             ) : null}
           </div>
-          <p className="mt-2 text-xs leading-relaxed text-slate-500">Escolha o mês do atendimento. A busca inclui sessões históricas ainda não materializadas na esteira TISS.</p>
-          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(170px,0.65fr)_minmax(220px,1fr)_minmax(280px,1.35fr)]">
-            <label className="text-xs font-normal text-slate-700">
-              <span className="mb-1 block">Mês da sessão</span>
-              <input
-                type="month"
-                value={setupTestMonth}
-                onChange={(event) => {
-                  const month = normalizeTissPreGuideTestMonth(event.target.value);
-                  if (!month) return;
-                  setSetupTestMonth(month);
-                  setSetupAppointmentId("");
-                  setSetupAppointments([]);
-                  setSetupTestResult({ status: "not_tested", issues: [] });
-                }}
-                className={setupFieldClass}
-                aria-label="Mês da sessão para o teste de Pré-guia"
-              />
-            </label>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
             <label className="text-xs font-normal text-slate-700">
               <span className="mb-1 block">Paciente</span>
               <select
@@ -3494,23 +3436,17 @@ export function PayerRequirementsPanel({
               <p className="mt-1 text-xs text-indigo-700">{buildSetupPreGuidePendingReasons(selectedSetupAppointment).join(" · ")}</p>
             </div>
           ) : null}
-          {selectedSetupAppointment && selectedMappingGuidance ? (
-            <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              <p className="font-semibold">Configuração salva, sessão aguardando recálculo</p>
-              <p className="mt-1 text-xs leading-relaxed text-amber-800">{selectedMappingGuidance}</p>
-            </div>
-          ) : null}
-          {!setupTestLoadState.loading && setupAppointmentsForSelectedPatient.length === 0 && setupIneligibleAppointmentsForSelectedPatient.length > 0 ? (
+          {!setupTestLoadState.loading && setupPayerAppointments.length === 0 && setupIneligibleAppointments.length > 0 ? (
             <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               <p className="font-semibold">Sessões encontradas, mas não elegíveis:</p>
               <ul className="mt-2 list-disc space-y-1 pl-4">
-                {setupSelectedEligibilitySummary.map((item) => <li key={item}>{item}</li>)}
+                {setupEligibilitySummary.map((item) => <li key={item}>{item}</li>)}
               </ul>
             </div>
           ) : null}
-          {!setupTestLoadState.loading && setupAppointmentsForSelectedPatient.length === 0 && setupIneligibleAppointmentsForSelectedPatient.length === 0 ? (
+          {!setupTestLoadState.loading && setupPayerAppointments.length === 0 && setupIneligibleAppointments.length === 0 ? (
             <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-600">
-              Nenhuma sessão encontrada em {formatTissPreGuideTestMonthLabel(setupTestMonth)}. Escolha outro mês ou confirme a data do atendimento na Agenda.
+              Nenhuma sessão encontrada para este paciente e período.
             </div>
           ) : null}
           {setupIneligibleAppointmentsForSelectedPatient.length > 0 ? (

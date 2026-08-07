@@ -35,8 +35,10 @@ assert.match(server, /async function listPayerBillableServiceOptionsForAppointme
 assert.match(server, /\.from\('payer_tuss_mappings'\)/);
 assert.match(server, /requestedServiceCatalogId/);
 assert.match(server, /fetchTussServiceCatalogByIdForAppointmentTissBilling/);
-assert.match(server, /serviceCatalogId: requestedServiceCatalogId/);
+assert.match(server, /serviceCatalogId: isUuid\(resolvedServiceCatalogId\) \? resolvedServiceCatalogId : null/);
 assert.match(server, /billableServiceOptions/);
+assert.match(server, /resolveBillingContextServiceCatalogId\(billingContext\)/);
+assert.match(server, /resolveUniqueTissServiceCatalogOptionByCode/);
 assert.match(server, /service_catalog_id: requestedServiceCatalogId \|\| appliedTissAuthorization\?\.serviceCatalogId \|\| undefined/);
 assert.match(server, /O procedimento faturável selecionado não está ativo no De\/Para deste convênio/);
 
