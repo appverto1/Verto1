@@ -1384,6 +1384,7 @@ export function CoordinatorDashboard({
   const [sessionGuideNumber, setSessionGuideNumber] = useState("");
   const [sessionAuthorizationCode, setSessionAuthorizationCode] = useState("");
   const [sessionPatientTissAuthorizationId, setSessionPatientTissAuthorizationId] = useState("");
+  const [sessionInsuranceServiceCatalogId, setSessionInsuranceServiceCatalogId] = useState("");
   const [showSessionUnavailableTissAuthorizations, setShowSessionUnavailableTissAuthorizations] = useState(false);
   const [sessionBillingSuggestionState, setSessionBillingSuggestionState] = useState<{
     loading: boolean;
@@ -3884,6 +3885,7 @@ export function CoordinatorDashboard({
       setSessionGuideNumber("");
       setSessionAuthorizationCode("");
       setSessionPatientTissAuthorizationId("");
+      setSessionInsuranceServiceCatalogId("");
       setSessionBillingSuggestionState({ loading: false, error: "", suggestion: null });
       return;
     }
@@ -3910,10 +3912,38 @@ export function CoordinatorDashboard({
     setSessionGuideNumber("");
     setSessionAuthorizationCode("");
     setSessionPatientTissAuthorizationId("");
+    setSessionInsuranceServiceCatalogId("");
     setSessionBillingSuggestionState({ loading: false, error: "", suggestion: null });
   };
 
   const sessionBillingSuggestion = sessionBillingSuggestionState.suggestion || null;
+  const sessionBillableServiceOptions = useMemo(() => {
+    const options = Array.isArray(sessionBillingSuggestion?.billableServiceOptions)
+      ? sessionBillingSuggestion.billableServiceOptions
+      : Array.isArray(sessionBillingSuggestion?.billable_service_options)
+        ? sessionBillingSuggestion.billable_service_options
+        : [];
+    const seen = new Set<string>();
+    return options.filter((option: any) => {
+      const serviceId = String(option?.serviceCatalogId || option?.service_catalog_id || "").trim();
+      if (!serviceId || seen.has(serviceId)) return false;
+      seen.add(serviceId);
+      return true;
+    });
+  }, [sessionBillingSuggestion]);
+  const selectedSessionBillableService = useMemo(
+    () => sessionBillableServiceOptions.find(
+      (option: any) => String(option?.serviceCatalogId || option?.service_catalog_id || "") === sessionInsuranceServiceCatalogId,
+    ) || null,
+    [sessionBillableServiceOptions, sessionInsuranceServiceCatalogId],
+  );
+  const selectedSessionProcedureCode = String(
+    selectedSessionBillableService?.tussCode ||
+      selectedSessionBillableService?.tuss_code ||
+      selectedSessionBillableService?.internalCode ||
+      selectedSessionBillableService?.internal_code ||
+      "",
+  ).trim();
   const sessionAvailableTissAuthorizations = useMemo(() => {
     const fromSuggestion = Array.isArray(sessionBillingSuggestion?.availableTissAuthorizations)
       ? sessionBillingSuggestion.availableTissAuthorizations
@@ -4010,6 +4040,8 @@ export function CoordinatorDashboard({
     setSessionGuideNumber(String(authorization?.guideNumber || ""));
     setSessionAuthorizationCode(String(authorization?.authorizationCode || authorization?.authorizationNumber || ""));
     setSessionPatientTissAuthorizationId(String(authorization?.authorizationId || authorization?.patientTissAuthorizationId || ""));
+    const authorizationServiceCatalogId = String(authorization?.serviceCatalogId || authorization?.service_catalog_id || "").trim();
+    if (authorizationServiceCatalogId) setSessionInsuranceServiceCatalogId(authorizationServiceCatalogId);
   };
   const renderSessionTissAuthorizationCard = (authorization: any, options: { compact?: boolean; history?: boolean } = {}) => {
     const canUse = Boolean(authorization?.canUseForAppointment || authorization?.isEligibleForAppointment) &&
@@ -4084,13 +4116,19 @@ export function CoordinatorDashboard({
       return;
     }
     let cancelled = false;
-    setSessionBillingSuggestionState({ loading: true, error: "", suggestion: null });
+    setSessionBillingSuggestionState((current) => ({
+      loading: true,
+      error: "",
+      suggestion: current.suggestion,
+    }));
     setShowSessionUnavailableTissAuthorizations(false);
     dataService.getAppointmentBillingSuggestion({
       patientId,
       payerId: sessionPayerId,
       payerName: selectedSessionPayerName,
       serviceType: sessionApproach,
+      serviceCatalogId: sessionInsuranceServiceCatalogId || undefined,
+      procedureCode: selectedSessionProcedureCode || undefined,
       appointmentDate: sessionDate,
       currentAppointmentId: editingAppointmentId || undefined,
     }).then((result: any) => {
@@ -4130,9 +4168,54 @@ export function CoordinatorDashboard({
     selectedSessionPatient?.id,
     selectedSessionPayerName,
     sessionApproach,
+    sessionInsuranceServiceCatalogId,
+    selectedSessionProcedureCode,
     sessionDate,
     sessionFinancialContextType,
     sessionPayerId,
+  ]);
+
+  useEffect(() => {
+    if (!isAddSessionModalOpen || sessionFinancialContextType !== "INSURANCE") return;
+    if (sessionBillableServiceOptions.length === 0) return;
+    const selectedStillExists = sessionBillableServiceOptions.some(
+      (option: any) => String(option?.serviceCatalogId || option?.service_catalog_id || "") === sessionInsuranceServiceCatalogId,
+    );
+    if (selectedStillExists) return;
+    if (sessionBillableServiceOptions.length === 1) {
+      setSessionInsuranceServiceCatalogId(String(
+        sessionBillableServiceOptions[0]?.serviceCatalogId ||
+          sessionBillableServiceOptions[0]?.service_catalog_id ||
+          "",
+      ));
+    } else if (sessionInsuranceServiceCatalogId) {
+      setSessionInsuranceServiceCatalogId("");
+    }
+  }, [
+    isAddSessionModalOpen,
+    sessionBillableServiceOptions,
+    sessionFinancialContextType,
+    sessionInsuranceServiceCatalogId,
+  ]);
+
+  useEffect(() => {
+    if (
+      !isAddSessionModalOpen ||
+      sessionFinancialContextType !== "INSURANCE" ||
+      !sessionInsuranceServiceCatalogId ||
+      sessionPatientTissAuthorizationId ||
+      sessionUsableTissAuthorizations.length !== 1
+    ) return;
+    const authorization = sessionUsableTissAuthorizations[0];
+    setSessionGuideNumber(String(authorization?.guideNumber || ""));
+    setSessionAuthorizationCode(String(authorization?.authorizationCode || authorization?.authorizationNumber || ""));
+    setSessionPatientTissAuthorizationId(String(authorization?.authorizationId || authorization?.patientTissAuthorizationId || ""));
+  }, [
+    isAddSessionModalOpen,
+    sessionFinancialContextType,
+    sessionInsuranceServiceCatalogId,
+    sessionPatientTissAuthorizationId,
+    sessionUsableTissAuthorizations,
   ]);
 
   useEffect(() => {
@@ -4432,6 +4515,10 @@ export function CoordinatorDashboard({
           ? "Informe o motivo da decisão financeira deste reagendamento."
       : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && !sessionPayerId
         ? "Selecione um pagador/convênio cadastrado ou escolha outro contexto financeiro válido."
+        : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && sessionBillingSuggestionState.loading
+          ? "Aguarde o carregamento dos procedimentos faturáveis do convênio."
+          : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && sessionBillableServiceOptions.length > 0 && !sessionInsuranceServiceCatalogId
+            ? "Selecione o procedimento faturável do convênio antes de confirmar."
         : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "PRIVATE" && sessionPrivatePricingState.loading
           ? "Aguarde a confirmação do valor particular."
           : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "PRIVATE" && sessionPrivatePricingState.error
@@ -4583,6 +4670,7 @@ export function CoordinatorDashboard({
     setSessionGuideNumber("");
     setSessionAuthorizationCode("");
     setSessionPatientTissAuthorizationId("");
+    setSessionInsuranceServiceCatalogId("");
     setSessionBillingSuggestionState({ loading: false, error: "", suggestion: null });
     setSessionNumSessions(1);
     setSessionRecurrencePattern("weekly");
@@ -4775,6 +4863,12 @@ export function CoordinatorDashboard({
         payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
         payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
         payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+        insuranceServiceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+        insurance_service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+        serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+        service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+        procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+        procedure_code: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
         privateServiceCatalogId: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
         private_service_catalog_id: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
         privateManualAmount: sessionFinancialContextType === "PRIVATE" && sessionPrivateManualAmount !== "" ? Number(sessionPrivateManualAmount) : null,
@@ -4840,6 +4934,8 @@ export function CoordinatorDashboard({
         payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
         payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : null,
         serviceType: sessionApproach || "Consulta Padrão",
+        serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+        procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
         insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName || null : null,
         insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber || null : null,
         insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName || null : null,
@@ -4928,6 +5024,12 @@ export function CoordinatorDashboard({
       payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
       payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
       payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+      insuranceServiceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+      insurance_service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+      serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+      service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+      procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+      procedure_code: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
       privateServiceCatalogId: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
       private_service_catalog_id: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
       privateManualAmount: sessionFinancialContextType === "PRIVATE" && sessionPrivateManualAmount !== "" ? Number(sessionPrivateManualAmount) : null,
@@ -6222,6 +6324,13 @@ export function CoordinatorDashboard({
     setSessionGuideNumber(String(appointment.guideNumber || appointment.guide_number || ""));
     setSessionAuthorizationCode(String(appointment.authorizationCode || appointment.authorization_code || ""));
     setSessionPatientTissAuthorizationId(String(appointment.patientTissAuthorizationId || appointment.patient_tiss_authorization_id || ""));
+    setSessionInsuranceServiceCatalogId(String(
+      appointment.insuranceServiceCatalogId ||
+        appointment.insurance_service_catalog_id ||
+        appointment.serviceCatalogId ||
+        appointment.service_catalog_id ||
+        "",
+    ));
     setSessionPrivateServiceCatalogId(String(appointment.privateServiceCatalogId || appointment.private_service_catalog_id || appointment.serviceCatalogId || appointment.service_catalog_id || ""));
     setSessionPrivateManualAmount(String(appointment.privateManualAmount || appointment.private_manual_amount || ""));
     setSessionPrivateDiscountAmount(String(appointment.privateDiscountAmount || appointment.private_discount_amount || ""));
@@ -6279,6 +6388,13 @@ export function CoordinatorDashboard({
             result.data.patient_tiss_authorization_id ||
             result.data.tissAuthorization?.authorizationId ||
             result.data.tiss_authorization?.authorizationId ||
+            "",
+        ));
+        setSessionInsuranceServiceCatalogId(String(
+          result.data.serviceCatalogId ||
+            result.data.service_catalog_id ||
+            result.data.tissAuthorization?.serviceCatalogId ||
+            result.data.tiss_authorization?.serviceCatalogId ||
             "",
         ));
       });
@@ -13763,12 +13879,18 @@ export function CoordinatorDashboard({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className={sessionModalLabelClass}>
-                    Tipo de sessão
+                    Especialidade / tipo clínico
                   </label>
                   <select
                     className={sessionModalSelectClass}
                     value={sessionApproach}
-                    onChange={(e) => setSessionApproach(e.target.value)}
+                    onChange={(e) => {
+                      setSessionApproach(e.target.value);
+                      setSessionInsuranceServiceCatalogId("");
+                      setSessionPatientTissAuthorizationId("");
+                      setSessionGuideNumber("");
+                      setSessionAuthorizationCode("");
+                    }}
                   >
                     <option value="">Selecione...</option>
                     <option value="ABA">ABA</option>
@@ -14122,6 +14244,7 @@ export function CoordinatorDashboard({
                             setSessionGuideNumber("");
                             setSessionAuthorizationCode("");
                             setSessionPatientTissAuthorizationId("");
+                            setSessionInsuranceServiceCatalogId("");
                           }
                         }}
                       >
@@ -14160,6 +14283,43 @@ export function CoordinatorDashboard({
                             </option>
                           ))}
                         </select>
+                      </label>
+                    )}
+                    {sessionFinancialContextType === "INSURANCE" && (
+                      <label className={`sm:col-span-2 ${sessionModalLabelClass}`}>
+                        Procedimento faturável do convênio
+                        <select
+                          className={sessionModalSelectClass}
+                          value={sessionInsuranceServiceCatalogId}
+                          disabled={!sessionPayerId || sessionBillingSuggestionState.loading}
+                          onChange={(event) => {
+                            setSessionInsuranceServiceCatalogId(event.target.value);
+                            setSessionPatientTissAuthorizationId("");
+                            setSessionGuideNumber("");
+                            setSessionAuthorizationCode("");
+                          }}
+                        >
+                          <option value="">
+                            {sessionBillingSuggestionState.loading
+                              ? "Carregando procedimentos..."
+                              : sessionBillableServiceOptions.length
+                                ? "Selecione o procedimento"
+                                : "Nenhum procedimento ativo no De/Para"}
+                          </option>
+                          {sessionBillableServiceOptions.map((option: any) => {
+                            const serviceId = String(option?.serviceCatalogId || option?.service_catalog_id || "");
+                            const serviceName = String(option?.serviceName || option?.service_name || "Procedimento");
+                            const tussCode = String(option?.tussCode || option?.tuss_code || "");
+                            return (
+                              <option key={`${serviceId}:${tussCode}`} value={serviceId}>
+                                {serviceName}{tussCode ? ` · TUSS ${tussCode}` : ""}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        <span className="mt-2 block text-xs font-normal text-slate-500">
+                          Este procedimento define o De/Para, o código TUSS, a autorização e o XML. A especialidade clínica continua separada acima.
+                        </span>
                       </label>
                     )}
                     {sessionFinancialContextType === "INSURANCE" && (

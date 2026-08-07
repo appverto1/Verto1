@@ -183,6 +183,7 @@ const ISSUE_TITLES: Record<string, string> = {
   AUTHORIZATION_NOT_STARTED: "Autorização ainda não vigente na data da sessão",
   AUTHORIZATION_INSUFFICIENT_BALANCE: "Quantidade autorizada insuficiente",
   MISSING_NEGOTIATED_PRICE: "Valor negociado ausente",
+  ZERO_AMOUNT_XML_OPERATOR_POLICY: "XML com valor R$ 0,00 autorizado pela operadora",
   PRICE_MISMATCH: "Valor da sessão diferente do valor contratado",
   MISSING_TUSS_MAPPING: "TUSS sem De/Para ativo",
   LEGACY_OR_INVALID_TUSS_CODE: "Código TUSS legado/inadequado para XML",
@@ -213,6 +214,7 @@ const ISSUE_ACTIONS: Record<string, string> = {
   AUTHORIZATION_NOT_STARTED: "Use uma autorização vigente na data da sessão.",
   AUTHORIZATION_INSUFFICIENT_BALANCE: "Atualize o saldo ou cadastre nova autorização antes do XML.",
   MISSING_NEGOTIATED_PRICE: "Cadastre o valor negociado ativo em Convênios e TISS > Tabela de valores.",
+  ZERO_AMOUNT_XML_OPERATOR_POLICY: "Confirme com a operadora o resultado da importação antes de usar esta política em produção.",
   PRICE_MISMATCH: "Confira o valor contratado e revalide a Pré-guia.",
   MISSING_TUSS_MAPPING: "Revise o De/Para TUSS ativo do convênio antes do XML.",
   LEGACY_OR_INVALID_TUSS_CODE: "Revise o De/Para TUSS do convênio e use o código ativo adequado.",
@@ -373,7 +375,10 @@ const CATALOG: Array<Omit<TissAntiGlosaChecklistItem, "status" | "relatedIssueCo
     label: "Valor calculado",
     riskClass: "risco de faturamento sem valor",
     suggestedAction: "Revalidar procedimento/TUSS",
-    okWhen: (snapshot) => Number(snapshot.procedure?.totalAmountCents || 0) > 0,
+    okWhen: (snapshot) => {
+      const amount = numberOrNull(snapshot.procedure?.totalAmountCents);
+      return amount !== null && (amount > 0 || (amount === 0 && payerAllowsZeroAmountXml(snapshot)));
+    },
   },
   {
     code: "authorization_procedure_match",
@@ -413,6 +418,9 @@ const hasInsurancePayerContext = (snapshot: Record<string, any>) =>
 const hasReviewedAntiGlosaProfile = (snapshot: Record<string, any>) =>
   booleanRequirement(snapshot, "antiGlosaReviewed", "anti_glosa_reviewed") ||
   booleanRequirement(snapshot, "operatorHasNoAdditionalRequirements", "operator_has_no_additional_requirements");
+
+const payerAllowsZeroAmountXml = (snapshot: Record<string, any>) =>
+  booleanRequirement(snapshot, "allowsZeroAmountXml", "allows_zero_amount_xml");
 
 function isRequired(snapshot: Record<string, any>, requirementPath?: string) {
   if (!requirementPath) return true;
@@ -479,6 +487,15 @@ function addUniversalTissBillingIssues(params: {
     recommendedAction: ISSUE_ACTIONS[code],
     preGuideId,
   });
+  const addWarning = (code: string, description: string, fieldPath: string) => addIssue(issues, {
+    code,
+    severity: "warning",
+    title: antiGlosaTitle(code),
+    description,
+    fieldPath,
+    recommendedAction: ISSUE_ACTIONS[code],
+    preGuideId,
+  });
 
   if (!text(snapshot.beneficiary?.cardNumber)) {
     addBlocking("MISSING_CARD_NUMBER", "Atendimento de convênio precisa identificar a carteirinha do beneficiário.", "beneficiary_card");
@@ -486,8 +503,16 @@ function addUniversalTissBillingIssues(params: {
   if (!text(snapshot.procedure?.tussCode) || !text(snapshot.procedure?.name)) {
     addBlocking("MISSING_TUSS_MAPPING", "Pré-guia de convênio precisa de procedimento TUSS oficial resolvido por De/Para.", "procedure_tuss_mapping");
   }
-  if (!numberOrNull(snapshot.procedure?.totalAmountCents) || Number(snapshot.procedure?.totalAmountCents || 0) <= 0) {
-    addBlocking("MISSING_NEGOTIATED_PRICE", "Pré-guia de convênio precisa de valor negociado positivo antes do XML.", "amount_calculated");
+  const totalAmountCents = numberOrNull(snapshot.procedure?.totalAmountCents);
+  if (totalAmountCents === null || totalAmountCents < 0 || (totalAmountCents === 0 && !payerAllowsZeroAmountXml(snapshot))) {
+    addBlocking("MISSING_NEGOTIATED_PRICE", "Pré-guia de convênio precisa de valor negociado antes do XML.", "amount_calculated");
+  } else if (totalAmountCents === 0 && payerAllowsZeroAmountXml(snapshot)) {
+    addWarning(
+      "ZERO_AMOUNT_XML_OPERATOR_POLICY",
+      text(requirements(snapshot).zeroAmountXmlReason || requirements(snapshot).zero_amount_xml_reason) ||
+        "A operadora está configurada para calcular o valor após a importação; o XML será gerado com 0.00.",
+      "amount_calculated",
+    );
   }
   if (!text(snapshot.payer?.contractedProviderCode) && !text(snapshot.payer?.operatorProviderCode)) {
     addBlocking("MISSING_PROVIDER_CODE", "Código contratual do prestador precisa estar configurado dentro da operadora.", "payer_contracted_provider_code");

@@ -133,6 +133,8 @@ type NormalizedGuide = OfficialTissCanonicalGuide & {
   attendanceType: string;
   attendanceRegime: string;
   attendanceCharacter: string;
+  zeroAmountPolicyApplied: boolean;
+  zeroAmountXmlReason?: string | null;
 };
 
 function addIssue(params: RequiredIssueParams) {
@@ -144,6 +146,42 @@ function addIssue(params: RequiredIssueParams) {
     field: params.field,
     preGuideId: params.preGuideId || null
   });
+}
+
+function addWarning(params: RequiredIssueParams) {
+  params.issues.push({
+    code: params.code,
+    message: params.message,
+    severity: "warning",
+    entity: params.entity,
+    field: params.field,
+    preGuideId: params.preGuideId || null
+  });
+}
+
+const truthyValue = (value: unknown) => {
+  if (value === true) return true;
+  return ["1", "true", "yes", "sim"].includes(text(value, 20).toLowerCase());
+};
+
+function zeroAmountXmlPolicy(row: any) {
+  const snapshot = row?.snapshot || row?.snapshot_data || {};
+  const payer = snapshot.payer || {};
+  const requirements = payer.requirements || snapshot.payerRequirements || snapshot.payer_requirements || {};
+  const allowed = truthyValue(
+    requirements.allowsZeroAmountXml ??
+      requirements.allows_zero_amount_xml ??
+      payer.allowsZeroAmountXml ??
+      payer.allows_zero_amount_xml
+  );
+  const reason = text(
+    requirements.zeroAmountXmlReason ??
+      requirements.zero_amount_xml_reason ??
+      payer.zeroAmountXmlReason ??
+      payer.zero_amount_xml_reason,
+    1200
+  );
+  return { allowed, reason };
 }
 
 function firstValue(...values: unknown[]) {
@@ -590,8 +628,19 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
   }
   const totalAmountCents = Math.trunc(Number(row?.totalAmountCents ?? row?.total_amount_cents ?? procedure.totalAmountCents ?? procedure.total_amount_cents ?? 0));
   const unitAmountCents = Math.trunc(Number(row?.unitAmountCents ?? row?.unit_amount_cents ?? procedure.unitAmountCents ?? procedure.unit_amount_cents ?? Math.trunc(totalAmountCents / quantity)));
-  if (!Number.isFinite(totalAmountCents) || totalAmountCents <= 0 || !Number.isFinite(unitAmountCents) || unitAmountCents <= 0) {
-    addIssue({ issues, preGuideId, entity: "procedure", field: "amount", code: "TISS_OFFICIAL_AMOUNT_MISSING", message: "Valor unitário e total são obrigatórios para XML TISS oficial." });
+  const zeroAmountPolicy = zeroAmountXmlPolicy(row);
+  const invalidAmount = !Number.isFinite(totalAmountCents) || totalAmountCents < 0 || !Number.isFinite(unitAmountCents) || unitAmountCents < 0;
+  if (invalidAmount || ((totalAmountCents === 0 || unitAmountCents === 0) && !zeroAmountPolicy.allowed)) {
+    addIssue({ issues, preGuideId, entity: "procedure", field: "amount", code: "TISS_OFFICIAL_AMOUNT_MISSING", message: "Valor unitário e total são obrigatórios para XML TISS oficial, salvo política explícita da operadora." });
+  } else if ((totalAmountCents === 0 || unitAmountCents === 0) && zeroAmountPolicy.allowed) {
+    addWarning({
+      issues,
+      preGuideId,
+      entity: "procedure",
+      field: "amount",
+      code: "TISS_OFFICIAL_ZERO_AMOUNT_OPERATOR_POLICY",
+      message: zeroAmountPolicy.reason || "A operadora calcula o valor após a importação; o XML oficial será emitido com 0.00."
+    });
   }
 
   const scheduledStart = firstValue(row?.scheduledStart, row?.scheduled_start, appointment.scheduledStart, appointment.scheduled_start);
@@ -651,7 +700,9 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
     authorizationValidUntil,
     attendanceType,
     attendanceRegime,
-    attendanceCharacter
+    attendanceCharacter,
+    zeroAmountPolicyApplied: totalAmountCents === 0 && zeroAmountPolicy.allowed,
+    zeroAmountXmlReason: totalAmountCents === 0 && zeroAmountPolicy.allowed ? zeroAmountPolicy.reason || null : null
   };
 }
 
@@ -792,6 +843,8 @@ export const communication040300Strategy: TissXmlGenerationStrategy = {
         messageOperation: COMMUNICATION_040300_MANIFEST.messageOperation,
         guideCount: payload.guideCount,
         totalAmountCents: payload.totalAmountCents,
+        zeroAmountPolicyGuideCount: guides.filter((guide) => guide.zeroAmountPolicyApplied).length,
+        zeroAmountPolicyReasons: Array.from(new Set(guides.map((guide) => guide.zeroAmountXmlReason).filter(Boolean))),
         epilogueHash,
         epilogueHashAlgorithm: "MD5 dos valores da transação em ordem, sem tags, codificados em ISO-8859-1",
         xmlHash,

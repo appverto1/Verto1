@@ -280,6 +280,7 @@ const issueLabelOverrides: Record<string, string> = {
   QUANTITY_MISSING: 'Quantidade não informada',
   BILLING_UNIT_MISSING: 'Unidade de cobrança não informada',
   AMOUNT_MISSING: 'Valor previsto não informado',
+  ZERO_AMOUNT_XML_OPERATOR_POLICY: 'Valor R$ 0,00 autorizado pela política explícita da operadora',
   GUIDE_MISSING: 'Guia não informada',
   AUTHORIZATION_REQUIRED: 'Convênio exige autorização, mas nenhuma autorização ativa foi encontrada para este paciente/procedimento',
   AUTHORIZATION_MISSING: 'Convênio exige autorização, mas nenhuma autorização ativa foi encontrada para este paciente/procedimento',
@@ -333,6 +334,7 @@ export function tissPreGuideIssueLabel(code: unknown) {
     QUANTITY_MISSING: 'Quantidade não informada',
     BILLING_UNIT_MISSING: 'Unidade de cobrança não informada',
     AMOUNT_MISSING: 'Valor previsto não informado',
+    ZERO_AMOUNT_XML_OPERATOR_POLICY: 'Valor R$ 0,00 autorizado pela política explícita da operadora',
     GUIDE_MISSING: 'Guia não informada',
     AUTHORIZATION_REQUIRED: 'Autorização não informada',
     AUTHORIZATION_MISSING: 'Autorização não informada',
@@ -378,6 +380,12 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   const signature = input.signature || {};
   const errors: TissPreGuideIssue[] = [];
   const warnings: TissPreGuideIssue[] = [];
+  const allowsZeroAmountXml = Boolean(
+    payerProfile.allows_zero_amount_xml ?? payerProfile.allowsZeroAmountXml
+  );
+  const zeroAmountXmlReason = text(
+    payerProfile.zero_amount_xml_reason ?? payerProfile.zeroAmountXmlReason
+  );
 
   const financialContext = normalizeContext(
     billingContext.payer_type ||
@@ -632,7 +640,18 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   if (resolvedTussCode && !tussDescription) addIssue(errors, 'TUSS_DESCRIPTION_MISSING', 'tuss_description', tissPreGuideIssueLabel('TUSS_DESCRIPTION_MISSING'), 'procedure');
   if (!positiveNumber(quantity)) addIssue(errors, 'QUANTITY_MISSING', 'quantity', tissPreGuideIssueLabel('QUANTITY_MISSING'), 'procedure');
   if (!unit) addIssue(errors, 'BILLING_UNIT_MISSING', 'unit', tissPreGuideIssueLabel('BILLING_UNIT_MISSING'), 'procedure');
-  if (!positiveNumber(totalAmountCents)) addIssue(errors, 'AMOUNT_MISSING', 'total_amount_cents', tissPreGuideIssueLabel('AMOUNT_MISSING'), 'procedure');
+  if (totalAmountCents === null || totalAmountCents < 0 || (totalAmountCents === 0 && !allowsZeroAmountXml)) {
+    addIssue(errors, 'AMOUNT_MISSING', 'total_amount_cents', tissPreGuideIssueLabel('AMOUNT_MISSING'), 'procedure');
+  } else if (totalAmountCents === 0 && allowsZeroAmountXml) {
+    addIssue(
+      warnings,
+      'ZERO_AMOUNT_XML_OPERATOR_POLICY',
+      'total_amount_cents',
+      zeroAmountXmlReason || tissPreGuideIssueLabel('ZERO_AMOUNT_XML_OPERATOR_POLICY'),
+      'procedure',
+      'warning',
+    );
+  }
 
   const cardNumber = text(billingContext.insurance_card_number || billingItem.card_number || patient.insurance_card_number);
   const cardValidUntil = text(
@@ -802,6 +821,8 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
           antiGlosaReviewedAt: text(payerProfile.anti_glosa_reviewed_at) || null,
           antiGlosaReviewedBy: text(payerProfile.anti_glosa_reviewed_by) || null,
           operatorHasNoAdditionalRequirements: Boolean(payerProfile.operator_has_no_additional_requirements),
+          allowsZeroAmountXml,
+          zeroAmountXmlReason: allowsZeroAmountXml ? zeroAmountXmlReason || null : null,
           allowsMixedMultidisciplinaryGuide: Boolean(payerProfile.allows_mixed_multidisciplinary_guide),
           requiresSeparateGuideBySpecialty: Boolean(payerProfile.requires_separate_guide_by_specialty),
         },
@@ -856,8 +877,10 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         tussVersion: text(tussCode.version || payerProfile.tiss_version) || null,
         quantity: positiveNumber(quantity) ? quantity : null,
         unit: unit || null,
-        unitAmountCents: unitAmountCents !== null && unitAmountCents > 0 ? unitAmountCents : null,
-        totalAmountCents: totalAmountCents !== null && totalAmountCents > 0 ? totalAmountCents : null,
+        unitAmountCents: unitAmountCents !== null && unitAmountCents >= 0 ? unitAmountCents : null,
+        totalAmountCents: totalAmountCents !== null && totalAmountCents >= 0 ? totalAmountCents : null,
+        zeroAmountXmlPolicyApplied: totalAmountCents === 0 && allowsZeroAmountXml,
+        zeroAmountXmlReason: totalAmountCents === 0 && allowsZeroAmountXml ? zeroAmountXmlReason || null : null,
       },
       authorization: {
         guideNumber: guideNumber || null,

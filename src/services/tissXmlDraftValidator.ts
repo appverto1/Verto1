@@ -177,10 +177,13 @@ function validateNewDraft(xml: string, rootAttrs: string, errors: TissXmlDraftVa
       errors.push(issue("VALUE_MISSING", "Valor ausente na guia.", "blocking", `${basePath}.values`, "value", preGuideId));
     } else {
       const guideAmountCents = amountToCents(getTag(values, "totalAmount"));
-      if (guideAmountCents === null || guideAmountCents <= 0) {
+      if (guideAmountCents === null || guideAmountCents < 0) {
         errors.push(issue("VALUE_MISSING", "Valor decimal da guia ausente ou inválido.", "blocking", `${basePath}.values.totalAmount`, "value", preGuideId));
       } else {
         summedGuideCents += guideAmountCents;
+        if (guideAmountCents === 0) {
+          warnings.push(issue("ZERO_AMOUNT_XML_OPERATOR_POLICY", "Guia com valor 0.00; confirme a política específica da operadora antes do envio.", "warning", `${basePath}.values.totalAmount`, "value", preGuideId));
+        }
       }
     }
   });

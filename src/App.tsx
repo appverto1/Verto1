@@ -5951,6 +5951,18 @@ export default function App() {
     }
     if (!financialContextType && effectivePayerId) financialContextType = 'INSURANCE';
     const usesInsuranceContext = financialContextType.toUpperCase() === 'INSURANCE';
+    const insuranceServiceCatalogId = usesInsuranceContext
+      ? String(
+          sess.insuranceServiceCatalogId ||
+            sess.insurance_service_catalog_id ||
+            sess.serviceCatalogId ||
+            sess.service_catalog_id ||
+            '',
+        ).trim()
+      : '';
+    const insuranceProcedureCode = usesInsuranceContext
+      ? String(sess.procedureCode || sess.procedure_code || '').trim()
+      : '';
     const effectiveInsurancePlan = patientInsurancePlans.find((plan: any) => {
       const planPayerId = String(plan?.payerId || plan?.payer_id || '').trim();
       const planPayerName = String(plan?.payerNameSnapshot || plan?.payer_name_snapshot || plan?.insuranceName || plan?.insurance_name || '').trim();
@@ -6151,6 +6163,12 @@ export default function App() {
           payer_id: usesInsuranceContext ? effectivePayerId || null : null,
           payerName: usesInsuranceContext ? effectivePayerName || '' : '',
           payer_name_snapshot: usesInsuranceContext ? effectivePayerName || '' : '',
+          insuranceServiceCatalogId: usesInsuranceContext ? insuranceServiceCatalogId || null : null,
+          insurance_service_catalog_id: usesInsuranceContext ? insuranceServiceCatalogId || null : null,
+          serviceCatalogId: usesInsuranceContext ? insuranceServiceCatalogId || null : null,
+          service_catalog_id: usesInsuranceContext ? insuranceServiceCatalogId || null : null,
+          procedureCode: usesInsuranceContext ? insuranceProcedureCode || null : null,
+          procedure_code: usesInsuranceContext ? insuranceProcedureCode || null : null,
           privateServiceCatalogId: financialContextType === 'PRIVATE' ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
           private_service_catalog_id: financialContextType === 'PRIVATE' ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
           privateManualAmount: financialContextType === 'PRIVATE' ? sess.privateManualAmount ?? sess.private_manual_amount ?? null : null,

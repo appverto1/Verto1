@@ -102,6 +102,31 @@ function hasAny(value: unknown) {
   return text(value).length > 0;
 }
 
+const truthyValue = (value: unknown) => {
+  if (value === true) return true;
+  return ["1", "true", "yes", "sim"].includes(text(value).toLowerCase());
+};
+
+function zeroAmountXmlPolicy(preGuide: any) {
+  const snapshot = preGuide?.snapshot || preGuide?.snapshot_data || {};
+  const payer = snapshot.payer || {};
+  const requirements = payer.requirements || snapshot.payerRequirements || snapshot.payer_requirements || {};
+  return {
+    allowed: truthyValue(
+      requirements.allowsZeroAmountXml ??
+        requirements.allows_zero_amount_xml ??
+        payer.allowsZeroAmountXml ??
+        payer.allows_zero_amount_xml
+    ),
+    reason: text(
+      requirements.zeroAmountXmlReason ??
+        requirements.zero_amount_xml_reason ??
+        payer.zeroAmountXmlReason ??
+        payer.zero_amount_xml_reason
+    ),
+  };
+}
+
 function normalizeTissVersion(value: unknown, warnings: TissXmlDraftIssue[]) {
   const version = text(value);
   if (TISS_VERSION_PATTERN.test(version) && !TEST_VERSION_PATTERN.test(version)) return version;
@@ -170,7 +195,12 @@ function validatePreGuideForXml(preGuide: any): TissXmlDraftIssue[] {
   if (!hasAny(procedure.billingCode || procedure.billing_code || procedure.tussCode || preGuide?.billingCode || preGuide?.billing_code || preGuide?.tussCode)) addIssue(issues, preGuide, "TUSS_CODE_MISSING", "Código TUSS não informado.", "procedure");
   if (!hasAny(procedure.name || preGuide?.internalProcedureName)) addIssue(issues, preGuide, "PROCEDURE_NAME_MISSING", "Procedimento não informado.", "procedure");
   if (amount(procedure.quantity || preGuide?.quantity) <= 0) addIssue(issues, preGuide, "QUANTITY_MISSING", "Quantidade do procedimento não informada.", "procedure");
-  if (amount(procedure.totalAmountCents || preGuide?.totalAmountCents) <= 0) addIssue(issues, preGuide, "AMOUNT_MISSING", "Valor previsto não informado.", "procedure");
+  const rawTotalAmount = procedure.totalAmountCents ?? procedure.total_amount_cents ?? preGuide?.totalAmountCents ?? preGuide?.total_amount_cents;
+  const totalAmount = Number(rawTotalAmount);
+  const zeroPolicy = zeroAmountXmlPolicy(preGuide);
+  if (!Number.isFinite(totalAmount) || totalAmount < 0 || (totalAmount === 0 && !zeroPolicy.allowed)) {
+    addIssue(issues, preGuide, "AMOUNT_MISSING", "Valor previsto não informado ou política de valor zero não autorizada.", "procedure");
+  }
   if (requirements.requiresExecutantRegistry && (!hasAny(professional.councilType) || !hasAny(professional.councilNumber))) {
     addIssue(issues, preGuide, "PROFESSIONAL_REGISTRY_MISSING", "Registro profissional não informado.", "professional");
   }
@@ -221,7 +251,18 @@ export function buildTissSpSadtDraftPayload(input: GenerateTissXmlDraftInput): T
     const procedure = rowSnapshot.procedure || {};
     const authorization = rowSnapshot.authorization || {};
     const quantity = amount(procedure.quantity || row.quantity || 1);
-    const totalAmountCents = amount(procedure.totalAmountCents || row.totalAmountCents);
+    const totalAmountCents = amount(procedure.totalAmountCents ?? procedure.total_amount_cents ?? row.totalAmountCents ?? row.total_amount_cents);
+    const zeroPolicy = zeroAmountXmlPolicy(row);
+    if (totalAmountCents === 0 && zeroPolicy.allowed) {
+      addWarning(
+        warnings,
+        "ZERO_AMOUNT_XML_OPERATOR_POLICY",
+        zeroPolicy.reason || "A operadora calcula o valor após a importação; o rascunho será emitido com 0.00.",
+        "procedure",
+        `guides.${index}.values.totalAmount`,
+        row
+      );
+    }
     const unit = normalizeUnit(procedure.unit || row.unit);
     const officialTussCode = text(procedure.officialTussCode || procedure.official_tuss_code || row.officialTussCode || row.official_tuss_code || procedure.tussCode || row.tussCode);
     const tussCode = text(procedure.billingCode || procedure.billing_code || row.billingCode || row.billing_code || officialTussCode);

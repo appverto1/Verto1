@@ -3075,6 +3075,7 @@ export const dataService = {
       payerId: options.payerId,
       payerName: options.payerName,
       serviceType: options.serviceType,
+      serviceCatalogId: options.serviceCatalogId,
       procedureCode: options.procedureCode
     });
     try {
@@ -3084,7 +3085,7 @@ export const dataService = {
       }, {
         helperName: 'getAppointmentBillingContext',
         operation: 'detail',
-        table: 'appointment_billing_contexts,appointment_required_documents,patient_payer_authorizations',
+        table: 'appointment_billing_contexts,appointment_required_documents,patient_payer_authorizations,payer_tuss_mappings,tuss_service_catalog,tuss_codes',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
@@ -3100,6 +3101,7 @@ export const dataService = {
       payerId: options.payerId,
       payerName: options.payerName,
       serviceType: options.serviceType,
+      serviceCatalogId: options.serviceCatalogId,
       procedureCode: options.procedureCode,
       appointmentDate: options.appointmentDate,
       currentAppointmentId: options.currentAppointmentId || options.appointmentId
@@ -3111,7 +3113,7 @@ export const dataService = {
       }, {
         helperName: 'getAppointmentBillingSuggestion',
         operation: 'detail',
-        table: 'patient_payer_authorizations,patient_financial_plans',
+        table: 'patient_payer_authorizations,patient_financial_plans,payer_tuss_mappings,tuss_service_catalog,tuss_codes',
         hasExplicitColumns: true,
         requiresPatientOrSession: true
       });

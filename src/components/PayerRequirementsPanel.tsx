@@ -197,6 +197,8 @@ type PayerTissForm = {
   antiGlosaReviewedAt: string;
   antiGlosaReviewedBy: string;
   operatorHasNoAdditionalRequirements: boolean;
+  allowsZeroAmountXml: boolean;
+  zeroAmountXmlReason: string;
   administrativeNotes: string;
   specificRules: string;
 };
@@ -375,6 +377,8 @@ const defaultPayerTissForm: PayerTissForm = {
   antiGlosaReviewedAt: "",
   antiGlosaReviewedBy: "",
   operatorHasNoAdditionalRequirements: false,
+  allowsZeroAmountXml: false,
+  zeroAmountXmlReason: "",
   administrativeNotes: "",
   specificRules: "",
 };
@@ -636,6 +640,8 @@ const normalizePayerTissProfile = (profile: any = {}): PayerTissForm => ({
   antiGlosaReviewedAt: profile.anti_glosa_reviewed_at || profile.antiGlosaReviewedAt || "",
   antiGlosaReviewedBy: profile.anti_glosa_reviewed_by || profile.antiGlosaReviewedBy || "",
   operatorHasNoAdditionalRequirements: Boolean(profile.operator_has_no_additional_requirements ?? profile.operatorHasNoAdditionalRequirements),
+  allowsZeroAmountXml: Boolean(profile.allows_zero_amount_xml ?? profile.allowsZeroAmountXml),
+  zeroAmountXmlReason: profile.zero_amount_xml_reason || profile.zeroAmountXmlReason || "",
   administrativeNotes: profile.administrative_notes || profile.administrativeNotes || "",
   specificRules: profile.specific_rules || profile.specificRules || "",
 });
@@ -1623,8 +1629,13 @@ export function PayerRequirementsPanel({
         saved = await createTussService() === true;
       } else if (stepKey === "tuss" && tussMappingForm.serviceCatalogId && tussMappingForm.tussCodeId) {
         saved = await createTussMapping() === true;
-      } else if (stepKey === "prices" && procedurePriceForm.serviceCatalogId && procedurePriceForm.amountCents) {
-        saved = await saveProcedurePrice() === true;
+      } else if (stepKey === "prices") {
+        const profileSaved = await savePayerTissProfile() === true;
+        if (!profileSaved) {
+          saved = false;
+        } else if (procedurePriceForm.serviceCatalogId && procedurePriceForm.amountCents !== "") {
+          saved = await saveProcedurePrice() === true;
+        }
       } else if (stepKey === "test") {
         saved = await runSetupPreGuideTest() === true;
       }
@@ -2029,6 +2040,10 @@ export function PayerRequirementsPanel({
 
   const savePayerTissProfile = async () => {
     if (!selectedPayerId || !isInsurancePayer(selectedPayer)) return false;
+    if (payerTissForm.allowsZeroAmountXml && !payerTissForm.zeroAmountXmlReason.trim()) {
+      setError("Informe a justificativa operacional para permitir XML com valor R$ 0,00.");
+      return false;
+    }
     const providerCodeErrors: Partial<Record<keyof PayerTissForm, string>> = {
       contractedProviderCode: getTissProviderCodeLengthError(payerTissForm.contractedProviderCode),
       operatorProviderCode: getTissProviderCodeLengthError(payerTissForm.operatorProviderCode, "Código operacional na operadora"),
@@ -2330,6 +2345,11 @@ export function PayerRequirementsPanel({
     const amountCents = parseBrazilianCurrencyToCents(procedurePriceForm.amountCents);
     if (amountCents === null) {
       setProcedurePriceAmountError("Informe um valor válido em reais, com no máximo duas casas decimais.");
+      procedurePriceAmountInputRef.current?.focus();
+      return false;
+    }
+    if (amountCents === 0 && !payerTissForm.allowsZeroAmountXml) {
+      setProcedurePriceAmountError("Ative e justifique a política de XML com valor R$ 0,00 para esta operadora antes de salvar.");
       procedurePriceAmountInputRef.current?.focus();
       return false;
     }
@@ -3153,8 +3173,33 @@ export function PayerRequirementsPanel({
               <input type="date" value={procedurePriceForm.validUntil} onChange={(event) => setProcedurePriceForm((current) => ({ ...current, validUntil: event.target.value }))} className={setupFieldClass} />
             </label>
           </div>
+          <div className={`mt-3 rounded-xl border px-3 py-3 ${payerTissForm.allowsZeroAmountXml ? "border-amber-200 bg-amber-50" : "border-slate-100 bg-slate-50"}`}>
+            <label className="flex items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={payerTissForm.allowsZeroAmountXml}
+                onChange={(event) => updatePayerTiss("allowsZeroAmountXml", event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#7a32fc] focus:ring-[#7a32fc]"
+              />
+              <span>
+                <strong className="block font-semibold text-slate-900">A operadora calcula o valor após importar o XML</strong>
+                Permitir valor unitário e total em R$ 0,00 somente para este convênio. A exceção ficará registrada na Pré-guia e no documento oficial.
+              </span>
+            </label>
+            {payerTissForm.allowsZeroAmountXml ? (
+              <label className="mt-3 block text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Justificativa obrigatória</span>
+                <input
+                  value={payerTissForm.zeroAmountXmlReason}
+                  onChange={(event) => updatePayerTiss("zeroAmountXmlReason", event.target.value)}
+                  className={setupFieldClass}
+                  placeholder="Ex.: Vivest calcula o valor contratado no portal após a importação"
+                />
+              </label>
+            ) : null}
+          </div>
           <p className="mt-3 text-xs leading-5 text-slate-500">
-            Informe o valor contratado para este procedimento. Esse valor será usado na Pré-guia e no XML.
+            Informe o valor contratado para este procedimento. Quando a política acima estiver explicitamente ativa, R$ 0,00 será aceito com alerta e enviado como 0.00 no XML.
             {selectedPriceTussCode ? ` TUSS selecionado: ${selectedPriceTussCode.code}.` : ""}
             {selectedPriceMapping ? ` De/Para: ${selectedPriceMapping.serviceName || selectedPriceMapping.contractCode || "selecionado"}.` : ""}
           </p>
@@ -4660,6 +4705,40 @@ export function PayerRequirementsPanel({
             </span>
           </div>
 
+          <div className={`mt-3 rounded-xl border px-3 py-3 ${payerTissForm.allowsZeroAmountXml ? "border-amber-200 bg-amber-50" : "border-emerald-100 bg-white"}`}>
+            <label className="flex items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                checked={payerTissForm.allowsZeroAmountXml}
+                onChange={(event) => updatePayerTiss("allowsZeroAmountXml", event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-[#7a32fc] focus:ring-[#7a32fc]"
+              />
+              <span>
+                <strong className="block font-semibold text-slate-900">Permitir XML com valor R$ 0,00 para esta operadora</strong>
+                Use somente quando a operadora confirmar que calcula o valor contratado no portal ou após a importação.
+              </span>
+            </label>
+            {payerTissForm.allowsZeroAmountXml ? (
+              <label className="mt-3 block text-xs font-normal text-slate-700">
+                <span className="mb-1 block">Justificativa operacional obrigatória</span>
+                <input
+                  value={payerTissForm.zeroAmountXmlReason}
+                  onChange={(event) => updatePayerTiss("zeroAmountXmlReason", event.target.value)}
+                  className="w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+                  placeholder="Ex.: valor calculado automaticamente no portal da Vivest"
+                />
+              </label>
+            ) : null}
+            <div className="mt-3">
+              <SaveActionButton
+                status="idle"
+                idleLabel="Salvar política do XML"
+                disabled={!selectedPayerId || saving || (payerTissForm.allowsZeroAmountXml && !payerTissForm.zeroAmountXmlReason.trim())}
+                onClick={() => void savePayerTissProfile()}
+              />
+            </div>
+          </div>
+
           {editingProcedurePriceId && <p className="mt-3 text-xs text-emerald-800">Editando uma configuração existente. Salvar atualizará somente este valor negociado.</p>}
           <SectionFeedbackMessage feedback={sectionFeedback.price} />
           <div className="mt-3 grid gap-3 lg:grid-cols-2">
@@ -4680,7 +4759,9 @@ export function PayerRequirementsPanel({
             <label htmlFor="payer-price-amount" className="text-xs font-normal text-slate-700">
               <span className="mb-1 block">Valor negociado (R$)</span>
               <input ref={procedurePriceAmountInputRef} id="payer-price-amount" inputMode="decimal" value={procedurePriceForm.amountCents} onChange={(event) => { setProcedurePriceForm((current) => ({ ...current, amountCents: event.target.value })); setProcedurePriceAmountError(""); }} placeholder="Ex.: 120,00" aria-describedby={procedurePriceAmountError ? "payer-price-amount-error" : "payer-price-amount-help"} aria-invalid={Boolean(procedurePriceAmountError)} className="w-full rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm font-normal outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100" />
-              <span id="payer-price-amount-help" className="mt-1 block text-xs text-slate-500">Informe o valor em reais, com até duas casas decimais.</span>
+              <span id="payer-price-amount-help" className="mt-1 block text-xs text-slate-500">
+                Informe o valor em reais, com até duas casas decimais. R$ 0,00 exige a política explícita da operadora acima.
+              </span>
               {procedurePriceAmountError && <span id="payer-price-amount-error" className="mt-1 block text-xs text-rose-600">{procedurePriceAmountError}</span>}
             </label>
             <label htmlFor="payer-price-source" className="text-xs font-normal text-slate-700">
