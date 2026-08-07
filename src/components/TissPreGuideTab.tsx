@@ -303,6 +303,41 @@ const PAGE_SIZE = 50;
 const OFFICIAL_BATCH_GUIDE_LIMIT = 500;
 const OFFICIAL_TISS_XML_STRATEGY = getDefaultTissOfficialStrategyDescriptor();
 
+const consultationTypes040300 = [
+  { code: "1", label: "Primeira consulta" },
+  { code: "2", label: "Seguimento" },
+  { code: "3", label: "Pré-natal" },
+  { code: "4", label: "Por encaminhamento" },
+] as const;
+
+const executantParticipationDegrees040300 = [
+  { code: "00", label: "Cirurgião" },
+  { code: "01", label: "Primeiro auxiliar" },
+  { code: "02", label: "Segundo auxiliar" },
+  { code: "03", label: "Terceiro auxiliar" },
+  { code: "04", label: "Quarto auxiliar" },
+  { code: "05", label: "Instrumentador" },
+  { code: "06", label: "Anestesista" },
+  { code: "07", label: "Auxiliar de anestesista" },
+  { code: "08", label: "Consultor" },
+  { code: "09", label: "Perfusionista" },
+  { code: "10", label: "Pediatra na sala de parto" },
+  { code: "11", label: "Auxiliar SADT" },
+  { code: "12", label: "Clínico" },
+  { code: "13", label: "Intensivista" },
+] as const;
+
+function optionLabel(
+  options: ReadonlyArray<{ code: string; label: string }>,
+  code: unknown,
+  fallback = "Não informado"
+) {
+  const normalized = String(code ?? "").trim();
+  if (!normalized) return fallback;
+  const option = options.find((item) => item.code === normalized);
+  return option ? `${option.code} - ${option.label}` : normalized;
+}
+
 const statusMeta: Record<string, { label: string; className: string }> = {
   valid: { label: "Válida", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
   pending_data: { label: "Pendente", className: "bg-amber-50 text-amber-700 ring-amber-200" },
@@ -381,6 +416,19 @@ function currencyInputToCents(value?: string | number | null) {
 
 function formatDate(value?: string | null) {
   return value ? formatDateTimeInAppointmentTimezone(value) || "Horário não informado" : "Horário não informado";
+}
+
+function formatCivilDate(value?: unknown, fallback = "Não informada") {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return fallback;
+  const date = new Date(`${normalized.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return fallback;
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(date);
 }
 
 function fieldValue(value: unknown, fallback = "Não informado") {
@@ -1818,16 +1866,28 @@ export function TissPreGuideTab({
     }
     const authorization = detail.snapshot?.authorization || {};
     const procedure = detail.snapshot?.procedure || {};
+    const requester = detail.snapshot?.requester || authorization.requester || {};
+    const attendance = detail.snapshot?.attendance || authorization.attendance || {};
+    const professional = detail.snapshot?.professional || authorization.professional || {};
     const toDateInput = (value?: unknown) => String(value || "").slice(0, 10);
     const currentAuthorizationTussCode = authorization.procedureTussCode || "";
     const expectedTussCode = authorization.expectedAuthorizedTussCode || procedure.authorizedCode || procedure.officialTussCode || procedure.tussCode || detail.authorizedCode || detail.tussCode || "";
     setAuthorizationForm({
       id: authorization.authorizationId || authorization.id || "",
       authorizationNumber: authorization.authorizationCode || detail.authorizationCode || "",
-      guideNumber: authorization.guideNumber || detail.guideNumber || "",
-      issueDate: toDateInput(authorization.authorizationValidFrom),
+      providerGuideNumber: authorization.providerGuideNumber || detail.snapshot?.guide?.providerGuideNumber || "",
+      guideNumber: authorization.operatorGuideNumber || authorization.guideNumber || detail.guideNumber || "",
+      issueDate: toDateInput(authorization.authorizationDate || authorization.issueDate || authorization.authorizationValidFrom),
+      requestDate: toDateInput(authorization.requestDate || requester.requestDate || attendance.requestDate),
       validFrom: toDateInput(authorization.authorizationValidFrom),
       validUntil: toDateInput(authorization.authorizationValidUntil || detail.authorizationValidUntil),
+      consultationType: attendance.consultationType || authorization.consultationType || "",
+      executantParticipationDegree: professional.participationDegree || professional.executantParticipationDegree || attendance.executantParticipationDegree || "",
+      requesterName: requester.name || requester.requesterName || "",
+      requesterCouncilType: requester.councilType || requester.requesterCouncilType || "",
+      requesterCouncilNumber: requester.councilNumber || requester.requesterCouncilNumber || "",
+      requesterCouncilState: requester.councilState || requester.requesterCouncilState || "",
+      requesterCboCode: requester.cboCode || requester.requesterCboCode || "",
       serviceCatalogId: authorization.serviceCatalogId || procedure.serviceCatalogId || "",
       tussCodeId: authorization.tussCodeId || procedure.tussCodeId || "",
       payerTussMappingId: authorization.payerTussMappingId || procedure.payerTussMappingId || "",
@@ -1861,10 +1921,19 @@ export function TissPreGuideTab({
         patientId: detail.patientId,
         payerId: detail.payerId,
         authorizationNumber: authorizationForm.authorizationNumber,
+        providerGuideNumber: authorizationForm.providerGuideNumber,
         guideNumber: authorizationForm.guideNumber,
         issueDate: authorizationForm.issueDate,
+        requestDate: authorizationForm.requestDate,
         validFrom: authorizationForm.validFrom,
         validUntil: authorizationForm.validUntil,
+        consultationType: authorizationForm.consultationType,
+        executantParticipationDegree: authorizationForm.executantParticipationDegree,
+        requesterName: authorizationForm.requesterName,
+        requesterCouncilType: authorizationForm.requesterCouncilType,
+        requesterCouncilNumber: authorizationForm.requesterCouncilNumber,
+        requesterCouncilState: authorizationForm.requesterCouncilState,
+        requesterCboCode: authorizationForm.requesterCboCode,
         serviceCatalogId: authorizationForm.serviceCatalogId,
         tussCodeId: authorizationForm.tussCodeId,
         payerTussMappingId: authorizationForm.payerTussMappingId,
@@ -3612,7 +3681,8 @@ export function TissPreGuideTab({
                       <DetailField label="Data/hora" value={formatDate(detail.scheduledStart)} />
                       <DetailField label="Pagador" value={fieldValue(snapshot.payer?.name || detail.payerName, "Sem pagador")} />
                       <DetailField label="Valor" value={formatCurrency(detail.totalAmountCents || snapshot.procedure?.totalAmountCents)} />
-                      <DetailField label="Guia" value={fieldValue(snapshot.authorization?.guideNumber || detail.guideNumber)} />
+                      <DetailField label="Guia no prestador" value={fieldValue(snapshot.authorization?.providerGuideNumber)} />
+                      <DetailField label="Guia da operadora" value={fieldValue(snapshot.authorization?.operatorGuideNumber || snapshot.authorization?.guideNumber || detail.guideNumber)} />
                       <DetailField label="Senha" value={fieldValue(snapshot.authorization?.authorizationCode || detail.authorizationCode)} />
                       <DetailField label="TUSS oficial" value={fieldValue(snapshot.procedure?.officialTussCode || snapshot.procedure?.tussCode || detail.officialTussCode || detail.tussCode)} />
                       <DetailField label="Código autorizado" value={fieldValue(snapshot.authorization?.procedureTussCode || snapshot.procedure?.authorizedCode || detail.authorizedCode)} />
@@ -3705,6 +3775,19 @@ export function TissPreGuideTab({
                     <DetailField label="Número" value={fieldValue(snapshot.professional?.councilNumber)} />
                     <DetailField label="UF" value={fieldValue(snapshot.professional?.councilState)} />
                     <DetailField label="CBO" value={fieldValue(snapshot.professional?.cboCode)} />
+                    <DetailField label="Código individual na operadora" value={fieldValue(snapshot.professional?.operatorProviderCode)} />
+                    <DetailField
+                      label="Grau de participação"
+                      value={optionLabel(executantParticipationDegrees040300, snapshot.professional?.participationDegree)}
+                    />
+                  </Section>
+
+                  <Section title="Profissional solicitante" icon={Stethoscope}>
+                    <DetailField label="Nome" value={fieldValue(snapshot.requester?.name)} />
+                    <DetailField label="Conselho" value={fieldValue(snapshot.requester?.councilType)} />
+                    <DetailField label="Número" value={fieldValue(snapshot.requester?.councilNumber)} />
+                    <DetailField label="UF" value={fieldValue(snapshot.requester?.councilState)} />
+                    <DetailField label="CBO" value={fieldValue(snapshot.requester?.cboCode)} />
                   </Section>
 
                   <Section title="Procedimento" icon={ClipboardCheck}>
@@ -3717,10 +3800,17 @@ export function TissPreGuideTab({
                   </Section>
 
                   <Section title="Guia / autorização" icon={FileSearch}>
-                    <DetailField label="Guia" value={fieldValue(snapshot.authorization?.guideNumber || detail.guideNumber)} />
+                    <DetailField label="Número da guia no prestador" value={fieldValue(snapshot.authorization?.providerGuideNumber)} />
+                    <DetailField label="Número da guia da operadora" value={fieldValue(snapshot.authorization?.operatorGuideNumber || snapshot.authorization?.guideNumber || detail.guideNumber)} />
                     <DetailField label="Senha / autorização" value={fieldValue(snapshot.authorization?.authorizationCode || detail.authorizationCode)} />
+                    <DetailField label="Data da autorização" value={formatCivilDate(snapshot.authorization?.authorizationDate)} />
+                    <DetailField label="Data da solicitação" value={formatCivilDate(snapshot.authorization?.requestDate)} />
                     <DetailField label="Início da validade" value={fieldValue(snapshot.authorization?.authorizationValidFrom)} />
                     <DetailField label="Validade" value={fieldValue(snapshot.authorization?.authorizationValidUntil || detail.authorizationValidUntil)} />
+                    <DetailField
+                      label="Tipo de consulta"
+                      value={optionLabel(consultationTypes040300, snapshot.attendance?.consultationType)}
+                    />
                     <DetailField label="Procedimento autorizado" value={fieldValue(snapshot.authorization?.procedureName || snapshot.authorization?.procedureTussCode || snapshot.authorization?.procedureCode)} />
                     <DetailField label="Quantidade autorizada" value={fieldValue(snapshot.authorization?.authorizedQuantity)} />
                     <DetailField label="Unidade autorizada" value={fieldValue(snapshot.authorization?.authorizedUnit)} />
@@ -3951,12 +4041,55 @@ export function TissPreGuideTab({
                 <div className="grid gap-4 sm:grid-cols-2">
                   <EditorField label="Convênio/pagador" value={fieldValue(detail?.payerName, "")} onChange={() => undefined} maxLength={180} />
                   <EditorField label="Número da autorização/senha" value={authorizationForm.authorizationNumber || ""} onChange={(value) => updateAuthorizationField("authorizationNumber", value)} maxLength={120} />
-                  <EditorField label="Número da guia" value={authorizationForm.guideNumber || ""} onChange={(value) => updateAuthorizationField("guideNumber", value)} maxLength={120} />
-                  <EditorField label="Data de emissão" type="date" value={authorizationForm.issueDate || ""} onChange={(value) => updateAuthorizationField("issueDate", value)} />
+                  <EditorField label="Número da guia no prestador" value={authorizationForm.providerGuideNumber || ""} onChange={(value) => updateAuthorizationField("providerGuideNumber", value)} maxLength={20} />
+                  <EditorField label="Número da guia atribuído pela operadora" value={authorizationForm.guideNumber || ""} onChange={(value) => updateAuthorizationField("guideNumber", value)} maxLength={20} />
+                  <EditorField label="Data da autorização" type="date" value={authorizationForm.issueDate || ""} onChange={(value) => updateAuthorizationField("issueDate", value)} />
+                  <EditorField label="Data da solicitação" type="date" value={authorizationForm.requestDate || ""} onChange={(value) => updateAuthorizationField("requestDate", value)} />
                   <EditorField label="Início da validade" type="date" value={authorizationForm.validFrom || ""} onChange={(value) => updateAuthorizationField("validFrom", value)} />
                   <EditorField label="Validade final" type="date" value={authorizationForm.validUntil || ""} onChange={(value) => updateAuthorizationField("validUntil", value)} />
                   <EditorField label="Quantidade autorizada" type="number" value={authorizationForm.authorizedQuantity || ""} onChange={(value) => updateAuthorizationField("authorizedQuantity", value)} maxLength={20} />
+                  <label className="text-xs font-medium text-slate-600">
+                    Tipo de consulta
+                    <select
+                      value={authorizationForm.consultationType || ""}
+                      onChange={(event) => updateAuthorizationField("consultationType", event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+                    >
+                      <option value="">Selecione quando aplicável</option>
+                      {consultationTypes040300.map((option) => (
+                        <option key={option.code} value={option.code}>{option.code} - {option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">
+                    Grau de participação do executante
+                    <select
+                      value={authorizationForm.executantParticipationDegree || ""}
+                      onChange={(event) => updateAuthorizationField("executantParticipationDegree", event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-100"
+                    >
+                      <option value="">Selecione quando aplicável</option>
+                      {executantParticipationDegrees040300.map((option) => (
+                        <option key={option.code} value={option.code}>{option.code} - {option.label}</option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
+                <section className="rounded-lg border border-slate-200 bg-white p-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-900">Profissional solicitante da guia</h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Copie os campos do solicitante informados na guia/autorização. Ele pode ser diferente do executante da sessão e não será inferido automaticamente.
+                    </p>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <EditorField label="Nome do profissional solicitante" value={authorizationForm.requesterName || ""} onChange={(value) => updateAuthorizationField("requesterName", value)} maxLength={180} />
+                    <EditorField label="Conselho profissional" value={authorizationForm.requesterCouncilType || ""} onChange={(value) => updateAuthorizationField("requesterCouncilType", value.toUpperCase())} maxLength={40} />
+                    <EditorField label="Número no conselho" value={authorizationForm.requesterCouncilNumber || ""} onChange={(value) => updateAuthorizationField("requesterCouncilNumber", value)} maxLength={80} />
+                    <EditorField label="UF do conselho" value={authorizationForm.requesterCouncilState || ""} onChange={(value) => updateAuthorizationField("requesterCouncilState", value.toUpperCase().slice(0, 2))} maxLength={2} />
+                    <EditorField label="CBO" value={authorizationForm.requesterCboCode || ""} onChange={(value) => updateAuthorizationField("requesterCboCode", value)} maxLength={40} />
+                  </div>
+                </section>
                 <section className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
@@ -4174,7 +4307,7 @@ export function TissPreGuideTab({
                     <EditorField label="UF do conselho" value={profileForm.councilState || ""} onChange={(value) => updateProfileField("councilState", value.toUpperCase().slice(0, 2))} maxLength={2} />
                     <EditorField label="CBO" value={profileForm.cboCode || ""} onChange={(value) => updateProfileField("cboCode", value)} maxLength={40} />
                     <EditorField label="Especialidade" value={profileForm.specialtyName || ""} onChange={(value) => updateProfileField("specialtyName", value)} maxLength={120} />
-                    <EditorField label="Código do prestador" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={14} />
+                    <EditorField label="Código individual na operadora" value={profileForm.providerCode || ""} onChange={(value) => updateProfileField("providerCode", value)} maxLength={14} />
                   </div>
                 </div>
               )}

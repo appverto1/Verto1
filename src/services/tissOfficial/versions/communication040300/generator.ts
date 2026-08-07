@@ -43,6 +43,11 @@ const MAX_GUIDES_PER_BATCH = 500;
 const VALID_ATTENDANCE_TYPES = new Set(attendanceTypes040300.map((item) => item.code));
 const VALID_ATTENDANCE_REGIMES = new Set(attendanceRegimes040300.map((item) => item.code));
 const VALID_ATTENDANCE_CHARACTERS = new Set(attendanceCharacters040300.map((item) => item.code));
+const VALID_CONSULTATION_TYPES = new Set(["1", "2", "3", "4"]);
+const VALID_PARTICIPATION_DEGREES = new Set([
+  "00", "01", "02", "03", "04", "05", "06",
+  "07", "08", "09", "10", "11", "12", "13"
+]);
 
 const COUNCIL_CODES: Record<string, string> = {
   CRESS: "01",
@@ -118,7 +123,14 @@ type NormalizedGuide = OfficialTissCanonicalGuide & {
   providerCnes: string;
   beneficiaryCard: string;
   beneficiaryName: string;
+  requesterName: string;
+  requesterCouncilCode: string;
+  requesterCouncilNumber: string;
+  requesterCouncilUf: string;
+  requesterCboCode: string;
   professionalName: string;
+  professionalIdentifier: ProviderIdentifier | null;
+  professionalParticipationDegree?: string | null;
   councilCode: string;
   councilNumber: string;
   councilUf: string;
@@ -128,11 +140,14 @@ type NormalizedGuide = OfficialTissCanonicalGuide & {
   quantity: number;
   unitAmountCents: number;
   authorizationCode?: string | null;
+  authorizationDate?: string | null;
   authorizationValidFrom?: string | null;
   authorizationValidUntil?: string | null;
+  requestDate?: string | null;
   attendanceType: string;
   attendanceRegime: string;
   attendanceCharacter: string;
+  consultationType?: string | null;
   zeroAmountPolicyApplied: boolean;
   zeroAmountXmlReason?: string | null;
 };
@@ -329,6 +344,24 @@ function pickProviderIdentifier(snapshot: any, row: any): ProviderIdentifier | n
   return null;
 }
 
+function pickProfessionalIdentifier(professional: any): ProviderIdentifier | null {
+  const operatorCode = normalizeNumberText(firstValue(
+    professional.operatorProviderCode,
+    professional.operator_provider_code,
+    professional.providerCode,
+    professional.provider_code
+  ), 14);
+  if (operatorCode && !isPlaceholder(operatorCode)) {
+    return { tag: "codigoPrestadorNaOperadora", value: operatorCode };
+  }
+  const documentType = text(professional.documentType || professional.document_type, 20).toUpperCase();
+  const documentNumber = firstDigits(14, professional.documentNumber, professional.document_number);
+  if (documentType === "CPF" && documentNumber.length === 11 && !isPlaceholder(documentNumber)) {
+    return { tag: "cpfContratado", value: documentNumber };
+  }
+  return null;
+}
+
 function providerHeaderIdentifier(identifier: ProviderIdentifier): ProviderIdentifier {
   if (identifier.tag === "codigoPrestadorNaOperadora") {
     return { tag: "codigoPrestadorNaOperadora", value: identifier.value };
@@ -351,13 +384,32 @@ function xmlProviderIdentifier(identifier: ProviderIdentifier, level: number) {
   return xmlElement(identifier.tag, identifier.value, level);
 }
 
-function xmlProfessional(professional: NormalizedGuide, level: number) {
+function xmlRequesterProfessional(guide: NormalizedGuide, level: number) {
   return [
-    professional.professionalName ? xmlElement("nomeProfissional", professional.professionalName, level) : "",
-    xmlElement("conselhoProfissional", professional.councilCode, level),
-    xmlElement("numeroConselhoProfissional", professional.councilNumber, level),
-    xmlElement("UF", professional.councilUf, level),
-    xmlElement("CBOS", professional.cboCode, level)
+    xmlElement("nomeProfissional", guide.requesterName, level),
+    xmlElement("conselhoProfissional", guide.requesterCouncilCode, level),
+    xmlElement("numeroConselhoProfissional", guide.requesterCouncilNumber, level),
+    xmlElement("UF", guide.requesterCouncilUf, level),
+    xmlElement("CBOS", guide.requesterCboCode, level)
+  ].filter(Boolean).join("\n");
+}
+
+function xmlExecutantTeam(guide: NormalizedGuide, level: number) {
+  if (!guide.professionalIdentifier) return "";
+  return [
+    `${"  ".repeat(level)}<ans:equipeSadt>`,
+    guide.professionalParticipationDegree
+      ? xmlElement("grauPart", guide.professionalParticipationDegree, level + 1)
+      : "",
+    `${"  ".repeat(level + 1)}<ans:codProfissional>`,
+    xmlProviderIdentifier(guide.professionalIdentifier, level + 2),
+    `${"  ".repeat(level + 1)}</ans:codProfissional>`,
+    xmlElement("nomeProf", guide.professionalName, level + 1),
+    xmlElement("conselho", guide.councilCode, level + 1),
+    xmlElement("numeroConselhoProfissional", guide.councilNumber, level + 1),
+    xmlElement("UF", guide.councilUf, level + 1),
+    xmlElement("CBOS", guide.cboCode, level + 1),
+    `${"  ".repeat(level)}</ans:equipeSadt>`
   ].filter(Boolean).join("\n");
 }
 
@@ -419,14 +471,14 @@ function buildSpSadtGuideXml(guide: NormalizedGuide, sequence: number) {
     "        <ans:guiaSP-SADT>",
     "          <ans:cabecalhoGuia>",
     xmlElement("registroANS", guide.payerAns, 6),
-    xmlElement("numeroGuiaPrestador", guide.guideNumber, 6),
+    xmlElement("numeroGuiaPrestador", guide.providerGuideNumber, 6),
     "          </ans:cabecalhoGuia>"
   ];
-  if (guide.authorizationCode || guide.authorizationValidFrom || guide.authorizationValidUntil) {
+  if (guide.operatorGuideNumber || guide.authorizationCode || guide.authorizationDate || guide.authorizationValidUntil) {
     lines.push(
       "          <ans:dadosAutorizacao>",
-      guide.guideNumber ? xmlElement("numeroGuiaOperadora", guide.guideNumber, 6) : "",
-      xmlElement("dataAutorizacao", guide.authorizationValidFrom, 6),
+      guide.operatorGuideNumber ? xmlElement("numeroGuiaOperadora", guide.operatorGuideNumber, 6) : "",
+      xmlElement("dataAutorizacao", guide.authorizationDate, 6),
       guide.authorizationCode ? xmlElement("senha", guide.authorizationCode, 6) : "",
       guide.authorizationValidUntil ? xmlElement("dataValidadeSenha", guide.authorizationValidUntil, 6) : "",
       "          </ans:dadosAutorizacao>"
@@ -443,11 +495,11 @@ function buildSpSadtGuideXml(guide: NormalizedGuide, sequence: number) {
     "            </ans:contratadoSolicitante>",
     xmlElement("nomeContratadoSolicitante", guide.providerName, 6),
     "            <ans:profissionalSolicitante>",
-    xmlProfessional(guide, 7),
+    xmlRequesterProfessional(guide, 7),
     "            </ans:profissionalSolicitante>",
     "          </ans:dadosSolicitante>",
     "          <ans:dadosSolicitacao>",
-    xmlElement("dataSolicitacao", date, 6),
+    guide.requestDate ? xmlElement("dataSolicitacao", guide.requestDate, 6) : "",
     xmlElement("caraterAtendimento", guide.attendanceCharacter, 6),
     "          </ans:dadosSolicitacao>",
     "          <ans:dadosExecutante>",
@@ -459,6 +511,7 @@ function buildSpSadtGuideXml(guide: NormalizedGuide, sequence: number) {
     "          <ans:dadosAtendimento>",
     xmlElement("tipoAtendimento", guide.attendanceType, 6),
     xmlElement("indicacaoAcidente", "9", 6),
+    guide.consultationType ? xmlElement("tipoConsulta", guide.consultationType, 6) : "",
     xmlElement("regimeAtendimento", guide.attendanceRegime, 6),
     "          </ans:dadosAtendimento>",
     "          <ans:procedimentosExecutados>",
@@ -474,6 +527,7 @@ function buildSpSadtGuideXml(guide: NormalizedGuide, sequence: number) {
     xmlElement("reducaoAcrescimo", "1.00", 7),
     xmlElement("valorUnitario", unitAmount, 7),
     xmlElement("valorTotal", totalAmount, 7),
+    xmlExecutantTeam(guide, 7),
     "            </ans:procedimentoExecutado>",
     "          </ans:procedimentosExecutados>",
     "          <ans:valorTotal>",
@@ -539,6 +593,8 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
   const provider = snapshot?.provider || {};
   const payer = snapshot?.payer || {};
   const professional = snapshot?.professional || {};
+  const requester = snapshot?.requester || snapshot?.requestingProfessional || {};
+  const attendance = snapshot?.attendance || {};
   const procedure = snapshot?.procedure || {};
   const authorization = snapshot?.authorization || {};
 
@@ -585,7 +641,36 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
     addIssue({ issues, preGuideId, entity: "beneficiary", field: "cardNumber", code: "TISS_OFFICIAL_BENEFICIARY_CARD_MISSING", message: "Número da carteirinha do beneficiário é obrigatório para XML TISS oficial." });
   }
 
+  const requesterName = normalizeLimitedText(firstValue(requester.name, requester.professionalName), 70);
+  const requesterCouncilCode = normalizeCouncil(firstValue(requester.councilCode, requester.councilType, requester.council));
+  const requesterCouncilNumber = normalizeNumberText(firstValue(requester.councilNumber, requester.registryNumber), 15);
+  const requesterCouncilUf = normalizeUf(firstValue(requester.councilState, requester.councilUf));
+  const requesterCboCode = normalizeCbo(firstValue(requester.cboCode, requester.cbo));
+  if (!requesterName) {
+    addIssue({ issues, preGuideId, entity: "requester", field: "name", code: "TISS_OFFICIAL_REQUESTER_NAME_MISSING", message: "Profissional solicitante real da guia é obrigatório para XML TISS oficial." });
+  }
+  if (!requesterCouncilCode) {
+    addIssue({ issues, preGuideId, entity: "requester", field: "councilType", code: "TISS_OFFICIAL_REQUESTER_COUNCIL_MISSING", message: "Conselho do profissional solicitante deve estar mapeado para código TISS." });
+  }
+  if (!requesterCouncilNumber) {
+    addIssue({ issues, preGuideId, entity: "requester", field: "councilNumber", code: "TISS_OFFICIAL_REQUESTER_REGISTRY_MISSING", message: "Número do conselho do profissional solicitante é obrigatório." });
+  }
+  if (!requesterCouncilUf) {
+    addIssue({ issues, preGuideId, entity: "requester", field: "councilState", code: "TISS_OFFICIAL_REQUESTER_UF_MISSING", message: "UF do conselho do profissional solicitante é obrigatória." });
+  }
+  if (!requesterCboCode) {
+    addIssue({ issues, preGuideId, entity: "requester", field: "cboCode", code: "TISS_OFFICIAL_REQUESTER_CBO_MISSING", message: "CBO do profissional solicitante é obrigatório." });
+  }
+
   const professionalName = normalizeLimitedText(firstValue(professional.name, professional.displayName, row?.professionalName, row?.professional_name_snapshot), 70);
+  const professionalIdentifier = pickProfessionalIdentifier(professional);
+  const professionalParticipationDegreeRaw = normalizeNumberText(firstValue(
+    professional.participationDegree,
+    professional.participation_degree
+  ), 2);
+  const professionalParticipationDegree = professionalParticipationDegreeRaw
+    ? professionalParticipationDegreeRaw.padStart(2, "0")
+    : null;
   const councilCode = normalizeCouncil(firstValue(professional.councilCode, professional.councilType, professional.council, professional.registryCouncil));
   const councilNumber = normalizeNumberText(firstValue(professional.councilNumber, professional.registryNumber, professional.professionalRegistry), 15);
   const councilUf = normalizeUf(firstValue(professional.councilState, professional.councilUf, professional.registryState));
@@ -606,9 +691,38 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
     addIssue({ issues, preGuideId, entity: "professional", field: "cboCode", code: "TISS_OFFICIAL_PROFESSIONAL_CBO_MISSING", message: "CBO do profissional é obrigatório para XML TISS oficial." });
   }
 
-  const guideNumber = normalizeNumberText(firstValue(row?.guideNumber, row?.guide_number, authorization.guideNumber, authorization.guide_number), 20);
-  if (!guideNumber || isPlaceholder(guideNumber)) {
-    addIssue({ issues, preGuideId, entity: "authorization", field: "guideNumber", code: "TISS_OFFICIAL_GUIDE_NUMBER_MISSING", message: "Número da guia é obrigatório para XML TISS oficial." });
+  if (payer?.requirements?.requiresExecutantRegistry && !professionalIdentifier) {
+    addIssue({ issues, preGuideId, entity: "professional", field: "operatorProviderCode", code: "TISS_OFFICIAL_EXECUTANT_IDENTIFIER_MISSING", message: "Informe o código individual do executante na operadora ou o CPF no perfil faturável." });
+  }
+  if (professionalParticipationDegree && !VALID_PARTICIPATION_DEGREES.has(professionalParticipationDegree)) {
+    addIssue({ issues, preGuideId, entity: "professional", field: "participationDegree", code: "TISS_OFFICIAL_PARTICIPATION_DEGREE_INVALID", message: "Grau de participação do executante não pertence ao domínio TISS." });
+  }
+
+  const providerGuideNumberRaw = firstValue(
+    authorization.providerGuideNumber,
+    authorization.provider_guide_number,
+    row?.providerGuideNumber,
+    row?.provider_guide_number
+  );
+  const providerGuideNumber = normalizeNumberText(providerGuideNumberRaw, 20);
+  if (!providerGuideNumber || isPlaceholder(providerGuideNumber)) {
+    addIssue({ issues, preGuideId, entity: "authorization", field: "providerGuideNumber", code: "TISS_OFFICIAL_PROVIDER_GUIDE_NUMBER_MISSING", message: "Número da guia no prestador é obrigatório e não pode ser inferido da guia da operadora." });
+  } else if (providerGuideNumberRaw.length > 20) {
+    addIssue({ issues, preGuideId, entity: "authorization", field: "providerGuideNumber", code: "TISS_OFFICIAL_PROVIDER_GUIDE_NUMBER_TOO_LONG", message: "Número da guia no prestador deve ter no máximo 20 caracteres; o XML nunca trunca esse número." });
+  }
+  const operatorGuideNumberRaw = firstValue(
+    authorization.operatorGuideNumber,
+    authorization.operator_guide_number,
+    authorization.guideNumber,
+    authorization.guide_number,
+    row?.operatorGuideNumber,
+    row?.operator_guide_number,
+    row?.guideNumber,
+    row?.guide_number
+  );
+  const operatorGuideNumber = normalizeNumberText(operatorGuideNumberRaw, 20) || null;
+  if (operatorGuideNumberRaw.length > 20) {
+    addIssue({ issues, preGuideId, entity: "authorization", field: "operatorGuideNumber", code: "TISS_OFFICIAL_OPERATOR_GUIDE_NUMBER_TOO_LONG", message: "Número da guia da operadora deve ter no máximo 20 caracteres; o XML nunca trunca esse número." });
   }
 
   const officialTussCode = normalizeNumberText(firstValue(row?.officialTussCode, row?.official_tuss_code, procedure.officialTussCode, procedure.official_tuss_code, row?.tussCode, row?.tuss_code, procedure.tussCode, procedure.tuss_code), 10);
@@ -652,6 +766,10 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
   const attendanceType = normalizeNumberText(firstValue(payer.defaultAttendanceType, payer.default_attendance_type, payer.defaultTipoAtendimento), 2).padStart(2, "0");
   const attendanceRegime = normalizeNumberText(firstValue(payer.defaultAttendanceRegime, payer.default_attendance_regime), 2).padStart(2, "0");
   const attendanceCharacter = normalizeNumberText(firstValue(payer.defaultAttendanceCharacter, payer.default_attendance_character), 1);
+  const consultationType = normalizeNumberText(firstValue(
+    attendance.consultationType,
+    attendance.consultation_type
+  ), 1) || null;
   if (!VALID_ATTENDANCE_TYPES.has(attendanceType)) {
     addIssue({ issues, preGuideId, entity: "payer", field: "defaultAttendanceType", code: "TISS_OFFICIAL_ATTENDANCE_TYPE_MISSING", message: "Tipo de atendimento TISS deve estar configurado no perfil do pagador." });
   }
@@ -661,11 +779,32 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
   if (!VALID_ATTENDANCE_CHARACTERS.has(attendanceCharacter)) {
     addIssue({ issues, preGuideId, entity: "payer", field: "defaultAttendanceCharacter", code: "TISS_OFFICIAL_ATTENDANCE_CHARACTER_MISSING", message: "Caráter de atendimento TISS deve estar configurado no perfil do pagador." });
   }
+  if (attendanceType === "04" && !consultationType) {
+    addIssue({ issues, preGuideId, entity: "attendance", field: "consultationType", code: "TISS_OFFICIAL_CONSULTATION_TYPE_MISSING", message: "Tipo de consulta é obrigatório quando o tipo de atendimento é 04 — Consulta." });
+  }
+  if (consultationType && !VALID_CONSULTATION_TYPES.has(consultationType)) {
+    addIssue({ issues, preGuideId, entity: "attendance", field: "consultationType", code: "TISS_OFFICIAL_CONSULTATION_TYPE_INVALID", message: "Tipo de consulta não pertence ao domínio TISS." });
+  }
 
   const authorizationCode = normalizeNumberText(firstValue(row?.authorizationCode, row?.authorization_code, authorization.authorizationCode, authorization.authorization_code), 20) || null;
+  const authorizationDate = normalizeDate(firstValue(
+    authorization.authorizationDate,
+    authorization.authorization_date,
+    authorization.issueDate,
+    authorization.issue_date,
+    authorization.authorizationValidFrom,
+    authorization.validFrom,
+    authorization.valid_from
+  )) || null;
   const authorizationValidFrom = normalizeDate(firstValue(authorization.authorizationValidFrom, authorization.validFrom, authorization.valid_from)) || null;
   const authorizationValidUntil = normalizeDate(firstValue(row?.authorizationValidUntil, row?.authorization_valid_until, authorization.authorizationValidUntil, authorization.validUntil, authorization.valid_until)) || null;
-  if ((authorizationCode || authorizationValidUntil) && !authorizationValidFrom) {
+  const requestDate = normalizeDate(firstValue(
+    authorization.requestDate,
+    authorization.request_date,
+    attendance.requestDate,
+    attendance.request_date
+  )) || null;
+  if ((operatorGuideNumber || authorizationCode || authorizationValidUntil) && !authorizationDate) {
     addIssue({ issues, preGuideId, entity: "authorization", field: "authorizationValidFrom", code: "TISS_OFFICIAL_AUTHORIZATION_DATE_MISSING", message: "Data da autorização deve ser informada quando houver senha ou validade de autorização." });
   }
 
@@ -676,7 +815,9 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
     timeZone,
     appointmentId: firstValue(row?.appointmentId, row?.appointment_id, appointment.id),
     patientId: firstValue(row?.patientId, row?.patient_id, beneficiary.id),
-    guideNumber,
+    guideNumber: providerGuideNumber,
+    providerGuideNumber,
+    operatorGuideNumber,
     scheduledStart,
     scheduledEnd: firstValue(row?.scheduledEnd, row?.scheduled_end, appointment.scheduledEnd, appointment.scheduled_end),
     totalAmountCents,
@@ -686,7 +827,14 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
     providerCnes,
     beneficiaryCard,
     beneficiaryName,
+    requesterName,
+    requesterCouncilCode,
+    requesterCouncilNumber,
+    requesterCouncilUf,
+    requesterCboCode,
     professionalName,
+    professionalIdentifier,
+    professionalParticipationDegree,
     councilCode,
     councilNumber,
     councilUf,
@@ -696,11 +844,14 @@ function normalizeGuide(row: any, issues: TissOfficialIssue[], timeZone: string)
     quantity,
     unitAmountCents,
     authorizationCode,
+    authorizationDate,
     authorizationValidFrom,
     authorizationValidUntil,
+    requestDate,
     attendanceType,
     attendanceRegime,
     attendanceCharacter,
+    consultationType,
     zeroAmountPolicyApplied: totalAmountCents === 0 && zeroAmountPolicy.allowed,
     zeroAmountXmlReason: totalAmountCents === 0 && zeroAmountPolicy.allowed ? zeroAmountPolicy.reason || null : null
   };
@@ -726,6 +877,8 @@ function buildPayload(input: OfficialTissDocumentInput, guides: NormalizedGuide[
       appointmentId: guide.appointmentId,
       patientId: guide.patientId,
       guideNumber: guide.guideNumber,
+      providerGuideNumber: guide.providerGuideNumber,
+      operatorGuideNumber: guide.operatorGuideNumber,
       scheduledStart: guide.scheduledStart,
       scheduledEnd: guide.scheduledEnd,
       totalAmountCents: guide.totalAmountCents

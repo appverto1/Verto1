@@ -47,6 +47,22 @@ const IDS = {
 };
 
 const ZERO_REASON = 'Vivest calcula o valor contratado no portal após a importação';
+const ZERO_AMOUNT_TISS_GUIDE = {
+  schemaVersion: 1,
+  providerGuideNumber: '07878204072678502701',
+  operatorGuideNumber: '21348170',
+  requestDate: '2026-07-04',
+  consultationType: '1',
+  executantParticipationDegree: '11',
+  requester: {
+    name: 'MEDICO NAO ENCONTRADO',
+    councilType: 'CRM',
+    councilNumber: '222222',
+    councilState: 'SP',
+    cboCode: '999999',
+    source: 'manual_document',
+  },
+};
 
 function buildValidationInput(allowsZeroAmountXml: boolean) {
   return {
@@ -130,7 +146,7 @@ function buildValidationInput(allowsZeroAmountXml: boolean) {
       ans_registration: '315478',
       tiss_version: '4.03.00',
       default_guide_type: 'sp_sadt',
-      default_attendance_type: '02',
+      default_attendance_type: '04',
       default_attendance_regime: '01',
       default_attendance_character: '1',
       contracted_executant: 'CLINICA CONSTRUINDO SABERES LTDA',
@@ -152,10 +168,13 @@ function buildValidationInput(allowsZeroAmountXml: boolean) {
       id: IDS.professionalProfile,
       professional_id: IDS.professional,
       display_name: 'Luciano Pereira da Silva Santos',
+      document_type: 'CPF',
+      document_number: '12345678901',
       council_type: 'CRP',
       council_number: '123009',
       council_state: 'SP',
       cbo_code: '251510',
+      provider_code: '5872211',
     },
     professional: { id: IDS.professional, name: 'Luciano Pereira da Silva Santos' },
     authorization: {
@@ -163,6 +182,7 @@ function buildValidationInput(allowsZeroAmountXml: boolean) {
       status: 'ACTIVE',
       authorization_number: '21348170119',
       guide_number: '21348170',
+      issue_date: '2026-07-04',
       valid_from: '2026-07-04',
       valid_until: '2026-09-02',
       authorized_quantity: 1,
@@ -170,6 +190,7 @@ function buildValidationInput(allowsZeroAmountXml: boolean) {
       service_catalog_id: IDS.service,
       tuss_code_id: IDS.tuss,
       procedure_tuss_code: '50000470',
+      sync_metadata: { tissGuide: ZERO_AMOUNT_TISS_GUIDE },
     },
     signature: {},
   };
@@ -189,6 +210,13 @@ assert.equal(allowedPreGuide.snapshot.procedure.totalAmountCents, 0);
 assert.equal(allowedPreGuide.snapshot.procedure.zeroAmountXmlPolicyApplied, true);
 assert.equal(allowedPreGuide.snapshot.payer.requirements.allowsZeroAmountXml, true);
 assert.equal(allowedPreGuide.snapshot.payer.requirements.zeroAmountXmlReason, ZERO_REASON);
+assert.equal(allowedPreGuide.snapshot.authorization.providerGuideNumber, ZERO_AMOUNT_TISS_GUIDE.providerGuideNumber);
+assert.equal(allowedPreGuide.snapshot.authorization.operatorGuideNumber, ZERO_AMOUNT_TISS_GUIDE.operatorGuideNumber);
+assert.equal(allowedPreGuide.snapshot.authorization.requestDate, ZERO_AMOUNT_TISS_GUIDE.requestDate);
+assert.deepEqual(allowedPreGuide.snapshot.requester, ZERO_AMOUNT_TISS_GUIDE.requester);
+assert.equal(allowedPreGuide.snapshot.attendance.consultationType, ZERO_AMOUNT_TISS_GUIDE.consultationType);
+assert.equal(allowedPreGuide.snapshot.professional.operatorProviderCode, '5872211');
+assert.equal(allowedPreGuide.snapshot.professional.participationDegree, ZERO_AMOUNT_TISS_GUIDE.executantParticipationDegree);
 
 const preGuideRow = {
   id: IDS.preGuide,

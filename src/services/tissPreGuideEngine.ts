@@ -237,6 +237,11 @@ const normalizeGuideType = (value: unknown): TissPreGuideValidationResult['guide
 };
 
 const VALID_RESPONSIBLE_SIGNATURE_STATUSES = new Set(['SIGNED', 'ACTIVE', 'COMPLETED', 'CONCLUIDA', 'CONCLUIDO']);
+const VALID_TISS_CONSULTATION_TYPES = new Set(['1', '2', '3', '4']);
+const VALID_TISS_PARTICIPATION_DEGREES = new Set([
+  '00', '01', '02', '03', '04', '05', '06',
+  '07', '08', '09', '10', '11', '12', '13',
+]);
 
 const issueLabelOverrides: Record<string, string> = {
   APPOINTMENT_MISSING: 'Atendimento não encontrado',
@@ -269,6 +274,7 @@ const issueLabelOverrides: Record<string, string> = {
   PROFESSIONAL_REGISTRY_MISSING: 'Registro profissional não informado',
   PROFESSIONAL_COUNCIL_STATE_MISSING: 'UF do conselho não informada',
   CBO_MISSING: 'CBO não informado',
+  PROFESSIONAL_OPERATOR_IDENTIFIER_MISSING: 'Código individual do executante na operadora ou CPF não informado',
   PAYER_TUSS_MAPPING_MISSING: 'Procedimento sem mapeamento TUSS para este convênio',
   PAYER_TUSS_MAPPING_EXPIRED: 'Mapeamento TUSS do convênio vencido para a data do atendimento',
   PAYER_PROCEDURE_PRICE_MISSING: 'Procedimento sem valor negociado vigente para este convênio',
@@ -282,7 +288,17 @@ const issueLabelOverrides: Record<string, string> = {
   BILLING_UNIT_MISSING: 'Unidade de cobrança não informada',
   AMOUNT_MISSING: 'Valor previsto não informado',
   ZERO_AMOUNT_XML_OPERATOR_POLICY: 'Valor R$ 0,00 autorizado pela política explícita da operadora',
-  GUIDE_MISSING: 'Guia não informada',
+  GUIDE_MISSING: 'Número da guia da operadora não informado',
+  PROVIDER_GUIDE_NUMBER_MISSING: 'Número da guia no prestador não informado',
+  PROVIDER_GUIDE_NUMBER_INVALID: 'Número da guia no prestador deve ter até 20 caracteres',
+  REQUESTER_NAME_MISSING: 'Nome do profissional solicitante não informado',
+  REQUESTER_COUNCIL_MISSING: 'Conselho do profissional solicitante não informado',
+  REQUESTER_COUNCIL_NUMBER_MISSING: 'Número do conselho do profissional solicitante não informado',
+  REQUESTER_COUNCIL_STATE_MISSING: 'UF do conselho do profissional solicitante não informada',
+  REQUESTER_CBO_MISSING: 'CBO do profissional solicitante não informado',
+  TISS_CONSULTATION_TYPE_MISSING: 'Tipo de consulta TISS obrigatório para atendimento 04 — Consulta',
+  TISS_CONSULTATION_TYPE_INVALID: 'Tipo de consulta TISS inválido',
+  TISS_PARTICIPATION_DEGREE_INVALID: 'Grau de participação TISS inválido',
   AUTHORIZATION_REQUIRED: 'Convênio exige autorização, mas nenhuma autorização ativa foi encontrada para este paciente/procedimento',
   AUTHORIZATION_MISSING: 'Convênio exige autorização, mas nenhuma autorização ativa foi encontrada para este paciente/procedimento',
   AUTHORIZATION_INACTIVE: 'Autorização encontrada não está ativa',
@@ -323,6 +339,7 @@ export function tissPreGuideIssueLabel(code: unknown) {
     PROFESSIONAL_REGISTRY_MISSING: 'Registro profissional não informado',
     PROFESSIONAL_COUNCIL_STATE_MISSING: 'UF do conselho não informada',
     CBO_MISSING: 'CBO não informado',
+    PROFESSIONAL_OPERATOR_IDENTIFIER_MISSING: 'Código individual do executante na operadora ou CPF não informado',
     PAYER_TUSS_MAPPING_MISSING: 'Procedimento sem mapeamento TUSS para este convênio',
     PAYER_TUSS_MAPPING_EXPIRED: 'Mapeamento TUSS vencido',
     PAYER_PROCEDURE_PRICE_MISSING: 'Valor negociado ausente',
@@ -336,7 +353,17 @@ export function tissPreGuideIssueLabel(code: unknown) {
     BILLING_UNIT_MISSING: 'Unidade de cobrança não informada',
     AMOUNT_MISSING: 'Valor previsto não informado',
     ZERO_AMOUNT_XML_OPERATOR_POLICY: 'Valor R$ 0,00 autorizado pela política explícita da operadora',
-    GUIDE_MISSING: 'Guia não informada',
+    GUIDE_MISSING: 'Número da guia da operadora não informado',
+    PROVIDER_GUIDE_NUMBER_MISSING: 'Número da guia no prestador não informado',
+    PROVIDER_GUIDE_NUMBER_INVALID: 'Número da guia no prestador inválido',
+    REQUESTER_NAME_MISSING: 'Profissional solicitante não informado',
+    REQUESTER_COUNCIL_MISSING: 'Conselho do solicitante não informado',
+    REQUESTER_COUNCIL_NUMBER_MISSING: 'Número do conselho do solicitante não informado',
+    REQUESTER_COUNCIL_STATE_MISSING: 'UF do conselho do solicitante não informada',
+    REQUESTER_CBO_MISSING: 'CBO do solicitante não informado',
+    TISS_CONSULTATION_TYPE_MISSING: 'Tipo de consulta TISS não informado',
+    TISS_CONSULTATION_TYPE_INVALID: 'Tipo de consulta TISS inválido',
+    TISS_PARTICIPATION_DEGREE_INVALID: 'Grau de participação TISS inválido',
     AUTHORIZATION_REQUIRED: 'Autorização não informada',
     AUTHORIZATION_MISSING: 'Autorização não informada',
     AUTHORIZATION_EXPIRED: 'Autorização vencida',
@@ -520,6 +547,9 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       professional.crp,
   );
   const councilType = text(professionalProfile.council_type || professional.council || professional.council_type);
+  const professionalDocumentType = text(professionalProfile.document_type).toUpperCase();
+  const professionalDocumentNumber = text(professionalProfile.document_number).replace(/\D/g, '');
+  const professionalOperatorProviderCode = text(professionalProfile.provider_code);
   if (requiresRegistry && (!councilNumber || !councilType)) {
     addIssue(errors, 'PROFESSIONAL_REGISTRY_MISSING', 'professional_registry', tissPreGuideIssueLabel('PROFESSIONAL_REGISTRY_MISSING'), 'professional');
   }
@@ -528,6 +558,19 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   }
   if (payerProfile.requires_cbo && !text(professionalProfile.cbo_code)) {
     addIssue(errors, 'CBO_MISSING', 'cbo_code', tissPreGuideIssueLabel('CBO_MISSING'), 'professional');
+  }
+  if (
+    requiresRegistry &&
+    !professionalOperatorProviderCode &&
+    !(professionalDocumentType === 'CPF' && professionalDocumentNumber.length === 11)
+  ) {
+    addIssue(
+      errors,
+      'PROFESSIONAL_OPERATOR_IDENTIFIER_MISSING',
+      'provider_code',
+      tissPreGuideIssueLabel('PROFESSIONAL_OPERATOR_IDENTIFIER_MISSING'),
+      'professional',
+    );
   }
 
   const procedureCode = text(service.internal_code || billingItem.internal_procedure_code);
@@ -672,7 +715,40 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
   if (payerProfile.requires_beneficiary_card_validity && cardValidUntil && scheduledStart && isBeforeDate(cardValidUntil, scheduledStart)) {
     addIssue(errors, 'BENEFICIARY_CARD_EXPIRED', 'beneficiary_card_valid_until', tissPreGuideIssueLabel('BENEFICIARY_CARD_EXPIRED'), 'beneficiary');
   }
-  const guideNumber = text(authorization.guide_number || billingContext.guide_number || billingItem.guide_number);
+  const authorizationSyncMetadata = objectValue(authorization.sync_metadata);
+  const tissGuideMetadata = objectValue(
+    authorizationSyncMetadata.tissGuide || authorizationSyncMetadata.tiss_guide,
+  );
+  const requesterMetadata = objectValue(tissGuideMetadata.requester);
+  const guideNumber = text(
+    tissGuideMetadata.operatorGuideNumber ||
+      tissGuideMetadata.operator_guide_number ||
+      authorization.guide_number ||
+      billingContext.guide_number ||
+      billingItem.guide_number,
+  );
+  const providerGuideNumber = text(
+    tissGuideMetadata.providerGuideNumber || tissGuideMetadata.provider_guide_number,
+  );
+  const requestDate = dateOnly(tissGuideMetadata.requestDate || tissGuideMetadata.request_date);
+  const consultationType = text(
+    tissGuideMetadata.consultationType || tissGuideMetadata.consultation_type,
+  );
+  const rawExecutantParticipationDegree = text(
+    tissGuideMetadata.executantParticipationDegree ||
+      tissGuideMetadata.executant_participation_degree,
+  );
+  const executantParticipationDegree = rawExecutantParticipationDegree
+    ? rawExecutantParticipationDegree.padStart(2, '0')
+    : '';
+  const requester = {
+    name: text(requesterMetadata.name),
+    councilType: text(requesterMetadata.councilType || requesterMetadata.council_type),
+    councilNumber: text(requesterMetadata.councilNumber || requesterMetadata.council_number),
+    councilState: text(requesterMetadata.councilState || requesterMetadata.council_state).toUpperCase(),
+    cboCode: text(requesterMetadata.cboCode || requesterMetadata.cbo_code).replace(/\D/g, ''),
+    source: text(requesterMetadata.source) || 'manual_document',
+  };
   const authorizationCode = text(
     authorization.authorization_number ||
       authorization.authorization_code ||
@@ -709,6 +785,28 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       mapping.requires_authorization,
   );
   if (requiresGuide && !guideNumber) addIssue(errors, 'GUIDE_MISSING', 'guide_number', tissPreGuideIssueLabel('GUIDE_MISSING'), 'authorization');
+  if (!providerGuideNumber) {
+    addIssue(errors, 'PROVIDER_GUIDE_NUMBER_MISSING', 'provider_guide_number', tissPreGuideIssueLabel('PROVIDER_GUIDE_NUMBER_MISSING'), 'authorization');
+  } else if (providerGuideNumber.length > 20) {
+    addIssue(errors, 'PROVIDER_GUIDE_NUMBER_INVALID', 'provider_guide_number', tissPreGuideIssueLabel('PROVIDER_GUIDE_NUMBER_INVALID'), 'authorization');
+  }
+  if (!requester.name) addIssue(errors, 'REQUESTER_NAME_MISSING', 'requester_name', tissPreGuideIssueLabel('REQUESTER_NAME_MISSING'), 'authorization');
+  if (!requester.councilType) addIssue(errors, 'REQUESTER_COUNCIL_MISSING', 'requester_council_type', tissPreGuideIssueLabel('REQUESTER_COUNCIL_MISSING'), 'authorization');
+  if (!requester.councilNumber) addIssue(errors, 'REQUESTER_COUNCIL_NUMBER_MISSING', 'requester_council_number', tissPreGuideIssueLabel('REQUESTER_COUNCIL_NUMBER_MISSING'), 'authorization');
+  if (!requester.councilState) addIssue(errors, 'REQUESTER_COUNCIL_STATE_MISSING', 'requester_council_state', tissPreGuideIssueLabel('REQUESTER_COUNCIL_STATE_MISSING'), 'authorization');
+  if (!requester.cboCode) addIssue(errors, 'REQUESTER_CBO_MISSING', 'requester_cbo_code', tissPreGuideIssueLabel('REQUESTER_CBO_MISSING'), 'authorization');
+  if (normalizeAttendanceType040300(payerProfile.default_attendance_type) === '04' && !consultationType) {
+    addIssue(errors, 'TISS_CONSULTATION_TYPE_MISSING', 'consultation_type', tissPreGuideIssueLabel('TISS_CONSULTATION_TYPE_MISSING'), 'authorization');
+  }
+  if (consultationType && !VALID_TISS_CONSULTATION_TYPES.has(consultationType)) {
+    addIssue(errors, 'TISS_CONSULTATION_TYPE_INVALID', 'consultation_type', tissPreGuideIssueLabel('TISS_CONSULTATION_TYPE_INVALID'), 'authorization');
+  }
+  if (
+    executantParticipationDegree &&
+    !VALID_TISS_PARTICIPATION_DEGREES.has(executantParticipationDegree)
+  ) {
+    addIssue(errors, 'TISS_PARTICIPATION_DEGREE_INVALID', 'executant_participation_degree', tissPreGuideIssueLabel('TISS_PARTICIPATION_DEGREE_INVALID'), 'professional');
+  }
   if (requiresAuthorization && (!authorizationId || !authorizationCode)) {
     addIssue(errors, 'AUTHORIZATION_REQUIRED', 'authorization_code', tissPreGuideIssueLabel('AUTHORIZATION_REQUIRED'), 'authorization');
   }
@@ -833,10 +931,25 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
         id: professionalId || null,
         profileId: text(professionalProfile.id) || null,
         name: executorName && !isPlaceholderExecutorName(executorName) ? executorName : null,
+        operatorProviderCode: professionalOperatorProviderCode || null,
+        documentType: professionalDocumentType || null,
+        documentNumber: professionalDocumentNumber || null,
         councilType: councilType || null,
         councilNumber: councilNumber || null,
         councilState: text(professionalProfile.council_state || professional.council_state) || null,
         cboCode: text(professionalProfile.cbo_code) || null,
+        participationDegree: executantParticipationDegree || null,
+      },
+      requester: {
+        name: requester.name || null,
+        councilType: requester.councilType || null,
+        councilNumber: requester.councilNumber || null,
+        councilState: requester.councilState || null,
+        cboCode: requester.cboCode || null,
+        source: requester.source || 'manual_document',
+      },
+      attendance: {
+        consultationType: consultationType || null,
       },
       procedure: {
         serviceCatalogId: text(service.id || billingItem.service_catalog_id) || null,
@@ -886,6 +999,10 @@ export function validateTissPreGuide(input: TissPreGuideValidationInput): TissPr
       },
       authorization: {
         guideNumber: guideNumber || null,
+        operatorGuideNumber: guideNumber || null,
+        providerGuideNumber: providerGuideNumber || null,
+        authorizationDate: dateOnly(authorization.issue_date || authorization.issued_at || authorizationValidFrom) || null,
+        requestDate: requestDate || null,
         authorizationCode: authorizationCode || null,
         authorizationId: text(authorization.id) || null,
         authorizationStatus: authorizationStatus || null,

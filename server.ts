@@ -5164,6 +5164,36 @@ function parseStoredJsonObject(input: any): Record<string, any> {
   }
 }
 
+function readPatientAuthorizationTissGuide(row: any) {
+  const syncMetadata = parseStoredJsonObject(row?.sync_metadata || row?.syncMetadata);
+  const guide = parseStoredJsonObject(syncMetadata.tissGuide || syncMetadata.tiss_guide);
+  const requester = parseStoredJsonObject(guide.requester);
+  const operatorGuideNumber = sanitizeString(
+    guide.operatorGuideNumber || guide.operator_guide_number || row?.guide_number || row?.guideNumber,
+    120
+  ) || null;
+
+  return {
+    schemaVersion: Number(guide.schemaVersion || guide.schema_version) === 1 ? 1 : null,
+    providerGuideNumber: sanitizeString(guide.providerGuideNumber || guide.provider_guide_number, 120) || null,
+    operatorGuideNumber,
+    requestDate: sanitizeIsoDateOnly(guide.requestDate || guide.request_date),
+    consultationType: sanitizeString(guide.consultationType || guide.consultation_type, 4) || null,
+    executantParticipationDegree: sanitizeString(
+      guide.executantParticipationDegree || guide.executant_participation_degree,
+      4
+    ) || null,
+    requester: {
+      name: sanitizeString(requester.name, 180) || null,
+      councilType: sanitizeString(requester.councilType || requester.council_type, 40) || null,
+      councilNumber: sanitizeString(requester.councilNumber || requester.council_number, 80) || null,
+      councilState: sanitizeString(requester.councilState || requester.council_state, 8) || null,
+      cboCode: sanitizeString(requester.cboCode || requester.cbo_code, 40) || null,
+      source: sanitizeString(requester.source, 40) || null
+    }
+  };
+}
+
 function sanitizeClinicalPayload(input: any, depth = 0): any {
   if (depth > 8) return null;
   if (input === null || input === undefined) return null;
@@ -12195,6 +12225,7 @@ async function hydratePatientPayerAuthorizationsForAppointmentTissBilling(organi
     const mapping = mappingsById.get(sanitizeString(row?.payer_tuss_mapping_id, 120));
     const authorizedQuantity = Number(row?.authorized_quantity ?? 0) || 0;
     const usedQuantity = Number(row?.used_quantity ?? 0) || 0;
+    const tissGuide = readPatientAuthorizationTissGuide(row);
     return {
       id: sanitizeString(row?.id, 120),
       patientId: sanitizeString(row?.patient_id, 120),
@@ -12203,6 +12234,12 @@ async function hydratePatientPayerAuthorizationsForAppointmentTissBilling(organi
       authorizationNumber: sanitizeString(row?.authorization_number || row?.authorization_code, 120) || null,
       authorizationCode: sanitizeString(row?.authorization_code || row?.authorization_number, 120) || null,
       guideNumber: sanitizeString(row?.guide_number, 120) || null,
+      providerGuideNumber: tissGuide.providerGuideNumber,
+      operatorGuideNumber: tissGuide.operatorGuideNumber,
+      requestDate: tissGuide.requestDate,
+      consultationType: tissGuide.consultationType,
+      executantParticipationDegree: tissGuide.executantParticipationDegree,
+      requester: tissGuide.requester,
       validFrom: row?.valid_from || null,
       validUntil: row?.valid_until || null,
       authorizedQuantity,
@@ -49779,6 +49816,7 @@ async function startServer() {
       : authorizedQuantity > 0
         ? Math.max(0, authorizedQuantity - usedQuantity - fallbackReservedQuantity)
         : null;
+    const tissGuide = readPatientAuthorizationTissGuide(row);
     return {
       id: sanitizeString(row?.id, 120),
       patientId: sanitizeString(row?.patient_id, 120),
@@ -49787,6 +49825,12 @@ async function startServer() {
       authorizationNumber: sanitizeString(row?.authorization_number || row?.authorization_code, 120) || null,
       authorizationCode: sanitizeString(row?.authorization_code || row?.authorization_number, 120) || null,
       guideNumber: sanitizeString(row?.guide_number, 120) || null,
+      providerGuideNumber: tissGuide.providerGuideNumber,
+      operatorGuideNumber: tissGuide.operatorGuideNumber,
+      requestDate: tissGuide.requestDate,
+      consultationType: tissGuide.consultationType,
+      executantParticipationDegree: tissGuide.executantParticipationDegree,
+      requester: tissGuide.requester,
       issueDate: row?.issue_date || row?.issued_at || null,
       validFrom: row?.valid_from || null,
       validUntil: row?.valid_until || null,
@@ -51129,6 +51173,17 @@ async function startServer() {
     professionalBillingProfileId: sanitizeString(row?.professional_billing_profile_id, 120) || null,
     guideType: sanitizeString(row?.guide_type, 40) || 'sp_sadt',
     guideNumber: sanitizeString(row?.guide_number, 120) || null,
+    providerGuideNumber: sanitizeString(
+      row?.snapshot_data?.authorization?.providerGuideNumber ||
+        row?.snapshot_data?.authorization?.provider_guide_number,
+      120
+    ) || null,
+    operatorGuideNumber: sanitizeString(
+      row?.snapshot_data?.authorization?.operatorGuideNumber ||
+        row?.snapshot_data?.authorization?.operator_guide_number ||
+        row?.guide_number,
+      120
+    ) || null,
     authorizationCode: sanitizeString(row?.authorization_code, 120) || null,
     authorizationValidUntil: row?.authorization_valid_until || null,
     beneficiaryCardNumber: sanitizeString(row?.beneficiary_card_number, 120) || null,
@@ -51884,6 +51939,10 @@ async function startServer() {
   }) => {
     const preGuide = serializeTissPreGuide(params.preGuideRow || {});
     const snapshot = preGuide?.snapshot || {};
+    const preGuideVersion = sanitizeString(params.preGuideRow?.generated_from_version, 80);
+    const legacyProviderGuideNumber = preGuideVersion !== 'tiss-pre-guide-v2'
+      ? sanitizeString(preGuide.guideNumber, 160)
+      : '';
     const sentAmount = normalizeNonNegativeCents(
       preGuide.totalAmountCents || snapshot?.procedure?.totalAmountCents || params.preGuideRow?.total_amount_cents
     );
@@ -51902,8 +51961,20 @@ async function startServer() {
       payer_id: isUuid(sanitizeString(preGuide.payerId || params.officialDocument?.payer_id, 120))
         ? sanitizeString(preGuide.payerId || params.officialDocument?.payer_id, 120)
         : null,
-      provider_guide_number: sanitizeString(preGuide.guideNumber || snapshot?.authorization?.guideNumber, 160) || null,
-      operator_guide_number: sanitizeString(snapshot?.authorization?.operatorGuideNumber || preGuide.guideNumber, 160) || null,
+      provider_guide_number: sanitizeString(
+        snapshot?.authorization?.providerGuideNumber ||
+          snapshot?.authorization?.provider_guide_number ||
+          preGuide.providerGuideNumber ||
+          legacyProviderGuideNumber,
+        160
+      ) || null,
+      operator_guide_number: sanitizeString(
+        snapshot?.authorization?.operatorGuideNumber ||
+          snapshot?.authorization?.operator_guide_number ||
+          preGuide.operatorGuideNumber ||
+          preGuide.guideNumber,
+        160
+      ) || null,
       authorization_code: sanitizeString(preGuide.authorizationCode || snapshot?.authorization?.authorizationCode, 160) || null,
       patient_name: sanitizeString(preGuide.patientName || snapshot?.beneficiary?.name, 180) || null,
       scheduled_start: preGuide.scheduledStart || params.preGuideRow?.scheduled_start || null,
@@ -52752,7 +52823,7 @@ async function startServer() {
       revenue_cycle_state_reason: revenueCycle.reason,
       anti_glosa_checklist: antiGlosaChecklist,
       anti_glosa_risk_codes: antiGlosaRiskCodes,
-      generated_from_version: 'tiss-pre-guide-v1',
+      generated_from_version: 'tiss-pre-guide-v2',
       stale_reason: null,
       updated_by: isUuid(userId) ? userId : null,
       updated_at: now,
@@ -53784,7 +53855,79 @@ async function startServer() {
           req.body?.authorization_code,
         120
       ) || null;
-      const guideNumber = sanitizeString(req.body?.guideNumber ?? req.body?.guide_number, 120) || null;
+      const existingTissGuide = readPatientAuthorizationTissGuide(existingAuthorization);
+      const guideNumber = sanitizeString(
+        req.body?.guideNumber ?? req.body?.guide_number ?? existingTissGuide.operatorGuideNumber,
+        120
+      ) || null;
+      const providerGuideNumber = sanitizeString(
+        req.body?.providerGuideNumber ?? req.body?.provider_guide_number ?? existingTissGuide.providerGuideNumber,
+        120
+      ) || null;
+      const requestDate = sanitizeIsoDateOnly(
+        req.body?.requestDate ?? req.body?.request_date ?? existingTissGuide.requestDate
+      );
+      const consultationType = sanitizeString(
+        req.body?.consultationType ?? req.body?.consultation_type ?? existingTissGuide.consultationType,
+        4
+      ).replace(/\D/g, '');
+      const rawParticipationDegree = sanitizeString(
+        req.body?.executantParticipationDegree ??
+          req.body?.executant_participation_degree ??
+          existingTissGuide.executantParticipationDegree,
+        4
+      ).replace(/\D/g, '');
+      const executantParticipationDegree = rawParticipationDegree
+        ? rawParticipationDegree.padStart(2, '0')
+        : '';
+      const requesterName = sanitizeString(
+        req.body?.requesterName ?? req.body?.requester_name ?? existingTissGuide.requester.name,
+        180
+      );
+      const requesterCouncilType = sanitizeString(
+        req.body?.requesterCouncilType ?? req.body?.requester_council_type ?? existingTissGuide.requester.councilType,
+        40
+      ).toUpperCase();
+      const requesterCouncilNumber = sanitizeString(
+        req.body?.requesterCouncilNumber ?? req.body?.requester_council_number ?? existingTissGuide.requester.councilNumber,
+        80
+      );
+      const requesterCouncilState = sanitizeString(
+        req.body?.requesterCouncilState ?? req.body?.requester_council_state ?? existingTissGuide.requester.councilState,
+        8
+      ).toUpperCase();
+      const requesterCboCode = sanitizeString(
+        req.body?.requesterCboCode ?? req.body?.requester_cbo_code ?? existingTissGuide.requester.cboCode,
+        40
+      ).replace(/\D/g, '');
+      if (providerGuideNumber.length > 20 || (guideNumber && guideNumber.length > 20)) {
+        return res.status(422).json({
+          success: false,
+          code: 'AUTHORIZATION_GUIDE_NUMBER_INVALID',
+          error: 'Os números da guia no prestador e da guia da operadora devem ter no máximo 20 caracteres.'
+        });
+      }
+      if (consultationType && !['1', '2', '3', '4'].includes(consultationType)) {
+        return res.status(422).json({
+          success: false,
+          code: 'AUTHORIZATION_TISS_CONSULTATION_TYPE_INVALID',
+          error: 'Selecione um tipo de consulta válido do padrão TISS 04.03.00.'
+        });
+      }
+      if (executantParticipationDegree && !['00', '01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12', '13'].includes(executantParticipationDegree)) {
+        return res.status(422).json({
+          success: false,
+          code: 'AUTHORIZATION_TISS_PARTICIPATION_DEGREE_INVALID',
+          error: 'Selecione um grau de participação válido do padrão TISS 04.03.00.'
+        });
+      }
+      if (requesterCouncilState && !/^[A-Z]{2}$/.test(requesterCouncilState)) {
+        return res.status(422).json({
+          success: false,
+          code: 'AUTHORIZATION_REQUESTER_COUNCIL_STATE_INVALID',
+          error: 'Informe a UF do conselho do solicitante com duas letras.'
+        });
+      }
       const issueDate = sanitizeIsoDateOnly(req.body?.issueDate ?? req.body?.issue_date ?? req.body?.issuedAt ?? req.body?.issued_at);
       const validFrom = sanitizeIsoDateOnly(req.body?.validFrom ?? req.body?.valid_from);
       const validUntil = sanitizeIsoDateOnly(req.body?.validUntil ?? req.body?.valid_until);
@@ -53920,6 +54063,7 @@ async function startServer() {
           error: 'Nenhum valor negociado ativo foi encontrado para este procedimento e convênio. Cadastre o valor antes de criar a autorização TISS.'
         });
       }
+      const existingSyncMetadata = parseStoredJsonObject(existingAuthorization?.sync_metadata);
       const payload = cleanObject({
         id: isUuid(authorizationId) ? authorizationId : undefined,
         organization_id: organizationId,
@@ -53945,6 +54089,7 @@ async function startServer() {
         synchronized_at: now,
         synchronized_by: isUuid(actorId) ? actorId : null,
         sync_metadata: cleanObject({
+          ...existingSyncMetadata,
           expectedTussCode: resolvedOfficialProcedureTussCode,
           officialTussCode: resolvedOfficialProcedureTussCode,
           authorizedCode: resolvedProcedureTussCode,
@@ -53952,7 +54097,23 @@ async function startServer() {
           resolvedTussCode: resolvedProcedureTussCode,
           payerTussMappingId: sanitizeString(resolvedMapping?.id, 120) || null,
           referenceDate: sanitizeString(referenceDate, 40) || null,
-          manualOverride: manualTussOverride
+          manualOverride: manualTussOverride,
+          tissGuide: cleanObject({
+            schemaVersion: 1,
+            providerGuideNumber,
+            operatorGuideNumber: guideNumber,
+            requestDate,
+            consultationType: consultationType || null,
+            executantParticipationDegree: executantParticipationDegree || null,
+            requester: cleanObject({
+              name: requesterName || null,
+              councilType: requesterCouncilType || null,
+              councilNumber: requesterCouncilNumber || null,
+              councilState: requesterCouncilState || null,
+              cboCode: requesterCboCode || null,
+              source: 'manual_document'
+            })
+          })
         }),
         procedure_tuss_code: resolvedProcedureTussCode,
         procedure_code: resolvedProcedureCode,
@@ -58864,15 +59025,8 @@ async function startServer() {
           authorized_unit: sanitizeString(mapping.billing_unit || service.billing_unit, 40) || null,
           synchronized_at: now,
           synchronized_by: isUuid(actorId) ? actorId : null,
-          sync_metadata: cleanObject({
-            source: 'mapping_sync',
-            mappingId: mapping.id,
-            previousTussCodes: previousCodes,
-            newTussCode: expectedTussCode,
-            officialTussCode,
-            authorizedCode: expectedTussCode,
-            billingCode: expectedBillingCode
-          }),
+          // Preserve the authorization's versioned guide/requester metadata.
+          // The canonical mapping fields above are sufficient for synchronization audit.
           updated_by: isUuid(actorId) ? actorId : null,
           updated_at: now
         })

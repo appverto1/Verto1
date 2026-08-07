@@ -37,7 +37,10 @@ export type OfficialTissCanonicalGuide = {
   preGuideId: string;
   appointmentId: string;
   patientId: string;
+  /** Compatibilidade de leitura: nas novas gerações corresponde ao número da guia no prestador. */
   guideNumber: string;
+  providerGuideNumber: string;
+  operatorGuideNumber?: string | null;
   scheduledStart: string;
   scheduledEnd: string;
   totalAmountCents: number;

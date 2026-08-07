@@ -93,6 +93,16 @@ const ISSUE_TO_ITEM: Record<string, string> = {
   AUTHORIZATION_EXPIRED: "authorization_valid",
   AUTHORIZATION_EXHAUSTED: "authorization_valid",
   GUIDE_MISSING: "guide_number",
+  PROVIDER_GUIDE_NUMBER_MISSING: "guide_number",
+  PROVIDER_GUIDE_NUMBER_INVALID: "guide_number",
+  REQUESTER_NAME_MISSING: "professional_registry",
+  REQUESTER_COUNCIL_MISSING: "professional_registry",
+  REQUESTER_COUNCIL_NUMBER_MISSING: "professional_registry",
+  REQUESTER_COUNCIL_STATE_MISSING: "professional_registry",
+  REQUESTER_CBO_MISSING: "professional_cbo",
+  TISS_CONSULTATION_TYPE_MISSING: "payer_configured",
+  TISS_CONSULTATION_TYPE_INVALID: "payer_configured",
+  TISS_PARTICIPATION_DEGREE_INVALID: "professional_registry",
   AUTHORIZED_PROCEDURE_NOT_INFORMED: "authorization_procedure_match",
   AUTHORIZATION_PROCEDURE_MISMATCH: "authorization_procedure_match",
   RESPONSIBLE_SIGNATURE_REQUIRED: "responsible_signature",
@@ -111,6 +121,16 @@ const ISSUE_CODE_MAP: Record<string, string> = {
   AUTHORIZATION_EXPIRED: "AUTHORIZATION_EXPIRED",
   AUTHORIZATION_EXHAUSTED: "AUTHORIZATION_INSUFFICIENT_BALANCE",
   GUIDE_MISSING: "MISSING_OPERATOR_GUIDE",
+  PROVIDER_GUIDE_NUMBER_MISSING: "MISSING_PROVIDER_GUIDE",
+  PROVIDER_GUIDE_NUMBER_INVALID: "INVALID_PROVIDER_GUIDE",
+  REQUESTER_NAME_MISSING: "MISSING_REQUESTER",
+  REQUESTER_COUNCIL_MISSING: "MISSING_REQUESTER_COUNCIL",
+  REQUESTER_COUNCIL_NUMBER_MISSING: "MISSING_REQUESTER_COUNCIL_NUMBER",
+  REQUESTER_COUNCIL_STATE_MISSING: "MISSING_REQUESTER_COUNCIL_UF",
+  REQUESTER_CBO_MISSING: "MISSING_REQUESTER_CBO",
+  TISS_CONSULTATION_TYPE_MISSING: "MISSING_CONSULTATION_TYPE",
+  TISS_CONSULTATION_TYPE_INVALID: "INVALID_CONSULTATION_TYPE",
+  TISS_PARTICIPATION_DEGREE_INVALID: "INVALID_PARTICIPATION_DEGREE",
   AUTHORIZED_PROCEDURE_NOT_INFORMED: "MISSING_TUSS_MAPPING",
   AUTHORIZATION_PROCEDURE_MISMATCH: "MISSING_TUSS_MAPPING",
   PAYER_TUSS_MAPPING_MISSING: "MISSING_TUSS_MAPPING",
@@ -693,18 +713,26 @@ const batchPreGuideSnapshot = (preGuide: Record<string, any>) => (
 
 const batchProviderGuideNumber = (preGuide: Record<string, any>) => {
   const snapshot = batchPreGuideSnapshot(preGuide);
-  return firstTextValue(
+  const explicitProviderGuideNumber = firstTextValue(
     preGuide.providerGuideNumber,
     preGuide.provider_guide_number,
-    preGuide.guideNumber,
-    preGuide.guide_number,
     snapshot.authorization?.providerGuideNumber,
     snapshot.authorization?.provider_guide_number,
-    snapshot.authorization?.guideNumber,
-    snapshot.authorization?.guide_number,
     snapshot.guide?.providerGuideNumber,
     snapshot.guide?.provider_guide_number,
     snapshot.guide?.number,
+  );
+  if (explicitProviderGuideNumber) return explicitProviderGuideNumber;
+  const generatedFromVersion = firstTextValue(
+    preGuide.generatedFromVersion,
+    preGuide.generated_from_version,
+  );
+  if (generatedFromVersion === "tiss-pre-guide-v2") return "";
+  return firstTextValue(
+    preGuide.guideNumber,
+    preGuide.guide_number,
+    snapshot.authorization?.guideNumber,
+    snapshot.authorization?.guide_number,
   );
 };
 
