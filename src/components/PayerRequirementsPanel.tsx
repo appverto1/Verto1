@@ -1012,6 +1012,7 @@ export function getPayerSetupReadiness(input: {
   payerTissMessage?: string;
   preGuideTestStatus?: "not_tested" | "ready" | "warning" | "blocked";
   preGuideTestIssues?: string[];
+  selectedAppointmentPreGuideErrorCodes?: string[];
 }): PayerSetupReadiness {
   const payer = input.payer || null;
   const tiss = input.tissProfile || {};
@@ -1032,6 +1033,19 @@ export function getPayerSetupReadiness(input: {
   const antiGlosaProfileNeedsReview = Boolean(input.antiGlosaProfileNeedsReview);
   const preGuideTestStatus = input.preGuideTestStatus || "not_tested";
   const preGuideTestIssues = input.preGuideTestIssues || [];
+  const selectedAppointmentPreGuideErrorCodes = new Set(
+    (input.selectedAppointmentPreGuideErrorCodes || []).map((code) => String(code || "").trim().toUpperCase()).filter(Boolean),
+  );
+  const selectedAppointmentMappingIssue = selectedAppointmentPreGuideErrorCodes.has("PAYER_TUSS_MAPPING_MISSING")
+    ? "missing"
+    : selectedAppointmentPreGuideErrorCodes.has("PAYER_TUSS_MAPPING_EXPIRED")
+      ? "expired"
+      : "";
+  const selectedAppointmentMappingMessage = selectedAppointmentMappingIssue === "expired"
+    ? "A sessão selecionada usa um De/Para fora da vigência para a data do atendimento."
+    : selectedAppointmentMappingIssue === "missing"
+      ? "A sessão selecionada não possui De/Para TUSS válido para este procedimento e data."
+      : "";
 
   const steps: PayerSetupStep[] = [
     makeSetupStep({
@@ -1081,23 +1095,33 @@ export function getPayerSetupReadiness(input: {
       key: "tuss",
       title: "TUSS e De/Para",
       shortDescription: "Vincule cada procedimento ao código TUSS aceito pela operadora.",
-      status: hasLegacyTussCode ? "blocked" : allActiveMappingsReady ? "ready" : "incomplete",
+      status: hasLegacyTussCode || selectedAppointmentMappingIssue ? "blocked" : allActiveMappingsReady ? "ready" : "incomplete",
       requiredActions: hasLegacyTussCode
         ? ["Troque códigos legados/inadequados por TUSS oficial ativo."]
-        : allActiveMappingsReady
-          ? [`${readyMappingCount} De/Para ativo(s) com vigência inicial persistida.`]
-          : activeMappingCount > 0
-            ? [`${activeMappingCount} De/Para ativo(s), mas a vigência inicial obrigatória ainda não foi salva.`]
-            : ["Crie De/Para entre procedimento interno e código TUSS oficial."],
-      nextActionLabel: hasLegacyTussCode ? "Corrigir TUSS legado" : allActiveMappingsReady ? "Avançar para valores" : "Completar De/Para",
-      canContinue: allActiveMappingsReady && !hasLegacyTussCode,
+        : selectedAppointmentMappingIssue
+          ? [selectedAppointmentMappingMessage]
+          : allActiveMappingsReady
+            ? [`${readyMappingCount} De/Para ativo(s) com vigência inicial persistida.`]
+            : activeMappingCount > 0
+              ? [`${activeMappingCount} De/Para ativo(s), mas a vigência inicial obrigatória ainda não foi salva.`]
+              : ["Crie De/Para entre procedimento interno e código TUSS oficial."],
+      nextActionLabel: hasLegacyTussCode
+        ? "Corrigir TUSS legado"
+        : selectedAppointmentMappingIssue
+          ? "Corrigir De/Para da sessão"
+          : allActiveMappingsReady
+            ? "Avançar para valores"
+            : "Completar De/Para",
+      canContinue: allActiveMappingsReady && !hasLegacyTussCode && !selectedAppointmentMappingIssue,
       blockingReasons: hasLegacyTussCode
         ? ["Código TUSS legado/inadequado para XML."]
-        : allActiveMappingsReady
-          ? []
-          : activeMappingCount > 0
-            ? ["Informe e salve a vigência inicial obrigatória do De/Para."]
-            : ["De/Para TUSS ativo é obrigatório para Pré-guia/XML."],
+        : selectedAppointmentMappingIssue
+          ? [selectedAppointmentMappingMessage]
+          : allActiveMappingsReady
+            ? []
+            : activeMappingCount > 0
+              ? ["Informe e salve a vigência inicial obrigatória do De/Para."]
+              : ["De/Para TUSS ativo é obrigatório para Pré-guia/XML."],
     }),
     makeSetupStep({
       key: "prices",
@@ -1472,6 +1496,12 @@ export function PayerRequirementsPanel({
     () => setupAppointments.find((appointment) => String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "") === setupAppointmentId) || null,
     [setupAppointmentId, setupAppointments],
   );
+  const selectedSetupAppointmentPreGuideErrorCodes = useMemo(
+    () => Array.isArray(selectedSetupAppointment?.preGuide?.validationErrorCodes)
+      ? selectedSetupAppointment.preGuide.validationErrorCodes.map((code: unknown) => String(code || "").trim()).filter(Boolean)
+      : [],
+    [selectedSetupAppointment],
+  );
   const payerSetupReadiness = useMemo(
     () => getPayerSetupReadiness({
       payer: selectedPayer,
@@ -1489,6 +1519,7 @@ export function PayerRequirementsPanel({
       payerTissMessage,
       preGuideTestStatus: setupTestResult.status,
       preGuideTestIssues: setupTestResult.issues,
+      selectedAppointmentPreGuideErrorCodes: selectedSetupAppointmentPreGuideErrorCodes,
     }),
     [
       activeBillingConfigurations.length,
@@ -1504,6 +1535,7 @@ export function PayerRequirementsPanel({
       selectedPayerOfficialCodeIssues,
       selectedPayerPriceCount,
       selectedPayerTissMissing,
+      selectedSetupAppointmentPreGuideErrorCodes,
       setupTestResult.issues,
       setupTestResult.status,
     ],

@@ -48372,6 +48372,63 @@ async function startServer() {
     }).slice(0, limit);
   };
 
+  const fetchClosureAppointmentRowsByIds = async (params: {
+    clinicId: string;
+    user: any;
+    appointmentIds: string[];
+    patientId?: string | null;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const appointmentIds = Array.from(new Set(
+      (params.appointmentIds || []).map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id))
+    )).slice(0, 500);
+    if (!isUuid(clinicId) || appointmentIds.length === 0) return [];
+
+    const omittedColumns = new Set<string>();
+    const therapistPatientIds = sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist'
+      ? await getClosureTherapistPatientIds(params.user, clinicId)
+      : [];
+    const therapistUserId = sanitizeString(params.user?.id, 120);
+
+    for (let attempt = 0; attempt <= CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.size + 2; attempt += 1) {
+      let query = supabase
+        .from('appointments')
+        .select(buildClosureAppointmentSelect(omittedColumns))
+        .in('id', appointmentIds)
+        .limit(appointmentIds.length);
+      if (!omittedColumns.has('status')) query = query.neq('status', 'deleted');
+      if (isUuid(patientId)) query = query.eq('patient_id', patientId);
+      if (omittedColumns.has('organization_id') && omittedColumns.has('clinic_id')) return [];
+      if (!omittedColumns.has('organization_id') && !omittedColumns.has('clinic_id')) {
+        query = query.or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`);
+      } else if (!omittedColumns.has('organization_id')) {
+        query = query.eq('organization_id', clinicId);
+      } else if (!omittedColumns.has('clinic_id')) {
+        query = query.eq('clinic_id', clinicId);
+      }
+      if (sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist') {
+        const orParts = [];
+        if (!omittedColumns.has('therapist_id') && isUuid(therapistUserId)) orParts.push(`therapist_id.eq.${therapistUserId}`);
+        if (therapistPatientIds.length > 0) orParts.push(`patient_id.in.(${therapistPatientIds.join(',')})`);
+        if (orParts.length > 0) query = query.or(orParts.join(','));
+        else if (!omittedColumns.has('therapist_id')) query = query.eq('therapist_id', '00000000-0000-0000-0000-000000000000');
+        else return [];
+      }
+      const result = await query;
+      if (!result.error) return Array.isArray(result.data) ? result.data : [];
+      if (isMissingRelationError(result.error)) return [];
+      const missingColumn = extractMissingColumnName(result.error);
+      if (missingColumn && CLOSURE_APPOINTMENT_SCHEMA_FALLBACK_COLUMNS.has(missingColumn) && !omittedColumns.has(missingColumn)) {
+        omittedColumns.add(missingColumn);
+        continue;
+      }
+      if (hasMissingFinancialSchema(result.error)) return [];
+      throw result.error;
+    }
+    return [];
+  };
+
   const mirrorLegacyClosureAppointmentsForPeriod = async (params: {
     clinicId: string;
     user: any;
@@ -49955,6 +50012,18 @@ async function startServer() {
       const byCode = services.find((service: any) => sanitizeString(service?.internal_code, 80).toLowerCase() === procedureKey);
       if (byCode) return byCode;
     }
+
+    // A classificação já persistida no item de faturamento é autoritativa para
+    // atendimentos históricos. Só um código de procedimento explícito acima pode
+    // substituí-la; matching textual não deve migrar silenciosamente a sessão para
+    // outro service_catalog_id e perder o De/Para já registrado.
+    const historicalServiceId = sanitizeString(historical?.serviceCatalogId, 120);
+    if (isUuid(historicalServiceId)) {
+      const historicalService = services.find((service: any) => sanitizeString(service?.id, 120) === historicalServiceId) ||
+        await fetchTussServiceCatalogById(organizationId, historicalServiceId);
+      if (historicalService?.id && historicalService?.active !== false) return historicalService;
+    }
+
     const serviceKey = normalizeBillingServiceMatchKey(serviceType);
     const activeMatch = services.find((service: any) => normalizeBillingServiceMatchKey(service?.service_type) === serviceKey) ||
       services.find((service: any) => normalizeBillingServiceMatchKey(service?.name) === serviceKey) ||
@@ -49971,8 +50040,6 @@ async function startServer() {
     });
     if (compatibleMatch) return compatibleMatch;
 
-    const historicalServiceId = sanitizeString(historical?.serviceCatalogId, 120);
-    if (isUuid(historicalServiceId)) return fetchTussServiceCatalogById(organizationId, historicalServiceId);
     const historicalInternalCode = sanitizeString(historical?.internalCode, 80);
     if (!historicalInternalCode) return null;
     const historicalResult = await supabase
@@ -54360,7 +54427,35 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Período inválido para carregar sessões do teste de Pré-guia.' });
       }
       const limit = parseBoundedListLimit(req.query?.limit, 200, 500);
-      const appointmentRows = await fetchClosurePeriodAppointmentRows({
+      const preGuideTestOptionSelect = 'id,appointment_id,patient_id,payer_id,scheduled_start,scheduled_end,status,validation_error_codes,stale_reason,snapshot_data,official_document_id,updated_at';
+      const preGuideTestOptionSelectLegacy = 'id,appointment_id,patient_id,payer_id,scheduled_start,scheduled_end,status,validation_error_codes,stale_reason,snapshot_data,updated_at';
+      const buildHistoricalPreGuideOptionsQuery = (selectColumns: string) => {
+        let query = supabase
+          .from('appointment_tiss_pre_guides')
+          .select(selectColumns)
+          .eq('organization_id', organizationId)
+          .eq('payer_id', payerId)
+          .gte('scheduled_start', range.fromIso)
+          .lte('scheduled_start', range.toIso)
+          .order('scheduled_start', { ascending: false })
+          .limit(limit);
+        if (patientId) query = query.eq('patient_id', patientId);
+        return query;
+      };
+
+      let historicalPreGuideResult = await buildHistoricalPreGuideOptionsQuery(preGuideTestOptionSelect);
+      if (historicalPreGuideResult.error && isOptionalTissPreGuideColumn(extractMissingColumnName(historicalPreGuideResult.error))) {
+        historicalPreGuideResult = await buildHistoricalPreGuideOptionsQuery(preGuideTestOptionSelectLegacy);
+      }
+      if (historicalPreGuideResult.error) {
+        if (hasMissingFinancialSchema(historicalPreGuideResult.error) || isMissingRelationError(historicalPreGuideResult.error) || extractMissingColumnName(historicalPreGuideResult.error)) {
+          historicalPreGuideResult = { data: [], error: null } as any;
+        } else {
+          throw historicalPreGuideResult.error;
+        }
+      }
+
+      const periodAppointmentRows = await fetchClosurePeriodAppointmentRows({
         clinicId: organizationId,
         user: req.session.user,
         fromIso: range.fromIso,
@@ -54369,6 +54464,50 @@ async function startServer() {
         ascending: false,
         limit
       });
+      const periodAppointmentIds = new Set(
+        periodAppointmentRows
+          .map((row: any) => sanitizeString(row?.id, 120))
+          .filter((id: string) => isUuid(id))
+      );
+      const historicalPreGuides = Array.isArray(historicalPreGuideResult.data) ? historicalPreGuideResult.data : [];
+      const missingHistoricalAppointmentIds: string[] = Array.from(new Set<string>(
+        historicalPreGuides
+          .map((row: any) => sanitizeString(row?.appointment_id, 120))
+          .filter((id: string) => isUuid(id) && !periodAppointmentIds.has(id))
+      ));
+      const historicalAppointmentRows = missingHistoricalAppointmentIds.length > 0
+        ? await fetchClosureAppointmentRowsByIds({
+            clinicId: organizationId,
+            user: req.session.user,
+            appointmentIds: missingHistoricalAppointmentIds,
+            patientId: patientId || null
+          })
+        : [];
+      const historicalPreGuidesByAppointment = new Map<string, any>(
+        historicalPreGuides
+          .map((row: any) => [sanitizeString(row?.appointment_id, 120), row])
+          .filter(([id]: any) => isUuid(id))
+      );
+      const appointmentRowsById = new Map<string, any>();
+      [...periodAppointmentRows, ...historicalAppointmentRows].forEach((row: any) => {
+        const id = sanitizeString(row?.id, 120);
+        if (isUuid(id)) appointmentRowsById.set(id, row);
+      });
+      const appointmentRows = Array.from(appointmentRowsById.values())
+        .sort((left: any, right: any) => {
+          const leftId = sanitizeString(left?.id, 120);
+          const rightId = sanitizeString(right?.id, 120);
+          const leftPreGuide = historicalPreGuidesByAppointment.get(leftId);
+          const rightPreGuide = historicalPreGuidesByAppointment.get(rightId);
+          const leftTime = new Date(
+            left?.scheduled_at || left?.scheduled_start_at || leftPreGuide?.scheduled_start || leftPreGuide?.snapshot_data?.appointment?.scheduledStart || 0
+          ).getTime();
+          const rightTime = new Date(
+            right?.scheduled_at || right?.scheduled_start_at || rightPreGuide?.scheduled_start || rightPreGuide?.snapshot_data?.appointment?.scheduledStart || 0
+          ).getTime();
+          return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+        })
+        .slice(0, limit);
       const appointmentIds = Array.from(new Set(
         appointmentRows
           .map((row: any) => sanitizeString(row?.id, 120))
@@ -54430,13 +54569,13 @@ async function startServer() {
 
       let [billingContextResult, preGuideResult, payerResult, appointmentPatientsResult, payerPatientsResult] = await Promise.all([
         billingContextPromise,
-        buildPreGuideOptionsQuery('id,appointment_id,status,validation_error_codes,stale_reason,snapshot_data,official_document_id,updated_at'),
+        buildPreGuideOptionsQuery(preGuideTestOptionSelect),
         payerPromise,
         queryAppointmentPatients(patientSelectWithCanonicalPayer),
         queryCanonicalPayerPatients(patientSelectWithCanonicalPayer)
       ]);
       if (preGuideResult.error && isOptionalTissPreGuideColumn(extractMissingColumnName(preGuideResult.error))) {
-        preGuideResult = await buildPreGuideOptionsQuery('id,appointment_id,status,validation_error_codes,stale_reason,snapshot_data,updated_at');
+        preGuideResult = await buildPreGuideOptionsQuery(preGuideTestOptionSelectLegacy);
       }
       const patientCanonicalColumnMissing = [appointmentPatientsResult.error, payerPatientsResult.error]
         .some((error: any) => extractMissingColumnName(error) === 'insurance_payer_id');
@@ -54494,11 +54633,11 @@ async function startServer() {
           .map((row: any) => [sanitizeString(row?.appointment_id, 120), mergeBillingContextMetadata(row)])
           .filter(([id]: any) => isUuid(id))
       );
-      const preGuidesByAppointment = new Map<string, any>(
-        (preGuideResult.error ? [] : preGuideResult.data || [])
-          .map((row: any) => [sanitizeString(row?.appointment_id, 120), row])
-          .filter(([id]: any) => isUuid(id))
-      );
+      const preGuidesByAppointment = new Map<string, any>();
+      [...historicalPreGuides, ...(preGuideResult.error ? [] : preGuideResult.data || [])].forEach((row: any) => {
+        const id = sanitizeString(row?.appointment_id, 120);
+        if (isUuid(id)) preGuidesByAppointment.set(id, row);
+      });
       const patientRows = [
         ...(appointmentPatientsResult.error ? [] : appointmentPatientsResult.data || []),
         ...(payerPatientsResult.error ? [] : payerPatientsResult.data || []),
@@ -54571,7 +54710,7 @@ async function startServer() {
         if (sanitizeString(preGuide?.stale_reason, 600)) pendingReasons.push('Pré-guia existente precisa ser revalidada.');
         if (validationErrorCodes.length > 0) pendingReasons.push(`Pré-guia existente possui ${validationErrorCodes.length} pendência(s) técnica(s).`);
 
-        const scheduledStart = appointment?.scheduled_at || appointment?.scheduled_start_at || preGuide?.snapshot_data?.appointment?.scheduledStart || null;
+        const scheduledStart = appointment?.scheduled_at || appointment?.scheduled_start_at || preGuide?.scheduled_start || preGuide?.snapshot_data?.appointment?.scheduledStart || null;
         const sourcePayload = parseCalendarSourcePayload(appointment?.source_payload);
         const syncStatus = sanitizeString(
           sourcePayload?.syncStatus ||
@@ -54611,7 +54750,11 @@ async function startServer() {
             id: sanitizeString(preGuide?.id, 120) || null,
             status: sanitizeString(preGuide?.status, 40) || null,
             officialDocumentId: officialDocumentId || null,
-            staleReason: sanitizeTextField(preGuide?.stale_reason, 600) || null
+            staleReason: sanitizeTextField(preGuide?.stale_reason, 600) || null,
+            validationErrorCodes: Array.isArray(preGuide?.validation_error_codes)
+              ? preGuide.validation_error_codes.map((code: any) => sanitizeString(code, 120)).filter(Boolean).slice(0, 30)
+              : [],
+            scheduledStart: preGuide?.scheduled_start || null
           } : null,
           officialDocumentId: officialDocumentId || null,
           preGuideTestState: hardReasons.length > 0
