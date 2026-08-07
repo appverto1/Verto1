@@ -54458,6 +54458,37 @@ async function startServer() {
         return res.status(404).json({ success: false, error: 'Convênio não encontrado ou não configurado como operadora de saúde.' });
       }
       const payerName = sanitizeString(payer?.name, 180) || 'Convênio';
+      let legacyPayerPatientsResult: any = { data: [], error: null };
+      if (!patientId) {
+        let legacyPayerPatientsQuery = supabase
+          .from('patients')
+          .select(patientCanonicalColumnMissing ? patientSelectLegacy : patientSelectWithCanonicalPayer)
+          .eq('clinic_id', organizationId)
+          .ilike('insurance_name', payerName);
+        if (!patientCanonicalColumnMissing) {
+          legacyPayerPatientsQuery = legacyPayerPatientsQuery.is('insurance_payer_id', null);
+        }
+        legacyPayerPatientsResult = await legacyPayerPatientsQuery
+          .order('name', { ascending: true })
+          .limit(500);
+      }
+      if (legacyPayerPatientsResult.error && extractMissingColumnName(legacyPayerPatientsResult.error) === 'insurance_payer_id') {
+        legacyPayerPatientsResult = await supabase
+          .from('patients')
+          .select(patientSelectLegacy)
+          .eq('clinic_id', organizationId)
+          .ilike('insurance_name', payerName)
+          .order('name', { ascending: true })
+          .limit(500);
+      }
+      if (legacyPayerPatientsResult.error && !hasMissingFinancialSchema(legacyPayerPatientsResult.error) && !isMissingRelationError(legacyPayerPatientsResult.error) && !extractMissingColumnName(legacyPayerPatientsResult.error)) {
+        throw legacyPayerPatientsResult.error;
+      }
+      const normalizedSelectedPayerName = normalizeClinicPayerNameForUniqueMatch(payerName);
+      const legacyPayerPatients = (legacyPayerPatientsResult.error ? [] : legacyPayerPatientsResult.data || [])
+        .filter((patient: any) =>
+          normalizeClinicPayerNameForUniqueMatch(patient?.insurance_name) === normalizedSelectedPayerName
+        );
       const contextsByAppointment = new Map<string, any>(
         (billingContextResult.error ? [] : billingContextResult.data || [])
           .map((row: any) => [sanitizeString(row?.appointment_id, 120), mergeBillingContextMetadata(row)])
@@ -54470,7 +54501,8 @@ async function startServer() {
       );
       const patientRows = [
         ...(appointmentPatientsResult.error ? [] : appointmentPatientsResult.data || []),
-        ...(payerPatientsResult.error ? [] : payerPatientsResult.data || [])
+        ...(payerPatientsResult.error ? [] : payerPatientsResult.data || []),
+        ...legacyPayerPatients
       ];
       const patientsById = new Map<string, any>();
       patientRows.forEach((row: any) => {
