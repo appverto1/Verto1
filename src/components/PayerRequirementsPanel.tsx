@@ -11,7 +11,8 @@ import {
   isSupportedAttendanceRegime040300,
   isSupportedAttendanceType040300,
 } from "../services/tissOfficial/versions/communication040300/domains";
-import { buildClinicMonthDateRange } from "../utils/scheduling";
+import { buildClinicDateRange, buildClinicMonthDateRange } from "../utils/scheduling";
+import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
   getTissProviderCodeLengthError,
   isValidTissCivilDate,
@@ -672,6 +673,15 @@ const setupEventSourcePayload = (event: any) => {
 const setupEventPatientId = (event: any) => {
   const source = setupEventSourcePayload(event);
   return String(event?.patientId || event?.patient_id || event?.patient?.id || source?.patientId || source?.patient_id || "").trim();
+};
+const setupPatientRecordId = (patient: any) => String(patient?.id || patient?.patientId || patient?.patient_id || "").trim();
+const setupPatientMatchesPayer = (patient: any, payerId: string, payerName?: string | null) => {
+  const eligibility = normalizePatientInsuranceEligibility(patient || {}, { useResponsibleFallback: false });
+  const patientPayerId = String(eligibility.insurancePayerId || "").trim();
+  const expectedName = normalizeSetupText(payerName);
+  const patientName = normalizeSetupText(eligibility.insuranceName);
+  if (payerId && patientPayerId) return patientPayerId === payerId;
+  return Boolean(expectedName && patientName && expectedName === patientName);
 };
 const setupEventPayerId = (event: any) => String(
   event?.payerId ||
@@ -1420,14 +1430,28 @@ export function PayerRequirementsPanel({
     () => summarizeSetupEligibilityDiagnostics(setupIneligibleAppointments),
     [setupIneligibleAppointments],
   );
-  const setupPatientIdsForPayer = useMemo(
-    () => new Set(setupAppointmentDiagnostics.map((item) => setupEventPatientId(item.appointment)).filter(Boolean)),
-    [setupAppointmentDiagnostics],
+  const setupLinkedPatientIdsForPayer = useMemo(
+    () => new Set(
+      setupPatients
+        .filter((patient) => setupPatientMatchesPayer(patient, selectedPayerId, selectedPayer?.name))
+        .map(setupPatientRecordId)
+        .filter(Boolean),
+    ),
+    [selectedPayer?.name, selectedPayerId, setupPatients],
   );
+  const setupPatientIdsForPayer = useMemo(() => {
+    const ids = new Set<string>(setupLinkedPatientIdsForPayer);
+    setupAppointmentDiagnostics
+      .filter((item) => item.payerRelated)
+      .map((item) => setupEventPatientId(item.appointment))
+      .filter(Boolean)
+      .forEach((id) => ids.add(id));
+    return ids;
+  }, [setupAppointmentDiagnostics, setupLinkedPatientIdsForPayer]);
   const setupPatientsForPayer = useMemo(() => {
-    if (setupPatientIdsForPayer.size === 0) return setupPatients;
-    return setupPatients.filter((patient) => setupPatientIdsForPayer.has(String(patient?.id || patient?.patientId || "").trim()));
-  }, [setupPatientIdsForPayer, setupPatients]);
+    if (!selectedPayerId && !selectedPayer?.name) return setupPatients;
+    return setupPatients.filter((patient) => setupPatientIdsForPayer.has(setupPatientRecordId(patient)));
+  }, [selectedPayer?.name, selectedPayerId, setupPatientIdsForPayer, setupPatients]);
   const setupAppointmentsForSelectedPatient = useMemo(
     () => setupPayerAppointments.filter((appointment) => !setupPatientId || setupEventPatientId(appointment) === setupPatientId),
     [setupPatientId, setupPayerAppointments],
@@ -2113,6 +2137,15 @@ export function PayerRequirementsPanel({
     return buildClinicMonthDateRange(new Date());
   };
 
+  const setupTestDateRange = () => {
+    const now = new Date();
+    const from = new Date(now);
+    const to = new Date(now);
+    from.setDate(from.getDate() - 180);
+    to.setDate(to.getDate() + 365);
+    return buildClinicDateRange(from, to);
+  };
+
   useEffect(() => {
     setSetupPatientId("");
     setSetupAppointmentId("");
@@ -2124,11 +2157,11 @@ export function PayerRequirementsPanel({
     let cancelled = false;
     const loadSetupTestOptions = async () => {
       setSetupTestLoadState({ loading: true, error: "" });
-      const range = currentMonthRange();
+      const range = setupTestDateRange();
       try {
         const [patientsResult, appointmentsResult] = await Promise.all([
           dataService.getPatients(),
-          dataService.getCalendarEvents({ from: range.from, to: range.to, view: "month", limit: 120 }),
+          dataService.getCalendarEvents({ from: range.from, to: range.to, view: "month", limit: 200 }),
         ]);
         if (cancelled) return;
         setSetupPatients(patientsResult?.success && Array.isArray(patientsResult.data) ? patientsResult.data : []);
@@ -2151,18 +2184,47 @@ export function PayerRequirementsPanel({
   }, [activeSetupStepKey, selectedPayerId]);
 
   useEffect(() => {
+    if (activeSetupStepKey !== "test" || !selectedPayerId || !setupPatientId) return undefined;
+    const controller = new AbortController();
+    const loadSelectedPatientAppointments = async () => {
+      const range = setupTestDateRange();
+      const result = await dataService.getCalendarEvents({
+        from: range.from,
+        to: range.to,
+        view: "month",
+        patientId: setupPatientId,
+        limit: 200,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted || !result?.success || !Array.isArray(result.data)) return;
+      setSetupAppointments((current) => {
+        const merged = new Map<string, any>();
+        [...current, ...result.data].forEach((appointment) => {
+          const id = String(appointment?.id || appointment?.appointmentId || appointment?.appointment_id || "").trim();
+          if (id) merged.set(id, appointment);
+        });
+        return Array.from(merged.values());
+      });
+    };
+    void loadSelectedPatientAppointments();
+    return () => controller.abort();
+  }, [activeSetupStepKey, selectedPayerId, setupPatientId]);
+
+  useEffect(() => {
     if (activeSetupStepKey !== "test") return;
     const firstAppointment = setupPayerAppointments[0] || null;
+    const firstLinkedPatientId = setupPatientRecordId(setupPatientsForPayer[0]);
+    const preferredPatientId = firstAppointment ? setupEventPatientId(firstAppointment) : firstLinkedPatientId;
     const currentPatientIsEligible = setupPatientId ? setupPatientIdsForPayer.has(setupPatientId) : false;
-    if (!setupPatientId && firstAppointment) {
-      setSetupPatientId(setupEventPatientId(firstAppointment));
+    if (!setupPatientId && preferredPatientId) {
+      setSetupPatientId(preferredPatientId);
       return;
     }
     if (setupPatientId && setupPatientIdsForPayer.size > 0 && !currentPatientIsEligible) {
-      setSetupPatientId(firstAppointment ? setupEventPatientId(firstAppointment) : "");
+      setSetupPatientId(preferredPatientId || "");
       setSetupAppointmentId("");
     }
-  }, [activeSetupStepKey, setupPatientId, setupPatientIdsForPayer, setupPayerAppointments]);
+  }, [activeSetupStepKey, setupPatientId, setupPatientIdsForPayer, setupPayerAppointments, setupPatientsForPayer]);
 
   useEffect(() => {
     if (activeSetupStepKey !== "test") return;
