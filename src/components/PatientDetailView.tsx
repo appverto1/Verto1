@@ -1047,10 +1047,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const normalizedRole = String(userRole || '').toLowerCase();
     return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
   }, [userRole]);
-  const canReopenAutomaticNoShow = useMemo(() => {
-    const normalizedRole = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').toLowerCase();
-    return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
-  }, [clinicContext?.role, resolvedClinicContext?.role, userRole]);
   const isPanelDark = useMemo(() => {
     if (themeMode === 'dark') return true;
     if (themeMode === 'light') return false;
@@ -1206,6 +1202,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isPreparingAnamnesisSave, setIsPreparingAnamnesisSave] = useState(false);
   const [isSavingAnamnesisFile, setIsSavingAnamnesisFile] = useState(false);
   const [resolvedClinicContext, setResolvedClinicContext] = useState<any>(clinicContext || {});
+  const canReopenAutomaticNoShow = useMemo(() => {
+    const normalizedRole = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').toLowerCase();
+    return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
+  }, [clinicContext?.role, resolvedClinicContext?.role, userRole]);
   const [previewFile, setPreviewFile] = useState<any>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
