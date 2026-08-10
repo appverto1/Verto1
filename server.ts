@@ -11173,6 +11173,10 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
       }, true);
       const patientId = sanitizeString(appointment?.patientId || appointment?.patient_id, 120);
       const patientName = sanitizeString(appointment?.patientName || appointment?.patient_name || appointment?.name, 180);
+      const serviceType = sanitizeString(
+        appointment?.service_type || appointment?.serviceType || appointment?.approach || appointment?.type,
+        180,
+      );
       const professionals = getClinicStateAppointmentProfessionals(appointment);
       return {
         index,
@@ -11187,6 +11191,7 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         roomPreventsOverlap,
         patientId,
         patientName,
+        serviceType,
         professionalIds: professionals.ids,
         professionalNames: professionals.names,
         blocks: getClinicStateAppointmentStatusBlocksConflict(appointment)
@@ -11215,10 +11220,24 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         (current.patientId && other.patientId && current.patientId === other.patientId) ||
         (!current.patientId && !other.patientId && current.patientName && current.patientName === other.patientName);
       if (samePatient) {
+        const normalizeServiceType = (value: any) =>
+          sanitizeString(value, 180)
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, ' ');
+        const sameSpecialty = Boolean(
+          current.serviceType &&
+          other.serviceType &&
+          normalizeServiceType(current.serviceType) === normalizeServiceType(other.serviceType),
+        );
         return {
           ok: false,
           status: 409,
-          error: `${current.patientName || 'Paciente'} já possui outra sessão nesse horário.`
+          error: sameSpecialty
+            ? `${current.patientName || 'Paciente'} já possui ${current.serviceType} nesse horário.`
+            : `${current.patientName || 'Paciente'} já possui outra sessão nesse horário.`
         };
       }
 
@@ -27620,6 +27639,7 @@ async function startServer() {
         date,
         start_time: startTime,
         duration_minutes: durationMinutes,
+        service_type: appointment?.service_type || appointment?.serviceType || appointment?.approach || appointment?.type,
         exclude_event_id: appointmentId,
         exclude_event_ids: Array.from(new Set([appointmentId, ...excludeIds])).filter(Boolean)
       }, params.user);
@@ -27629,7 +27649,7 @@ async function startServer() {
           status: 409,
           appointmentId,
           conflict: result,
-          error: result.humanMessage || 'Já existe atendimento no mesmo horário para este paciente, profissional ou sala.'
+          error: result.humanMessage || 'Já existe atendimento conflitante no mesmo horário para este paciente, profissional, especialidade ou sala.'
         };
       }
     }
@@ -27934,10 +27954,18 @@ async function startServer() {
       return res.status(400).json({ success: false, error: 'Clínica inválida para agendamento.' });
     }
 
-    const rawAppointments = Array.isArray(params.rawAppointments) ? params.rawAppointments.slice(0, 52) : [];
-    if (rawAppointments.length === 0) {
+    const MAX_APPOINTMENT_BATCH_SIZE = 120;
+    const rawAppointmentInput = Array.isArray(params.rawAppointments) ? params.rawAppointments : [];
+    if (rawAppointmentInput.length === 0) {
       return res.status(400).json({ success: false, error: 'Nenhum agendamento enviado.' });
     }
+    if (rawAppointmentInput.length > MAX_APPOINTMENT_BATCH_SIZE) {
+      return res.status(400).json({
+        success: false,
+        error: `O lote possui ${rawAppointmentInput.length} agendamentos. O limite por confirmação é ${MAX_APPOINTMENT_BATCH_SIZE}.`,
+      });
+    }
+    const rawAppointments = rawAppointmentInput.slice();
 
     const existingRowsForPreparation = params.requireExisting
       ? await readPersistedAppointmentRows(
@@ -42958,6 +42986,10 @@ async function startServer() {
     const locationType = normalizeScheduleLocationType(rawInput?.location_type || rawInput?.locationType || rawInput?.location);
     const roomId = sanitizeString(rawInput?.room_id || rawInput?.roomId || rawInput?.room, 180);
     const roomName = sanitizeString(rawInput?.room_name || rawInput?.roomName || rawInput?.roomDisplayName || roomId, 180);
+    const serviceType = sanitizeString(
+      rawInput?.service_type || rawInput?.serviceType || rawInput?.specialty || rawInput?.approach || rawInput?.type,
+      180,
+    );
     let sessionBufferMinutes = Math.round(asSafeNumber(rawInput?.session_buffer_minutes ?? rawInput?.sessionBufferMinutes, 0, 120) ?? 0);
     if (professionalIds[0]) {
       try {
@@ -43100,6 +43132,7 @@ async function startServer() {
       end_time: parsedDates.endTime,
       duration_minutes: parsedDates.duration,
       session_buffer_minutes: sessionBufferMinutes,
+      service_type: serviceType,
       exclude_event_id: rawInput?.exclude_event_id || rawInput?.excludeEventId,
       exclude_event_ids: Array.isArray(rawInput?.exclude_event_ids)
         ? rawInput.exclude_event_ids

@@ -122,11 +122,16 @@ import {
   SCHEDULE_LOCATION_OPTIONS,
   addMinutesToTime,
   buildRecurrenceDateKeys,
+  buildWeeklyScheduleOccurrences,
   checkLocalScheduleConflicts,
+  findWeeklyScheduleDraftConflicts,
   getAppointmentDurationOption,
   normalizeDurationMinutes,
   normalizeScheduleLocationType,
+  normalizeWeeklyScheduleSlots,
+  WEEKLY_SCHEDULE_DAYS,
   type ScheduleLocationType,
+  type WeeklyScheduleSlot,
 } from "../utils/scheduling";
 
 type DashboardTab =
@@ -199,6 +204,25 @@ type NavigationNode = {
 };
 
 const COORDINATOR_SIDEBAR_PREFERENCE_KEY = "verto:coordinator-sidebar-expanded";
+
+const SESSION_SPECIALTY_OPTIONS = [
+  "ABA",
+  "Fonoaudiologia",
+  "Terapia Ocupacional",
+  "Psicologia",
+  "Psicopedagogia",
+  "Avaliação",
+  "Supervisão",
+  "Reunião interdisciplinar",
+  "Orientação familiar",
+  "Outro",
+] as const;
+
+const MAX_WEEKLY_SCHEDULE_OCCURRENCES = 120;
+
+const createWeeklyScheduleSlotId = () =>
+  `weekly-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
 
 const readSidebarPreference = (key: string) => {
   if (typeof window === "undefined") return false;
@@ -1420,6 +1444,9 @@ export function CoordinatorDashboard({
   const [isSessionSubmitting, setIsSessionSubmitting] = useState(false);
   const [sessionNumSessions, setSessionNumSessions] = useState(1);
   const [sessionRecurrencePattern, setSessionRecurrencePattern] = useState("weekly");
+  const [sessionWeeklyAgendaEnabled, setSessionWeeklyAgendaEnabled] = useState(false);
+  const [sessionWeeklyWeeks, setSessionWeeklyWeeks] = useState(4);
+  const [sessionWeeklySlots, setSessionWeeklySlots] = useState<WeeklyScheduleSlot[]>([]);
   const [sessionApplyAuthorizationToRecurrence, setSessionApplyAuthorizationToRecurrence] =
     useState(true);
   const [sessionReuseGuideAcrossRecurrence, setSessionReuseGuideAcrossRecurrence] =
@@ -4295,6 +4322,179 @@ export function CoordinatorDashboard({
     [editingAppointmentId, sessionDate, sessionNumSessions, sessionRecurrencePattern],
   );
 
+  const sessionWeeklyScheduleSignature = useMemo(
+    () =>
+      sessionWeeklySlots
+        .map((slot) =>
+          [
+            slot.id,
+            slot.weekday,
+            slot.time,
+            slot.specialty,
+            slot.professionalId,
+            slot.professionalName,
+            slot.durationMinutes,
+          ].join("~"),
+        )
+        .join("|"),
+    [sessionWeeklySlots],
+  );
+
+  const sessionWeeklyOccurrences = useMemo(
+    () =>
+      sessionWeeklyAgendaEnabled && !editingAppointmentId
+        ? buildWeeklyScheduleOccurrences({
+            startDate: sessionDate,
+            weeks: sessionWeeklyWeeks,
+            slots: sessionWeeklySlots,
+            maxOccurrences: 240,
+          })
+        : [],
+    [
+      editingAppointmentId,
+      sessionDate,
+      sessionWeeklyAgendaEnabled,
+      sessionWeeklyScheduleSignature,
+      sessionWeeklyWeeks,
+    ],
+  );
+
+  const sessionWeeklyDraftConflictState = useMemo(
+    () => findWeeklyScheduleDraftConflicts(sessionWeeklySlots),
+    [sessionWeeklyScheduleSignature],
+  );
+
+  const sessionWeeklySlotsReady = useMemo(
+    () =>
+      sessionWeeklySlots.length > 0 &&
+      sessionWeeklySlots.every((slot) => {
+        const weekday = Number(slot.weekday);
+        const duration = Number(slot.durationMinutes || sessionDurationMinutes);
+        return (
+          Number.isInteger(weekday) &&
+          weekday >= 0 &&
+          weekday <= 6 &&
+          /^\d{2}:\d{2}$/.test(String(slot.time || "").slice(0, 5)) &&
+          Boolean(String(slot.specialty || "").trim()) &&
+          Boolean(String(slot.professionalId || "").trim()) &&
+          Number.isFinite(duration) &&
+          duration >= 15
+        );
+      }),
+    [sessionDurationMinutes, sessionWeeklyScheduleSignature, sessionWeeklySlots.length],
+  );
+
+  const sessionWeeklyValidationError =
+    !sessionWeeklyAgendaEnabled || editingAppointmentId
+      ? ""
+      : sessionWeeklySlots.length === 0
+        ? "Adicione ao menos um atendimento à agenda semanal."
+        : !sessionWeeklySlotsReady
+          ? "Preencha horário, especialidade, profissional e duração em todos os atendimentos da agenda semanal."
+          : sessionWeeklyOccurrences.length === 0
+            ? "Nenhuma ocorrência válida foi gerada a partir da data inicial."
+            : sessionWeeklyOccurrences.length > MAX_WEEKLY_SCHEDULE_OCCURRENCES
+              ? `A agenda semanal gera ${sessionWeeklyOccurrences.length} atendimentos. O limite por confirmação é ${MAX_WEEKLY_SCHEDULE_OCCURRENCES}.`
+              : sessionWeeklyDraftConflictState.blocking
+                ? sessionWeeklyDraftConflictState.humanMessage
+                : "";
+
+  const sessionPlannedOccurrenceCount =
+    sessionWeeklyAgendaEnabled && !editingAppointmentId
+      ? sessionWeeklyOccurrences.length
+      : Math.min(52, Math.max(1, Number(sessionNumSessions) || 1));
+
+  const sessionAuthorizationApplicableOccurrenceCount = sessionWeeklyAgendaEnabled && !editingAppointmentId
+    ? sessionWeeklyOccurrences.filter(
+        (occurrence) =>
+          normalizeUtf8Text(occurrence.specialty).trim().toLowerCase() ===
+          normalizeUtf8Text(sessionApproach).trim().toLowerCase(),
+      ).length
+    : sessionPlannedOccurrenceCount;
+
+  const sessionWeeklyHasMixedSpecialties = Boolean(
+    sessionWeeklyAgendaEnabled &&
+      !editingAppointmentId &&
+      new Set(
+        sessionWeeklyOccurrences
+          .map((occurrence) => normalizeUtf8Text(occurrence.specialty).trim().toLowerCase())
+          .filter(Boolean),
+      ).size > 1,
+  );
+
+  const addSessionWeeklySlot = (weekday: number) => {
+    const selectedProfessional = findProfessionalOptionById(sessionProfessionalId);
+    setSessionWeeklySlots((current) => [
+      ...current,
+      {
+        id: createWeeklyScheduleSlotId(),
+        weekday,
+        time: sessionTime || "08:00",
+        specialty: sessionApproach || "",
+        professionalId: selectedProfessional?.id || sessionProfessionalId || "",
+        professionalName: selectedProfessional?.label || sessionProfessional || "",
+        durationMinutes: sessionDurationMinutes,
+      },
+    ]);
+  };
+
+  const updateSessionWeeklySlot = (slotId: string, patch: Partial<WeeklyScheduleSlot>) => {
+    setSessionWeeklySlots((current) =>
+      current.map((slot) =>
+        String(slot.id) === String(slotId)
+          ? { ...slot, ...patch }
+          : slot,
+      ),
+    );
+  };
+
+  const removeSessionWeeklySlot = (slotId: string) => {
+    setSessionWeeklySlots((current) =>
+      current.filter((slot) => String(slot.id) !== String(slotId)),
+    );
+  };
+
+  const toggleSessionWeeklyAgenda = (enabled: boolean) => {
+    setSessionWeeklyAgendaEnabled(enabled);
+    if (enabled) setSessionNumSessions(1);
+    if (!enabled || sessionWeeklySlots.length > 0) return;
+    const parsed = sessionDate ? new Date(`${sessionDate}T00:00:00`) : new Date();
+    const weekday = Number.isNaN(parsed.getTime()) ? new Date().getDay() : parsed.getDay();
+    addSessionWeeklySlot(weekday);
+  };
+
+  useEffect(() => {
+    if (!sessionWeeklyAgendaEnabled || editingAppointmentId) return;
+    const professional = findProfessionalOptionById(sessionProfessionalId);
+    setSessionWeeklySlots((current) => {
+      let changed = false;
+      const next = current.map((slot) => {
+        const patch: Partial<WeeklyScheduleSlot> = {};
+        if (!String(slot.specialty || "").trim() && sessionApproach) {
+          patch.specialty = sessionApproach;
+        }
+        if (!String(slot.professionalId || "").trim() && sessionProfessionalId) {
+          patch.professionalId = sessionProfessionalId;
+          patch.professionalName = professional?.label || sessionProfessional || "";
+        }
+        if (!slot.durationMinutes && sessionDurationMinutes) {
+          patch.durationMinutes = sessionDurationMinutes;
+        }
+        if (Object.keys(patch).length === 0) return slot;
+        changed = true;
+        return { ...slot, ...patch };
+      });
+      return changed ? next : current;
+    });
+  }, [
+    editingAppointmentId,
+    sessionApproach,
+    sessionDurationMinutes,
+    sessionProfessional,
+    sessionProfessionalId,
+    sessionWeeklyAgendaEnabled,
+  ]);
+
   const sessionCareSetting =
     sessionLocationType === "clinica"
       ? "CLINIC"
@@ -4474,14 +4674,15 @@ export function CoordinatorDashboard({
             ? Boolean(sessionLocationNotes.trim())
             : true;
 
+  const sessionUsesWeeklyAgenda = Boolean(sessionWeeklyAgendaEnabled && !editingAppointmentId);
   const requiredSessionFieldsReady = Boolean(
     sessionPatientName.trim() &&
       sessionDate &&
-      sessionTime &&
       sessionApproach &&
       selectedSessionProfessional?.id &&
       sessionDurationMinutes >= 15 &&
-      sessionStructuredLocationReady,
+      sessionStructuredLocationReady &&
+      (!sessionUsesWeeklyAgenda || (!sessionWeeklyValidationError && sessionWeeklySlotsReady)),
   );
   const selectedFinancialContextOption = APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.find(
     (option) => option.value === sessionFinancialContextType,
@@ -4535,7 +4736,7 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     if (!isAddSessionModalOpen) return;
-    if (!sessionPatientName || !sessionDate || !sessionTime || !sessionApproach || !selectedSessionProfessional?.id) {
+    if (!sessionPatientName || !sessionDate || !sessionApproach || !selectedSessionProfessional?.id) {
       setScheduleConflictState({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
       return;
     }
@@ -4549,68 +4750,155 @@ export function CoordinatorDashboard({
       });
       return;
     }
+    if (sessionUsesWeeklyAgenda && sessionWeeklyValidationError) {
+      setScheduleConflictState({
+        loading: false,
+        checked: true,
+        blocking: true,
+        message: sessionWeeklyValidationError,
+        conflicts: sessionWeeklyDraftConflictState.conflicts || [],
+      });
+      return;
+    }
 
-    const localResult = checkLocalScheduleConflicts({
-      appointments: therapistAgenda,
-      patient_id: selectedSessionPatient?.id,
-      patient_name: sessionPatientName,
-      professional_ids: selectedSessionProfessional?.id ? [selectedSessionProfessional.id] : [],
-      professional_names: sessionProfessional ? [sessionProfessional] : [],
-      room_id: sessionLocationType === "clinica" ? sessionRoom : "",
-      room_name: selectedSessionRoom?.name || sessionRoom,
-      room_prevent_overlapping_appointments: selectedSessionRoom?.prevent_overlapping_appointments ?? selectedSessionRoom?.preventOverlappingAppointments,
-      rooms,
-      location_type: sessionLocationType,
-      date: sessionDate,
-      start_time: sessionTime,
-      end_time: sessionEndTime,
-      duration_minutes: sessionDurationMinutes,
-      session_buffer_minutes: sessionBufferMinutes,
-      exclude_event_id: editingAppointmentId,
-      recurrence_dates: sessionRecurrenceDates,
-    });
+    const scheduleChecks = sessionUsesWeeklyAgenda
+      ? Array.from(
+          sessionWeeklyOccurrences.reduce((groups, occurrence) => {
+            const key = String(occurrence.slotId || occurrence.id || "");
+            const existing = groups.get(key) || [];
+            existing.push(occurrence);
+            groups.set(key, existing);
+            return groups;
+          }, new Map<string, typeof sessionWeeklyOccurrences>()),
+        ).map(([slotId, occurrences]) => {
+          const slot = sessionWeeklySlots.find((row) => String(row.id) === slotId) || occurrences[0];
+          const professional = findProfessionalOptionById(slot?.professionalId);
+          return {
+            slotId,
+            date: occurrences[0]?.date || sessionDate,
+            recurrenceDates: occurrences.map((occurrence) => occurrence.date),
+            time: String(slot?.time || "").slice(0, 5),
+            specialty: String(slot?.specialty || "").trim(),
+            durationMinutes: Number(slot?.durationMinutes || sessionDurationMinutes),
+            professionalId: String(slot?.professionalId || "").trim(),
+            professionalName: String(slot?.professionalName || professional?.label || "").trim(),
+          };
+        })
+      : [{
+          slotId: "single",
+          date: sessionDate,
+          recurrenceDates: sessionRecurrenceDates,
+          time: sessionTime,
+          specialty: sessionApproach,
+          durationMinutes: sessionDurationMinutes,
+          professionalId: String(selectedSessionProfessional?.id || ""),
+          professionalName: sessionProfessional || selectedSessionProfessional?.label || "",
+        }];
+
+    if (scheduleChecks.length === 0) {
+      setScheduleConflictState({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
+      return;
+    }
+
+    const localResults = scheduleChecks.map((check) =>
+      checkLocalScheduleConflicts({
+        appointments: therapistAgenda,
+        patient_id: selectedSessionPatient?.id,
+        patient_name: sessionPatientName,
+        professional_ids: check.professionalId ? [check.professionalId] : [],
+        professional_names: check.professionalName ? [check.professionalName] : [],
+        room_id: sessionLocationType === "clinica" ? sessionRoom : "",
+        room_name: selectedSessionRoom?.name || sessionRoom,
+        room_prevent_overlapping_appointments:
+          selectedSessionRoom?.prevent_overlapping_appointments ??
+          selectedSessionRoom?.preventOverlappingAppointments,
+        rooms,
+        location_type: sessionLocationType,
+        date: check.date,
+        start_time: check.time,
+        duration_minutes: check.durationMinutes,
+        session_buffer_minutes: sessionBufferMinutes,
+        service_type: check.specialty,
+        exclude_event_id: editingAppointmentId,
+        recurrence_dates: check.recurrenceDates,
+      }),
+    );
+    const localConflicts = localResults.flatMap((result) => result.conflicts || []);
+    const localBlocking = localResults.some((result) => result.blocking);
+    if (localBlocking) {
+      setScheduleConflictState({
+        loading: false,
+        checked: true,
+        blocking: true,
+        message: localConflicts[0]?.humanMessage || "Existe conflito bloqueante na agenda.",
+        conflicts: localConflicts,
+      });
+      return;
+    }
+
     setScheduleConflictState({
       loading: true,
       checked: true,
-      blocking: localResult.blocking,
-      message: localResult.humanMessage,
-      conflicts: localResult.conflicts,
+      blocking: false,
+      message: sessionUsesWeeklyAgenda ? "Validando todos os horários da agenda semanal..." : "Validando horário...",
+      conflicts: [],
     });
 
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const result = await dataService.checkScheduleConflicts({
-          patient_id: selectedSessionPatient?.id,
-          patient_name: sessionPatientName,
-          professional_ids: selectedSessionProfessional?.id ? [selectedSessionProfessional.id] : [],
-          professional_names: sessionProfessional ? [sessionProfessional] : [],
-          room_id: sessionLocationType === "clinica" ? sessionRoom : null,
-          room_name: selectedSessionRoom?.name || sessionRoom,
-          room_prevent_overlapping_appointments:
-            selectedSessionRoom?.prevent_overlapping_appointments ??
-            selectedSessionRoom?.preventOverlappingAppointments,
-          location_type: sessionLocationType,
-          date: sessionDate,
-          start_time: sessionTime,
-          end_time: sessionEndTime,
-          duration_minutes: sessionDurationMinutes,
-          session_buffer_minutes: sessionBufferMinutes,
-          exclude_event_id: editingAppointmentId,
-          recurrence_dates: sessionRecurrenceDates,
-        });
+        const results = await Promise.all(
+          scheduleChecks.map((check) =>
+            dataService.checkScheduleConflicts({
+              patient_id: selectedSessionPatient?.id,
+              patient_name: sessionPatientName,
+              professional_ids: check.professionalId ? [check.professionalId] : [],
+              professional_names: check.professionalName ? [check.professionalName] : [],
+              room_id: sessionLocationType === "clinica" ? sessionRoom : null,
+              room_name: selectedSessionRoom?.name || sessionRoom,
+              room_prevent_overlapping_appointments:
+                selectedSessionRoom?.prevent_overlapping_appointments ??
+                selectedSessionRoom?.preventOverlappingAppointments,
+              location_type: sessionLocationType,
+              date: check.date,
+              start_time: check.time,
+              duration_minutes: check.durationMinutes,
+              session_buffer_minutes: sessionBufferMinutes,
+              service_type: check.specialty,
+              exclude_event_id: editingAppointmentId,
+              recurrence_dates: check.recurrenceDates,
+            }),
+          ),
+        );
         if (cancelled) return;
-        const serverResult = result?.success === false ? null : result?.data || result;
-        if (!serverResult) {
-          setScheduleConflictState((prev) => ({ ...prev, loading: false }));
+        const failedConflictCheck = results.find((result: any) => result?.success === false);
+        if (failedConflictCheck) {
+          setScheduleConflictState({
+            loading: false,
+            checked: true,
+            blocking: true,
+            message: failedConflictCheck?.error || "Não foi possível validar conflitos no servidor. Tente novamente antes de confirmar.",
+            conflicts: [],
+          });
           return;
         }
+        const serverResults = results
+          .map((result: any) => result?.data || result)
+          .filter(Boolean);
+        const conflicts = serverResults.flatMap((result: any) =>
+          Array.isArray(result?.conflicts) ? result.conflicts : [],
+        );
+        const blocking = serverResults.some((result: any) => Boolean(result?.blocking));
         setScheduleConflictState({
           loading: false,
           checked: true,
-          blocking: Boolean(serverResult.blocking),
-          message: serverResult.humanMessage || (serverResult.hasConflict ? "Conflito encontrado." : "Horário disponível."),
-          conflicts: Array.isArray(serverResult.conflicts) ? serverResult.conflicts : [],
+          blocking,
+          message: blocking
+            ? conflicts[0]?.humanMessage || "Existe conflito bloqueante em um dos atendimentos."
+            : sessionUsesWeeklyAgenda
+              ? `${sessionWeeklyOccurrences.length} atendimentos sem sobreposição de paciente, profissional ou sala e sem duplicidade de especialidade para o mesmo paciente.`
+              : "Horário disponível.",
+          conflicts,
         });
       } catch (error) {
         if (!cancelled) {
@@ -4639,6 +4927,10 @@ export function CoordinatorDashboard({
     sessionRecurrenceDates.join("|"),
     sessionRoom,
     sessionTime,
+    sessionUsesWeeklyAgenda,
+    sessionWeeklyOccurrences.length,
+    sessionWeeklyScheduleSignature,
+    sessionWeeklyValidationError,
     therapistAgenda,
   ]);
 
@@ -4674,6 +4966,9 @@ export function CoordinatorDashboard({
     setSessionBillingSuggestionState({ loading: false, error: "", suggestion: null });
     setSessionNumSessions(1);
     setSessionRecurrencePattern("weekly");
+    setSessionWeeklyAgendaEnabled(false);
+    setSessionWeeklyWeeks(4);
+    setSessionWeeklySlots([]);
     setSessionApplyAuthorizationToRecurrence(true);
     setSessionReuseGuideAcrossRecurrence(false);
     setEditingAppointmentId(null);
@@ -4689,6 +4984,29 @@ export function CoordinatorDashboard({
         editingAppointment.recurrenceGroupId ||
         editingAppointment.recurrence_group_id),
   );
+  const editingAppointmentRecurrenceFrequency = useMemo(() => {
+    if (!editingAppointment) return "";
+    const direct = String(
+      editingAppointment?.recurrenceFrequency || editingAppointment?.recurrence_frequency || "",
+    ).trim();
+    if (direct) return direct.toLowerCase();
+    const rawSource = editingAppointment?.source_payload || editingAppointment?.sourcePayload;
+    let source: any = rawSource;
+    if (typeof rawSource === "string") {
+      try {
+        source = JSON.parse(rawSource);
+      } catch {
+        source = null;
+      }
+    }
+    return String(source?.recurrenceFrequency || source?.recurrence_frequency || "")
+      .trim()
+      .toLowerCase();
+  }, [editingAppointment]);
+  const isEditingWeeklyAgendaAppointment = editingAppointmentRecurrenceFrequency === "weekly_agenda";
+  const effectiveAppointmentEditScope: "single" | "future" = isEditingWeeklyAgendaAppointment
+    ? "single"
+    : appointmentEditScope;
 
   const openNewAppointmentAt = (date: string, time = "08:00") => {
     const clickedDate = String(date || "").trim() || new Date().toISOString().split("T")[0];
@@ -4724,6 +5042,10 @@ export function CoordinatorDashboard({
   };
 
   const handleSessionSubmit = async () => {
+    if (sessionUsesWeeklyAgenda && sessionWeeklyValidationError) {
+      showToast(sessionWeeklyValidationError, "error");
+      return;
+    }
     if (!requiredSessionFieldsReady) {
       const locationMessage =
         sessionLocationType === "escola"
@@ -4757,7 +5079,7 @@ export function CoordinatorDashboard({
 
     const getBulkEditExcludedAppointmentIds = () => {
       if (!editingAppointmentId) return [];
-      if (!isEditingRecurringAppointment || appointmentEditScope !== "future") {
+      if (!isEditingRecurringAppointment || effectiveAppointmentEditScope !== "future") {
         return [String(editingAppointmentId)];
       }
       const recurrenceGroupId = String(
@@ -4794,28 +5116,37 @@ export function CoordinatorDashboard({
     };
     const conflictExcludeEventIds = getBulkEditExcludedAppointmentIds();
 
-    const serverConflict = await dataService.checkScheduleConflicts({
-      patient_id: selectedSessionPatient?.id,
-      patient_name: sessionPatientName,
-      professional_ids: selectedSessionProfessional?.id ? [selectedSessionProfessional.id] : [],
-      professional_names: sessionProfessional ? [sessionProfessional] : [],
-      room_id: sessionLocationType === "clinica" ? sessionRoom : null,
-      room_name: selectedSessionRoom?.name || sessionRoom,
-      location_type: sessionLocationType,
-      date: sessionDate,
-      start_time: sessionTime,
-      end_time: sessionEndTime,
-      duration_minutes: sessionDurationMinutes,
-      exclude_event_id: editingAppointmentId,
-      exclude_event_ids: conflictExcludeEventIds,
-      recurrence_dates: sessionRecurrenceDates,
-    });
-    const conflictPayload = serverConflict?.data || serverConflict;
-    if (conflictPayload?.blocking) {
-      hideProcessing();
-      releaseSessionSubmit();
-      showToast(conflictPayload.humanMessage || "Conflito encontrado nesse horário.", "error");
-      return;
+    if (!sessionUsesWeeklyAgenda) {
+      const serverConflict = await dataService.checkScheduleConflicts({
+        patient_id: selectedSessionPatient?.id,
+        patient_name: sessionPatientName,
+        professional_ids: selectedSessionProfessional?.id ? [selectedSessionProfessional.id] : [],
+        professional_names: sessionProfessional ? [sessionProfessional] : [],
+        room_id: sessionLocationType === "clinica" ? sessionRoom : null,
+        room_name: selectedSessionRoom?.name || sessionRoom,
+        location_type: sessionLocationType,
+        service_type: sessionApproach || "Consulta Padrão",
+        date: sessionDate,
+        start_time: sessionTime,
+        end_time: sessionEndTime,
+        duration_minutes: sessionDurationMinutes,
+        exclude_event_id: editingAppointmentId,
+        exclude_event_ids: conflictExcludeEventIds,
+        recurrence_dates: sessionRecurrenceDates,
+      });
+      if (serverConflict?.success === false) {
+        hideProcessing();
+        releaseSessionSubmit();
+        showToast(serverConflict?.error || "Não foi possível validar conflitos no servidor. Tente novamente.", "error");
+        return;
+      }
+      const conflictPayload = serverConflict?.data || serverConflict;
+      if (conflictPayload?.blocking) {
+        hideProcessing();
+        releaseSessionSubmit();
+        showToast(conflictPayload.humanMessage || "Conflito encontrado nesse horário.", "error");
+        return;
+      }
     }
 
     if (editingAppointmentId) {
@@ -4904,7 +5235,7 @@ export function CoordinatorDashboard({
         therapist_name: selectedSessionProfessional?.label || sessionProfessional,
         recurrencePattern: sessionRecurrencePattern,
         recurrenceScope: isEditingRecurringAppointment
-          ? appointmentEditScope
+          ? effectiveAppointmentEditScope
           : "single",
       };
       const result: any = await onUpdateAppointment(editingAppointmentId, updates);
@@ -4922,7 +5253,7 @@ export function CoordinatorDashboard({
       );
       onAddActivityLog(
         "Agendamento editado",
-        isEditingRecurringAppointment && appointmentEditScope === "future"
+        isEditingRecurringAppointment && effectiveAppointmentEditScope === "future"
           ? `Série recorrente de ${sessionPatientName} atualizada a partir de ${sessionDate} às ${sessionTime}.`
           : `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
         "management",
@@ -5062,16 +5393,24 @@ export function CoordinatorDashboard({
       professional_id: selectedSessionProfessional?.id || sessionProfessionalId,
       therapistId: selectedSessionProfessional?.id || sessionProfessionalId,
       therapist_id: selectedSessionProfessional?.id || sessionProfessionalId,
-      numSessions: Math.min(52, Math.max(1, Number(sessionNumSessions) || 1)),
-      recurrencePattern: sessionRecurrencePattern,
+      numSessions: sessionUsesWeeklyAgenda
+        ? Math.min(MAX_WEEKLY_SCHEDULE_OCCURRENCES, Math.max(1, sessionWeeklyOccurrences.length))
+        : Math.min(52, Math.max(1, Number(sessionNumSessions) || 1)),
+      recurrencePattern: sessionUsesWeeklyAgenda ? "weekly_agenda" : sessionRecurrencePattern,
+      weeklyAgendaEnabled: sessionUsesWeeklyAgenda,
+      weekly_agenda_enabled: sessionUsesWeeklyAgenda,
+      recurrenceWeeks: sessionUsesWeeklyAgenda ? sessionWeeklyWeeks : null,
+      recurrence_weeks: sessionUsesWeeklyAgenda ? sessionWeeklyWeeks : null,
+      weeklySchedule: sessionUsesWeeklyAgenda ? normalizeWeeklyScheduleSlots(sessionWeeklySlots) : [],
+      weekly_schedule: sessionUsesWeeklyAgenda ? normalizeWeeklyScheduleSlots(sessionWeeklySlots) : [],
       applyAuthorizationToRecurrence:
-        Number(sessionNumSessions) <= 1 || sessionApplyAuthorizationToRecurrence,
+        sessionPlannedOccurrenceCount <= 1 || sessionApplyAuthorizationToRecurrence,
       apply_authorization_to_recurrence:
-        Number(sessionNumSessions) <= 1 || sessionApplyAuthorizationToRecurrence,
+        sessionPlannedOccurrenceCount <= 1 || sessionApplyAuthorizationToRecurrence,
       reuseGuideAcrossRecurrence:
-        Number(sessionNumSessions) > 1 && sessionReuseGuideAcrossRecurrence,
+        sessionPlannedOccurrenceCount > 1 && sessionReuseGuideAcrossRecurrence,
       reuse_guide_across_recurrence:
-        Number(sessionNumSessions) > 1 && sessionReuseGuideAcrossRecurrence,
+        sessionPlannedOccurrenceCount > 1 && sessionReuseGuideAcrossRecurrence,
     };
     const result = await onScheduleSession(newSession);
     if (result && !result.success) {
@@ -5083,7 +5422,9 @@ export function CoordinatorDashboard({
     onAddActivityLog(
       "Agendamento criado",
       Number(newSession.numSessions) > 1
-        ? `${newSession.numSessions} sessões semanais agendadas para ${sessionPatientName} a partir de ${sessionDate} às ${sessionTime}.`
+        ? sessionUsesWeeklyAgenda
+          ? `${newSession.numSessions} atendimentos da agenda semanal criados para ${sessionPatientName} a partir de ${sessionDate}.`
+          : `${newSession.numSessions} sessões recorrentes agendadas para ${sessionPatientName} a partir de ${sessionDate} às ${sessionTime}.`
         : `Nova sessão agendada para ${sessionPatientName} em ${sessionDate} às ${sessionTime}.`,
       "management",
     );
@@ -5094,7 +5435,9 @@ export function CoordinatorDashboard({
     releaseSessionSubmit();
     showToast(
       Number(newSession.numSessions) > 1
-        ? "Agendamentos recorrentes criados com sucesso!"
+        ? sessionUsesWeeklyAgenda
+          ? "Agenda semanal criada com sucesso!"
+          : "Agendamentos recorrentes criados com sucesso!"
         : "Agendamento criado com sucesso!",
     );
   };
@@ -13767,7 +14110,7 @@ export function CoordinatorDashboard({
           onClick={() => setIsAddSessionModalOpen(false)}
         >
           <div
-            className="bg-white w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[28px] p-5 shadow-2xl animate-pop relative sm:p-6"
+            className="bg-white w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-[28px] p-5 shadow-2xl animate-pop relative sm:p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -13814,7 +14157,7 @@ export function CoordinatorDashboard({
                 <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <div>
                   <label className={sessionModalLabelClass}>
-                    Data
+                    {sessionUsesWeeklyAgenda ? "A partir de" : "Data"}
                   </label>
                   <input
                     type="date"
@@ -13825,7 +14168,7 @@ export function CoordinatorDashboard({
                 </div>
                 <div>
                   <label className={sessionModalLabelClass}>
-                    Hora de início
+                    {sessionUsesWeeklyAgenda ? "Horário padrão" : "Hora de início"}
                   </label>
                   <input
                     type="time"
@@ -13836,7 +14179,7 @@ export function CoordinatorDashboard({
                 </div>
                 <div>
                   <label className={sessionModalLabelClass}>
-                    Duração
+                    {sessionUsesWeeklyAgenda ? "Duração padrão" : "Duração"}
                   </label>
                   <select
                     className="w-full rounded-xl border border-slate-100 bg-white p-3 text-sm font-medium text-slate-700 outline-none focus:border-violet-200 focus:ring-2 focus:ring-violet-100"
@@ -13879,7 +14222,7 @@ export function CoordinatorDashboard({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className={sessionModalLabelClass}>
-                    Especialidade / tipo clínico
+                    {sessionUsesWeeklyAgenda ? "Especialidade padrão / tipo clínico" : "Especialidade / tipo clínico"}
                   </label>
                   <select
                     className={sessionModalSelectClass}
@@ -13893,16 +14236,9 @@ export function CoordinatorDashboard({
                     }}
                   >
                     <option value="">Selecione...</option>
-                    <option value="ABA">ABA</option>
-                    <option value="Fonoaudiologia">Fonoaudiologia</option>
-                    <option value="Terapia Ocupacional">Terapia Ocupacional</option>
-                    <option value="Psicologia">Psicologia</option>
-                    <option value="Psicopedagogia">Psicopedagogia</option>
-                    <option value="Avaliação">Avaliação</option>
-                    <option value="Supervisão">Supervisão</option>
-                    <option value="Reunião interdisciplinar">Reunião interdisciplinar</option>
-                    <option value="Orientação familiar">Orientação familiar</option>
-                    <option value="Outro">Outro</option>
+                    {SESSION_SPECIALTY_OPTIONS.map((specialty) => (
+                      <option key={specialty} value={specialty}>{specialty}</option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -14179,7 +14515,7 @@ export function CoordinatorDashboard({
               )}
               <div>
                 <label className={sessionModalLabelClass}>
-                  Profissional responsável
+                  {sessionUsesWeeklyAgenda ? "Profissional padrão" : "Profissional responsável"}
                 </label>
                 <select
                   className={sessionModalSelectClass}
@@ -14555,7 +14891,7 @@ export function CoordinatorDashboard({
                         </div>
                       </div>
                     )}
-                    {sessionFinancialContextType === "INSURANCE" && !editingAppointmentId && Number(sessionNumSessions) > 1 && (
+                    {sessionFinancialContextType === "INSURANCE" && !editingAppointmentId && sessionPlannedOccurrenceCount > 1 && (
                       <div className="sm:col-span-2 space-y-3 rounded-2xl border border-violet-100 bg-white p-3">
                         <label className="flex items-start gap-3 text-xs font-semibold normal-case tracking-normal text-slate-700">
                           <input
@@ -14567,7 +14903,7 @@ export function CoordinatorDashboard({
                             }
                           />
                           <span>
-                            Aplicar esta autorização às {sessionNumSessions} sessões
+                            Aplicar esta autorização às {sessionAuthorizationApplicableOccurrenceCount} sessões de {sessionApproach || "especialidade padrão"}
                           </span>
                         </label>
                         <label className="flex items-start gap-3 text-xs font-semibold normal-case tracking-normal text-slate-700">
@@ -14581,6 +14917,11 @@ export function CoordinatorDashboard({
                           />
                           <span>Usar esta mesma guia em todas as sessões</span>
                         </label>
+                        {sessionWeeklyHasMixedSpecialties && (
+                          <p className="rounded-xl bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-700">
+                            A autorização e o procedimento selecionados aqui só são reaproveitados nas ocorrências de {sessionApproach || "especialidade padrão"}. As outras especialidades são persistidas separadamente para evitar faturamento incorreto.
+                          </p>
+                        )}
                         {!sessionReuseGuideAcrossRecurrence && (
                           <p className="text-[11px] font-medium text-slate-500">
                             A primeira sessão mantém a guia informada. As demais ficam com guia pendente por ocorrência.
@@ -14630,33 +14971,46 @@ export function CoordinatorDashboard({
                   <p className="text-sm font-semibold text-slate-800">
                     Este agendamento faz parte de uma recorrência.
                   </p>
-                  <p className="mt-1 text-xs font-medium text-slate-500">
-                    Escolha se a remarcação vale só para esta data ou para esta e as próximas sessões da série.
-                  </p>
-                  <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-white p-1">
-                    <button
-                      type="button"
-                      onClick={() => setAppointmentEditScope("single")}
-                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                        appointmentEditScope === "single"
-                          ? "bg-[#7a32fc] text-white shadow-lg shadow-violet-500/20"
-                          : "text-slate-500 hover:bg-slate-50"
-                      }`}
-                    >
-                      Só este dia
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAppointmentEditScope("future")}
-                      className={`rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
-                        appointmentEditScope === "future"
-                          ? "bg-[#7a32fc] text-white shadow-lg shadow-violet-500/20"
-                          : "text-slate-500 hover:bg-slate-50"
-                      }`}
-                    >
-                      Este e próximos
-                    </button>
-                  </div>
+                  {isEditingWeeklyAgendaAppointment ? (
+                    <>
+                      <p className="mt-1 text-xs font-medium text-slate-500">
+                        Esta série usa uma agenda semanal com horários, especialidades e profissionais independentes. Para proteger os outros atendimentos da série, esta edição altera somente esta ocorrência.
+                      </p>
+                      <div className="mt-3 inline-flex rounded-xl bg-white px-3 py-2 text-xs font-semibold text-violet-700">
+                        Somente esta ocorrência
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="mt-1 text-xs font-medium text-slate-500">
+                        Escolha se a remarcação vale só para esta data ou para esta e as próximas sessões da série.
+                      </p>
+                      <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl bg-white p-1">
+                        <button
+                          type="button"
+                          onClick={() => setAppointmentEditScope("single")}
+                          className={`rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
+                            appointmentEditScope === "single"
+                              ? "bg-[#7a32fc] text-white shadow-lg shadow-violet-500/20"
+                              : "text-slate-500 hover:bg-slate-50"
+                          }`}
+                        >
+                          Só este dia
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAppointmentEditScope("future")}
+                          className={`rounded-xl px-3 py-2 text-xs font-semibold transition-all ${
+                            appointmentEditScope === "future"
+                              ? "bg-[#7a32fc] text-white shadow-lg shadow-violet-500/20"
+                              : "text-slate-500 hover:bg-slate-50"
+                          }`}
+                        >
+                          Este e próximos
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               {!editingAppointmentId && (
@@ -14665,69 +15019,231 @@ export function CoordinatorDashboard({
                     <input
                       type="checkbox"
                       className="mt-1 h-4 w-4 rounded border-slate-300 text-[#7a32fc]"
-                      checked={Number(sessionNumSessions) > 1}
-                      onChange={(e) => setSessionNumSessions(e.target.checked ? 4 : 1)}
+                      checked={sessionWeeklyAgendaEnabled}
+                      onChange={(event) => toggleSessionWeeklyAgenda(event.target.checked)}
                     />
                     <span>
                       <span className="block text-sm font-semibold text-slate-800">
-                        Reservar semanalmente este dia e horário
+                        Montar agenda semanal recorrente
                       </span>
                       <span className="mt-1 block text-xs font-medium text-slate-500">
-                        Cria sessões recorrentes para o mesmo paciente, sala, profissional e horário. Os lembretes seguem separados para cada data.
+                        Escolha os dias e cadastre um ou mais atendimentos por dia. Cada atendimento possui horário, especialidade, profissional e duração próprios.
                       </span>
                     </span>
                   </label>
-                  {Number(sessionNumSessions) > 1 && (
-                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] items-end gap-3">
-                      <div>
-                        <label className={sessionModalLabelClass}>
-                          Recorrência
-                        </label>
-                        <select
-                          className={sessionModalSelectClass}
-                          value={sessionRecurrencePattern}
-                          onChange={(e) => setSessionRecurrencePattern(e.target.value)}
-                        >
-                          <option value="weekly">Semanal</option>
-                          <option value="biweekly">Quinzenal</option>
-                          <option value="monthly">Mensal</option>
-                          <option value="custom">Personalizada</option>
-                        </select>
+
+                  {sessionWeeklyAgendaEnabled ? (
+                    <div className="mt-4 space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-[180px_1fr] sm:items-end">
+                        <div>
+                          <label className={sessionModalLabelClass}>Repetir por</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min={1}
+                              max={52}
+                              className={sessionModalInputClass}
+                              value={sessionWeeklyWeeks}
+                              onChange={(event) =>
+                                setSessionWeeklyWeeks(
+                                  Math.min(52, Math.max(1, Number(event.target.value) || 1)),
+                                )
+                              }
+                            />
+                            <span className="text-xs font-bold text-slate-400">semanas</span>
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-violet-100 bg-violet-50 px-4 py-3">
+                          <p className="text-xs font-semibold text-violet-900">
+                            {sessionWeeklyOccurrences.length} atendimentos serão criados
+                          </p>
+                          <p className="mt-1 text-[11px] font-medium text-violet-700">
+                            O lote só é confirmado sem sobreposição de paciente, profissional ou sala e sem duplicidade de especialidade para o mesmo paciente.
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <label className={sessionModalLabelClass}>
-                          Quantidade de sessões
-                        </label>
-                        <input
-                          type="number"
-                          min={2}
-                          max={52}
-                          className={sessionModalInputClass}
-                          value={sessionNumSessions}
-                          onChange={(e) =>
-                            setSessionNumSessions(
-                              Math.min(52, Math.max(2, Number(e.target.value) || 2)),
-                            )
-                          }
-                        />
+
+                      <div className="space-y-3">
+                        {WEEKLY_SCHEDULE_DAYS.map((day) => {
+                          const daySlots = sessionWeeklySlots.filter((slot) => Number(slot.weekday) === day.value);
+                          return (
+                            <div key={day.value} className="rounded-2xl border border-slate-200 bg-white p-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-semibold text-slate-800">{day.label}</p>
+                                  <p className="text-[11px] font-medium text-slate-400">
+                                    {daySlots.length === 0
+                                      ? "Sem atendimento"
+                                      : `${daySlots.length} atendimento${daySlots.length > 1 ? "s" : ""}`}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => addSessionWeeklySlot(day.value)}
+                                  className="inline-flex items-center gap-1 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 hover:bg-violet-100"
+                                >
+                                  <Plus size={14} /> Atendimento
+                                </button>
+                              </div>
+
+                              {daySlots.length > 0 && (
+                                <div className="mt-3 space-y-2">
+                                  {daySlots.map((slot) => {
+                                    const slotId = String(slot.id || "");
+                                    return (
+                                      <div key={slotId} className="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50/70 p-3 md:grid-cols-[110px_1fr_1fr_110px_40px] md:items-end">
+                                        <div>
+                                          <label className={sessionModalLabelClass}>Horário</label>
+                                          <input
+                                            type="time"
+                                            className={sessionModalInputClass}
+                                            value={String(slot.time || "").slice(0, 5)}
+                                            onChange={(event) => updateSessionWeeklySlot(slotId, { time: event.target.value })}
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className={sessionModalLabelClass}>Especialidade</label>
+                                          <select
+                                            className={sessionModalSelectClass}
+                                            value={String(slot.specialty || "")}
+                                            onChange={(event) => updateSessionWeeklySlot(slotId, { specialty: event.target.value })}
+                                          >
+                                            <option value="">Selecione...</option>
+                                            {SESSION_SPECIALTY_OPTIONS.map((specialty) => (
+                                              <option key={specialty} value={specialty}>{specialty}</option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <label className={sessionModalLabelClass}>Profissional</label>
+                                          <select
+                                            className={sessionModalSelectClass}
+                                            value={String(slot.professionalId || "")}
+                                            onChange={(event) => {
+                                              const professional = findProfessionalOptionById(event.target.value);
+                                              updateSessionWeeklySlot(slotId, {
+                                                professionalId: event.target.value,
+                                                professionalName: professional?.label || "",
+                                              });
+                                            }}
+                                          >
+                                            <option value="">Selecione...</option>
+                                            {therapistFilterOptions.map((member) => (
+                                              <option key={member.id} value={member.id}>{member.label}</option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                        <div>
+                                          <label className={sessionModalLabelClass}>Duração</label>
+                                          <select
+                                            className={sessionModalSelectClass}
+                                            value={String(slot.durationMinutes || sessionDurationMinutes)}
+                                            onChange={(event) => updateSessionWeeklySlot(slotId, { durationMinutes: Number(event.target.value) })}
+                                          >
+                                            {SESSION_DURATION_QUICK_OPTIONS.map((duration) => (
+                                              <option key={duration} value={duration}>{duration} min</option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          aria-label={`Remover atendimento de ${day.label}`}
+                                          onClick={() => removeSessionWeeklySlot(slotId)}
+                                          className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-400 hover:bg-red-50 hover:text-red-600"
+                                        >
+                                          <Trash2 size={16} />
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
-                      <span className="pb-3 text-xs font-bold text-slate-400">
-                        ocorrências
-                      </span>
+
+                      {sessionWeeklyValidationError && (
+                        <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-xs font-semibold text-red-700">
+                          {sessionWeeklyValidationError}
+                        </div>
+                      )}
+
+                      {sessionWeeklyOccurrences.length > 0 && (
+                        <div className="rounded-2xl bg-white p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs font-semibold text-slate-600">Preview dos próximos atendimentos</p>
+                            {sessionWeeklyOccurrences.length > 10 && (
+                              <span className="text-[11px] font-medium text-slate-400">
+                                +{sessionWeeklyOccurrences.length - 10} ocorrências
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {sessionWeeklyOccurrences.slice(0, 10).map((occurrence, index) => {
+                              const professional = findProfessionalOptionById(occurrence.professionalId);
+                              const dateLabel = String(occurrence.date || "").split("-").reverse().join("/");
+                              return (
+                                <span
+                                  key={`${occurrence.slotId}-${occurrence.date}-${index}`}
+                                  className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-semibold text-slate-600"
+                                >
+                                  {dateLabel} • {occurrence.time} • {occurrence.specialty} • {professional?.label || occurrence.professionalName || "Profissional"}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                  {Number(sessionNumSessions) > 1 && (
-                    <div className="mt-4 rounded-2xl bg-white p-3">
-                      <p className="text-xs font-medium text-slate-500">
-                        Preview das próximas datas
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {sessionRecurrenceDates.slice(0, 8).map((dateKey) => (
-                          <span key={dateKey} className="rounded-xl bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-600">
-                            {dateKey}
+                  ) : (
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-3">
+                      <label className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          className="mt-1 h-4 w-4 rounded border-slate-300 text-[#7a32fc]"
+                          checked={Number(sessionNumSessions) > 1}
+                          onChange={(event) => setSessionNumSessions(event.target.checked ? 4 : 1)}
+                        />
+                        <span>
+                          <span className="block text-xs font-semibold text-slate-700">Usar recorrência simples</span>
+                          <span className="mt-1 block text-[11px] font-medium text-slate-400">
+                            Mantém o mesmo dia, horário, especialidade e profissional em todas as ocorrências.
                           </span>
-                        ))}
-                      </div>
+                        </span>
+                      </label>
+                      {Number(sessionNumSessions) > 1 && (
+                        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div>
+                            <label className={sessionModalLabelClass}>Recorrência</label>
+                            <select
+                              className={sessionModalSelectClass}
+                              value={sessionRecurrencePattern}
+                              onChange={(event) => setSessionRecurrencePattern(event.target.value)}
+                            >
+                              <option value="weekly">Semanal</option>
+                              <option value="biweekly">Quinzenal</option>
+                              <option value="monthly">Mensal</option>
+                              <option value="custom">Personalizada</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className={sessionModalLabelClass}>Quantidade de sessões</label>
+                            <input
+                              type="number"
+                              min={2}
+                              max={52}
+                              className={sessionModalInputClass}
+                              value={sessionNumSessions}
+                              onChange={(event) =>
+                                setSessionNumSessions(
+                                  Math.min(52, Math.max(2, Number(event.target.value) || 2)),
+                                )
+                              }
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

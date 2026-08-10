@@ -1,7 +1,7 @@
 export type ScheduleLocationType = 'clinica' | 'online' | 'domicilio' | 'escola' | 'outro';
 export type CareSetting = 'CLINIC' | 'ONLINE' | 'PATIENT_HOME' | 'SCHOOL' | 'OTHER';
 
-export type ScheduleConflictType = 'professional' | 'room' | 'patient' | 'team';
+export type ScheduleConflictType = 'professional' | 'room' | 'patient' | 'team' | 'specialty';
 
 export type ScheduleConflict = {
   conflictType: ScheduleConflictType;
@@ -316,6 +316,145 @@ export function buildRecurrenceDateKeys(params: {
   });
 }
 
+export type WeeklyScheduleSlot = {
+  id?: string;
+  weekday: number;
+  time: string;
+  specialty: string;
+  professionalId?: string;
+  professionalName?: string;
+  durationMinutes?: number;
+};
+
+export type WeeklyScheduleOccurrence = WeeklyScheduleSlot & {
+  slotId: string;
+  date: string;
+  weekIndex: number;
+};
+
+export const WEEKLY_SCHEDULE_DAYS = [
+  { value: 1, shortLabel: 'Seg', label: 'Segunda-feira' },
+  { value: 2, shortLabel: 'Ter', label: 'Terça-feira' },
+  { value: 3, shortLabel: 'Qua', label: 'Quarta-feira' },
+  { value: 4, shortLabel: 'Qui', label: 'Quinta-feira' },
+  { value: 5, shortLabel: 'Sex', label: 'Sexta-feira' },
+  { value: 6, shortLabel: 'Sáb', label: 'Sábado' },
+  { value: 0, shortLabel: 'Dom', label: 'Domingo' },
+] as const;
+
+const normalizeWeeklyScheduleSpecialty = (value: any) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+const localDateKey = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+export function normalizeWeeklyScheduleSlots(slots: any[]): WeeklyScheduleSlot[] {
+  return (Array.isArray(slots) ? slots : [])
+    .map((slot: any, index: number) => ({
+      id: String(slot?.id || slot?.slotId || `slot-${index + 1}`),
+      weekday: Math.max(0, Math.min(6, Math.round(Number(slot?.weekday) || 0))),
+      time: normalizeAppointmentTime(slot?.time),
+      specialty: String(slot?.specialty || slot?.approach || slot?.serviceType || slot?.service_type || '').trim(),
+      professionalId: String(slot?.professionalId || slot?.professional_id || slot?.therapistId || slot?.therapist_id || '').trim() || undefined,
+      professionalName: String(slot?.professionalName || slot?.professional_name || slot?.therapistName || slot?.therapist_name || slot?.professional || '').trim() || undefined,
+      durationMinutes: normalizeDurationMinutes(slot?.durationMinutes || slot?.duration_minutes || DEFAULT_SESSION_DURATION_MINUTES),
+    }))
+    .filter((slot) => Boolean(slot.time && slot.specialty));
+}
+
+export function buildWeeklyScheduleOccurrences(params: {
+  startDate: any;
+  weeks?: any;
+  slots?: any[];
+  maxOccurrences?: number;
+}): WeeklyScheduleOccurrence[] {
+  const startDateKey = normalizeAppointmentDate(params.startDate);
+  const start = startDateKey ? new Date(`${startDateKey}T00:00:00`) : null;
+  if (!start || Number.isNaN(start.getTime())) return [];
+  const weeks = Math.min(52, Math.max(1, Math.round(Number(params.weeks || 1) || 1)));
+  const maxOccurrences = Math.min(240, Math.max(1, Number(params.maxOccurrences || 120) || 120));
+  const slots = normalizeWeeklyScheduleSlots(params.slots || []);
+  if (slots.length === 0) return [];
+
+  const monday = new Date(start);
+  const mondayOffset = (monday.getDay() + 6) % 7;
+  monday.setDate(monday.getDate() - mondayOffset);
+
+  const occurrences: WeeklyScheduleOccurrence[] = [];
+  for (let weekIndex = 0; weekIndex < weeks; weekIndex += 1) {
+    for (const slot of slots) {
+      const candidate = new Date(monday);
+      const dayOffsetFromMonday = (slot.weekday + 6) % 7;
+      candidate.setDate(monday.getDate() + weekIndex * 7 + dayOffsetFromMonday);
+      const date = localDateKey(candidate);
+      if (date < startDateKey) continue;
+      occurrences.push({
+        ...slot,
+        slotId: String(slot.id || ''),
+        date,
+        weekIndex,
+      });
+      if (occurrences.length >= maxOccurrences) break;
+    }
+    if (occurrences.length >= maxOccurrences) break;
+  }
+  return occurrences.sort((left, right) => {
+    const byDate = left.date.localeCompare(right.date);
+    if (byDate !== 0) return byDate;
+    const byTime = timeToMinutes(left.time) - timeToMinutes(right.time);
+    if (byTime !== 0) return byTime;
+    return String(left.slotId).localeCompare(String(right.slotId));
+  });
+}
+
+export function findWeeklyScheduleDraftConflicts(slotsInput: any[]): ScheduleConflictResult {
+  const slots = normalizeWeeklyScheduleSlots(slotsInput);
+  const conflicts: ScheduleConflict[] = [];
+  const addConflict = (conflict: ScheduleConflict) => {
+    if (!conflicts.some((item) => item.humanMessage === conflict.humanMessage)) conflicts.push(conflict);
+  };
+  for (let index = 0; index < slots.length; index += 1) {
+    const current = slots[index];
+    const currentEnd = addMinutesToTime(current.time, current.durationMinutes);
+    for (let otherIndex = index + 1; otherIndex < slots.length; otherIndex += 1) {
+      const other = slots[otherIndex];
+      if (current.weekday !== other.weekday) continue;
+      const otherEnd = addMinutesToTime(other.time, other.durationMinutes);
+      if (!appointmentTimesOverlap(current.time, currentEnd, other.time, otherEnd)) continue;
+      const sameSpecialty = normalizeWeeklyScheduleSpecialty(current.specialty) === normalizeWeeklyScheduleSpecialty(other.specialty);
+      const sameProfessional = Boolean(
+        current.professionalId && other.professionalId && current.professionalId === other.professionalId
+      ) || Boolean(
+        current.professionalName && other.professionalName && current.professionalName === other.professionalName
+      );
+      const dayLabel = WEEKLY_SCHEDULE_DAYS.find((day) => day.value === current.weekday)?.label || 'Mesmo dia';
+      const reasons = [
+        'mesmo paciente',
+        ...(sameProfessional ? ['mesmo profissional'] : []),
+        ...(sameSpecialty ? [`mesma especialidade (${current.specialty})`] : []),
+      ];
+      addConflict({
+        conflictType: sameSpecialty ? 'specialty' : 'patient',
+        humanMessage: `${dayLabel}: ${current.time}-${currentEnd} conflita com ${other.time}-${otherEnd} (${reasons.join(', ')}).`,
+        blocking: true,
+        startTime: current.time,
+        endTime: currentEnd,
+      });
+    }
+  }
+  return {
+    hasConflict: conflicts.length > 0,
+    conflicts,
+    blocking: conflicts.some((conflict) => conflict.blocking),
+    humanMessage: conflicts[0]?.humanMessage || 'Agenda semanal sem conflitos internos.',
+  };
+}
+
 export function appointmentTimesOverlap(startA: any, endA: any, startB: any, endB: any): boolean {
   return timeToMinutes(startA) < timeToMinutes(endB) && timeToMinutes(endA) > timeToMinutes(startB);
 }
@@ -584,6 +723,9 @@ export function checkLocalScheduleConflicts(input: {
   exclude_event_id?: any;
   exclude_event_ids?: any[];
   recurrence_dates?: any[];
+  service_type?: any;
+  serviceType?: any;
+  specialty?: any;
 }): ScheduleConflictResult {
   const appointments = Array.isArray(input.appointments) ? input.appointments : [];
   const recurrenceDates = Array.isArray(input.recurrence_dates) && input.recurrence_dates.length > 0
@@ -600,6 +742,8 @@ export function checkLocalScheduleConflicts(input: {
   const bufferedEndTime = addMinutesToTime(startTime, durationMinutes + sessionBufferMinutes);
   const patientId = String(input.patient_id || '').trim();
   const patientName = String(input.patient_name || '').trim();
+  const serviceType = String(input.service_type || input.serviceType || input.specialty || '').trim();
+  const normalizedServiceType = normalizeWeeklyScheduleSpecialty(serviceType);
   const roomId = String(input.room_id || '').trim();
   const roomName = String(input.room_name || roomId || 'Sala').trim();
   const roomConfig = findScheduleRoomConfig(input.rooms || [], roomId, roomName);
@@ -649,13 +793,22 @@ export function checkLocalScheduleConflicts(input: {
 
       const existingPatientId = getAppointmentPatientId(appointment);
       const existingPatientName = getAppointmentPatientName(appointment);
-      if (
+      const samePatient =
         (patientId && existingPatientId && patientId === existingPatientId) ||
-        (!patientId && patientName && existingPatientName.toLowerCase() === patientName.toLowerCase())
-      ) {
+        (!patientId && patientName && existingPatientName.toLowerCase() === patientName.toLowerCase());
+      if (samePatient) {
+        const existingServiceType = String(
+          appointment?.service_type || appointment?.serviceType || appointment?.approach || appointment?.type || ''
+        ).trim();
+        const sameSpecialty = Boolean(
+          normalizedServiceType &&
+          normalizeWeeklyScheduleSpecialty(existingServiceType) === normalizedServiceType
+        );
         addConflict({
-          conflictType: 'patient',
-          humanMessage: `${patientName || existingPatientName || 'Paciente'} ja possui sessão das ${existingStart} as ${existingEnd}.`,
+          conflictType: sameSpecialty ? 'specialty' : 'patient',
+          humanMessage: sameSpecialty
+            ? `${patientName || existingPatientName || 'Paciente'} já possui ${serviceType || existingServiceType} das ${existingStart} às ${existingEnd}.`
+            : `${patientName || existingPatientName || 'Paciente'} já possui outra sessão das ${existingStart} às ${existingEnd}.`,
           blocking: true,
           date: dateKey,
           startTime: existingStart,
@@ -677,7 +830,7 @@ export function checkLocalScheduleConflicts(input: {
         if (roomPreventsOverlappingAppointments(existingRoomPolicySource, true)) {
           addConflict({
             conflictType: 'room',
-            humanMessage: `${roomName} ja esta ocupada das ${existingStart} as ${existingEnd}.`,
+            humanMessage: `${roomName} já está ocupada das ${existingStart} às ${existingEnd}.`,
             blocking: true,
             date: dateKey,
             startTime: existingStart,
@@ -699,7 +852,7 @@ export function checkLocalScheduleConflicts(input: {
           'Profissional';
         addConflict({
           conflictType: existingProfessionalIds.length > 1 ? 'team' : 'professional',
-          humanMessage: `${professionalName} ja possui sessão das ${existingStart} as ${existingEnd}.`,
+          humanMessage: `${professionalName} já possui sessão das ${existingStart} às ${existingEnd}.`,
           blocking: true,
           date: dateKey,
           startTime: existingStart,
@@ -715,7 +868,7 @@ export function checkLocalScheduleConflicts(input: {
     hasConflict: conflicts.length > 0,
     conflicts,
     blocking,
-    humanMessage: conflicts[0]?.humanMessage || 'Horario disponivel.'
+    humanMessage: conflicts[0]?.humanMessage || 'Horário disponível.'
   };
 }
 

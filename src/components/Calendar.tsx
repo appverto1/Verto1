@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Ban,
@@ -73,6 +73,17 @@ const formatPatientFinanceCurrency = (value: any) => new Intl.NumberFormat('pt-B
   style: 'currency',
   currency: 'BRL'
 }).format(Number(value || 0));
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const getProfessionalNameOnly = (member: any) => {
+  const display = String(member?.label || member?.name || '').trim();
+  const specialty = String(member?.specialty || '').trim();
+  if (!display || !specialty) return display;
+  const specialtyPrefix = new RegExp(`^${escapeRegExp(specialty)}\\s*[-–—·:]?\\s*`, 'i');
+  const stripped = display.replace(specialtyPrefix, '').trim();
+  return stripped || display;
+};
 
 const isPersistedUuid = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
@@ -2857,6 +2868,7 @@ export const ClinicalAgendaBoard = ({
           </div>
           <div className="space-y-2">
             {(teamMembers || []).slice(0, 8).map((member: any) => {
+              const memberNameOnly = getProfessionalNameOnly(member);
               const memberPhotoUrl = String(
                 member?.profilePicture ||
                 member?.profile_picture ||
@@ -2896,11 +2908,11 @@ export const ClinicalAgendaBoard = ({
                       />
                     ) : null}
                     <span data-avatar-fallback="true" className={memberPhotoUrl ? 'hidden' : ''}>
-                      {getInitials(member.label || member.name)}
+                      {getInitials(memberNameOnly || member.label || member.name)}
                     </span>
                   </span>
                   <span className="min-w-0">
-                    <span className={`block truncate text-xs font-semibold ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{member.label || member.name}</span>
+                    <span className={`block truncate text-xs font-semibold ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>{memberNameOnly || member.label || member.name}</span>
                     {member.specialty && <span className="block truncate text-[10px] text-slate-400">{member.specialty}</span>}
                   </span>
                 </button>

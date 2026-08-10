@@ -1,4 +1,4 @@
-﻿import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS, LogoVerto } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard, RefreshCw } from 'lucide-react';
@@ -17,12 +17,15 @@ import {
   appointmentTimesOverlap as scheduleTimesOverlap,
   buildAppointmentDateTime,
   buildRecurrenceDateKeys,
+  buildWeeklyScheduleOccurrences,
   calculateAppointmentEnd,
+  findWeeklyScheduleDraftConflicts,
   findScheduleRoomConfig,
   getAppointmentDurationMinutes,
   normalizeAppointmentTime,
   normalizeDurationMinutes,
   normalizeScheduleLocationType,
+  normalizeWeeklyScheduleSlots,
   resolveRecurringAppointmentBillingFields,
   roomPreventsOverlappingAppointments,
 } from './utils/scheduling';
@@ -5823,13 +5826,70 @@ export default function App() {
     if (!pid) {
       return { success: false, errors: ['Selecione um paciente cadastrado para confirmar o agendamento.'] };
     }
-    const numSessions = Math.min(52, Math.max(1, Number(sess.numSessions) || 1));
+    const weeklyScheduleSlots = normalizeWeeklyScheduleSlots(
+      sess.weeklySchedule || sess.weekly_schedule || [],
+    );
+    const weeklyAgendaEnabled = Boolean(
+      (sess.weeklyAgendaEnabled ?? sess.weekly_agenda_enabled ?? weeklyScheduleSlots.length > 0) &&
+      weeklyScheduleSlots.length > 0,
+    );
+    const weeklyDraftConflict = weeklyAgendaEnabled
+      ? findWeeklyScheduleDraftConflicts(weeklyScheduleSlots)
+      : null;
+    if (weeklyDraftConflict?.blocking) {
+      return {
+        success: false,
+        errors: [weeklyDraftConflict.humanMessage || 'A agenda semanal possui atendimentos sobrepostos.'],
+      };
+    }
+    const weeklyOccurrences = weeklyAgendaEnabled
+      ? buildWeeklyScheduleOccurrences({
+          startDate: sess.date,
+          weeks: sess.recurrenceWeeks || sess.recurrence_weeks || 1,
+          slots: weeklyScheduleSlots,
+          maxOccurrences: 240,
+        })
+      : [];
+    if (weeklyAgendaEnabled && weeklyOccurrences.length === 0) {
+      return { success: false, errors: ['A agenda semanal não gerou nenhum atendimento válido.'] };
+    }
+    if (weeklyOccurrences.length > 120) {
+      return {
+        success: false,
+        errors: [`A agenda semanal gera ${weeklyOccurrences.length} atendimentos. O limite por confirmação é 120.`],
+      };
+    }
+    const legacyNumSessions = Math.min(52, Math.max(1, Number(sess.numSessions) || 1));
+    const legacyRecurrenceDates = weeklyAgendaEnabled
+      ? []
+      : buildRecurrenceDateKeys({
+          startDate: sess.date,
+          count: legacyNumSessions,
+          pattern: sess.recurrencePattern || 'weekly',
+        });
+    const scheduleOccurrences = weeklyAgendaEnabled
+      ? weeklyOccurrences.map((occurrence) => ({
+          date: occurrence.date,
+          time: occurrence.time,
+          approach: occurrence.specialty,
+          professionalId: String(occurrence.professionalId || '').trim(),
+          professionalName: String(occurrence.professionalName || '').trim(),
+          durationMinutes: normalizeDurationMinutes(occurrence.durationMinutes || sess.durationMinutes || sess.duration_minutes || 50, 50),
+          slotId: occurrence.slotId,
+          weekIndex: occurrence.weekIndex,
+        }))
+      : legacyRecurrenceDates.map((date) => ({
+          date,
+          time: sess.time,
+          approach: sess.approach,
+          professionalId: String(sess.professionalId || sess.professional_id || sess.therapistId || sess.therapist_id || '').trim(),
+          professionalName: String(sess.professionalName || sess.professional || '').trim(),
+          durationMinutes: normalizeDurationMinutes(sess.durationMinutes || sess.duration_minutes || 50, 50),
+          slotId: '',
+          weekIndex: 0,
+        }));
+    const numSessions = scheduleOccurrences.length;
     const recurrenceGroupId = numSessions > 1 ? createAppointmentId() : null;
-    const recurrenceDates = buildRecurrenceDateKeys({
-      startDate: sess.date,
-      count: numSessions,
-      pattern: sess.recurrencePattern || 'weekly',
-    });
     const requestedRoomId = String(
       sess.roomId || sess.room_id || sess.room || '',
     ).trim();
@@ -6028,10 +6088,30 @@ export default function App() {
       return { success: false, errors: ['Selecione uma escola atualmente vinculada ao paciente.'] };
     }
 
-    for (let i = 0; i < recurrenceDates.length; i += 1) {
-      const dateStr = recurrenceDates[i];
-      const startTime = sess.time;
-      const endTime = calculateEndTime(sess.time, sess.approach, durationMinutes);
+    const normalizeServiceKey = (value: any) =>
+      String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+
+    for (let i = 0; i < scheduleOccurrences.length; i += 1) {
+      const occurrence = scheduleOccurrences[i];
+      const dateStr = occurrence.date;
+      const startTime = String(occurrence.time || '').slice(0, 5);
+      const occurrenceApproach = String(occurrence.approach || sess.approach || 'Consulta Padrão').trim();
+      const occurrenceDurationMinutes = normalizeDurationMinutes(occurrence.durationMinutes || durationMinutes, durationMinutes);
+      const occurrenceProfessionalId = String(occurrence.professionalId || professionalId || '').trim();
+      const occurrenceProfessionalName = String(occurrence.professionalName || professionalName || '').trim();
+      if (!dateStr || !startTime || !occurrenceApproach || !occurrenceProfessionalId) {
+        const message = 'Cada atendimento precisa ter data, horário, especialidade e profissional definidos.';
+        if (!conflicts.includes(message)) conflicts.push(message);
+        continue;
+      }
+      const endTime = calculateEndTime(startTime, occurrenceApproach, occurrenceDurationMinutes);
+      const occurrenceMatchesBaseSpecialty =
+        !weeklyAgendaEnabled || normalizeServiceKey(occurrenceApproach) === normalizeServiceKey(sess.approach);
 
       therapistAgenda.forEach((item) => {
         if (item.date !== dateStr || !appointmentBlocksConflict(item)) return;
@@ -6056,8 +6136,8 @@ export default function App() {
           roomId &&
           String(item.room || item.roomId || item.room_id || '') === roomId;
         const sameProfessional =
-          (professionalId && String(item.professionalId || item.therapistId || item.professional_id || item.therapist_id || '') === professionalId) ||
-          (professionalName && String(item.professional || item.therapistName || '').trim() === professionalName);
+          (occurrenceProfessionalId && String(item.professionalId || item.therapistId || item.professional_id || item.therapist_id || '') === occurrenceProfessionalId) ||
+          (occurrenceProfessionalName && String(item.professional || item.therapistName || '').trim() === occurrenceProfessionalName);
         const samePatient =
           String(item.patientId || item.patient_id || '') === String(pid || '') ||
           String(item.name || item.patientName || '').trim() === String(sess.patientName || '').trim();
@@ -6067,19 +6147,26 @@ export default function App() {
           if (!conflicts.includes(message)) conflicts.push(message);
         }
         if (sameProfessional) {
-          const message = `${professionalName || 'Profissional'} já possui atendimento das ${item.time} às ${existingEndTime} em ${dateStr}.`;
+          const message = `${occurrenceProfessionalName || 'Profissional'} já possui atendimento das ${item.time} às ${existingEndTime} em ${dateStr}.`;
           if (!conflicts.includes(message)) conflicts.push(message);
         }
         if (samePatient) {
-          const message = `${sess.patientName || 'Paciente'} já possui outra sessão nesse horário em ${dateStr}.`;
+          const existingSpecialty = String(item.service_type || item.serviceType || item.approach || item.type || '').trim();
+          const sameSpecialty = Boolean(
+            existingSpecialty &&
+            normalizeServiceKey(existingSpecialty) === normalizeServiceKey(occurrenceApproach),
+          );
+          const message = sameSpecialty
+            ? `${sess.patientName || 'Paciente'} já possui ${occurrenceApproach} nesse horário em ${dateStr}.`
+            : `${sess.patientName || 'Paciente'} já possui outra sessão nesse horário em ${dateStr}.`;
           if (!conflicts.includes(message)) conflicts.push(message);
         }
       });
 
       if (conflicts.length === 0) {
         const appointmentId = createAppointmentId();
-        const startAt = buildAppointmentDateTime(dateStr, sess.time);
-        const endAt = calculateAppointmentEnd(startAt, durationMinutes);
+        const startAt = buildAppointmentDateTime(dateStr, startTime);
+        const endAt = calculateAppointmentEnd(startAt, occurrenceDurationMinutes);
         if (!startAt || !endAt) {
           const message = 'Informe data e horario validos para este atendimento.';
           if (!conflicts.includes(message)) conflicts.push(message);
@@ -6090,10 +6177,10 @@ export default function App() {
         const occurrenceBillingFields = resolveRecurringAppointmentBillingFields({
           occurrenceIndex: i,
           totalOccurrences: numSessions,
-          guideNumber: sourceGuideNumber,
-          authorizationCode: sourceAuthorizationCode,
-          applyAuthorizationToRecurrence: recurringAuthorizationEnabled,
-          reuseGuideAcrossRecurrence: recurringGuideReuseEnabled,
+          guideNumber: occurrenceMatchesBaseSpecialty ? sourceGuideNumber : '',
+          authorizationCode: occurrenceMatchesBaseSpecialty ? sourceAuthorizationCode : '',
+          applyAuthorizationToRecurrence: recurringAuthorizationEnabled && occurrenceMatchesBaseSpecialty,
+          reuseGuideAcrossRecurrence: recurringGuideReuseEnabled && occurrenceMatchesBaseSpecialty,
         });
         newItems.push({
           id: appointmentId,
@@ -6105,30 +6192,30 @@ export default function App() {
           patient_email: patientForSession?.email || null,
           name: sess.patientName,
           date: dateStr,
-          time: sess.time,
+          time: startTime,
           scheduledAt,
           scheduled_at: scheduledAt,
           scheduledStartAt: scheduledAt,
           scheduled_start_at: scheduledAt,
           scheduledEndAt,
           scheduled_end_at: scheduledEndAt,
-          durationMinutes,
-          duration_minutes: durationMinutes,
-          scheduledDurationMinutes: durationMinutes,
-          scheduled_duration_minutes: durationMinutes,
+          durationMinutes: occurrenceDurationMinutes,
+          duration_minutes: occurrenceDurationMinutes,
+          scheduledDurationMinutes: occurrenceDurationMinutes,
+          scheduled_duration_minutes: occurrenceDurationMinutes,
           status: 'pending',
-          type: sess.approach,
-          approach: sess.approach,
-          serviceType: sess.approach,
-          service_type: sess.approach,
+          type: occurrenceApproach,
+          approach: occurrenceApproach,
+          serviceType: occurrenceApproach,
+          service_type: occurrenceApproach,
           color: 'bg-blue-100 text-blue-600',
-          professional: professionalName,
-          professionalId: professionalId || null,
-          professional_id: professionalId || null,
-          therapistId: professionalId || null,
-          therapist_id: professionalId || null,
-          therapistName: professionalName,
-          therapist_name: professionalName,
+          professional: occurrenceProfessionalName,
+          professionalId: occurrenceProfessionalId || null,
+          professional_id: occurrenceProfessionalId || null,
+          therapistId: occurrenceProfessionalId || null,
+          therapist_id: occurrenceProfessionalId || null,
+          therapistName: occurrenceProfessionalName,
+          therapist_name: occurrenceProfessionalName,
           room: roomId,
           roomId,
           room_id: roomId,
@@ -6163,22 +6250,22 @@ export default function App() {
           payer_id: usesInsuranceContext ? effectivePayerId || null : null,
           payerName: usesInsuranceContext ? effectivePayerName || '' : '',
           payer_name_snapshot: usesInsuranceContext ? effectivePayerName || '' : '',
-          insuranceServiceCatalogId: usesInsuranceContext ? insuranceServiceCatalogId || null : null,
-          insurance_service_catalog_id: usesInsuranceContext ? insuranceServiceCatalogId || null : null,
-          serviceCatalogId: usesInsuranceContext ? insuranceServiceCatalogId || null : null,
-          service_catalog_id: usesInsuranceContext ? insuranceServiceCatalogId || null : null,
-          procedureCode: usesInsuranceContext ? insuranceProcedureCode || null : null,
-          procedure_code: usesInsuranceContext ? insuranceProcedureCode || null : null,
-          privateServiceCatalogId: financialContextType === 'PRIVATE' ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
-          private_service_catalog_id: financialContextType === 'PRIVATE' ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
-          privateManualAmount: financialContextType === 'PRIVATE' ? sess.privateManualAmount ?? sess.private_manual_amount ?? null : null,
-          private_manual_amount: financialContextType === 'PRIVATE' ? sess.privateManualAmount ?? sess.private_manual_amount ?? null : null,
-          privateDiscountAmount: financialContextType === 'PRIVATE' ? sess.privateDiscountAmount ?? sess.private_discount_amount ?? null : null,
-          private_discount_amount: financialContextType === 'PRIVATE' ? sess.privateDiscountAmount ?? sess.private_discount_amount ?? null : null,
-          privateZeroClassification: financialContextType === 'PRIVATE' ? sess.privateZeroClassification || sess.private_zero_classification || null : null,
-          private_zero_classification: financialContextType === 'PRIVATE' ? sess.privateZeroClassification || sess.private_zero_classification || null : null,
-          privatePricingReason: financialContextType === 'PRIVATE' ? sess.privatePricingReason || sess.private_pricing_reason || null : null,
-          private_pricing_reason: financialContextType === 'PRIVATE' ? sess.privatePricingReason || sess.private_pricing_reason || null : null,
+          insuranceServiceCatalogId: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
+          insurance_service_catalog_id: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
+          serviceCatalogId: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
+          service_catalog_id: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
+          procedureCode: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceProcedureCode || null : null,
+          procedure_code: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceProcedureCode || null : null,
+          privateServiceCatalogId: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
+          private_service_catalog_id: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
+          privateManualAmount: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateManualAmount ?? sess.private_manual_amount ?? null : null,
+          private_manual_amount: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateManualAmount ?? sess.private_manual_amount ?? null : null,
+          privateDiscountAmount: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateDiscountAmount ?? sess.private_discount_amount ?? null : null,
+          private_discount_amount: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateDiscountAmount ?? sess.private_discount_amount ?? null : null,
+          privateZeroClassification: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateZeroClassification || sess.private_zero_classification || null : null,
+          private_zero_classification: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateZeroClassification || sess.private_zero_classification || null : null,
+          privatePricingReason: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privatePricingReason || sess.private_pricing_reason || null : null,
+          private_pricing_reason: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privatePricingReason || sess.private_pricing_reason || null : null,
           privateRescheduleFinancialDecision: financialContextType === 'PRIVATE' ? sess.privateRescheduleFinancialDecision || sess.private_reschedule_financial_decision || null : null,
           private_reschedule_financial_decision: financialContextType === 'PRIVATE' ? sess.privateRescheduleFinancialDecision || sess.private_reschedule_financial_decision || null : null,
           insurancePlanName: effectiveInsurancePlanName,
@@ -6189,10 +6276,10 @@ export default function App() {
           guide_number: occurrenceBillingFields.guideNumber,
           authorizationCode: occurrenceBillingFields.authorizationCode,
           authorization_code: occurrenceBillingFields.authorizationCode,
-          applyAuthorizationToRecurrence: recurringAuthorizationEnabled,
-          apply_authorization_to_recurrence: recurringAuthorizationEnabled,
-          reuseGuideAcrossRecurrence: recurringGuideReuseEnabled,
-          reuse_guide_across_recurrence: recurringGuideReuseEnabled,
+          applyAuthorizationToRecurrence: recurringAuthorizationEnabled && occurrenceMatchesBaseSpecialty,
+          apply_authorization_to_recurrence: recurringAuthorizationEnabled && occurrenceMatchesBaseSpecialty,
+          reuseGuideAcrossRecurrence: recurringGuideReuseEnabled && occurrenceMatchesBaseSpecialty,
+          reuse_guide_across_recurrence: recurringGuideReuseEnabled && occurrenceMatchesBaseSpecialty,
           isRecurring: numSessions > 1,
           is_recurring: numSessions > 1,
           recurrenceGroupId,
@@ -6201,8 +6288,12 @@ export default function App() {
           recurrence_index: i + 1,
           recurrenceTotal: numSessions,
           recurrence_total: numSessions,
-          recurrenceFrequency: numSessions > 1 ? String(sess.recurrencePattern || 'weekly') : null,
-          recurrence_frequency: numSessions > 1 ? String(sess.recurrencePattern || 'weekly') : null,
+          recurrenceFrequency: numSessions > 1 ? (weeklyAgendaEnabled ? 'weekly_agenda' : String(sess.recurrencePattern || 'weekly')) : null,
+          recurrence_frequency: numSessions > 1 ? (weeklyAgendaEnabled ? 'weekly_agenda' : String(sess.recurrencePattern || 'weekly')) : null,
+          weeklyScheduleSlotId: weeklyAgendaEnabled ? occurrence.slotId || null : null,
+          weekly_schedule_slot_id: weeklyAgendaEnabled ? occurrence.slotId || null : null,
+          weeklyScheduleWeekIndex: weeklyAgendaEnabled ? Number(occurrence.weekIndex || 0) : null,
+          weekly_schedule_week_index: weeklyAgendaEnabled ? Number(occurrence.weekIndex || 0) : null,
           patientResponse: null,
           patient_response: null,
           patientRespondedAt: null,
@@ -6231,9 +6322,18 @@ export default function App() {
     }
 
     const actionSequence = nextAppointmentActionSequence();
+    const idempotencyScheduleSeed = weeklyAgendaEnabled
+      ? scheduleOccurrences
+          .map((occurrence) => `${occurrence.date}@${occurrence.time}@${occurrence.approach}@${occurrence.professionalId}`)
+          .join('|')
+      : String(sess.time || '');
+    let idempotencyScheduleHash = 0;
+    for (let index = 0; index < idempotencyScheduleSeed.length; index += 1) {
+      idempotencyScheduleHash = ((idempotencyScheduleHash << 5) - idempotencyScheduleHash + idempotencyScheduleSeed.charCodeAt(index)) | 0;
+    }
     const persistenceResult = await dataService.createAppointments(
       newItems,
-      `${pid}:${sess.date}:${sess.time}:${numSessions}`,
+      `${pid}:${sess.date}:${numSessions}:${Math.abs(idempotencyScheduleHash).toString(36)}`,
     );
     if (!persistenceResult?.success || !Array.isArray(persistenceResult?.appointments)) {
       return {
