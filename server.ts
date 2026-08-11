@@ -8550,8 +8550,7 @@ function dateGroupForClinic(value: unknown, user: any): string {
 }
 
 function hasGlobalClinicAccess(user: any): boolean {
-  const role = sanitizeString(user?.role, 40).toLowerCase();
-  return role === 'admin' || role === 'owner';
+  return user?.isPlatformAdmin === true;
 }
 
 async function resolveEffectiveClinicRole(
@@ -10301,6 +10300,25 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 function isUuid(value: string | null | undefined): boolean {
   if (!value) return false;
   return UUID_REGEX.test(value);
+}
+
+async function isPlatformAdminUserId(userId: unknown): Promise<boolean> {
+  const safeUserId = sanitizeString(userId, 120);
+  if (!isUuid(safeUserId)) return false;
+
+  const { data, error } = await supabase
+    .from('platform_admins')
+    .select('user_id')
+    .eq('user_id', safeUserId)
+    .eq('active', true)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[PlatformAdmin] capability lookup failed:', sanitizeString(error?.message || String(error), 240));
+    return false;
+  }
+
+  return Boolean(data?.user_id);
 }
 
 function parseTaskScheduleToMs(value: string | null | undefined): number | null {
@@ -14478,6 +14496,7 @@ function mergeAuthoritativeClinicSettings(sessionSettings: any, context: Resolve
 
 async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
   if (!sessionUser?.id) return buildSessionUserPayload(sessionUser);
+  const isPlatformAdmin = await isPlatformAdminUserId(sessionUser.id);
   const workspaces = filterWorkspacesForUser(
     await fetchUserWorkspaces(sessionUser.id),
     sessionUser
@@ -14485,6 +14504,7 @@ async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
   const accessContexts = await fetchUserAccessContexts(sessionUser.id, workspaces);
   const baseSessionUser = buildSessionUserPayload({
     ...sessionUser,
+    isPlatformAdmin,
     workspaces,
     accessContexts
   });
@@ -14823,6 +14843,7 @@ function buildSessionUserPayload(input: any) {
     id: sanitizeString(input?.id, 120),
     email: sanitizeEmail(input?.email) || sanitizeString(input?.email, 320),
     role: ensureRole(resolvedRole) ? resolvedRole : 'therapist',
+    isPlatformAdmin: input?.isPlatformAdmin === true,
     name: sanitizeString(input?.name, 180),
     profilePicture: sanitizeSessionUrl(input?.profilePicture),
     profilePicturePath: sanitizeString(input?.profilePicturePath || input?.profile_picture_path, 500) || null,
@@ -19419,6 +19440,7 @@ async function startServer() {
           message: 'Confirme o Google Authenticator para acessar o painel administrativo.'
         });
       }
+      req.session.user.isPlatformAdmin = await isPlatformAdminUserId(sessionUserId);
       syncWorkspaceContextInSession(req, res, () => {});
       if (
         req.session.user?.mustSelectAccessContext === true &&
@@ -37744,6 +37766,7 @@ async function startServer() {
               .from('activity_logs')
               .select(ACTIVITY_LOG_SELECT)
               .in('user_id', Array.from(new Set(memberIds)))
+              .eq('clinic_id', clinicId)
               .eq('is_active', true)
               .is('deleted_at', null)
               .order('timestamp', { ascending: false })
@@ -38293,7 +38316,7 @@ async function startServer() {
         if (membershipSettingsError) throw membershipSettingsError;
       }
 
-      if (!isClinicManagedMember && clinicId && (role === 'coordinator' || role === 'admin' || role === 'owner')) {
+      if (context.onboardingMode === 'clinic_owner' && clinicId) {
         const { error: clinicUpdateError } = await supabase
           .from('clinics')
           .upsert([{
@@ -38534,8 +38557,17 @@ async function startServer() {
 
   app.post('/api/profile/:userId', checkAuth, async (req: any, res) => {
     try {
-      // Only allow own profile or admin
-      if (req.session.user.id !== req.params.userId && req.session.user.role !== 'admin') {
+      // Only allow own profile, platform admin, or clinic admin managing a user from the same clinic
+      const targetProfileUserId = sanitizeString(req.params.userId, 120);
+      const sessionProfileUserId = sanitizeString(req.session.user?.id, 120);
+      const sessionProfileRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const sessionProfileClinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const canManageTargetProfile = req.session.user?.isPlatformAdmin === true || (
+        sessionProfileRole === 'admin' &&
+        isUuid(sessionProfileClinicId) &&
+        await professionalBelongsToClinic(targetProfileUserId, sessionProfileClinicId, req.session.user)
+      );
+      if (sessionProfileUserId !== targetProfileUserId && !canManageTargetProfile) {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
@@ -38621,7 +38653,7 @@ async function startServer() {
         id: sanitizeString(req.params.userId, 120),
         name: professionalFullName || undefined,
         email: sanitizeEmail(req.body?.email) || undefined,
-        role: sanitizeString(req.body?.role, 40) || undefined,
+
         profile_picture: sanitizeUrl(req.body?.profile_picture) || sanitizeUrl(req.body?.profilePicture) || undefined,
         crp: resolvedCrp || undefined,
         cpf: professionalCpf || undefined,
@@ -74959,11 +74991,10 @@ async function startServer() {
   };
 
   const checkPlatformAdmin = (req: any, res: any, next: any) => {
-    const role = sanitizeString(req.session.user?.role, 40);
-    if (role === 'admin' || role === 'owner') {
+    if (req.session.user?.isPlatformAdmin === true) {
       return next();
     }
-    return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem acessar esta rota.' });
+    return res.status(403).json({ error: 'Acesso negado. Apenas administradores da plataforma podem acessar esta rota.' });
   };
 
   const seedFixedDemoIfEmpty = async (
