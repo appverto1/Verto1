@@ -38,12 +38,17 @@ assert.match(
 assert.match(
   app,
   /const ClinicRoleFoundationPending/,
-  'Diretor, Supervisor e Faturista precisam de estado seguro durante a migração de scopes',
+  'componente temporário pode permanecer disponível durante a migração gradual',
 );
 assert.match(
   app,
-  /user\.role === 'director' \|\| user\.role === 'supervisor'/,
-  'Diretor e Supervisor permanecem no estado seguro até seus dashboards por scope serem liberados',
+  /\['director', 'coordinator', 'supervisor', 'receptionist', 'therapist'\]\.includes\(String\(user\.role \|\| ''\)\.toLowerCase\(\)\)[\s\S]{0,160}<CoordinatorDashboard/,
+  'Diretor e Supervisor devem usar o dashboard clínico já filtrado por capabilities/scopes',
+);
+assert.doesNotMatch(
+  app,
+  /user\.role === 'director' \|\| user\.role === 'supervisor'\)[\s\S]{0,160}<ClinicRoleFoundationPending/,
+  'Diretor e Supervisor não devem voltar à tela temporária após liberação por scope',
 );
 assert.match(
   app,

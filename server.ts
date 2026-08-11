@@ -392,6 +392,7 @@ import {
   type CapabilityOverrideLike
 } from './src/utils/authorizationRuntime';
 import {
+  ROLE_DEFAULT_SCOPES,
   isCapabilityKey,
   type CapabilityKey,
   type ClinicBaseRole
@@ -5281,23 +5282,54 @@ const PATIENT_FINANCIAL_PAYLOAD_KEYS = new Set([
   'dreMetrics'
 ]);
 
+const PATIENT_INSURANCE_PAYLOAD_KEYS = new Set([
+  'insurancePayerId','insurance_payer_id','convenioPayerId','convenio_payer_id',
+  'insuranceType','insurance_type','convenioTipo','insuranceName','insurance_name','convenioNome',
+  'insuranceCardNumber','insurance_card_number','cardNumber','convenioCarteirinha',
+  'insuranceCardValidUntil','insurance_card_valid_until','convenioCarteirinhaValidade',
+  'insurancePlanCategory','insurance_plan_category','convenioPlanoCategoria',
+  'insuranceHolderName','insurance_holder_name','convenioTitularNome',
+  'insuranceHolderCpf','insurance_holder_cpf','convenioTitularCpf',
+  'insuranceHolderRelationship','insurance_holder_relationship','convenioTitularRelacao',
+  'insuranceEligibilityNotes','eligibilityNotes','eligibility_notes','convenioElegibilidadeObs',
+]);
+
+function redactPatientPayloadKeys(input: any, keys: ReadonlySet<string>): any {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const redacted: Record<string, any> = { ...input };
+  for (const key of keys) delete redacted[key];
+  for (const nestedKey of ['anamnese', 'anamnesisData']) {
+    const nested = redacted[nestedKey];
+    if (!nested || typeof nested !== 'object' || Array.isArray(nested)) continue;
+    const safeNested = { ...nested };
+    for (const key of keys) delete safeNested[key];
+    redacted[nestedKey] = safeNested;
+  }
+  return redacted;
+}
+
 function redactPatientFinancialPayload(input: any, user: any): any {
   if (canAccessClinicFinance(user)) return input;
+  return redactPatientPayloadKeys(input, PATIENT_FINANCIAL_PAYLOAD_KEYS);
+}
+
+function redactPatientRecordPayloadForCapabilities(
+  input: any,
+  user: any,
+  capabilities?: ReadonlySet<CapabilityKey> | null,
+): any {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  // Portal do próprio paciente mantém o comportamento histórico. Atores da clínica
+  // são filtrados pela membership efetiva, inclusive overrides ALLOW/DENY.
+  if (!capabilities) return redactPatientFinancialPayload(input, user);
 
-  const redacted: Record<string, any> = { ...input };
-  for (const key of PATIENT_FINANCIAL_PAYLOAD_KEYS) {
-    delete redacted[key];
+  let redacted = input;
+  if (!capabilities.has('finance.payments.view')) {
+    redacted = redactPatientPayloadKeys(redacted, PATIENT_FINANCIAL_PAYLOAD_KEYS);
   }
-
-  if (redacted.anamnese && typeof redacted.anamnese === 'object' && !Array.isArray(redacted.anamnese)) {
-    const safeAnamnesis = { ...redacted.anamnese };
-    for (const key of PATIENT_FINANCIAL_PAYLOAD_KEYS) {
-      delete safeAnamnesis[key];
-    }
-    redacted.anamnese = safeAnamnesis;
+  if (!capabilities.has('patient.insurance.view')) {
+    redacted = redactPatientPayloadKeys(redacted, PATIENT_INSURANCE_PAYLOAD_KEYS);
   }
-
   return redacted;
 }
 
@@ -8042,9 +8074,32 @@ function hasVerifiedOwnerMfaSession(user: any): boolean {
 
 function requireRoles(...allowedRoles: AppRole[]) {
   const allowed = new Set<AppRole>(allowedRoles);
-  return (req: any, res: any, next: any) => {
+  return async (req: any, res: any, next: any) => {
     const role = req.session?.user?.role;
-    if (!ensureRole(role) || !allowed.has(role)) {
+    if (!ensureRole(role)) {
+      return res.status(403).json({ error: 'Acesso negado para este perfil.' });
+    }
+
+    let roleAllowed = allowed.has(role);
+    // Transitional compatibility while legacy routes are migrated to capabilities:
+    // Director is a strict superset of Coordinator, but only when the active
+    // membership for the selected clinic is still valid on the server.
+    if (!roleAllowed && role === 'director' && allowed.has('coordinator')) {
+      try {
+        roleAllowed = (await resolveEffectiveClinicRole(req.session?.user)) === 'director';
+      } catch (error) {
+        logRouteDbError('requireRoles.directorCompatibility', error, {
+          clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+          userId: sanitizeString(req.session?.user?.id, 120)
+        });
+        return res.status(503).json({
+          error: 'CLINIC_MEMBERSHIP_ROLE_UNAVAILABLE',
+          message: 'Não foi possível validar seu acesso nesta clínica agora.'
+        });
+      }
+    }
+
+    if (!roleAllowed) {
       return res.status(403).json({ error: 'Acesso negado para este perfil.' });
     }
     if (role === 'owner' && !hasVerifiedOwnerMfaSession(req.session?.user)) {
@@ -8670,7 +8725,10 @@ function requireActiveClinicRoles(
   return async (req: any, res: any, next: any) => {
     try {
       const role = await resolveEffectiveClinicRole(req.session?.user);
-      if (!role || !allowed.has(role)) {
+      const roleAllowed = Boolean(
+        role && (allowed.has(role) || (role === 'director' && allowed.has('coordinator')))
+      );
+      if (!roleAllowed) {
         return res.status(403).json({
           success: false,
           error: 'CLINIC_MEMBERSHIP_ROLE_DENIED',
@@ -8750,7 +8808,7 @@ function buildAbaPromptTypePayload(input: any, clinicId: string, actorId?: strin
 
 function canAccessClinicFinance(user: any): boolean {
   const role = sanitizeString(user?.role, 40).toLowerCase();
-  return role === 'coordinator' || role === 'admin' || role === 'owner';
+  return role === 'director' || role === 'coordinator' || role === 'admin' || role === 'owner';
 }
 
 const TEAM_ACCESS_PER_ACTIVE_PATIENT = 10;
@@ -8854,6 +8912,65 @@ function requireClinicCapability(capability: CapabilityKey) {
         message: 'Não foi possível validar sua permissão nesta clínica agora.'
       });
     }
+  };
+}
+
+function requireAnyClinicCapability(...capabilities: CapabilityKey[]) {
+  if (capabilities.length === 0 || capabilities.some((capability) => !isCapabilityKey(capability))) {
+    throw new Error(`INVALID_ANY_CAPABILITY_MIDDLEWARE:${capabilities.join(',')}`);
+  }
+  return async (req: any, res: any, next: any) => {
+    try {
+      const currentUserId = sanitizeString(req.session?.user?.id, 120);
+      const currentClinic = sanitizeString(currentClinicId(req.session?.user), 120);
+      const cachedContext = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
+      const context = cachedContext &&
+        cachedContext.userId === currentUserId &&
+        cachedContext.clinicId === currentClinic
+          ? cachedContext
+          : await resolveClinicCapabilityContext(req.session?.user);
+      if (!context || !capabilities.some((capability) => context.capabilities.has(capability))) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_CAPABILITY_DENIED',
+          capabilities,
+          message: 'Seu acesso atual nesta clínica não permite esta ação.'
+        });
+      }
+      req.authorizationContext = context;
+      req.effectiveClinicRole = context.role;
+      return next();
+    } catch (error) {
+      logRouteDbError('requireAnyClinicCapability', error, {
+        capabilities,
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+        userId: sanitizeString(req.session?.user?.id, 120)
+      });
+      if (isMissingRelationError(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_CAPABILITY_SCHEMA_UNAVAILABLE',
+          message: 'A estrutura de permissões por clínica ainda não foi aplicada.'
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'CLINIC_CAPABILITY_UNAVAILABLE',
+        message: 'Não foi possível validar sua permissão nesta clínica agora.'
+      });
+    }
+  };
+}
+
+
+function requireClinicCapabilityOrPatientPortal(capability: CapabilityKey) {
+  const clinicGuard = requireClinicCapability(capability);
+  return async (req: any, res: any, next: any) => {
+    const role = sanitizeString(req.session?.user?.role, 40).toLowerCase();
+    if (role === 'patient' || req.session?.user?.activeAccessContext?.kind === 'patient_portal') {
+      return next();
+    }
+    return clinicGuard(req, res, next);
   };
 }
 
@@ -25395,6 +25512,38 @@ async function startServer() {
   };
 
   // Clinic Management & Invitations
+  app.get('/api/clinic/authorization/me', checkAuth, async (req: any, res) => {
+    try {
+      const context = await resolveClinicCapabilityContext(req.session?.user);
+      if (!context) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_AUTHORIZATION_CONTEXT_UNAVAILABLE',
+          message: 'Não foi possível resolver seu vínculo ativo nesta clínica.'
+        });
+      }
+      return res.json({
+        success: true,
+        data: {
+          membershipId: context.membershipId,
+          clinicId: context.clinicId,
+          role: context.role,
+          capabilities: Array.from(context.capabilities).sort(),
+          scopes: ROLE_DEFAULT_SCOPES[context.role] || [],
+          overrides: context.overrides.map((item: any) => ({
+            permissionKey: sanitizeString(item?.permission_key || item?.permissionKey, 160),
+            effect: sanitizeString(item?.effect, 20).toLowerCase()
+          })).filter((item: any) => item.permissionKey && (item.effect === 'allow' || item.effect === 'deny'))
+        }
+      });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/clinic/authorization/me [GET]', error, {
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+        userId: sanitizeString(req.session?.user?.id, 120)
+      });
+    }
+  });
+
   app.get('/api/clinic/members', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'supervisor', 'therapist', 'biller', 'admin', 'owner'), async (req: any, res) => {
     const user = req.session.user;
 
@@ -27127,9 +27276,21 @@ async function startServer() {
     }
   });
 
-  app.get('/api/clinic/state', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/state', checkAuth, requireAnyClinicCapability('clinic.view', 'calendar.own.view', 'calendar.team.view', 'calendar.clinic.view', 'aba.program.view'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
+      const context = req.authorizationContext as ResolvedClinicCapabilityContext;
+      const canViewAppointments =
+        context.capabilities.has('calendar.clinic.view') ||
+        context.capabilities.has('calendar.team.view') ||
+        context.capabilities.has('calendar.own.view');
+      const canViewProtocols = context.capabilities.has('aba.program.view');
+      const canViewRooms = canViewAppointments || context.capabilities.has('clinic.rooms.manage');
+      const canViewSpecialtySettings = context.capabilities.has('clinic.settings.view');
+      const scopedPatientIds = canViewAppointments
+        ? await resolvePatientListScopedPatientIds(context)
+        : [];
+      const scopedPatientSet = scopedPatientIds === null ? null : new Set(scopedPatientIds);
       const stateResult = await fetchClinicStateWithSchemaFallback({
         supabase,
         clinicId,
@@ -27184,14 +27345,30 @@ async function startServer() {
         }
       }
 
+      const sourceAppointments = Array.isArray(data?.appointments) ? data.appointments : [];
+      const scopedAppointments = !canViewAppointments
+        ? []
+        : scopedPatientSet === null
+          ? sourceAppointments
+          : sourceAppointments.filter((appointment: any) => {
+              const patientId = sanitizeString(
+                appointment?.patient_id || appointment?.patientId || appointment?.patient?.id,
+                120
+              );
+              return patientId && scopedPatientSet.has(patientId);
+            });
+
       return res.json({
         success: true,
         data: {
           clinicId,
-          rooms: Array.isArray(data?.rooms) ? data.rooms : [],
-          appointments: Array.isArray(data?.appointments) ? data.appointments : [],
-          protocols: normalizeProtocolArrayForRoute(data?.protocols),
-          specialtySettings: data?.specialty_settings && typeof data.specialty_settings === 'object' ? data.specialty_settings : {},
+          rooms: canViewRooms && Array.isArray(data?.rooms) ? data.rooms : [],
+          appointments: scopedAppointments,
+          protocols: canViewProtocols ? normalizeProtocolArrayForRoute(data?.protocols) : [],
+          specialtySettings:
+            canViewSpecialtySettings && data?.specialty_settings && typeof data.specialty_settings === 'object'
+              ? data.specialty_settings
+              : {},
           updatedAt: data?.updated_at || null
         }
       });
@@ -27203,30 +27380,50 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/state', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/clinic/state', checkAuth, async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
+      const context = await resolveClinicCapabilityContext(req.session?.user);
+      if (!context) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_AUTHORIZATION_CONTEXT_UNAVAILABLE',
+          message: 'Não foi possível resolver seu vínculo ativo nesta clínica.'
+        });
+      }
       const actorId = sanitizeString(req.session.user?.id, 120);
       const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
-      const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
-      const canManageRooms =
-        actorRole === 'coordinator' ||
-        actorRole === 'receptionist' ||
-        actorRole === 'admin' ||
-        actorRole === 'owner';
-      const canManageProtocols =
-        actorRole === 'coordinator' ||
-        actorRole === 'admin' ||
-        actorRole === 'owner';
-      const canManageSpecialtySettings = canManageProtocols;
+      const actorRole = context.role;
+      const canManageRooms = context.capabilities.has('clinic.rooms.manage');
+      const canManageAppointments = context.capabilities.has('calendar.appointment.edit');
+      const canManageProtocols = context.capabilities.has('clinic.settings.edit');
+      const canManageSpecialtySettings = context.capabilities.has('clinic.settings.edit');
 
-      const nextRooms = canManageRooms && Array.isArray(req.body?.rooms) ? req.body.rooms.slice(0, 400) : undefined;
-      const nextAppointments = Array.isArray(req.body?.appointments) ? req.body.appointments.slice(0, 5000) : undefined;
-      let nextProtocols = canManageProtocols && Array.isArray(req.body?.protocols) ? req.body.protocols.slice(0, 600) : undefined;
-      const nextSpecialtySettings =
-        canManageSpecialtySettings && req.body?.specialtySettings && typeof req.body.specialtySettings === 'object'
-          ? req.body.specialtySettings
-          : undefined;
+      const requestedRooms = Array.isArray(req.body?.rooms);
+      const requestedAppointments = Array.isArray(req.body?.appointments);
+      const requestedProtocols = Array.isArray(req.body?.protocols);
+      const requestedSpecialtySettings = Boolean(
+        req.body?.specialtySettings && typeof req.body.specialtySettings === 'object'
+      );
+      const deniedCapability =
+        requestedRooms && !canManageRooms ? 'clinic.rooms.manage'
+          : requestedAppointments && !canManageAppointments ? 'calendar.appointment.edit'
+            : requestedProtocols && !canManageProtocols ? 'clinic.settings.edit'
+              : requestedSpecialtySettings && !canManageSpecialtySettings ? 'clinic.settings.edit'
+                : null;
+      if (deniedCapability) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_CAPABILITY_DENIED',
+          capability: deniedCapability,
+          message: 'Seu acesso atual nesta clínica não permite alterar este estado.'
+        });
+      }
+
+      const nextRooms = requestedRooms ? req.body.rooms.slice(0, 400) : undefined;
+      const nextAppointments = requestedAppointments ? req.body.appointments.slice(0, 5000) : undefined;
+      let nextProtocols = requestedProtocols ? req.body.protocols.slice(0, 600) : undefined;
+      const nextSpecialtySettings = requestedSpecialtySettings ? req.body.specialtySettings : undefined;
 
       if (
         nextRooms === undefined &&
@@ -28690,7 +28887,7 @@ async function startServer() {
     }));
   };
 
-  app.post('/api/appointments', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
+  app.post('/api/appointments', checkAuth, requireClinicCapability('calendar.appointment.create'), async (req: any, res: any) => {
     try {
       return await persistAppointmentActionBatch({
         req,
@@ -28705,7 +28902,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/appointments/:appointmentId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
+  app.patch('/api/appointments/:appointmentId', checkAuth, requireClinicCapability('calendar.appointment.edit'), async (req: any, res: any) => {
     try {
       return await persistAppointmentActionBatch({
         req,
@@ -30667,7 +30864,7 @@ async function startServer() {
 
   app.patch('/api/appointments/:appointmentId/status', checkAuth, handleAppointmentStatusUpdate);
 
-  app.delete('/api/appointments/:appointmentId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res: any) => {
+  app.delete('/api/appointments/:appointmentId', checkAuth, requireClinicCapability('calendar.appointment.cancel'), async (req: any, res: any) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       if (!appointmentId) return res.status(400).json({ success: false, error: 'Sessão inválida.' });
@@ -30973,7 +31170,7 @@ async function startServer() {
     return handleAppointmentStatusUpdate(req, res);
   });
 
-  app.post('/api/push/appointment-reminder', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/push/appointment-reminder', checkAuth, requireClinicCapability('communication.reminders.send'), async (req: any, res) => {
     try {
       if (!vapidPublicKey || !vapidPrivateKey) {
         return res.status(503).json({ success: false, error: 'VAPID_NOT_CONFIGURED' });
@@ -35584,7 +35781,7 @@ async function startServer() {
   });
 
   // Secure patient record storage (encrypted JSON payload)
-  app.post('/api/patient-records/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+  app.post('/api/patient-records/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.record.view'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 512 * 1024, 'Payload do prontuário')) return;
       const rawPatientId = sanitizeString(req.params.patientId, 100);
@@ -35597,7 +35794,12 @@ async function startServer() {
       if (!patientId) return res.status(400).json({ error: 'patientId inválido' });
 
       const payloadRawBase = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
-      const payloadRaw = redactPatientFinancialPayload(payloadRawBase, req.session.user);
+      const capabilityContext = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
+      const payloadRaw = redactPatientRecordPayloadForCapabilities(
+        payloadRawBase,
+        req.session.user,
+        capabilityContext?.capabilities,
+      );
       const payload = sanitizeClinicalPayload(payloadRaw);
       let existingQuery = supabase
         .from('patient_records')
@@ -36322,7 +36524,7 @@ async function startServer() {
     });
   };
 
-  app.get('/api/patient-files/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+  app.get('/api/patient-files/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.documents.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       if (!patientId) return res.status(400).json({ success: false, error: 'patientId inválido.' });
@@ -36407,7 +36609,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patient-files/:patientId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), uploadLimiter, async (req: any, res) => {
+  app.post('/api/patient-files/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.documents.upload'), checkPatientAccess, uploadLimiter, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 18 * 1024 * 1024, 'Upload de arquivo do paciente')) return;
       const isMultipart = String(req.headers?.['content-type'] || '').toLowerCase().includes('multipart/form-data');
@@ -36824,7 +37026,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patient-records/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+  app.get('/api/patient-records/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.record.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
@@ -36860,8 +37062,13 @@ async function startServer() {
           actorId: sanitizeString(req.session.user?.id, 120)
         });
       }
+      const capabilityContext = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
       const responsePayload = decryptedPayload
-        ? normalizePatientInsuranceEligibilityPayload(redactPatientFinancialPayload(decryptedPayload, req.session.user))
+        ? redactPatientRecordPayloadForCapabilities(
+            normalizePatientInsuranceEligibilityPayload(decryptedPayload),
+            req.session.user,
+            capabilityContext?.capabilities,
+          )
         : null;
       res.json({
         success: true,
@@ -37014,7 +37221,7 @@ async function startServer() {
   };
 
   // Notes
-  app.get('/api/notes/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
+  app.get('/api/notes/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.history.view'), checkPatientAccess, async (req, res) => {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
@@ -37333,7 +37540,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/notes', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/notes', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.notes.create'), checkPatientAccess, async (req: any, res) => {
     const requestId = requestIdForLogs(req);
     const rawPatientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
     try {
@@ -37398,7 +37605,7 @@ async function startServer() {
   });
 
   // History
-  app.get('/api/history/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
+  app.get('/api/history/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.history.view'), checkPatientAccess, async (req, res) => {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
@@ -37773,7 +37980,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/history', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/history', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.evolution.create'), checkPatientAccess, async (req: any, res) => {
     const requestId = requestIdForLogs(req);
     const rawPatientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
     try {
@@ -49601,6 +49808,71 @@ async function startServer() {
     return enrichCalendarEventsWithPatientConfirmationState(events, clinicId, organizationId || clinicId);
   };
 
+  type CalendarReadScope = {
+    allClinic: boolean;
+    patientIds: ReadonlySet<string>;
+    professionalIds: ReadonlySet<string>;
+  };
+
+  const resolveCalendarReadScope = async (
+    context: ResolvedClinicCapabilityContext,
+  ): Promise<CalendarReadScope> => {
+    if (context.capabilities.has('calendar.clinic.view')) {
+      return { allClinic: true, patientIds: new Set(), professionalIds: new Set() };
+    }
+
+    if (context.capabilities.has('calendar.team.view')) {
+      const scopedPatientIds = await resolvePatientListScopedPatientIds(context);
+      if (scopedPatientIds === null) {
+        return { allClinic: true, patientIds: new Set(), professionalIds: new Set() };
+      }
+      return {
+        allClinic: false,
+        patientIds: new Set(scopedPatientIds),
+        professionalIds: new Set(),
+      };
+    }
+
+    if (context.capabilities.has('calendar.own.view')) {
+      return {
+        allClinic: false,
+        patientIds: new Set(),
+        professionalIds: new Set([context.userId]),
+      };
+    }
+
+    return { allClinic: false, patientIds: new Set(), professionalIds: new Set() };
+  };
+
+  const calendarRowMatchesReadScope = (row: any, scope: CalendarReadScope): boolean => {
+    if (scope.allClinic) return true;
+    const patientId = sanitizeString(row?.patient_id || row?.patientId, 120);
+    const professionalId = sanitizeString(row?.therapist_id || row?.therapistId || row?.professional_id, 120);
+    return (patientId && scope.patientIds.has(patientId)) || (professionalId && scope.professionalIds.has(professionalId));
+  };
+
+  const CALENDAR_INSURANCE_FIELDS = new Set([
+    'payer_id','payerId','payer_name','payerName','payer_name_snapshot','payerNameSnapshot',
+    'insurance_card_number','insuranceCardNumber','insurance_plan_name','insurancePlanName',
+    'authorization_code','authorizationCode','guide_number','guideNumber','procedure_code','procedureCode',
+  ]);
+
+  const redactCalendarEventForCapabilities = (
+    event: any,
+    capabilities: ReadonlySet<CapabilityKey>,
+  ) => {
+    if (!event || typeof event !== 'object' || Array.isArray(event)) return event;
+    if (capabilities.has('patient.insurance.view') || capabilities.has('billing.sessions.view')) return event;
+    const safe = { ...event };
+    for (const key of CALENDAR_INSURANCE_FIELDS) delete safe[key];
+    if (safe.source_payload && typeof safe.source_payload === 'object' && !Array.isArray(safe.source_payload)) {
+      const sourcePayload = { ...safe.source_payload };
+      for (const key of CALENDAR_INSURANCE_FIELDS) delete sourcePayload[key];
+      safe.source_payload = sourcePayload;
+    }
+    return safe;
+  };
+
   const fetchCalendarAppointmentDetailRow = async (eventId: string, clinicId: string, user: any) => {
     if (isUuid(eventId)) {
       let query = supabase
@@ -49623,10 +49895,12 @@ async function startServer() {
     return appointment ? { ...appointment, source_payload: appointment } : null;
   };
 
-  app.get('/api/calendar/events', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/calendar/events', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('calendar.clinic.view', 'calendar.team.view', 'calendar.own.view'), async (req: any, res) => {
     try {
       const range = parseCalendarRangeParams(req.query);
       if (!range.ok) return res.status(400).json({ success: false, error: 'Intervalo da agenda inválido.' });
+      const context = req.authorizationContext as ResolvedClinicCapabilityContext;
+      const calendarScope = await resolveCalendarReadScope(context);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const filters = {
@@ -49640,6 +49914,10 @@ async function startServer() {
         schoolUnitIds: parseCalendarFilterList(req.query?.schoolUnitId || req.query?.schoolUnitIds).filter((id) => id !== 'all')
       };
 
+      if (!calendarScope.allClinic && calendarScope.patientIds.size === 0 && calendarScope.professionalIds.size === 0) {
+        return res.json({ success: true, data: [], source: 'authorization_scope' });
+      }
+
       let query = supabase
         .from('appointments')
         .select(CALENDAR_EVENT_SELECT)
@@ -49651,8 +49929,18 @@ async function startServer() {
         .limit(range.limit);
       if (!hasGlobalClinicAccess(req.session.user) && clinicId) query = query.eq('clinic_id', clinicId);
       if (organizationId && isUuid(organizationId)) query = query.eq('organization_id', organizationId);
+      if (!calendarScope.allClinic && calendarScope.patientIds.size > 0) {
+        const scopedPatientIds = Array.from(calendarScope.patientIds);
+        const requestedPatientIds = filters.patientIds.filter((id) => calendarScope.patientIds.has(id));
+        const patientIdsForQuery = filters.patientIds.length > 0 ? requestedPatientIds : scopedPatientIds;
+        if (patientIdsForQuery.length === 0) return res.json({ success: true, data: [], source: 'authorization_scope' });
+        query = query.in('patient_id', patientIdsForQuery);
+      }
+      if (!calendarScope.allClinic && calendarScope.professionalIds.size > 0) {
+        query = query.in('therapist_id', Array.from(calendarScope.professionalIds));
+      }
       if (filters.therapistIds.length > 0) query = query.in('therapist_id', filters.therapistIds);
-      if (filters.patientIds.length > 0) query = query.in('patient_id', filters.patientIds);
+      if (filters.patientIds.length > 0 && (calendarScope.allClinic || calendarScope.patientIds.size === 0)) query = query.in('patient_id', filters.patientIds);
       if (filters.roomIds.length > 0) query = query.in('room_id', filters.roomIds);
       if (filters.schoolIds.length > 0) query = query.in('school_id', filters.schoolIds);
       if (filters.schoolUnitIds.length > 0) query = query.in('school_unit_id', filters.schoolUnitIds);
@@ -49662,7 +49950,10 @@ async function startServer() {
       if (error) {
         if (hasMissingFinancialSchema(error)) {
           const fallback = await fetchCalendarEventsFromClinicState(clinicId, range, filters, {}, organizationId);
-          return res.json({ success: true, data: fallback, source: 'clinic_state_fallback' });
+          const scopedFallback = fallback
+            .filter((event: any) => calendarRowMatchesReadScope(event, calendarScope))
+            .map((event: any) => redactCalendarEventForCapabilities(event, context.capabilities));
+          return res.json({ success: true, data: scopedFallback, source: 'clinic_state_fallback' });
         }
         throw error;
       }
@@ -49671,11 +49962,20 @@ async function startServer() {
       const hydratedRows = await hydrateCalendarPatientNames(rows, clinicId);
       const patientIds = rows.map((row: any) => sanitizeString(row?.patient_id, 120)).filter(Boolean);
       const appointmentIds = rows.map((row: any) => sanitizeString(row?.id, 180)).filter(Boolean);
-      const [planCountByPatient, probeCountByAppointment] = await Promise.all([
-        countCalendarPlanItemsByPatient(patientIds, clinicId, organizationId, req.session.user),
-        countCalendarMaintenanceProbesByAppointment(appointmentIds, clinicId, organizationId, req.session.user)
-      ]);
-      const closureByAppointment = await fetchClosureSummariesByAppointment(appointmentIds, organizationId, req.session.user);
+      const canViewCalendarAbaHints = context.capabilities.has('aba.next_session.view')
+        || context.capabilities.has('aba.maintenance.manage')
+        || context.capabilities.has('aba.analytics.view');
+      const canViewCalendarClosure = context.capabilities.has('billing.sessions.view')
+        || context.capabilities.has('billing.preguide.view');
+      const [planCountByPatient, probeCountByAppointment] = canViewCalendarAbaHints
+        ? await Promise.all([
+            countCalendarPlanItemsByPatient(patientIds, clinicId, organizationId, req.session.user),
+            countCalendarMaintenanceProbesByAppointment(appointmentIds, clinicId, organizationId, req.session.user)
+          ])
+        : [new Map<string, number>(), new Map<string, any>()];
+      const closureByAppointment = canViewCalendarClosure
+        ? await fetchClosureSummariesByAppointment(appointmentIds, organizationId, req.session.user)
+        : new Map<string, any>();
       const counters = { planCountByPatient, probeCountByAppointment };
       const normalizedEvents = hydratedRows
         .map((row: any) => {
@@ -49692,35 +49992,56 @@ async function startServer() {
         clinicId,
         organizationId
       );
-      return res.json({ success: true, data: events, source: 'appointments' });
+      return res.json({
+        success: true,
+        data: events
+          .filter((event: any) => calendarRowMatchesReadScope(event, calendarScope))
+          .map((event: any) => redactCalendarEventForCapabilities(event, context.capabilities)),
+        source: 'appointments'
+      });
     } catch (error: any) {
       console.warn('[Calendar] event list failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível carregar a agenda agora.' });
     }
   });
 
-  app.get('/api/calendar/events/:eventId/detail', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/calendar/events/:eventId/detail', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('calendar.clinic.view', 'calendar.team.view', 'calendar.own.view'), async (req: any, res) => {
     try {
       const eventId = sanitizeString(req.params.eventId, 180);
       if (!eventId) return res.status(400).json({ success: false, error: 'Sessão inválida.' });
+      const context = req.authorizationContext as ResolvedClinicCapabilityContext;
+      const calendarScope = await resolveCalendarReadScope(context);
+      const canViewBillingContext = context.capabilities.has('billing.sessions.view')
+        || context.capabilities.has('billing.preguide.view');
+      const canViewPatientFinance = context.capabilities.has('finance.payments.view');
+      const canViewClinicalPlanning = context.capabilities.has('aba.next_session.view')
+        || context.capabilities.has('aba.maintenance.manage')
+        || context.capabilities.has('aba.suggestions.view');
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const row = await fetchCalendarAppointmentDetailRow(eventId, clinicId, req.session.user);
       if (!row) return res.status(404).json({ success: false, error: 'Sessão não encontrada.' });
-      try {
-        await persistAppointmentClosureCheck({
-          appointmentId: eventId,
-          user: req.session.user,
-          force: true,
-          scopedAppointment: row
-        });
-      } catch (closureRefreshError: any) {
-        console.warn('[Calendar] detail closure refresh skipped:', {
-          appointmentId: eventId,
-          message: closureRefreshError?.message || String(closureRefreshError)
-        });
+      if (!calendarRowMatchesReadScope(row, calendarScope)) {
+        return res.status(403).json({ success: false, error: 'CALENDAR_SCOPE_DENIED', message: 'Esta sessão está fora do seu escopo de agenda.' });
       }
-      const closureByAppointment = await fetchClosureSummariesByAppointment([eventId], organizationId, req.session.user);
+      if (canViewBillingContext) {
+        try {
+          await persistAppointmentClosureCheck({
+            appointmentId: eventId,
+            user: req.session.user,
+            force: true,
+            scopedAppointment: row
+          });
+        } catch (closureRefreshError: any) {
+          console.warn('[Calendar] detail closure refresh skipped:', {
+            appointmentId: eventId,
+            message: closureRefreshError?.message || String(closureRefreshError)
+          });
+        }
+      }
+      const closureByAppointment = canViewBillingContext
+        ? await fetchClosureSummariesByAppointment([eventId], organizationId, req.session.user)
+        : new Map<string, any>();
       const closure = closureByAppointment.get(eventId);
       const [hydratedRow] = await hydrateCalendarPatientNames([closure ? { ...row, ...mapClosureRowToCalendarFields(closure) } : row], clinicId);
       const baseEvent = normalizeCalendarAppointmentRow(hydratedRow || row);
@@ -49765,27 +50086,33 @@ async function startServer() {
             .eq('status', 'SIGNED')
             .order('signed_at', { ascending: false })
             .limit(5),
-          supabase
-            .from('appointment_billing_contexts')
-            .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
-            .eq('organization_id', organizationId)
-            .eq('appointment_id', eventId)
-            .limit(1)
-            .maybeSingle(),
-          supabase
-            .from('appointment_required_documents')
-            .select(APPOINTMENT_REQUIRED_DOCUMENT_SELECT)
-            .eq('organization_id', organizationId)
-            .eq('appointment_id', eventId)
-            .order('created_at', { ascending: false })
-            .limit(20),
-          supabase
-            .from('patient_financial_appointment_summaries')
-            .select('organization_id,clinic_id,appointment_id,patient_id,professional_id,patient_name_snapshot,professional_name_snapshot,service_type_snapshot,specialty_snapshot,appointment_scheduled_at,quantity,unit_amount,subtotal,payment_id,original_amount,additional_amount,discount_amount,total_amount,paid_amount,refunded_amount,balance_amount,due_date,method,last_payment_at,financial_status,source,notes,created_at,updated_at')
-            .eq('organization_id', organizationId)
-            .eq('appointment_id', eventId)
-            .limit(1)
-            .maybeSingle()
+          canViewBillingContext
+            ? supabase
+                .from('appointment_billing_contexts')
+                .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
+                .eq('organization_id', organizationId)
+                .eq('appointment_id', eventId)
+                .limit(1)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+          canViewBillingContext
+            ? supabase
+                .from('appointment_required_documents')
+                .select(APPOINTMENT_REQUIRED_DOCUMENT_SELECT)
+                .eq('organization_id', organizationId)
+                .eq('appointment_id', eventId)
+                .order('created_at', { ascending: false })
+                .limit(20)
+            : Promise.resolve({ data: [], error: null }),
+          canViewPatientFinance
+            ? supabase
+                .from('patient_financial_appointment_summaries')
+                .select('organization_id,clinic_id,appointment_id,patient_id,professional_id,patient_name_snapshot,professional_name_snapshot,service_type_snapshot,specialty_snapshot,appointment_scheduled_at,quantity,unit_amount,subtotal,payment_id,original_amount,additional_amount,discount_amount,total_amount,paid_amount,refunded_amount,balance_amount,due_date,method,last_payment_at,financial_status,source,notes,created_at,updated_at')
+                .eq('organization_id', organizationId)
+                .eq('appointment_id', eventId)
+                .limit(1)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null })
         ]);
         if (!requestsResult.error) actionRequests = requestsResult.data || [];
         else if (!hasMissingFinancialSchema(requestsResult.error)) throw requestsResult.error;
@@ -49807,7 +50134,7 @@ async function startServer() {
         else if (!hasMissingFinancialSchema(patientFinanceResult.error) && !isMissingRelationError(patientFinanceResult.error)) throw patientFinanceResult.error;
       }
 
-      if (isUuid(patientId)) {
+      if (isUuid(patientId) && canViewClinicalPlanning) {
         let planQuery = supabase
           .from('aba_next_session_plan_items')
           .select(ABA_NEXT_SESSION_PLAN_ITEM_SELECT)
@@ -49905,11 +50232,11 @@ async function startServer() {
       return res.json({
         success: true,
         data: {
-          event: {
+          event: redactCalendarEventForCapabilities({
             ...event,
             notes: sanitizeTextField(row?.notes || parseCalendarSourcePayload(row?.source_payload)?.notes || parseCalendarSourcePayload(row?.source_payload)?.note, 1200) || null,
             duration_minutes: getCalendarAppointmentDuration(row)
-          },
+          }, context.capabilities),
           team: event.therapist_name ? [{ id: event.therapist_id, name: event.therapist_name, role: 'Responsável' }] : [],
           nextSessionPlanItems: planItems,
           acceptedRecommendations,
@@ -49918,21 +50245,25 @@ async function startServer() {
           sessionRecord: event.has_session_record ? { label: 'Sessão registrada', status: 'registered' } : null,
           report: event.has_report ? { label: 'Relatório disponível', status: 'ready' } : null,
           pendingSignature: event.has_pending_signature,
-          closure: closure ? mapClosureRowToCalendarFields(closure) : null,
-          billingContext: serializeBillingContext(billingContext || {
-            appointment_id: eventId,
-            patient_id: event.patient_id,
-            service_type: event.type || event.service_type || null
-          }, null, billingDocuments, await resolveAppointmentBillingSuggestion({
-            organizationId,
-            patientId: event.patient_id,
-            serviceType: event.type || event.service_type || null,
-            payerId: event.payer_id || billingContext?.payer_id || null,
-            payerName: event.payer_name_snapshot || billingContext?.payer_name_snapshot || null,
-            appointmentDate: event.scheduled_start_at || event.scheduled_at || event.date || null,
-            procedureCode: event.procedure_code || billingContext?.procedure_code || null
-          })),
-          patientFinance,
+          closure: canViewBillingContext && closure
+            ? redactCalendarEventForCapabilities(mapClosureRowToCalendarFields(closure), context.capabilities)
+            : null,
+          billingContext: canViewBillingContext
+            ? serializeBillingContext(billingContext || {
+                appointment_id: eventId,
+                patient_id: event.patient_id,
+                service_type: event.type || event.service_type || null
+              }, null, billingDocuments, await resolveAppointmentBillingSuggestion({
+                organizationId,
+                patientId: event.patient_id,
+                serviceType: event.type || event.service_type || null,
+                payerId: event.payer_id || billingContext?.payer_id || null,
+                payerName: event.payer_name_snapshot || billingContext?.payer_name_snapshot || null,
+                appointmentDate: event.scheduled_start_at || event.scheduled_at || event.date || null,
+                procedureCode: event.procedure_code || billingContext?.procedure_code || null
+              }))
+            : null,
+          patientFinance: canViewPatientFinance ? patientFinance : null,
           actionRequests,
           statusHistory,
           signatures
@@ -64550,7 +64881,7 @@ async function startServer() {
     };
   };
 
-  app.get('/api/aba/patients/:patientId/therapeutic-plan', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/therapeutic-plan', checkAuth, requireClinicCapability('treatment_plan.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -64898,7 +65229,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-plans', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-plans', checkAuth, requireClinicCapability('treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Escopo do Plano terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -65289,7 +65620,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Escopo do Plano terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -65454,7 +65785,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
@@ -65529,7 +65860,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-programs', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-programs', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -65789,7 +66120,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.edit'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
@@ -65837,7 +66168,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.edit'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -65900,7 +66231,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-programs/:programId/targets', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-programs/:programId/targets', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.edit'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
@@ -65941,7 +66272,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/program-templates', requireAbaV2Feature, checkAuth, requireClinicCapability('clinic.settings.edit'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
@@ -66148,7 +66479,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/program-templates/:templateId', requireAbaV2Feature, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/aba/program-templates/:templateId', requireAbaV2Feature, checkAuth, requireClinicCapability('clinic.settings.edit'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Modelo de programa')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -66294,7 +66625,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/targets/:targetId/mastery-criteria', checkAuth, checkPatientAccess, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/targets/:targetId/mastery-criteria', checkAuth, checkPatientAccess, requireClinicCapability('aba.program.edit'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId || req.body?.patient_id || req.body?.patientId, 120);
       const targetId = sanitizeString(req.params.targetId || req.body?.target_id || req.body?.targetId, 180);
@@ -67335,7 +67666,7 @@ async function startServer() {
     };
   };
 
-  app.get('/api/aba/patient-summary/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patient-summary/:patientId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -67356,7 +67687,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/maintenance-overview/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/maintenance-overview/:patientId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -68718,7 +69049,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/maintenance-schedules', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/maintenance-schedules', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -68746,7 +69077,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/maintenance-schedules/clear', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/maintenance-schedules/clear', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload para apagar manutenções')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -68897,7 +69228,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/future-appointments', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/future-appointments', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.next_session.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -68961,7 +69292,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/maintenance-targets/ensure', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/maintenance-targets/ensure', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de habilidade adquirida para manutenção')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId || req.body?.patient_id || req.body?.patientId, 120);
@@ -69933,7 +70264,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/next-session/recommendations', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/next-session/recommendations', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.suggestions.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -69986,7 +70317,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/next-session/recommendations/generate', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/next-session/recommendations/generate', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.suggestions.apply'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de geração de planejamento ABA')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -70276,7 +70607,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/next-session/plan-items', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/next-session/plan-items', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.next_session.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -70331,7 +70662,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/clinical-line-chart', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/clinical-line-chart', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
       if (!isUuid(patientId)) {
@@ -70537,7 +70868,7 @@ async function startServer() {
 
 
 
-  app.post('/api/patients/:patientId/clinical-observations', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/patients/:patientId/clinical-observations', checkAuth, requireClinicCapability('clinical.notes.create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Observação clínica')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -70664,7 +70995,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/clinical-outcomes-dashboard', checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/patients/:patientId/clinical-outcomes-dashboard', checkAuth, requireClinicCapability('reports.clinical.indicators'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -70890,7 +71221,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/charts/targets', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/charts/targets', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
       if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], annotations: [] } });
@@ -70927,7 +71258,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/charts/behaviors', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/charts/behaviors', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
       if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], annotations: [] } });
@@ -71035,7 +71366,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/charts/mastery', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/charts/mastery', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.mastery.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
       if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], evaluations: [], annotations: [] } });
@@ -71100,7 +71431,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/charts/maintenance', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/charts/maintenance', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
       if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], schedules: [], probeResults: [], alerts: [], annotations: [] } });
@@ -71203,7 +71534,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/charts/session-changes', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/charts/session-changes', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
       if (!isUuid(patientId)) return res.json({ success: true, data: { points: [], annotations: [] } });
@@ -71240,7 +71571,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/patients/:patientId/charts/overview', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/patients/:patientId/charts/overview', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
       if (!isUuid(patientId)) return res.json({ success: true, data: { summary: null, points: [], insights: [], annotations: [] } });
@@ -71293,7 +71624,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/charts/annotations', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/charts/annotations', requireAbaV2Feature, checkAuth, requireClinicCapability('clinical.notes.create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload da anotação de gráfico ABA')) return;
       const { patientId, clinicId, organizationId } = resolveAbaChartPatientScope(req);
@@ -71336,7 +71667,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/prompt-types', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/aba/prompt-types', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
@@ -71382,10 +71713,10 @@ async function startServer() {
     }
   };
 
-  app.post('/api/aba/prompt-types', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), saveAbaPromptTypeHandler);
-  app.patch('/api/aba/prompt-types/:promptTypeId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), saveAbaPromptTypeHandler);
+  app.post('/api/aba/prompt-types', requireAbaV2Feature, checkAuth, requireClinicCapability('clinic.settings.edit'), saveAbaPromptTypeHandler);
+  app.patch('/api/aba/prompt-types/:promptTypeId', requireAbaV2Feature, checkAuth, requireClinicCapability('clinic.settings.edit'), saveAbaPromptTypeHandler);
 
-  app.post('/api/aba/maintenance-probe-results', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/maintenance-probe-results', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload de maintenance probe ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -71820,7 +72151,7 @@ async function startServer() {
     });
   };
 
-  app.post('/api/aba/sessions', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/sessions', requireAbaV2Feature, checkAuth, requireClinicCapability('session.start'), checkPatientAccess, async (req: any, res) => {
     let claimedAppointmentId = '';
     let claimedSessionId = '';
     let appointmentClaimNeedsRelease = false;
@@ -72373,7 +72704,7 @@ async function startServer() {
   });
 
 
-  app.post('/api/aba/sessions/:sessionId/complete', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/sessions/:sessionId/complete', requireAbaV2Feature, checkAuth, requireClinicCapability('session.finish'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 192 * 1024, 'Encerramento da sessão ABA')) return;
       const sessionId = sanitizeString(req.params.sessionId, 180);
@@ -72658,7 +72989,7 @@ async function startServer() {
   });
 
 
-  app.post('/api/appointments/:appointmentId/reopen-no-show', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/appointments/:appointmentId/reopen-no-show', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('calendar.no_show.record'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Reabertura de falta')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -72718,7 +73049,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/sessions/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/sessions/:patientId', requireAbaV2Feature, checkAuth, requireClinicCapability('session.history.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -72745,7 +73076,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/session-summaries', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/session-summaries', requireAbaV2Feature, checkAuth, requireClinicCapability('session.data.write'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 192 * 1024, 'Payload do resumo da sessão ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -72934,7 +73265,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/trials', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/trials', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.trial.record'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 128 * 1024, 'Payload da tentativa ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -73123,7 +73454,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/trials/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/trials/:patientId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -73147,7 +73478,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/behavior-events', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/behavior-events', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 128 * 1024, 'Payload do comportamento ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -73376,7 +73707,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/behavior-events/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/behavior-events/:patientId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -73430,7 +73761,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/interval-records', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/interval-records', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload do intervalo ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -73511,7 +73842,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/interval-summaries', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/interval-summaries', requireAbaV2Feature, checkAuth, requireClinicCapability('session.data.write'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload do resumo de intervalo ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -73614,7 +73945,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/abc-events', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/abc-events', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload ABC ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -73682,7 +74013,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/mastery-evaluations', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/mastery-evaluations', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.trial.record'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 128 * 1024, 'Payload da avaliação de maestria ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -73814,7 +74145,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/mastery-evaluations/:patientId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/mastery-evaluations/:patientId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.mastery.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);

@@ -107,7 +107,8 @@ assert.match(
 );
 assert.match(
   server,
-  /app\.get\('\/api\/aba\/patients\/:patientId\/therapeutic-plan'[\s\S]*?requireActiveClinicRoles\('coordinator', 'therapist', 'admin', 'owner'\)/,
+  /app\.get\('\/api\/aba\/patients\/:patientId\/therapeutic-plan'[^\n]*requireClinicCapability\('treatment_plan\.view'\)[^\n]*checkPatientAccess/,
+  'plano terapêutico deve usar capability + escopo do paciente',
 );
 assert.match(
   server,

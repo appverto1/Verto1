@@ -87,7 +87,7 @@ const hasActiveProfessionalLink = (
   );
 
 export function isTherapeuticPlanManager(roleOrActor: unknown): boolean {
-  return ['owner', 'admin', 'coordinator'].includes(
+  return ['owner', 'admin', 'director', 'coordinator', 'supervisor'].includes(
     resolveActorRole(roleOrActor)
   );
 }

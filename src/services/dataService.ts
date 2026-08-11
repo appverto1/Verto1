@@ -7230,6 +7230,19 @@ export const dataService = {
     }
   },
 
+  async getClinicAuthorizationContext() {
+    try {
+      const response = await fetch('/api/clinic/authorization/me', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error loading clinic authorization context:', error);
+      return { success: false, error: normalizeApiErrorMessage(error) };
+    }
+  },
+
   async selectWorkspace(clinicId: string) {
     try {
       const response = await fetch('/api/workspaces/select', {

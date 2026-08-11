@@ -91,6 +91,7 @@ import {
 } from "recharts";
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
 import { dataService } from "../services/dataService";
+import { getDefaultCapabilitiesForRole, isClinicBaseRole } from "../constants/authorizationModel";
 import {
   getAgendaViewPreferenceKey,
   readAgendaViewPreference,
@@ -112,7 +113,6 @@ import {
   onlyDigits,
   parseDocumentForStorage,
 } from "../utils/brMasks";
-import { ROLE_CAPABILITY_SECTIONS } from "../constants/roleCapabilities";
 import {
   getDefaultAnamnesisTemplate,
   normalizeAnamnesisTemplate,
@@ -695,19 +695,50 @@ export function CoordinatorDashboard({
     {}
   ) as Record<string, any>;
   const role = String(user?.role || "coordinator");
-  const capabilityRole: "coordinator" | "receptionist" | "therapist" =
-    role === "therapist"
-      ? "therapist"
-      : role === "receptionist"
-        ? "receptionist"
-        : "coordinator";
-  const isTherapist = capabilityRole === "therapist";
-  const isReceptionist = capabilityRole === "receptionist";
-  const canCancelRecurringAppointments = ["coordinator", "receptionist", "therapist", "admin", "owner"].includes(role.toLowerCase());
+  const normalizedRole = role.trim().toLowerCase();
+  const isSupervisor = normalizedRole === "supervisor";
+  const isDirectTherapist = normalizedRole === "therapist";
+  // Supervisor shares the conservative clinical UI restrictions of a therapist,
+  // but patient scoping continues to come from SUPERVISED_CASES on the server.
+  const isTherapist = isDirectTherapist || isSupervisor;
+  const isReceptionist = normalizedRole === "receptionist";
+  const baseCapabilities = useMemo(() => {
+    if (!isClinicBaseRole(normalizedRole)) return new Set<string>();
+    return new Set<string>(getDefaultCapabilitiesForRole(normalizedRole));
+  }, [normalizedRole]);
+  const [effectiveCapabilities, setEffectiveCapabilities] = useState<Set<string>>(baseCapabilities);
+  const [authorizationHydrated, setAuthorizationHydrated] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setEffectiveCapabilities(baseCapabilities);
+    setAuthorizationHydrated(false);
+    if (!isClinicBaseRole(normalizedRole)) {
+      setAuthorizationHydrated(true);
+      return () => { cancelled = true; };
+    }
+    void dataService.getClinicAuthorizationContext().then((result: any) => {
+      if (cancelled) return;
+      if (result?.success && Array.isArray(result?.data?.capabilities)) {
+        setEffectiveCapabilities(new Set(result.data.capabilities.map((value: any) => String(value || '').trim()).filter(Boolean)));
+      }
+      setAuthorizationHydrated(true);
+    }).catch(() => {
+      if (!cancelled) setAuthorizationHydrated(true);
+    });
+    return () => { cancelled = true; };
+  }, [baseCapabilities, normalizedRole, user?.activeWorkspaceId, user?.clinicId]);
+
+  const hasCapability = useCallback(
+    (capability: string) => effectiveCapabilities.has(capability),
+    [effectiveCapabilities],
+  );
+
+  const canCancelRecurringAppointments = hasCapability("calendar.appointment.cancel");
   const canDeleteRecurringAppointments = canCancelRecurringAppointments;
-  const canAccessClinicFinance = ["coordinator", "admin", "owner"].includes(role.toLowerCase());
-  const canCreatePatients = !isTherapist;
-  const canManageRooms = !isTherapist;
+  const canAccessClinicFinance = hasCapability("finance.payments.view");
+  const canCreatePatients = hasCapability("patient.create");
+  const canManageRooms = hasCapability("clinic.rooms.manage");
   const dashboardResumeKey = useMemo(() => {
     const userId = String(user?.id || "").trim();
     const workspaceId =
@@ -718,49 +749,60 @@ export function CoordinatorDashboard({
   }, [user?.id, user?.activeWorkspaceId, user?.clinicId]);
   const hasRestoredDashboardStateRef = useRef(false);
 
+  const legacyCapabilityRequirements: Record<string, readonly string[]> = {
+    "medical-records": ["clinical.record.view"],
+    "patient-intake": ["patient.create"],
+    "protocol-library": ["aba.program.view"],
+    "patient-financial": ["finance.payments.view"],
+    // The existing Team tab contains compensation/admin controls, so simple
+    // team.view is intentionally not enough to expose the whole tab.
+    "team-compensation": ["team.permissions.manage"],
+    "clinic-settings": ["clinic.settings.view"],
+    "billing-management": ["billing.sessions.view"],
+    "engagement-widgets": ["patient.list"],
+    "agenda-multi-view": ["calendar.clinic.view", "calendar.team.view", "calendar.own.view"],
+    "rooms": ["clinic.rooms.manage"],
+  };
+
   const capabilityStatusForRole = (capabilityKey: string): "full" | "limited" | "none" => {
-    const capability = ROLE_CAPABILITY_SECTIONS.flatMap((section) => section.items).find(
-      (item) => item.key === capabilityKey,
-    );
-    if (!capability) return "none";
-    const status = (capability as any)?.[capabilityRole];
-    if (status === "full" || status === "limited" || status === "none") return status;
-    return "none";
+    const requirements = legacyCapabilityRequirements[capabilityKey] || [];
+    if (requirements.length === 0) return "none";
+    return requirements.some((capability) => hasCapability(capability)) ? "full" : "none";
   };
 
   const tabCapabilityMap: Record<string, string | null> = {
-    dashboard: null,
-    patients: "patient-intake",
+    dashboard: "engagement-widgets",
+    patients: isTherapist ? "medical-records" : "patient-intake",
     protocols: "protocol-library",
     financial: "patient-financial",
     team: "team-compensation",
     payers: "clinic-settings",
-    patientAuthorizations: "clinic-settings",
+    patientAuthorizations: null,
     settings: null,
-    logs: null,
+    logs: "clinic-settings",
     billing: "billing-management",
     flow: "engagement-widgets",
     birthdays: "engagement-widgets",
     agenda: "agenda-multi-view",
-    closure: "agenda-multi-view",
-    conference: "agenda-multi-view",
+    closure: "billing-management",
+    conference: "billing-management",
     rooms: "rooms",
+    schools: "clinic-settings",
   };
 
-  const capabilityForTab = (tabId: string) => {
-    if (tabId === "patients" && isTherapist) return "medical-records";
-    return tabCapabilityMap[tabId];
-  };
+  const capabilityForTab = (tabId: string) => tabCapabilityMap[tabId];
 
   const canAccessTab = (tabId: string) => {
-    if (tabId === "financial") return canAccessClinicFinance || isReceptionist;
-    if (tabId === "closure") return !isReceptionist;
-    if (tabId === "conference") return !isReceptionist && !isTherapist;
+    if (!authorizationHydrated && (normalizedRole === "director" || normalizedRole === "supervisor")) {
+      return tabId === "dashboard" || tabId === "patients";
+    }
+    if (tabId === "patientAuthorizations") return hasCapability("patient.insurance.authorization.view");
+    if (tabId === "settings") return isTherapist || hasCapability("clinic.settings.view");
+    if (tabId === "financial") return canAccessClinicFinance;
+    if (tabId === "closure" || tabId === "conference") return hasCapability("billing.preguide.view");
     const capability = capabilityForTab(tabId);
-    if (!capability) return true;
-    const status = capabilityStatusForRole(capability);
-    if (status === "none") return false;
-    return true;
+    if (!capability) return false;
+    return capabilityStatusForRole(capability) !== "none";
   };
 
   const [activeTab, setActiveTab] = useState<
@@ -888,7 +930,7 @@ export function CoordinatorDashboard({
       setTabHistory(["dashboard"]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role, activeTab]);
+  }, [role, activeTab, authorizationHydrated, effectiveCapabilities]);
 
   const goBackTab = () => {
     setTabHistory((prev) => {
@@ -1109,14 +1151,14 @@ export function CoordinatorDashboard({
   const roleScopedPatients = useMemo(() => {
     const currentTherapistId = String(user?.id || "").trim();
     const mainListPatients = allPatients.filter(isPatientVisibleInMainList);
-    return isTherapist
+    return isDirectTherapist
       ? mainListPatients.filter(
           (patient: any) =>
             Boolean(currentTherapistId) &&
             patientMatchesProfessionalFilter(patient, currentTherapistId),
         )
       : mainListPatients;
-  }, [allPatients, isTherapist, user?.id]);
+  }, [allPatients, isDirectTherapist, user?.id]);
 
   const birthdayPatients = useMemo(
     () => roleScopedPatients.filter((patient: any) => isBirthdayTodayPatient(patient)),
@@ -1786,10 +1828,10 @@ export function CoordinatorDashboard({
   });
   const therapistCanRegisterClinicalData = !isTherapist || Boolean(therapistCrp.trim());
   const isDemoAccount = Boolean(user?.isDemoUser);
-  const canManageProtocolLibrary = capabilityStatusForRole("protocol-library") === "full";
-  const canManageClinicSettings = capabilityStatusForRole("clinic-settings") !== "none";
-  const canManageBilling = !isDemoAccount && capabilityStatusForRole("billing-management") !== "none";
-  const canEditAnamnesisTemplate = canManageClinicSettings || isTherapist;
+  const canManageProtocolLibrary = hasCapability("aba.program.edit");
+  const canManageClinicSettings = hasCapability("clinic.settings.edit");
+  const canManageBilling = !isDemoAccount && hasCapability("billing.sessions.view");
+  const canEditAnamnesisTemplate = canManageClinicSettings || isDirectTherapist;
   const DAY_GRID_SLOT_HEIGHT_PX = 66;
   const DAY_GRID_START_HOUR = 7;
   const DAY_GRID_END_HOUR = 20;

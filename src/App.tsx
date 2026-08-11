@@ -3590,11 +3590,7 @@ export default function App() {
   const hydrateState = async (nextUser: any) => {
     if (!nextUser) return;
 
-    if (
-      nextUser.role !== 'therapist' &&
-      nextUser.role !== 'coordinator' &&
-      nextUser.role !== 'receptionist'
-    ) {
+    if (!['director', 'coordinator', 'supervisor', 'therapist', 'receptionist'].includes(String(nextUser.role || '').toLowerCase())) {
       setClinicStateHydrated(true);
       setClinicStateSyncReady(false);
       return;
@@ -3752,7 +3748,7 @@ export default function App() {
 
     // Paciente tem hidratação própria (histórico/tarefas/notas) e não deve
     // receber sobreposição do estado clínico global após F5.
-    if (user.role === 'patient' || user.role === 'director' || user.role === 'supervisor' || user.role === 'biller') {
+    if (user.role === 'patient' || user.role === 'biller') {
       setClinicStateHydrated(false);
       setClinicStateSyncReady(false);
       return;
@@ -4060,7 +4056,7 @@ export default function App() {
     params: { limit?: number; cursor?: string; from?: string; to?: string } = {}
   ) => {
     const normalizedPatientId = String(patientId || '').trim();
-    if (!normalizedPatientId || !user || !['therapist', 'coordinator', 'receptionist', 'admin', 'owner'].includes(String(user.role || '').toLowerCase())) {
+    if (!normalizedPatientId || !user || !['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'admin', 'owner'].includes(String(user.role || '').toLowerCase())) {
       return { success: false, error: 'Paciente inválido.' };
     }
     try {
@@ -7890,11 +7886,9 @@ export default function App() {
           <ClinicMemberAccessPending user={user} onLogout={handleLogout} />
         ) : isProfessionalClinicRole(user.role) && !hasDashboardBillingAccess(user) ? (
           <SubscriptionRequired user={user} onLogout={handleLogout} />
-        ) : (user.role === 'director' || user.role === 'supervisor') ? (
-          <ClinicRoleFoundationPending user={user} onLogout={handleLogout} />
         ) : user.role === 'biller' ? (
           <BillerWorkspace user={user} onLogout={handleLogout} />
-        ) : (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !clinicStateHydrated ? (
+        ) : (['director', 'coordinator', 'supervisor', 'therapist', 'receptionist'].includes(String(user.role || '').toLowerCase())) && !clinicStateHydrated ? (
           <div className="min-h-screen flex items-center justify-center bg-white">
             <div className="text-center">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#7a32fc] mx-auto"></div>
@@ -7935,7 +7929,7 @@ export default function App() {
             isReadOnlyMode={patientIsReadOnlyMode}
             patientPortalId={resolvedPatientPortalId}
             />
-        ) : user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'therapist' ? (
+        ) : ['director', 'coordinator', 'supervisor', 'receptionist', 'therapist'].includes(String(user.role || '').toLowerCase()) ? (
           <CoordinatorDashboard 
             user={{ ...user, profilePicture, crp }}
             onLogout={handleLogout}
