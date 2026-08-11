@@ -2069,6 +2069,8 @@ export async function fetchPatientsWithSchemaFallback(params: {
   userId?: string | null;
   clinicId?: string | null;
   limit: number;
+  patientIds?: readonly string[] | null;
+  selectColumns?: readonly string[] | null;
   logger?: LoggerLike;
 }) {
   await hydrateMissingColumnsFromCriticalStatus(
@@ -2078,12 +2080,30 @@ export async function fetchPatientsWithSchemaFallback(params: {
   );
   const cachedMissingColumns = readCachedMissingColumns(params.supabase, 'patients');
   const discoveredMissingColumns = new Set<string>();
-  let columns = PATIENT_LIST_SELECT_COLUMNS.filter((column) => !cachedMissingColumns.has(column));
+  const requestedColumns = Array.isArray(params.selectColumns) && params.selectColumns.length > 0
+    ? new Set(params.selectColumns.map((column) => cleanString(column, 120)).filter(Boolean))
+    : null;
+  let columns = PATIENT_LIST_SELECT_COLUMNS.filter(
+    (column) => !cachedMissingColumns.has(column) && (!requestedColumns || requestedColumns.has(column)),
+  );
   let filterIsActive = columns.includes('is_active');
   let filterDeletedAt = columns.includes('deleted_at');
+  const role = cleanString(params.role, 40).toLowerCase();
+  const hasExplicitPatientScope = Array.isArray(params.patientIds);
+  const scopedPatientIds = Array.from(new Set(
+    (params.patientIds || [])
+      .map((patientId) => cleanString(patientId, 120))
+      .filter(Boolean),
+  )).slice(0, Math.max(params.limit, 500));
   let includeProfessionalScope =
-    cleanString(params.role, 40).toLowerCase() === 'therapist' && columns.includes('professional_id');
+    role === 'therapist' && !hasExplicitPatientScope && columns.includes('professional_id');
   let lastError: any = null;
+
+  // Supervisor scope must always be resolved explicitly by the caller. This
+  // prevents a missing supervision query from degrading into clinic-wide data.
+  if ((role === 'supervisor' || hasExplicitPatientScope) && scopedPatientIds.length === 0) {
+    return { data: [], error: null, select: joinColumns(columns) };
+  }
 
   const warnDiscoveredCapabilities = () => {
     if (discoveredMissingColumns.size === 0) return;
@@ -2107,18 +2127,20 @@ export async function fetchPatientsWithSchemaFallback(params: {
       query = query.neq('status', 'ARCHIVED').neq('status', 'archived');
     }
 
+    const clinicId = cleanString(params.clinicId, 120);
+    const userId = cleanString(params.userId, 120);
+    if (clinicId && ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller', 'admin', 'owner'].includes(role)) {
+      query = query.eq('clinic_id', clinicId);
+    }
+    if (hasExplicitPatientScope) {
+      query = query.in('id', scopedPatientIds);
+    }
+
     query = query
       .order('created_at', { ascending: false })
       .limit(params.limit);
 
-    const role = cleanString(params.role, 40).toLowerCase();
-    const clinicId = cleanString(params.clinicId, 120);
-    const userId = cleanString(params.userId, 120);
-
-    if (role === 'coordinator' || role === 'receptionist') {
-      if (clinicId) query = query.eq('clinic_id', clinicId);
-    } else if (role === 'therapist') {
-      if (clinicId) query = query.eq('clinic_id', clinicId);
+    if (role === 'therapist' && !hasExplicitPatientScope) {
       if (includeProfessionalScope && columns.includes('professional_id')) {
         query = query.or(`therapist_id.eq.${userId},professional_id.eq.${userId}`);
       } else {
