@@ -8561,8 +8561,61 @@ function dateGroupForClinic(value: unknown, user: any): string {
 }
 
 function hasGlobalClinicAccess(user: any): boolean {
-  const role = sanitizeString(user?.role, 40).toLowerCase();
-  return role === 'admin' || role === 'owner';
+  // Platform administration is intentionally NOT a clinical-data bypass.
+  // A future support/break-glass flow must create an explicit, audited
+  // platform_support context for one clinic before this can ever return true.
+  return Boolean(
+    user?.isPlatformAdmin === true &&
+    sanitizeString(user?.activeAccessContext?.kind, 60).toLowerCase() === 'platform_support' &&
+    user?.activeAccessContext?.breakGlass === true &&
+    isUuid(currentClinicId(user))
+  );
+}
+
+async function isPlatformAdminUserId(userIdInput: unknown): Promise<boolean> {
+  const userId = sanitizeString(userIdInput, 120);
+  if (!isUuid(userId)) return false;
+  try {
+    const { data, error } = await supabase
+      .from('platform_admins')
+      .select('user_id,active')
+      .eq('user_id', userId)
+      .eq('active', true)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (isMissingRelationError(error)) return false;
+      throw error;
+    }
+    return sanitizeString(data?.user_id, 120) === userId && data?.active === true;
+  } catch (error) {
+    logRouteDbError('isPlatformAdminUserId', error, { userId });
+    return false;
+  }
+}
+
+async function checkPlatformAdmin(req: any, res: any, next: any) {
+  const userId = sanitizeString(req.session?.user?.id, 120);
+  const allowed = await isPlatformAdminUserId(userId);
+  if (!allowed) {
+    return res.status(403).json({
+      success: false,
+      error: 'PLATFORM_ADMIN_REQUIRED',
+      message: 'Acesso restrito à administração da plataforma Verto.'
+    });
+  }
+  if (
+    sanitizeString(req.session?.user?.role, 40).toLowerCase() === 'owner' &&
+    !hasVerifiedOwnerMfaSession(req.session?.user)
+  ) {
+    return res.status(401).json({
+      success: false,
+      error: 'OWNER_MFA_REQUIRED',
+      message: 'Confirme o Google Authenticator para acessar esta área.'
+    });
+  }
+  if (req.session?.user) req.session.user.isPlatformAdmin = true;
+  return next();
 }
 
 async function resolveEffectiveClinicRole(
@@ -15126,8 +15179,12 @@ async function loadPatientProfessionalAccessEvidence(params: {
   patientId: string;
   clinicId: string;
   actorId: string;
+  actorRole?: string | null;
 }) {
-  const [professionalLinkResult, membershipResult, profileResult] =
+  const actorRole = sanitizeString(params.actorRole, 40).toLowerCase();
+  const shouldResolveSupervision = actorRole === 'supervisor';
+
+  const [professionalLinkResult, membershipResult, profileResult, patientCaseLinksResult] =
     await Promise.all([
       supabase
         .from('patient_professional_links')
@@ -15150,7 +15207,16 @@ async function loadPatientProfessionalAccessEvidence(params: {
         .select('user_id,specialty')
         .eq('user_id', params.actorId)
         .limit(1)
-        .maybeSingle()
+        .maybeSingle(),
+      shouldResolveSupervision
+        ? supabase
+            .from('patient_professional_links')
+            .select('professional_id')
+            .eq('organization_id', params.clinicId)
+            .eq('patient_id', params.patientId)
+            .eq('status', 'active')
+            .limit(50)
+        : Promise.resolve({ data: [], error: null })
     ]);
 
   const legacyMembershipSchemaUnavailable =
@@ -15159,7 +15225,8 @@ async function loadPatientProfessionalAccessEvidence(params: {
   for (const result of [
     professionalLinkResult,
     membershipResult,
-    profileResult
+    profileResult,
+    patientCaseLinksResult
   ]) {
     if (result.error && !isMissingRelationError(result.error)) {
       throw result.error;
@@ -15170,6 +15237,45 @@ async function loadPatientProfessionalAccessEvidence(params: {
     !legacyMembershipSchemaUnavailable
   ) {
     throw profileResult.error;
+  }
+
+  let activeSupervisionLink: any = null;
+  if (
+    shouldResolveSupervision &&
+    !legacyMembershipSchemaUnavailable &&
+    !isMissingRelationError(patientCaseLinksResult.error)
+  ) {
+    const professionalIds = Array.from(new Set(
+      (patientCaseLinksResult.data || [])
+        .map((item: any) => sanitizeString(item?.professional_id, 120))
+        .filter((id: string) => isUuid(id))
+    ));
+    const [directSupervisionResult, professionalSupervisionResult] = await Promise.all([
+      supabase
+        .from('clinical_supervision_links')
+        .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status')
+        .eq('clinic_id', params.clinicId)
+        .eq('supervisor_user_id', params.actorId)
+        .eq('patient_id', params.patientId)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle(),
+      professionalIds.length > 0
+        ? supabase
+            .from('clinical_supervision_links')
+            .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status')
+            .eq('clinic_id', params.clinicId)
+            .eq('supervisor_user_id', params.actorId)
+            .in('supervised_user_id', professionalIds)
+            .eq('status', 'active')
+            .limit(1)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null })
+    ]);
+    for (const result of [directSupervisionResult, professionalSupervisionResult]) {
+      if (result.error && !isMissingRelationError(result.error)) throw result.error;
+    }
+    activeSupervisionLink = directSupervisionResult.data || professionalSupervisionResult.data || null;
   }
 
   return {
@@ -15185,6 +15291,7 @@ async function loadPatientProfessionalAccessEvidence(params: {
     activeManagerMembership: legacyMembershipSchemaUnavailable
       ? null
       : membershipResult.data,
+    activeSupervisionLink,
     legacyMembershipSchemaUnavailable
   };
 }
@@ -15196,7 +15303,6 @@ async function canAccessPatientInCurrentClinic(
 ): Promise<boolean> {
   if (!isUuid(patientId)) return false;
   const explicitDemoUser = isExplicitDemoUser(user);
-  if (hasGlobalClinicAccess(user) && !explicitDemoUser) return true;
   const clinicId = currentClinicId(user);
   const role = sanitizeString(user?.role, 40).toLowerCase();
   const userId = sanitizeString(user?.id, 120);
@@ -15233,13 +15339,15 @@ async function canAccessPatientInCurrentClinic(
         const evidence = await loadPatientProfessionalAccessEvidence({
           patientId,
           clinicId,
-          actorId: userId
+          actorId: userId,
+          actorRole: role
         });
         if (evidence.legacyMembershipSchemaUnavailable) {
           return (
             (role === 'therapist' &&
               sanitizeString(data?.therapist_id, 120) === userId) ||
-            role === 'coordinator'
+            role === 'coordinator' ||
+            role === 'director'
           );
         }
         return evaluatePatientClinicalAccess({
@@ -15271,7 +15379,8 @@ async function canAccessPatientInCurrentClinic(
         const evidence = await loadPatientProfessionalAccessEvidence({
           patientId,
           clinicId: legacyClinicId,
-          actorId: userId
+          actorId: userId,
+          actorRole: role
         });
         return evidence.legacyMembershipSchemaUnavailable;
       } catch {
@@ -22229,16 +22338,11 @@ async function startServer() {
         req.body.patientId = canonicalPatientId;
       }
 
-      const hasResolvedClinicRole =
-        typeof req.effectiveClinicRole === 'string' &&
-        req.effectiveClinicRole.length > 0;
-      const globalClinicAccess = hasResolvedClinicRole
-        ? ['admin', 'owner'].includes(
-            sanitizeString(req.effectiveClinicRole, 40).toLowerCase()
-          )
-        : hasGlobalClinicAccess(user);
+      const globalClinicAccess = hasGlobalClinicAccess(user);
 
-      // Global backoffice bypass only
+      // No platform role receives implicit prontuário access. The only global
+      // path is an explicit future break-glass context, which demo users can
+      // never use.
       if (globalClinicAccess && isExplicitDemoUser(user)) {
         return res.status(403).json({ error: 'A conta demo não possui acesso global a prontuários.' });
       }
@@ -22302,13 +22406,15 @@ async function startServer() {
         const evidence = await loadPatientProfessionalAccessEvidence({
           patientId: resolvedPatientId,
           clinicId: patientClinicId,
-          actorId: userId
+          actorId: userId,
+          actorRole: userRole
         });
         if (evidence.legacyMembershipSchemaUnavailable) {
           if (
             (userRole === 'therapist' &&
               sanitizeString(patient.therapist_id, 120) === userId) ||
-            userRole === 'coordinator'
+            userRole === 'coordinator' ||
+            userRole === 'director'
           ) {
             return next();
           }
@@ -22325,11 +22431,15 @@ async function startServer() {
               evidence.activeProfessionalMembership,
             activeProfessionalProfile: evidence.activeProfessionalProfile,
             activeManagerMembership: evidence.activeManagerMembership,
+            activeSupervisionLink: evidence.activeSupervisionLink,
             requiredPermission: 'read'
           })
         ) {
           if (evidence.activeProfessionalLink) {
             req.patientProfessionalLink = evidence.activeProfessionalLink;
+          }
+          if (evidence.activeSupervisionLink) {
+            req.patientSupervisionLink = evidence.activeSupervisionLink;
           }
           return next();
         }
@@ -22614,7 +22724,7 @@ async function startServer() {
     return res.json(status);
   });
 
-  app.get('/api/internal/schema-status', checkAuth, requireRoles('owner', 'admin'), async (req: any, res) => {
+  app.get('/api/internal/schema-status', checkAuth, checkPlatformAdmin, async (req: any, res) => {
     const state = await refreshAppointmentActionResolutionSchema(Boolean(req.query?.refresh));
     return res.json({
       success: true,
@@ -74817,15 +74927,9 @@ async function startServer() {
     }
   });
 
-  const checkOwner = (req: any, res: any, next: any) => {
-    if (req.session.user?.role === 'owner' && hasVerifiedOwnerMfaSession(req.session.user)) {
-      return next();
-    }
-    return res.status(403).json({
-      error: 'OWNER_MFA_REQUIRED',
-      message: 'Acesso administrativo exige autenticação de dois fatores.'
-    });
-  };
+  // Legacy route name retained, but authority now comes exclusively from
+  // public.platform_admins (with owner MFA still enforced by the middleware).
+  const checkOwner = checkPlatformAdmin;
 
   // Owner-only stats (CEO dashboard)
   app.get('/api/owner/stats', checkAuth, checkOwner, async (req: any, res) => {
@@ -75119,22 +75223,6 @@ async function startServer() {
   });
 
   // --- ADMIN ROUTES ---
-  const checkAdmin = (req: any, res: any, next: any) => {
-    if (req.session.user && req.session.user.role === 'admin') {
-      next();
-    } else {
-      res.status(403).json({ error: 'Acesso negado. Apenas administradores podem acessar esta rota.' });
-    }
-  };
-
-  const checkPlatformAdmin = (req: any, res: any, next: any) => {
-    const role = sanitizeString(req.session.user?.role, 40);
-    if (role === 'admin' || role === 'owner') {
-      return next();
-    }
-    return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem acessar esta rota.' });
-  };
-
   const seedFixedDemoIfEmpty = async (
     clinicId: string,
     ownerUserId: string,
@@ -75856,7 +75944,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/stats', checkAuth, checkAdmin, async (req, res) => {
+  app.get('/api/admin/stats', checkAuth, checkPlatformAdmin, async (req, res) => {
     try {
       // Get total users
       const { count: totalUsers } = await supabase.from('users').select('id', { count: 'exact', head: true });
@@ -75895,7 +75983,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/clients', checkAuth, checkAdmin, async (req, res) => {
+  app.get('/api/admin/clients', checkAuth, checkPlatformAdmin, async (req, res) => {
     try {
       const { data, error } = await supabase
         .from('users')
@@ -77180,7 +77268,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/dre', checkAuth, checkAdmin, async (req, res) => {
+  app.get('/api/admin/dre', checkAuth, checkPlatformAdmin, async (req, res) => {
     try {
       // This would ideally aggregate data from a 'transactions' or 'revenue' table
       // For now, we'll aggregate from the 'users' table based on their active plans
@@ -77204,7 +77292,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/refund', checkAuth, checkAdmin, async (req, res) => {
+  app.post('/api/admin/refund', checkAuth, checkPlatformAdmin, async (req, res) => {
     const { stripeSessionId, amount } = req.body;
     try {
       const stripe = getStripe();
@@ -77217,7 +77305,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/charge', checkAuth, checkAdmin, async (req, res) => {
+  app.post('/api/admin/charge', checkAuth, checkPlatformAdmin, async (req, res) => {
     const { userId } = req.body;
     try {
       // Logic to trigger a manual charge or retry via Stripe
@@ -77329,7 +77417,7 @@ async function startServer() {
   app.get(
     "/api/owner/sales/leads",
     checkAuth,
-    requireRoles("owner", "admin"),
+    checkPlatformAdmin,
     async (req: any, res) => {
       const page = Math.max(1, Math.min(1000, Number(req.query?.page || 1)));
       const pageSize = Math.max(
@@ -77518,7 +77606,7 @@ async function startServer() {
   app.patch(
     "/api/owner/sales/leads/:leadId",
     checkAuth,
-    requireRoles("owner", "admin"),
+    checkPlatformAdmin,
     async (req: any, res) => {
       const leadId = sanitizeString(req.params?.leadId, 120);
       if (!isUuid(leadId))
@@ -79771,7 +79859,7 @@ async function startServer() {
   app.get(
     "/api/owner/sales/leads/:leadId/events",
     checkAuth,
-    requireRoles("owner", "admin"),
+    checkPlatformAdmin,
     async (req: any, res) => {
       const leadId = sanitizeString(req.params?.leadId, 120);
       if (!isUuid(leadId))
@@ -79796,7 +79884,7 @@ async function startServer() {
   app.post(
     "/api/owner/sales/offers",
     checkAuth,
-    requireRoles("owner", "admin"),
+    checkPlatformAdmin,
     async (req: any, res) => {
       const leadId = sanitizeString(req.body?.leadId, 120);
       const simulationId = sanitizeString(req.body?.simulationId, 120);
@@ -80811,7 +80899,7 @@ async function startServer() {
   app.post(
     "/api/owner/sales/offers/:offerId/resend-activation",
     checkAuth,
-    requireRoles("owner", "admin"),
+    checkPlatformAdmin,
     resendActivationLimiter,
     async (req: any, res) => {
       const offerId = sanitizeString(req.params?.offerId, 120);
@@ -80871,7 +80959,7 @@ async function startServer() {
     },
   );
 
-  app.post('/api/admin/billing/sync-stripe-plans', checkAuth, requireRoles('owner', 'admin'), async (_req: any, res) => {
+  app.post('/api/admin/billing/sync-stripe-plans', checkAuth, checkPlatformAdmin, async (_req: any, res) => {
     try {
       const sync = await syncStripeBillingPlanSnapshots('admin_endpoint');
       return res.json({

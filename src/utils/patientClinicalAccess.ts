@@ -21,13 +21,40 @@ type PatientClinicalAccessProfile = {
   specialty?: unknown;
 } | null;
 
+type PatientClinicalSupervisionLink = {
+  clinic_id?: unknown;
+  supervisor_user_id?: unknown;
+  supervised_user_id?: unknown;
+  patient_id?: unknown;
+  status?: unknown;
+} | null;
+
 const cleanText = (value: unknown) => String(value ?? '').trim();
 
+const isActiveMembershipFor = (
+  membership: PatientClinicalAccessMembership,
+  actorId: string,
+  clinicId: string,
+  allowedRoles: readonly string[],
+): boolean => Boolean(
+  membership
+  && cleanText(membership.user_id) === actorId
+  && cleanText(membership.clinic_id) === clinicId
+  && allowedRoles.includes(cleanText(membership.role).toLowerCase())
+  && cleanText(membership.status).toLowerCase() === 'active'
+);
+
+/**
+ * Evaluates only the patient/case scope dimension for clinical data.
+ *
+ * Platform administration never grants an implicit clinical bypass here.
+ * Route-level capability checks remain responsible for deciding whether the
+ * action itself (read/write/approve/etc.) is permitted for the actor role.
+ */
 export function evaluatePatientClinicalAccess(params: {
   actorId: unknown;
   actorRole: unknown;
   actorClinicId: unknown;
-  hasGlobalAccess?: boolean;
   patientId: unknown;
   patientClinicId: unknown;
   legacyTherapistId?: unknown;
@@ -35,10 +62,9 @@ export function evaluatePatientClinicalAccess(params: {
   activeProfessionalMembership?: PatientClinicalAccessMembership;
   activeProfessionalProfile?: PatientClinicalAccessProfile;
   activeManagerMembership?: PatientClinicalAccessMembership;
+  activeSupervisionLink?: PatientClinicalSupervisionLink;
   requiredPermission: PatientClinicalPermission;
 }): boolean {
-  if (params.hasGlobalAccess === true) return true;
-
   const actorId = cleanText(params.actorId);
   const actorRole = cleanText(params.actorRole).toLowerCase();
   const actorClinicId = cleanText(params.actorClinicId);
@@ -54,15 +80,43 @@ export function evaluatePatientClinicalAccess(params: {
     return false;
   }
 
-  const managerMembership = params.activeManagerMembership;
+  // Clinic managers receive clinic-wide clinical scope only from an active
+  // membership in the exact patient clinic. Legacy/global roles do not count.
   if (
-    managerMembership &&
-    cleanText(managerMembership.user_id) === actorId &&
-    cleanText(managerMembership.clinic_id) === patientClinicId &&
-    cleanText(managerMembership.role).toLowerCase() === 'coordinator' &&
-    cleanText(managerMembership.status).toLowerCase() === 'active'
+    isActiveMembershipFor(
+      params.activeManagerMembership,
+      actorId,
+      patientClinicId,
+      ['director', 'coordinator'],
+    )
   ) {
     return true;
+  }
+
+  // Supervisor scope is explicit. A supervisor may reach the patient only
+  // when a current supervision relationship resolves to this exact case.
+  if (
+    actorRole === 'supervisor'
+    && isActiveMembershipFor(
+      params.activeProfessionalMembership,
+      actorId,
+      patientClinicId,
+      ['supervisor'],
+    )
+  ) {
+    const supervision = params.activeSupervisionLink;
+    if (
+      supervision
+      && cleanText(supervision.clinic_id) === patientClinicId
+      && cleanText(supervision.supervisor_user_id) === actorId
+      && cleanText(supervision.status).toLowerCase() === 'active'
+      && (
+        cleanText(supervision.patient_id) === patientId
+        || cleanText(supervision.supervised_user_id).length > 0
+      )
+    ) {
+      return true;
+    }
   }
 
   const link = params.activeProfessionalLink;
@@ -72,12 +126,8 @@ export function evaluatePatientClinicalAccess(params: {
     return Boolean(
       actorRole === 'therapist' &&
       cleanText(params.legacyTherapistId) === actorId &&
-      membership &&
+      isActiveMembershipFor(membership, actorId, patientClinicId, ['therapist']) &&
       profile &&
-      cleanText(membership.user_id) === actorId &&
-      cleanText(membership.clinic_id) === patientClinicId &&
-      cleanText(membership.role).toLowerCase() === 'therapist' &&
-      cleanText(membership.status).toLowerCase() === 'active' &&
       cleanText(profile.user_id) === actorId &&
       cleanText(profile.specialty).length >= 2
     );
@@ -86,12 +136,9 @@ export function evaluatePatientClinicalAccess(params: {
   const membership = params.activeProfessionalMembership;
   const profile = params.activeProfessionalProfile;
   return Boolean(
-    membership &&
+    actorRole === 'therapist' &&
+      isActiveMembershipFor(membership, actorId, patientClinicId, ['therapist']) &&
       profile &&
-      cleanText(membership.user_id) === actorId &&
-      cleanText(membership.clinic_id) === patientClinicId &&
-      cleanText(membership.role).toLowerCase() === 'therapist' &&
-      cleanText(membership.status).toLowerCase() === 'active' &&
       cleanText(profile.user_id) === actorId &&
       cleanText(profile.specialty).length >= 2 &&
       cleanText(link.organization_id) === patientClinicId &&

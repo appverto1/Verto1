@@ -48,8 +48,8 @@ assert.equal(
     globalRole: 'admin',
     membership: activeMembership('therapist'),
   }),
-  'admin',
-  'o papel global persistido prevalece sobre o papel da workspace',
+  'therapist',
+  'papel global legado não sobrepõe a membership da workspace',
 );
 
 assert.equal(
@@ -60,7 +60,8 @@ assert.equal(
     globalRole: 'owner',
     membership: null,
   }),
-  'owner',
+  null,
+  'owner legado sem membership não recebe autoridade clínica',
 );
 
 assert.equal(
@@ -151,6 +152,8 @@ assert.equal(
 );
 
 
+assert.equal(canAssignClinicRole('owner', 'director'), false);
+assert.equal(canAssignClinicRole('admin', 'director'), false);
 assert.equal(canAssignClinicRole('director', 'director'), true);
 assert.equal(canAssignClinicRole('director', 'biller'), true);
 assert.equal(canAssignClinicRole('coordinator', 'supervisor'), true);
@@ -159,6 +162,8 @@ assert.equal(canAssignClinicRole('coordinator', 'director'), false);
 assert.equal(canAssignClinicRole('supervisor', 'therapist'), false);
 assert.equal(canAssignClinicRole('biller', 'biller'), false);
 
+assert.equal(canManageClinicRole('owner', 'director'), false);
+assert.equal(canManageClinicRole('admin', 'director'), false);
 assert.equal(canManageClinicRole('director', 'director'), true);
 assert.equal(canManageClinicRole('director', 'coordinator'), true);
 assert.equal(canManageClinicRole('coordinator', 'coordinator'), true);

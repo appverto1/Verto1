@@ -559,11 +559,80 @@ assert.equal(
     ...accessFacts,
     actorId: otherProfessionalId,
     actorRole: 'owner',
-    hasGlobalAccess: true,
-    activeProfessionalLink: null
+    activeProfessionalLink: null,
+    activeProfessionalMembership: null,
+    activeProfessionalProfile: null,
+    activeManagerMembership: null
+  }),
+  false,
+  'papel global owner/admin não concede bypass clínico'
+);
+assert.equal(
+  evaluatePatientClinicalAccess({
+    ...accessFacts,
+    actorId: otherProfessionalId,
+    actorRole: 'director',
+    activeProfessionalLink: null,
+    activeProfessionalMembership: null,
+    activeProfessionalProfile: null,
+    activeManagerMembership: {
+      user_id: otherProfessionalId,
+      clinic_id: clinicId,
+      role: 'director',
+      status: 'active'
+    }
   }),
   true,
-  'owner/admin global permanece autorizado'
+  'diretor com membership ativa recebe escopo clínico da unidade'
+);
+assert.equal(
+  evaluatePatientClinicalAccess({
+    ...accessFacts,
+    actorId: otherProfessionalId,
+    actorRole: 'supervisor',
+    activeProfessionalLink: null,
+    activeProfessionalMembership: {
+      user_id: otherProfessionalId,
+      clinic_id: clinicId,
+      role: 'supervisor',
+      status: 'active'
+    },
+    activeProfessionalProfile: null,
+    activeManagerMembership: {
+      user_id: otherProfessionalId,
+      clinic_id: clinicId,
+      role: 'supervisor',
+      status: 'active'
+    },
+    activeSupervisionLink: {
+      clinic_id: clinicId,
+      supervisor_user_id: otherProfessionalId,
+      patient_id: patientId,
+      supervised_user_id: null,
+      status: 'active'
+    }
+  }),
+  true,
+  'supervisor com vínculo explícito recebe acesso somente ao caso supervisionado'
+);
+assert.equal(
+  evaluatePatientClinicalAccess({
+    ...accessFacts,
+    actorId: otherProfessionalId,
+    actorRole: 'supervisor',
+    activeProfessionalLink: null,
+    activeProfessionalMembership: {
+      user_id: otherProfessionalId,
+      clinic_id: clinicId,
+      role: 'supervisor',
+      status: 'active'
+    },
+    activeProfessionalProfile: null,
+    activeManagerMembership: null,
+    activeSupervisionLink: null
+  }),
+  false,
+  'supervisor sem vínculo de supervisão não acessa o prontuário'
 );
 const crossTenantAccess = evaluatePatientClinicalAccess({
   ...accessFacts,

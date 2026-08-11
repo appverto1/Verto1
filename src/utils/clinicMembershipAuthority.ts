@@ -56,14 +56,9 @@ export function normalizeClinicAuthorityRole(
 export function resolveEffectiveClinicRoleFromMembership(
   input: ClinicMembershipAuthorityInput,
 ): ClinicAuthorityRole | null {
-  const globalRole = normalizeClinicAuthorityRole(input.globalRole);
-
-  // Owner e admin vêm do papel global persistido. O papel da sessão pode ser o
-  // papel da workspace selecionada e não deve esconder essa autoridade.
-  if (globalRole === 'owner' || globalRole === 'admin') {
-    return globalRole;
-  }
-
+  // Clinic authority is membership-scoped. Legacy/global owner/admin labels and
+  // the session role never substitute an active membership in the selected
+  // clinic. Platform administration is validated by a separate authority.
   const actorId = cleanText(input.actorId);
   const clinicId = cleanText(input.clinicId);
   const membership = input.membership;
@@ -94,9 +89,6 @@ export function canAssignClinicRole(
     return false;
   }
 
-  // Platform legacy roles are kept only for backward-compatible administration.
-  if (actorRole === 'owner' || actorRole === 'admin') return true;
-
   // Directors may manage every clinic-scoped role, including another director,
   // but only after the active-clinic membership check performed by the server.
   if (actorRole === 'director') return true;
@@ -122,7 +114,7 @@ export function canManageClinicRole(
     return false;
   }
 
-  if (actorRole === 'owner' || actorRole === 'admin' || actorRole === 'director') {
+  if (actorRole === 'director') {
     return true;
   }
 
