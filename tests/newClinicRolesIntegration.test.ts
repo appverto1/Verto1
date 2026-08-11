@@ -42,8 +42,13 @@ assert.match(
 );
 assert.match(
   app,
-  /user\.role === 'director' \|\| user\.role === 'supervisor' \|\| user\.role === 'biller'/,
-  'papéis com escopo ainda não migrado não devem cair no dashboard amplo legado',
+  /user\.role === 'director' \|\| user\.role === 'supervisor'/,
+  'Diretor e Supervisor permanecem no estado seguro até seus dashboards por scope serem liberados',
+);
+assert.match(
+  app,
+  /user\.role === 'biller'[\s\S]{0,120}<BillerWorkspace/,
+  'Faturista deve entrar no workspace dedicado de faturamento, sem cair no dashboard clínico legado',
 );
 assert.match(team, /const canGrantDirector = actorRole === 'director' \|\| actorRole === 'admin' \|\| actorRole === 'owner'/);
 assert.match(team, />Supervisor</);

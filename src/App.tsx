@@ -185,6 +185,9 @@ const PatientDashboard = React.lazy(() =>
 const CoordinatorDashboard = React.lazy(() =>
   import('./components/CoordinatorDashboard').then((m) => ({ default: m.CoordinatorDashboard }))
 );
+const BillerWorkspace = React.lazy(() =>
+  import('./components/BillerWorkspace').then((m) => ({ default: m.BillerWorkspace }))
+);
 const AdminDashboard = React.lazy(() =>
   import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
 );
@@ -7887,8 +7890,10 @@ export default function App() {
           <ClinicMemberAccessPending user={user} onLogout={handleLogout} />
         ) : isProfessionalClinicRole(user.role) && !hasDashboardBillingAccess(user) ? (
           <SubscriptionRequired user={user} onLogout={handleLogout} />
-        ) : (user.role === 'director' || user.role === 'supervisor' || user.role === 'biller') ? (
+        ) : (user.role === 'director' || user.role === 'supervisor') ? (
           <ClinicRoleFoundationPending user={user} onLogout={handleLogout} />
+        ) : user.role === 'biller' ? (
+          <BillerWorkspace user={user} onLogout={handleLogout} />
         ) : (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !clinicStateHydrated ? (
           <div className="min-h-screen flex items-center justify-center bg-white">
             <div className="text-center">

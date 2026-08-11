@@ -36,6 +36,8 @@ assert.equal(
 );
 
 assert.equal(hasEffectiveClinicCapability('biller', 'billing.xml.generate'), true);
+assert.equal(hasEffectiveClinicCapability('biller', 'patient.insurance.authorization.edit'), true);
+assert.equal(hasEffectiveClinicCapability('biller', 'patient.insurance.eligibility.view'), true);
 assert.equal(
   hasEffectiveClinicCapability('biller', 'clinical.record.view'),
   false,

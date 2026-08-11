@@ -15485,6 +15485,58 @@ async function canAccessPatientInCurrentClinic(
   return false;
 }
 
+
+async function canAccessPatientBillingInCurrentClinic(
+  patientId: string,
+  user: any,
+): Promise<boolean> {
+  if (!isUuid(patientId)) return false;
+  const clinicId = sanitizeString(currentClinicId(user), 120);
+  const userId = sanitizeString(user?.id || user?.user_id, 120);
+  if (!isUuid(clinicId) || !isUuid(userId)) return false;
+
+  const [patientResult, membershipResult] = await Promise.all([
+    supabase
+      .from('patients')
+      .select('id,clinic_id,is_demo')
+      .eq('id', patientId)
+      .eq('clinic_id', clinicId)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('clinic_memberships')
+      .select('user_id,clinic_id,role,status')
+      .eq('user_id', userId)
+      .eq('clinic_id', clinicId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  if (patientResult.error || membershipResult.error) return false;
+  if (!patientResult.data?.id || !membershipResult.data?.user_id) return false;
+  if (isExplicitDemoUser(user) && patientResult.data?.is_demo !== true) return false;
+
+  const membershipRole = sanitizeString(membershipResult.data.role, 40).toLowerCase();
+  if (!isClinicBaseRole(membershipRole)) return false;
+
+  // Membership is the source of truth. This also keeps legacy session roles
+  // (owner/admin) from becoming a global bypass when their clinic membership
+  // has already been normalized to director.
+  if (membershipRole === 'therapist' || membershipRole === 'supervisor') {
+    return canAccessPatientInCurrentClinic(patientId, { ...user, role: membershipRole });
+  }
+  if (!['director', 'coordinator', 'receptionist', 'biller'].includes(membershipRole)) {
+    return false;
+  }
+
+  return (
+    sanitizeString(membershipResult.data.user_id, 120) === userId &&
+    sanitizeString(membershipResult.data.clinic_id, 120) === clinicId
+  );
+}
+
 async function canPortalSessionAccessPatient(patientId: string, user: any): Promise<boolean> {
   if (!isUuid(patientId)) return false;
   const role = sanitizeString(user?.role, 40).toLowerCase();
@@ -51564,7 +51616,7 @@ async function startServer() {
     }
     const data = result.data || await buildClinicStateAppointment();
     if (!data?.id) return { ok: false, status: 404, error: 'Sessão não encontrada.' };
-    if (!(await canAccessPatientInCurrentClinic(sanitizeString(data.patient_id, 120), user))) {
+    if (!(await canAccessPatientBillingInCurrentClinic(sanitizeString(data.patient_id, 120), user))) {
       return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     }
     return { ok: true, organizationId, appointment: data };
@@ -53407,7 +53459,7 @@ async function startServer() {
     const billingAppointment = mergeAppointmentBillingPayload(appointment);
     const patientId = sanitizeString(billingAppointment?.patient_id || billingAppointment?.patientId, 120);
     if (!isUuid(patientId)) return { ok: false, status: 404, error: 'Sessão sem paciente válido.' };
-    if (!(await canAccessPatientInCurrentClinic(patientId, params.user))) {
+    if (!(await canAccessPatientBillingInCurrentClinic(patientId, params.user))) {
       return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     }
 
@@ -53817,7 +53869,7 @@ async function startServer() {
     }
   };
 
-  app.get('/api/admin/tiss/provider-profile', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tiss/provider-profile', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -53829,7 +53881,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tiss/provider-profile', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/admin/tiss/provider-profile', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Perfil TISS do prestador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -53891,7 +53943,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tiss/payer-profiles', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tiss/payer-profiles', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -53931,7 +53983,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tiss/payer-profiles/:payerId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tiss/payer-profiles/:payerId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const payerId = sanitizeString(req.params.payerId, 120);
@@ -53945,7 +53997,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tiss/payer-profiles/:payerId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/admin/tiss/payer-profiles/:payerId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil TISS do pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -54115,7 +54167,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/tiss-authorizations', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/patients/tiss-authorizations', noStoreDynamicResponse, checkAuth, requireClinicCapability('patient.insurance.authorization.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -54130,7 +54182,7 @@ async function startServer() {
         .order('updated_at', { ascending: false })
         .limit(limit);
       if (patientId) {
-        if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+        if (!isUuid(patientId) || !(await canAccessPatientBillingInCurrentClinic(patientId, req.session.user))) {
           return res.status(404).json(payerSafeError(404));
         }
         query = query.eq('patient_id', patientId);
@@ -54160,12 +54212,12 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/tiss-authorizations', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/patients/:patientId/tiss-authorizations', noStoreDynamicResponse, checkAuth, requireClinicCapability('patient.insurance.authorization.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const patientId = sanitizeString(req.params.patientId, 120);
       if (!isUuid(organizationId) || !isUuid(patientId)) return res.status(400).json(payerSafeError(400));
-      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+      if (!(await canAccessPatientBillingInCurrentClinic(patientId, req.session.user))) {
         return res.status(404).json(payerSafeError(404));
       }
       const { data, error } = await supabase
@@ -54194,7 +54246,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/patient-payer-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/patient-payer-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('patient.insurance.authorization.edit'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Autorização do paciente')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -54205,7 +54257,7 @@ async function startServer() {
       if (!isUuid(organizationId) || !isUuid(patientId) || !isUuid(payerId)) {
         return res.status(400).json({ success: false, error: 'Informe paciente e pagador válidos.', code: 'INVALID_AUTHORIZATION_SCOPE' });
       }
-      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+      if (!(await canAccessPatientBillingInCurrentClinic(patientId, req.session.user))) {
         return res.status(404).json(payerSafeError(404));
       }
       if (!(await fetchPayerForAdmin(payerId, organizationId))) {
@@ -54634,14 +54686,14 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/patients/:patientId/tiss-authorizations/:authorizationId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/patients/:patientId/tiss-authorizations/:authorizationId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('patient.insurance.authorization.edit'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 8 * 1024, 'Status da autorização TISS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const patientId = sanitizeString(req.params.patientId, 120);
       const authorizationId = sanitizeString(req.params.authorizationId, 120);
       if (!isUuid(organizationId) || !isUuid(patientId) || !isUuid(authorizationId)) return res.status(400).json(payerSafeError(400));
-      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+      if (!(await canAccessPatientBillingInCurrentClinic(patientId, req.session.user))) {
         return res.status(404).json(payerSafeError(404));
       }
       const nextActive = req.body?.active === true;
@@ -54732,13 +54784,13 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/patients/:patientId/tiss-authorizations/:authorizationId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/patients/:patientId/tiss-authorizations/:authorizationId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('patient.insurance.authorization.edit'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const patientId = sanitizeString(req.params.patientId, 120);
       const authorizationId = sanitizeString(req.params.authorizationId, 120);
       if (!isUuid(organizationId) || !isUuid(patientId) || !isUuid(authorizationId)) return res.status(400).json(payerSafeError(400));
-      if (!(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
+      if (!(await canAccessPatientBillingInCurrentClinic(patientId, req.session.user))) {
         return res.status(404).json(payerSafeError(404));
       }
       const { data: authorization, error: loadError } = await supabase
@@ -54925,7 +54977,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tiss/professional-profiles', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tiss/professional-profiles', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -54949,7 +55001,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tiss/professional-profiles/:professionalId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tiss/professional-profiles/:professionalId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const professionalId = sanitizeString(req.params.professionalId, 120);
@@ -54964,7 +55016,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tiss/professional-profiles/:professionalId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/admin/tiss/professional-profiles/:professionalId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil faturável do profissional')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -54987,7 +55039,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/pre-guides', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/pre-guides', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -55077,7 +55129,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/pre-guides/test-options', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/pre-guides/test-options', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
@@ -55529,7 +55581,7 @@ async function startServer() {
     return `verto-tiss-oficial-${month}-${payerName}-lote-${batchNumber}.xml`;
   };
 
-  app.get('/api/tiss/official-documents', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -55600,7 +55652,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.generate'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'XML TISS oficial')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -55858,7 +55910,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/official-documents/tracking', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents/tracking', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -55893,7 +55945,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/official-documents/:documentId/tracking', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents/:documentId/tracking', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const documentId = sanitizeString(req.params.documentId, 120);
@@ -55920,7 +55972,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents/:documentId/tracking/sent', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents/:documentId/tracking/sent', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 12 * 1024, 'acompanhamento de lote XML')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -55975,7 +56027,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents/:documentId/tracking/return', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents/:documentId/tracking/return', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.operator_return.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 12 * 1024, 'retorno de lote XML')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -56085,7 +56137,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/tracking', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/tracking', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.operator_return.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 12 * 1024, 'acompanhamento de guia XML')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -56178,7 +56230,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/appeal', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/appeal', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.denial.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 12 * 1024, 'recurso de glosa')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -56260,7 +56312,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/official-documents/:documentId/download', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents/:documentId/download', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const documentId = sanitizeString(req.params.documentId, 120);
@@ -56300,7 +56352,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/official-documents/:documentId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents/:documentId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const documentId = sanitizeString(req.params.documentId, 120);
@@ -56351,7 +56403,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/xml-drafts', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/xml-drafts', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -56388,7 +56440,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/xml-drafts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/xml-drafts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.generate'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'XML TISS em rascunho')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -56611,7 +56663,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/xml-drafts/:draftId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/xml-drafts/:draftId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const draftId = sanitizeString(req.params.draftId, 120);
@@ -56634,7 +56686,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/xml-drafts/:draftId/validate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/xml-drafts/:draftId/validate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.validate'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const draftId = sanitizeString(req.params.draftId, 120);
@@ -56724,7 +56776,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/xml-drafts/:draftId/download', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/xml-drafts/:draftId/download', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const draftId = sanitizeString(req.params.draftId, 120);
@@ -56751,7 +56803,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/revenue-cycle/events', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/revenue-cycle/events', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -56787,7 +56839,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/billing-batch-drafts', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/billing-batch-drafts', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -56826,7 +56878,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/billing-batch-drafts/:batchId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/billing-batch-drafts/:batchId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const batchId = sanitizeString(req.params.batchId, 120);
@@ -56849,7 +56901,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/billing-batch-drafts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/billing-batch-drafts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.batch.create'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Lote rascunho TISS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57028,7 +57080,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/billing-batch-drafts/:batchId/cancel', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/billing-batch-drafts/:batchId/cancel', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.batch.create'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const batchId = sanitizeString(req.params.batchId, 120);
@@ -57107,7 +57159,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/pre-guides/coverage', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/pre-guides/coverage', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -57244,7 +57296,7 @@ async function startServer() {
 
   const activeTissPreGuidePeriodRevalidations = new Set<string>();
 
-  app.post('/api/tiss/pre-guides/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tiss/pre-guides/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Revalidação de Pré-guias TISS do período')) return;
       const startedAt = Date.now();
@@ -57636,7 +57688,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/pre-guides/:appointmentId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/pre-guides/:appointmentId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -57670,10 +57722,10 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/pre-guides/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleTissPreGuideRevalidation);
-  app.post('/api/appointments/:appointmentId/tiss-pre-guide/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleTissPreGuideRevalidation);
+  app.post('/api/tiss/pre-guides/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.manage'), handleTissPreGuideRevalidation);
+  app.post('/api/appointments/:appointmentId/tiss-pre-guide/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.manage'), handleTissPreGuideRevalidation);
 
-  app.get('/api/payer-options', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/payer-options', noStoreDynamicResponse, checkAuth, requireClinicCapability('patient.insurance.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) {
@@ -57707,7 +57759,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/payers', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/payers', checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -57733,7 +57785,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/payers', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/admin/payers', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57784,7 +57836,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/payers/:payerId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/admin/payers/:payerId', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57821,7 +57873,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/payers/:payerId/requirements', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/payers/:payerId/requirements', checkAuth, requireClinicCapability('billing.antiglosa.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const payerId = sanitizeString(req.params.payerId, 120);
@@ -57867,7 +57919,7 @@ async function startServer() {
     updated_at: new Date().toISOString()
   });
 
-  app.post('/api/admin/payers/:payerId/requirements', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/admin/payers/:payerId/requirements', portalActionLimiter, checkAuth, requireClinicCapability('billing.antiglosa.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de regra do pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57900,7 +57952,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/payer-requirements/:requirementId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/admin/payer-requirements/:requirementId', portalActionLimiter, checkAuth, requireClinicCapability('billing.antiglosa.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de regra do pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57970,7 +58022,7 @@ async function startServer() {
     };
   };
 
-  app.get('/api/admin/payer-requirements/:requirementId/delete-impact', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/payer-requirements/:requirementId/delete-impact', checkAuth, requireClinicCapability('billing.antiglosa.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const requirementId = sanitizeString(req.params.requirementId, 120);
@@ -57992,7 +58044,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/admin/payer-requirements/:requirementId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/admin/payer-requirements/:requirementId', portalActionLimiter, checkAuth, requireClinicCapability('billing.antiglosa.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const requirementId = sanitizeString(req.params.requirementId, 120);
@@ -58071,7 +58123,7 @@ async function startServer() {
     return true;
   };
 
-  app.get('/api/admin/tuss/services', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tuss/services', checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -58095,7 +58147,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/services', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/admin/tuss/services', portalActionLimiter, checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de procedimento TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58146,7 +58198,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tuss/services/:serviceId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/admin/tuss/services/:serviceId', portalActionLimiter, checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de procedimento TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58183,7 +58235,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tuss/codes', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tuss/codes', checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -58207,7 +58259,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/codes', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/admin/tuss/codes', portalActionLimiter, checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de codigo TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58258,7 +58310,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tuss/codes/:codeId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/admin/tuss/codes/:codeId', portalActionLimiter, checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de codigo TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58293,7 +58345,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tuss/mappings', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tuss/mappings', checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -58334,7 +58386,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/mappings', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/admin/tuss/mappings', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de mapeamento TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58493,7 +58545,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tuss/mappings/:mappingId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/admin/tuss/mappings/:mappingId', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de mapeamento TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58633,7 +58685,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tuss/prices', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tuss/prices', checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -58690,7 +58742,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/prices', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/admin/tuss/prices', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de tabela negociada TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58815,7 +58867,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tuss/prices/:priceId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/admin/tuss/prices/:priceId', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de tabela negociada TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58927,7 +58979,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tuss/:entityType/:entityId/delete-impact', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/admin/tuss/:entityType/:entityId/delete-impact', checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     const entityType = sanitizeString(req.params.entityType, 40);
     const entityId = sanitizeString(req.params.entityId, 120);
     const normalizedEntityType = normalizeTussDeleteEntityType(entityType);
@@ -58987,7 +59039,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/admin/tuss/:entityType/:entityId', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/admin/tuss/:entityType/:entityId', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     const entityType = sanitizeString(req.params.entityType, 40);
     const entityId = sanitizeString(req.params.entityId, 120);
     const normalizedEntityType = normalizeTussDeleteEntityType(entityType);
@@ -59055,7 +59107,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/mappings/:mappingId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/admin/tuss/mappings/:mappingId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Payload de revalidação TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -59283,7 +59335,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/mappings/:mappingId/sync-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/admin/tuss/mappings/:mappingId/sync-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Sincronização de autorizações TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -60355,7 +60407,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/closure/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/closure/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação de período')) return;
       const range = parseClosureDateRange(req.body || {});
@@ -61150,7 +61202,7 @@ async function startServer() {
     return true;
   };
 
-  app.get('/api/conference/monthly', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/conference/monthly', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), async (req: any, res) => {
     const readStartedAt = Date.now();
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -61256,15 +61308,15 @@ async function startServer() {
     }
   };
 
-  app.get('/api/conference/monthly/summary-by-patient', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byPatient'));
-  app.get('/api/conference/monthly/summary-by-professional', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byProfessional'));
-  app.get('/api/conference/monthly/summary-by-payer', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byPayer'));
-  app.get('/api/conference/monthly/summary-by-service-type', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byServiceType'));
-  app.get('/api/conference/monthly/summary-by-procedure', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byProcedure' as any));
-  app.get('/api/conference/monthly/summary-by-tuss-code', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byTussCode' as any));
-  app.get('/api/conference/monthly/summary-by-guide-type', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), handleConferenceSummary('byGuideType' as any));
+  app.get('/api/conference/monthly/summary-by-patient', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), handleConferenceSummary('byPatient'));
+  app.get('/api/conference/monthly/summary-by-professional', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), handleConferenceSummary('byProfessional'));
+  app.get('/api/conference/monthly/summary-by-payer', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), handleConferenceSummary('byPayer'));
+  app.get('/api/conference/monthly/summary-by-service-type', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), handleConferenceSummary('byServiceType'));
+  app.get('/api/conference/monthly/summary-by-procedure', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), handleConferenceSummary('byProcedure' as any));
+  app.get('/api/conference/monthly/summary-by-tuss-code', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), handleConferenceSummary('byTussCode' as any));
+  app.get('/api/conference/monthly/summary-by-guide-type', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), handleConferenceSummary('byGuideType' as any));
 
-  app.get('/api/conference/monthly/session/:appointmentId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/conference/monthly/session/:appointmentId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), async (req: any, res) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -61318,7 +61370,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/conference/monthly/session/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/conference/monthly/session/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação da conferência')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -61365,7 +61417,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/conference/monthly/session/:appointmentId/status', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/conference/monthly/session/:appointmentId/status', portalActionLimiter, checkAuth, requireClinicCapability('billing.preguide.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de status da conferência')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -61418,7 +61470,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/conference/monthly/export', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/conference/monthly/export', portalActionLimiter, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de exportação da conferência')) return;

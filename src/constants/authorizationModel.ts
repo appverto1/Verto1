@@ -247,7 +247,7 @@ export const ROLE_DEFAULT_CAPABILITIES: Record<ClinicBaseRole | PortalRole, read
   biller: internal(
     'clinic.view','workspace.switch','team.view',
     'patient.list','patient.demographics.view','patient.contacts.view','patient.documents.registration.view',
-    'patient.insurance.view','patient.insurance.edit','patient.insurance.card.view','patient.insurance.authorization.view',
+    'patient.insurance.view','patient.insurance.edit','patient.insurance.card.view','patient.insurance.authorization.view','patient.insurance.authorization.edit','patient.insurance.eligibility.view',
     'billing.sessions.view','billing.preguide.view','billing.preguide.manage','billing.mapping.manage','billing.tuss.manage','billing.antiglosa.view','billing.antiglosa.manage','billing.batch.create','billing.xml.generate','billing.xml.validate','billing.xml.export','billing.operator_return.manage','billing.amount.submitted','billing.amount.paid','billing.denial.manage','billing.financial_settlement',
   ),
   patient: [
