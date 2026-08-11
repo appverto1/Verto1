@@ -1,9 +1,12 @@
 export type ClinicAuthorityRole =
   | 'owner'
   | 'admin'
+  | 'director'
   | 'coordinator'
+  | 'supervisor'
   | 'receptionist'
   | 'therapist'
+  | 'biller'
   | 'patient';
 
 type ClinicMembershipAuthorityInput = {
@@ -22,16 +25,22 @@ type ClinicMembershipAuthorityInput = {
 const ALL_AUTHORITY_ROLES = new Set<ClinicAuthorityRole>([
   'owner',
   'admin',
+  'director',
   'coordinator',
+  'supervisor',
   'receptionist',
   'therapist',
+  'biller',
   'patient',
 ]);
 
 const CLINIC_MEMBERSHIP_ROLES = new Set<ClinicAuthorityRole>([
+  'director',
   'coordinator',
+  'supervisor',
   'receptionist',
   'therapist',
+  'biller',
 ]);
 
 const cleanText = (value: unknown): string =>

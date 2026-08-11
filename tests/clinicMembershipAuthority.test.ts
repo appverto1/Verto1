@@ -112,3 +112,39 @@ assert.match(
 );
 
 console.log('clinicMembershipAuthority.test.ts: ok');
+
+assert.equal(
+  resolveEffectiveClinicRoleFromMembership({
+    actorId,
+    clinicId,
+    sessionRole: 'director',
+    globalRole: null,
+    membership: activeMembership('director'),
+  }),
+  'director',
+  'diretor é papel válido por membership ativa',
+);
+
+assert.equal(
+  resolveEffectiveClinicRoleFromMembership({
+    actorId,
+    clinicId,
+    sessionRole: 'supervisor',
+    globalRole: null,
+    membership: activeMembership('supervisor'),
+  }),
+  'supervisor',
+  'supervisor é papel válido por membership ativa',
+);
+
+assert.equal(
+  resolveEffectiveClinicRoleFromMembership({
+    actorId,
+    clinicId,
+    sessionRole: 'biller',
+    globalRole: null,
+    membership: activeMembership('biller'),
+  }),
+  'biller',
+  'faturista é papel válido por membership ativa',
+);
