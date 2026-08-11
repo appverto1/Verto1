@@ -1,13 +1,10 @@
 import React, { useState } from 'react';
-import { 
-  Mail, 
-  UserPlus, 
-  X, 
-  CheckCircle2, 
+import {
+  Mail,
+  X,
+  CheckCircle2,
   AlertCircle,
-  Stethoscope,
-  Calendar,
-  ArrowRight
+  ArrowRight,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { dataService } from '../services/dataService';
@@ -21,20 +18,26 @@ interface InvitationModalProps {
   onClose: () => void;
 }
 
+type InviteRole = 'director' | 'coordinator' | 'supervisor' | 'therapist' | 'receptionist' | 'biller';
+
 const formatInviteRoleLabel = (
   role: string,
   specialty = '',
 ) => {
+  if (role === 'director') return 'Diretor';
+  if (role === 'coordinator') return 'Coordenador';
+  if (role === 'supervisor') return 'Supervisor';
   if (role === 'therapist') {
     return `Profissional de atendimento · ${specialty || 'Especialidade pendente'}`;
   }
   if (role === 'receptionist') return 'Recepcionista/Assistente';
+  if (role === 'biller') return 'Faturista';
   return 'Profissional';
 };
 
 export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'therapist' | 'receptionist'>('therapist');
+  const [role, setRole] = useState<InviteRole>('therapist');
   const [specialty, setSpecialty] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +46,8 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
 
   const explicitTeamLimit = Number(user?.teamMemberLimit || user?.team_member_limit || 0);
   const maxMembers = Number.isFinite(explicitTeamLimit) && explicitTeamLimit > 0 ? explicitTeamLimit : null;
+  const actorRole = String(user?.role || '').trim().toLowerCase();
+  const canGrantDirector = actorRole === 'director' || actorRole === 'admin' || actorRole === 'owner';
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,60 +165,45 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Papel na Clínica</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setRole('therapist')}
-                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${role === 'therapist' ? 'border-blue-500 bg-blue-50/50' : 'border-slate-100 hover:border-slate-200'}`}
-                  >
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${role === 'therapist' ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      <Stethoscope size={20} />
-                    </div>
-                    <p className="text-sm font-bold text-slate-900">Profissional de atendimento</p>
-                  </button>
+                <select
+                  value={role}
+                  onChange={(event) => setRole(event.target.value as InviteRole)}
+                  className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/10"
+                >
+                  {canGrantDirector && <option value="director">Diretor</option>}
+                  <option value="coordinator">Coordenador</option>
+                  <option value="supervisor">Supervisor</option>
+                  <option value="therapist">Profissional de atendimento</option>
+                  <option value="receptionist">Recepcionista/Assistente</option>
+                  <option value="biller">Faturista</option>
+                </select>
 
-                  {role === 'therapist' && (
-                    <div className="col-span-2 rounded-2xl border border-blue-100 bg-blue-50/40 p-3">
-                      <label
-                        htmlFor="invitation-clinical-specialty"
-                        className="mb-2 block text-xs font-medium text-slate-600"
-                      >
-                        Especialidade clínica
-                      </label>
-                      <select
-                        id="invitation-clinical-specialty"
-                        value={specialty}
-                        required
-                        onChange={(event) => setSpecialty(event.target.value)}
-                        className="min-h-11 w-full rounded-xl border border-blue-100 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"
-                      >
-                        <option value="" disabled>
-                          Selecione a especialidade
+                {role === 'therapist' && (
+                  <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50/40 p-3">
+                    <label
+                      htmlFor="invitation-clinical-specialty"
+                      className="mb-2 block text-xs font-medium text-slate-600"
+                    >
+                      Especialidade clínica
+                    </label>
+                    <select
+                      id="invitation-clinical-specialty"
+                      value={specialty}
+                      required
+                      onChange={(event) => setSpecialty(event.target.value)}
+                      className="min-h-11 w-full rounded-xl border border-blue-100 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"
+                    >
+                      <option value="" disabled>
+                        Selecione a especialidade
+                      </option>
+                      {CLINICAL_SPECIALTY_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
                         </option>
-                        {CLINICAL_SPECIALTY_OPTIONS.map((option) => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-2 text-xs leading-5 text-slate-500">
-                        A especialidade será usada nos vínculos e planos do
-                        profissional.
-                      </p>
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => setRole('receptionist')}
-                    className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all text-left ${role === 'receptionist' ? 'border-green-500 bg-green-50/50' : 'border-slate-100 hover:border-slate-200'}`}
-                  >
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${role === 'receptionist' ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      <Calendar size={20} />
-                    </div>
-                    <p className="text-sm font-bold text-slate-900">Recepcionista/Assistente</p>
-                  </button>
-                </div>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
 
               {error && (

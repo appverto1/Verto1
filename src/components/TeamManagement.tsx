@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Users, 
   UserPlus, 
@@ -14,7 +14,9 @@ import {
   UserCheck,
   Calendar,
   Stethoscope,
-  Clock
+  Clock,
+  Building2,
+  ReceiptText
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -25,11 +27,15 @@ import {
   readClinicalSpecialtyFromSource,
 } from '../utils/clinicalSpecialties';
 
+type ClinicMemberRole = 'director' | 'coordinator' | 'supervisor' | 'therapist' | 'receptionist' | 'biller';
+
+type MemberRole = ClinicMemberRole | 'patient' | 'admin' | 'owner';
+
 interface Member {
   id: string;
   name: string;
   email: string;
-  role: 'coordinator' | 'therapist' | 'receptionist' | 'patient' | 'admin';
+  role: MemberRole;
   profileRole?: string | null;
   professionalTitle?: string | null;
   specialty?: string | null;
@@ -95,8 +101,11 @@ const hasSameOperationalRole = (member: Member, reference: Member | null) => {
 
 const formatAccessRoleLabel = (role: unknown, source?: any) => {
   const normalizedRole = String(role || '').trim().toLowerCase();
+  if (normalizedRole === 'director') return 'Diretor';
   if (normalizedRole === 'coordinator') return 'Coordenador';
+  if (normalizedRole === 'supervisor') return 'Supervisor';
   if (normalizedRole === 'receptionist') return 'Recepcionista/Assistente';
+  if (normalizedRole === 'biller') return 'Faturista';
   if (normalizedRole === 'admin' || normalizedRole === 'owner') return 'Administrador';
   if (normalizedRole === 'therapist') {
     return (
@@ -237,7 +246,7 @@ export function TeamManagement({
   const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
   const [unlinkingMemberId, setUnlinkingMemberId] = useState<string | null>(null);
   const [newMemberEmail, setNewMemberEmail] = useState('');
-  const [newMemberRole, setNewMemberRole] = useState<'therapist' | 'receptionist' | 'coordinator'>('therapist');
+  const [newMemberRole, setNewMemberRole] = useState<ClinicMemberRole>('therapist');
   const [newMemberSpecialty, setNewMemberSpecialty] = useState('');
   const [specialtySavingId, setSpecialtySavingId] = useState<string | null>(null);
   const [roleSpecialtyDrafts, setRoleSpecialtyDrafts] = useState<Record<string, string>>({});
@@ -261,6 +270,13 @@ export function TeamManagement({
   const inviteLimit = Math.max(MIN_TEAM_ACCESS_LIMIT, normalizedActivePatientCount * PROFESSIONALS_PER_ACTIVE_PATIENT);
   const totalUsed = (members?.length || 0) + (invitations?.filter(i => i.status === 'pending').length || 0);
   const canInvite = totalUsed < inviteLimit;
+  const actorRole = String(user?.role || '').trim().toLowerCase();
+  const canManageTeamAccess = ['director', 'coordinator', 'admin', 'owner'].includes(actorRole);
+  const canGrantDirector = actorRole === 'director' || actorRole === 'admin' || actorRole === 'owner';
+  const canManageMemberAccess = (member: Member) =>
+    canManageTeamAccess &&
+    member.id !== user.id &&
+    !(actorRole === 'coordinator' && member.role === 'director');
 
   useEffect(() => {
     void (async () => {
@@ -734,11 +750,15 @@ export function TeamManagement({
   };
 
   const roleIcons = {
+    director: <Building2 className="text-violet-600" size={18} />,
     coordinator: <Shield className="text-purple-500" size={18} />,
+    supervisor: <UserCheck className="text-indigo-500" size={18} />,
     therapist: <Stethoscope className="text-blue-500" size={18} />,
     receptionist: <Calendar className="text-green-500" size={18} />,
+    biller: <ReceiptText className="text-amber-600" size={18} />,
     patient: <Users className="text-slate-400" size={18} />,
-    admin: <Shield className="text-red-500" size={18} />
+    admin: <Shield className="text-red-500" size={18} />,
+    owner: <Shield className="text-red-500" size={18} />
   };
 
   const filteredMembers = members.filter(m => 
@@ -848,7 +868,9 @@ export function TeamManagement({
                       <div className="relative z-20">
                         <button 
                           onClick={() => setOpenMenuId(openMenuId === member.id ? null : member.id)}
-                          className="p-2 text-slate-400 hover:text-slate-600 hover:bg-white rounded-xl transition-all"
+                          disabled={!canManageMemberAccess(member)}
+                          aria-label={canManageMemberAccess(member) ? 'Gerenciar acesso do membro' : 'Acesso gerenciado por papel superior'}
+                          className="p-2 text-slate-400 hover:text-slate-600 hover:bg-white rounded-xl transition-all disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent"
                         >
                           <MoreVertical size={18} />
                         </button>
@@ -858,12 +880,30 @@ export function TeamManagement({
                             <div className="px-4 py-2 border-b border-slate-50 mb-1">
                               <p className="text-xs font-medium text-slate-500">Alterar acesso</p>
                             </div>
+                            {canGrantDirector && (
+                              <button
+                                type="button"
+                                onClick={() => { handleUpdateRole(member.id, 'director'); setOpenMenuId(null); }}
+                                className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'director' ? 'text-violet-700 bg-violet-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                                disabled={member.id === user.id}
+                              >
+                                <Building2 size={14} /> Diretor
+                              </button>
+                            )}
                             <button 
                               onClick={() => { handleUpdateRole(member.id, 'coordinator'); setOpenMenuId(null); }}
                               className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'coordinator' ? 'text-purple-600 bg-purple-50' : 'text-slate-600 hover:bg-slate-50'}`}
                               disabled={member.id === user.id}
                             >
                               <Shield size={14} /> Coordenador
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { handleUpdateRole(member.id, 'supervisor'); setOpenMenuId(null); }}
+                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'supervisor' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                              disabled={member.id === user.id}
+                            >
+                              <UserCheck size={14} /> Supervisor
                             </button>
                             {member.role === 'therapist' ? (
                               <div className="flex w-full items-center gap-3 bg-blue-50 px-4 py-2.5 text-xs font-medium text-blue-600">
@@ -939,6 +979,14 @@ export function TeamManagement({
                               disabled={member.id === user.id}
                             >
                               <Calendar size={14} /> Recepcionista/Assistente
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { handleUpdateRole(member.id, 'biller'); setOpenMenuId(null); }}
+                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'biller' ? 'text-amber-700 bg-amber-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                              disabled={member.id === user.id}
+                            >
+                              <ReceiptText size={14} /> Faturista
                             </button>
                             {member.role === 'therapist' && (
                               <div className="border-t border-slate-50 pt-2 mt-1">
@@ -1409,7 +1457,37 @@ export function TeamManagement({
 
               <div>
                 <label className="mb-2 block text-xs font-medium text-slate-600">Papel e nível de acesso</label>
-                <div className="grid grid-cols-1 gap-2.5">
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  {canGrantDirector && (
+                    <button
+                      type="button"
+                      aria-pressed={newMemberRole === 'director'}
+                      onClick={() => setNewMemberRole('director')}
+                      className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${newMemberRole === 'director' ? 'border-violet-300 bg-violet-50/70 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
+                    >
+                      <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${newMemberRole === 'director' ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                        <Building2 size={19} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-800">Diretor</p>
+                        <p className="mt-0.5 text-xs text-slate-500">Gestão completa das unidades autorizadas</p>
+                      </div>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    aria-pressed={newMemberRole === 'supervisor'}
+                    onClick={() => setNewMemberRole('supervisor')}
+                    className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${newMemberRole === 'supervisor' ? 'border-indigo-300 bg-indigo-50/70 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
+                  >
+                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${newMemberRole === 'supervisor' ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <UserCheck size={19} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800">Supervisor</p>
+                      <p className="mt-0.5 text-xs text-slate-500">Supervisão clínica dos casos vinculados</p>
+                    </div>
+                  </button>
                   <button
                     type="button"
                     aria-pressed={newMemberRole === 'therapist'}
@@ -1426,7 +1504,7 @@ export function TeamManagement({
                   </button>
 
                   {newMemberRole === 'therapist' && (
-                    <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                    <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3 sm:col-span-2">
                       <label
                         htmlFor="team-invitation-clinical-specialty"
                         className="mb-2 block text-xs font-medium text-slate-600"
@@ -1483,6 +1561,20 @@ export function TeamManagement({
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-slate-800">Recepcionista/Assistente</p>
                       <p className="mt-0.5 text-xs text-slate-500">Agenda, pagamentos, cobranças e convênios</p>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={newMemberRole === 'biller'}
+                    onClick={() => setNewMemberRole('biller')}
+                    className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${newMemberRole === 'biller' ? 'border-amber-300 bg-amber-50/70 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
+                  >
+                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${newMemberRole === 'biller' ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <ReceiptText size={19} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-800">Faturista</p>
+                      <p className="mt-0.5 text-xs text-slate-500">Convênios, TISS, lotes e retorno financeiro</p>
                     </div>
                   </button>
                 </div>

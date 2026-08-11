@@ -382,9 +382,20 @@ import {
   ptsLastReviewedAt
 } from './src/utils/ptsClinicalWorkspace';
 import {
+  canAssignClinicRole,
+  canManageClinicRole,
   resolveEffectiveClinicRoleFromMembership,
   type ClinicAuthorityRole
 } from './src/utils/clinicMembershipAuthority';
+import {
+  hasEffectiveClinicCapability,
+  type CapabilityOverrideLike
+} from './src/utils/authorizationRuntime';
+import {
+  isCapabilityKey,
+  type CapabilityKey,
+  type ClinicBaseRole
+} from './src/constants/authorizationModel';
 import {
   evaluatePatientClinicalAccess,
   executeAuthorizedHistoryScoreMutation
@@ -519,7 +530,7 @@ async function updateClinicSubscriptionStatus(params: {
       .from('users')
       .update({ subscription_status: params.status })
       .eq('clinic_id', safeClinicId)
-      .in('role', ['coordinator', 'therapist', 'receptionist']);
+      .in('role', ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller']);
     if (error) {
       console.error('[Stripe Webhook] Falha ao atualizar status por clínica:', {
         clinicId: safeClinicId,
@@ -1323,7 +1334,7 @@ function normalizeClinicAccessStatus(value: any): string {
 }
 
 function roleRequiresClinicBillingAccess(role: any): boolean {
-  return ['coordinator', 'therapist', 'receptionist', 'admin'].includes(
+  return ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller', 'admin'].includes(
     sanitizeString(role, 40).toLowerCase()
   );
 }
@@ -1677,11 +1688,11 @@ async function reconcileActivePatientSyncQueue(trigger: string): Promise<number>
   }
 }
 
-type AppRole = 'owner' | 'admin' | 'coordinator' | 'receptionist' | 'therapist' | 'patient';
-type ClinicRole = 'coordinator' | 'therapist' | 'receptionist';
+type AppRole = 'owner' | 'admin' | 'director' | 'coordinator' | 'supervisor' | 'receptionist' | 'therapist' | 'biller' | 'patient';
+type ClinicRole = 'director' | 'coordinator' | 'supervisor' | 'therapist' | 'receptionist' | 'biller';
 
-const ALL_ROLES: AppRole[] = ['owner', 'admin', 'coordinator', 'receptionist', 'therapist', 'patient'];
-const CLINIC_ROLES: ClinicRole[] = ['coordinator', 'therapist', 'receptionist'];
+const ALL_ROLES: AppRole[] = ['owner', 'admin', 'director', 'coordinator', 'supervisor', 'receptionist', 'therapist', 'biller', 'patient'];
+const CLINIC_ROLES: ClinicRole[] = ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller'];
 const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ENCRYPTION_ALGO = 'aes-256-gcm';
@@ -8006,7 +8017,7 @@ function ensureClinicRole(role: unknown): role is ClinicRole {
 
 function normalizeRequestedRole(role: unknown): AppRole {
   const safe = sanitizeString(role, 40).toLowerCase();
-  if (safe === 'coordinator' || safe === 'admin' || safe === 'therapist' || safe === 'receptionist' || safe === 'patient' || safe === 'owner') {
+  if (safe === 'director' || safe === 'coordinator' || safe === 'supervisor' || safe === 'admin' || safe === 'therapist' || safe === 'receptionist' || safe === 'biller' || safe === 'patient' || safe === 'owner') {
     return safe as AppRole;
   }
   if (safe === 'professional') return 'coordinator';
@@ -8550,7 +8561,8 @@ function dateGroupForClinic(value: unknown, user: any): string {
 }
 
 function hasGlobalClinicAccess(user: any): boolean {
-  return user?.isPlatformAdmin === true;
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  return role === 'admin' || role === 'owner';
 }
 
 async function resolveEffectiveClinicRole(
@@ -8685,6 +8697,95 @@ function canAccessClinicFinance(user: any): boolean {
 const TEAM_ACCESS_PER_ACTIVE_PATIENT = 10;
 const MIN_TEAM_ACCESS_LIMIT = 10;
 
+
+type ResolvedClinicCapabilityContext = {
+  membershipId: string;
+  clinicId: string;
+  userId: string;
+  role: ClinicBaseRole;
+  overrides: CapabilityOverrideLike[];
+};
+
+async function resolveClinicCapabilityContext(user: any): Promise<ResolvedClinicCapabilityContext | null> {
+  if (user?.activeAccessContext?.kind === 'patient_portal') return null;
+  const userId = sanitizeString(user?.id || user?.user_id, 120);
+  const clinicId = sanitizeString(currentClinicId(user), 120);
+  if (!isUuid(userId) || !isUuid(clinicId)) return null;
+
+  const { data: membership, error: membershipError } = await supabase
+    .from('clinic_memberships')
+    .select('id,user_id,clinic_id,role,status')
+    .eq('user_id', userId)
+    .eq('clinic_id', clinicId)
+    .eq('status', 'active')
+    .limit(1)
+    .maybeSingle();
+  if (membershipError) throw membershipError;
+  const membershipId = sanitizeString(membership?.id, 120);
+  const membershipRole = sanitizeString(membership?.role, 40).toLowerCase();
+  if (!isUuid(membershipId) || !isClinicBaseRole(membershipRole)) return null;
+
+  let overrides: CapabilityOverrideLike[] = [];
+  const { data: overrideRows, error: overrideError } = await supabase
+    .from('clinic_membership_permission_overrides')
+    .select('permission_key,effect')
+    .eq('membership_id', membershipId)
+    .limit(500);
+  if (overrideError) {
+    if (!isMissingRelationError(overrideError)) throw overrideError;
+  } else {
+    overrides = Array.isArray(overrideRows) ? overrideRows : [];
+  }
+
+  return {
+    membershipId,
+    clinicId,
+    userId,
+    role: membershipRole,
+    overrides,
+  };
+}
+
+function requireClinicCapability(capability: CapabilityKey) {
+  if (!isCapabilityKey(capability)) {
+    throw new Error(`INVALID_CAPABILITY_MIDDLEWARE:${String(capability)}`);
+  }
+  return async (req: any, res: any, next: any) => {
+    try {
+      const context = await resolveClinicCapabilityContext(req.session?.user);
+      if (!context || !hasEffectiveClinicCapability(context.role, capability, context.overrides)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_CAPABILITY_DENIED',
+          capability,
+          message: 'Seu acesso atual nesta clínica não permite esta ação.'
+        });
+      }
+      req.authorizationContext = context;
+      req.effectiveClinicRole = context.role;
+      return next();
+    } catch (error) {
+      logRouteDbError('requireClinicCapability', error, {
+        capability,
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+        userId: sanitizeString(req.session?.user?.id, 120)
+      });
+      if (isMissingRelationError(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_CAPABILITY_SCHEMA_UNAVAILABLE',
+          message: 'A estrutura de permissões por clínica ainda não foi aplicada.'
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'CLINIC_CAPABILITY_UNAVAILABLE',
+        message: 'Não foi possível validar sua permissão nesta clínica agora.'
+      });
+    }
+  };
+}
+
 async function getClinicTeamAccessUsage(clinicId: string) {
   const safeClinicId = sanitizeString(clinicId, 120);
   if (!safeClinicId) {
@@ -8709,13 +8810,13 @@ async function getClinicTeamAccessUsage(clinicId: string) {
       .select('user_id', { count: 'exact', head: true })
       .eq('clinic_id', safeClinicId)
       .eq('status', 'active')
-      .in('role', ['coordinator', 'therapist', 'receptionist']),
+      .in('role', ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller']),
     supabase
       .from('invitations')
       .select('id', { count: 'exact', head: true })
       .eq('clinic_id', safeClinicId)
       .eq('status', 'pending')
-      .in('role', ['coordinator', 'therapist', 'receptionist'])
+      .in('role', ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller'])
   ]);
 
   const activePatients = Math.max(0, Number(patientsResult.count || 0));
@@ -10300,25 +10401,6 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-
 function isUuid(value: string | null | undefined): boolean {
   if (!value) return false;
   return UUID_REGEX.test(value);
-}
-
-async function isPlatformAdminUserId(userId: unknown): Promise<boolean> {
-  const safeUserId = sanitizeString(userId, 120);
-  if (!isUuid(safeUserId)) return false;
-
-  const { data, error } = await supabase
-    .from('platform_admins')
-    .select('user_id')
-    .eq('user_id', safeUserId)
-    .eq('active', true)
-    .maybeSingle();
-
-  if (error) {
-    console.error('[PlatformAdmin] capability lookup failed:', sanitizeString(error?.message || String(error), 240));
-    return false;
-  }
-
-  return Boolean(data?.user_id);
 }
 
 function parseTaskScheduleToMs(value: string | null | undefined): number | null {
@@ -14496,7 +14578,6 @@ function mergeAuthoritativeClinicSettings(sessionSettings: any, context: Resolve
 
 async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
   if (!sessionUser?.id) return buildSessionUserPayload(sessionUser);
-  const isPlatformAdmin = await isPlatformAdminUserId(sessionUser.id);
   const workspaces = filterWorkspacesForUser(
     await fetchUserWorkspaces(sessionUser.id),
     sessionUser
@@ -14504,7 +14585,6 @@ async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
   const accessContexts = await fetchUserAccessContexts(sessionUser.id, workspaces);
   const baseSessionUser = buildSessionUserPayload({
     ...sessionUser,
-    isPlatformAdmin,
     workspaces,
     accessContexts
   });
@@ -14843,7 +14923,6 @@ function buildSessionUserPayload(input: any) {
     id: sanitizeString(input?.id, 120),
     email: sanitizeEmail(input?.email) || sanitizeString(input?.email, 320),
     role: ensureRole(resolvedRole) ? resolvedRole : 'therapist',
-    isPlatformAdmin: input?.isPlatformAdmin === true,
     name: sanitizeString(input?.name, 180),
     profilePicture: sanitizeSessionUrl(input?.profilePicture),
     profilePicturePath: sanitizeString(input?.profilePicturePath || input?.profile_picture_path, 500) || null,
@@ -19341,7 +19420,7 @@ async function startServer() {
 
   const isBillingAccessBlocked = async (user: any): Promise<boolean> => {
     const role = sanitizeString(user?.role, 40).toLowerCase();
-    if (!['coordinator', 'therapist', 'receptionist', 'admin'].includes(role)) return false;
+    if (!['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller', 'admin'].includes(role)) return false;
     const userId = sanitizeString(user?.id, 120);
     const clinicId = sanitizeString(currentClinicId(user), 120);
     const now = Date.now();
@@ -19440,7 +19519,6 @@ async function startServer() {
           message: 'Confirme o Google Authenticator para acessar o painel administrativo.'
         });
       }
-      req.session.user.isPlatformAdmin = await isPlatformAdminUserId(sessionUserId);
       syncWorkspaceContextInSession(req, res, () => {});
       if (
         req.session.user?.mustSelectAccessContext === true &&
@@ -24855,8 +24933,11 @@ async function startServer() {
 
   const formatClinicAccessRoleLabel = (role: unknown, source?: any) => {
     const normalizedRole = sanitizeString(role, 40).toLowerCase();
+    if (normalizedRole === 'director') return 'Diretor';
     if (normalizedRole === 'coordinator') return 'Coordenador';
+    if (normalizedRole === 'supervisor') return 'Supervisor';
     if (normalizedRole === 'receptionist') return 'Recepcionista/Assistente';
+    if (normalizedRole === 'biller') return 'Faturista';
     if (normalizedRole === 'therapist') {
       const specialty = readProfessionalTitleFromSource(source);
       return specialty
@@ -25058,7 +25139,7 @@ async function startServer() {
   };
 
   // Clinic Management & Invitations
-  app.get('/api/clinic/members', checkAuth, requireActiveClinicRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/members', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'supervisor', 'therapist', 'biller', 'admin', 'owner'), async (req: any, res) => {
     const user = req.session.user;
 
     try {
@@ -25417,7 +25498,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/invite', inviteLimiter, checkAuth, requireActiveClinicRoles('coordinator', 'admin'), async (req: any, res) => {
+  app.post('/api/clinic/invite', inviteLimiter, checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const email = sanitizeEmail(req.body?.email);
       const roleRaw = sanitizeString(req.body?.role, 30);
@@ -25429,6 +25510,14 @@ async function startServer() {
 
       if (!email || !role) {
         return res.status(400).json({ error: 'Email e papel validos sao obrigatorios' });
+      }
+      const actorRole = sanitizeString(req.effectiveClinicRole || user?.role, 40).toLowerCase();
+      if (!canAssignClinicRole(actorRole, role)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_ROLE_DELEGATION_DENIED',
+          message: 'Seu papel atual não pode conceder este nível de acesso.'
+        });
       }
       const requestedSpecialty =
         requiredOnboardingFields?.specialty ||
@@ -25843,7 +25932,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/clinic/invitations', checkAuth, async (req: any, res) => {
+  app.get('/api/clinic/invitations', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const user = req.session.user;
       const clinicId = currentClinicId(user);
@@ -25934,12 +26023,9 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/clinic/invitations/:invitationId/cancel', checkAuth, async (req: any, res) => {
+  app.patch('/api/clinic/invitations/:invitationId/cancel', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
     try {
       const user = req.session.user;
-      if (user.role !== 'coordinator' && user.role !== 'admin') {
-        return res.status(403).json({ error: 'Apenas coordenadores podem cancelar convites' });
-      }
 
       const clinicId = currentClinicId(user);
       const invitationId = sanitizeString(req.params?.invitationId, 120);
@@ -26095,13 +26181,21 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/assign-role', checkAuth, requireActiveClinicRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/clinic/assign-role', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
     const adminUser = req.session.user;
 
     const email = sanitizeEmail(req.body?.email);
     const roleRaw = sanitizeString(req.body?.role, 30);
     const role = ensureClinicRole(roleRaw) ? roleRaw : null;
     if (!email || !role) return res.status(400).json({ error: 'Email e papel sao obrigatorios' });
+    const actorRole = sanitizeString(req.effectiveClinicRole || adminUser?.role, 40).toLowerCase();
+    if (!canAssignClinicRole(actorRole, role)) {
+      return res.status(403).json({
+        success: false,
+        error: 'CLINIC_ROLE_DELEGATION_DENIED',
+        message: 'Seu papel atual não pode conceder este nível de acesso.'
+      });
+    }
     const specialty = role === 'therapist'
       ? normalizeClinicalSpecialty(req.body?.specialty || req.body?.professionalTitle || req.body?.professional_title)
       : null;
@@ -26122,8 +26216,34 @@ async function startServer() {
 
       if (findError) throw findError;
       if (!targetUser) return res.status(404).json({ error: 'Usuario nao encontrado' });
+      if (sanitizeString(targetUser.id, 120) === sanitizeString(adminUser?.id, 120)) {
+        return res.status(400).json({
+          success: false,
+          error: 'SELF_ROLE_CHANGE_DENIED',
+          message: 'Você não pode alterar o próprio papel por esta ação.'
+        });
+      }
 
       const clinicId = currentClinicId(adminUser);
+      const { data: existingMembership, error: existingMembershipError } = await supabase
+        .from('clinic_memberships')
+        .select('user_id,clinic_id,role,status')
+        .eq('user_id', targetUser.id)
+        .eq('clinic_id', clinicId)
+        .limit(1)
+        .maybeSingle();
+      if (existingMembershipError) throw existingMembershipError;
+      if (
+        existingMembership?.status === 'active' &&
+        !canManageClinicRole(actorRole, existingMembership.role)
+      ) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_ROLE_TARGET_ABOVE_ACTOR',
+          message: 'Seu papel atual não pode administrar este membro.'
+        });
+      }
+
       const { error: updateError } = await supabase
         .from('clinic_memberships')
         .upsert([{
@@ -26142,7 +26262,7 @@ async function startServer() {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
-  app.patch('/api/clinic/members/:memberId/specialty', checkAuth, requireActiveClinicRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/clinic/members/:memberId/specialty', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
     const actor = req.session.user;
     if (!enforcePayloadLimit(req, res, 4 * 1024, 'Especialidade clínica')) return;
 
@@ -26215,7 +26335,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/clinic/members/:memberId/role', checkAuth, requireActiveClinicRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/clinic/members/:memberId/role', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
     const adminUser = req.session.user;
 
     const memberId = sanitizeString(req.params?.memberId, 120);
@@ -26231,6 +26351,21 @@ async function startServer() {
     const professionalTitle = specialty;
 
     if (!isUuid(memberId) || !role) return res.status(400).json({ error: 'Papel e membro válidos são obrigatórios' });
+    if (memberId === sanitizeString(adminUser?.id, 120)) {
+      return res.status(400).json({
+        success: false,
+        error: 'SELF_ROLE_CHANGE_DENIED',
+        message: 'Você não pode alterar o próprio papel por esta ação.'
+      });
+    }
+    const actorRole = sanitizeString(req.effectiveClinicRole || adminUser?.role, 40).toLowerCase();
+    if (!canAssignClinicRole(actorRole, role)) {
+      return res.status(403).json({
+        success: false,
+        error: 'CLINIC_ROLE_DELEGATION_DENIED',
+        message: 'Seu papel atual não pode conceder este nível de acesso.'
+      });
+    }
     if (role === 'therapist' && !specialty) {
       return res.status(400).json({
         success: false,
@@ -26255,6 +26390,13 @@ async function startServer() {
           success: false,
           error: 'CLINIC_MEMBER_NOT_FOUND',
           message: 'Membro ativo não encontrado nesta clínica.'
+        });
+      }
+      if (!canManageClinicRole(actorRole, currentMembership.role)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_ROLE_TARGET_ABOVE_ACTOR',
+          message: 'Seu papel atual não pode administrar este membro.'
         });
       }
 
@@ -26306,11 +26448,8 @@ async function startServer() {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
-  app.patch('/api/clinic/members/:memberId/unlink', checkAuth, async (req: any, res) => {
+  app.patch('/api/clinic/members/:memberId/unlink', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
     const adminUser = req.session.user;
-    if (adminUser.role !== 'coordinator' && adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Apenas coordenadores podem desvincular membros' });
-    }
 
     const memberId = sanitizeString(req.params?.memberId, 120);
     if (!memberId) return res.status(400).json({ error: 'Membro inválido' });
@@ -26331,6 +26470,14 @@ async function startServer() {
       if (membershipError) throw membershipError;
       if (!targetMembership) {
         return res.status(404).json({ error: 'Membro não encontrado nesta clínica' });
+      }
+      const actorRole = sanitizeString(req.effectiveClinicRole || adminUser?.role, 40).toLowerCase();
+      if (!canManageClinicRole(actorRole, sanitizeString(targetMembership.role, 40).toLowerCase())) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_ROLE_DELEGATION_DENIED',
+          message: 'Seu papel atual não pode desvincular este nível de acesso.'
+        });
       }
 
       const { error: unlinkError } = await supabase
@@ -37766,7 +37913,6 @@ async function startServer() {
               .from('activity_logs')
               .select(ACTIVITY_LOG_SELECT)
               .in('user_id', Array.from(new Set(memberIds)))
-              .eq('clinic_id', clinicId)
               .eq('is_active', true)
               .is('deleted_at', null)
               .order('timestamp', { ascending: false })
@@ -38316,7 +38462,7 @@ async function startServer() {
         if (membershipSettingsError) throw membershipSettingsError;
       }
 
-      if (context.onboardingMode === 'clinic_owner' && clinicId) {
+      if (!isClinicManagedMember && clinicId && (role === 'coordinator' || role === 'admin' || role === 'owner')) {
         const { error: clinicUpdateError } = await supabase
           .from('clinics')
           .upsert([{
@@ -38557,17 +38703,8 @@ async function startServer() {
 
   app.post('/api/profile/:userId', checkAuth, async (req: any, res) => {
     try {
-      // Only allow own profile, platform admin, or clinic admin managing a user from the same clinic
-      const targetProfileUserId = sanitizeString(req.params.userId, 120);
-      const sessionProfileUserId = sanitizeString(req.session.user?.id, 120);
-      const sessionProfileRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
-      const sessionProfileClinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const canManageTargetProfile = req.session.user?.isPlatformAdmin === true || (
-        sessionProfileRole === 'admin' &&
-        isUuid(sessionProfileClinicId) &&
-        await professionalBelongsToClinic(targetProfileUserId, sessionProfileClinicId, req.session.user)
-      );
-      if (sessionProfileUserId !== targetProfileUserId && !canManageTargetProfile) {
+      // Only allow own profile or admin
+      if (req.session.user.id !== req.params.userId && req.session.user.role !== 'admin') {
         return res.status(403).json({ error: 'Acesso negado' });
       }
 
@@ -38653,7 +38790,7 @@ async function startServer() {
         id: sanitizeString(req.params.userId, 120),
         name: professionalFullName || undefined,
         email: sanitizeEmail(req.body?.email) || undefined,
-
+        role: sanitizeString(req.body?.role, 40) || undefined,
         profile_picture: sanitizeUrl(req.body?.profile_picture) || sanitizeUrl(req.body?.profilePicture) || undefined,
         crp: resolvedCrp || undefined,
         cpf: professionalCpf || undefined,
@@ -74991,10 +75128,11 @@ async function startServer() {
   };
 
   const checkPlatformAdmin = (req: any, res: any, next: any) => {
-    if (req.session.user?.isPlatformAdmin === true) {
+    const role = sanitizeString(req.session.user?.role, 40);
+    if (role === 'admin' || role === 'owner') {
       return next();
     }
-    return res.status(403).json({ error: 'Acesso negado. Apenas administradores da plataforma podem acessar esta rota.' });
+    return res.status(403).json({ error: 'Acesso negado. Apenas administradores podem acessar esta rota.' });
   };
 
   const seedFixedDemoIfEmpty = async (

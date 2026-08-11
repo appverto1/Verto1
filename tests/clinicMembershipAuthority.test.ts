@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
+  canAssignClinicRole,
+  canManageClinicRole,
   resolveEffectiveClinicRoleFromMembership,
 } from '../src/utils/clinicMembershipAuthority';
 
@@ -100,7 +102,7 @@ assert.match(
 );
 assert.match(
   server,
-  /app\.patch\('\/api\/clinic\/members\/:memberId\/specialty', checkAuth, requireActiveClinicRoles\('coordinator', 'admin', 'owner'\)/,
+  /app\.patch\('\/api\/clinic\/members\/:memberId\/specialty', checkAuth, requireActiveClinicRoles\('director', 'coordinator', 'admin', 'owner'\)/,
 );
 assert.match(
   server,
@@ -108,10 +110,9 @@ assert.match(
 );
 assert.match(
   server,
-  /const actorRole = sanitizeString\(req\.effectiveClinicRole, 40\)/,
+  /const actorRole = sanitizeString\(req\.effectiveClinicRole \|\| [^,]+, 40\)/,
 );
 
-console.log('clinicMembershipAuthority.test.ts: ok');
 
 assert.equal(
   resolveEffectiveClinicRoleFromMembership({
@@ -148,3 +149,37 @@ assert.equal(
   'biller',
   'faturista é papel válido por membership ativa',
 );
+
+
+assert.equal(canAssignClinicRole('director', 'director'), true);
+assert.equal(canAssignClinicRole('director', 'biller'), true);
+assert.equal(canAssignClinicRole('coordinator', 'supervisor'), true);
+assert.equal(canAssignClinicRole('coordinator', 'biller'), true);
+assert.equal(canAssignClinicRole('coordinator', 'director'), false);
+assert.equal(canAssignClinicRole('supervisor', 'therapist'), false);
+assert.equal(canAssignClinicRole('biller', 'biller'), false);
+
+assert.equal(canManageClinicRole('director', 'director'), true);
+assert.equal(canManageClinicRole('director', 'coordinator'), true);
+assert.equal(canManageClinicRole('coordinator', 'coordinator'), true);
+assert.equal(canManageClinicRole('coordinator', 'biller'), true);
+assert.equal(canManageClinicRole('coordinator', 'director'), false);
+assert.equal(canManageClinicRole('supervisor', 'therapist'), false);
+
+assert.match(
+  server,
+  /app\.post\('\/api\/clinic\/invite'[\s\S]*?requireActiveClinicRoles\('director', 'coordinator', 'admin', 'owner'\)/,
+  'diretor e coordenador podem abrir o fluxo de convite na clínica ativa',
+);
+assert.match(
+  server,
+  /CLINIC_ROLE_DELEGATION_DENIED/,
+  'delegação de papel precisa de validação server-side',
+);
+assert.match(
+  server,
+  /CLINIC_ROLE_TARGET_ABOVE_ACTOR/,
+  'coordenador não pode administrar membro com papel de diretor',
+);
+
+console.log('clinicMembershipAuthority.test.ts: ok');

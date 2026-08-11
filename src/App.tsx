@@ -1,7 +1,7 @@
 import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS, LogoVerto } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
-import { Database, CheckCircle2, AlertCircle, Lock, WifiOff, LayoutDashboard, RefreshCw } from 'lucide-react';
+import { Database, CheckCircle2, AlertCircle, Lock, ShieldCheck, WifiOff, LayoutDashboard, RefreshCw } from 'lucide-react';
 import { clearSensitiveOfflineCacheForUser, getFailedSyncRecords, resetFailedSyncRecord, syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
 import { formatProfessionalRegistry } from './utils/professionalRegistry';
@@ -151,9 +151,12 @@ const getActiveAccessContext = (candidateUser: any): AccessContextOption | null 
 
 const getAccessContextRoleLabel = (role: unknown) => {
   const normalized = String(role || '').trim().toLowerCase();
+  if (normalized === 'director') return 'Direção';
   if (normalized === 'coordinator') return 'Coordenação';
+  if (normalized === 'supervisor') return 'Supervisão clínica';
   if (normalized === 'therapist') return 'Profissional de atendimento';
   if (normalized === 'receptionist') return 'Recepção';
+  if (normalized === 'biller') return 'Faturamento';
   if (normalized === 'admin' || normalized === 'owner') return 'Gestão da clínica';
   return 'Equipe da clínica';
 };
@@ -265,7 +268,7 @@ const normalizeSubscriptionStatusForAccess = (value: unknown): string =>
   String(value || '').trim().toLowerCase();
 
 const isProfessionalClinicRole = (role: unknown): boolean =>
-  ['therapist', 'coordinator', 'receptionist', 'admin'].includes(
+  ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller', 'admin'].includes(
     String(role || '').trim().toLowerCase(),
   );
 
@@ -803,7 +806,7 @@ export default function App() {
   };
 
   const canAccessClinicFinance = (role: any) =>
-    ['coordinator', 'admin', 'owner'].includes(String(role || '').toLowerCase());
+    ['director', 'coordinator', 'admin', 'owner'].includes(String(role || '').toLowerCase());
 
   const stripPatientFinancialFields = (patient: any) => {
     if (!patient || typeof patient !== 'object') return patient;
@@ -2912,6 +2915,31 @@ export default function App() {
     </div>
   );
 
+  const ClinicRoleFoundationPending = ({ user, onLogout }: { user: any; onLogout: () => void }) => {
+    const role = String(user?.role || '').trim().toLowerCase();
+    const roleLabel = role === 'director' ? 'Diretor' : role === 'supervisor' ? 'Supervisor' : role === 'biller' ? 'Faturista' : 'Colaborador';
+    const roleDescription = role === 'director'
+      ? 'Seu vínculo de direção está ativo. O acesso completo às unidades autorizadas será liberado conforme a migração segura das capabilities e dos escopos da clínica.'
+      : role === 'supervisor'
+        ? 'Seu vínculo de supervisão está ativo. Os casos disponíveis serão exibidos somente pelos vínculos de supervisão autorizados pela clínica.'
+        : 'Seu acesso de faturamento está ativo. As clínicas e operações disponíveis serão exibidas somente conforme os vínculos e permissões de faturamento autorizados.';
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-xl rounded-3xl border border-slate-100 bg-white p-8 text-center shadow-sm">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-50 text-[#7a32fc]">
+            <ShieldCheck size={28} />
+          </div>
+          <h2 className="mt-5 text-xl font-bold text-slate-900">Acesso de {roleLabel} configurado</h2>
+          <p className="mt-2 text-sm leading-relaxed text-slate-500">{roleDescription}</p>
+          <p className="mt-3 text-xs text-slate-400">Clínica ativa: {user?.onboardingContext?.clinic?.name || user?.workspaceName || 'clínica autorizada'}</p>
+          <button onClick={onLogout} className="mt-6 rounded-xl bg-slate-100 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-200">
+            Sair da conta
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const SubscriptionRequired = ({ user, onLogout }: { user: any, onLogout: () => void }) => {
     const isPatientCheckout = String(user?.role || '').toLowerCase() === 'patient';
     const [plansState, setPlansState] = useState<{
@@ -3721,7 +3749,7 @@ export default function App() {
 
     // Paciente tem hidratação própria (histórico/tarefas/notas) e não deve
     // receber sobreposição do estado clínico global após F5.
-    if (user.role === 'patient') {
+    if (user.role === 'patient' || user.role === 'director' || user.role === 'supervisor' || user.role === 'biller') {
       setClinicStateHydrated(false);
       setClinicStateSyncReady(false);
       return;
@@ -4051,7 +4079,7 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-    if (!(user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist')) return;
+    if (!(user.role === 'director' || user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist')) return;
     if (!clinicStateHydrated) return;
     if (!clinicStateSyncReady) return;
 
@@ -4066,7 +4094,7 @@ export default function App() {
         const payload: any = {
           workspace_id: workspaceId || undefined
         };
-        if (role === 'coordinator' || role === 'admin' || role === 'owner') {
+        if (role === 'director' || role === 'coordinator' || role === 'admin' || role === 'owner') {
           payload.rooms = rooms;
           payload.protocols = protocols;
           payload.specialtySettings = specialtySettings;
@@ -4089,7 +4117,7 @@ export default function App() {
   // Fetch activity logs from Backend on load
   useEffect(() => {
     const fetchLogs = async () => {
-      if (user && (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'admin' || user.role === 'owner')) {
+      if (user && (user.role === 'director' || user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist' || user.role === 'admin' || user.role === 'owner')) {
         const key = `${String(user?.id || '').trim()}:${String(user?.role || '').trim()}`;
         const previous = activityLogsFetchRef.current;
         if (previous?.key === key && (previous.inFlight || Date.now() - previous.fetchedAt < ACTIVITY_LOGS_REFRESH_TTL_MS)) {
@@ -7838,7 +7866,7 @@ export default function App() {
               )}
             </section>
           </main>
-        ) : ((user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && user.firstLoginCompleted === false) || showOnboarding ? (
+        ) : ((['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller'].includes(String(user.role || '').toLowerCase())) && user.firstLoginCompleted === false) || showOnboarding ? (
           <ProfessionalOnboarding 
             user={user} 
             onComplete={(data) => {
@@ -7859,6 +7887,8 @@ export default function App() {
           <ClinicMemberAccessPending user={user} onLogout={handleLogout} />
         ) : isProfessionalClinicRole(user.role) && !hasDashboardBillingAccess(user) ? (
           <SubscriptionRequired user={user} onLogout={handleLogout} />
+        ) : (user.role === 'director' || user.role === 'supervisor' || user.role === 'biller') ? (
+          <ClinicRoleFoundationPending user={user} onLogout={handleLogout} />
         ) : (user.role === 'therapist' || user.role === 'coordinator' || user.role === 'receptionist') && !clinicStateHydrated ? (
           <div className="min-h-screen flex items-center justify-center bg-white">
             <div className="text-center">

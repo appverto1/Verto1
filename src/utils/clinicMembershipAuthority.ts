@@ -83,3 +83,52 @@ export function resolveEffectiveClinicRoleFromMembership(
 
   return membershipRole;
 }
+
+export function canAssignClinicRole(
+  actorRoleInput: unknown,
+  targetRoleInput: unknown,
+): boolean {
+  const actorRole = normalizeClinicAuthorityRole(actorRoleInput);
+  const targetRole = normalizeClinicAuthorityRole(targetRoleInput);
+  if (!actorRole || !targetRole || !CLINIC_MEMBERSHIP_ROLES.has(targetRole)) {
+    return false;
+  }
+
+  // Platform legacy roles are kept only for backward-compatible administration.
+  if (actorRole === 'owner' || actorRole === 'admin') return true;
+
+  // Directors may manage every clinic-scoped role, including another director,
+  // but only after the active-clinic membership check performed by the server.
+  if (actorRole === 'director') return true;
+
+  // Coordinators manage operational roles inside their own clinic, but cannot
+  // create or promote a director.
+  if (actorRole === 'coordinator') {
+    return targetRole !== 'director';
+  }
+
+  return false;
+}
+
+
+
+export function canManageClinicRole(
+  actorRoleInput: unknown,
+  targetCurrentRoleInput: unknown,
+): boolean {
+  const actorRole = normalizeClinicAuthorityRole(actorRoleInput);
+  const targetCurrentRole = normalizeClinicAuthorityRole(targetCurrentRoleInput);
+  if (!actorRole || !targetCurrentRole || !CLINIC_MEMBERSHIP_ROLES.has(targetCurrentRole)) {
+    return false;
+  }
+
+  if (actorRole === 'owner' || actorRole === 'admin' || actorRole === 'director') {
+    return true;
+  }
+
+  if (actorRole === 'coordinator') {
+    return targetCurrentRole !== 'director';
+  }
+
+  return false;
+}
