@@ -354,8 +354,10 @@ export async function getRecordsByType(type: OfflineRecord['type']): Promise<Off
 }
 
 export async function getPendingRecords(): Promise<OfflineRecord[]> {
-  const rows = await db.records.where('sync_status').equals('pending').toArray();
   const currentUserId = await getCurrentUserIdOrNull();
+  if (!currentUserId) return [];
+  const rows = (await db.records.where('sync_status').equals('pending').toArray())
+    .filter((row) => row.user_id === currentUserId);
   const backupRows = currentUserId
     ? Object.values(readLogBackups(currentUserId)).filter((row) => row.sync_status === 'pending')
     : [];
@@ -368,8 +370,12 @@ export async function getPendingRecords(): Promise<OfflineRecord[]> {
 }
 
 export async function getFailedSyncRecords(): Promise<OfflineRecord[]> {
-  const rows = await db.records.where('sync_status').equals('failed').toArray();
-  const conflictRows = await db.records.where('sync_status').equals('conflict').toArray();
+  const currentUserId = await getCurrentUserIdOrNull();
+  if (!currentUserId) return [];
+  const rows = (await db.records.where('sync_status').equals('failed').toArray())
+    .filter((row) => row.user_id === currentUserId);
+  const conflictRows = (await db.records.where('sync_status').equals('conflict').toArray())
+    .filter((row) => row.user_id === currentUserId);
   const decoded = await Promise.all([...rows, ...conflictRows].map(mapStoredToOfflineRecord));
   return decoded.filter(Boolean) as OfflineRecord[];
 }

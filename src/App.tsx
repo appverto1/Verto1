@@ -1311,9 +1311,15 @@ export default function App() {
   }, [user?.id]);
   
   useEffect(() => {
+    const canSyncCurrentUser = Boolean(
+      user &&
+      user.firstLoginCompleted !== false &&
+      user.activationRequired !== true &&
+      hasDashboardBillingAccess(user)
+    );
     const handleOnline = () => {
       setIsOnline(true);
-      syncOfflineData();
+      if (canSyncCurrentUser) void syncOfflineData();
     };
     const handleOffline = () => setIsOnline(false);
 
@@ -1327,14 +1333,20 @@ export default function App() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
+  }, [user?.id, user?.firstLoginCompleted, user?.activationRequired, user?.onboardingContext?.canAccessDashboard]);
 
   // Sync when user is ready
   useEffect(() => {
-    if (user && navigator.onLine) {
-      syncOfflineData();
+    if (
+      user &&
+      user.firstLoginCompleted !== false &&
+      user.activationRequired !== true &&
+      hasDashboardBillingAccess(user) &&
+      navigator.onLine
+    ) {
+      void syncOfflineData();
     }
-  }, [user]);
+  }, [user?.id, user?.firstLoginCompleted, user?.activationRequired, user?.onboardingContext?.canAccessDashboard]);
 
   useEffect(() => {
     if (!user) {
@@ -1809,6 +1821,7 @@ export default function App() {
               passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
               activationEmail: authContext?.activationEmail || null,
               invitationId: authContext?.invitationId || null,
+              deferInvitationAcceptance: shouldDeferInvitationAcceptance,
               email: credentials.email,
               password: credentials.password,
             })
@@ -1886,6 +1899,7 @@ export default function App() {
           passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
           activationEmail: authContext?.activationEmail || null,
           invitationId: authContext?.invitationId || null,
+          deferInvitationAcceptance: shouldDeferInvitationAcceptance,
           email: credentials?.email || null,
           password: credentials?.password || null,
         })
@@ -3750,6 +3764,20 @@ export default function App() {
     // receber sobreposição do estado clínico global após F5.
     if (user.role === 'patient' || user.role === 'biller') {
       setClinicStateHydrated(false);
+      setClinicStateSyncReady(false);
+      return;
+    }
+
+    // During first professional onboarding the session/workspace may already
+    // exist, but clinic state and patient data are not needed yet. Starting
+    // that hydration here caused /api/clinic/state to race invitation
+    // acceptance and surface a misleading 402 before onboarding finished.
+    if (
+      user.firstLoginCompleted === false ||
+      user.activationRequired === true ||
+      user?.onboardingContext?.canAccessDashboard === false
+    ) {
+      setClinicStateHydrated(true);
       setClinicStateSyncReady(false);
       return;
     }

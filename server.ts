@@ -15019,6 +15019,7 @@ function clinicInvitationAcceptanceError(error: any): Error & { code: string; st
     'CLINIC_INVITATION_NOT_FOUND',
     'CLINIC_INVITATION_EMAIL_MISMATCH',
     'CLINIC_INVITATION_ROLE_INVALID',
+    'CLINIC_INVITATION_SPECIALTY_INVALID',
     'CLINIC_INVITATION_ALREADY_USED',
     'CLINIC_INVITATION_NOT_AVAILABLE',
     'CLINIC_INVITATION_CONCURRENT_UPDATE',
@@ -15032,6 +15033,7 @@ function clinicInvitationAcceptanceError(error: any): Error & { code: string; st
     CLINIC_INVITATION_NOT_FOUND: 404,
     CLINIC_INVITATION_EMAIL_MISMATCH: 403,
     CLINIC_INVITATION_ROLE_INVALID: 422,
+    CLINIC_INVITATION_SPECIALTY_INVALID: 422,
     CLINIC_INVITATION_ALREADY_USED: 409,
     CLINIC_INVITATION_NOT_AVAILABLE: 409,
     CLINIC_INVITATION_CONCURRENT_UPDATE: 409,
@@ -24245,6 +24247,7 @@ async function startServer() {
     const requestId = requestIdForLogs(req);
     const { intendedRole } = req.body;
     const activationFlow = Boolean(req.body?.activationFlow);
+    const deferInvitationAcceptance = Boolean(req.body?.deferInvitationAcceptance);
     const passwordSetupCompleted = Boolean(req.body?.passwordSetupCompleted);
     const authProvider = sanitizeString(req.body?.provider, 40).toLowerCase();
     const activationEmail = sanitizeEmail(req.body?.activationEmail);
@@ -24483,8 +24486,6 @@ async function startServer() {
         }
       }
 
-      const profileExistedBeforeInvitationProvisioning = Boolean(profile);
-
       // If profile still doesn't exist (first time Google login), create it
       let commercialPaidActivation: {
         email: string;
@@ -24718,11 +24719,19 @@ async function startServer() {
 
       let workspaces = await fetchUserWorkspaces(user.id);
       // Existing professionals accept invitations from the dedicated, explicit
-      // screen. Automatic acceptance remains only for a first-account
-      // activation link, which carries its own verified invitation id.
+      // screen. A first activation link, however, must accept the explicit
+      // invitation even if this request reconciled a legacy public profile by
+      // e-mail. The invitation id + authenticated e-mail are the authority.
+      // A first activation link is authoritative for the invited workspace,
+      // even when a legacy/public profile was reconciled by e-mail earlier in
+      // this request. The old `profileExistedBeforeInvitationProvisioning`
+      // gate left some invited users without an active clinic_membership,
+      // which then caused 402s and blocked onboarding uploads.
+      // Existing-account invitation flows explicitly defer acceptance to the
+      // dedicated confirmation screen.
       const invitationForWorkspace =
-        !profileExistedBeforeInvitationProvisioning &&
         activationFlow &&
+        !deferInvitationAcceptance &&
         requestedInvitationId &&
         requestedClinicInvitation
           ? requestedClinicInvitation
@@ -24744,6 +24753,7 @@ async function startServer() {
             CLINIC_INVITATION_EMAIL_MISMATCH: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.',
             CLINIC_INVITATION_NOT_FOUND: 'Este convite não foi encontrado.',
             CLINIC_INVITATION_NOT_AVAILABLE: 'Este convite expirou, foi cancelado ou não está mais disponível.',
+            CLINIC_INVITATION_SPECIALTY_INVALID: 'A especialidade vinculada ao convite está inválida. Solicite ao responsável da clínica que revise e reenvie o convite.',
             CLINIC_INVITATION_MIGRATION_REQUIRED: 'A atualização segura de convites ainda não foi aplicada no banco de dados.',
           };
           return res.status(Number(acceptanceError?.statusCode) || 500).json({
@@ -26499,10 +26509,11 @@ async function startServer() {
         ? await supabase.from('users').select('id,name').eq('id', authUser.id).maybeSingle()
         : { data: null, error: null } as any;
       if (invitedProfileResult.error) throw invitedProfileResult.error;
-      const invitedProfileExists = Boolean(invitedProfileResult.data?.id);
-      const reusedExistingAuthAccess = Boolean(
-        authUserHadVerifiedEmail && invitedProfileExists
-      );
+      // A confirmed Supabase Auth identity is already an existing account,
+      // even when public.users has not been created/reconciled yet. Requiring
+      // the public profile here incorrectly sent confirmed users through a new
+      // password setup flow.
+      const reusedExistingAuthAccess = Boolean(authUserHadVerifiedEmail);
 
       if (authUser?.id && !reusedExistingAuthAccess) {
         const currentMetadata = authUser?.user_metadata && typeof authUser.user_metadata === 'object'
@@ -26908,6 +26919,7 @@ async function startServer() {
         CLINIC_INVITATION_EMAIL_MISMATCH: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.',
         CLINIC_INVITATION_NOT_FOUND: 'Convite não encontrado.',
         CLINIC_INVITATION_NOT_AVAILABLE: 'Este convite expirou, foi cancelado ou não está mais disponível.',
+        CLINIC_INVITATION_SPECIALTY_INVALID: 'A especialidade vinculada ao convite está inválida. Solicite ao responsável da clínica que revise e reenvie o convite.',
         CLINIC_INVITATION_MIGRATION_REQUIRED: 'A atualização segura de convites ainda não foi aplicada no banco de dados.',
       };
       logRouteDbError('/api/clinic/accept-invite [POST]', error, {
@@ -39067,6 +39079,13 @@ async function startServer() {
       const role = (context.membership?.role || req.session.user.role) as AppRole;
       const clinicId = context.clinic.id;
       const isClinicManagedMember = ['invited_professional', 'clinic_member'].includes(context.onboardingMode);
+      if (isClinicManagedMember && !context.membership) {
+        return res.status(409).json({
+          success: false,
+          code: 'ONBOARDING_MEMBERSHIP_REQUIRED',
+          error: 'Seu convite ainda não concluiu o vínculo com a clínica. Abra novamente o link do convite para finalizar o acesso.'
+        });
+      }
       const fullName = sanitizeString(req.body?.fullName || req.body?.name, 180);
       const birthDate = sanitizeDate(req.body?.birthDate);
       const gender = sanitizeString(req.body?.gender, 40);

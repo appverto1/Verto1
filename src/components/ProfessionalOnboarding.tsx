@@ -228,6 +228,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           throw new Error(contextResult?.error || 'Não foi possível identificar a clínica vinculada ao seu acesso.');
         }
         const authoritativeContext = contextResult.data as OnboardingContext;
+        if (
+          ['invited_professional', 'clinic_member'].includes(authoritativeContext?.onboardingMode || '') &&
+          !authoritativeContext?.membership
+        ) {
+          throw new Error('Seu convite ainda não concluiu o vínculo com a clínica. Abra novamente o link recebido por e-mail.');
+        }
         setContext(authoritativeContext);
         const profile = profileResult?.data?.professional_profile;
         const metadata = profile?.metadata || {};

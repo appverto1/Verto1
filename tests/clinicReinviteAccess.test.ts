@@ -75,8 +75,7 @@ assert.match(invitationAcceptance, /No clinic,[\s\S]*?role, name, or e-mail come
 assert.match(dataService, /async acceptInvitation\(invitationId: string\)/);
 
 // Conta existente reutiliza Auth e não recebe nova senha/UUID.
-assert.match(inviteRoute, /const invitedProfileExists = Boolean\(invitedProfileResult\.data\?\.id\)/);
-assert.match(inviteRoute, /const reusedExistingAuthAccess = Boolean\([\s\S]*?authUserHadVerifiedEmail && invitedProfileExists/);
+assert.match(inviteRoute, /const reusedExistingAuthAccess = Boolean\(authUserHadVerifiedEmail\)/);
 assert.match(inviteRoute, /inviteMode: 'new'/);
 assert.match(inviteRoute, /const activationLink = reusedExistingAuthAccess[\s\S]*?\? activationEntryUrl/);
 assert.match(inviteRoute, /getClinicInvitationAcceptanceUrl\(data\?\.id\)/);
@@ -121,13 +120,14 @@ assert.match(acceptRoute, /acceptClinicInvitationAtomically\(\{/);
 const loginHandler = section(app, 'const handleLoginSuccess = async', 'const [therapistNotes');
 assert.match(loginHandler, /const shouldDeferInvitationAcceptance = Boolean/);
 assert.match(loginHandler, /invitationId: authContext\?\.invitationId \|\| null/);
+assert.match(loginHandler, /deferInvitationAcceptance: shouldDeferInvitationAcceptance/);
 assert.match(loginHandler, /result\?\.message \|\| result\?\.error \|\| 'Erro no login'/);
 assert.doesNotMatch(loginHandler, /invitationId: shouldDeferInvitationAcceptance \? null/);
 assert.match(loginHandler, /if \(!shouldDeferInvitationAcceptance\) clearActivationInvitationContext\(\)/);
 assert.match(activation, /activationFlow: Boolean\(invitationId\)/);
 assert.match(activation, /invitationId: invitationId \|\| null/);
-assert.match(loginRoute, /const profileExistedBeforeInvitationProvisioning = Boolean\(profile\)/);
-assert.match(loginRoute, /!profileExistedBeforeInvitationProvisioning[\s\S]*?activationFlow[\s\S]*?requestedInvitationId/);
+assert.doesNotMatch(loginRoute, /!profileExistedBeforeInvitationProvisioning/);
+assert.match(loginRoute, /activationFlow[\s\S]*?!deferInvitationAcceptance[\s\S]*?requestedInvitationId[\s\S]*?requestedClinicInvitation/);
 assert.doesNotMatch(loginRoute, /\.eq\('email', safeAuthEmail\)[\s\S]*?\.eq\('status', 'pending'\)[\s\S]*?invitationForWorkspace = pendingInvite/);
 assert.match(billingOnboardingPaths, /path === '\/api\/clinic\/accept-invite'/);
 assert.match(invitationBillingBypass, /=== '\/api\/clinic\/accept-invite'/);
