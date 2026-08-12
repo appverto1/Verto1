@@ -66,4 +66,42 @@ assert.doesNotMatch(
   'migration nunca deve promover owner/admin automaticamente',
 );
 
+
+const app = fs.readFileSync('src/App.tsx', 'utf8');
+
+assert.match(
+  server,
+  /function buildSessionUserPayload[\s\S]*?isPlatformAdmin:\s*input\?\.isPlatformAdmin === true/,
+  'flag de platform admin precisa sobreviver à compactação/hidratação da sessão',
+);
+assert.match(
+  server,
+  /app\.post\('\/api\/auth\/2fa\/login'[\s\S]*?isPlatformAdminUserId\(boundUserId\)[\s\S]*?isPlatformAdmin:\s*isPlatformAdminLogin/,
+  'login após MFA precisa devolver a autoridade de plataforma para o frontend',
+);
+assert.match(
+  server,
+  /app\.post\('\/api\/auth\/login'[\s\S]*?const isPlatformAdminLogin = await isPlatformAdminUserId[\s\S]*?isPlatformAdmin:\s*isPlatformAdminLogin/,
+  'login normal precisa carregar a autoridade de plataforma na sessão',
+);
+assert.match(
+  server,
+  /app\.get\('\/api\/auth\/me'[\s\S]*?isPlatformAdminUserId\(sessionUserId\)[\s\S]*?hasVerifiedOwnerMfaSession\(req\.session\.user\)/,
+  'auth/me precisa restaurar autoridade de plataforma e continuar exigindo MFA privilegiado',
+);
+const platformPanelIndex = app.indexOf("user?.isPlatformAdmin === true ? (");
+const workspacePickerIndex = app.indexOf('showWorkspacePicker && accessContextOptions.length > 0 ? (');
+assert.ok(platformPanelIndex >= 0, 'frontend precisa rotear platform admin pelo flag canônico');
+assert.ok(workspacePickerIndex > platformPanelIndex, 'painel da plataforma deve ter prioridade sobre workspaces clínicos');
+assert.match(
+  app.slice(platformPanelIndex, platformPanelIndex + 220),
+  /<SuperAdminDashboard onLogout=\{handleLogout\} \/>/,
+  'platform admin deve abrir diretamente o painel administrativo da Verto',
+);
+assert.doesNotMatch(
+  app,
+  /user\.role === 'owner' \? \([\s\S]{0,120}<SuperAdminDashboard/,
+  'papel owner legado não pode decidir o painel de plataforma no frontend',
+);
+
 console.log('platformAdminAuthority.test.ts: ok');

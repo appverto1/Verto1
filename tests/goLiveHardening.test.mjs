@@ -126,4 +126,16 @@ for (const label of ['Diretor', 'Coordenador', 'Supervisor', 'Terapeuta', 'Recep
   assert.ok(roleMatrix.includes(label), `matriz deve exibir ${label}`);
 }
 
+
+// Platform-admin session identity must survive MFA/session hydration and own the initial frontend route.
+const app = read('src/App.tsx');
+assert.match(server, /function buildSessionUserPayload[\s\S]*?isPlatformAdmin:\s*input\?\.isPlatformAdmin === true/);
+assert.match(server, /app\.post\('\/api\/auth\/2fa\/login'[\s\S]*?isPlatformAdminUserId\(boundUserId\)[\s\S]*?isPlatformAdmin:\s*isPlatformAdminLogin/);
+assert.match(server, /app\.get\('\/api\/auth\/me'[\s\S]*?isPlatformAdminUserId\(sessionUserId\)[\s\S]*?PRIVILEGED_MFA_REQUIRED/);
+const platformPanelIndex = app.indexOf("user?.isPlatformAdmin === true ? (");
+const clinicPickerIndex = app.indexOf('showWorkspacePicker && accessContextOptions.length > 0 ? (');
+assert.ok(platformPanelIndex >= 0 && clinicPickerIndex > platformPanelIndex);
+assert.match(app.slice(platformPanelIndex, platformPanelIndex + 220), /<SuperAdminDashboard/);
+assert.doesNotMatch(app, /user\.role === 'owner' \? \([\s\S]{0,120}<SuperAdminDashboard/);
+
 console.log('goLiveHardening.test.mjs: ok');

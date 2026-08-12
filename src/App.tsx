@@ -7747,6 +7747,8 @@ export default function App() {
           ) : (
             <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
           )
+        ) : user?.isPlatformAdmin === true ? (
+          <SuperAdminDashboard onLogout={handleLogout} />
         ) : showWorkspacePicker && accessContextOptions.length > 0 ? (
           <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-8 sm:px-6">
             <section
@@ -8116,9 +8118,7 @@ export default function App() {
             onUpdateTask={handleUpdateTask}
             allTasks={tasks}
           />
-        ) : user.role === 'owner' ? (
-          <SuperAdminDashboard onLogout={handleLogout} />
-        ) : user.role === 'admin' ? (
+        ) : user.role === 'admin' || user.role === 'owner' ? (
           <AdminDashboard onLogout={handleLogout} />
         ) : (
           <AdminDashboard onLogout={handleLogout} />

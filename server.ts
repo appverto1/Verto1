@@ -8087,7 +8087,10 @@ function hasVerifiedMfaSession(user: any): boolean {
 }
 
 function hasVerifiedOwnerMfaSession(user: any): boolean {
-  if (sanitizeString(user?.role, 40).toLowerCase() !== 'owner') return true;
+  const privilegedSession =
+    sanitizeString(user?.role, 40).toLowerCase() === 'owner' ||
+    user?.isPlatformAdmin === true;
+  if (!privilegedSession) return true;
   return hasVerifiedMfaSession(user);
 }
 
@@ -15247,6 +15250,7 @@ function buildSessionUserPayload(input: any) {
     id: sanitizeString(input?.id, 120),
     email: sanitizeEmail(input?.email) || sanitizeString(input?.email, 320),
     role: ensureRole(resolvedRole) ? resolvedRole : 'therapist',
+    isPlatformAdmin: input?.isPlatformAdmin === true,
     name: sanitizeString(input?.name, 180),
     profilePicture: sanitizeSessionUrl(input?.profilePicture),
     profilePicturePath: sanitizeString(input?.profilePicturePath || input?.profile_picture_path, 500) || null,
@@ -23289,6 +23293,7 @@ async function startServer() {
       }
       const profile = profileResult.data as any;
       const workspaces = await fetchUserWorkspaces(boundUserId);
+      const isPlatformAdminLogin = await isPlatformAdminUserId(boundUserId);
       const selectedWorkspace = workspaces.find((workspace: any) => workspace.clinicId === profile.clinic_id) || workspaces[0] || null;
       const roleForSession = securityProfile.role === 'owner' ? 'owner' : selectedWorkspace?.role || profile.role;
       if (roleForSession === 'owner' && securityProfile.role !== 'owner') {
@@ -23307,6 +23312,7 @@ async function startServer() {
         id: boundUserId,
         email: user.email,
         role: roleForSession,
+        isPlatformAdmin: isPlatformAdminLogin,
         name: profile.name,
         sessionToken: await issueSessionToken(boundUserId),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
@@ -24953,6 +24959,7 @@ async function startServer() {
         id: user.id,
         email: user.email,
         role: roleForSession,
+        isPlatformAdmin: isPlatformAdminLogin,
         name: profile.name,
         sessionToken: await issueSessionToken(sanitizeString(user.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
@@ -25054,9 +25061,9 @@ async function startServer() {
 
   app.get('/api/auth/me', authMeLimiter, syncWorkspaceContextInSession, async (req: any, res: any) => {
     if (req.session.user) {
+      const sessionUserId = sanitizeString(req.session.user?.id, 120);
+      const sessionToken = sanitizeString(req.session.user?.sessionToken, 200);
       try {
-        const sessionUserId = sanitizeString(req.session.user?.id, 120);
-        const sessionToken = sanitizeString(req.session.user?.sessionToken, 200);
         if (!await isActiveSessionToken(sessionUserId, sessionToken)) {
           req.session.destroy(() => {});
           res.clearCookie('verto-session');
@@ -25066,11 +25073,22 @@ async function startServer() {
         console.error('[Auth] Estado distribuído de sessão indisponível em /auth/me:', sanitizeString(sessionStateError?.message || String(sessionStateError), 240));
         return res.status(503).json({ user: null, error: 'SESSION_STATE_UNAVAILABLE' });
       }
+      try {
+        if (typeof req.session.user?.isPlatformAdmin !== 'boolean') {
+          req.session.user.isPlatformAdmin = await isPlatformAdminUserId(sessionUserId);
+        }
+      } catch (platformAdminLookupError: any) {
+        logRouteDbError('/api/auth/me', platformAdminLookupError, {
+          userId: sessionUserId,
+          stage: 'platform_admin_authority'
+        });
+        return res.status(503).json({ user: null, error: 'PLATFORM_ADMIN_AUTHORITY_UNAVAILABLE' });
+      }
       if (!hasVerifiedOwnerMfaSession(req.session.user)) {
         await invalidateActiveSession(req.session.user?.id, req.session.user?.sessionToken);
         req.session.destroy(() => {});
         res.clearCookie('verto-session');
-        return res.status(401).json({ user: null, error: 'OWNER_MFA_REQUIRED' });
+        return res.status(401).json({ user: null, error: 'PRIVILEGED_MFA_REQUIRED' });
       }
       try {
         req.session.user = await hydrateSessionUserWithOnboardingContext(req.session.user);
