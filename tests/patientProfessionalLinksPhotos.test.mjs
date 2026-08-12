@@ -7,12 +7,12 @@ const panel = fs.readFileSync('src/components/PatientProfessionalLinksPanel.tsx'
 
 assert.match(
   server,
-  /const usersSelect = 'id,name,email,profile_picture'/,
+  /const usersSelect = 'id,name,email,profile_picture,profile_picture_path'/,
   'a equipe do caso deve carregar a mesma foto persistida no cadastro global do usuário',
 );
 assert.match(
   server,
-  /resolveProfessionalProfilePhotoUrl\(null, professional\)/,
+  /resolveProfessionalProfilePhotoUrl\(profile, professionalById\.get\(String\(profile\.user_id\)\)\)/,
   'a foto do cadastro global deve ser normalizada para a URL interna de visualização',
 );
 assert.match(

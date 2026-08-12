@@ -38,6 +38,7 @@ const DOMAIN_LABELS: Record<string, string> = {
   insurance: 'Convênios',
   clinical: 'Prontuário',
   treatment: 'Plano terapêutico',
+  school: 'Escolas e ambiente escolar',
   aba: 'ABA',
   calendar: 'Agenda',
   session: 'Sessão',

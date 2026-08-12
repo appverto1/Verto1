@@ -2095,13 +2095,14 @@ export async function fetchPatientsWithSchemaFallback(params: {
       .map((patientId) => cleanString(patientId, 120))
       .filter(Boolean),
   )).slice(0, Math.max(params.limit, 500));
-  let includeProfessionalScope =
-    role === 'therapist' && !hasExplicitPatientScope && columns.includes('professional_id');
   let lastError: any = null;
 
-  // Supervisor scope must always be resolved explicitly by the caller. This
-  // prevents a missing supervision query from degrading into clinic-wide data.
-  if ((role === 'supervisor' || hasExplicitPatientScope) && scopedPatientIds.length === 0) {
+  // Clinical case-scoped roles must always be resolved explicitly by the caller.
+  // Never fall back to legacy patients.therapist_id/professional_id filters.
+  if ((role === 'supervisor' || role === 'therapist') && !hasExplicitPatientScope) {
+    return { data: [], error: null, select: joinColumns(columns) };
+  }
+  if (hasExplicitPatientScope && scopedPatientIds.length === 0) {
     return { data: [], error: null, select: joinColumns(columns) };
   }
 
@@ -2140,14 +2141,6 @@ export async function fetchPatientsWithSchemaFallback(params: {
       .order('created_at', { ascending: false })
       .limit(params.limit);
 
-    if (role === 'therapist' && !hasExplicitPatientScope) {
-      if (includeProfessionalScope && columns.includes('professional_id')) {
-        query = query.or(`therapist_id.eq.${userId},professional_id.eq.${userId}`);
-      } else {
-        query = query.eq('therapist_id', userId);
-      }
-    }
-
     const result = await query;
     if (!result.error) {
       warnDiscoveredCapabilities();
@@ -2166,7 +2159,6 @@ export async function fetchPatientsWithSchemaFallback(params: {
 
     let handled = false;
     if (missingColumn === 'professional_id') {
-      includeProfessionalScope = false;
       columns = columns.filter((column) => column !== 'professional_id');
       handled = true;
     } else if (missingColumn === 'is_active') {

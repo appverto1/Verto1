@@ -149,9 +149,15 @@ const patientInitials = (value: unknown) => String(value || 'P')
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
+  const hasCapability = (capability: string) => {
+    if (capabilities instanceof Set) return capabilities.has(capability);
+    if (Array.isArray(capabilities)) return capabilities.includes(capability);
+    if (capabilities && typeof capabilities.has === 'function') return capabilities.has(capability);
+    return false;
+  };
   const coalescePatientText = (...values: any[]) => {
     for (const value of values) {
       if (typeof value === 'string') {
@@ -1043,10 +1049,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
   };
 
-  const canManageTherapistAssignment = useMemo(() => {
-    const normalizedRole = String(userRole || '').toLowerCase();
-    return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
-  }, [userRole]);
+  const canManageTherapistAssignment = useMemo(
+    () => hasCapability('team.patient_primary.manage'),
+    [capabilities],
+  );
+  const canManageCaseTeam = useMemo(
+    () => hasCapability('team.case.manage'),
+    [capabilities],
+  );
+  const canManageSchool = useMemo(
+    () => hasCapability('school.manage'),
+    [capabilities],
+  );
   const isPanelDark = useMemo(() => {
     if (themeMode === 'dark') return true;
     if (themeMode === 'light') return false;
@@ -1066,7 +1080,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     const loadClinicTherapists = async () => {
-      if (!canManageTherapistAssignment) {
+      if (!canManageTherapistAssignment && !canManageCaseTeam) {
         setClinicTherapists([]);
         return;
       }
@@ -1090,7 +1104,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }
     };
     loadClinicTherapists();
-  }, [canManageTherapistAssignment, patient?.id]);
+  }, [canManageCaseTeam, canManageTherapistAssignment, patient?.id]);
 
   const handleTherapistAssignmentChange = async (nextTherapistId: string) => {
     if (!onUpdatePatient) return;
@@ -1202,10 +1216,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isPreparingAnamnesisSave, setIsPreparingAnamnesisSave] = useState(false);
   const [isSavingAnamnesisFile, setIsSavingAnamnesisFile] = useState(false);
   const [resolvedClinicContext, setResolvedClinicContext] = useState<any>(clinicContext || {});
-  const canReopenAutomaticNoShow = useMemo(() => {
-    const normalizedRole = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').toLowerCase();
-    return ['coordinator', 'admin', 'owner'].includes(normalizedRole);
-  }, [clinicContext?.role, resolvedClinicContext?.role, userRole]);
+  const canReopenAutomaticNoShow = useMemo(
+    () => hasCapability('session.no_show.classify'),
+    [capabilities],
+  );
   const [previewFile, setPreviewFile] = useState<any>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -9408,7 +9422,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               <PatientProfessionalLinksPanel
                 patientId={String(patient.id)}
                 professionals={clinicTherapists}
-                canManage={canManageTherapistAssignment}
+                canManage={canManageCaseTeam}
                 dark={isPanelDark}
               />
             ) : null}
@@ -11075,7 +11089,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         ) : activeTab === 'session' && isKidsProfile ? (
           null
         ) : activeTab === 'school' ? (
-          <PatientSchoolInformation patientId={String(patient.id)} canManage={['owner', 'admin', 'coordinator', 'receptionist'].includes(String(userRole || '').toLowerCase())} isPanelDark={isPanelDark} />
+          <PatientSchoolInformation patientId={String(patient.id)} canManage={canManageSchool} isPanelDark={isPanelDark} />
         ) : (
           <div className="space-y-6 animate-fade-in">
             <div className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>

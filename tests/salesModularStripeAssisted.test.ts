@@ -18,8 +18,8 @@ const ownerBuilder = fs.readFileSync('src/components/SalesModularProposalBuilder
 
 assert.match(server, /const STRIPE_API_VERSION: Stripe\.LatestApiVersion = '2026-03-25\.dahlia'/);
 assert.match(server, /new Stripe\(key, \{ apiVersion: STRIPE_API_VERSION \}\)/);
-assert.match(checkoutRoute, /requireRoles\("owner"\)/, 'Checkout modular deve ser restrito ao owner');
-assert.match(checkoutRoute, /hasVerifiedOwnerMfaSession/, 'MFA deve ser obrigatório');
+assert.match(checkoutRoute, /checkPlatformAdmin/, 'Checkout modular deve exigir administração da plataforma');
+assert.match(checkoutRoute, /hasVerifiedMfaSession/, 'MFA deve ser obrigatório para qualquer administrador da plataforma');
 assert.match(checkoutRoute, /MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
 assert.match(checkoutRoute, /accepted_terms_snapshot/);
 assert.match(checkoutRoute, /MODULAR_CHECKOUT_BROWSER_VALUES_REJECTED/);

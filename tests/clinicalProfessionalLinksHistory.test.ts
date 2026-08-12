@@ -437,7 +437,7 @@ assert.equal(
     membership: coordinatorMembership
   }),
   true,
-  'membership coordinator autoriza gestão sem depender de users.role'
+  'membership coordenador ativa é a fonte de verdade, sem depender do role legado da sessão'
 );
 assert.equal(
   isPatientProfessionalLinkManager({
@@ -455,7 +455,8 @@ assert.equal(
     clinicId,
     membership: null
   }),
-  true
+  false,
+  'owner legado sem membership ativa não recebe gestão clínica'
 );
 let endPersistCount = 0;
 const deniedEnd = await executeAuthorizedPatientProfessionalLinkEnd({
@@ -696,8 +697,8 @@ assert.equal(
     legacyTherapistId: professionalId,
     activeProfessionalLink: null
   }),
-  true,
-  'therapist_id legado permanece compatível com membership e profile válidos'
+  false,
+  'therapist_id legado não substitui vínculo ativo da equipe do caso'
 );
 
 let deniedWriteCount = 0;
@@ -779,7 +780,7 @@ const usersBatchSource = getLinksSource.slice(
 assert.match(usersBatchSource, /\.select\(usersSelect\)/);
 assert.doesNotMatch(usersBatchSource, /\.eq\('clinic_id'/);
 assert.doesNotMatch(usersBatchSource, /\.eq\('role'/);
-assert.match(getLinksSource, /const usersSelect = 'id,name,email'/);
+assert.match(getLinksSource, /const usersSelect = 'id,name,email,profile_picture,profile_picture_path'/);
 assert.match(getLinksSource, /canInspectInconsistentLinks/);
 assert.match(getLinksSource, /stage,/);
 assert.match(getLinksSource, /table,/);

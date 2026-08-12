@@ -90,7 +90,8 @@ assert.match(migration, /Especialidade não informada/);
 assert.doesNotMatch(migration, /delete from public\.patient_professional_links|delete from public\.patient_therapeutic_plans/i);
 
 assert.match(server, /THERAPEUTIC_PLAN_VERSION_CONFLICT/);
-assert.match(server, /\.eq\('edit_version', expectedVersion\)/);
+assert.match(server, /update_patient_therapeutic_plan_v3/);
+assert.match(server, /p_expected_version:\s*expectedVersion/);
 assert.match(server, /THERAPEUTIC_PLAN_PROFESSIONAL_NOT_LINKED/);
 assert.match(
   server,

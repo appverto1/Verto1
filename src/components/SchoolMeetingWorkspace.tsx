@@ -45,6 +45,7 @@ export function SchoolMeetingWorkspace({
   school,
   professionals = [],
   userRole = 'coordinator',
+  capabilities,
   onClose,
   onChanged,
 }: {
@@ -52,6 +53,7 @@ export function SchoolMeetingWorkspace({
   school?: any;
   professionals?: any[];
   userRole?: string;
+  capabilities?: any;
   onClose: () => void;
   onChanged?: (meeting: any) => void;
 }) {
@@ -87,8 +89,15 @@ export function SchoolMeetingWorkspace({
   const [candidatePagination, setCandidatePagination] = useState<any>(null);
   const [candidateLoading, setCandidateLoading] = useState(false);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
-  const normalizedRole = String(userRole || '').toLowerCase();
-  const canAccessClinicalContent = ['owner', 'admin', 'coordinator', 'therapist'].includes(normalizedRole);
+  const hasCapability = (capability: string) => {
+    if (capabilities instanceof Set) return capabilities.has(capability);
+    if (Array.isArray(capabilities)) return capabilities.includes(capability);
+    if (capabilities && typeof capabilities.has === 'function') return capabilities.has(capability);
+    return false;
+  };
+  const canAccessClinicalContent = hasCapability('clinical.history.view');
+  const canWriteClinicalContent = hasCapability('clinical.notes.create');
+  const canManageMeeting = hasCapability('school.meetings.manage');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -218,8 +227,8 @@ export function SchoolMeetingWorkspace({
   }, [detail?.school_id, detail?.school_unit_id, patientIds]);
 
   useEffect(() => {
-    if (tab === 'participants' && detail?.school_id) void loadCandidates(1);
-  }, [tab, detail?.school_id, detail?.school_unit_id, loadCandidates]);
+    if (canManageMeeting && tab === 'participants' && detail?.school_id) void loadCandidates(1);
+  }, [canManageMeeting, tab, detail?.school_id, detail?.school_unit_id, loadCandidates]);
 
   const addPatients = async () => {
     if (!selectedCandidateIds.length) return;
@@ -288,6 +297,10 @@ export function SchoolMeetingWorkspace({
   };
 
   const saveMinutes = async (complete = false) => {
+    if (!canManageMeeting || !canWriteClinicalContent) {
+      setNotice('Seu acesso atual permite visualizar a ata, mas não alterá-la.');
+      return;
+    }
     setSaving(true);
     setNotice('');
     const payload = {
@@ -398,7 +411,7 @@ export function SchoolMeetingWorkspace({
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Pauta geral</p>
                   <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{detail.agenda || 'Nenhuma pauta registrada.'}</p>
                 </div>
-                <div className="grid gap-3 rounded-2xl border border-slate-100 p-4 sm:grid-cols-2">
+                {canManageMeeting && <div className="grid gap-3 rounded-2xl border border-slate-100 p-4 sm:grid-cols-2">
                   <input type="datetime-local" value={transition.scheduledStart} onChange={(event) => setTransition((value) => ({ ...value, scheduledStart: event.target.value }))} className="rounded-xl border border-slate-200 p-3" aria-label="Novo início" />
                   <input type="datetime-local" value={transition.scheduledEnd} onChange={(event) => setTransition((value) => ({ ...value, scheduledEnd: event.target.value }))} className="rounded-xl border border-slate-200 p-3" aria-label="Novo término" />
                   <input value={transition.reason} onChange={(event) => setTransition((value) => ({ ...value, reason: event.target.value }))} placeholder="Motivo para reagendamento, cancelamento ou não realização" className="rounded-xl border border-slate-200 p-3 sm:col-span-2" />
@@ -409,7 +422,7 @@ export function SchoolMeetingWorkspace({
                     {['SCHEDULED', 'CONFIRMED', 'RESCHEDULED'].includes(detail.status) && <button disabled={saving} onClick={() => void runTransition('CANCEL')} className="rounded-xl border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-700">Cancelar</button>}
                     {['SCHEDULED', 'CONFIRMED', 'RESCHEDULED'].includes(detail.status) && <button disabled={saving} onClick={() => void runTransition('NOT_HELD')} className="rounded-xl border border-amber-200 px-4 py-2 text-sm font-semibold text-amber-700">Não realizada</button>}
                   </div>
-                </div>
+                </div>}
               </div>
             )}
 
@@ -422,13 +435,13 @@ export function SchoolMeetingWorkspace({
                       <div key={row.id} className="rounded-2xl border border-slate-100 p-3">
                         <div className="flex items-center justify-between gap-2">
                           <div><p className="font-semibold text-slate-800">{row.patients?.name || 'Paciente'}</p><p className="text-xs text-slate-500">{row.patient_school_enrollments?.grade_level || ''} {row.patient_school_enrollments?.class_name || ''}</p></div>
-                          <button onClick={() => void removePatient(row.patient_id)} className="rounded-lg p-2 text-rose-600" aria-label="Remover paciente"><Trash2 size={16} /></button>
+                          {canManageMeeting && <button onClick={() => void removePatient(row.patient_id)} className="rounded-lg p-2 text-rose-600" aria-label="Remover paciente"><Trash2 size={16} /></button>}
                         </div>
-                        <select value={row.participation_status || 'UNKNOWN'} onChange={(event) => void markAttendance('PATIENT', row.id, event.target.value)} className="mt-3 w-full rounded-xl border border-slate-200 p-2 text-sm" aria-label={`Presença de ${row.patients?.name || 'paciente'}`}>{ATTENDANCE.map((value) => <option key={value} value={value}>{value}</option>)}</select>
+                        <select disabled={!canManageMeeting} value={row.participation_status || 'UNKNOWN'} onChange={(event) => void markAttendance('PATIENT', row.id, event.target.value)} className="mt-3 w-full rounded-xl border border-slate-200 p-2 text-sm disabled:bg-slate-50" aria-label={`Presença de ${row.patients?.name || 'paciente'}`}>{ATTENDANCE.map((value) => <option key={value} value={value}>{value}</option>)}</select>
                       </div>
                     ))}
                   </div>
-                  <div className="mt-4 rounded-2xl border border-dashed border-violet-200 p-4">
+                  {canManageMeeting && <div className="mt-4 rounded-2xl border border-dashed border-violet-200 p-4">
                     <h4 className="font-semibold text-slate-800">Adicionar pacientes da mesma escola</h4>
                     {candidateLoading ? <Loader2 className="mt-4 animate-spin text-violet-500" /> : (
                       <div className="mt-3 space-y-2">
@@ -445,12 +458,12 @@ export function SchoolMeetingWorkspace({
                         </div>
                       </div>
                     )}
-                  </div>
+                  </div>}
                 </section>
 
                 <section>
                   <h3 className="font-semibold text-slate-900">Participantes internos e externos</h3>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {canManageMeeting && <div className="mt-3 grid gap-2 sm:grid-cols-2">
                     <select value={participant.participantType} onChange={(event) => setParticipant((value) => ({ ...value, participantType: event.target.value }))} className="rounded-xl border border-slate-200 p-2">
                       <option value="INTERNAL_USER">Profissional interno</option>
                       <option value="SCHOOL_CONTACT">Contato escolar</option>
@@ -462,15 +475,15 @@ export function SchoolMeetingWorkspace({
                     {participant.participantType === 'FAMILY_RESPONSIBLE' && <select value={participant.responsibleId} onChange={(event) => setParticipant((value) => ({ ...value, responsibleId: event.target.value }))} className="rounded-xl border border-slate-200 p-2"><option value="">Selecionar responsável</option>{responsibleOptions.map((row) => <option key={row.id} value={row.id}>{row.label}</option>)}</select>}
                     {participant.participantType === 'EXTERNAL_GUEST' && <><input value={participant.externalName} onChange={(event) => setParticipant((value) => ({ ...value, externalName: event.target.value }))} placeholder="Nome" className="rounded-xl border border-slate-200 p-2" /><input type="email" value={participant.externalEmail} onChange={(event) => setParticipant((value) => ({ ...value, externalEmail: event.target.value }))} placeholder="E-mail" className="rounded-xl border border-slate-200 p-2" /></>}
                     <button disabled={saving} onClick={() => void addParticipant()} className="rounded-xl bg-violet-600 px-3 py-2 text-sm font-semibold text-white sm:col-span-2"><UserPlus size={15} className="mr-1 inline" />Adicionar</button>
-                  </div>
+                  </div>}
                   <div className="mt-3 space-y-2">
                     {activeParticipants.map((row: any) => (
                       <div key={row.id} className="rounded-2xl border border-slate-100 p-3">
                         <div className="flex items-center justify-between">
                           <p className="font-semibold text-slate-800">{row.school_contacts?.name || row.external_name || professionals.find((professional: any) => String(professional.id) === String(row.professional_id))?.name || responsibleOptions.find((responsible) => responsible.id === String(row.responsible_id))?.label || row.participant_type}</p>
-                          <button onClick={() => void removeParticipant(row.id)} className="rounded-lg p-2 text-rose-600" aria-label="Remover participante"><Trash2 size={16} /></button>
+                          {canManageMeeting && <button onClick={() => void removeParticipant(row.id)} className="rounded-lg p-2 text-rose-600" aria-label="Remover participante"><Trash2 size={16} /></button>}
                         </div>
-                        <select value={row.attendance_status || 'UNKNOWN'} onChange={(event) => void markAttendance('PARTICIPANT', row.id, event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 p-2 text-sm" aria-label="Presença do participante">{ATTENDANCE.map((value) => <option key={value} value={value}>{value}</option>)}</select>
+                        <select disabled={!canManageMeeting} value={row.attendance_status || 'UNKNOWN'} onChange={(event) => void markAttendance('PARTICIPANT', row.id, event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 p-2 text-sm disabled:bg-slate-50" aria-label="Presença do participante">{ATTENDANCE.map((value) => <option key={value} value={value}>{value}</option>)}</select>
                       </div>
                     ))}
                   </div>
@@ -481,37 +494,37 @@ export function SchoolMeetingWorkspace({
             {canAccessClinicalContent && tab === 'minutes' && (
               <div className="space-y-5">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <input type="datetime-local" value={minutes.actualStart} onChange={(event) => setMinutes((value) => ({ ...value, actualStart: event.target.value }))} className="rounded-xl border border-slate-200 p-3" aria-label="Início real" />
-                  <input type="datetime-local" value={minutes.actualEnd} onChange={(event) => setMinutes((value) => ({ ...value, actualEnd: event.target.value }))} className="rounded-xl border border-slate-200 p-3" aria-label="Término real" />
-                  <textarea value={minutes.generalSummary} onChange={(event) => setMinutes((value) => ({ ...value, generalSummary: event.target.value }))} placeholder="Resumo geral, sem conteúdo clínico individual" className="min-h-28 rounded-xl border border-slate-200 p-3 sm:col-span-2" />
-                  <textarea value={minutes.decisions} onChange={(event) => setMinutes((value) => ({ ...value, decisions: event.target.value }))} placeholder="Decisões gerais" className="min-h-24 rounded-xl border border-slate-200 p-3 sm:col-span-2" />
-                  <input type="datetime-local" value={minutes.nextMeetingAt} onChange={(event) => setMinutes((value) => ({ ...value, nextMeetingAt: event.target.value }))} className="rounded-xl border border-slate-200 p-3" aria-label="Próxima reunião" />
+                  <input disabled={!canWriteClinicalContent || !canManageMeeting} type="datetime-local" value={minutes.actualStart} onChange={(event) => setMinutes((value) => ({ ...value, actualStart: event.target.value }))} className="rounded-xl border border-slate-200 p-3" aria-label="Início real" />
+                  <input disabled={!canWriteClinicalContent || !canManageMeeting} type="datetime-local" value={minutes.actualEnd} onChange={(event) => setMinutes((value) => ({ ...value, actualEnd: event.target.value }))} className="rounded-xl border border-slate-200 p-3" aria-label="Término real" />
+                  <textarea disabled={!canWriteClinicalContent || !canManageMeeting} value={minutes.generalSummary} onChange={(event) => setMinutes((value) => ({ ...value, generalSummary: event.target.value }))} placeholder="Resumo geral, sem conteúdo clínico individual" className="min-h-28 rounded-xl border border-slate-200 p-3 sm:col-span-2" />
+                  <textarea disabled={!canWriteClinicalContent || !canManageMeeting} value={minutes.decisions} onChange={(event) => setMinutes((value) => ({ ...value, decisions: event.target.value }))} placeholder="Decisões gerais" className="min-h-24 rounded-xl border border-slate-200 p-3 sm:col-span-2" />
+                  <input disabled={!canWriteClinicalContent || !canManageMeeting} type="datetime-local" value={minutes.nextMeetingAt} onChange={(event) => setMinutes((value) => ({ ...value, nextMeetingAt: event.target.value }))} className="rounded-xl border border-slate-200 p-3" aria-label="Próxima reunião" />
                 </div>
                 <div>
                   <h3 className="font-semibold text-slate-900">Notas individuais protegidas</h3>
                   <div className="mt-3 space-y-3">{activePatients.map((row: any) => {
                     const draft = patientNotes[row.patient_id] || { note: '', decisions: '', referrals: '', visibility: 'CLINICAL_TEAM' };
-                    return <div key={row.patient_id} className="rounded-2xl border border-slate-100 p-4"><p className="font-semibold text-slate-800">{row.patients?.name}</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><textarea value={draft.note} onChange={(event) => setPatientNotes((value) => ({ ...value, [row.patient_id]: { ...draft, note: event.target.value } }))} placeholder="Observação específica" className="min-h-24 rounded-xl border border-slate-200 p-2 sm:col-span-2" /><textarea value={draft.decisions} onChange={(event) => setPatientNotes((value) => ({ ...value, [row.patient_id]: { ...draft, decisions: event.target.value } }))} placeholder="Decisões do paciente" className="rounded-xl border border-slate-200 p-2" /><textarea value={draft.referrals} onChange={(event) => setPatientNotes((value) => ({ ...value, [row.patient_id]: { ...draft, referrals: event.target.value } }))} placeholder="Encaminhamentos clínicos" className="rounded-xl border border-slate-200 p-2" /><select value={draft.visibility} onChange={(event) => setPatientNotes((value) => ({ ...value, [row.patient_id]: { ...draft, visibility: event.target.value } }))} className="rounded-xl border border-slate-200 p-2 sm:col-span-2"><option value="CLINICAL_TEAM">Somente equipe clínica</option><option value="AUTHORIZED_FAMILY">Família autorizada</option><option value="AUTHORIZED_SCHOOL">Escola autorizada</option></select></div></div>;
+                    return <div key={row.patient_id} className="rounded-2xl border border-slate-100 p-4"><p className="font-semibold text-slate-800">{row.patients?.name}</p><div className="mt-3 grid gap-2 sm:grid-cols-2"><textarea disabled={!canWriteClinicalContent || !canManageMeeting} value={draft.note} onChange={(event) => setPatientNotes((value) => ({ ...value, [row.patient_id]: { ...draft, note: event.target.value } }))} placeholder="Observação específica" className="min-h-24 rounded-xl border border-slate-200 p-2 sm:col-span-2" /><textarea disabled={!canWriteClinicalContent || !canManageMeeting} value={draft.decisions} onChange={(event) => setPatientNotes((value) => ({ ...value, [row.patient_id]: { ...draft, decisions: event.target.value } }))} placeholder="Decisões do paciente" className="rounded-xl border border-slate-200 p-2" /><textarea disabled={!canWriteClinicalContent || !canManageMeeting} value={draft.referrals} onChange={(event) => setPatientNotes((value) => ({ ...value, [row.patient_id]: { ...draft, referrals: event.target.value } }))} placeholder="Encaminhamentos clínicos" className="rounded-xl border border-slate-200 p-2" /><select disabled={!canWriteClinicalContent || !canManageMeeting} value={draft.visibility} onChange={(event) => setPatientNotes((value) => ({ ...value, [row.patient_id]: { ...draft, visibility: event.target.value } }))} className="rounded-xl border border-slate-200 p-2 sm:col-span-2"><option value="CLINICAL_TEAM">Somente equipe clínica</option><option value="AUTHORIZED_FAMILY">Família autorizada</option><option value="AUTHORIZED_SCHOOL">Escola autorizada</option></select></div></div>;
                   })}</div>
                 </div>
-                <div>
+                {canWriteClinicalContent && canManageMeeting && <div>
                   <div className="flex items-center justify-between"><h3 className="font-semibold text-slate-900">Encaminhamentos e tarefas</h3><button onClick={() => setReferrals((rows) => [...rows, { title: '', description: '', patientId: '', responsibleUserId: '', dueAt: '', priority: 'MEDIUM' }])} className="rounded-xl border border-violet-200 px-3 py-2 text-sm font-semibold text-violet-700"><Plus size={15} className="mr-1 inline" />Adicionar</button></div>
                   <div className="mt-3 space-y-3">{referrals.map((row, index) => <div key={index} className="grid gap-2 rounded-2xl border border-slate-100 p-3 sm:grid-cols-2"><input value={row.title} onChange={(event) => setReferrals((rows) => rows.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Título da tarefa" className="rounded-xl border border-slate-200 p-2" /><select value={row.responsibleUserId} onChange={(event) => setReferrals((rows) => rows.map((item, itemIndex) => itemIndex === index ? { ...item, responsibleUserId: event.target.value } : item))} className="rounded-xl border border-slate-200 p-2"><option value="">Responsável</option>{professionals.map((professional: any) => <option key={professional.id} value={professional.id}>{professional.name || professional.email}</option>)}</select><select value={row.patientId} onChange={(event) => setReferrals((rows) => rows.map((item, itemIndex) => itemIndex === index ? { ...item, patientId: event.target.value } : item))} className="rounded-xl border border-slate-200 p-2"><option value="">Selecione o paciente</option>{activePatients.map((patient: any) => <option key={patient.patient_id} value={patient.patient_id}>{patient.patients?.name}</option>)}</select><input type="datetime-local" value={row.dueAt} onChange={(event) => setReferrals((rows) => rows.map((item, itemIndex) => itemIndex === index ? { ...item, dueAt: event.target.value } : item))} className="rounded-xl border border-slate-200 p-2" /><select value={row.priority} onChange={(event) => setReferrals((rows) => rows.map((item, itemIndex) => itemIndex === index ? { ...item, priority: event.target.value } : item))} className="rounded-xl border border-slate-200 p-2"><option value="LOW">Baixa prioridade</option><option value="MEDIUM">Média prioridade</option><option value="HIGH">Alta prioridade</option><option value="URGENT">Urgente</option></select><textarea value={row.description} onChange={(event) => setReferrals((rows) => rows.map((item, itemIndex) => itemIndex === index ? { ...item, description: event.target.value } : item))} placeholder="Descrição" className="rounded-xl border border-slate-200 p-2 sm:col-span-2" /></div>)}</div>
-                </div>
-                <div className="flex flex-wrap justify-end gap-2"><button disabled={saving} onClick={() => void saveMinutes(false)} className="rounded-xl border border-violet-200 px-4 py-3 text-sm font-semibold text-violet-700"><Save size={16} className="mr-1 inline" />Salvar rascunho</button><button disabled={saving} onClick={() => void saveMinutes(true)} className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white"><CheckCircle2 size={16} className="mr-1 inline" />Concluir ata</button></div>
+                </div>}
+                {canWriteClinicalContent && canManageMeeting ? <div className="flex flex-wrap justify-end gap-2"><button disabled={saving} onClick={() => void saveMinutes(false)} className="rounded-xl border border-violet-200 px-4 py-3 text-sm font-semibold text-violet-700"><Save size={16} className="mr-1 inline" />Salvar rascunho</button><button disabled={saving} onClick={() => void saveMinutes(true)} className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white"><CheckCircle2 size={16} className="mr-1 inline" />Concluir ata</button></div> : <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-500">Ata disponível somente para leitura neste acesso.</div>}
               </div>
             )}
 
             {canAccessClinicalContent && tab === 'documents' && (
               <div>
-                <div className="grid gap-3 sm:grid-cols-2">
+                {canManageMeeting && <div className="grid gap-3 sm:grid-cols-2">
                   <select value={documentForm.patientId} onChange={(event) => setDocumentForm((value) => ({ ...value, patientId: event.target.value, documentId: '' }))} className="rounded-xl border border-slate-200 p-3"><option value="">Selecione o paciente</option>{activePatients.map((row: any) => <option key={row.patient_id} value={row.patient_id}>{row.patients?.name}</option>)}</select>
                   <select value={documentForm.documentId} disabled={!documentForm.patientId} onChange={(event) => setDocumentForm((value) => ({ ...value, documentId: event.target.value }))} className="rounded-xl border border-slate-200 p-3 disabled:opacity-50"><option value="">Selecione um documento existente</option>{(detail.availableDocuments || []).filter((file: any) => String(file.patient_id) === documentForm.patientId).map((file: any) => <option key={file.id} value={file.id}>{file.file_name || file.id}</option>)}</select>
                   <select value={documentForm.documentType} onChange={(event) => setDocumentForm((value) => ({ ...value, documentType: event.target.value }))} className="rounded-xl border border-slate-200 p-3"><option value="OTHER">Outro</option><option value="MEETING_MINUTES">Ata</option><option value="CONSENT">Autorização</option><option value="PEDAGOGICAL_REPORT">Relatório pedagógico</option><option value="SCHOOL_REPORT">Relatório escolar</option></select>
                   <select value={documentForm.visibility} onChange={(event) => setDocumentForm((value) => ({ ...value, visibility: event.target.value }))} className="rounded-xl border border-slate-200 p-3"><option value="INTERNAL">Interno</option><option value="AUTHORIZED_FAMILY">Família autorizada</option><option value="AUTHORIZED_SCHOOL">Escola autorizada</option></select>
                   <button disabled={saving || !documentForm.documentId || !documentForm.patientId} onClick={() => void linkDocument()} className="rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white sm:col-span-2 disabled:opacity-40"><FileText size={16} className="mr-1 inline" />Vincular documento existente</button>
-                </div>
-                <div className="mt-5 space-y-2">{(detail.documents || []).map((link: any) => <div key={link.id} className="flex items-center justify-between gap-3 rounded-2xl border border-slate-100 p-4"><div><p className="font-semibold text-slate-800">{link.document?.file_name || link.document_type}</p><p className="text-xs text-slate-500">{link.document_type} · {link.visibility}</p></div><div className="flex gap-2"><button onClick={() => void openDocument(link)} className="rounded-lg border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700">Abrir</button><button onClick={() => void archiveDocument(link.id)} className="rounded-lg border border-rose-200 p-2 text-rose-600" aria-label="Arquivar vínculo"><Trash2 size={15} /></button></div></div>)}{!(detail.documents || []).length && <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">Nenhum documento vinculado.</div>}</div>
+                </div>}
+                <div className="mt-5 space-y-2">{(detail.documents || []).map((link: any) => <div key={link.id} className="flex items-center justify-between gap-3 rounded-2xl border border-slate-100 p-4"><div><p className="font-semibold text-slate-800">{link.document?.file_name || link.document_type}</p><p className="text-xs text-slate-500">{link.document_type} · {link.visibility}</p></div><div className="flex gap-2"><button onClick={() => void openDocument(link)} className="rounded-lg border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700">Abrir</button>{canManageMeeting && <button onClick={() => void archiveDocument(link.id)} className="rounded-lg border border-rose-200 p-2 text-rose-600" aria-label="Arquivar vínculo"><Trash2 size={15} /></button>}</div></div>)}{!(detail.documents || []).length && <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">Nenhum documento vinculado.</div>}</div>
               </div>
             )}
           </div>

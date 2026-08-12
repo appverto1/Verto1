@@ -67,6 +67,35 @@ if (supabaseUrl && !isValidUrl(supabaseUrl)) {
   errors.push('SUPABASE_URL: formato invalido de URL.');
 }
 
+
+if (isDeployEnvironment()) {
+  const appBaseUrl = String(process.env.VERTO_APP_BASE_URL || '').trim();
+  if (!appBaseUrl) {
+    errors.push('VERTO_APP_BASE_URL: obrigatoria em deploy para links, convites e callbacks.');
+  } else if (!isValidUrl(appBaseUrl)) {
+    errors.push('VERTO_APP_BASE_URL: formato invalido de URL.');
+  } else if (new URL(appBaseUrl).protocol !== 'https:') {
+    errors.push('VERTO_APP_BASE_URL: deve utilizar HTTPS em deploy.');
+  }
+
+  const expectedProjectRef = String(process.env.SUPABASE_EXPECTED_PROJECT_REF || '').trim();
+  if (!expectedProjectRef) {
+    errors.push('SUPABASE_EXPECTED_PROJECT_REF: obrigatoria em deploy para impedir uso acidental do projeto Supabase errado.');
+  } else if (!/^[a-z0-9-]+$/i.test(expectedProjectRef)) {
+    errors.push('SUPABASE_EXPECTED_PROJECT_REF: formato invalido.');
+  } else if (supabaseUrl) {
+    try {
+      const host = new URL(supabaseUrl).hostname.toLowerCase();
+      const actualRef = host.endsWith('.supabase.co') ? host.slice(0, -'.supabase.co'.length) : '';
+      if (!actualRef || actualRef !== expectedProjectRef.toLowerCase()) {
+        errors.push('SUPABASE_EXPECTED_PROJECT_REF: nao corresponde ao SUPABASE_URL configurado.');
+      }
+    } catch {
+      // SUPABASE_URL already reports its own validation error above.
+    }
+  }
+}
+
 const encryptionKey = String(process.env.DATA_ENCRYPTION_KEY || '').trim();
 if (encryptionKey && !/^[0-9a-fA-F]{64}$/.test(encryptionKey) && !isBase64Of32Bytes(encryptionKey)) {
   errors.push('DATA_ENCRYPTION_KEY: use hex (64 chars) ou base64 (32 bytes).');

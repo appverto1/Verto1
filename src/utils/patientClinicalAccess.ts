@@ -66,7 +66,6 @@ export function evaluatePatientClinicalAccess(params: {
   requiredPermission: PatientClinicalPermission;
 }): boolean {
   const actorId = cleanText(params.actorId);
-  const actorRole = cleanText(params.actorRole).toLowerCase();
   const actorClinicId = cleanText(params.actorClinicId);
   const patientId = cleanText(params.patientId);
   const patientClinicId = cleanText(params.patientClinicId);
@@ -96,8 +95,7 @@ export function evaluatePatientClinicalAccess(params: {
   // Supervisor scope is explicit. A supervisor may reach the patient only
   // when a current supervision relationship resolves to this exact case.
   if (
-    actorRole === 'supervisor'
-    && isActiveMembershipFor(
+    isActiveMembershipFor(
       params.activeProfessionalMembership,
       actorId,
       patientClinicId,
@@ -121,23 +119,15 @@ export function evaluatePatientClinicalAccess(params: {
 
   const link = params.activeProfessionalLink;
   if (!link) {
-    const membership = params.activeProfessionalMembership;
-    const profile = params.activeProfessionalProfile;
-    return Boolean(
-      actorRole === 'therapist' &&
-      cleanText(params.legacyTherapistId) === actorId &&
-      isActiveMembershipFor(membership, actorId, patientClinicId, ['therapist']) &&
-      profile &&
-      cleanText(profile.user_id) === actorId &&
-      cleanText(profile.specialty).length >= 2
-    );
+    // patient_professional_links is the canonical case-team relation.
+    // Legacy patients.therapist_id never grants production access by itself.
+    return false;
   }
 
   const membership = params.activeProfessionalMembership;
   const profile = params.activeProfessionalProfile;
   return Boolean(
-    actorRole === 'therapist' &&
-      isActiveMembershipFor(membership, actorId, patientClinicId, ['therapist']) &&
+    isActiveMembershipFor(membership, actorId, patientClinicId, ['therapist']) &&
       profile &&
       cleanText(profile.user_id) === actorId &&
       cleanText(profile.specialty).length >= 2 &&

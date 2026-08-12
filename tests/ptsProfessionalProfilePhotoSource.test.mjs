@@ -6,7 +6,7 @@ const dashboard = fs.readFileSync('src/components/PtsTherapeuticDashboard.tsx', 
 
 assert.match(
   server,
-  /async function resolveProfessionalProfilePhotoUrl\(profile: any\)[\s\S]*metadata\?\.profilePicturePath[\s\S]*resolvePatientPhotoUrl/,
+  /async function resolveProfessionalProfilePhotoUrl\(profile: any, user\?: any\)[\s\S]*metadata\?\.profilePicturePath[\s\S]*user\?\.profile_picture_path[\s\S]*resolvePatientPhotoUrl/,
   'a foto profissional deve reutilizar o mesmo path persistido nas configurações profissionais',
 );
 assert.match(
@@ -21,8 +21,8 @@ assert.match(
 );
 assert.match(
   server,
-  /profile_photo_url: await resolveProfessionalProfilePhotoUrl\(profile\)/,
-  'PTS deve devolver a URL de visualização baseada na fonte canônica do perfil',
+  /const user: any = linkedUserById\.get\(String\(professionalId\)\)[\s\S]*profile_photo_url: await resolveProfessionalProfilePhotoUrl\(profile, user\)/,
+  'PTS deve resolver a foto canônica com fallback do usuário em lote',
 );
 assert.doesNotMatch(
   server,

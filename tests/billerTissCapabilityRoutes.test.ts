@@ -18,9 +18,7 @@ const billingRoutePrefixes = [
   '/api/patients/tiss-authorizations',
   '/api/patients/:patientId/tiss-authorizations',
 ];
-const allowedLegacySelfRoutes = new Set([
-  '/api/tiss/professional-profile/me',
-]);
+const allowedLegacySelfRoutes = new Set<string>();
 for (const line of server.split(/\r?\n/)) {
   const match = line.match(/app\.(get|post|patch|delete)\('([^']+)'/);
   if (!match) continue;
@@ -52,6 +50,8 @@ expectRouteCapability('get', '/api/admin/tuss/mappings', 'billing.mapping.manage
 expectRouteCapability('get', '/api/admin/payers/:payerId/requirements', 'billing.antiglosa.view');
 expectRouteCapability('post', '/api/admin/payers/:payerId/requirements', 'billing.antiglosa.manage');
 expectRouteCapability('post', '/api/tiss/patient-payer-authorizations', 'patient.insurance.authorization.edit');
+assert.match(server, /app\.get\('\/api\/tiss\/professional-profile\/me'[\s\S]{0,260}requireAnyClinicCapability\('session\.billing_evidence\.generate', 'session\.start'\)/);
+assert.match(server, /app\.patch\('\/api\/tiss\/professional-profile\/me'[\s\S]{0,300}requireAnyClinicCapability\('session\.billing_evidence\.generate', 'session\.start'\)/);
 
 assert.match(
   server,

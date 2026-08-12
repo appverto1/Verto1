@@ -298,12 +298,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const effectiveRole = String(
     planData?.capabilities?.actorRole || normalizedRole,
   ).trim().toLowerCase();
-  const canManageStructure = ['owner', 'admin', 'coordinator'].includes(effectiveRole);
-  const roleCanCreate = ['owner', 'admin', 'coordinator', 'therapist'].includes(effectiveRole);
-  const canCreatePlanScope =
-    roleCanCreate &&
-    planData.readOnlyHistory !== true &&
-    planData?.capabilities?.canCreatePlans !== false;
+  const canManageStructure = planData?.capabilities?.canManageAllPlans === true || ['owner', 'admin', 'director', 'coordinator', 'supervisor'].includes(effectiveRole);
+  const roleCanCreate = planData?.capabilities?.canCreatePlans !== false && ['owner', 'admin', 'director', 'coordinator', 'supervisor', 'therapist'].includes(effectiveRole);
+  const canCreatePlanScope = roleCanCreate && planData.readOnlyHistory !== true;
   const canCreateProgram =
     canCreatePlanScope &&
     planData?.capabilities?.programsEnabled !== false;
@@ -1631,7 +1628,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                   <button type="button" className={secondaryButton} onClick={() => setExpandedRecommendationKey((current) => current === group.key ? '' : group.key)}>{isExpanded ? 'Ocultar contexto' : 'Abrir contexto'}</button>
                   {(!primaryNeedsManager || canManageStructure) && (actionPolicy.primaryAction !== 'complete_origin' || canManageStructure) && <button type="button" className="inline-flex min-h-[40px] items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm text-white disabled:opacity-50" disabled={recommendationActionId === String(recommendation.id)} onClick={() => { if (actionPolicy.primaryAction === 'complete_origin') setExpandedRecommendationKey(group.key); void runRecommendationAction(actionPolicy.primaryAction, actionRecommendation); }}>{recommendationActionId === String(recommendation.id) && <Loader2 size={15} className="animate-spin" />}{actionPolicy.primaryLabel}</button>}
                   {actionPolicy.secondaryAction && (!secondaryNeedsManager || canManageStructure) && <button type="button" className={secondaryButton} disabled={recommendationActionId === String(recommendation.id)} onClick={() => void runRecommendationAction(actionPolicy.secondaryAction as TherapeuticRecommendationActionKind, actionRecommendation)}>{actionPolicy.secondaryLabel}</button>}
-                  {actionPolicy.primaryAction === 'complete_origin' && !canManageStructure && <span className={`self-center text-xs ${muted}`}>Origem deve ser vinculada por um coordenador.</span>}
+                  {actionPolicy.primaryAction === 'complete_origin' && !canManageStructure && <span className={`self-center text-xs ${muted}`}>Origem deve ser vinculada por quem gerencia o plano.</span>}
                 </div>
               </article>
             );

@@ -118,6 +118,7 @@ export function isAdditionalCapabilityCompatibleWithRoleScope(
       capability.startsWith('treatment_plan.') ||
       capability.startsWith('treatment_goal.') ||
       capability.startsWith('aba.') ||
+      capability.startsWith('school.') ||
       capability.startsWith('session.') ||
       capability.startsWith('patient.files.') ||
       capability === 'documents.patient_share'

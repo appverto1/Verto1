@@ -29,8 +29,8 @@ assert.match(
 );
 assert.match(
   patientDetail,
-  /aria-label="Áreas do prontuário"[\s\S]*lg:grid lg:auto-cols-fr lg:grid-flow-col/,
-  'as abas devem distribuir igualmente a largura disponível no desktop',
+  /aria-label="Áreas do prontuário"[\s\S]*overflow-x-auto[\s\S]*min-w-\[6rem\]/,
+  'as abas devem permanecer navegáveis e responsivas sem comprimir os rótulos',
 );
 assert.match(
   patientDetail,

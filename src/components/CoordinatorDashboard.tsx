@@ -7089,9 +7089,9 @@ export function CoordinatorDashboard({
       noShowRequiresManualDecision,
       parsedDecisionAmount,
       validDecisionAmount,
-      canDecide: ["owner", "admin", "coordinator", "receptionist"].includes(role.toLowerCase()),
+      canDecide: hasCapability("finance.payments.edit"),
     };
-  }, [agendaPrivateFinancialSnapshotState.data, agendaPrivatePolicyDecisionAmount, role]);
+  }, [agendaPrivateFinancialSnapshotState.data, agendaPrivatePolicyDecisionAmount, hasCapability]);
 
   const openAppointmentProfileFromAgenda = useCallback(
     (appointment: any) => {
@@ -9219,7 +9219,7 @@ export function CoordinatorDashboard({
       onAppointmentActionResolved={onAppointmentActionResolved}
       onOpenPatient={onPatientClick}
       onNavigateTissPreGuides={
-        ["owner", "admin", "coordinator"].includes(String(user?.role || "").toLowerCase())
+        hasCapability("billing.preguide.view")
           ? () =>
               navigateToTab("conference", {
                 tab: "conference",
@@ -10407,6 +10407,7 @@ export function CoordinatorDashboard({
             <PatientDetailView
               patient={patient}
               themeMode={theme}
+              capabilities={effectiveCapabilities}
               onBack={() => setView("home")}
               hideBackButton={true}
               clinicContext={{
@@ -11678,6 +11679,7 @@ export function CoordinatorDashboard({
                       patients={allPatients}
                       professionals={therapistFilterOptions}
                       currentUser={user}
+                      capabilities={effectiveCapabilities}
                       launchRequest={patientFinanceLaunchRequest}
                       onLaunchHandled={() => setPatientFinanceLaunchRequest(null)}
                       onPaymentsLoaded={setPayments}
@@ -13020,6 +13022,7 @@ export function CoordinatorDashboard({
                   patients={allPatients}
                   professionals={Object.values(therapistMembersById)}
                   userRole={role}
+                  capabilities={effectiveCapabilities}
                   onOpenPatient={(patientId, patientName) => onPatientClick(patientId, { tab: "school" }, patientName)}
                   onScheduleSchoolSession={openSchoolSessionFromEnrollment}
                 />

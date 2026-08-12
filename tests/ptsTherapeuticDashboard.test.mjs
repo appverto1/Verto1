@@ -38,7 +38,7 @@ assert.match(panel, /Nova versão do PTS/);
 assert.match(panel, /renderPtsProgramCard/);
 assert.match(panel, /profile_photo_url:\s*[\s\S]*link\.profile_photo_url/);
 assert.match(server, /user_id,full_name,specialty,profile_photo_url/);
-assert.match(server, /profile_photo_url:\s*sanitizeUrl\(profile\?\.profile_photo_url\) \|\| null/);
+assert.match(server, /const user: any = linkedUserById\.get\(String\(professionalId\)\)[\s\S]*profile_photo_url:\s*await resolveProfessionalProfilePhotoUrl\(profile, user\)/);
 
 
 console.log('ptsTherapeuticDashboard.test.mjs: ok');

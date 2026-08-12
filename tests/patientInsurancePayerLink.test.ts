@@ -30,7 +30,7 @@ assert.match(coordinator, /histórico inativo/);
 assert.match(dataService, /async getPayerOptions/);
 assert.match(dataService, /endpointWithQuery\('\/api\/payer-options'/);
 assert.match(server, /app\.get\('\/api\/payer-options'/);
-assert.match(server, /requireRoles\('coordinator', 'receptionist', 'admin', 'owner'\)/);
+assert.match(server, /app\.get\('\/api\/payer-options'[\s\S]*requireClinicCapability\('patient\.insurance\.view'\)/);
 assert.match(server, /\.eq\('organization_id', organizationId\)/);
 assert.match(server, /\.select\('id,name,payer_type,status'\)/);
 assert.match(server, /\.eq\('payer_type', 'INSURANCE'\)/);

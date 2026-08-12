@@ -183,7 +183,7 @@ const specialtyRoute = routeSection(
 );
 assert.match(
   specialtyRoute,
-  /requireActiveClinicRoles\('coordinator', 'admin', 'owner'\)/,
+  /requireClinicCapability\('team.edit'\)/,
 );
 assert.match(specialtyRoute, /\.from\('clinic_memberships'\)/);
 assert.match(specialtyRoute, /\.eq\('clinic_id', clinicId\)/);

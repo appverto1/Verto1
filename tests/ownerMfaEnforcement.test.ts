@@ -9,7 +9,8 @@ const migration = fs.readFileSync(
 
 assert.match(server, /const OWNER_MFA_POLICY_VERSION = '2026-07-23-v1'/);
 assert.match(server, /function hasVerifiedOwnerMfaSession/);
-assert.match(server, /const checkOwner =[\s\S]*hasVerifiedOwnerMfaSession/);
+assert.match(server, /const checkOwner = checkPlatformAdmin/);
+assert.match(server, /checkPlatformAdmin[\s\S]*hasVerifiedMfaSession/);
 assert.match(server, /authMfaLimiter/);
 assert.match(migration, /enable row level security/);
 assert.match(migration, /revoke all on table public\.auth_mfa_challenges/);

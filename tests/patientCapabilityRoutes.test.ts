@@ -50,8 +50,13 @@ assert.match(
 );
 assert.match(
   schemaFallbacks,
-  /role === 'supervisor' \|\| hasExplicitPatientScope[\s\S]{0,180}return \{ data: \[\], error: null/,
-  'supervisor sem escopo explícito deve falhar fechado',
+  /\(role === 'supervisor' \|\| role === 'therapist'\) && !hasExplicitPatientScope[\s\S]{0,180}return \{ data: \[\], error: null/,
+  'supervisor/terapeuta sem escopo explícito devem falhar fechado',
+);
+assert.doesNotMatch(
+  schemaFallbacks,
+  /includeProfessionalScope/,
+  'lista de pacientes não deve reativar fallback por patients.professional_id/therapist_id',
 );
 assert.doesNotMatch(
   server,

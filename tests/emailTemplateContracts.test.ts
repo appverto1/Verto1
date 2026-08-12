@@ -39,7 +39,7 @@ assert.deepEqual(buildPasswordRecoveryTemplateVariables(recoveryUrl), {
   reset_link: recoveryUrl,
 });
 assert.deepEqual(buildPasswordRecoveryTemplateVariables('javascript:alert(1)'), {
-  reset_link: 'https://www.appverto.com.br/reset-password',
+  reset_link: 'https://www.appverto.com.br/?auth_action=recovery',
 });
 
 const legacyRecovery = buildPasswordRecoveryEmailTemplate({

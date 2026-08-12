@@ -5070,7 +5070,7 @@ function escapeHtml(value: string): string {
 }
 
 function buildPostPaymentActivationEmail(token: string): string {
-  const activationUrl = `https://appverto.com.br/register?token=${encodeURIComponent(token)}`;
+  const activationUrl = `${getInvitationAppBaseUrl()}/register?token=${encodeURIComponent(token)}`;
   return `
     <div style="margin:0;padding:0;background:#f6f8ff;font-family:Inter,Segoe UI,Arial,sans-serif;color:#111827;">
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f6f8ff;padding:32px 16px;">
@@ -5106,11 +5106,7 @@ function buildPostPaymentActivationEmail(token: string): string {
 }
 
 function buildSalesPostPaymentActivationEmail(token: string): string {
-  const configuredBase = sanitizeString(
-    process.env.VERTO_APP_BASE_URL,
-    500,
-  ).replace(/\/+$/, "");
-  const appBase = configuredBase || "https://appverto.com.br";
+  const appBase = getInvitationAppBaseUrl();
   const activationUrl = `${appBase}/ativacao-comercial/${encodeURIComponent(token)}`;
   return `
     <div style="margin:0;padding:0;background:#f6f8ff;font-family:Inter,Segoe UI,Arial,sans-serif;color:#111827;">
@@ -5685,6 +5681,19 @@ async function resolvePatientPhotoUrl(rawUrl: unknown, rawPath?: unknown): Promi
   const storagePath = extractPatientPhotosStoragePath(rawPath) || extractPatientPhotosStoragePath(rawUrl);
   if (storagePath) return buildPatientPhotoViewUrl(storagePath);
   return sanitizeSessionUrl(rawUrl);
+}
+
+async function resolveProfessionalProfilePhotoUrl(profile: any, user?: any): Promise<string | null> {
+  const metadata = profile?.metadata && typeof profile.metadata === 'object' && !Array.isArray(profile.metadata)
+    ? profile.metadata
+    : {};
+  const storagePath =
+    extractPatientPhotosStoragePath(metadata?.profilePicturePath) ||
+    extractPatientPhotosStoragePath(metadata?.profile_picture_path) ||
+    extractPatientPhotosStoragePath(profile?.profile_photo_url) ||
+    extractPatientPhotosStoragePath(user?.profile_picture_path) ||
+    extractPatientPhotosStoragePath(user?.profile_picture);
+  return resolvePatientPhotoUrl(profile?.profile_photo_url || user?.profile_picture, storagePath);
 }
 
 type DetectedUploadMime =
@@ -8070,12 +8079,16 @@ function normalizeRequestedRole(role: unknown): AppRole {
 
 const OWNER_MFA_POLICY_VERSION = '2026-07-23-v1';
 
-function hasVerifiedOwnerMfaSession(user: any): boolean {
-  if (sanitizeString(user?.role, 40).toLowerCase() !== 'owner') return true;
+function hasVerifiedMfaSession(user: any): boolean {
   const verifiedAt = Date.parse(sanitizeString(user?.mfaVerifiedAt, 80));
   return user?.mfaVerified === true &&
     sanitizeString(user?.mfaMethod, 20).toLowerCase() === 'totp' &&
     Number.isFinite(verifiedAt);
+}
+
+function hasVerifiedOwnerMfaSession(user: any): boolean {
+  if (sanitizeString(user?.role, 40).toLowerCase() !== 'owner') return true;
+  return hasVerifiedMfaSession(user);
 }
 
 function requireRoles(...allowedRoles: AppRole[]) {
@@ -8108,7 +8121,7 @@ function requireRoles(...allowedRoles: AppRole[]) {
     if (!roleAllowed) {
       return res.status(403).json({ error: 'Acesso negado para este perfil.' });
     }
-    if (role === 'owner' && !hasVerifiedOwnerMfaSession(req.session?.user)) {
+    if (role === 'owner' && !hasVerifiedMfaSession(req.session?.user)) {
       return res.status(401).json({
         error: 'OWNER_MFA_REQUIRED',
         message: 'Confirme o Google Authenticator para acessar esta area.'
@@ -8671,18 +8684,79 @@ async function checkPlatformAdmin(req: any, res: any, next: any) {
       message: 'Acesso restrito à administração da plataforma Verto.'
     });
   }
-  if (
-    sanitizeString(req.session?.user?.role, 40).toLowerCase() === 'owner' &&
-    !hasVerifiedOwnerMfaSession(req.session?.user)
-  ) {
+  if (!hasVerifiedMfaSession(req.session?.user)) {
     return res.status(401).json({
       success: false,
-      error: 'OWNER_MFA_REQUIRED',
-      message: 'Confirme o Google Authenticator para acessar esta área.'
+      error: 'PLATFORM_ADMIN_MFA_REQUIRED',
+      message: 'Confirme o Google Authenticator para acessar a administração da plataforma.'
     });
   }
   if (req.session?.user) req.session.user.isPlatformAdmin = true;
   return next();
+}
+
+type ResolvedExternalBillingAccess = {
+  isExternalBillingUser: boolean;
+  externalOrganizationIds: string[];
+  allowedClinicIds: ReadonlySet<string>;
+};
+
+async function resolveExternalBillingAccessForUser(userId: unknown): Promise<ResolvedExternalBillingAccess> {
+  const safeUserId = sanitizeString(userId, 120);
+  const empty = { isExternalBillingUser: false, externalOrganizationIds: [], allowedClinicIds: new Set<string>() };
+  if (!isUuid(safeUserId)) return empty;
+
+  const memberships = await supabase
+    .from('external_organization_users')
+    .select('external_organization_id,status')
+    .eq('user_id', safeUserId)
+    .eq('status', 'active')
+    .limit(100);
+  if (memberships.error) {
+    if (isMissingRelationError(memberships.error)) return empty;
+    throw memberships.error;
+  }
+  const linkedOrganizationIds = Array.from(new Set(
+    (memberships.data || [])
+      .map((row: any) => sanitizeString(row?.external_organization_id, 120))
+      .filter((id: string) => isUuid(id))
+  ));
+  if (linkedOrganizationIds.length === 0) return empty;
+
+  const organizations = await supabase
+    .from('external_organizations')
+    .select('id,status,organization_type')
+    .in('id', linkedOrganizationIds)
+    .eq('status', 'active')
+    .eq('organization_type', 'billing_company')
+    .limit(100);
+  if (organizations.error) throw organizations.error;
+  const activeOrganizationIds = Array.from(new Set(
+    (organizations.data || [])
+      .map((row: any) => sanitizeString(row?.id, 120))
+      .filter((id: string) => isUuid(id))
+  ));
+  if (activeOrganizationIds.length === 0) {
+    return { isExternalBillingUser: true, externalOrganizationIds: [], allowedClinicIds: new Set<string>() };
+  }
+
+  const clinicLinks = await supabase
+    .from('external_organization_clinic_links')
+    .select('external_organization_id,clinic_id,status')
+    .in('external_organization_id', activeOrganizationIds)
+    .eq('status', 'active')
+    .limit(1000);
+  if (clinicLinks.error) throw clinicLinks.error;
+  const allowedClinicIds = new Set<string>(
+    (clinicLinks.data || [])
+      .map((row: any) => sanitizeString(row?.clinic_id, 120))
+      .filter((id: string) => isUuid(id))
+  );
+  return {
+    isExternalBillingUser: true,
+    externalOrganizationIds: activeOrganizationIds,
+    allowedClinicIds,
+  };
 }
 
 async function resolveEffectiveClinicRole(
@@ -8715,13 +8789,20 @@ async function resolveEffectiveClinicRole(
   if (globalActorResult.error) throw globalActorResult.error;
   if (membershipResult.error) throw membershipResult.error;
 
-  return resolveEffectiveClinicRoleFromMembership({
+  const resolvedRole = resolveEffectiveClinicRoleFromMembership({
     actorId,
     clinicId,
     sessionRole,
     globalRole: globalActorResult.data?.role,
     membership: membershipResult.data
   });
+  if (resolvedRole === 'biller') {
+    const externalBillingAccess = await resolveExternalBillingAccessForUser(actorId);
+    if (externalBillingAccess.isExternalBillingUser && !externalBillingAccess.allowedClinicIds.has(clinicId)) {
+      return null;
+    }
+  }
+  return resolvedRole;
 }
 
 function normalizePromptTypeKey(value: unknown): string {
@@ -8795,6 +8876,12 @@ async function resolveClinicCapabilityContext(user: any): Promise<ResolvedClinic
   const membershipId = sanitizeString(membership?.id, 120);
   const membershipRole = sanitizeString(membership?.role, 40).toLowerCase();
   if (!isUuid(membershipId) || !isClinicBaseRole(membershipRole)) return null;
+  if (membershipRole === 'biller') {
+    const externalBillingAccess = await resolveExternalBillingAccessForUser(userId);
+    if (externalBillingAccess.isExternalBillingUser && !externalBillingAccess.allowedClinicIds.has(clinicId)) {
+      return null;
+    }
+  }
 
   let overrides: CapabilityOverrideLike[] = [];
   const { data: overrideRows, error: overrideError } = await supabase
@@ -8947,27 +9034,19 @@ async function resolvePatientListScopedPatientIds(
   if (mode === 'none') return [];
 
   if (mode === 'assigned_patients') {
-    const [linksResult, legacyPatientsResult] = await Promise.all([
-      supabase
-        .from('patient_professional_links')
-        .select('patient_id')
-        .eq('organization_id', context.clinicId)
-        .eq('professional_id', context.userId)
-        .eq('status', 'active')
-        .limit(2000),
-      supabase
-        .from('patients')
-        .select('id')
-        .eq('clinic_id', context.clinicId)
-        .eq('therapist_id', context.userId)
-        .limit(2000),
-    ]);
-    if (linksResult.error && !isMissingRelationError(linksResult.error)) throw linksResult.error;
-    if (legacyPatientsResult.error) throw legacyPatientsResult.error;
-    return Array.from(new Set([
-      ...(linksResult.error ? [] : (linksResult.data || []).map((row: any) => sanitizeString(row?.patient_id, 120))),
-      ...(legacyPatientsResult.data || []).map((row: any) => sanitizeString(row?.id, 120)),
-    ].filter(isUuid)));
+    const linksResult = await supabase
+      .from('patient_professional_links')
+      .select('patient_id')
+      .eq('organization_id', context.clinicId)
+      .eq('professional_id', context.userId)
+      .eq('status', 'active')
+      .limit(2000);
+    if (linksResult.error) throw linksResult.error;
+    return Array.from(new Set(
+      (linksResult.data || [])
+        .map((row: any) => sanitizeString(row?.patient_id, 120))
+        .filter(isUuid)
+    ));
   }
 
   const supervisionResult = await supabase
@@ -8989,28 +9068,18 @@ async function resolvePatientListScopedPatientIds(
   ));
   if (supervisedUserIds.length === 0) return Array.from(new Set(directPatientIds));
 
-  const [caseLinksResult, legacyPatientsResult] = await Promise.all([
-    supabase
-      .from('patient_professional_links')
-      .select('patient_id')
-      .eq('organization_id', context.clinicId)
-      .eq('status', 'active')
-      .in('professional_id', supervisedUserIds)
-      .limit(5000),
-    supabase
-      .from('patients')
-      .select('id')
-      .eq('clinic_id', context.clinicId)
-      .in('therapist_id', supervisedUserIds)
-      .limit(5000),
-  ]);
-  if (caseLinksResult.error && !isMissingRelationError(caseLinksResult.error)) throw caseLinksResult.error;
-  if (legacyPatientsResult.error) throw legacyPatientsResult.error;
+  const caseLinksResult = await supabase
+    .from('patient_professional_links')
+    .select('patient_id')
+    .eq('organization_id', context.clinicId)
+    .eq('status', 'active')
+    .in('professional_id', supervisedUserIds)
+    .limit(5000);
+  if (caseLinksResult.error) throw caseLinksResult.error;
 
   return Array.from(new Set([
     ...directPatientIds,
-    ...(caseLinksResult.error ? [] : (caseLinksResult.data || []).map((row: any) => sanitizeString(row?.patient_id, 120))),
-    ...(legacyPatientsResult.data || []).map((row: any) => sanitizeString(row?.id, 120)),
+    ...(caseLinksResult.data || []).map((row: any) => sanitizeString(row?.patient_id, 120)),
   ].filter(isUuid)));
 }
 
@@ -10787,31 +10856,12 @@ async function resolvePatientIdForRequest(
   }
 
   if (foundByName?.id) return sanitizeString(foundByName.id, 120);
-  if (!options.createIfMissing) return null;
 
-  const role = sanitizeString(user?.role, 40).toLowerCase();
-  if (!['owner', 'admin', 'coordinator', 'receptionist', 'therapist'].includes(role)) return null;
-
-  const insertPayload = {
-    name: guessedName || 'Paciente',
-    email: null,
-    phone: null,
-    age: null,
-    diagnosis: null,
-    status: 'active',
-    clinic_id: clinicId,
-    therapist_id: sanitizeString(user?.id, 120) || null,
-    created_at: new Date().toISOString()
-  };
-
-  const { data: created, error: createError } = await supabase
-    .from('patients')
-    .insert([insertPayload])
-    .select('id')
-    .single();
-
-  if (createError || !created?.id) return null;
-  return sanitizeString(created.id, 120);
+  // Clinical write routes must never create a patient as a side effect of
+  // resolving a legacy/local identifier. Patient creation is an explicit,
+  // separately authorized operation (`patient.create`). Keeping this fail-closed
+  // prevents orphan records when a later patient-scope check rejects the write.
+  return null;
 }
 
 function normalizeAppointmentStatusForTable(status: unknown): string {
@@ -12001,7 +12051,7 @@ const privateSessionPricingErrorResponse = (error: any) => {
     return { status: 403, error: 'Seu perfil não possui permissão para alterar o valor particular desta sessão.' };
   }
   if (raw.includes('PRIVATE_SESSION_DISCOUNT_APPROVAL_REQUIRED')) {
-    return { status: 403, error: 'Este desconto exige aprovação de owner ou administrador.' };
+    return { status: 403, error: 'Este desconto exige uma permissão financeira de aprovação.' };
   }
   if (
     raw.includes('PRIVATE_SESSION_MANUAL_CANCELLATION_DECISION_REQUIRED') ||
@@ -12046,7 +12096,7 @@ const privateSessionPricingErrorResponse = (error: any) => {
     return { status: 409, error: 'Esta chave de idempotência já foi usada com outro conteúdo. Salve novamente como uma nova versão.' };
   }
   if (raw.includes('WRITE_FORBIDDEN')) {
-    return { status: 403, error: 'Somente owner ou administrador pode criar versões de preços e acordos particulares.' };
+    return { status: 403, error: 'Seu acesso não permite gerenciar preços e acordos particulares.' };
   }
   if (
     hasMissingFinancialSchema(error) ||
@@ -12154,7 +12204,7 @@ async function validatePrivateLateCancellationRescheduleBatch(params: {
   appointments: any[];
   existingById: Map<string, any>;
   clinicId: string;
-  actorRole: string;
+  canManageFinance: boolean;
 }) {
   const rescheduled = (params.appointments || []).filter((appointment: any) => {
     if (readAppointmentFinancialContextType(mergeAppointmentBillingPayload(appointment)) !== 'PRIVATE') return false;
@@ -12191,7 +12241,7 @@ async function validatePrivateLateCancellationRescheduleBatch(params: {
   );
   if (lateByAppointmentId.size === 0) return { ok: true as const };
 
-  if (!['owner', 'admin', 'coordinator', 'receptionist'].includes(sanitizeString(params.actorRole, 80).toLowerCase())) {
+  if (!params.canManageFinance) {
     return {
       ok: false as const,
       status: 403,
@@ -14224,7 +14274,7 @@ async function fetchUserWorkspaces(userId: string) {
     return [];
   }
 
-  return (data || []).map((membership: any) => {
+  const workspaces = (data || []).map((membership: any) => {
     const clinic = membership.clinics || {};
     return {
       clinicId: sanitizeString(clinic.id || membership.clinic_id, 120),
@@ -14242,6 +14292,13 @@ async function fetchUserWorkspaces(userId: string) {
       billingModel: sanitizeString(clinic?.billing_model, 40).toLowerCase() || null
     };
   }).filter((w: any) => w.clinicId);
+
+  if (!workspaces.some((workspace: any) => workspace.role === 'biller')) return workspaces;
+  const externalBillingAccess = await resolveExternalBillingAccessForUser(userId);
+  if (!externalBillingAccess.isExternalBillingUser) return workspaces;
+  return workspaces.filter((workspace: any) =>
+    workspace.role !== 'biller' || externalBillingAccess.allowedClinicIds.has(workspace.clinicId)
+  );
 }
 
 type AccessContextKind = 'clinic_workspace' | 'patient_portal';
@@ -14760,7 +14817,7 @@ async function resolveOnboardingContextForUser(params: {
     onboardingMode,
     requiresPayment: onboardingMode === 'clinic_owner',
     canAccessDashboard,
-    canEditClinic: onboardingMode === 'clinic_owner' && ['owner', 'admin', 'coordinator'].includes(role),
+    canEditClinic: onboardingMode === 'clinic_owner' && ['owner', 'admin', 'director', 'coordinator'].includes(role),
     source: isInvited ? 'membership_invitation' : isOwner ? 'clinic_owner' : membership ? 'membership' : 'profile',
     errorCode: null,
     clinic: {
@@ -24712,20 +24769,22 @@ async function startServer() {
         profile?.role,
         securityProfile?.role,
       ].some((role) => sanitizeString(role, 40).toLowerCase() === 'owner');
-      if (isOwnerLogin) {
+      const isPlatformAdminLogin = await isPlatformAdminUserId(sanitizeString(user.id, 120));
+      const requiresPrivilegedMfa = isOwnerLogin || isPlatformAdminLogin;
+      if (requiresPrivilegedMfa) {
         if (securityProfileResult.error || !securityProfile) {
-          console.error('[MFA] owner security profile unavailable:', sanitizeString(securityProfileResult.error?.message, 200));
+          console.error('[MFA] privileged security profile unavailable:', sanitizeString(securityProfileResult.error?.message, 200));
           return res.status(503).json({
-            error: 'OWNER_MFA_SCHEMA_UNAVAILABLE',
+            error: 'PRIVILEGED_MFA_SCHEMA_UNAVAILABLE',
             message: 'O acesso administrativo está bloqueado até a validação da estrutura de segurança.'
           });
         }
-        if (sanitizeString(securityProfile.role, 40).toLowerCase() !== 'owner') {
+        if (isOwnerLogin && sanitizeString(securityProfile.role, 40).toLowerCase() !== 'owner') {
           return res.status(403).json({ error: 'OWNER_ROLE_INCONSISTENT' });
         }
         if (!hasCredentials || !supabaseAuthClient || credentialEmail !== safeAuthEmail) {
           return res.status(401).json({
-            error: 'OWNER_PASSWORD_REQUIRED',
+            error: 'PRIVILEGED_PASSWORD_REQUIRED',
             message: 'Entre com e-mail e senha para iniciar a verificação do Google Authenticator.'
           });
         }
@@ -24755,15 +24814,15 @@ async function startServer() {
       const hasConfiguredMfa =
         securityMfaEnabled &&
         Boolean(resolvedSecurityMfaSecret);
-      const mustChallengeMfa = isOwnerLogin || securityMfaEnabled;
+      const mustChallengeMfa = requiresPrivilegedMfa || securityMfaEnabled;
       if (mustChallengeMfa) {
-        if (!isOwnerLogin && (!hasCredentials || !supabaseAuthClient || credentialEmail !== safeAuthEmail)) {
+        if (!requiresPrivilegedMfa && (!hasCredentials || !supabaseAuthClient || credentialEmail !== safeAuthEmail)) {
           return res.status(401).json({
             error: 'MFA_PASSWORD_REQUIRED',
             message: 'Entre com e-mail e senha antes de confirmar o Google Authenticator.'
           });
         }
-        if (!isOwnerLogin) {
+        if (!requiresPrivilegedMfa) {
           const passwordCheck = await supabaseAuthClient.auth.signInWithPassword({
             email: credentialEmail as string,
             password: credentialPassword,
@@ -27262,7 +27321,7 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Identidade profissional ou clínica inválida.' });
       }
 
-      const canManageClinicTemplates = ['owner', 'admin', 'coordinator'].includes(actorRole);
+      const canManageClinicTemplates = ['director', 'coordinator'].includes(actorRole);
       const incomingTemplate = req.body?.template && typeof req.body.template === 'object' ? req.body.template : {};
       const requestedScope = sanitizeString(
         incomingTemplate?.templateScope || incomingTemplate?.scope || req.body?.templateScope || req.body?.scope,
@@ -27415,7 +27474,7 @@ async function startServer() {
       const scope = sanitizeString(existing.scope, 20) || (existing.owner_user_id ? 'personal' : 'clinic');
       const canArchive = scope === 'personal'
         ? sanitizeString(existing.owner_user_id, 120) === actorId
-        : ['owner', 'admin', 'coordinator'].includes(actorRole) && sanitizeString(existing.organization_id, 120) === clinicId;
+        : ['director', 'coordinator'].includes(actorRole) && sanitizeString(existing.organization_id, 120) === clinicId;
       if (!canArchive) {
         return res.status(403).json({ success: false, error: 'Sem permissão para arquivar esta ficha.' });
       }
@@ -28869,7 +28928,7 @@ async function startServer() {
       appointments: preparedAppointments,
       existingById,
       clinicId,
-      actorRole: sanitizeString(actor?.role, 80)
+      canManageFinance: req.authorizationContext?.capabilities?.has('finance.entries.manage') === true
     });
     if (!privateRescheduleValidation.ok) {
       return res.status(privateRescheduleValidation.status).json({
@@ -30754,7 +30813,10 @@ async function startServer() {
         });
 
         if (manualSnapshots.length > 0) {
-          if (isPatientActor || !['owner', 'admin', 'coordinator', 'receptionist'].includes(actorRole)) {
+          if (
+            isPatientActor ||
+            professionalAuthorizationContext?.capabilities.has('finance.entries.manage') !== true
+          ) {
             throw new Error('PRIVATE_SESSION_MANUAL_POLICY_DECISION_FORBIDDEN');
           }
           if (
@@ -31536,17 +31598,15 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
       const linksSelect = 'id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,starts_at,ends_at,status,permissions,created_by,ended_by,created_at,updated_at';
-      const usersSelect = 'id,name,email';
-      const profilesSelect = 'user_id,specialty,council,council_number';
+      const usersSelect = 'id,name,email,profile_picture,profile_picture_path';
+      const profilesSelect = 'user_id,specialty,council,council_number,profile_photo_url,metadata';
       const membershipsSelect = 'user_id,clinic_id,role,status';
       let stage = 'links';
       let table = 'patient_professional_links';
       let select = linksSelect;
       try {
-        const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
         const canInspectInconsistentLinks =
-          hasGlobalClinicAccess(req.session.user) ||
-          actorRole === 'coordinator';
+          req.authorizationContext?.capabilities?.has('team.case.manage') === true;
         let linksQuery = supabase
           .from('patient_professional_links')
           .select(linksSelect)
@@ -31584,7 +31644,11 @@ async function startServer() {
               .select(profilesSelect)
               .in('user_id', professionalIds);
             if (profilesResult.error) throw profilesResult.error;
-            professionalProfiles = profilesResult.data || [];
+            const professionalById = new Map(professionals.map((professional: any) => [String(professional.id), professional]));
+            professionalProfiles = await Promise.all((profilesResult.data || []).map(async (profile: any) => ({
+              ...profile,
+              profile_photo_url: await resolveProfessionalProfilePhotoUrl(profile, professionalById.get(String(profile.user_id)))
+            })));
 
             stage = 'memberships';
             table = 'clinic_memberships';
@@ -31632,6 +31696,7 @@ async function startServer() {
     '/api/patients/:patientId/professional-links',
     checkAuth,
     checkPatientAccess,
+    requireClinicCapability('team.case.manage'),
     async (req: any, res) => {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const actorId = sanitizeString(req.session.user.id, 120);
@@ -31652,23 +31717,13 @@ async function startServer() {
       let table = 'users';
       let select = 'id,name,email';
       try {
-        const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
-        let actorMembership: any = null;
-        if (!['owner', 'admin'].includes(actorRole)) {
-          stage = 'actor_membership';
-          table = 'clinic_memberships';
-          select = 'user_id,clinic_id,role,status';
-          const actorMembershipResult = await supabase
-            .from('clinic_memberships')
-            .select(select)
-            .eq('user_id', actorId)
-            .eq('clinic_id', clinicId)
-            .eq('role', 'coordinator')
-            .eq('status', 'active')
-            .maybeSingle();
-          if (actorMembershipResult.error) throw actorMembershipResult.error;
-          actorMembership = actorMembershipResult.data;
-        }
+        const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+        const actorMembership = {
+          user_id: actorId,
+          clinic_id: clinicId,
+          role: actorRole,
+          status: 'active'
+        };
         if (!isPatientProfessionalLinkManager({
           actorId,
           actorRole,
@@ -31831,9 +31886,10 @@ async function startServer() {
     '/api/patients/:patientId/professional-links/:linkId/end',
     checkAuth,
     checkPatientAccess,
+    requireClinicCapability('team.case.manage'),
     async (req: any, res) => {
       const actorId = sanitizeString(req.session.user.id, 120);
-      const actorRole = sanitizeString(req.session.user.role, 40).toLowerCase();
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
       const linkId = sanitizeString(req.params.linkId, 120);
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(
@@ -31848,28 +31904,12 @@ async function startServer() {
       ) {
         return res.status(400).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_INVALID' });
       }
-      let actorMembership: any = null;
-      if (!['owner', 'admin'].includes(actorRole)) {
-        const membershipResult = await supabase
-          .from('clinic_memberships')
-          .select('user_id,clinic_id,role,status')
-          .eq('user_id', actorId)
-          .eq('clinic_id', clinicId)
-          .eq('role', 'coordinator')
-          .eq('status', 'active')
-          .maybeSingle();
-        if (membershipResult.error) {
-          return res.status(
-            isMissingRelationError(membershipResult.error) ? 503 : 500
-          ).json({
-            success: false,
-            error: isMissingRelationError(membershipResult.error)
-              ? 'MULTIDISCIPLINARY_SCHEMA_PENDING'
-              : 'PATIENT_PROFESSIONAL_LINK_FAILED'
-          });
-        }
-        actorMembership = membershipResult.data;
-      }
+      const actorMembership = {
+        user_id: actorId,
+        clinic_id: clinicId,
+        role: actorRole,
+        status: 'active'
+      };
       const outcome = await executeAuthorizedPatientProfessionalLinkEnd({
         isManager: isPatientProfessionalLinkManager({
           actorId,
@@ -34093,7 +34133,36 @@ async function startServer() {
     }
   });
 
-  app.post('/api/storage/upload', uploadLimiter, checkAuth, requireAnyClinicCapabilityOrPatientPortal('patient.files.upload', 'clinical.documents.upload'), async (req: any, res) => {
+  const patientStorageUploadGuard = requireAnyClinicCapabilityOrPatientPortal('patient.files.upload', 'clinical.documents.upload');
+  const requireStorageUploadAccess = async (req: any, res: any, next: any) => {
+    const requestedObjectPath = sanitizeString(req.body?.path, 260);
+    const requestedPathParts = requestedObjectPath.split('/').filter(Boolean);
+    const accessObjectPath = requestedPathParts[0] === 'demo'
+      ? requestedPathParts.slice(2).join('/')
+      : requestedObjectPath;
+    if (!accessObjectPath.startsWith('onboarding/')) {
+      return patientStorageUploadGuard(req, res, next);
+    }
+    try {
+      if (sanitizeString(req.session?.user?.role, 40).toLowerCase() === 'patient') {
+        return res.status(403).json({ success: false, error: 'Perfil sem permissão para upload de onboarding.' });
+      }
+      const effectiveRole = await resolveEffectiveClinicRole(req.session?.user);
+      if (!effectiveRole || !isClinicBaseRole(effectiveRole)) {
+        return res.status(403).json({ success: false, error: 'É necessário um vínculo ativo com a clínica para enviar documentos de onboarding.' });
+      }
+      req.effectiveClinicRole = effectiveRole;
+      return next();
+    } catch (error) {
+      logRouteDbError('requireStorageUploadAccess', error, {
+        userId: sanitizeString(req.session?.user?.id, 120),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120)
+      });
+      return res.status(500).json({ success: false, error: 'Não foi possível validar o acesso ao upload agora.' });
+    }
+  };
+
+  app.post('/api/storage/upload', uploadLimiter, checkAuth, requireStorageUploadAccess, async (req: any, res) => {
     try {
       const bucketName = sanitizeString(req.body?.bucket, 80);
       const requestedObjectPath = sanitizeString(req.body?.path, 260);
@@ -34135,8 +34204,8 @@ async function startServer() {
         if (!isUuid(actorId) || actorId !== ownerUserId) {
           return res.status(403).json({ success: false, error: 'Você só pode enviar arquivos do seu próprio onboarding.' });
         }
-        if (!['coordinator', 'therapist', 'receptionist', 'admin', 'owner'].includes(role)) {
-          return res.status(403).json({ success: false, error: 'Perfil sem permissão para upload de onboarding.' });
+        if (!isClinicBaseRole(sanitizeString(req.effectiveClinicRole, 40).toLowerCase())) {
+          return res.status(403).json({ success: false, error: 'É necessário um vínculo ativo com a clínica para enviar documentos de onboarding.' });
         }
       } else {
         const ownerPatientId = sanitizeString(accessObjectPath.split('/')[0], 120);
@@ -36122,7 +36191,7 @@ async function startServer() {
 
       let financialPlanSyncWarning: string | null = null;
       if (
-        canAccessClinicFinance(req.session.user) &&
+        req.authorizationContext?.capabilities?.has('finance.entries.manage') === true &&
         Object.prototype.hasOwnProperty.call(payloadRawBase, 'financialPlans')
       ) {
         const financialPlanSync = await persistPatientFinancialPlans({
@@ -55484,7 +55553,7 @@ async function startServer() {
     return { data, tissPipeline };
   };
 
-  app.get('/api/tiss/professional-profile/me', noStoreDynamicResponse, checkAuth, requireRoles('therapist', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/tiss/professional-profile/me', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('session.billing_evidence.generate', 'session.start'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const professionalId = sanitizeString(req.session.user?.id, 120);
@@ -55505,7 +55574,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/tiss/professional-profile/me', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('therapist', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/tiss/professional-profile/me', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('session.billing_evidence.generate', 'session.start'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil faturável do profissional')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -65324,13 +65393,13 @@ async function startServer() {
           .map((link: any) => sanitizeString(link?.professional_id, 120))
           .filter(isUuid)
       ));
-      const [linkedProfilesResult, linkedMembershipsResult] = linkedProfessionalIds.length
+      const [linkedProfilesResult, linkedMembershipsResult, linkedUsersResult] = linkedProfessionalIds.length
         ? await Promise.all([
             supabase
               .from('professional_profiles')
-              .select('user_id,full_name,specialty')
+              .select('user_id,full_name,specialty,profile_photo_url,metadata')
               .in('user_id', linkedProfessionalIds)
-              .limit(5),
+              .limit(200),
             supabase
               .from('clinic_memberships')
               .select('user_id,clinic_id,role,status')
@@ -65338,16 +65407,41 @@ async function startServer() {
               .eq('role', 'therapist')
               .eq('status', 'active')
               .in('user_id', linkedProfessionalIds)
-              .limit(5)
+              .limit(200),
+            supabase
+              .from('users')
+              .select('id,name,email,profile_picture,profile_picture_path')
+              .in('id', linkedProfessionalIds)
+              .limit(200)
           ])
         : [
+            { data: [], error: null },
             { data: [], error: null },
             { data: [], error: null }
           ];
       if (linkedProfilesResult.error) throw linkedProfilesResult.error;
       if (linkedMembershipsResult.error) throw linkedMembershipsResult.error;
-      const linkedProfileById = new Map(
+      if (linkedUsersResult.error) throw linkedUsersResult.error;
+      const linkedUserById = new Map(
+        (linkedUsersResult.data || []).map((user: any) => [String(user.id), user])
+      );
+      const rawLinkedProfileById = new Map(
         (linkedProfilesResult.data || []).map((profile: any) => [String(profile.user_id), profile])
+      );
+      const resolvedLinkedProfiles = await Promise.all(
+        linkedProfessionalIds.map(async (professionalId) => {
+          const profile: any = rawLinkedProfileById.get(String(professionalId)) || {};
+          const user: any = linkedUserById.get(String(professionalId)) || {};
+          return {
+            ...profile,
+            user_id: profile?.user_id || professionalId,
+            full_name: profile?.full_name || user?.name || null,
+            profile_photo_url: await resolveProfessionalProfilePhotoUrl(profile, user)
+          };
+        })
+      );
+      const linkedProfileById = new Map(
+        resolvedLinkedProfiles.map((profile: any) => [String(profile.user_id), profile])
       );
       const linkedMembershipIds = new Set(
         (linkedMembershipsResult.data || []).map((membership: any) =>
@@ -65368,6 +65462,7 @@ async function startServer() {
         return {
           ...link,
           name: sanitizeString(profile?.full_name, 180) || 'Profissional',
+          profile_photo_url: profile?.profile_photo_url || null,
           specialty:
             canonicalSpecialty ||
             sanitizeTextField(link?.specialty, 120) ||
@@ -65542,7 +65637,7 @@ async function startServer() {
         });
       }
       const role = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
-      const canManageAny = ['owner', 'admin', 'coordinator'].includes(role);
+      const canManageAny = isTherapeuticPlanManager(role);
       if (!canManageAny && responsibleProfessionalId !== actorId) {
         return res.status(403).json({
           success: false,
@@ -65859,7 +65954,7 @@ async function startServer() {
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });
 
-      const canManageAny = ['owner', 'admin', 'coordinator'].includes(role);
+      const canManageAny = isTherapeuticPlanManager(role);
       const permittedIds = new Set([
         String(existing.responsible_professional_id),
         ...(existing.participant_professional_ids || []).map(String),
@@ -66010,7 +66105,7 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const actorRole = sanitizeString(req.effectiveClinicRole, 80).toLowerCase();
-      const canManageLibrary = ['owner', 'admin', 'coordinator'].includes(actorRole);
+      const canManageLibrary = ['director', 'coordinator'].includes(actorRole);
       const includeArchived = String(req.query?.includeArchived || '').toLowerCase() === 'true';
       const templateQuery = supabase
         .from('aba_program_templates')
@@ -66117,10 +66212,10 @@ async function startServer() {
           String(planScope.responsible_professional_id || ''),
           ...(planScope.participant_professional_ids || []).map(String),
         ]);
-        if (!['owner', 'admin', 'coordinator'].includes(role) && !scopeParticipantIds.has(actorId)) {
+        if (!isTherapeuticPlanManager(role) && !scopeParticipantIds.has(actorId)) {
           return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_EDIT_DENIED' });
         }
-        if (!['owner', 'admin', 'coordinator'].includes(role)) {
+        if (!isTherapeuticPlanManager(role)) {
           const { data: activeLink, error: activeLinkError } = await supabase
             .from('patient_professional_links')
             .select('permissions')
@@ -66137,7 +66232,7 @@ async function startServer() {
         }
         therapeuticPlanScope = planScope;
       }
-      const canApprove = ['owner', 'admin', 'coordinator'].includes(role);
+      const canApprove = isTherapeuticPlanManager(role);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
       const status = canApprove
         ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')
@@ -66348,7 +66443,7 @@ async function startServer() {
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const role = sanitizeString(req.effectiveClinicRole, 80).toLowerCase();
       const status = sanitizeString(req.body?.status, 40).toLowerCase();
-      if (!['owner', 'admin', 'coordinator'].includes(role) && status !== 'awaiting_approval') {
+      if (!isTherapeuticPlanManager(role) && status !== 'awaiting_approval') {
         return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode alterar a fase oficial do programa.' });
       }
       if (!isTherapeuticPlanManager(role)) {
@@ -66497,7 +66592,7 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const role = sanitizeString(req.effectiveClinicRole, 80).toLowerCase();
-      const canShareWithClinic = ['owner', 'admin', 'coordinator'].includes(role);
+      const canShareWithClinic = ['director', 'coordinator'].includes(role);
       const requestedVisibility = sanitizeString(req.body?.visibility, 20) === 'private'
         ? 'private'
         : 'clinic';
@@ -66718,7 +66813,7 @@ async function startServer() {
       const existingScope = sanitizeString(existing.source_scope, 40).toUpperCase();
       const canManageExisting = existingScope === 'PERSONAL'
         ? sanitizeString(existing.owner_user_id, 120) === actorId
-        : sanitizeString(existing.organization_id, 120) === organizationId && ['owner', 'admin', 'coordinator'].includes(actorRole);
+        : sanitizeString(existing.organization_id, 120) === organizationId && ['director', 'coordinator'].includes(actorRole);
       if (!canManageExisting) {
         return res.status(403).json({ success: false, error: 'TEMPLATE_ACCESS_DENIED' });
       }
@@ -74971,10 +75066,10 @@ async function startServer() {
       if (!idempotencyKey) return res.status(400).json({ success: false, error: 'Não foi possível identificar esta operação com segurança. Tente novamente.' });
       const financeDocument = readPatientFinanceDocumentInput(req.body);
       if (!financeDocument.ok) return res.status(400).json({ success: false, error: financeDocument.error });
-      const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
-      const privilegedFinancialRole = actorRole === 'owner' || actorRole === 'admin';
-      if (operation === 'REFUND' && !privilegedFinancialRole) {
-        return res.status(403).json({ success: false, error: 'Somente owner ou administrador pode estornar recebimentos.' });
+      const canApproveSensitiveFinance =
+        req.authorizationContext?.capabilities?.has('finance.entries.manage') === true;
+      if (operation === 'REFUND' && !canApproveSensitiveFinance) {
+        return res.status(403).json({ success: false, error: 'Seu acesso atual não permite estornar recebimentos.' });
       }
 
       const snapshotResult = await supabase
@@ -74990,15 +75085,15 @@ async function startServer() {
       }
       const privateSnapshot = snapshotResult.data || null;
       if (privateSnapshot) {
-        if (operation === 'COURTESY' && !privilegedFinancialRole) {
-          return res.status(403).json({ success: false, error: 'Somente owner ou administrador pode marcar uma cobrança como cortesia.' });
+        if (operation === 'COURTESY' && !canApproveSensitiveFinance) {
+          return res.status(403).json({ success: false, error: 'Seu acesso atual não permite marcar uma cobrança como cortesia.' });
         }
         if (
           operation === 'DISCOUNT' &&
           privateSnapshot.discount_approval_required !== false &&
-          !privilegedFinancialRole
+          !canApproveSensitiveFinance
         ) {
-          return res.status(403).json({ success: false, error: 'Este desconto exige aprovação de owner ou administrador.' });
+          return res.status(403).json({ success: false, error: 'Este desconto exige uma permissão financeira de aprovação.' });
         }
         if (operation === 'PARTIAL_PAYMENT' && privateSnapshot.allow_partial_payment === false) {
           return res.status(409).json({ success: false, error: 'A política congelada desta sessão não permite pagamento parcial.' });
@@ -79127,7 +79222,7 @@ async function startServer() {
               result: results,
               actorUserId,
               actorRole: req.session?.user?.role,
-              mfaVerified: hasVerifiedOwnerMfaSession(req.session?.user),
+              mfaVerified: hasVerifiedMfaSession(req.session?.user),
               explicitConfirmation:
                 req.body?.commercialExceptionConfirmed === true,
               justification,
@@ -79148,7 +79243,7 @@ async function startServer() {
             code: approvalResult.error,
             blockingCodes: review.technicalBlockingCodes,
             error: accessError
-              ? "A aprovação excepcional exige owner com MFA validado."
+              ? "A aprovação excepcional exige administração da plataforma com MFA validado."
               : approvalResult.error ===
                     "COMMERCIAL_EXCEPTION_JUSTIFICATION_REQUIRED"
                 ? "Informe uma justificativa comercial com pelo menos 20 caracteres."
@@ -79748,13 +79843,13 @@ async function startServer() {
   ) => {
     const { leadId, simulationId, actorUserId, idempotencyKey } = params;
     if (
-      req.session?.user?.role !== "owner"
-      || !hasVerifiedOwnerMfaSession(req.session?.user)
+      req.session?.user?.isPlatformAdmin !== true
+      || !hasVerifiedMfaSession(req.session?.user)
     ) {
       return res.status(403).json({
         success: false,
         code: "PROPOSAL_ACCESS_DENIED",
-        error: "Esta ação exige acesso owner com MFA validado.",
+        error: "Esta ação exige administração da plataforma com MFA validado.",
       });
     }
     if (
@@ -80047,13 +80142,13 @@ async function startServer() {
   ) => {
     const { leadId, simulationId, actorUserId, idempotencyKey } = params;
     if (
-      req.session?.user?.role !== "owner"
-      || !hasVerifiedOwnerMfaSession(req.session?.user)
+      req.session?.user?.isPlatformAdmin !== true
+      || !hasVerifiedMfaSession(req.session?.user)
     ) {
       return res.status(403).json({
         success: false,
         code: "SIMULATION_ACCESS_DENIED",
-        error: "Esta ação exige acesso owner com MFA validado.",
+        error: "Esta ação exige administração da plataforma com MFA validado.",
       });
     }
     if (
@@ -80821,7 +80916,7 @@ async function startServer() {
   app.post(
     "/api/owner/sales/offers/:offerId/accept",
     checkAuth,
-    requireRoles("owner"),
+    checkPlatformAdmin,
     modularCheckoutLimiter,
     async (req: any, res) => {
       const offerId = sanitizeString(req.params?.offerId, 120);
@@ -80829,7 +80924,7 @@ async function startServer() {
       if (
         !isUuid(offerId)
         || !isUuid(actorUserId)
-        || !hasVerifiedOwnerMfaSession(req.session?.user)
+        || !hasVerifiedMfaSession(req.session?.user)
       ) {
         return res.status(403).json({ success: false, error: "OWNER_MFA_REQUIRED" });
       }
@@ -81003,7 +81098,7 @@ async function startServer() {
   app.post(
     "/api/owner/sales/offers/:offerId/modular-checkout",
     checkAuth,
-    requireRoles("owner"),
+    checkPlatformAdmin,
     modularCheckoutLimiter,
     async (req: any, res) => {
       const offerId = sanitizeString(req.params?.offerId, 120);
@@ -81017,12 +81112,12 @@ async function startServer() {
         !isUuid(offerId)
         || !isUuid(actorUserId)
         || idempotencyKey.length < 12
-        || !hasVerifiedOwnerMfaSession(req.session?.user)
+        || !hasVerifiedMfaSession(req.session?.user)
       ) {
         return res.status(403).json({
           success: false,
           code: "MODULAR_CHECKOUT_OWNER_MFA_REQUIRED",
-          error: "Esta ação exige owner com MFA validado.",
+          error: "Esta ação exige administração da plataforma com MFA validado.",
         });
       }
       if (
@@ -81477,7 +81572,7 @@ async function startServer() {
   app.get(
     "/api/owner/sales/offers/:offerId/modular-checkout",
     checkAuth,
-    requireRoles("owner"),
+    checkPlatformAdmin,
     async (req: any, res) => {
       const offerId = sanitizeString(req.params?.offerId, 120);
       if (!isUuid(offerId)) return res.status(400).json({ success: false, error: "OFFER_INVALID" });
@@ -81507,12 +81602,12 @@ async function startServer() {
   app.post(
     "/api/owner/sales/offers/:offerId/modular-checkout/expire",
     checkAuth,
-    requireRoles("owner"),
+    checkPlatformAdmin,
     modularCheckoutLimiter,
     async (req: any, res) => {
       const offerId = sanitizeString(req.params?.offerId, 120);
       const linkId = sanitizeString(req.body?.linkId, 120);
-      if (!isUuid(offerId) || !isUuid(linkId) || !hasVerifiedOwnerMfaSession(req.session?.user)) {
+      if (!isUuid(offerId) || !isUuid(linkId) || !hasVerifiedMfaSession(req.session?.user)) {
         return res.status(403).json({ success: false, error: "OWNER_MFA_REQUIRED" });
       }
       const { data: link, error } = await supabase
@@ -81546,12 +81641,12 @@ async function startServer() {
   app.post(
     "/api/owner/sales/offers/:offerId/modular-checkout/email",
     checkAuth,
-    requireRoles("owner"),
+    checkPlatformAdmin,
     modularCheckoutLimiter,
     async (req: any, res) => {
       const offerId = sanitizeString(req.params?.offerId, 120);
       const linkId = sanitizeString(req.body?.linkId, 120);
-      if (!isUuid(offerId) || !isUuid(linkId) || !hasVerifiedOwnerMfaSession(req.session?.user)) {
+      if (!isUuid(offerId) || !isUuid(linkId) || !hasVerifiedMfaSession(req.session?.user)) {
         return res.status(403).json({ success: false, error: "OWNER_MFA_REQUIRED" });
       }
       const { data: link, error: linkError } = await supabase
@@ -82850,14 +82945,18 @@ async function startServer() {
     try {
       const cronSecret = sanitizeString(process.env.BILLING_CRON_SECRET || '', 240);
       const providedSecret = sanitizeString(req.headers['x-cron-secret'] || req.body?.secret, 240);
-      const sessionRole = sanitizeString(req.session?.user?.role, 40).toLowerCase();
+      const sessionUserId = sanitizeString(req.session?.user?.id, 120);
       const authorizedBySecret = Boolean(
         cronSecret &&
         providedSecret &&
         Buffer.byteLength(cronSecret) === Buffer.byteLength(providedSecret) &&
         crypto.timingSafeEqual(Buffer.from(cronSecret), Buffer.from(providedSecret))
       );
-      const authorizedBySession = ['owner', 'admin'].includes(sessionRole);
+      const authorizedBySession = Boolean(
+        isUuid(sessionUserId) &&
+        await isPlatformAdminUserId(sessionUserId) &&
+        hasVerifiedMfaSession(req.session?.user)
+      );
       if (!authorizedBySecret && !authorizedBySession) {
         return res.status(403).json({ success: false, error: 'Acesso negado para reportar uso de billing.' });
       }
@@ -82883,14 +82982,18 @@ async function startServer() {
     try {
       const cronSecret = sanitizeString(process.env.BILLING_CRON_SECRET || '', 240);
       const providedSecret = sanitizeString(req.headers['x-cron-secret'] || req.body?.secret, 240);
-      const sessionRole = sanitizeString(req.session?.user?.role, 40).toLowerCase();
+      const sessionUserId = sanitizeString(req.session?.user?.id, 120);
       const authorizedBySecret = Boolean(
         cronSecret &&
         providedSecret &&
         Buffer.byteLength(cronSecret) === Buffer.byteLength(providedSecret) &&
         crypto.timingSafeEqual(Buffer.from(cronSecret), Buffer.from(providedSecret))
       );
-      const authorizedBySession = ['owner', 'admin'].includes(sessionRole);
+      const authorizedBySession = Boolean(
+        isUuid(sessionUserId) &&
+        await isPlatformAdminUserId(sessionUserId) &&
+        hasVerifiedMfaSession(req.session?.user)
+      );
       if (!authorizedBySecret && !authorizedBySession) {
         return res.status(403).json({ success: false, error: 'Acesso negado para reconciliar billing.' });
       }
@@ -82918,7 +83021,8 @@ async function startServer() {
     supabase,
     noStoreDynamicResponse,
     checkAuth,
-    requireRoles,
+    requireClinicCapability,
+    resolvePatientListScopedPatientIds,
     portalActionLimiter,
     sanitizeString,
     currentClinicId
@@ -82928,7 +83032,8 @@ async function startServer() {
     supabase,
     noStoreDynamicResponse,
     checkAuth,
-    requireRoles,
+    requireClinicCapability,
+    requireAnyClinicCapability,
     portalActionLimiter,
     sanitizeString,
     currentClinicId

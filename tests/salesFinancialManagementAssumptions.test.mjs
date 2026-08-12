@@ -14,7 +14,7 @@ for (const label of [
   'Impostos sobre o lucro',
   'Depreciação e amortização',
   'Despesas financeiras',
-  'Outras despesas corporativas não atribuídas'
+  'Outras despesas abaixo do EBITDA'
 ]) {
   assert.match(panel, new RegExp(label), `premissa visível ausente: ${label}`);
 }

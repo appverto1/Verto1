@@ -5,7 +5,8 @@ type ClinicAppointmentPolicyRouteDeps = {
   supabase: any;
   noStoreDynamicResponse: any;
   checkAuth: any;
-  requireRoles: (...roles: string[]) => any;
+  requireClinicCapability: (capability: any) => any;
+  requireAnyClinicCapability: (...capabilities: any[]) => any;
   portalActionLimiter: any;
   sanitizeString: (value: any, max?: number) => string;
   currentClinicId: (user: any) => string | null;
@@ -33,7 +34,8 @@ export function registerClinicAppointmentPolicyRoutes(
     supabase,
     noStoreDynamicResponse,
     checkAuth,
-    requireRoles,
+    requireClinicCapability,
+    requireAnyClinicCapability,
     portalActionLimiter,
     sanitizeString,
     currentClinicId
@@ -43,7 +45,7 @@ export function registerClinicAppointmentPolicyRoutes(
     '/api/clinic/appointment-policy',
     noStoreDynamicResponse,
     checkAuth,
-    requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'),
+    requireAnyClinicCapability('calendar.own.view', 'calendar.clinic.view', 'calendar.team.view', 'clinic.settings.view'),
     async (req: any, res: any) => {
       try {
         const clinicId = sanitizeString(currentClinicId(req.session?.user), 120);
@@ -65,9 +67,7 @@ export function registerClinicAppointmentPolicyRoutes(
             noShowToleranceMinutes: Number(result.data.no_show_tolerance_minutes || 30),
             noShowMode: String(result.data.no_show_mode || 'AUTO').toUpperCase() === 'REVIEW' ? 'REVIEW' : 'AUTO',
             updatedAt: result.data.updated_at || null,
-            canManage: ['owner', 'admin', 'coordinator'].includes(
-              sanitizeString(req.session?.user?.role, 40).toLowerCase()
-            )
+            canManage: req.authorizationContext?.capabilities?.has('clinic.settings.edit') === true
           }
         });
       } catch (error: any) {
@@ -98,7 +98,7 @@ export function registerClinicAppointmentPolicyRoutes(
     portalActionLimiter,
     noStoreDynamicResponse,
     checkAuth,
-    requireRoles('coordinator', 'admin', 'owner'),
+    requireClinicCapability('clinic.settings.edit'),
     async (req: any, res: any) => {
       try {
         const clinicId = sanitizeString(currentClinicId(req.session?.user), 120);

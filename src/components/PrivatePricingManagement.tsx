@@ -16,6 +16,7 @@ import { formatDisplayDate } from '../utils/dateFormatting';
 type Props = {
   patients: any[];
   currentUser?: any;
+  capabilities?: any;
   onToast?: (message: string, type?: 'success' | 'error') => void;
 };
 
@@ -95,7 +96,7 @@ const policyLabel = (type: any, value: any) => {
   return 'sem cobrança';
 };
 
-export function PrivatePricingManagement({ patients, currentUser, onToast }: Props) {
+export function PrivatePricingManagement({ patients, currentUser, capabilities, onToast }: Props) {
   const [catalog, setCatalog] = useState<any>({
     rules: [],
     agreements: [],
@@ -108,7 +109,13 @@ export function PrivatePricingManagement({ patients, currentUser, onToast }: Pro
   const [agreement, setAgreement] = useState<any>(initialAgreement);
   const [savingRule, setSavingRule] = useState(false);
   const [savingAgreement, setSavingAgreement] = useState(false);
-  const canManage = ['owner', 'admin'].includes(String(currentUser?.role || '').toLowerCase());
+  const canManage = capabilities instanceof Set
+    ? capabilities.has('finance.entries.manage')
+    : Array.isArray(capabilities)
+      ? capabilities.includes('finance.entries.manage')
+      : capabilities && typeof capabilities.has === 'function'
+        ? capabilities.has('finance.entries.manage')
+        : false;
 
   const load = async () => {
     setLoading(true);

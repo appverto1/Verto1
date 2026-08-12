@@ -58,6 +58,7 @@ type Props = {
   patients: any[];
   professionals: any[];
   currentUser?: any;
+  capabilities?: any;
   launchRequest?: LaunchRequest;
   onLaunchHandled?: () => void;
   onPaymentsLoaded?: (payments: any[]) => void;
@@ -209,6 +210,7 @@ export function PatientFinanceWorkspace({
   patients,
   professionals,
   currentUser,
+  capabilities,
   launchRequest,
   onLaunchHandled,
   onPaymentsLoaded,
@@ -251,7 +253,13 @@ export function PatientFinanceWorkspace({
   const [policySaving, setPolicySaving] = useState(false);
   const [sendingReminderChargeId, setSendingReminderChargeId] = useState('');
 
-  const canManagePolicy = ['owner', 'admin', 'coordinator'].includes(String(currentUser?.role || '').toLowerCase());
+  const canManagePolicy = capabilities instanceof Set
+    ? capabilities.has('finance.entries.manage')
+    : Array.isArray(capabilities)
+      ? capabilities.includes('finance.entries.manage')
+      : capabilities && typeof capabilities.has === 'function'
+        ? capabilities.has('finance.entries.manage')
+        : false;
 
   useEffect(() => {
     let cancelled = false;
@@ -700,6 +708,7 @@ export function PatientFinanceWorkspace({
       <PrivatePricingManagement
         patients={patients}
         currentUser={currentUser}
+        capabilities={capabilities}
         onToast={onToast}
       />
       <div className="flex flex-col gap-3 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">

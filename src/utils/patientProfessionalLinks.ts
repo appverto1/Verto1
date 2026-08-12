@@ -152,14 +152,13 @@ export function isPatientProfessionalLinkManager(params: {
   membership?: any;
 }): boolean {
   const actorId = cleanText(params.actorId);
-  const actorRole = cleanText(params.actorRole).toLowerCase();
   const clinicId = cleanText(params.clinicId);
   if (!actorId || !clinicId) return false;
-  if (actorRole === 'owner' || actorRole === 'admin') return true;
+  const membershipRole = cleanText(params.membership?.role).toLowerCase();
   return Boolean(
     cleanText(params.membership?.user_id) === actorId &&
       cleanText(params.membership?.clinic_id) === clinicId &&
-      cleanText(params.membership?.role).toLowerCase() === 'coordinator' &&
+      ['director', 'coordinator'].includes(membershipRole) &&
       cleanText(params.membership?.status).toLowerCase() === 'active'
   );
 }
