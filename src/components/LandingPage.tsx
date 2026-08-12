@@ -248,8 +248,11 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         body: JSON.stringify({ email: recoveryEmail })
       });
       const data = await parseApiResponse(response);
-      if (!response.ok) {
-        throw new Error(data?.error || 'Falha ao iniciar recuperação.');
+      // O rate limiter preserva privacidade respondendo com uma mensagem genérica
+      // mesmo quando usa HTTP 429. Para o usuário, isso continua sendo um pedido
+      // aceito: nunca revelamos se o e-mail existe nem mostramos um falso erro.
+      if (!response.ok && data?.success !== true) {
+        throw new Error(data?.error || data?.message || 'Falha ao iniciar recuperação.');
       }
       setRecoveryMessage(data?.message || 'Se este e-mail estiver cadastrado, você receberá instruções.');
       setRecoveryStep('sent');

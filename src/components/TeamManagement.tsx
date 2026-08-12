@@ -350,8 +350,9 @@ export function TeamManagement({
             }
           : {}
       );
-      if (result.success && result.invitationEmailSent !== false) {
+      if (result.success && (result.inAppInvitation === true || result.invitationEmailSent !== false)) {
         setInviteSent(true);
+        setSuccess(result.message || (result.inAppInvitation ? 'Convite disponibilizado no aplicativo do profissional.' : 'Convite enviado com sucesso.'));
         setNewMemberEmail('');
         setNewMemberSpecialty('');
         await fetchInvitations();
@@ -1622,7 +1623,7 @@ export function TeamManagement({
                   : !canInvite
                     ? 'Limite atingido'
                     : inviteSent
-                      ? 'Convite enviado com sucesso.'
+                      ? 'Convite criado com sucesso.'
                       : 'Enviar convite'}
               </button>
             </form>

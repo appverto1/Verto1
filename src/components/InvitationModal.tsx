@@ -75,7 +75,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
             }
           : {}
       );
-      if (result.success && result.invitationEmailSent !== false) {
+      if (result.success && (result.inAppInvitation === true || result.invitationEmailSent !== false)) {
         setInvitations([
           ...invitations,
           { email, role: formatInviteRoleLabel(role, specialty) },
@@ -220,7 +220,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
               >
                 <span className="inline-flex items-center justify-center gap-2">
                   {success && <CheckCircle2 size={17} />}
-                  {loading ? 'Enviando...' : success ? 'Convite enviado com sucesso.' : 'Enviar convite'}
+                  {loading ? 'Enviando...' : success ? 'Convite criado com sucesso.' : 'Enviar convite'}
                 </span>
               </button>
             </form>

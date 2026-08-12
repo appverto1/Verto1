@@ -41,13 +41,19 @@ export const ClinicInvitationAcceptance = ({
   const acceptedClinicName = String(accepted?.onboardingContext?.clinic?.name || '').trim() || 'Clínica convidante';
   const acceptedRole = String(accepted?.onboardingContext?.membership?.role || '').trim().toLowerCase();
   const acceptedSpecialty = String(accepted?.onboardingContext?.membership?.specialty || '').trim();
-  const acceptedRoleLabel = acceptedRole === 'therapist'
-    ? 'Profissional de atendimento'
+  const acceptedRoleLabel = acceptedRole === 'director'
+    ? 'Direção'
     : acceptedRole === 'coordinator'
       ? 'Coordenação'
-      : acceptedRole === 'receptionist'
-        ? 'Recepção'
-        : 'Membro da clínica';
+      : acceptedRole === 'supervisor'
+        ? 'Supervisão clínica'
+        : acceptedRole === 'therapist'
+          ? 'Profissional de atendimento'
+          : acceptedRole === 'receptionist'
+            ? 'Recepção'
+            : acceptedRole === 'biller'
+              ? 'Faturamento'
+              : 'Membro da clínica';
 
   const handleAccept = async () => {
     if (!isInvitationId(invitationId)) {

@@ -75,6 +75,39 @@ type AccessContextOption = {
   [key: string]: any;
 };
 
+type PendingClinicInvitationOption = {
+  invitationId: string;
+  clinicId: string;
+  clinicName: string;
+  clinicLogoUrl?: string | null;
+  role: string;
+  specialty?: string | null;
+  invitedAt?: string | null;
+};
+
+const getPendingClinicInvitations = (candidateUser: any): PendingClinicInvitationOption[] => {
+  if (!Array.isArray(candidateUser?.pendingClinicInvitations)) return [];
+  const seen = new Set<string>();
+  return candidateUser.pendingClinicInvitations
+    .map((item: any): PendingClinicInvitationOption | null => {
+      const invitationId = String(item?.invitationId || item?.id || '').trim();
+      const clinicId = String(item?.clinicId || item?.clinic_id || '').trim();
+      const role = String(item?.role || '').trim().toLowerCase();
+      if (!invitationId || !clinicId || !role || seen.has(invitationId)) return null;
+      seen.add(invitationId);
+      return {
+        invitationId,
+        clinicId,
+        clinicName: String(item?.clinicName || item?.clinic_name || 'Clínica').trim() || 'Clínica',
+        clinicLogoUrl: String(item?.clinicLogoUrl || item?.clinic_logo_url || '').trim() || null,
+        role,
+        specialty: String(item?.specialty || '').trim() || null,
+        invitedAt: String(item?.invitedAt || item?.created_at || '').trim() || null,
+      };
+    })
+    .filter((item: PendingClinicInvitationOption | null): item is PendingClinicInvitationOption => Boolean(item));
+};
+
 const normalizeAccessContextKind = (value: unknown): AccessContextKind | null => {
   const normalized = String(value || '').trim().toLowerCase();
   if (['clinic', 'clinic_workspace', 'workspace'].includes(normalized)) return 'clinic_workspace';
@@ -466,6 +499,8 @@ export default function App() {
   };
 
   const shouldPromptWorkspaceSelection = (candidateUser: any) => {
+    const pendingInvitations = getPendingClinicInvitations(candidateUser);
+    if (pendingInvitations.length > 0) return true;
     const contexts = getUserAccessContexts(candidateUser);
     if (contexts.length === 0) return false;
     if (typeof candidateUser?.mustSelectAccessContext === 'boolean') {
@@ -526,6 +561,7 @@ export default function App() {
 
   const computeWorkspacePickerVisibility = (candidateUser: any) => {
     if (!candidateUser) return false;
+    const pendingInvitations = getPendingClinicInvitations(candidateUser);
     const contexts = getUserAccessContexts(candidateUser);
     const inWorkspaceRoute =
       window.location.pathname.startsWith('/workspaces') ||
@@ -533,6 +569,7 @@ export default function App() {
     const hasContext = hasValidWorkspaceContext(candidateUser);
     const mustSelectContext = shouldPromptWorkspaceSelection(candidateUser);
 
+    if (pendingInvitations.length > 0) return true;
     if (inWorkspaceRoute && contexts.length > 1) return true;
     if (hasContext && !mustSelectContext && inWorkspaceRoute) {
       window.history.replaceState({}, document.title, '/');
@@ -2483,7 +2520,7 @@ export default function App() {
 
   useEffect(() => {
     const openAccessContextPicker = () => {
-      if (getUserAccessContexts(user).length <= 1) return;
+      if (getUserAccessContexts(user).length <= 1 && getPendingClinicInvitations(user).length === 0) return;
       setAccessContextSelectionError('');
       setShowWorkspacePicker(true);
     };
@@ -7553,15 +7590,14 @@ export default function App() {
     </div>
   );
   const accessContextOptions = getUserAccessContexts(user);
+  const pendingClinicInvitations = getPendingClinicInvitations(user);
   const clinicAccessContexts = accessContextOptions.filter((context) => context.kind === 'clinic_workspace');
   const patientAccessContexts = accessContextOptions.filter((context) => context.kind === 'patient_portal');
   const activeAccessContext = getActiveAccessContext(user);
   const isActivePatientPortal = activeAccessContext
     ? activeAccessContext.kind === 'patient_portal'
     : accessContextOptions.length === 0 && user?.role === 'patient';
-  const canKeepCurrentAccessContext = Boolean(
-    activeAccessContext && !shouldPromptWorkspaceSelection(user),
-  );
+  const canKeepCurrentAccessContext = Boolean(activeAccessContext);
   const userNeedsPatientActivation =
     isActivePatientPortal &&
     user?.portalVerified !== true &&
@@ -7777,7 +7813,7 @@ export default function App() {
           )
         ) : user?.isPlatformAdmin === true ? (
           <SuperAdminDashboard onLogout={handleLogout} />
-        ) : showWorkspacePicker && accessContextOptions.length > 0 ? (
+        ) : showWorkspacePicker && (accessContextOptions.length > 0 || pendingClinicInvitations.length > 0) ? (
           <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-8 sm:px-6">
             <section
               className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7"
@@ -7803,6 +7839,57 @@ export default function App() {
               )}
 
               <div className="mt-6 space-y-6">
+                {pendingClinicInvitations.length > 0 && (
+                  <div>
+                    <div className="flex items-end justify-between gap-3">
+                      <div>
+                        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-500">Novos convites</h2>
+                        <p className="mt-1 text-xs text-slate-500">Seu cadastro profissional será reutilizado. Nenhuma senha ou documento precisa ser criado novamente.</p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-700">
+                        {pendingClinicInvitations.length} pendente{pendingClinicInvitations.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {pendingClinicInvitations.map((invitation) => (
+                        <button
+                          key={invitation.invitationId}
+                          type="button"
+                          onClick={() => {
+                            const params = new URLSearchParams({
+                              auth_action: 'accept_invitation',
+                              invitation_id: invitation.invitationId,
+                            });
+                            window.history.replaceState({}, document.title, `/?${params.toString()}`);
+                            setAccessContextSelectionError('');
+                            setShowWorkspacePicker(false);
+                            setLocationRevision((revision) => revision + 1);
+                          }}
+                          className="flex min-h-[78px] w-full items-center gap-3 rounded-2xl border border-violet-200 bg-violet-50/50 px-4 py-3 text-left transition hover:border-violet-400 hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
+                        >
+                          <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-white text-violet-600 shadow-sm">
+                            {invitation.clinicLogoUrl ? (
+                              <img src={invitation.clinicLogoUrl} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                              <LayoutDashboard size={18} />
+                            )}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-semibold text-slate-900">
+                              {invitation.clinicName || 'Clínica'}
+                            </span>
+                            <span className="mt-0.5 block text-xs text-slate-500">
+                              {getAccessContextRoleLabel(invitation.role)}{invitation.specialty ? ` · ${invitation.specialty}` : ''}
+                            </span>
+                            <span className="mt-1 block text-[11px] font-medium text-violet-700">Revisar e aceitar vínculo</span>
+                          </span>
+                          <span aria-hidden="true" className="text-lg text-violet-300">›</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {clinicAccessContexts.length > 0 && (
                   <div>
                     <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Trabalhar</h2>
