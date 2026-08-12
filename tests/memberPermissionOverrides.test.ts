@@ -19,13 +19,15 @@ assert.match(migration, /revoke all on function[\s\S]*authenticated/i);
 assert.match(migration, /grant execute on function[\s\S]*service_role/i);
 
 assert.match(team, /capabilities\?\.has\('team\.permissions\.manage'\)/);
-assert.match(team, /Permissões específicas/);
+assert.match(team, /Ajustar acessos/);
 assert.match(editor, /type="checkbox"/);
-assert.match(editor, /Padrão/);
-assert.match(editor, /ALLOW\/DENY/);
+assert.match(editor, /Usar padrão do perfil/);
+assert.doesNotMatch(editor, /ALLOW\/DENY/);
 
 
 assert.match(server, /requestedEffect: effect/);
 assert.match(server, /scopeLimited: !defaultEnabled && !canEnable/);
-assert.match(editor, /Fora do escopo/);
+assert.match(editor, /Não disponível para este perfil/);
+assert.match(editor, /Mostrar indisponíveis/);
+assert.doesNotMatch(editor, /authorization\.scopes\.join/);
 console.log('memberPermissionOverrides.test.ts: ok');

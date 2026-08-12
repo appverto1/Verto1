@@ -32,7 +32,7 @@ type AuthorizationPayload = {
 };
 
 const DOMAIN_LABELS: Record<string, string> = {
-  clinic: 'Clínica',
+  clinic: 'Unidade / clínica',
   team: 'Equipe',
   patient: 'Pacientes',
   insurance: 'Convênios',
@@ -57,6 +57,25 @@ const ROLE_LABELS: Record<string, string> = {
   biller: 'Faturista',
 };
 
+const SCOPE_LABELS: Record<string, string> = {
+  ACTIVE_CLINIC: 'esta unidade',
+  AUTHORIZED_CLINICS: 'unidades autorizadas',
+  ASSIGNED_PATIENTS: 'pacientes vinculados',
+  SUPERVISED_CASES: 'casos sob supervisão',
+  OWN_RESOURCES: 'próprios registros',
+  BILLING_SCOPE: 'somente dados necessários ao faturamento',
+  SELF_OR_DEPENDENTS: 'próprios dados e dependentes',
+  PLATFORM: 'administração da plataforma',
+};
+
+const humanizeScopes = (scopes: string[] = []) => {
+  const labels = scopes.map((scope) => SCOPE_LABELS[scope]).filter(Boolean);
+  if (!labels.length) return '';
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} e ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')} e ${labels[labels.length - 1]}`;
+};
+
 const normalizeSearch = (value: string) =>
   value
     .normalize('NFD')
@@ -77,6 +96,7 @@ export function MemberPermissionEditor({
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [reason, setReason] = useState('');
+  const [showUnavailable, setShowUnavailable] = useState(false);
 
   useEffect(() => {
     if (!member?.id) return;
@@ -104,9 +124,16 @@ export function MemberPermissionEditor({
     };
   }, [member?.id]);
 
+  const unavailableCount = useMemo(
+    () => (authorization?.catalog || []).filter((item) => item.scopeLimited && !item.effectiveEnabled && item.canEnable === false).length,
+    [authorization?.catalog],
+  );
+
   const filteredGroups = useMemo(() => {
     const query = normalizeSearch(search);
     const items = (authorization?.catalog || []).filter((item) => {
+      const unavailableForRole = item.scopeLimited && !item.effectiveEnabled && item.canEnable === false;
+      if (!showUnavailable && unavailableForRole) return false;
       if (!query) return true;
       return normalizeSearch(`${item.label} ${item.key} ${DOMAIN_LABELS[item.domain] || item.domain}`).includes(query);
     });
@@ -117,7 +144,7 @@ export function MemberPermissionEditor({
       grouped.set(item.domain, current);
     }
     return Array.from(grouped.entries());
-  }, [authorization?.catalog, search]);
+  }, [authorization?.catalog, search, showUnavailable]);
 
   if (!member) return null;
 
@@ -205,19 +232,19 @@ export function MemberPermissionEditor({
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-violet-700">
               <ShieldCheck size={18} />
-              <span className="text-xs font-semibold uppercase tracking-[0.12em]">Permissões individuais</span>
+              <span className="text-xs font-semibold uppercase tracking-[0.12em]">Acessos do profissional</span>
             </div>
             <h2 className="mt-2 truncate text-xl font-semibold text-slate-900">{member.name || member.email || 'Membro da equipe'}</h2>
             <p className="mt-1 text-sm text-slate-500">
               {ROLE_LABELS[authorization?.role || member.role || ''] || authorization?.role || member.role || 'Equipe'}
-              {authorization?.scopes?.length ? ` · ${authorization.scopes.join(' + ')}` : ''}
+              {authorization?.scopes?.length ? ` · Acesso limitado a ${humanizeScopes(authorization.scopes)}` : ''}
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
             className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-            aria-label="Fechar permissões"
+            aria-label="Fechar acessos"
           >
             <X size={20} />
           </button>
@@ -229,7 +256,7 @@ export function MemberPermissionEditor({
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Buscar permissão"
+              placeholder="Buscar acesso ou função"
               className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-500/10"
             />
           </label>
@@ -237,10 +264,25 @@ export function MemberPermissionEditor({
             value={reason}
             onChange={(event) => setReason(event.target.value)}
             maxLength={500}
-            placeholder="Motivo da alteração (opcional, fica na auditoria)"
+            placeholder="Motivo da alteração (opcional)"
             className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-violet-400 focus:ring-2 focus:ring-violet-500/10"
           />
         </div>
+
+        {unavailableCount > 0 && (
+          <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-5 py-2.5 text-xs md:px-6">
+            <span className="text-slate-500">
+              Mostrando apenas os acessos que podem ser usados por este perfil.
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowUnavailable((current) => !current)}
+              className="shrink-0 font-semibold text-violet-700 hover:text-violet-800"
+            >
+              {showUnavailable ? 'Ocultar indisponíveis' : `Mostrar indisponíveis (${unavailableCount})`}
+            </button>
+          </div>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 md:px-6">
           {loading ? (
@@ -265,7 +307,7 @@ export function MemberPermissionEditor({
                     <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
                       {DOMAIN_LABELS[domain] || domain}
                     </h3>
-                    <span className="text-[11px] text-slate-400">{items.length} permissões</span>
+                    <span className="text-[11px] text-slate-400">{items.length} opções</span>
                   </div>
                   <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white">
                     {items.map((item) => {
@@ -282,16 +324,15 @@ export function MemberPermissionEditor({
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="text-sm font-medium text-slate-800">{item.label}</p>
                               {item.sensitive && (
-                                <span className="rounded-md bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">Sensível</span>
+                                <span className="rounded-md bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">Acesso sensível</span>
                               )}
                               {item.overrideEffect && (
-                                <span className="rounded-md bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">Personalizada</span>
+                                <span className="rounded-md bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-700">Ajuste individual</span>
                               )}
                               {item.scopeLimited && !item.effectiveEnabled && (
-                                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">Fora do escopo</span>
+                                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">Não disponível para este perfil</span>
                               )}
                             </div>
-                            <p className="mt-1 truncate font-mono text-[10px] text-slate-400">{item.key}</p>
                           </div>
 
                           <div className="flex shrink-0 items-center gap-2">
@@ -302,7 +343,7 @@ export function MemberPermissionEditor({
                                 disabled={!item.editable || Boolean(savingKey)}
                                 className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-500 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                               >
-                                <RotateCcw size={13} /> Padrão
+                                <RotateCcw size={13} /> Usar padrão do perfil
                               </button>
                             )}
                             <label className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 ${item.effectiveEnabled ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'} ${!item.editable || !canToggle ? 'opacity-50' : ''}`}>
@@ -314,7 +355,7 @@ export function MemberPermissionEditor({
                                 className="h-4 w-4 rounded border-slate-300 accent-emerald-600"
                               />
                               <span className={`text-xs font-semibold ${item.effectiveEnabled ? 'text-emerald-700' : 'text-slate-500'}`}>
-                                {saving ? 'Salvando…' : item.effectiveEnabled ? 'Permitido' : 'Bloqueado'}
+                                {saving ? 'Salvando…' : item.effectiveEnabled ? 'Liberado' : 'Sem acesso'}
                               </span>
                             </label>
                           </div>
@@ -326,14 +367,14 @@ export function MemberPermissionEditor({
               ))}
 
               {!loading && filteredGroups.length === 0 && (
-                <div className="py-12 text-center text-sm text-slate-500">Nenhuma permissão encontrada.</div>
+                <div className="py-12 text-center text-sm text-slate-500">Nenhum acesso encontrado.</div>
               )}
             </div>
           )}
         </div>
 
         <div className="border-t border-slate-100 bg-white px-5 py-3 text-xs leading-5 text-slate-500 md:px-6">
-          O papel define o padrão. Alterações salvam apenas exceções <strong>ALLOW/DENY</strong>; permissões que ampliariam o papel além do seu escopo estrutural ficam bloqueadas, e vínculo/clínica/escopo do recurso continuam obrigatórios no servidor.
+          O perfil profissional define os acessos iniciais. Mudanças feitas aqui valem somente para este membro da equipe. Algumas opções permanecem indisponíveis quando não fazem parte das responsabilidades desse perfil ou do vínculo dele com a clínica.
         </div>
       </div>
     </div>

@@ -889,7 +889,7 @@ export function TeamManagement({
                               onClick={() => { setPermissionMember(member); setOpenMenuId(null); }}
                               className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-violet-700 hover:bg-violet-50 transition-all"
                             >
-                              <Shield size={14} /> Permissões específicas
+                              <Shield size={14} /> Ajustar acessos
                             </button>
                             <div className="h-px bg-slate-50 my-1" />
                             {canGrantDirector && (

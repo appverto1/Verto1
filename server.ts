@@ -8724,59 +8724,6 @@ async function resolveEffectiveClinicRole(
   });
 }
 
-function requireActiveClinicRoles(
-  ...allowedRoles: ClinicAuthorityRole[]
-) {
-  const allowed = new Set<ClinicAuthorityRole>(allowedRoles);
-  return async (req: any, res: any, next: any) => {
-    try {
-      const role = await resolveEffectiveClinicRole(req.session?.user);
-      const roleAllowed = Boolean(
-        role && (allowed.has(role) || (role === 'director' && allowed.has('coordinator')))
-      );
-      if (!roleAllowed) {
-        return res.status(403).json({
-          success: false,
-          error: 'CLINIC_MEMBERSHIP_ROLE_DENIED',
-          message: 'Seu acesso atual nesta clínica não permite esta ação.'
-        });
-      }
-      if (
-        role === 'owner' &&
-        !hasVerifiedOwnerMfaSession({
-          ...req.session?.user,
-          role: 'owner'
-        })
-      ) {
-        return res.status(401).json({
-          success: false,
-          error: 'OWNER_MFA_REQUIRED',
-          message: 'Confirme o Google Authenticator para acessar esta área.'
-        });
-      }
-      req.effectiveClinicRole = role;
-      return next();
-    } catch (error) {
-      logRouteDbError('requireActiveClinicRoles', error, {
-        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
-        userId: sanitizeString(req.session?.user?.id, 120)
-      });
-      if (isMissingRelationError(error)) {
-        return res.status(503).json({
-          success: false,
-          error: 'CLINIC_MEMBERSHIP_SCHEMA_UNAVAILABLE',
-          message: 'A estrutura de acesso por clínica ainda não foi aplicada.'
-        });
-      }
-      return res.status(500).json({
-        success: false,
-        error: 'CLINIC_MEMBERSHIP_ROLE_UNAVAILABLE',
-        message: 'Não foi possível validar seu acesso nesta clínica agora.'
-      });
-    }
-  };
-}
-
 function normalizePromptTypeKey(value: unknown): string {
   return sanitizeString(value, 160)
     .normalize('NFD')
@@ -9065,6 +9012,45 @@ async function resolvePatientListScopedPatientIds(
     ...(caseLinksResult.error ? [] : (caseLinksResult.data || []).map((row: any) => sanitizeString(row?.patient_id, 120))),
     ...(legacyPatientsResult.data || []).map((row: any) => sanitizeString(row?.id, 120)),
   ].filter(isUuid)));
+}
+
+
+async function resolveLegacyClinicalEmailReadScope(user: any, emailInput: unknown): Promise<{
+  allowed: boolean;
+  roleForFilter: string;
+  patientIds: string[];
+}> {
+  const safeEmail = sanitizeEmail(emailInput);
+  const sessionEmail = sanitizeEmail(user?.email);
+  const sessionRole = sanitizeString(user?.role, 40).toLowerCase();
+  const isPatientPortal = sessionRole === 'patient' || user?.activeAccessContext?.kind === 'patient_portal';
+  const isSelfRequest = Boolean(safeEmail && sessionEmail && safeEmail === sessionEmail);
+
+  if (isPatientPortal) {
+    if (!isSelfRequest) return { allowed: false, roleForFilter: 'patient', patientIds: [] };
+    const patientIds = await getPatientIdsByEmailAcrossClinics(
+      safeEmail,
+      sanitizeString(user?.id, 120),
+      currentClinicId(user),
+    );
+    return { allowed: true, roleForFilter: 'patient', patientIds };
+  }
+
+  const context = await resolveClinicCapabilityContext(user);
+  if (!context?.capabilities.has('clinical.history.view')) {
+    return { allowed: false, roleForFilter: sessionRole, patientIds: [] };
+  }
+
+  const clinicPatientIds = await getClinicPatientIdsByEmail(context.clinicId, safeEmail);
+  if (clinicPatientIds.length === 0) {
+    return { allowed: true, roleForFilter: context.role, patientIds: [] };
+  }
+
+  const scopedPatientIds = await resolvePatientListScopedPatientIds(context);
+  const patientIds = scopedPatientIds === null
+    ? clinicPatientIds
+    : clinicPatientIds.filter((patientId) => scopedPatientIds.includes(patientId));
+  return { allowed: true, roleForFilter: context.role, patientIds };
 }
 
 async function getClinicTeamAccessUsage(clinicId: string) {
@@ -25888,13 +25874,26 @@ async function startServer() {
     }
   });
 
-  app.get('/api/clinic/members/:memberId/work-schedule', checkAuth, requireActiveClinicRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/members/:memberId/work-schedule', checkAuth, requireAnyClinicCapability('calendar.team.view', 'calendar.own.view'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
       const memberId = sanitizeString(req.params.memberId, 120);
-      const requesterRole = sanitizeString(req.session.user?.role, 40);
       const requesterId = sanitizeString(req.session.user?.id, 120);
-      const canView = ['coordinator', 'receptionist', 'admin', 'owner'].includes(requesterRole) || requesterId === memberId;
+      const authorizationContext = req.authorizationContext as ResolvedClinicCapabilityContext;
+      let canView = requesterId === memberId || authorizationContext.capabilities.has('calendar.team.view');
+      if (canView && requesterId !== memberId && authorizationContext.role === 'supervisor') {
+        const { data: supervisionLink, error: supervisionError } = await supabase
+          .from('clinical_supervision_links')
+          .select('id')
+          .eq('clinic_id', clinicId)
+          .eq('supervisor_user_id', requesterId)
+          .eq('supervised_user_id', memberId)
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle();
+        if (supervisionError) throw supervisionError;
+        canView = Boolean(supervisionLink?.id);
+      }
       if (!canView) return res.status(403).json({ success: false, error: 'Sem permissão para visualizar horários de trabalho.' });
       const data = await fetchProfessionalWorkingSchedule(clinicId, memberId);
       if (!data) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta clínica.' });
@@ -25907,7 +25906,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/clinic/members/:memberId/work-schedule', portalActionLimiter, checkAuth, requireActiveClinicRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/clinic/members/:memberId/work-schedule', portalActionLimiter, checkAuth, requireAnyClinicCapability('team.edit', 'calendar.own.view'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Horários de trabalho')) return;
       const clinicId = currentClinicId(req.session.user);
@@ -25915,8 +25914,8 @@ async function startServer() {
       const membership = await assertClinicMemberForWorkSchedule(clinicId, memberId);
       if (!membership) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta clínica.' });
       const actorId = sanitizeString(req.session.user?.id, 120);
-      const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
-      if (actorId !== memberId && !['coordinator', 'admin', 'owner'].includes(actorRole)) {
+      const authorizationContext = req.authorizationContext as ResolvedClinicCapabilityContext;
+      if (actorId !== memberId && !authorizationContext.capabilities.has('team.edit')) {
         return res.status(403).json({
           success: false,
           error: 'WORK_SCHEDULE_WRITE_FORBIDDEN',
@@ -30451,11 +30450,25 @@ async function startServer() {
       const actor = req.session.user;
       const actorRole = sanitizeString(actor?.role, 40).toLowerCase();
       const actorId = sanitizeString(actor?.id, 120);
-      const isPatientActor = actorRole === 'patient';
-      const isProfessionalActor = ['coordinator', 'receptionist', 'therapist', 'admin', 'owner'].includes(actorRole);
-      if (!isPatientActor && !isProfessionalActor) {
-        return res.status(403).json({ success: false, error: 'Perfil sem permissão para alterar agenda.' });
+      const isPatientActor = actorRole === 'patient' || actor?.activeAccessContext?.kind === 'patient_portal';
+      let professionalAuthorizationContext: ResolvedClinicCapabilityContext | null = null;
+      if (!isPatientActor) {
+        professionalAuthorizationContext = await resolveClinicCapabilityContext(actor);
+        const requiredCapability: CapabilityKey =
+          normalizedStatus === 'confirmed'
+            ? 'calendar.attendance.confirm'
+            : normalizedStatus === 'reschedule'
+              ? 'calendar.appointment.reschedule'
+              : normalizedStatus === 'canceled'
+                ? 'calendar.appointment.cancel'
+                : normalizedStatus === 'no_show'
+                  ? 'calendar.no_show.record'
+                  : 'calendar.appointment.edit';
+        if (!professionalAuthorizationContext?.capabilities.has(requiredCapability)) {
+          return res.status(403).json({ success: false, error: 'Perfil sem permissão para alterar este status da agenda.' });
+        }
       }
+      const isProfessionalActor = Boolean(professionalAuthorizationContext);
       const clinicId = currentClinicId(actor);
       const now = new Date().toISOString();
       const safeSource = sanitizeString(req.body?.source, 80) || 'appointment_confirmation_popup';
@@ -37727,31 +37740,16 @@ async function startServer() {
     try {
       const safeEmail = sanitizeEmail(req.params.email);
       if (!safeEmail) return res.status(400).json({ error: 'E-mail inválido.' });
-      const userRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
-      const isPrivileged = ['therapist', 'coordinator', 'receptionist', 'admin', 'owner'].includes(userRole);
-      const isSelfRequest = sanitizeEmail(req.session.user?.email) === safeEmail;
-
-      // Only allow if searching for own email OR if therapist
-      if (!isPrivileged && !isSelfRequest) {
-        return res.status(403).json({ error: 'Acesso negado' });
-      }
-
-      const roleForFilter = !isPrivileged && isSelfRequest ? 'patient' : userRole;
+      const emailScope = await resolveLegacyClinicalEmailReadScope(req.session.user, safeEmail);
+      if (!emailScope.allowed) return res.status(403).json({ error: 'Acesso negado' });
+      const roleForFilter = emailScope.roleForFilter;
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      let scopedPatientIds: string[] | null = null;
-      if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
-        const clinicId = currentClinicId(req.session.user);
-        if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
-        const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
-        if (clinicPatientIds.length === 0) {
-          return res.json({ success: true, data: [] });
-        }
-        scopedPatientIds = clinicPatientIds;
-      }
+      const scopedPatientIds = emailScope.patientIds;
+      if (scopedPatientIds.length === 0) return res.json({ success: true, data: [] });
 
       const notesResult = await fetchNotesWithRoleFilter({
         patientEmail: safeEmail,
-        patientIds: scopedPatientIds || undefined,
+        patientIds: scopedPatientIds,
         role: roleForFilter,
         limit,
         requestId: requestIdForLogs(req),
@@ -37895,30 +37893,16 @@ async function startServer() {
     try {
       const safeEmail = sanitizeEmail(req.params.email);
       if (!safeEmail) return res.status(400).json({ error: 'E-mail inválido.' });
-      const userRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
-      const isPrivileged = ['therapist', 'coordinator', 'receptionist', 'admin', 'owner'].includes(userRole);
-      const isSelfRequest = sanitizeEmail(req.session.user?.email) === safeEmail;
-
-      // Only allow if searching for own email OR if therapist/admin
-      if (!isPrivileged && !isSelfRequest) {
-        return res.status(403).json({ error: 'Acesso negado' });
-      }
-
+      const emailScope = await resolveLegacyClinicalEmailReadScope(req.session.user, safeEmail);
+      if (!emailScope.allowed) return res.status(403).json({ error: 'Acesso negado' });
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      let scopedPatientIds: string[] | null = null;
-
-      if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
-        const clinicId = currentClinicId(req.session.user);
-        if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
-        const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
-        if (clinicPatientIds.length === 0) return res.json({ success: true, data: [] });
-        scopedPatientIds = clinicPatientIds;
-      }
+      const scopedPatientIds = emailScope.patientIds;
+      if (scopedPatientIds.length === 0) return res.json({ success: true, data: [] });
       
       const historyResult = await fetchHistoryWithSchemaFallback({
         supabase,
         patientEmail: safeEmail,
-        patientIds: scopedPatientIds || undefined,
+        patientIds: scopedPatientIds,
         limit,
         route: '/api/history/email/:email',
         logger: console
@@ -38436,7 +38420,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patient-logs', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'patient', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/patient-logs', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.evolution.create'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de log do paciente')) return;
       const resolvedPatientId = await resolvePatientIdForRequest(
@@ -38447,6 +38431,14 @@ async function startServer() {
       const safeType = sanitizeString(req.body?.type, 40).toLowerCase();
       if (!resolvedPatientId || !['task', 'mood', 'energy'].includes(safeType)) {
         return res.status(400).json({ success: false, error: 'patient_id e type válido são obrigatórios.' });
+      }
+
+      const isPatientPortalActor = sanitizeString(req.session.user?.role, 40).toLowerCase() === 'patient';
+      const canWritePatientLog = isPatientPortalActor
+        ? await canPortalSessionAccessPatient(resolvedPatientId, req.session.user)
+        : await canAccessPatientInCurrentClinic(resolvedPatientId, req.session.user, 'write');
+      if (!canWritePatientLog) {
+        return res.status(403).json({ success: false, error: 'Acesso negado ao paciente informado.' });
       }
 
       const timestamp = sanitizeString(req.body?.timestamp, 40) || new Date().toISOString();
@@ -39818,7 +39810,7 @@ async function startServer() {
   });
 
   // Tasks
-  app.get('/api/tasks/:patientId', checkAuth, checkPatientAccess, async (req, res) => {
+  app.get('/api/tasks/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.history.view'), checkPatientAccess, async (req, res) => {
     try {
       const patientId = sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
@@ -39882,30 +39874,16 @@ async function startServer() {
     try {
       const safeEmail = sanitizeEmail(req.params.email);
       if (!safeEmail) return res.status(400).json({ error: 'E-mail inválido.' });
-      const userRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
-      const isPrivileged = ['therapist', 'coordinator', 'receptionist', 'admin', 'owner'].includes(userRole);
-      const isSelfRequest = sanitizeEmail(req.session.user?.email) === safeEmail;
-
-      // Only allow if searching for own email OR if therapist/admin
-      if (!isPrivileged && !isSelfRequest) {
-        return res.status(403).json({ error: 'Acesso negado' });
-      }
-
+      const emailScope = await resolveLegacyClinicalEmailReadScope(req.session.user, safeEmail);
+      if (!emailScope.allowed) return res.status(403).json({ error: 'Acesso negado' });
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      let scopedPatientIds: string[] | null = null;
-
-      if (!hasGlobalClinicAccess(req.session.user) && isPrivileged) {
-        const clinicId = currentClinicId(req.session.user);
-        if (!clinicId) return res.status(403).json({ error: 'Clínica não identificada.' });
-        const clinicPatientIds = await getClinicPatientIdsByEmail(clinicId, safeEmail);
-        if (clinicPatientIds.length === 0) return res.json({ success: true, data: [] });
-        scopedPatientIds = clinicPatientIds;
-      }
+      const scopedPatientIds = emailScope.patientIds;
+      if (scopedPatientIds.length === 0) return res.json({ success: true, data: [] });
       
       const tasksResult = await fetchTasksWithSchemaFallback({
         supabase,
         patientEmail: safeEmail,
-        patientIds: scopedPatientIds || undefined,
+        patientIds: scopedPatientIds,
         limit,
         route: '/api/tasks/email/:email',
         logger: console
@@ -39982,7 +39960,7 @@ async function startServer() {
       res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
   });
-  app.post('/api/tasks', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/tasks', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),
@@ -40021,6 +39999,9 @@ async function startServer() {
       }
       if (!isUuid(payload.patient_id)) {
         return res.status(400).json({ error: 'patient_id inválido para salvar tarefas.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(payload.patient_id, req.session.user, 'write'))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado ao paciente informado.' });
       }
 
       let safePayload: Record<string, any> = { ...payload };
@@ -40074,7 +40055,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/tasks/:taskId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/tasks/:taskId', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     try {
       const taskId = sanitizeString(req.params.taskId, 120);
       if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
@@ -40126,7 +40107,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/tasks/:taskId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/tasks/:taskId', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     try {
       const taskId = sanitizeString(req.params.taskId, 120);
       if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
@@ -40175,7 +40156,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/history/:historyId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/history/:historyId', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     let scopedPatientId = '';
     try {
       const historyId = sanitizeString(req.params.historyId, 120);
@@ -40225,7 +40206,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/history/:historyId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/history/:historyId', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     try {
       const historyId = sanitizeString(req.params.historyId, 120);
       if (!historyId) return res.status(400).json({ success: false, error: 'historyId inválido.' });
@@ -40253,7 +40234,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/notes/:noteId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/notes/:noteId', checkAuth, requireClinicCapability('clinical.notes.create'), async (req: any, res) => {
     try {
       const noteId = sanitizeString(req.params.noteId, 120);
       if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
@@ -40332,7 +40313,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/notes/:noteId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/notes/:noteId', checkAuth, requireClinicCapability('clinical.notes.create'), async (req: any, res) => {
     try {
       const noteId = sanitizeString(req.params.noteId, 120);
       if (!noteId) return res.status(400).json({ success: false, error: 'noteId inválido.' });
@@ -40381,7 +40362,7 @@ async function startServer() {
   });
 
   // Assigned Tasks (adult homework workflow)
-  app.get('/api/assigned-tasks/:patientId', checkAuth, checkPatientAccess, async (req: any, res) => {
+  app.get('/api/assigned-tasks/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.history.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
@@ -40551,7 +40532,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/assigned-tasks', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/assigned-tasks', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
         sanitizeString(req.body?.patient_id, 120),
@@ -40590,8 +40571,11 @@ async function startServer() {
         parent_assigned_task_id: sanitizeString(req.body?.parent_assigned_task_id, 120) || undefined
       });
 
-      if (!payload.patient_id || !payload.professional_id) {
+      if (!payload.patient_id || !payload.professional_id || !isUuid(payload.patient_id)) {
         return res.status(400).json({ success: false, error: 'patient_id e professional_id são obrigatórios.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(payload.patient_id, req.session.user, 'write'))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado ao paciente informado.' });
       }
 
       const { data, error } = await supabase
@@ -40616,7 +40600,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/assigned-tasks/:taskId', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/assigned-tasks/:taskId', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     try {
       const taskId = sanitizeString(req.params.taskId, 120);
       if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
@@ -40815,7 +40799,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/assigned-tasks/:taskId/review', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/assigned-tasks/:taskId/review', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     try {
       const taskId = sanitizeString(req.params.taskId, 120);
       if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });

@@ -92,9 +92,15 @@ assert.equal(
 );
 
 const server = fs.readFileSync('server.ts', 'utf8');
+assert.doesNotMatch(
+  server,
+  /function requireActiveClinicRoles/,
+  'gates legados por papel não devem voltar ao backend clínico',
+);
 assert.match(
   server,
-  /function requireActiveClinicRoles[\s\S]*?resolveEffectiveClinicRole/,
+  /function requireClinicCapability\(capability: CapabilityKey\)[\s\S]*?resolveClinicCapabilityContext/,
+  'autorização clínica deve resolver membership ativa antes da capability',
 );
 assert.match(
   server,
