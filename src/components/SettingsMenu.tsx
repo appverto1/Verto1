@@ -17,6 +17,8 @@ interface SettingsMenuProps {
   onViewTeam?: () => void;
   onOpenInvitations?: () => void;
   onViewProfile?: () => void;
+  onViewClinicSettings?: () => void;
+  canManageClinicSettings?: boolean;
   onViewBilling?: () => void;
   onOpenOnboarding?: () => void;
   onOpenMarketplace?: () => void;
@@ -28,6 +30,8 @@ export function SettingsMenu({
   onViewTeam, 
   onOpenInvitations, 
   onViewProfile, 
+  onViewClinicSettings,
+  canManageClinicSettings = false,
   onViewBilling,
   onOpenOnboarding,
   onOpenMarketplace
@@ -71,9 +75,10 @@ export function SettingsMenu({
     user?.role ||
     ''
   ).trim().toLowerCase();
+  const isDirector = normalizedRole === 'director';
   const isCoordinator = normalizedRole === 'coordinator' || normalizedRole === 'admin';
   const isOwner = normalizedRole === 'owner';
-  const canManageTeam = isCoordinator || isOwner;
+  const canManageTeam = isDirector || isCoordinator || isOwner;
   const onboardingMode = String(user?.onboardingContext?.onboardingMode || '').trim().toLowerCase();
   const isClinicManagedMember = ['invited_professional', 'clinic_member'].includes(onboardingMode);
   const canSeeBilling = (isCoordinator || isOwner) && !isClinicManagedMember;
@@ -85,8 +90,10 @@ export function SettingsMenu({
           .filter(Boolean)
       ).size;
   const canSwitchAccessContext = accessContextCount > 1;
-  const roleLabel = normalizedRole === 'coordinator'
-    ? 'Coordenador'
+  const roleLabel = normalizedRole === 'director'
+    ? 'Diretor'
+    : normalizedRole === 'coordinator'
+      ? 'Coordenador'
     : normalizedRole === 'receptionist'
       ? 'Recepcionista/Assistente'
       : normalizedRole === 'owner' || normalizedRole === 'admin'
@@ -199,10 +206,28 @@ export function SettingsMenu({
               >
                 <div className="flex items-center gap-3">
                   <User size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                  <span className="text-sm font-medium">Perfil e clínica</span>
+                  <span className="text-sm font-medium">Meu perfil profissional</span>
                 </div>
                 <ChevronRight size={14} className="text-slate-300" />
               </button>
+
+              {canManageClinicSettings && onViewClinicSettings && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsOpen(false);
+                    onViewClinicSettings();
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <Settings size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
+                    <span className="text-sm font-medium">Configurações da clínica</span>
+                  </div>
+                  <ChevronRight size={14} className="text-slate-300" />
+                </button>
+              )}
 
               {canSwitchAccessContext && (
                 <button

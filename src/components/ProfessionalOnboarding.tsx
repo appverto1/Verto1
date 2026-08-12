@@ -76,6 +76,23 @@ const formatCpf = (value: string) => {
     .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
 };
 
+const formatCnpj = (value: string) => {
+  const digits = digitsOnly(value).slice(0, 14);
+  return digits
+    .replace(/(\d{2})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1/$2')
+    .replace(/(\d{4})(\d{1,2})$/, '$1-$2');
+};
+
+const formatDocument = (value: string, type: 'CPF' | 'CNPJ' | 'OTHER') =>
+  type === 'CNPJ' ? formatCnpj(value) : type === 'CPF' ? formatCpf(value) : value.slice(0, 40);
+
+const formatCep = (value: string) => {
+  const digits = digitsOnly(value).slice(0, 8);
+  return digits.replace(/(\d{5})(\d{1,3})$/, '$1-$2');
+};
+
 const formatPhone = (value: string) => {
   const digits = digitsOnly(value).slice(0, 11);
   if (digits.length <= 2) return digits;
@@ -125,7 +142,16 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
   const [fullName, setFullName] = useState(user?.name || '');
   const [phone, setPhone] = useState(formatPhone(user?.phone || ''));
-  const [cpf, setCpf] = useState(formatCpf(user?.cpf || ''));
+  const initialProfessionalMetadata = user?.professionalProfile?.metadata || user?.professional_profile?.metadata || {};
+  const initialDocumentTypeRaw = String(
+    user?.professionalProfile?.documentType || user?.professional_profile?.document_type || initialProfessionalMetadata?.documentType || 'CPF',
+  ).toUpperCase();
+  const initialDocumentType = (['CPF', 'CNPJ', 'OTHER'].includes(initialDocumentTypeRaw) ? initialDocumentTypeRaw : 'CPF') as 'CPF' | 'CNPJ' | 'OTHER';
+  const [documentType, setDocumentType] = useState<'CPF' | 'CNPJ' | 'OTHER'>(initialDocumentType);
+  const [documentNumber, setDocumentNumber] = useState(formatDocument(
+    user?.professionalProfile?.documentNumber || user?.professional_profile?.document_number || initialProfessionalMetadata?.documentNumber || user?.cpf || '',
+    initialDocumentType,
+  ));
   const [birthDate, setBirthDate] = useState(formatDateForDisplay(''));
   const [gender, setGender] = useState('');
   const [countryCode, setCountryCode] = useState(formatCountryCode('+55'));
@@ -138,6 +164,13 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const [selectedDays, setSelectedDays] = useState<string[]>(['monday', 'tuesday', 'wednesday', 'thursday', 'friday']);
   const [workStart, setWorkStart] = useState('08:00');
   const [workEnd, setWorkEnd] = useState('18:00');
+  const [addressLine, setAddressLine] = useState('');
+  const [addressNumber, setAddressNumber] = useState('');
+  const [addressComplement, setAddressComplement] = useState('');
+  const [addressDistrict, setAddressDistrict] = useState('');
+  const [addressCity, setAddressCity] = useState('');
+  const [addressState, setAddressState] = useState('');
+  const [addressPostalCode, setAddressPostalCode] = useState('');
 
   // Owner-only clinic fields. They are never submitted for invited members.
   const [clinicName, setClinicName] = useState(user?.clinicSettings?.clinicName || '');
@@ -204,7 +237,11 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         const draft = draftRaw ? JSON.parse(draftRaw) : {};
         setFullName(profile?.full_name || draft.fullName || user?.name || '');
         setPhone(formatPhone(profile?.phone || draft.phone || user?.phone || ''));
-        setCpf(formatCpf(profile?.cpf || metadata?.cpf || draft.cpf || user?.cpf || ''));
+        const loadedDocumentTypeRaw = String(profile?.document_type || metadata?.documentType || metadata?.document_type || draft.documentType || initialDocumentType || 'CPF').toUpperCase();
+        const loadedDocumentType = (['CPF', 'CNPJ', 'OTHER'].includes(loadedDocumentTypeRaw) ? loadedDocumentTypeRaw : 'CPF') as 'CPF' | 'CNPJ' | 'OTHER';
+        const loadedDocumentNumber = profile?.document_number || metadata?.documentNumber || metadata?.document_number || profile?.cpf || metadata?.cpf || draft.documentNumber || draft.cpf || user?.cpf || '';
+        setDocumentType(loadedDocumentType);
+        setDocumentNumber(formatDocument(String(loadedDocumentNumber || ''), loadedDocumentType));
         setBirthDate(formatDateForDisplay(profile?.birth_date || draft.birthDate || ''));
         setGender(profile?.gender || draft.gender || '');
         setCountryCode(formatCountryCode(profile?.country_code || draft.countryCode || '+55'));
@@ -214,6 +251,14 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setMiniCurriculum(profile?.mini_curriculum || metadata?.miniCurriculum || draft.miniCurriculum || user?.miniCurriculum || '');
         setSignatureDataUrl(profile?.signature_data_url || draft.signatureDataUrl || user?.signatureDataUrl || null);
         setSessionDurationMinutes(String(metadata?.sessionDurationMinutes || metadata?.defaultSessionDurationMinutes || draft.sessionDurationMinutes || '50'));
+        const address = profile?.address && typeof profile.address === 'object' ? profile.address : {};
+        setAddressLine(address.addressLine || address.address_line || address.street || draft.addressLine || '');
+        setAddressNumber(address.number || draft.addressNumber || '');
+        setAddressComplement(address.complement || draft.addressComplement || '');
+        setAddressDistrict(address.district || address.neighborhood || draft.addressDistrict || '');
+        setAddressCity(address.city || draft.addressCity || '');
+        setAddressState(String(address.state || address.uf || draft.addressState || '').toUpperCase().slice(0, 2));
+        setAddressPostalCode(formatCep(address.postalCode || address.postal_code || address.cep || draft.addressPostalCode || ''));
 
         if (savedSchedule?.days) {
           setSelectedDays(WEEKDAYS.filter(([key]) => savedSchedule.days?.[key]?.enabled !== false && savedSchedule.days?.[key]?.periods?.length).map(([key]) => key));
@@ -245,7 +290,15 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     localStorage.setItem(draftKey, JSON.stringify({
       fullName,
       phone,
-      cpf,
+      documentType,
+      documentNumber,
+      addressLine,
+      addressNumber,
+      addressComplement,
+      addressDistrict,
+      addressCity,
+      addressState,
+      addressPostalCode,
       birthDate,
       gender,
       countryCode,
@@ -262,7 +315,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     }));
   }, [
     birthDate, clinicLogoUrl, clinicName, clinicOperationType, clinicPhone, contextLoading,
-    countryCode, council, councilNumber, cpf, draftKey, fullName, gender, isOwnerOnboarding,
+    addressCity, addressComplement, addressDistrict, addressLine, addressNumber, addressPostalCode, addressState,
+    countryCode, council, councilNumber, documentNumber, documentType, draftKey, fullName, gender, isOwnerOnboarding,
     miniCurriculum, phone, profilePicture, selectedDays, sessionDurationMinutes, signatureDataUrl,
     user?.firstLoginCompleted, workEnd, workStart,
   ]);
@@ -335,7 +389,16 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         gender,
         countryCode: formatCountryCode(countryCode),
         phone: digitsOnly(phone),
-        cpf: digitsOnly(cpf),
+        documentType,
+        documentNumber: documentType === 'OTHER' ? documentNumber.trim() : digitsOnly(documentNumber),
+        cpf: documentType === 'CPF' ? digitsOnly(documentNumber) : '',
+        addressLine,
+        addressNumber,
+        addressComplement,
+        addressDistrict,
+        addressCity,
+        addressState,
+        addressPostalCode: digitsOnly(addressPostalCode),
         council,
         councilNumber,
         miniCurriculum,
@@ -370,7 +433,15 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         ...(result.user || {}),
         name: fullName,
         crp: councilNumber || null,
-        cpf: cpf || null,
+        cpf: documentType === 'CPF' ? documentNumber || null : null,
+        professionalProfile: {
+          documentType,
+          documentNumber,
+          address: {
+            addressLine, number: addressNumber, complement: addressComplement, district: addressDistrict,
+            city: addressCity, state: addressState, postalCode: addressPostalCode,
+          },
+        },
         phone: phone || null,
         specialties: specialty || null,
         miniCurriculum: miniCurriculum || null,
@@ -486,10 +557,34 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                       <span>Telefone ou WhatsApp</span>
                       <input value={phone} onChange={(event) => setPhone(formatPhone(event.target.value))} placeholder="(11) 99999-9999" inputMode="tel" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
                     </label>
-                    <label className="space-y-2 text-sm font-medium text-slate-700">
-                      <span>CPF</span>
-                      <input value={cpf} onChange={(event) => setCpf(formatCpf(event.target.value))} placeholder="000.000.000-00" inputMode="numeric" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
-                    </label>
+                    <div className="grid grid-cols-[120px_1fr] gap-2">
+                      <label className="space-y-2 text-sm font-medium text-slate-700">
+                        <span>Documento</span>
+                        <select
+                          value={documentType}
+                          onChange={(event) => {
+                            const nextType = event.target.value as 'CPF' | 'CNPJ' | 'OTHER';
+                            setDocumentType(nextType);
+                            setDocumentNumber((current) => formatDocument(current, nextType));
+                          }}
+                          className="w-full rounded-xl bg-slate-50 px-3 py-3 text-slate-900"
+                        >
+                          <option value="CPF">CPF</option>
+                          <option value="CNPJ">CNPJ</option>
+                          <option value="OTHER">Outro</option>
+                        </select>
+                      </label>
+                      <label className="space-y-2 text-sm font-medium text-slate-700">
+                        <span>{documentType === 'CNPJ' ? 'CNPJ' : documentType === 'CPF' ? 'CPF' : 'Número do documento'}</span>
+                        <input
+                          value={documentNumber}
+                          onChange={(event) => setDocumentNumber(formatDocument(event.target.value, documentType))}
+                          placeholder={documentType === 'CNPJ' ? '00.000.000/0000-00' : documentType === 'CPF' ? '000.000.000-00' : 'Documento'}
+                          inputMode={documentType === 'OTHER' ? 'text' : 'numeric'}
+                          className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900"
+                        />
+                      </label>
+                    </div>
                     <label className="space-y-2 text-sm font-medium text-slate-700">
                       <span>Data de nascimento</span>
                       <input value={birthDate} onChange={(event) => setBirthDate(formatDateForDisplay(event.target.value))} placeholder="dd/mm/aaaa" inputMode="numeric" maxLength={10} className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
@@ -545,6 +640,18 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                       <span>Código do país</span>
                       <input value={countryCode} onChange={(event) => setCountryCode(formatCountryCode(event.target.value))} placeholder="+55" inputMode="numeric" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
                     </label>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <p className="mb-3 text-sm font-semibold text-slate-800">Endereço profissional</p>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <input value={addressPostalCode} onChange={(e) => setAddressPostalCode(formatCep(e.target.value))} placeholder="CEP" inputMode="numeric" className="rounded-xl bg-slate-50 px-4 py-3 text-sm" />
+                      <input value={addressLine} onChange={(e) => setAddressLine(e.target.value)} placeholder="Rua, avenida, travessa" className="rounded-xl bg-slate-50 px-4 py-3 text-sm" />
+                      <input value={addressNumber} onChange={(e) => setAddressNumber(e.target.value)} placeholder="Número" className="rounded-xl bg-slate-50 px-4 py-3 text-sm" />
+                      <input value={addressComplement} onChange={(e) => setAddressComplement(e.target.value)} placeholder="Complemento" className="rounded-xl bg-slate-50 px-4 py-3 text-sm" />
+                      <input value={addressDistrict} onChange={(e) => setAddressDistrict(e.target.value)} placeholder="Bairro" className="rounded-xl bg-slate-50 px-4 py-3 text-sm" />
+                      <input value={addressCity} onChange={(e) => setAddressCity(e.target.value)} placeholder="Cidade" className="rounded-xl bg-slate-50 px-4 py-3 text-sm" />
+                      <input value={addressState} onChange={(e) => setAddressState(e.target.value.toUpperCase().slice(0, 2))} placeholder="UF" maxLength={2} className="rounded-xl bg-slate-50 px-4 py-3 text-sm" />
+                    </div>
                   </div>
                   <label className="block space-y-2 text-sm font-medium text-slate-700">
                     <span>Minicurrículo profissional</span>

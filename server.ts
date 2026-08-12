@@ -39070,17 +39070,23 @@ async function startServer() {
       const fullName = sanitizeString(req.body?.fullName || req.body?.name, 180);
       const birthDate = sanitizeDate(req.body?.birthDate);
       const gender = sanitizeString(req.body?.gender, 40);
-      const cep = sanitizeString(req.body?.cep, 20);
-      const logradouro = sanitizeString(req.body?.logradouro, 180);
-      const number = sanitizeString(req.body?.number, 20);
-      const complement = sanitizeString(req.body?.complement, 120);
-      const bairro = sanitizeString(req.body?.bairro, 120);
-      const cidade = sanitizeString(req.body?.cidade, 120);
-      const uf = sanitizeString(req.body?.uf || req.body?.state, 2).toUpperCase();
+      const cep = sanitizeString(req.body?.cep || req.body?.addressPostalCode || req.body?.postalCode, 20);
+      const logradouro = sanitizeString(req.body?.logradouro || req.body?.addressLine || req.body?.street, 180);
+      const number = sanitizeString(req.body?.number || req.body?.addressNumber, 20);
+      const complement = sanitizeString(req.body?.complement || req.body?.addressComplement, 120);
+      const bairro = sanitizeString(req.body?.bairro || req.body?.addressDistrict || req.body?.district, 120);
+      const cidade = sanitizeString(req.body?.cidade || req.body?.addressCity || req.body?.city, 120);
+      const uf = sanitizeString(req.body?.uf || req.body?.state || req.body?.addressState, 2).toUpperCase();
       const sessionDurationMinutes = asSafeNumber(req.body?.sessionDurationMinutes, 20, 240) || 50;
       const countryCode = sanitizeString(req.body?.countryCode, 8);
       const phone = sanitizePhone(req.body?.phone);
-      const cpf = normalizeCpf(req.body?.cpf);
+      const professionalDocumentTypeRaw = sanitizeString(req.body?.documentType || req.body?.document_type, 10).toUpperCase();
+      const professionalDocumentType = ['CPF', 'CNPJ', 'OTHER'].includes(professionalDocumentTypeRaw) ? professionalDocumentTypeRaw : 'CPF';
+      const rawProfessionalDocument = sanitizeString(req.body?.documentNumber || req.body?.document_number || req.body?.cpf, 40);
+      const professionalDocumentNumber = professionalDocumentType === 'OTHER'
+        ? rawProfessionalDocument.replace(/[^A-Za-z0-9./-]/g, '')
+        : rawProfessionalDocument.replace(/\D/g, '');
+      const cpf = professionalDocumentType === 'CPF' ? normalizeCpf(professionalDocumentNumber) : '';
       const miniCurriculum = sanitizeString(req.body?.miniCurriculum || req.body?.mini_curriculum, 4000);
       const requestedClinicName = sanitizeString(req.body?.clinicName, 160);
       const requestedClinicLogoUrl = sanitizeUrl(req.body?.clinicLogoUrl);
@@ -39143,7 +39149,21 @@ async function startServer() {
         }
       }
 
-      const address = { cep, logradouro, number, complement, bairro, cidade, uf: uf || null, cnpj: isClinicManagedMember ? null : clinicCnpj || null };
+      const address = cleanObject({
+        cep: cep || null,
+        postalCode: cep || null,
+        logradouro: logradouro || null,
+        addressLine: logradouro || null,
+        number: number || null,
+        complement: complement || null,
+        bairro: bairro || null,
+        district: bairro || null,
+        cidade: cidade || null,
+        city: cidade || null,
+        uf: uf || null,
+        state: uf || null,
+        ...(isClinicManagedMember ? {} : { cnpj: clinicCnpj || null }),
+      });
       const userPatch = cleanObject({
         name: fullName,
         phone: phone || undefined,
@@ -39229,6 +39249,10 @@ async function startServer() {
               work_schedule: workSchedule,
             }),
             cpf: cpf || null,
+            documentType: professionalDocumentType,
+            document_type: professionalDocumentType,
+            documentNumber: professionalDocumentNumber || null,
+            document_number: professionalDocumentNumber || null,
             miniCurriculum: miniCurriculum || null,
             mini_curriculum: miniCurriculum || null,
             specialty: globalSpecialty,
@@ -39350,8 +39374,16 @@ async function startServer() {
         phone: phone || req.session.user?.phone || null,
         specialties: specialty || req.session.user?.specialties || null,
         miniCurriculum: miniCurriculum || req.session.user?.miniCurriculum || null,
-        profilePicture: sanitizeSessionUrl(profilePicture) || req.session.user?.profilePicture || null,
-        signatureDataUrl: sanitizeSessionUrl(signatureDataUrl) || req.session.user?.signatureDataUrl || null,
+        profilePicture:
+          buildPatientPhotoViewUrl(extractPatientPhotosStoragePath(profilePicturePath)) ||
+          sanitizeSessionUrl(profilePicture) ||
+          req.session.user?.profilePicture ||
+          null,
+        signatureDataUrl:
+          buildPatientPhotoViewUrl(extractPatientPhotosStoragePath(signaturePath)) ||
+          sanitizeSessionUrl(signatureDataUrl) ||
+          req.session.user?.signatureDataUrl ||
+          null,
         clinicSettings: nextClinicSettings,
         onboardingContext: context,
         workspaces: compactWorkspacesForSession(await fetchUserWorkspaces(userId)),
@@ -39508,10 +39540,14 @@ async function startServer() {
 
   app.post('/api/profile/:userId', checkAuth, async (req: any, res) => {
     try {
-      // Only allow own profile or admin
-      if (req.session.user.id !== req.params.userId && req.session.user.role !== 'admin') {
+      // O perfil profissional é pessoal. Configurações da clínica são autorizadas
+      // separadamente pela capability da membership ativa.
+      if (req.session.user.id !== req.params.userId) {
         return res.status(403).json({ error: 'Acesso negado' });
       }
+      const authorizationContext = await resolveClinicCapabilityContext(req.session.user);
+      const activeClinicRole = sanitizeString(authorizationContext?.role, 40).toLowerCase();
+      const canEditClinicSettings = ['director', 'coordinator'].includes(activeClinicRole) && Boolean(authorizationContext?.capabilities?.has('clinic.settings.edit'));
 
       const profilePicturePath = sanitizeString(req.body?.profilePicturePath || req.body?.profile_picture_path, 260);
       const signaturePath = sanitizeString(req.body?.signaturePath || req.body?.signature_path, 260);
@@ -39521,7 +39557,7 @@ async function startServer() {
           ? req.body.professionalProfile
           : {};
       const clinicSettingsInput =
-        req.body?.clinicSettings && typeof req.body.clinicSettings === 'object'
+        canEditClinicSettings && req.body?.clinicSettings && typeof req.body.clinicSettings === 'object'
           ? req.body.clinicSettings
           : {};
       const resolvedCrp = sanitizeString(req.body?.crp, 80);
@@ -39541,7 +39577,7 @@ async function startServer() {
           professionalProfileInput?.professionalRoleTitle,
         160
       );
-      const professionalEmail = sanitizeEmail(req.body?.email || professionalProfileInput?.email || professionalProfileInput?.professionalEmail);
+      const professionalEmail = sanitizeEmail(req.session.user?.email);
       const professionalCouncilState = sanitizeString(
         professionalProfileInput?.councilState ||
           professionalProfileInput?.council_state ||
@@ -39563,6 +39599,29 @@ async function startServer() {
       const professionalFullName =
         sanitizeString(professionalProfileInput?.fullName || professionalProfileInput?.full_name || req.body?.name, 180) ||
         sanitizeString(req.body?.name, 180);
+      const professionalDocumentTypeRaw = sanitizeString(
+        professionalProfileInput?.documentType || professionalProfileInput?.document_type,
+        10
+      ).toUpperCase();
+      const professionalDocumentType = ['CPF', 'CNPJ', 'OTHER'].includes(professionalDocumentTypeRaw)
+        ? professionalDocumentTypeRaw
+        : (professionalCpf ? 'CPF' : null);
+      const professionalDocumentNumber = sanitizeString(
+        professionalProfileInput?.documentNumber || professionalProfileInput?.document_number || professionalCpf,
+        40
+      ).replace(professionalDocumentType === 'OTHER' ? /[^A-Za-z0-9./-]/g : /\D/g, '');
+      const professionalAddressInput = professionalProfileInput?.address && typeof professionalProfileInput.address === 'object'
+        ? professionalProfileInput.address
+        : {};
+      const professionalAddress = cleanObject({
+        cep: sanitizeString(professionalAddressInput?.cep || professionalAddressInput?.postalCode, 20).replace(/\D/g, '') || null,
+        logradouro: sanitizeString(professionalAddressInput?.logradouro || professionalAddressInput?.addressLine, 180) || null,
+        number: sanitizeString(professionalAddressInput?.number || professionalAddressInput?.addressNumber, 40) || null,
+        complement: sanitizeString(professionalAddressInput?.complement || professionalAddressInput?.addressComplement, 120) || null,
+        bairro: sanitizeString(professionalAddressInput?.bairro || professionalAddressInput?.district, 120) || null,
+        cidade: sanitizeString(professionalAddressInput?.cidade || professionalAddressInput?.city, 120) || null,
+        uf: sanitizeString(professionalAddressInput?.uf || professionalAddressInput?.state, 2).toUpperCase() || null,
+      });
       const clinicName = sanitizeString(clinicSettingsInput?.clinicName || req.body?.clinicName, 160);
       const clinicLegalName = sanitizeString(clinicSettingsInput?.clinicLegalName || clinicSettingsInput?.legalName || req.body?.clinicLegalName, 180);
       const clinicDocumentTypeSource = sanitizeString(clinicSettingsInput?.clinicDocumentType || clinicSettingsInput?.documentType || req.body?.clinicDocumentType, 10).toUpperCase();
@@ -39594,8 +39653,7 @@ async function startServer() {
       const safePayload = cleanObject({
         id: sanitizeString(req.params.userId, 120),
         name: professionalFullName || undefined,
-        email: sanitizeEmail(req.body?.email) || undefined,
-        role: sanitizeString(req.body?.role, 40) || undefined,
+        // E-mail e papel são autoridades de autenticação/membership e não podem ser alterados por esta rota de perfil.
         profile_picture: sanitizeUrl(req.body?.profile_picture) || sanitizeUrl(req.body?.profilePicture) || undefined,
         crp: resolvedCrp || undefined,
         cpf: professionalCpf || undefined,
@@ -39687,6 +39745,10 @@ async function startServer() {
             professionalPhone: professionalPhone || existingMetadata?.professionalPhone || undefined,
             email: professionalEmail || existingMetadata?.email || undefined,
             professionalEmail: professionalEmail || existingMetadata?.professionalEmail || undefined,
+            documentType: professionalDocumentType || existingMetadata?.documentType || undefined,
+            document_type: professionalDocumentType || existingMetadata?.document_type || undefined,
+            documentNumber: professionalDocumentNumber || existingMetadata?.documentNumber || undefined,
+            document_number: professionalDocumentNumber || existingMetadata?.document_number || undefined,
             roleTitle: professionalRoleTitle || existingMetadata?.roleTitle || undefined,
             professionalRoleTitle: professionalRoleTitle || existingMetadata?.professionalRoleTitle || undefined,
             council: resolvedCouncil || existingMetadata?.council || undefined,
@@ -39726,11 +39788,12 @@ async function startServer() {
             mini_curriculum:
               sanitizeString(req.body?.miniCurriculum || professionalProfileInput?.miniCurriculum, 3000) ||
               undefined,
-            clinic_name: clinicName || undefined,
-            clinic_phone: clinicPhone || undefined,
+            address: Object.keys(professionalAddress).length > 0 ? professionalAddress : undefined,
+            clinic_name: canEditClinicSettings ? clinicName || undefined : undefined,
+            clinic_phone: canEditClinicSettings ? clinicPhone || undefined : undefined,
             profile_photo_url: resolvedProfilePictureUrl || undefined,
             signature_data_url: resolvedSignatureUrl || undefined,
-            clinic_logo_url: resolvedClinicLogoUrl || undefined,
+            clinic_logo_url: canEditClinicSettings ? resolvedClinicLogoUrl || undefined : undefined,
             metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined,
             updated_at: new Date().toISOString()
           });
@@ -39745,7 +39808,8 @@ async function startServer() {
             profileCandidate = rest;
           }
 
-          const nextClinicSettings = compactClinicSettingsForSession({
+          const nextClinicSettings = canEditClinicSettings
+            ? compactClinicSettingsForSession({
             ...(req.session.user?.clinicSettings || {}),
             ...clinicSettingsInput,
             ...(clinicName ? { clinicName } : {}),
@@ -39779,9 +39843,10 @@ async function startServer() {
               sanitizeString(req.body?.miniCurriculum || clinicSettingsInput?.therapistMiniCurriculum, 3000) ||
               req.session.user?.clinicSettings?.therapistMiniCurriculum ||
               null,
-          });
+          })
+            : compactClinicSettingsForSession(req.session.user?.clinicSettings || {});
 
-          if (clinicId && (role === 'coordinator' || role === 'admin' || role === 'owner')) {
+          if (clinicId && canEditClinicSettings) {
             await patchTableSafely('clinics', { column: 'id', value: clinicId }, {
               name: clinicName || undefined,
               display_name: clinicName || undefined,
@@ -39830,7 +39895,10 @@ async function startServer() {
                   councilState: professionalCouncilState || undefined,
                   cboCode: professionalCboCode || undefined,
                   specialtyName: professionalSpecialtyName || undefined,
-                  crp: resolvedCrp || resolvedCouncilNumber || undefined
+                  crp: resolvedCrp || resolvedCouncilNumber || undefined,
+                  documentType: professionalDocumentType || undefined,
+                  documentNumber: professionalDocumentNumber || undefined,
+                  address: Object.keys(professionalAddress).length > 0 ? professionalAddress : undefined
                 }),
                 clinic_settings: nextClinicSettings,
                 first_login_completed:

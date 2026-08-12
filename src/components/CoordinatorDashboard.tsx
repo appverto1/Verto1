@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import {
   LayoutDashboard,
   Users,
+  User,
   TrendingUp,
   Calendar,
   ClipboardList,
@@ -147,6 +148,7 @@ type DashboardTab =
   | "patientAuthorizations"
   | "rooms"
   | "protocols"
+  | "professionalProfile"
   | "settings"
   | "logs"
   | "billing"
@@ -797,7 +799,8 @@ export function CoordinatorDashboard({
       return tabId === "dashboard" || tabId === "patients";
     }
     if (tabId === "patientAuthorizations") return hasCapability("patient.insurance.authorization.view");
-    if (tabId === "settings") return isTherapist || hasCapability("clinic.settings.view");
+    if (tabId === "professionalProfile") return isClinicBaseRole(normalizedRole);
+    if (tabId === "settings") return hasCapability("clinic.settings.view");
     if (tabId === "financial") return canAccessClinicFinance;
     if (tabId === "closure" || tabId === "conference") return hasCapability("billing.preguide.view");
     const capability = capabilityForTab(tabId);
@@ -818,6 +821,7 @@ export function CoordinatorDashboard({
     | "patientAuthorizations"
     | "rooms"
     | "protocols"
+    | "professionalProfile"
     | "settings"
     | "logs"
     | "billing"
@@ -1284,7 +1288,8 @@ export function CoordinatorDashboard({
     patientAuthorizations: "Autorizações dos pacientes",
     rooms: "Reservas de Sala",
     protocols: "Protocolos",
-    settings: isTherapist ? "Configurações Profissionais" : "Configurações da Clínica",
+    professionalProfile: "Meu perfil profissional",
+    settings: "Configurações da Clínica",
     logs: "Log de Atividades",
     billing: "Assinatura e Cobrança",
   };
@@ -1782,6 +1787,14 @@ export function CoordinatorDashboard({
   const [therapistProviderCode, setTherapistProviderCode] = useState<string>(
     String(user?.professionalProfile?.providerCode || user?.professional_profile?.provider_code || profileMetadata?.providerCode || profileMetadata?.provider_code || ""),
   );
+  const professionalAddress = (user?.professionalProfile?.address || user?.professional_profile?.address || {}) as Record<string, any>;
+  const [therapistAddressLine, setTherapistAddressLine] = useState<string>(String(professionalAddress?.logradouro || professionalAddress?.addressLine || ""));
+  const [therapistAddressNumber, setTherapistAddressNumber] = useState<string>(String(professionalAddress?.number || professionalAddress?.addressNumber || ""));
+  const [therapistAddressComplement, setTherapistAddressComplement] = useState<string>(String(professionalAddress?.complement || professionalAddress?.addressComplement || ""));
+  const [therapistDistrict, setTherapistDistrict] = useState<string>(String(professionalAddress?.bairro || professionalAddress?.district || ""));
+  const [therapistCity, setTherapistCity] = useState<string>(String(professionalAddress?.cidade || professionalAddress?.city || ""));
+  const [therapistState, setTherapistState] = useState<string>(String(professionalAddress?.uf || professionalAddress?.state || "").toUpperCase().slice(0, 2));
+  const [therapistPostalCode, setTherapistPostalCode] = useState<string>(maskCep(String(professionalAddress?.cep || professionalAddress?.postalCode || "")));
   const [clinicDisplayName, setClinicDisplayName] = useState<string>(
     String(user?.clinicSettings?.clinicName || user?.workspaceName || ""),
   );
@@ -1829,7 +1842,7 @@ export function CoordinatorDashboard({
   const therapistCanRegisterClinicalData = !isTherapist || Boolean(therapistCrp.trim());
   const isDemoAccount = Boolean(user?.isDemoUser);
   const canManageProtocolLibrary = hasCapability("aba.program.edit");
-  const canManageClinicSettings = hasCapability("clinic.settings.edit");
+  const canManageClinicSettings = ["director", "coordinator"].includes(normalizedRole) && hasCapability("clinic.settings.edit");
   const canManageBilling = !isDemoAccount && hasCapability("billing.sessions.view");
   const canEditAnamnesisTemplate = canManageClinicSettings || isDirectTherapist;
   const DAY_GRID_SLOT_HEIGHT_PX = 66;
@@ -2724,6 +2737,14 @@ export function CoordinatorDashboard({
     setTherapistProviderCode(
       String(user?.professionalProfile?.providerCode || user?.professional_profile?.provider_code || nextProfileMetadata?.providerCode || nextProfileMetadata?.provider_code || ""),
     );
+    const nextProfessionalAddress = (user?.professionalProfile?.address || user?.professional_profile?.address || {}) as Record<string, any>;
+    setTherapistAddressLine(String(nextProfessionalAddress?.logradouro || nextProfessionalAddress?.addressLine || ""));
+    setTherapistAddressNumber(String(nextProfessionalAddress?.number || nextProfessionalAddress?.addressNumber || ""));
+    setTherapistAddressComplement(String(nextProfessionalAddress?.complement || nextProfessionalAddress?.addressComplement || ""));
+    setTherapistDistrict(String(nextProfessionalAddress?.bairro || nextProfessionalAddress?.district || ""));
+    setTherapistCity(String(nextProfessionalAddress?.cidade || nextProfessionalAddress?.city || ""));
+    setTherapistState(String(nextProfessionalAddress?.uf || nextProfessionalAddress?.state || "").toUpperCase().slice(0, 2));
+    setTherapistPostalCode(maskCep(String(nextProfessionalAddress?.cep || nextProfessionalAddress?.postalCode || "")));
     setTherapistSignatureDataUrl((prev) =>
       isUnsavedLocalMediaPreview(prev)
         ? prev
@@ -2820,7 +2841,7 @@ export function CoordinatorDashboard({
   ]);
 
   useEffect(() => {
-    if (activeTab !== "settings" || !isTherapist) return;
+    if (activeTab !== "professionalProfile") return;
     const professionalId = String(user?.id || "").trim();
     if (!professionalId) return;
     let cancelled = false;
@@ -2966,12 +2987,20 @@ export function CoordinatorDashboard({
       const signature = firstText(globalProfile?.signature_data_url, globalProfile?.signatureDataUrl);
       if (profilePhoto) setTherapistProfilePhotoUrl(profilePhoto);
       if (signature) setTherapistSignatureDataUrl(signature);
+      const address = globalProfile?.address && typeof globalProfile.address === "object" ? globalProfile.address : {};
+      setTherapistAddressLine(firstText(address?.logradouro, address?.addressLine));
+      setTherapistAddressNumber(firstText(address?.number, address?.addressNumber));
+      setTherapistAddressComplement(firstText(address?.complement, address?.addressComplement));
+      setTherapistDistrict(firstText(address?.bairro, address?.district));
+      setTherapistCity(firstText(address?.cidade, address?.city));
+      setTherapistState(firstText(address?.uf, address?.state).toUpperCase().slice(0, 2));
+      setTherapistPostalCode(maskCep(firstText(address?.cep, address?.postalCode)));
     };
     void loadOwnProfessionalSettings();
     return () => {
       cancelled = true;
     };
-  }, [activeTab, isTherapist, user?.id]);
+  }, [activeTab, user?.id]);
 
   const refreshSignedMediaUrls = useCallback(async () => {
     try {
@@ -3001,7 +3030,7 @@ export function CoordinatorDashboard({
   }, [user?.id]);
 
   useEffect(() => {
-    if (activeTab !== "settings") return;
+    if (activeTab !== "settings" && activeTab !== "professionalProfile") return;
     let cancelled = false;
     const refresh = async () => {
       if (cancelled) return;
@@ -3019,7 +3048,7 @@ export function CoordinatorDashboard({
 
   const retryMediaIfBroken = useCallback(
     async (mediaType: "signature" | "profile" | "logo") => {
-      if (activeTab !== "settings") return;
+      if (activeTab !== "settings" && activeTab !== "professionalProfile") return;
       if (
         (mediaType === "signature" && isUnsavedLocalMediaPreview(therapistSignatureDataUrl)) ||
         (mediaType === "profile" && isUnsavedLocalMediaPreview(therapistProfilePhotoUrl)) ||
@@ -8126,13 +8155,15 @@ export function CoordinatorDashboard({
     );
   };
 
-  const handleSaveClinicSettings = async () => {
+  const handleSaveClinicSettings = async (saveScope: "professional" | "clinic" = "clinic") => {
     const cleanFullName = therapistFullName.trim();
     const cleanCrp = therapistCrp.trim();
     const normalizedTherapistDocumentType = ["CPF", "CNPJ", "OTHER"].includes(String(therapistDocumentType || "").toUpperCase())
       ? String(therapistDocumentType || "").toUpperCase()
       : "CPF";
-    const cleanCpf = onlyDigits(therapistCpf, normalizedTherapistDocumentType === "CNPJ" ? 14 : 11);
+    const cleanProfessionalDocument = normalizedTherapistDocumentType === "OTHER"
+      ? therapistCpf.trim().replace(/[^A-Za-z0-9./-]/g, "").slice(0, 40)
+      : onlyDigits(therapistCpf, normalizedTherapistDocumentType === "CNPJ" ? 14 : 11);
     const cleanPhone = onlyDigits(therapistPhone, 11);
     const cleanTherapistEmail = therapistEmail.trim();
     const cleanRoleTitle = therapistRoleTitle.trim();
@@ -8168,40 +8199,40 @@ export function CoordinatorDashboard({
       !cleanCrp ||
       /^[A-Za-z0-9À-ÿ .\/-]{2,80}$/u.test(cleanCrp);
 
-    if (!cleanFullName || cleanFullName.length < 3) {
+    if (saveScope === "professional" && (!cleanFullName || cleanFullName.length < 3)) {
       showToast("Informe o nome completo para salvar o perfil.", "error");
       return;
     }
-    if (!isCrpValid) {
+    if (saveScope === "professional" && !isCrpValid) {
       showToast("Registro profissional inválido. Revise o número do conselho.", "error");
       return;
     }
-    if (cleanCpf && normalizedTherapistDocumentType !== "OTHER") {
+    if (saveScope === "professional" && cleanProfessionalDocument && normalizedTherapistDocumentType !== "OTHER") {
       const expectedLength = normalizedTherapistDocumentType === "CNPJ" ? 14 : 11;
-      if (cleanCpf.length !== expectedLength) {
+      if (cleanProfessionalDocument.length !== expectedLength) {
         showToast(normalizedTherapistDocumentType === "CNPJ" ? "CNPJ do profissional inválido." : "CPF inválido. Informe 11 dígitos.", "error");
         return;
       }
     }
-    if (normalizedTherapistDocumentType === "OTHER" && cleanCpf && cleanCpf.length < 3) {
+    if (saveScope === "professional" && normalizedTherapistDocumentType === "OTHER" && cleanProfessionalDocument && cleanProfessionalDocument.length < 3) {
       showToast("Documento profissional inválido.", "error");
       return;
     }
-    if (cleanClinicDocumentNumber) {
+    if (saveScope === "clinic" && cleanClinicDocumentNumber) {
       const expectedLength = normalizedClinicDocumentType === "CPF" ? 11 : 14;
       if (cleanClinicDocumentNumber.length !== expectedLength) {
         showToast(normalizedClinicDocumentType === "CPF" ? "CPF da clínica inválido." : "CNPJ da clínica inválido.", "error");
         return;
       }
     }
-    if (!isTherapist && !canManageClinicSettings) {
+    if (saveScope === "clinic" && !canManageClinicSettings) {
       showToast("Apenas a coordenação pode alterar as configurações da clínica.", "error");
       return;
     }
 
     if (clinicSettingsSaveInFlightRef.current) return;
     clinicSettingsSaveInFlightRef.current = true;
-    showProcessing(isTherapist ? "Salvando perfil profissional..." : "Salvando perfil e dados da clínica...");
+    showProcessing(saveScope === "professional" ? "Salvando perfil profissional..." : "Salvando configurações da clínica...");
 
     try {
     const clinicSettings = {
@@ -8232,7 +8263,7 @@ export function CoordinatorDashboard({
       clinicCnesCode: cleanClinicCnesCode || null,
     };
 
-    if (!isTherapist && canManageClinicSettings) {
+    if (saveScope === "clinic" && canManageClinicSettings) {
       try {
         const providerResult = await dataService.updateClinicTissProfile({
           legalName: cleanClinicLegalName || cleanClinicName || null,
@@ -8261,24 +8292,12 @@ export function CoordinatorDashboard({
     }
 
     const ownProfessionalId = String(user?.id || "").trim();
-    const shouldPersistOwnBillingProfile = Boolean(ownProfessionalId && (isTherapist || (!isTherapist && canManageClinicSettings)));
+    const shouldPersistOwnBillingProfile = Boolean(saveScope === "professional" && ownProfessionalId);
     if (shouldPersistOwnBillingProfile) {
-      const professionalBillingResult = isTherapist
-        ? await dataService.updateOwnProfessionalBillingProfile({
+      const professionalBillingResult = await dataService.updateOwnProfessionalBillingProfile({
             displayName: cleanFullName || null,
             documentType: normalizedTherapistDocumentType,
-            documentNumber: cleanCpf || null,
-            councilType: cleanCouncilType || cleanCrp.split(/\s|\//)[0] || null,
-            councilNumber: cleanCrp || null,
-            councilState: cleanCouncilState || null,
-            cboCode: cleanCboCode || null,
-            specialtyName: cleanSpecialtyName || cleanSpecialties || null,
-            providerCode: cleanTherapistProviderCode || null,
-          })
-        : await dataService.updateProfessionalBillingProfile(ownProfessionalId, {
-            displayName: cleanFullName || null,
-            documentType: normalizedTherapistDocumentType,
-            documentNumber: cleanCpf || null,
+            documentNumber: cleanProfessionalDocument || null,
             councilType: cleanCouncilType || cleanCrp.split(/\s|\//)[0] || null,
             councilNumber: cleanCrp || null,
             councilState: cleanCouncilState || null,
@@ -8292,49 +8311,64 @@ export function CoordinatorDashboard({
       }
     }
 
-    onUpdateProfile({
-      name: therapistFullName?.trim() || user?.name,
-      cpf: cleanCpf || null,
-      phone: cleanPhone || null,
-      email: cleanTherapistEmail || user?.email,
-      professionalRoleTitle: cleanRoleTitle || null,
-      crp: cleanCrp || null,
-      specialties: cleanSpecialties,
-      miniCurriculum: cleanMiniCurriculum,
-      profilePicture: therapistProfilePhotoUrl,
-      signatureDataUrl: therapistSignatureDataUrl,
-      professionalProfile: {
-        fullName: cleanFullName,
-        cpf: cleanCpf || null,
-        documentType: normalizedTherapistDocumentType,
+    if (saveScope === "professional") {
+      onUpdateProfile({
+        name: cleanFullName || user?.name,
+        cpf: normalizedTherapistDocumentType === "CPF" ? cleanProfessionalDocument || null : null,
         phone: cleanPhone || null,
-        email: cleanTherapistEmail || null,
-        roleTitle: cleanRoleTitle || null,
+        email: cleanTherapistEmail || user?.email,
+        professionalRoleTitle: cleanRoleTitle || null,
         crp: cleanCrp || null,
-        council: cleanCouncilType || null,
-        councilState: cleanCouncilState || null,
-        cboCode: cleanCboCode || null,
-        specialtyName: cleanSpecialtyName || null,
-        providerCode: cleanTherapistProviderCode || null,
         specialties: cleanSpecialties,
         miniCurriculum: cleanMiniCurriculum,
         profilePicture: therapistProfilePhotoUrl,
         signatureDataUrl: therapistSignatureDataUrl,
-      },
-      clinicSettings: {
-        ...clinicSettings,
-        clinicLogoUrl: !isTherapist ? clinicLogoDataUrl || undefined : user?.clinicSettings?.clinicLogoUrl,
-      },
-    });
+        professionalProfile: {
+          fullName: cleanFullName,
+          cpf: normalizedTherapistDocumentType === "CPF" ? cleanProfessionalDocument || null : null,
+          documentType: normalizedTherapistDocumentType,
+          documentNumber: cleanProfessionalDocument || null,
+          phone: cleanPhone || null,
+          email: cleanTherapistEmail || null,
+          roleTitle: cleanRoleTitle || null,
+          crp: cleanCrp || null,
+          council: cleanCouncilType || null,
+          councilState: cleanCouncilState || null,
+          cboCode: cleanCboCode || null,
+          specialtyName: cleanSpecialtyName || null,
+          providerCode: cleanTherapistProviderCode || null,
+          specialties: cleanSpecialties,
+          miniCurriculum: cleanMiniCurriculum,
+          address: {
+            logradouro: therapistAddressLine.trim() || null,
+            number: therapistAddressNumber.trim() || null,
+            complement: therapistAddressComplement.trim() || null,
+            bairro: therapistDistrict.trim() || null,
+            cidade: therapistCity.trim() || null,
+            uf: therapistState.trim().toUpperCase().slice(0, 2) || null,
+            cep: onlyDigits(therapistPostalCode, 8) || null,
+          },
+          profilePicture: therapistProfilePhotoUrl,
+          signatureDataUrl: therapistSignatureDataUrl,
+        },
+      });
+    } else {
+      onUpdateProfile({
+        clinicSettings: {
+          ...clinicSettings,
+          clinicLogoUrl: clinicLogoDataUrl || undefined,
+        },
+      });
+    }
 
     onAddActivityLog(
-      isTherapist ? "Perfil profissional atualizado" : "Perfil e dados da clínica atualizados",
-      isTherapist
-        ? "O profissional atualizou dados cadastrais, documentos, assinatura e foto de perfil."
-        : "A coordenação atualizou dados profissionais, dados institucionais da clínica, horários e branding.",
+      saveScope === "professional" ? "Perfil profissional atualizado" : "Dados da clínica atualizados",
+      saveScope === "professional"
+        ? "O profissional atualizou seu cadastro pessoal, documentos, endereço, assinatura e foto."
+        : "A Direção ou Coordenação atualizou os dados institucionais, horários e branding da clínica.",
       "management",
     );
-    showToast(isTherapist ? "Perfil atualizado com sucesso!" : "Perfil e clínica salvos. Pré-guias afetadas serão atualizadas automaticamente.");
+    showToast(saveScope === "professional" ? "Perfil profissional salvo com sucesso!" : "Configurações da clínica salvas. Pré-guias afetadas serão atualizadas automaticamente.");
     } catch (error: any) {
       console.error("Falha ao salvar configurações da clínica:", error);
       showToast(error?.message || "Não foi possível salvar as configurações agora. Nenhum dado foi confirmado como salvo.", "error");
@@ -9991,7 +10025,8 @@ export function CoordinatorDashboard({
         label: "Configurações",
         icon: ShieldCheck,
         children: [
-          { id: "settings-clinic", label: isTherapist ? "Profissional" : "Clínica", icon: ShieldCheck, tab: "settings" },
+          { id: "settings-profile", label: "Meu perfil profissional", icon: User, tab: "professionalProfile" },
+          { id: "settings-clinic", label: "Configurações da clínica", icon: ShieldCheck, tab: "settings" },
           { id: "settings-team", label: "Profissionais", icon: Users, tab: "team" },
           { id: "settings-rooms", label: "Salas", icon: DoorOpen, tab: "rooms" },
           { id: "settings-billing", label: "Assinatura", icon: CreditCard, tab: "billing" },
@@ -10338,6 +10373,11 @@ export function CoordinatorDashboard({
                 }}
                 onOpenInvitations={() => setShowInvitationModal(true)}
                 onViewProfile={() => {
+                  navigateToTab("professionalProfile");
+                  setView("home");
+                }}
+                canManageClinicSettings={canManageClinicSettings}
+                onViewClinicSettings={() => {
                   navigateToTab("settings");
                   setView("home");
                 }}
@@ -10646,7 +10686,9 @@ export function CoordinatorDashboard({
               onLogout={onLogout}
               onViewTeam={() => navigateToTab("team")}
               onOpenInvitations={() => setShowInvitationModal(true)}
-              onViewProfile={() => navigateToTab("settings")}
+              onViewProfile={() => navigateToTab("professionalProfile")}
+              canManageClinicSettings={canManageClinicSettings}
+              onViewClinicSettings={() => navigateToTab("settings")}
               onViewBilling={() => navigateToTab("billing")}
               onOpenOnboarding={onOpenOnboarding}
             />
@@ -13516,6 +13558,45 @@ export function CoordinatorDashboard({
                 </div>
               </div>
             )}
+            {activeTab === "professionalProfile" && (
+              <motion.div
+                key="professional-profile"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+              >
+                <ClinicGlobalSettingsPanel
+                  mode="professional"
+                  isTherapist={isTherapist}
+                  currentUserId={String(user?.id || '')}
+                  canEditAnamnesisTemplate={canEditAnamnesisTemplate}
+                  loadingAnamnesisTemplate={loadingAnamnesisTemplate}
+                  onOpenAnamnesisTemplate={() => setIsAnamnesisTemplateModalOpen(true)}
+                  canManageClinicSettings={false}
+                  canManageBilling={false}
+                  normalizedPlanName={normalizedPlanName}
+                  navigateToTab={navigateToTab}
+                  onSave={() => handleSaveClinicSettings("professional")}
+                  values={{
+                    therapistFullName, therapistDocumentType, therapistCpf, therapistEmail, therapistPhone, therapistRoleTitle,
+                    therapistCouncilType, therapistCrp, therapistCouncilState, therapistCboCode, therapistSpecialtyName,
+                    therapistProviderCode, therapistSpecialties, therapistMiniCurriculum, therapistSignatureDataUrl,
+                    therapistProfilePhotoUrl, therapistAddressLine, therapistAddressNumber, therapistAddressComplement,
+                    therapistDistrict, therapistCity, therapistState, therapistPostalCode,
+                  }}
+                  setters={{
+                    setTherapistFullName, setTherapistDocumentType, setTherapistCpf, setTherapistEmail, setTherapistPhone,
+                    setTherapistRoleTitle, setTherapistCouncilType, setTherapistCrp, setTherapistCouncilState,
+                    setTherapistCboCode, setTherapistSpecialtyName, setTherapistProviderCode, setTherapistSpecialties,
+                    setTherapistMiniCurriculum, setTherapistSignatureDataUrl, setTherapistProfilePhotoUrl,
+                    setTherapistAddressLine, setTherapistAddressNumber, setTherapistAddressComplement, setTherapistDistrict,
+                    setTherapistCity, setTherapistState, setTherapistPostalCode,
+                  }}
+                  readImageAsDataUrl={readImageAsDataUrl}
+                  retryMediaIfBroken={retryMediaIfBroken}
+                />
+              </motion.div>
+            )}
             {activeTab === "settings" && (
               <motion.div
                 key="settings"
@@ -13524,6 +13605,7 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
               >
                 <ClinicGlobalSettingsPanel
+                  mode="clinic"
                   isTherapist={isTherapist}
                   currentUserId={String(user?.id || '')}
                   canEditAnamnesisTemplate={canEditAnamnesisTemplate}
@@ -13533,7 +13615,7 @@ export function CoordinatorDashboard({
                   canManageBilling={canManageBilling}
                   normalizedPlanName={normalizedPlanName}
                   navigateToTab={navigateToTab}
-                  onSave={handleSaveClinicSettings}
+                  onSave={() => handleSaveClinicSettings("clinic")}
                   values={{
                     therapistFullName,
                     therapistDocumentType,
@@ -13551,6 +13633,7 @@ export function CoordinatorDashboard({
                     therapistMiniCurriculum,
                     therapistSignatureDataUrl,
                     therapistProfilePhotoUrl,
+                    therapistAddressLine, therapistAddressNumber, therapistAddressComplement, therapistDistrict, therapistCity, therapistState, therapistPostalCode,
                     clinicDisplayName,
                     clinicLegalName,
                     clinicDocumentType,
@@ -13589,6 +13672,7 @@ export function CoordinatorDashboard({
                     setTherapistMiniCurriculum,
                     setTherapistSignatureDataUrl,
                     setTherapistProfilePhotoUrl,
+                    setTherapistAddressLine, setTherapistAddressNumber, setTherapistAddressComplement, setTherapistDistrict, setTherapistCity, setTherapistState, setTherapistPostalCode,
                     setClinicDisplayName,
                     setClinicLegalName,
                     setClinicDocumentType,

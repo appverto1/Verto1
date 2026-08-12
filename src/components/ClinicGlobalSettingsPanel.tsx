@@ -11,6 +11,7 @@ import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStora
 type SettingsValues = Record<string, any>;
 
 type ClinicGlobalSettingsPanelProps = {
+  mode: "professional" | "clinic";
   isTherapist: boolean;
   currentUserId: string;
   canEditAnamnesisTemplate: boolean;
@@ -1262,6 +1263,7 @@ function MediaDropzone({
 }
 
 export function ClinicGlobalSettingsPanel({
+  mode,
   isTherapist,
   currentUserId,
   canEditAnamnesisTemplate,
@@ -1277,6 +1279,7 @@ export function ClinicGlobalSettingsPanel({
   readImageAsDataUrl,
   retryMediaIfBroken,
 }: ClinicGlobalSettingsPanelProps) {
+  const isProfessionalView = mode === "professional";
   const scrollToClinicData = () => {
     document.getElementById("clinic-master-data")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -1295,9 +1298,9 @@ export function ClinicGlobalSettingsPanel({
 
   const professionalFields = (
     <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-      {isTherapist && (
+      {isProfessionalView && (
         <p className="md:col-span-2 rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-normal leading-relaxed text-indigo-800">
-          Este cadastro pertence a você e acompanha seus vínculos. Ele é reutilizado em documentos clínicos, relatórios, Pré-guias TISS e rotinas de faturamento.
+          Este cadastro é pessoal e acompanha você em todos os vínculos autorizados. A clínica não substitui sua identidade profissional.
         </p>
       )}
       <label className={`${labelClass} md:col-span-2`}>
@@ -1333,7 +1336,7 @@ export function ClinicGlobalSettingsPanel({
       </div>
       <label className={labelClass}>
         E-mail
-        <input type="email" value={values.therapistEmail} onChange={(event) => setters.setTherapistEmail(event.target.value)} placeholder="responsavel@clinica.com" className={inputClass} />
+        <input type="email" value={values.therapistEmail} readOnly aria-readonly="true" title="O e-mail de acesso é alterado pelo fluxo de conta verificado." placeholder="seu@email.com" className={`${inputClass} bg-slate-50 text-slate-500`} />
       </label>
       <label className={labelClass}>
         Telefone / WhatsApp
@@ -1370,12 +1373,43 @@ export function ClinicGlobalSettingsPanel({
         Código do prestador
         <input type="text" value={values.therapistProviderCode} onChange={(event) => setters.setTherapistProviderCode(event.target.value)} placeholder="Opcional, conforme operadora" className={inputClass} />
       </label>
+      <div className="md:col-span-2 mt-2 border-t border-slate-100 pt-5">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Endereço profissional</p>
+      </div>
+      <label className={labelClass}>
+        Endereço
+        <input type="text" value={values.therapistAddressLine || ""} onChange={(event) => setters.setTherapistAddressLine(event.target.value)} placeholder="Rua, avenida, travessa" className={inputClass} />
+      </label>
+      <label className={labelClass}>
+        Número
+        <input type="text" value={values.therapistAddressNumber || ""} onChange={(event) => setters.setTherapistAddressNumber(event.target.value)} placeholder="Número" className={inputClass} />
+      </label>
+      <label className={labelClass}>
+        Complemento
+        <input type="text" value={values.therapistAddressComplement || ""} onChange={(event) => setters.setTherapistAddressComplement(event.target.value)} placeholder="Sala, conjunto, bloco" className={inputClass} />
+      </label>
+      <label className={labelClass}>
+        Bairro
+        <input type="text" value={values.therapistDistrict || ""} onChange={(event) => setters.setTherapistDistrict(event.target.value)} placeholder="Bairro" className={inputClass} />
+      </label>
+      <label className={labelClass}>
+        Cidade
+        <input type="text" value={values.therapistCity || ""} onChange={(event) => setters.setTherapistCity(event.target.value)} placeholder="Cidade" className={inputClass} />
+      </label>
+      <label className={labelClass}>
+        UF
+        <input type="text" value={values.therapistState || ""} onChange={(event) => setters.setTherapistState(event.target.value.toUpperCase().slice(0, 2))} placeholder="SP" maxLength={2} className={inputClass} />
+      </label>
+      <label className={labelClass}>
+        CEP
+        <input type="text" value={values.therapistPostalCode || ""} onChange={(event) => setters.setTherapistPostalCode(maskCep(event.target.value))} placeholder="00000-000" className={inputClass} />
+      </label>
       <label className={`${labelClass} md:col-span-2`}>
         Mini currículo
         <textarea rows={3} value={values.therapistMiniCurriculum} onChange={(event) => setters.setTherapistMiniCurriculum(event.target.value)} placeholder="Resumo profissional usado em relatórios e documentos." className={`${inputClass} resize-none`} />
       </label>
       <div className="md:col-span-2 flex justify-end">
-        <SaveButton onSave={onSave}>{isTherapist ? "Salvar perfil profissional" : "Salvar responsável"}</SaveButton>
+        <SaveButton onSave={onSave}>Salvar perfil profissional</SaveButton>
       </div>
     </div>
   );
@@ -1454,14 +1488,14 @@ export function ClinicGlobalSettingsPanel({
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">{isTherapist ? "Identidade profissional" : "Configurações globais"}</p>
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-slate-400">{isProfessionalView ? "Perfil profissional" : "Configurações da unidade"}</p>
             <h3 className="mt-1 text-2xl font-semibold text-slate-900">
-              {isTherapist ? "Configurações profissionais" : "Meu perfil e configurações da clínica"}
+              {isProfessionalView ? "Meu perfil profissional" : "Configurações da clínica"}
             </h3>
             <p className="mt-2 max-w-3xl text-sm font-normal text-slate-500">
-              {isTherapist
-                ? "Gerencie seu cadastro, credenciais, disponibilidade por clínica e ferramentas clínicas pessoais."
-                : "Dados preenchidos uma vez e reutilizados em Pré-guia TISS, Pré-faturamento, Fechamento, documentos, relatórios, notificações e agenda."}
+              {isProfessionalView
+                ? "Seus dados pessoais, documentos, registro profissional, assinatura e foto ficam em um cadastro único e acompanham seus vínculos."
+                : "Dados institucionais da unidade atual. Apenas Direção e Coordenação autorizadas podem editar estas informações."}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -1472,20 +1506,20 @@ export function ClinicGlobalSettingsPanel({
                 disabled={loadingAnamnesisTemplate}
                 className="rounded-xl border border-[#7a32fc]/25 bg-white px-4 py-2.5 text-sm font-medium text-[#7a32fc] transition-all hover:bg-[#f6f0ff] disabled:opacity-60"
               >
-                {loadingAnamnesisTemplate ? "Carregando ficha..." : isTherapist ? "Minhas fichas" : "Editar ficha de anamnese"}
+                {loadingAnamnesisTemplate ? "Carregando ficha..." : isProfessionalView ? "Minhas fichas" : "Editar ficha de anamnese"}
               </button>
             )}
-            <SaveButton onSave={onSave}>{isTherapist ? "Salvar perfil" : "Salvar cadastro global"}</SaveButton>
+            <SaveButton onSave={onSave}>{isProfessionalView ? "Salvar meu perfil" : "Salvar configurações da clínica"}</SaveButton>
           </div>
         </div>
       </div>
 
-      {isTherapist ? (
+      {isProfessionalView ? (
         <>
           <SectionCard title="Cadastro e credenciais profissionais" description="Mantenha seus dados de identificação, conselho, especialidade e informações usadas em documentos clínicos e faturamento." complete={responsibleComplete && professionalBillingComplete} hasAnyData={Boolean(values.therapistFullName || values.therapistPhone || values.therapistEmail || values.therapistCrp || values.therapistCboCode)}>
             {professionalFields}
           </SectionCard>
-          <ProfessionalScheduleSettings memberId={currentUserId} />
+          {isTherapist && <ProfessionalScheduleSettings memberId={currentUserId} />}
           <SectionCard title="Assinatura e foto profissional" description="Estes arquivos acompanham seu perfil e são usados em relatórios, documentos e registros assinados." complete={mediaComplete} hasAnyData={mediaComplete}>
             {mediaFields}
           </SectionCard>
@@ -1569,13 +1603,6 @@ export function ClinicGlobalSettingsPanel({
                 </p>
               </SectionCard>
 
-              <SectionCard title="Profissional responsável" description="Dados do responsável técnico ou administrativo. Eles não substituem os dados da clínica." complete={responsibleComplete && professionalBillingComplete} hasAnyData={Boolean(values.therapistFullName || values.therapistCpf || values.therapistCrp)}>
-                {professionalFields}
-              </SectionCard>
-
-              <SectionCard title="Dados assistenciais e documentos" description="Assinatura e foto seguem o fluxo existente e continuam funcionando como antes." complete={mediaComplete} hasAnyData={mediaComplete}>
-                {mediaFields}
-              </SectionCard>
 
               <SectionCard title="Preferências da clínica" description="Preferências operacionais usadas na agenda e nas rotinas administrativas." complete={Boolean(values.workStart && values.workEnd)} hasAnyData>
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2">

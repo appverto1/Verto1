@@ -58,7 +58,7 @@ export const CAPABILITY_CATALOG = [
   { key: 'clinic.view', label: 'Visualizar dados da unidade', domain: 'clinic', delegable: true },
   { key: 'clinic.edit', label: 'Editar dados da unidade', domain: 'clinic', delegable: true, sensitive: true },
   { key: 'clinic.settings.view', label: 'Visualizar configurações da clínica', domain: 'clinic', delegable: true },
-  { key: 'clinic.settings.edit', label: 'Editar configurações da clínica', domain: 'clinic', delegable: true, sensitive: true },
+  { key: 'clinic.settings.edit', label: 'Editar configurações da clínica', domain: 'clinic', delegable: false, sensitive: true },
   { key: 'clinic.rooms.manage', label: 'Gerenciar salas e locais de atendimento', domain: 'clinic', delegable: true },
   { key: 'clinic.indicators.view', label: 'Visualizar indicadores gerais da clínica', domain: 'clinic', delegable: true },
   { key: 'workspace.switch', label: 'Alternar entre unidades autorizadas', domain: 'clinic', delegable: true },
