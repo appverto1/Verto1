@@ -9609,6 +9609,7 @@ export function CoordinatorDashboard({
             </div>
             <TeamManagement
               user={user}
+              capabilities={effectiveCapabilities}
               onRequestUpgrade={() => navigateToTab("billing")}
               activePatientCount={(allPatients || []).filter((patient: any) => String(patient?.status || "active").toLowerCase() !== "inactive").length}
               memberSessionDurations={professionalSessionDurations}
@@ -11289,6 +11290,7 @@ export function CoordinatorDashboard({
               >
                 <TeamManagement
                   user={user}
+                  capabilities={effectiveCapabilities}
                   onRequestUpgrade={() => navigateToTab("billing")}
                   activePatientCount={(allPatients || []).filter((patient: any) => String(patient?.status || "active").toLowerCase() !== "inactive").length}
                   memberSessionDurations={professionalSessionDurations}

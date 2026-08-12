@@ -388,12 +388,18 @@ import {
   type ClinicAuthorityRole
 } from './src/utils/clinicMembershipAuthority';
 import {
+  canDelegateClinicCapability,
   resolveEffectiveClinicCapabilities,
   type CapabilityOverrideLike
 } from './src/utils/authorizationRuntime';
 import {
+  CAPABILITY_CATALOG,
   ROLE_DEFAULT_SCOPES,
+  getDefaultCapabilitiesForRole,
   isCapabilityKey,
+  isClinicBaseRole,
+  isDelegableCapability,
+  roleHasDefaultCapability,
   type CapabilityKey,
   type ClinicBaseRole
 } from './src/constants/authorizationModel';
@@ -8965,6 +8971,18 @@ function requireAnyClinicCapability(...capabilities: CapabilityKey[]) {
 
 function requireClinicCapabilityOrPatientPortal(capability: CapabilityKey) {
   const clinicGuard = requireClinicCapability(capability);
+  return async (req: any, res: any, next: any) => {
+    const role = sanitizeString(req.session?.user?.role, 40).toLowerCase();
+    if (role === 'patient' || req.session?.user?.activeAccessContext?.kind === 'patient_portal') {
+      return next();
+    }
+    return clinicGuard(req, res, next);
+  };
+}
+
+
+function requireAnyClinicCapabilityOrPatientPortal(...capabilities: CapabilityKey[]) {
+  const clinicGuard = requireAnyClinicCapability(...capabilities);
   return async (req: any, res: any, next: any) => {
     const role = sanitizeString(req.session?.user?.role, 40).toLowerCase();
     if (role === 'patient' || req.session?.user?.activeAccessContext?.kind === 'patient_portal') {
@@ -25544,7 +25562,224 @@ async function startServer() {
     }
   });
 
-  app.get('/api/clinic/members', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'supervisor', 'therapist', 'biller', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/members/:memberId/authorization', checkAuth, requireClinicCapability('team.permissions.manage'), async (req: any, res) => {
+    try {
+      const actorContext = req.authorizationContext as ResolvedClinicCapabilityContext;
+      const memberId = sanitizeString(req.params?.memberId, 120);
+      if (!isUuid(memberId)) {
+        return res.status(400).json({ success: false, error: 'CLINIC_MEMBER_INVALID' });
+      }
+      if (memberId === actorContext.userId) {
+        return res.status(403).json({
+          success: false,
+          error: 'SELF_PERMISSION_CHANGE_DENIED',
+          message: 'Você não pode administrar as próprias permissões.'
+        });
+      }
+
+      const { data: membership, error: membershipError } = await supabase
+        .from('clinic_memberships')
+        .select('id,user_id,clinic_id,role,status')
+        .eq('user_id', memberId)
+        .eq('clinic_id', actorContext.clinicId)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle();
+      if (membershipError) throw membershipError;
+      const membershipRole = sanitizeString(membership?.role, 40).toLowerCase();
+      if (!membership || !isClinicBaseRole(membershipRole)) {
+        return res.status(404).json({
+          success: false,
+          error: 'CLINIC_MEMBER_NOT_FOUND',
+          message: 'Membro ativo não encontrado nesta clínica.'
+        });
+      }
+      if (!canManageClinicRole(actorContext.role, membershipRole)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_ROLE_TARGET_ABOVE_ACTOR',
+          message: 'Seu papel atual não pode administrar este membro.'
+        });
+      }
+
+      const { data: overrideRows, error: overrideError } = await supabase
+        .from('clinic_membership_permission_overrides')
+        .select('permission_key,effect,reason,updated_at')
+        .eq('membership_id', sanitizeString(membership.id, 120))
+        .limit(500);
+      if (overrideError) throw overrideError;
+
+      const overrides = Array.isArray(overrideRows) ? overrideRows : [];
+      const effective = resolveEffectiveClinicCapabilities(membershipRole, overrides);
+      if (!effective) {
+        return res.status(409).json({ success: false, error: 'CLINIC_MEMBER_AUTHORIZATION_INVALID' });
+      }
+      const defaults = getDefaultCapabilitiesForRole(membershipRole);
+      const overrideMap = new Map(
+        overrides
+          .map((item: any) => [
+            sanitizeString(item?.permission_key, 160),
+            sanitizeString(item?.effect, 20).toLowerCase(),
+          ] as const)
+          .filter(([key, effect]) => isCapabilityKey(key) && (effect === 'allow' || effect === 'deny')),
+      );
+
+      return res.json({
+        success: true,
+        data: {
+          membershipId: sanitizeString(membership.id, 120),
+          memberId,
+          role: membershipRole,
+          scopes: ROLE_DEFAULT_SCOPES[membershipRole] || [],
+          catalog: CAPABILITY_CATALOG
+            .filter((definition) => definition.delegable)
+            .map((definition) => {
+              const defaultEnabled = defaults.has(definition.key);
+              const overrideEffect = overrideMap.get(definition.key) || null;
+              const canEnable = canDelegateClinicCapability({
+                actorRole: actorContext.role,
+                targetRole: membershipRole,
+                actorUserId: actorContext.userId,
+                targetUserId: memberId,
+                capability: definition.key,
+                actorCapabilities: actorContext.capabilities,
+                requestedEffect: 'allow',
+              });
+              const canDisable = canDelegateClinicCapability({
+                actorRole: actorContext.role,
+                targetRole: membershipRole,
+                actorUserId: actorContext.userId,
+                targetUserId: memberId,
+                capability: definition.key,
+                actorCapabilities: actorContext.capabilities,
+                requestedEffect: 'deny',
+              });
+              return {
+                key: definition.key,
+                label: definition.label,
+                domain: definition.domain,
+                sensitive: definition.sensitive === true,
+                defaultEnabled,
+                effectiveEnabled: effective.capabilities.has(definition.key),
+                overrideEffect,
+                editable: canEnable || canDisable || Boolean(overrideEffect),
+                canEnable,
+                canDisable,
+                scopeLimited: !defaultEnabled && !canEnable,
+              };
+            }),
+        }
+      });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/clinic/members/:memberId/authorization [GET]', error, {
+        memberId: sanitizeString(req.params?.memberId, 120),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+      });
+    }
+  });
+
+  app.patch('/api/clinic/members/:memberId/authorization', portalActionLimiter, checkAuth, requireClinicCapability('team.permissions.manage'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Permissão individual')) return;
+      const actorContext = req.authorizationContext as ResolvedClinicCapabilityContext;
+      const memberId = sanitizeString(req.params?.memberId, 120);
+      const permissionKey = sanitizeString(req.body?.permissionKey || req.body?.permission_key, 160);
+      const requestedEffectRaw = req.body?.effect;
+      const effect = requestedEffectRaw === null || requestedEffectRaw === undefined || requestedEffectRaw === ''
+        ? null
+        : sanitizeString(requestedEffectRaw, 20).toLowerCase();
+      const reason = sanitizeTextField(req.body?.reason, 500) || null;
+
+      if (!isUuid(memberId) || !isCapabilityKey(permissionKey)) {
+        return res.status(400).json({ success: false, error: 'CLINIC_PERMISSION_INVALID' });
+      }
+      if (effect !== null && effect !== 'allow' && effect !== 'deny') {
+        return res.status(400).json({ success: false, error: 'CLINIC_PERMISSION_EFFECT_INVALID' });
+      }
+      if (!isDelegableCapability(permissionKey)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_PERMISSION_NOT_DELEGABLE',
+          message: 'Esta permissão é estrutural e não pode ser delegada.'
+        });
+      }
+
+      const { data: membership, error: membershipError } = await supabase
+        .from('clinic_memberships')
+        .select('id,user_id,clinic_id,role,status')
+        .eq('user_id', memberId)
+        .eq('clinic_id', actorContext.clinicId)
+        .eq('status', 'active')
+        .limit(1)
+        .maybeSingle();
+      if (membershipError) throw membershipError;
+      const membershipRole = sanitizeString(membership?.role, 40).toLowerCase();
+      const membershipId = sanitizeString(membership?.id, 120);
+      if (!membership || !isUuid(membershipId) || !isClinicBaseRole(membershipRole)) {
+        return res.status(404).json({ success: false, error: 'CLINIC_MEMBER_NOT_FOUND' });
+      }
+      if (!canDelegateClinicCapability({
+        actorRole: actorContext.role,
+        targetRole: membershipRole,
+        actorUserId: actorContext.userId,
+        targetUserId: memberId,
+        capability: permissionKey,
+        actorCapabilities: actorContext.capabilities,
+        requestedEffect: effect,
+      })) {
+        const selfEdit = memberId === actorContext.userId;
+        return res.status(403).json({
+          success: false,
+          error: selfEdit ? 'SELF_PERMISSION_CHANGE_DENIED' : 'CLINIC_PERMISSION_DELEGATION_DENIED',
+          message: selfEdit
+            ? 'Você não pode alterar as próprias permissões.'
+            : 'Seu acesso atual não permite delegar esta permissão para este membro.'
+        });
+      }
+
+      const { error: rpcError } = await supabase.rpc('set_clinic_membership_permission_override_v1', {
+        p_membership_id: membershipId,
+        p_permission_key: permissionKey,
+        p_effect: effect,
+        p_actor_user_id: actorContext.userId,
+        p_reason: reason,
+      });
+      if (rpcError) throw rpcError;
+
+      const { data: refreshedRows, error: refreshedError } = await supabase
+        .from('clinic_membership_permission_overrides')
+        .select('permission_key,effect')
+        .eq('membership_id', membershipId)
+        .limit(500);
+      if (refreshedError) throw refreshedError;
+      const effective = resolveEffectiveClinicCapabilities(membershipRole, refreshedRows || []);
+      return res.json({
+        success: true,
+        data: {
+          memberId,
+          membershipId,
+          permissionKey,
+          effect,
+          defaultEnabled: roleHasDefaultCapability(membershipRole, permissionKey),
+          effectiveEnabled: effective?.capabilities.has(permissionKey) === true,
+        }
+      });
+    } catch (error: any) {
+      if (isMissingRelationError(error) || sanitizeString(error?.message, 300).includes('set_clinic_membership_permission_override_v1')) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_PERMISSION_RPC_MIGRATION_REQUIRED',
+          message: 'A função atômica de permissões ainda não foi aplicada no banco.'
+        });
+      }
+      return sendRouteDbError(res, '/api/clinic/members/:memberId/authorization [PATCH]', error, {
+        memberId: sanitizeString(req.params?.memberId, 120),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+      });
+    }
+  });
+
+  app.get('/api/clinic/members', checkAuth, requireClinicCapability('team.view'), async (req: any, res) => {
     const user = req.session.user;
 
     try {
@@ -25758,7 +25993,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/members/:memberId/work-schedule/apply', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/clinic/members/:memberId/work-schedule/apply', portalActionLimiter, checkAuth, requireClinicCapability('team.edit'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 128 * 1024, 'Aplicação de escala')) return;
       const clinicId = currentClinicId(req.session.user);
@@ -25903,7 +26138,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/invite', inviteLimiter, checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/clinic/invite', inviteLimiter, checkAuth, requireClinicCapability('team.invite'), async (req: any, res) => {
     try {
       const email = sanitizeEmail(req.body?.email);
       const roleRaw = sanitizeString(req.body?.role, 30);
@@ -26337,7 +26572,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/clinic/invitations', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/invitations', checkAuth, requireClinicCapability('team.view'), async (req: any, res) => {
     try {
       const user = req.session.user;
       const clinicId = currentClinicId(user);
@@ -26428,7 +26663,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/clinic/invitations/:invitationId/cancel', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/clinic/invitations/:invitationId/cancel', checkAuth, requireClinicCapability('team.invite'), async (req: any, res) => {
     try {
       const user = req.session.user;
 
@@ -26586,7 +26821,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/assign-role', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/clinic/assign-role', checkAuth, requireClinicCapability('team.permissions.manage'), async (req: any, res) => {
     const adminUser = req.session.user;
 
     const email = sanitizeEmail(req.body?.email);
@@ -26667,7 +26902,7 @@ async function startServer() {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
-  app.patch('/api/clinic/members/:memberId/specialty', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/clinic/members/:memberId/specialty', checkAuth, requireClinicCapability('team.edit'), async (req: any, res) => {
     const actor = req.session.user;
     if (!enforcePayloadLimit(req, res, 4 * 1024, 'Especialidade clínica')) return;
 
@@ -26740,7 +26975,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/clinic/members/:memberId/role', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/clinic/members/:memberId/role', checkAuth, requireClinicCapability('team.permissions.manage'), async (req: any, res) => {
     const adminUser = req.session.user;
 
     const memberId = sanitizeString(req.params?.memberId, 120);
@@ -26853,7 +27088,7 @@ async function startServer() {
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
-  app.patch('/api/clinic/members/:memberId/unlink', checkAuth, requireActiveClinicRoles('director', 'coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/clinic/members/:memberId/unlink', checkAuth, requireClinicCapability('team.deactivate'), async (req: any, res) => {
     const adminUser = req.session.user;
 
     const memberId = sanitizeString(req.params?.memberId, 120);
@@ -26915,7 +27150,7 @@ async function startServer() {
       return res.status(500).json({ error: 'Falha na operação de dados.' });
     }
   });
-  app.get('/api/clinic/anamnesis-template', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/anamnesis-template', checkAuth, requireClinicCapability('clinical.anamnesis.view'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
       const templateResult = await fetchClinicAnamnesisTemplateWithSchemaFallback({
@@ -26943,11 +27178,11 @@ async function startServer() {
     }
   });
 
-  app.get('/api/clinic/anamnesis-template/defaults', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (_req: any, res) => {
+  app.get('/api/clinic/anamnesis-template/defaults', checkAuth, requireClinicCapability('clinical.anamnesis.view'), async (_req: any, res) => {
     return res.json({ success: true, data: getDefaultAnamnesisTemplate() });
   });
 
-  app.get('/api/clinic/anamnesis-templates', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/anamnesis-templates', checkAuth, requireClinicCapability('clinical.anamnesis.view'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
       const actorId = sanitizeString(req.session.user?.id, 120);
@@ -27018,7 +27253,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/anamnesis-templates', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/clinic/anamnesis-templates', checkAuth, requireClinicCapability('clinical.anamnesis.edit'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Ficha de anamnese')) return;
       const clinicId = currentClinicId(req.session.user);
@@ -27160,7 +27395,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/clinic/anamnesis-templates/:templateId', checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/clinic/anamnesis-templates/:templateId', checkAuth, requireClinicCapability('clinical.anamnesis.edit'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
       const actorId = sanitizeString(req.session.user?.id, 120);
@@ -27220,7 +27455,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/anamnesis-template', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/clinic/anamnesis-template', checkAuth, requireClinicCapability('clinic.settings.edit'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
       const actorId = sanitizeString(req.session.user?.id, 120);
@@ -31283,7 +31518,7 @@ async function startServer() {
     '/api/patients/:patientId/professional-links',
     checkAuth,
     checkPatientAccess,
-    requireRoles('coordinator', 'therapist', 'admin', 'owner'),
+    requireClinicCapability('team.view'),
     async (req: any, res) => {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
@@ -32289,7 +32524,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patients/:patientId/relationship-confirmation/send', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/patients/:patientId/relationship-confirmation/send', portalActionLimiter, checkAuth, checkPatientAccess, requireClinicCapability('patient.clinic_link.manage'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -32861,7 +33096,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patients/:patientId/shared-history/snapshot', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/patients/:patientId/shared-history/snapshot', portalActionLimiter, checkAuth, checkPatientAccess, requireClinicCapability('patient.clinic_link.manage'), requireClinicCapability('clinical.history.view'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -32987,7 +33222,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patients/:patientId/shared-history/import', portalActionLimiter, checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/patients/:patientId/shared-history/import', portalActionLimiter, checkAuth, checkPatientAccess, requireClinicCapability('patient.clinic_link.manage'), requireClinicCapability('clinical.history.view'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const snapshotId = sanitizeString(req.body?.snapshotId || req.body?.snapshot_id, 120);
@@ -33816,7 +34051,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/storage/create-bucket', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req, res) => {
+  app.post('/api/storage/create-bucket', checkAuth, requireClinicCapability('clinic.settings.edit'), async (req, res) => {
     const { bucketName } = req.body;
     if (!bucketName) return res.status(400).json({ error: 'Bucket name is required' });
 
@@ -33845,7 +34080,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/storage/upload', uploadLimiter, checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'), async (req: any, res) => {
+  app.post('/api/storage/upload', uploadLimiter, checkAuth, requireAnyClinicCapabilityOrPatientPortal('patient.files.upload', 'clinical.documents.upload'), async (req: any, res) => {
     try {
       const bucketName = sanitizeString(req.body?.bucket, 80);
       const requestedObjectPath = sanitizeString(req.body?.path, 260);
@@ -34127,7 +34362,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/storage/patient-photos/view', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner', 'patient'), async (req: any, res) => {
+  app.get('/api/storage/patient-photos/view', checkAuth, requireAnyClinicCapabilityOrPatientPortal('patient.demographics.view', 'clinical.record.view'), async (req: any, res) => {
     try {
       const objectPath = extractPatientPhotosStoragePath(req.query?.path);
       const actorId = sanitizeString(req.session.user?.id, 120);
@@ -34215,7 +34450,7 @@ async function startServer() {
     '/api/patients/:id/resend-activation',
     resendActivationLimiter,
     checkAuth,
-    requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'),
+    requireClinicCapability('patient.demographics.edit'),
     async (req: any, res) => {
       try {
         const patientId = sanitizeString(req.params.id, 120);
@@ -34328,7 +34563,7 @@ async function startServer() {
     '/api/patients/:id/resend-recovery',
     resendRecoveryLimiter,
     checkAuth,
-    requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'),
+    requireClinicCapability('patient.demographics.edit'),
     async (req: any, res) => {
       try {
         const patientId = sanitizeString(req.params.id, 120);
@@ -34770,7 +35005,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patients/:patientId/portability/request', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/patients/:patientId/portability/request', portalActionLimiter, checkAuth, requireClinicCapability('patient.clinic_link.manage'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId, 120);
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -34895,7 +35130,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/portability/status', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/patients/:patientId/portability/status', checkAuth, requireClinicCapability('patient.clinic_link.manage'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId, 120);
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -35085,7 +35320,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patients/:patientId/portability/import', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/patients/:patientId/portability/import', portalActionLimiter, checkAuth, requireClinicCapability('patient.clinic_link.manage'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId, 120);
       const requestId = sanitizeString(req.body?.requestId || req.body?.request_id, 120);
@@ -35697,7 +35932,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/financial-plans', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/patients/:patientId/financial-plans', checkAuth, requireClinicCapability('finance.payments.view'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -35730,7 +35965,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/patients/:patientId/financial-plans', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.put('/api/patients/:patientId/financial-plans', portalActionLimiter, checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload do plano financeiro')) return;
       const patientId = sanitizeString(req.params.patientId, 120);
@@ -36949,7 +37184,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/patient-files/:patientId/:fileId', checkAuth, checkPatientAccess, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/patient-files/:patientId/:fileId', checkAuth, checkPatientAccess, requireClinicCapability('patient.files.archive'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
       const fileId = sanitizeString(req.params.fileId, 120);
@@ -46790,7 +47025,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/appointments/:appointmentId/action-requests', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/appointments/:appointmentId/action-requests', checkAuth, requireClinicCapability('calendar.requests.manage'), async (req: any, res) => {
     try {
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
@@ -46814,7 +47049,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/appointments/action-requests/:requestId/availability', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/appointments/action-requests/:requestId/availability', noStoreDynamicResponse, checkAuth, requireClinicCapability('calendar.requests.manage'), async (req: any, res) => {
     try {
       const schemaState = await requireAppointmentActionResolutionSchema(
         req,
@@ -46856,7 +47091,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/appointments/action-requests/:requestId/approve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/appointments/action-requests/:requestId/approve', portalActionLimiter, checkAuth, requireClinicCapability('calendar.requests.manage'), async (req: any, res) => {
     try {
       if (!(await requireAppointmentActionResolutionSchema(req, res, 'approval'))) return;
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de aprovação de solicitação')) return;
@@ -47258,7 +47493,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/appointments/action-requests/:requestId/reject', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/appointments/action-requests/:requestId/reject', portalActionLimiter, checkAuth, requireClinicCapability('calendar.requests.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de recusa de solicitação')) return;
       const context = await fetchAppointmentActionRequestForAdmin(req.params.requestId, req.session.user);
@@ -47371,7 +47606,7 @@ async function startServer() {
       .slice(0, params.limit);
   };
 
-  app.post('/api/calendar/events/check-conflicts', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/calendar/events/check-conflicts', checkAuth, requireAnyClinicCapability('calendar.appointment.create', 'calendar.appointment.edit', 'calendar.appointment.reschedule'), async (req: any, res) => {
     try {
       const result = await checkScheduleConflicts(req.body || {}, req.session.user);
       return res.json({ success: true, data: result, ...result });
@@ -47381,7 +47616,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/appointments/duplicates/diagnostics', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/appointments/duplicates/diagnostics', checkAuth, requireClinicCapability('reports.appointments.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
@@ -47487,7 +47722,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/clinic/rooms', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/clinic/rooms', checkAuth, requireAnyClinicCapability('calendar.clinic.view', 'calendar.team.view', 'calendar.own.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
@@ -47525,7 +47760,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/clinic/rooms', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/clinic/rooms', checkAuth, requireClinicCapability('clinic.rooms.manage'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
@@ -47562,7 +47797,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/clinic/rooms/:roomId', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/clinic/rooms/:roomId', checkAuth, requireClinicCapability('clinic.rooms.manage'), async (req: any, res) => {
     try {
       const roomId = sanitizeString(req.params.roomId, 180);
       if (!isUuid(roomId)) return res.status(400).json({ success: false, error: 'Sala inválida.' });
@@ -47598,7 +47833,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/clinic/rooms/:roomId', checkAuth, requireRoles('coordinator', 'receptionist', 'admin', 'owner'), async (req: any, res) => {
+  app.delete('/api/clinic/rooms/:roomId', checkAuth, requireClinicCapability('clinic.rooms.manage'), async (req: any, res) => {
     try {
       const roomId = sanitizeString(req.params.roomId, 180);
       if (!isUuid(roomId)) return res.status(400).json({ success: false, error: 'Sala inválida.' });
@@ -47619,7 +47854,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/reports/time/patient', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/reports/time/patient', checkAuth, requireClinicCapability('reports.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
@@ -47653,7 +47888,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/reports/time/professional', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/reports/time/professional', checkAuth, requireClinicCapability('reports.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
@@ -59918,7 +60153,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/appointments/billing-suggestion', checkAuth, requireRoles('coordinator', 'receptionist', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/appointments/billing-suggestion', checkAuth, requireClinicCapability('billing.sessions.view'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
       if (!isUuid(patientId)) return res.status(400).json(payerSafeError(400));
@@ -59944,7 +60179,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/appointments/:appointmentId/billing-context', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/appointments/:appointmentId/billing-context', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.sessions.view'), async (req: any, res) => {
     try {
       const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(payerSafeError((context as any).status || 404));
@@ -60005,7 +60240,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/appointments/:appointmentId/billing-context', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/appointments/:appointmentId/billing-context', portalActionLimiter, checkAuth, requireClinicCapability('billing.preguide.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de contexto de pagador')) return;
       const context = await fetchAppointmentForBillingContext(req.params.appointmentId, req.session.user);
@@ -60457,7 +60692,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/appointments/:appointmentId/billing-item/resolve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/appointments/:appointmentId/billing-item/resolve', portalActionLimiter, checkAuth, requireClinicCapability('billing.preguide.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 16 * 1024, 'Payload de resolução TUSS-ready')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -60491,7 +60726,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/appointments/:appointmentId/required-documents/:documentId/waive', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/appointments/:appointmentId/required-documents/:documentId/waive', portalActionLimiter, checkAuth, requireClinicCapability('billing.antiglosa.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 16 * 1024, 'Payload de dispensa de documento')) return;
       const reason = sanitizeTextField(req.body?.reason || req.body?.justification || req.body?.justificativa, 800);
@@ -60545,7 +60780,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/closure/appointments', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/closure/appointments', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('billing.sessions.view', 'session.history.view'), async (req: any, res) => {
     const { page, limit, from, to } = parseClosurePageParams(req.query);
     const readStartedAt = Date.now();
     const emptyClosurePayload = (reason = '') => ({ success: true, data: [], page, limit, totals: {
@@ -60782,7 +61017,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/closure/appointments/:appointmentId', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/closure/appointments/:appointmentId', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('billing.sessions.view', 'session.history.view'), async (req: any, res) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -60843,7 +61078,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/closure/appointments/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/closure/appointments/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('billing.sessions.view', 'session.history.view'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação de fechamento')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -60879,7 +61114,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/closure/appointments/:appointmentId/override', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/closure/appointments/:appointmentId/override', portalActionLimiter, checkAuth, requireClinicCapability('billing.preguide.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de override de fechamento')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -67274,7 +67509,7 @@ async function startServer() {
     return { ok: true, session: data, patientId, clinicId: sanitizeString(data.clinic_id || clinicId, 120) };
   };
 
-  app.get('/api/aba/session-live-summaries/:sessionId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/aba/session-live-summaries/:sessionId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), async (req: any, res) => {
     try {
       const scope = await resolveAbaSessionReadScope(req.params.sessionId, req.session.user);
       if (!scope.ok) return res.status((scope as any).status || 400).json({ success: false, error: (scope as any).error });
@@ -67295,7 +67530,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/session-reports/:sessionId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/aba/session-reports/:sessionId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), async (req: any, res) => {
     try {
       const scope = await resolveAbaSessionReadScope(req.params.sessionId, req.session.user);
       if (!scope.ok) return res.status((scope as any).status || 400).json({ success: false, error: (scope as any).error });
@@ -67318,7 +67553,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/recent-session-events/:sessionId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/aba/recent-session-events/:sessionId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), async (req: any, res) => {
     try {
       const requestedSessionId = sanitizeString(req.params.sessionId, 180);
       if (!isUuid(requestedSessionId)) {
@@ -67376,7 +67611,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/sessions/:sessionId/maintenance-probes', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/aba/sessions/:sessionId/maintenance-probes', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), async (req: any, res) => {
     try {
       const requestedSessionId = sanitizeString(req.params.sessionId, 180);
       if (!isUuid(requestedSessionId)) {
@@ -67787,7 +68022,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/aba/maintenance-panel', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/patients/:patientId/aba/maintenance-panel', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -68895,7 +69130,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/debug/pei-maintenance-goals', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/patients/:patientId/debug/pei-maintenance-goals', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       // Endpoint de debug para investigar por que habilidades não aparecem como elegíveis
       // Mostra: PEI goals + ABA targets elegíveis
@@ -68980,7 +69215,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/aba/targets/linkable', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/patients/:patientId/aba/targets/linkable', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -69354,7 +69589,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/targets/:targetId/maintenance-schedules', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/targets/:targetId/maintenance-schedules', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de agendamento de Maintenance Probe')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -69501,7 +69736,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/targets/:targetId/maintenance-schedules/next-session', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/targets/:targetId/maintenance-schedules/next-session', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de agendamento para futura sessão')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -69534,7 +69769,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/maintenance-schedules/:scheduleId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/aba/maintenance-schedules/:scheduleId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de edição de Maintenance Probe')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -69710,7 +69945,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/maintenance-schedules/:scheduleId/cancel', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/maintenance-schedules/:scheduleId/cancel', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Payload de cancelamento de Maintenance Probe')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -69779,7 +70014,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/targets/:targetId/next-maintenance-probe', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/aba/targets/:targetId/next-maintenance-probe', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = sanitizeString(req.query?.organizationId || req.query?.organization_id || req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
@@ -69798,7 +70033,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/maintenance-schedules/:scheduleId/complete', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/maintenance-schedules/:scheduleId/complete', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de conclusão de Maintenance Probe')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -69840,7 +70075,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/maintenance-schedules/:scheduleId/confirm-link', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/maintenance-schedules/:scheduleId/confirm-link', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de confirmacao de Maintenance Probe')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -70053,8 +70288,8 @@ async function startServer() {
     }
   };
 
-  app.post('/api/aba/maintenance-schedules/:scheduleId/assign-appointment', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), handleAssignMaintenanceScheduleToAppointment);
-  app.patch('/api/aba/maintenance-schedules/:scheduleId/assign-appointment', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), handleAssignMaintenanceScheduleToAppointment);
+  app.post('/api/aba/maintenance-schedules/:scheduleId/assign-appointment', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), handleAssignMaintenanceScheduleToAppointment);
+  app.patch('/api/aba/maintenance-schedules/:scheduleId/assign-appointment', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), handleAssignMaintenanceScheduleToAppointment);
 
   const handleRelinkMaintenanceScheduleTarget = async (req: any, res: any) => {
     try {
@@ -70144,10 +70379,10 @@ async function startServer() {
     }
   };
 
-  app.post('/api/aba/maintenance-schedules/:scheduleId/relink-target', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), handleRelinkMaintenanceScheduleTarget);
-  app.patch('/api/aba/maintenance-schedules/:scheduleId/relink-target', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), handleRelinkMaintenanceScheduleTarget);
+  app.post('/api/aba/maintenance-schedules/:scheduleId/relink-target', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), handleRelinkMaintenanceScheduleTarget);
+  app.patch('/api/aba/maintenance-schedules/:scheduleId/relink-target', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), handleRelinkMaintenanceScheduleTarget);
 
-  app.post('/api/aba/maintenance-schedules/:scheduleId/skip-link', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/maintenance-schedules/:scheduleId/skip-link', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de adiamento de Maintenance Probe')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -70414,7 +70649,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/recommendations/:recommendationId/accept', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/recommendations/:recommendationId/accept', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.suggestions.apply'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de aceite de sugestão ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -70445,7 +70680,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/recommendations/:recommendationId/reject', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/recommendations/:recommendationId/reject', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.suggestions.apply'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de recusa de sugestão ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -70479,7 +70714,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/recommendations/:recommendationId/link-target', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/recommendations/:recommendationId/link-target', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.suggestions.apply'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Vínculo de origem da recomendação ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -70531,7 +70766,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/recommendations/:recommendationId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/aba/recommendations/:recommendationId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.suggestions.apply'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de edição de sugestão ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -70577,7 +70812,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/recommendations/:recommendationId/apply-to-next-session', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/aba/recommendations/:recommendationId/apply-to-next-session', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.suggestions.apply'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de aplicação ao plano ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -70633,11 +70868,34 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/next-session-plan-items/:planItemId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/aba/next-session-plan-items/:planItemId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.suggestions.apply'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de item do plano ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const planItemId = sanitizeString(req.params.planItemId, 180);
+      if (!isUuid(planItemId)) {
+        return res.status(400).json({ success: false, error: 'INVALID_PLAN_ITEM_ID' });
+      }
+      const { data: existingPlanItem, error: existingPlanItemError } = await supabase
+        .from('aba_next_session_plan_items')
+        .select('id,patient_id,clinic_id,organization_id')
+        .eq('id', planItemId)
+        .eq('clinic_id', clinicId)
+        .limit(1)
+        .maybeSingle();
+      if (existingPlanItemError) {
+        if (hasMissingFinancialSchema(existingPlanItemError)) {
+          return res.status(503).json({ success: false, error: 'Schema de planejamento ABA ainda não aplicado.' });
+        }
+        throw existingPlanItemError;
+      }
+      const scopedPatientId = sanitizeString(existingPlanItem?.patient_id, 120);
+      if (!existingPlanItem?.id || !isUuid(scopedPatientId)) {
+        return res.status(404).json({ success: false, error: 'Item de plano não encontrado.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(scopedPatientId, req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Paciente fora do seu escopo clínico.' });
+      }
       const patch = cleanObject({
         status: req.body?.status !== undefined ? normalizeAbaPlanItemStatus(req.body.status) : undefined,
         instructions: req.body?.instructions !== undefined ? sanitizeTextField(req.body.instructions, 1000) : undefined,
@@ -72577,7 +72835,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/sessions/:sessionId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/aba/sessions/:sessionId', requireAbaV2Feature, checkAuth, requireClinicCapability('session.data.write'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload da sessão ABA')) return;
       const sessionId = sanitizeString(req.params.sessionId, 180);
@@ -73643,7 +73901,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/aba/behavior-events/:eventId', requireAbaV2Feature, checkAuth, requireRoles('coordinator', 'therapist', 'admin', 'owner'), checkPatientAccess, async (req: any, res) => {
+  app.delete('/api/aba/behavior-events/:eventId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), checkPatientAccess, async (req: any, res) => {
     try {
       const eventId = sanitizeString(req.params?.eventId || req.body?.event_id || req.body?.eventId || req.body?.id, 180);
       const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
@@ -74326,7 +74584,7 @@ async function startServer() {
     'timezone', 'created_at'
   ].join(',');
 
-  app.get('/api/private-pricing/catalog', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.get('/api/private-pricing/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('finance.payments.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74397,7 +74655,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/private-pricing/resolve', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.post('/api/private-pricing/resolve', portalActionLimiter, checkAuth, requireClinicCapability('finance.payments.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74431,7 +74689,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/private-pricing/appointments/:appointmentId/snapshot', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.get('/api/private-pricing/appointments/:appointmentId/snapshot', noStoreDynamicResponse, checkAuth, requireClinicCapability('finance.payments.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74455,7 +74713,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/private-pricing/rules', portalActionLimiter, checkAuth, requireRoles('admin', 'owner'), async (req: any, res) => {
+  app.post('/api/private-pricing/rules', portalActionLimiter, checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74478,7 +74736,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/private-pricing/patients/:patientId/agreements', portalActionLimiter, checkAuth, requireRoles('admin', 'owner'), async (req: any, res) => {
+  app.post('/api/private-pricing/patients/:patientId/agreements', portalActionLimiter, checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74503,7 +74761,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patient-finance/ledger', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.get('/api/patient-finance/ledger', noStoreDynamicResponse, checkAuth, requireClinicCapability('finance.payments.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74629,7 +74887,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patient-finance/charges', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.post('/api/patient-finance/charges', portalActionLimiter, checkAuth, requireClinicCapability('finance.payments.receive'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74716,7 +74974,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patient-finance/charges/:paymentId/operations', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.post('/api/patient-finance/charges/:paymentId/operations', portalActionLimiter, checkAuth, requireClinicCapability('finance.payments.edit'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74810,7 +75068,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patient-finance/charges/:paymentId/reminder', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.post('/api/patient-finance/charges/:paymentId/reminder', portalActionLimiter, checkAuth, requireClinicCapability('finance.payments.edit'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74949,7 +75207,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patient-finance/policy', noStoreDynamicResponse, checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.get('/api/patient-finance/policy', noStoreDynamicResponse, checkAuth, requireClinicCapability('finance.payments.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -74967,7 +75225,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/patient-finance/policy', portalActionLimiter, checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.put('/api/patient-finance/policy', portalActionLimiter, checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
@@ -75014,7 +75272,7 @@ async function startServer() {
   });
 
   // Legacy payments API kept for old rows and backward compatibility.
-  app.get('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.get('/api/payments', checkAuth, requireClinicCapability('finance.payments.view'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
       const paymentsResult = await fetchPaymentsWithSchemaFallback({
@@ -75036,7 +75294,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/payments', checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.post('/api/payments', checkAuth, requireClinicCapability('finance.payments.receive'), async (req: any, res) => {
     try {
       const receiptUrl = sanitizeReceiptUrl(req.body?.receipt_url);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
@@ -75113,7 +75371,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/payments/:paymentId', checkAuth, requireRoles('coordinator', 'admin', 'owner', 'receptionist'), async (req: any, res) => {
+  app.patch('/api/payments/:paymentId', checkAuth, requireClinicCapability('finance.payments.edit'), async (req: any, res) => {
     try {
       const paymentId = sanitizeString(req.params.paymentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -75184,7 +75442,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/financial/professional-payments', checkAuth, requireClinicCapability('finance.entries.view'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
       const professionalPaymentsResult = await fetchProfessionalPaymentsWithSchemaFallback({
@@ -75208,7 +75466,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/financial/professional-payments', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/financial/professional-payments', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
     try {
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase() || 'pending';
       const payload = cleanObject({
@@ -75267,7 +75525,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/financial/professional-payments/:paymentId', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.patch('/api/financial/professional-payments/:paymentId', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
     try {
       const paymentId = sanitizeString(req.params.paymentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -75325,7 +75583,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/financial/entries', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/financial/entries', checkAuth, requireClinicCapability('finance.entries.view'), async (req: any, res) => {
     try {
       const scopedClinicId = currentClinicId(req.session.user);
       const entriesResult = await fetchFinancialEntriesWithSchemaFallback({
@@ -75349,7 +75607,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/financial/feature-survey', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.get('/api/financial/feature-survey', checkAuth, requireClinicCapability('finance.reports.view'), async (req: any, res) => {
     try {
       const user = req.session.user;
       const clinicId = currentClinicId(user);
@@ -75371,7 +75629,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/financial/feature-survey', checkAuth, requireRoles('coordinator', 'admin', 'owner'), async (req: any, res) => {
+  app.post('/api/financial/feature-survey', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
     try {
       const user = req.session.user;
       const clinicId = currentClinicId(user);

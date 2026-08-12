@@ -55,7 +55,7 @@ assert.match(
   /user\.role === 'biller'[\s\S]{0,120}<BillerWorkspace/,
   'Faturista deve entrar no workspace dedicado de faturamento, sem cair no dashboard clínico legado',
 );
-assert.match(team, /const canGrantDirector = actorRole === 'director' \|\| actorRole === 'admin' \|\| actorRole === 'owner'/);
+assert.match(team, /const canGrantDirector = actorRole === 'director'/);
 assert.match(team, />Supervisor</);
 assert.match(team, />Faturista</);
 assert.match(invitationModal, /<option value="supervisor">Supervisor<\/option>/);

@@ -19,6 +19,7 @@ import {
   ReceiptText
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { MemberPermissionEditor } from './MemberPermissionEditor';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CLINICAL_SPECIALTY_OPTIONS,
@@ -226,12 +227,14 @@ export function TeamManagement({
   activePatientCount = 0,
   memberSessionDurations = {},
   onUpdateMemberSessionDuration,
+  capabilities,
 }: {
   user: any;
   onRequestUpgrade?: () => void;
   activePatientCount?: number;
   memberSessionDurations?: Record<string, string>;
   onUpdateMemberSessionDuration?: (member: Member, duration: string) => void;
+  capabilities?: ReadonlySet<string>;
 }) {
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
@@ -264,6 +267,7 @@ export function TeamManagement({
   const [bulkApplying, setBulkApplying] = useState(false);
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [permissionMember, setPermissionMember] = useState<Member | null>(null);
 
   void onRequestUpgrade;
   const normalizedActivePatientCount = Math.max(0, Number(activePatientCount) || 0);
@@ -271,8 +275,8 @@ export function TeamManagement({
   const totalUsed = (members?.length || 0) + (invitations?.filter(i => i.status === 'pending').length || 0);
   const canInvite = totalUsed < inviteLimit;
   const actorRole = String(user?.role || '').trim().toLowerCase();
-  const canManageTeamAccess = ['director', 'coordinator', 'admin', 'owner'].includes(actorRole);
-  const canGrantDirector = actorRole === 'director' || actorRole === 'admin' || actorRole === 'owner';
+  const canManageTeamAccess = capabilities?.has('team.permissions.manage') === true;
+  const canGrantDirector = actorRole === 'director';
   const canManageMemberAccess = (member: Member) =>
     canManageTeamAccess &&
     member.id !== user.id &&
@@ -880,6 +884,14 @@ export function TeamManagement({
                             <div className="px-4 py-2 border-b border-slate-50 mb-1">
                               <p className="text-xs font-medium text-slate-500">Alterar acesso</p>
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => { setPermissionMember(member); setOpenMenuId(null); }}
+                              className="w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium text-violet-700 hover:bg-violet-50 transition-all"
+                            >
+                              <Shield size={14} /> Permissões específicas
+                            </button>
+                            <div className="h-px bg-slate-50 my-1" />
                             {canGrantDirector && (
                               <button
                                 type="button"
@@ -1726,6 +1738,11 @@ export function TeamManagement({
           </div>
         </section>
       )}
+
+      <MemberPermissionEditor
+        member={permissionMember}
+        onClose={() => setPermissionMember(null)}
+      />
     </div>
   );
 }

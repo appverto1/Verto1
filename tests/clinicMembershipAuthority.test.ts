@@ -103,7 +103,7 @@ assert.match(
 );
 assert.match(
   server,
-  /app\.patch\('\/api\/clinic\/members\/:memberId\/specialty', checkAuth, requireActiveClinicRoles\('director', 'coordinator', 'admin', 'owner'\)/,
+  /app\.patch\('\/api\/clinic\/members\/:memberId\/specialty', checkAuth, requireClinicCapability\('team\.edit'\)/,
 );
 assert.match(
   server,
@@ -174,8 +174,8 @@ assert.equal(canManageClinicRole('supervisor', 'therapist'), false);
 
 assert.match(
   server,
-  /app\.post\('\/api\/clinic\/invite'[\s\S]*?requireActiveClinicRoles\('director', 'coordinator', 'admin', 'owner'\)/,
-  'diretor e coordenador podem abrir o fluxo de convite na clínica ativa',
+  /app\.post\('\/api\/clinic\/invite'[\s\S]*?requireClinicCapability\('team\.invite'\)/,
+  'convite exige capability de equipe na membership ativa',
 );
 assert.match(
   server,

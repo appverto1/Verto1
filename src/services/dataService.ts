@@ -6863,6 +6863,53 @@ export const dataService = {
     }
   },
 
+  async getClinicMemberAuthorization(memberId: string) {
+    try {
+      const response = await fetch(`/api/clinic/members/${encodeURIComponent(String(memberId))}/authorization`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: result?.message || result?.error || 'Não foi possível carregar as permissões deste membro.'
+        };
+      }
+      return result;
+    } catch (error) {
+      console.error('Error fetching clinic member authorization:', error);
+      return { success: false, error: 'Não foi possível carregar as permissões deste membro.' };
+    }
+  },
+
+  async updateClinicMemberPermissionOverride(
+    memberId: string,
+    permissionKey: string,
+    effect: 'allow' | 'deny' | null,
+    reason?: string,
+  ) {
+    try {
+      const response = await fetch(`/api/clinic/members/${encodeURIComponent(String(memberId))}/authorization`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ permissionKey, effect, reason: reason || undefined })
+      });
+      const result = await safeJson(response);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: result?.message || result?.error || 'Não foi possível atualizar esta permissão.'
+        };
+      }
+      return result;
+    } catch (error) {
+      console.error('Error updating clinic member permission override:', error);
+      return { success: false, error: 'Não foi possível atualizar esta permissão.' };
+    }
+  },
+
   async getMemberWorkSchedule(memberId: string) {
     try {
       const response = await fetch(`/api/clinic/members/${encodeURIComponent(String(memberId))}/work-schedule`, {
