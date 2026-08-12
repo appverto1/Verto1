@@ -3731,8 +3731,10 @@ function resolveStoredCouncil(input: any): string | null {
   return sanitizeString(input?.council, 80) || null;
 }
 
-function maskEmail(email: string): string {
-  const [local, domain] = email.split('@');
+function maskEmail(email: unknown): string {
+  const safeEmail = sanitizeEmail(email);
+  if (!safeEmail) return '***';
+  const [local, domain] = safeEmail.split('@');
   if (!local || !domain) return '***';
   const visible = local.slice(0, 2);
   return `${visible}${'*'.repeat(Math.max(1, local.length - 2))}@${domain}`;
@@ -3995,6 +3997,19 @@ function isMissingRelationError(error: any): boolean {
   if (code === '42P01') return true;
   return (
     message.includes('relation') && message.includes('does not exist')
+  );
+}
+
+function isDuplicateConstraintError(error: any): boolean {
+  const code = sanitizeString(error?.code, 40).toUpperCase();
+  const message = extractSupabaseErrorMessage(error).toLowerCase();
+  return (
+    code === '23505' ||
+    message.includes('duplicate key') ||
+    message.includes('unique constraint') ||
+    message.includes('already exists') ||
+    message.includes('duplicado') ||
+    message.includes('já existe')
   );
 }
 
@@ -24648,7 +24663,11 @@ async function startServer() {
           user_metadata: { first_login_completed: false },
         });
 
-        if (finalRole === "coordinator") {
+        if (
+          finalRole === "coordinator" &&
+          !invitationPendingAcceptance &&
+          sanitizeString(clinicId, 120) === sanitizeString(user.id, 120)
+        ) {
           await ensureClinicAndMembershipForCoordinator(user.id);
           if (commercialPaidActivation) {
             await finalizeSalesActivationForUser({
@@ -24676,8 +24695,14 @@ async function startServer() {
         req.session.isFirstLogin = true;
       }
 
-      // Legacy compatibility: ensure coordinator always has clinic membership
-      if (profile.role === 'coordinator') {
+      // Legacy compatibility is restricted to a coordinator profile that actually
+      // owns the technical self-clinic. An invited coordinator must never receive
+      // a new clinic just because the global profile role is coordinator.
+      const shouldEnsureOwnedCoordinatorWorkspace =
+        profile.role === 'coordinator' &&
+        !requestedClinicInvitation &&
+        sanitizeString(profile.clinic_id, 120) === sanitizeString(user.id, 120);
+      if (shouldEnsureOwnedCoordinatorWorkspace) {
         await ensureClinicAndMembershipForCoordinator(user.id);
       } else if (profile.clinic_id && ensureClinicRole(profile.role) && !invitationPendingAcceptance) {
         await supabase
