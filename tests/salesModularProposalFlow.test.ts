@@ -17,7 +17,8 @@ assert.match(builder, /Seleção manual/);
 assert.match(builder, /Limite técnico de capacidade/);
 assert.match(builder, /customBasePackageLimit/);
 assert.match(builder, /basePackageSelectionMode/);
-assert.match(builder, /modularCheckoutEnabled: false/);
+assert.match(builder, /modularCheckoutEnabled: true/);
+assert.match(builder, /trialDays: 7/);
 
 assert.match(server, /customBasePackageLimit/);
 assert.match(server, /basePackageSelectionMode/);
@@ -36,8 +37,9 @@ assert.match(
   /basePackage: sanitizePublicBasePackage\(/,
   'a proposta pública deve reutilizar e sanitizar o pacote-base congelado'
 );
-assert.match(server, /modularCheckoutEnabled: false/);
-assert.match(server, /PROPOSAL_MODULAR_CHECKOUT_NOT_ENABLED/);
+assert.match(server, /modularCheckoutEnabled: offer\?\.modular_checkout_enabled === true/);
+assert.match(server, /create_sales_modular_offer_v2/);
+assert.doesNotMatch(server, /PROPOSAL_MODULAR_CHECKOUT_NOT_ENABLED/);
 assert.match(
   server,
   /stripe\.checkout\.sessions\.create/,
@@ -59,7 +61,8 @@ assert.match(
   /<option value="consulta">Sessão<\/option>/,
   'o valor persistido permanece consulta e o rótulo visível vira Sessão'
 );
-assert.match(publicOffer, /checkout modular será habilitado/);
+assert.match(publicOffer, /Continuar para cadastro do cartão/);
+assert.match(publicOffer, /dias gratuitos/);
 
 const visibleFiles = [
   'src/components/Calendar.tsx',

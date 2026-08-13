@@ -404,6 +404,18 @@ import {
   type ClinicBaseRole
 } from './src/constants/authorizationModel';
 import {
+  filterCapabilitiesByOrganizationModules,
+  hasOrganizationModule,
+  isOrganizationModuleKey,
+  requiredModuleForCapability,
+  type OrganizationModuleAccessMode,
+  type OrganizationModuleKey,
+} from './src/constants/organizationModules';
+import {
+  resolveStripeEnvironment,
+  validateStripeSecretForEnvironment,
+} from './services/stripeEnvironment';
+import {
   evaluatePatientClinicalAccess,
   executeAuthorizedHistoryScoreMutation
 } from './src/utils/patientClinicalAccess';
@@ -461,6 +473,7 @@ function validateRequiredEnvForDeploy(): void {
     'SUPABASE_SERVICE_ROLE_KEY',
     'DATA_ENCRYPTION_KEY',
     'PSEUDONYMIZATION_KEY',
+    'STRIPE_ENVIRONMENT',
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET'
   ] as const;
@@ -473,6 +486,12 @@ function validateRequiredEnvForDeploy(): void {
   const dataEncryptionKey = String(process.env.DATA_ENCRYPTION_KEY || '').trim();
   if (!isValidDataEncryptionKey(dataEncryptionKey)) {
     throw new Error('DATA_ENCRYPTION_KEY invalida. Use hex com 64 caracteres ou base64 com 32 bytes.');
+  }
+  try {
+    const stripeEnvironment = resolveStripeEnvironment();
+    validateStripeSecretForEnvironment(stripeEnvironment);
+  } catch (error: any) {
+    throw new Error(`Ambiente Stripe invalido para deploy: ${sanitizeString(error?.message || String(error), 220)}`);
   }
 }
 
@@ -1864,6 +1883,22 @@ function deriveSalesCheckoutPublicToken(
     .digest("base64url");
 }
 
+function buildSalesModuleSetHash(
+  offerId: string,
+  requestHash: string,
+  itemKeys: Iterable<string>,
+): string {
+  const runtimeModules = Array.from(new Set(
+    Array.from(itemKeys)
+      .map((value) => sanitizeString(value, 80))
+      .filter(isOrganizationModuleKey),
+  )).sort();
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ offerId, requestHash, modules: runtimeModules }))
+    .digest('hex');
+}
+
 function salesApplicationOrigin(req: any): string {
   return sanitizeString(
     process.env.VERTO_APP_BASE_URL || `${req.protocol}://${req.get("host")}`,
@@ -2679,6 +2714,9 @@ function normalizeSalesModularProposalRequest(
     ),
     discountDurationMonths: Number(source.discountDurationMonths || 0),
     offerValidityDays: Number(source.offerValidityDays || 14),
+    trialDays: [0, 7, 14, 30].includes(Number(source.trialDays || 0))
+      ? Number(source.trialDays || 0) as 0 | 7 | 14 | 30
+      : Number(source.trialDays || 0) as 0 | 7 | 14 | 30,
     onboardingInstallments: Number(source.onboardingInstallments || 1),
     usageProfile: "intensive" as SalesUsageProfile,
     driverOverrides: {},
@@ -8990,7 +9028,63 @@ type ResolvedClinicCapabilityContext = {
   role: ClinicBaseRole;
   overrides: CapabilityOverrideLike[];
   capabilities: ReadonlySet<CapabilityKey>;
+  modules: ReadonlySet<OrganizationModuleKey>;
+  moduleAccessMode: OrganizationModuleAccessMode;
+  entitlementVersion: number;
 };
+
+type ResolvedOrganizationModuleAccess = {
+  mode: OrganizationModuleAccessMode;
+  version: number;
+  modules: ReadonlySet<OrganizationModuleKey>;
+};
+
+async function resolveOrganizationModuleAccess(clinicId: string): Promise<ResolvedOrganizationModuleAccess> {
+  const { data, error } = await supabase.rpc('get_organization_module_access_v1', {
+    p_organization_id: clinicId,
+  });
+
+  if (error) {
+    const code = sanitizeString((error as any)?.code, 40);
+    const message = sanitizeString((error as any)?.message || String(error), 500);
+    if (
+      isMissingRelationError(error)
+      || code === 'PGRST202'
+      || code === '42883'
+      || message.includes('get_organization_module_access_v1')
+    ) {
+      const schemaError = new Error('CLINIC_MODULE_SCHEMA_UNAVAILABLE');
+      (schemaError as any).code = 'CLINIC_MODULE_SCHEMA_UNAVAILABLE';
+      throw schemaError;
+    }
+    if (message.includes('CLINIC_MODULE_ACCESS_PROFILE_MISSING')) {
+      const profileError = new Error('CLINIC_MODULE_ACCESS_PROFILE_MISSING');
+      (profileError as any).code = 'CLINIC_MODULE_ACCESS_PROFILE_MISSING';
+      throw profileError;
+    }
+    throw error;
+  }
+
+  const row: any = data || {};
+  const mode = sanitizeString(row?.mode, 30) as OrganizationModuleAccessMode;
+  if (mode !== 'legacy_full' && mode !== 'contract') {
+    const profileError = new Error('CLINIC_MODULE_ACCESS_PROFILE_MISSING');
+    (profileError as any).code = 'CLINIC_MODULE_ACCESS_PROFILE_MISSING';
+    throw profileError;
+  }
+
+  const modules = new Set<OrganizationModuleKey>();
+  for (const rawModuleKey of Array.isArray(row?.modules) ? row.modules : []) {
+    const moduleKey = sanitizeString(rawModuleKey, 80);
+    if (isOrganizationModuleKey(moduleKey)) modules.add(moduleKey);
+  }
+
+  return {
+    mode,
+    version: Math.max(1, Math.floor(Number(row?.version) || 1)),
+    modules,
+  };
+}
 
 async function resolveClinicCapabilityContext(user: any): Promise<ResolvedClinicCapabilityContext | null> {
   if (user?.activeAccessContext?.kind === 'patient_portal') return null;
@@ -9017,20 +9111,29 @@ async function resolveClinicCapabilityContext(user: any): Promise<ResolvedClinic
     }
   }
 
+  const [overrideResult, moduleAccess] = await Promise.all([
+    supabase
+      .from('clinic_membership_permission_overrides')
+      .select('permission_key,effect')
+      .eq('membership_id', membershipId)
+      .limit(500),
+    resolveOrganizationModuleAccess(clinicId),
+  ]);
+
   let overrides: CapabilityOverrideLike[] = [];
-  const { data: overrideRows, error: overrideError } = await supabase
-    .from('clinic_membership_permission_overrides')
-    .select('permission_key,effect')
-    .eq('membership_id', membershipId)
-    .limit(500);
-  if (overrideError) {
-    if (!isMissingRelationError(overrideError)) throw overrideError;
+  if (overrideResult.error) {
+    if (!isMissingRelationError(overrideResult.error)) throw overrideResult.error;
   } else {
-    overrides = Array.isArray(overrideRows) ? overrideRows : [];
+    overrides = Array.isArray(overrideResult.data) ? overrideResult.data : [];
   }
 
   const resolvedCapabilities = resolveEffectiveClinicCapabilities(membershipRole, overrides);
   if (!resolvedCapabilities) return null;
+  const effectiveCapabilities = filterCapabilitiesByOrganizationModules(
+    resolvedCapabilities.capabilities,
+    moduleAccess.mode,
+    moduleAccess.modules,
+  );
 
   return {
     membershipId,
@@ -9038,7 +9141,10 @@ async function resolveClinicCapabilityContext(user: any): Promise<ResolvedClinic
     userId,
     role: membershipRole,
     overrides,
-    capabilities: resolvedCapabilities.capabilities,
+    capabilities: effectiveCapabilities,
+    modules: moduleAccess.modules,
+    moduleAccessMode: moduleAccess.mode,
+    entitlementVersion: moduleAccess.version,
   };
 }
 
@@ -9073,11 +9179,11 @@ function requireClinicCapability(capability: CapabilityKey) {
         clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
         userId: sanitizeString(req.session?.user?.id, 120)
       });
-      if (isMissingRelationError(error)) {
+      if (isClinicModuleSchemaError(error)) {
         return res.status(503).json({
           success: false,
-          error: 'CLINIC_CAPABILITY_SCHEMA_UNAVAILABLE',
-          message: 'A estrutura de permissões por clínica ainda não foi aplicada.'
+          error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE',
+          message: 'A estrutura de módulos contratados ainda não foi aplicada.'
         });
       }
       return res.status(500).json({
@@ -9120,11 +9226,11 @@ function requireAnyClinicCapability(...capabilities: CapabilityKey[]) {
         clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
         userId: sanitizeString(req.session?.user?.id, 120)
       });
-      if (isMissingRelationError(error)) {
+      if (isClinicModuleSchemaError(error)) {
         return res.status(503).json({
           success: false,
-          error: 'CLINIC_CAPABILITY_SCHEMA_UNAVAILABLE',
-          message: 'A estrutura de permissões por clínica ainda não foi aplicada.'
+          error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE',
+          message: 'A estrutura de módulos contratados ainda não foi aplicada.'
         });
       }
       return res.status(500).json({
@@ -9137,12 +9243,102 @@ function requireAnyClinicCapability(...capabilities: CapabilityKey[]) {
 }
 
 
+
+function isClinicModuleSchemaError(error: any): boolean {
+  const code = sanitizeString(error?.code || error?.message, 120);
+  return code === 'CLINIC_MODULE_SCHEMA_UNAVAILABLE' || isMissingRelationError(error);
+}
+
+function requireClinicModule(moduleKey: OrganizationModuleKey) {
+  if (!isOrganizationModuleKey(moduleKey)) {
+    throw new Error(`INVALID_CLINIC_MODULE_MIDDLEWARE:${String(moduleKey)}`);
+  }
+  return async (req: any, res: any, next: any) => {
+    try {
+      const currentUserId = sanitizeString(req.session?.user?.id, 120);
+      const currentClinic = sanitizeString(currentClinicId(req.session?.user), 120);
+      const cachedContext = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
+      const context = cachedContext && cachedContext.userId === currentUserId && cachedContext.clinicId === currentClinic
+        ? cachedContext
+        : await resolveClinicCapabilityContext(req.session?.user);
+      if (!context || !hasOrganizationModule(context.moduleAccessMode, context.modules, moduleKey)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_MODULE_NOT_ENTITLED',
+          module: moduleKey,
+          message: 'Este módulo não está contratado para a clínica atual.',
+        });
+      }
+      req.authorizationContext = context;
+      req.effectiveClinicRole = context.role;
+      return next();
+    } catch (error: any) {
+      logRouteDbError('requireClinicModule', error, {
+        moduleKey,
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+        userId: sanitizeString(req.session?.user?.id, 120),
+      });
+      if (isClinicModuleSchemaError(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE',
+          message: 'A estrutura de módulos contratados ainda não foi aplicada.',
+        });
+      }
+      return res.status(500).json({
+        success: false,
+        error: 'CLINIC_MODULE_ACCESS_UNAVAILABLE',
+        message: 'Não foi possível validar os módulos contratados agora.',
+      });
+    }
+  };
+}
+
+async function requirePatientPortalCapabilityModule(req: any, res: any, capability: CapabilityKey): Promise<boolean> {
+  const moduleKey = requiredModuleForCapability(capability);
+  if (!moduleKey) return true;
+  const clinicId = sanitizeString(
+    req.session?.user?.activeAccessContext?.clinicId ||
+    req.session?.user?.activeAccessContext?.clinic_id ||
+    currentClinicId(req.session?.user),
+    120,
+  );
+  if (!isUuid(clinicId)) {
+    res.status(403).json({ success: false, error: 'CLINIC_MODULE_NOT_ENTITLED', module: moduleKey });
+    return false;
+  }
+  try {
+    const moduleAccess = await resolveOrganizationModuleAccess(clinicId);
+    if (!hasOrganizationModule(moduleAccess.mode, moduleAccess.modules, moduleKey)) {
+      res.status(403).json({
+        success: false,
+        error: 'CLINIC_MODULE_NOT_ENTITLED',
+        module: moduleKey,
+        message: 'Este módulo não está contratado para a clínica atual.',
+      });
+      return false;
+    }
+    return true;
+  } catch (error: any) {
+    if (isClinicModuleSchemaError(error)) {
+      res.status(503).json({ success: false, error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE' });
+      return false;
+    }
+    throw error;
+  }
+}
+
 function requireClinicCapabilityOrPatientPortal(capability: CapabilityKey) {
   const clinicGuard = requireClinicCapability(capability);
   return async (req: any, res: any, next: any) => {
     const role = sanitizeString(req.session?.user?.role, 40).toLowerCase();
     if (role === 'patient' || req.session?.user?.activeAccessContext?.kind === 'patient_portal') {
-      return next();
+      try {
+        if (!(await requirePatientPortalCapabilityModule(req, res, capability))) return;
+        return next();
+      } catch (error) {
+        return res.status(500).json({ success: false, error: 'CLINIC_MODULE_ACCESS_UNAVAILABLE' });
+      }
     }
     return clinicGuard(req, res, next);
   };
@@ -9154,11 +9350,55 @@ function requireAnyClinicCapabilityOrPatientPortal(...capabilities: CapabilityKe
   return async (req: any, res: any, next: any) => {
     const role = sanitizeString(req.session?.user?.role, 40).toLowerCase();
     if (role === 'patient' || req.session?.user?.activeAccessContext?.kind === 'patient_portal') {
-      return next();
+      try {
+        for (const capability of capabilities) {
+          const moduleKey = requiredModuleForCapability(capability);
+          if (!moduleKey) return next();
+          const clinicId = sanitizeString(req.session?.user?.activeAccessContext?.clinicId || currentClinicId(req.session?.user), 120);
+          if (!isUuid(clinicId)) continue;
+          const moduleAccess = await resolveOrganizationModuleAccess(clinicId);
+          if (hasOrganizationModule(moduleAccess.mode, moduleAccess.modules, moduleKey)) return next();
+        }
+        return res.status(403).json({ success: false, error: 'CLINIC_MODULE_NOT_ENTITLED' });
+      } catch (error: any) {
+        if (isClinicModuleSchemaError(error)) return res.status(503).json({ success: false, error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE' });
+        return res.status(500).json({ success: false, error: 'CLINIC_MODULE_ACCESS_UNAVAILABLE' });
+      }
     }
     return clinicGuard(req, res, next);
   };
 }
+
+  const requirePatientPortalModule = (moduleKey: OrganizationModuleKey) =>
+    async (req: any, res: any, next: any) => {
+      try {
+        const context = await resolvePatientPortalContext(req.session?.user);
+        const clinicId = sanitizeString(context?.clinicId, 120);
+        if (!isUuid(clinicId)) {
+          return res.status(403).json({ success: false, error: 'CLINIC_MODULE_NOT_ENTITLED', module: moduleKey });
+        }
+        const moduleAccess = await resolveOrganizationModuleAccess(clinicId);
+        if (!hasOrganizationModule(moduleAccess.mode, moduleAccess.modules, moduleKey)) {
+          return res.status(403).json({
+            success: false,
+            error: 'CLINIC_MODULE_NOT_ENTITLED',
+            module: moduleKey,
+            message: 'Este recurso não está contratado pela clínica vinculada.',
+          });
+        }
+        req.portalModuleAccess = moduleAccess;
+        req.portalContext = context;
+        return next();
+      } catch (error: any) {
+        if (isClinicModuleSchemaError(error)) {
+          return res.status(503).json({ success: false, error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE' });
+        }
+        return sendRouteDbError(res, 'requirePatientPortalModule', error, {
+          requestId: requestIdForLogs(req),
+        });
+      }
+    };
+
 
 async function resolvePatientListScopedPatientIds(
   context: ResolvedClinicCapabilityContext,
@@ -18195,6 +18435,13 @@ async function startServer() {
     session: Stripe.Checkout.Session,
   ) => {
     const metadata = (session.metadata || {}) as Record<string, string>;
+    if (sanitizeString(metadata.flowType, 80) === "sales_modular_assisted") {
+      const stripeEnvironment = resolveStripeEnvironment();
+      validateStripeSecretForEnvironment(stripeEnvironment);
+      if (sanitizeString(metadata.environment, 20) !== stripeEnvironment) {
+        throw new Error("MODULAR_CHECKOUT_ENVIRONMENT_MISMATCH");
+      }
+    }
     const offerId = sanitizeString(metadata.offerId, 120);
     const leadId = sanitizeString(metadata.leadId, 120);
     if (!isUuid(offerId) || !isUuid(leadId)) {
@@ -18239,6 +18486,21 @@ async function startServer() {
     }
     if (leadError || !lead) {
       throw leadError || new Error("SALES_LEAD_NOT_FOUND");
+    }
+    if (sanitizeString(metadata.flowType, 80) === "sales_modular_assisted") {
+      const { data: frozenModuleItems, error: frozenModuleError } = await supabase
+        .from("sales_offer_items")
+        .select("item_key")
+        .eq("offer_id", offerId);
+      if (frozenModuleError) throw frozenModuleError;
+      const expectedModuleSetHash = buildSalesModuleSetHash(
+        offerId,
+        sanitizeString(metadata.requestHash, 64),
+        (frozenModuleItems || []).map((item: any) => sanitizeString(item?.item_key, 80)),
+      );
+      if (sanitizeString(metadata.moduleSetHash, 64) !== expectedModuleSetHash) {
+        throw new Error("MODULAR_CHECKOUT_RECONCILIATION_FAILED");
+      }
     }
     let subscription: Stripe.Subscription | null = null;
     // A paid Checkout is already authoritative for the financial transition.
@@ -18982,6 +19244,13 @@ async function startServer() {
     }
 
     const metadata = (subscription.metadata || {}) as Record<string, string>;
+    if (sanitizeString(metadata.flowType, 80) === "sales_modular_assisted") {
+      const stripeEnvironment = resolveStripeEnvironment();
+      validateStripeSecretForEnvironment(stripeEnvironment);
+      if (sanitizeString(metadata.environment, 20) !== stripeEnvironment) {
+        throw new Error("MODULAR_CHECKOUT_ENVIRONMENT_MISMATCH");
+      }
+    }
     const offerId = sanitizeString(metadata.offerId, 120);
     const leadId = sanitizeString(metadata.leadId, 120);
     if (!isUuid(offerId) || !isUuid(leadId)) {
@@ -18989,7 +19258,7 @@ async function startServer() {
     }
     const { data: offer, error: offerError } = await supabase
       .from("sales_offers")
-      .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id")
+      .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type")
       .eq("id", offerId)
       .eq("lead_id", leadId)
       .maybeSingle();
@@ -19050,6 +19319,29 @@ async function startServer() {
         .eq("offer_id", offerId)
         .eq("stripe_subscription_id", subscription.id);
       if (linkLifecycleError) throw linkLifecycleError;
+
+      const { data: entitlementLead, error: entitlementLeadError } = await supabase
+        .from("sales_leads")
+        .select("id,converted_clinic_id")
+        .eq("id", leadId)
+        .is("deleted_at", null)
+        .maybeSingle();
+      if (entitlementLeadError) throw entitlementLeadError;
+      const organizationId = sanitizeString(
+        entitlementLead?.converted_clinic_id,
+        120,
+      );
+      if (isUuid(organizationId)) {
+        await applyModularEntitlementsForOrganization({
+          offerId,
+          organizationId,
+          stripeSubscriptionId: subscription.id,
+          stripeEventId: event.id,
+          status: event.type === "customer.subscription.deleted"
+            ? "cancelled"
+            : stripeSubscriptionToEntitlementStatus(subscription.status),
+        });
+      }
     }
 
     const lifecycleEvent = await supabase.from("sales_lead_events").upsert(
@@ -21589,7 +21881,7 @@ async function startServer() {
     if (safeToken.length < 32) return { error: "invalid_token" as const };
     const tokenHash = hashSalesOfferToken(safeToken);
     const extendedOfferSelect =
-      "id,lead_id,status,base_unit_amount_cents,currency,initial_active_patient_quantity,discount_duration_months,discount_type,discount_percentage,stripe_coupon_id,promotional_unit_amount_cents,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,stripe_checkout_session_id,expires_at,revoked_at,accepted_at,offer_type,proposal_name,public_notes,modular_checkout_enabled,modular_snapshot,catalog_version_id";
+      "id,lead_id,status,base_unit_amount_cents,currency,initial_active_patient_quantity,discount_duration_months,discount_type,discount_percentage,stripe_coupon_id,promotional_unit_amount_cents,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,stripe_checkout_session_id,expires_at,revoked_at,accepted_at,offer_type,proposal_name,public_notes,modular_checkout_enabled,modular_snapshot,catalog_version_id,trial_days,created_by";
     const legacyOfferSelect =
       "id,lead_id,status,base_unit_amount_cents,currency,initial_active_patient_quantity,discount_duration_months,discount_type,discount_percentage,stripe_coupon_id,promotional_unit_amount_cents,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,stripe_checkout_session_id,expires_at,revoked_at,accepted_at";
     let offerResult = await supabase
@@ -21787,8 +22079,20 @@ async function startServer() {
               capacityBlockPhases: sanitizePublicCapacityBlockPhases(
                 modularSnapshot.commercialPricing?.capacityBlockPhases,
               ),
-              modularCheckoutEnabled: false,
-              stripeReady: false,
+              modularCheckoutEnabled:
+                (offer as any).modular_checkout_enabled === true,
+              stripeReady: (() => {
+                try {
+                  const stripeEnvironment = resolveStripeEnvironment();
+                  validateStripeSecretForEnvironment(stripeEnvironment);
+                  return (offer as any).modular_checkout_enabled === true;
+                } catch {
+                  return false;
+                }
+              })(),
+              trialDays: [0, 7, 14, 30].includes(Number((offer as any).trial_days || 0))
+                ? Number((offer as any).trial_days || 0)
+                : 0,
             },
           });
         }
@@ -21992,11 +22296,53 @@ async function startServer() {
         if (
           sanitizeString((offer as any).offer_type, 30) === "modular"
         ) {
-          return res.status(409).json({
-            success: false,
-            error: "PROPOSAL_MODULAR_CHECKOUT_NOT_ENABLED",
-            message:
-              "Checkout modular será habilitado após a validação da nova estrutura de pacotes.",
+          const forbiddenFields = [
+            "amount", "price", "prices", "discount", "lineItems",
+            "organizationId", "modules", "trialDays", "environment",
+          ];
+          if (forbiddenFields.some((field) => req.body?.[field] !== undefined)) {
+            return res.status(400).json({
+              success: false,
+              error: "MODULAR_CHECKOUT_BROWSER_VALUES_REJECTED",
+              message: "Preço, módulos, tenant, trial e ambiente são reconstruídos no servidor.",
+            });
+          }
+          if (!offer.accepted_at) {
+            return res.status(409).json({
+              success: false,
+              error: "MODULAR_OFFER_ACCEPTANCE_REQUIRED",
+              message: "Aceite a proposta antes de continuar para o cartão.",
+            });
+          }
+          const actorUserId = sanitizeString((offer as any).created_by, 120);
+          if (!isUuid(actorUserId)) {
+            return res.status(503).json({
+              success: false,
+              error: "MODULAR_CHECKOUT_RECONCILIATION_FAILED",
+              message: "A proposta não possui autoria comercial reconciliável.",
+            });
+          }
+          let stripeEnvironment: "test" | "live";
+          try {
+            stripeEnvironment = resolveStripeEnvironment();
+            validateStripeSecretForEnvironment(stripeEnvironment);
+          } catch {
+            return res.status(503).json({
+              success: false,
+              error: "STRIPE_ENVIRONMENT_CONFIGURATION_INVALID",
+              message: "Configuração Stripe indisponível para esta contratação.",
+            });
+          }
+          const idempotencyKey = crypto
+            .createHash("sha256")
+            .update(`public-modular-checkout:${offer.id}:${stripeEnvironment}:${loaded.tokenHash}`)
+            .digest("hex");
+          return createOrReuseModularCheckout(req, res, {
+            offerId: String(offer.id),
+            actorUserId,
+            idempotencyKey,
+            publicMode: true,
+            publicOfferToken: token,
           });
         }
         const duration = Number(offer.discount_duration_months || 0) || null;
@@ -22497,6 +22843,42 @@ async function startServer() {
     },
   );
 
+  const stripeSubscriptionToEntitlementStatus = (
+    status: unknown,
+  ): "active" | "trial" | "grace" | "suspended" | "cancelled" => {
+    const normalized = sanitizeString(status, 40).toLowerCase();
+    if (normalized === "trialing") return "trial";
+    if (normalized === "active") return "active";
+    if (normalized === "past_due") return "grace";
+    if (normalized === "canceled") return "cancelled";
+    return "suspended";
+  };
+
+  const applyModularEntitlementsForOrganization = async (params: {
+    offerId: string;
+    organizationId: string;
+    stripeSubscriptionId: string;
+    stripeEventId: string;
+    status: "active" | "trial" | "grace" | "suspended" | "cancelled";
+  }) => {
+    const { error } = await supabase.rpc(
+      "apply_sales_offer_module_entitlements_v1",
+      {
+        p_offer_id: params.offerId,
+        p_organization_id: params.organizationId,
+        p_stripe_subscription_id: params.stripeSubscriptionId,
+        p_stripe_event_id: params.stripeEventId,
+        p_status: params.status,
+      },
+    );
+    if (error) {
+      const wrapped = new Error("MODULE_ENTITLEMENT_PROVISIONING_FAILED");
+      (wrapped as any).code = "MODULE_ENTITLEMENT_PROVISIONING_FAILED";
+      (wrapped as any).cause = error;
+      throw wrapped;
+    }
+  };
+
   const finalizeSalesActivationForUser = async (params: {
     email: string;
     userId: string;
@@ -22510,27 +22892,28 @@ async function startServer() {
     const leadId = sanitizeString(params.leadId, 120);
     const checkoutSessionId = sanitizeString(params.checkoutSessionId, 200);
     if (
-      !normalizedEmail ||
-      !isUuid(params.userId) ||
-      !isUuid(params.clinicId) ||
-      !isUuid(offerId) ||
-      !isUuid(leadId) ||
-      !checkoutSessionId
+      !normalizedEmail
+      || !isUuid(params.userId)
+      || !isUuid(params.clinicId)
+      || !isUuid(offerId)
+      || !isUuid(leadId)
+      || !checkoutSessionId
     ) {
       return;
     }
 
+    let modularContract = false;
     try {
       const [leadResult, offerResult, activationResult] = await Promise.all([
         supabase
           .from("sales_leads")
-          .select("id,normalized_email,deleted_at")
+          .select("id,normalized_email,deleted_at,converted_clinic_id")
           .eq("id", leadId)
           .is("deleted_at", null)
           .maybeSingle(),
         supabase
           .from("sales_offers")
-          .select("id,lead_id,status,stripe_checkout_session_id")
+          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type")
           .eq("id", offerId)
           .eq("lead_id", leadId)
           .eq("status", "paid")
@@ -22553,6 +22936,7 @@ async function startServer() {
       if (readError) throw readError;
       if (!leadResult.data || !offerResult.data || !activationResult.data)
         return;
+      modularContract = sanitizeString(offerResult.data.offer_type, 30) === "modular";
       const activationExpired = activationResult.data.expires_at
         ? new Date(activationResult.data.expires_at).getTime() <= Date.now()
         : false;
@@ -22562,7 +22946,11 @@ async function startServer() {
 
       const now = new Date().toISOString();
       const conversionKey = `activation-completed:${leadId}:${params.userId}`;
-      const results = await Promise.all([
+
+      // Persist the canonical tenant relationship first. The entitlement RPC
+      // validates this relationship itself, preventing an offer from activating
+      // modules in another clinic. This update is idempotent on retries.
+      const [leadUpdate, discountUpdate] = await Promise.all([
         supabase
           .from("sales_leads")
           .update({
@@ -22582,6 +22970,38 @@ async function startServer() {
           })
           .eq("offer_id", offerId)
           .eq("lead_id", leadId),
+      ]);
+      if (leadUpdate.error || discountUpdate.error) {
+        throw leadUpdate.error || discountUpdate.error;
+      }
+
+      if (modularContract) {
+        const subscriptionId = sanitizeString(
+          offerResult.data.stripe_subscription_id,
+          200,
+        );
+        if (!subscriptionId) {
+          throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
+        }
+        const subscription = await getStripe().subscriptions.retrieve(
+          subscriptionId,
+        );
+        const entitlementStatus = stripeSubscriptionToEntitlementStatus(
+          subscription.status,
+        );
+        if (!["active", "trial", "grace"].includes(entitlementStatus)) {
+          throw new Error("SALES_SUBSCRIPTION_NOT_ACTIVE");
+        }
+        await applyModularEntitlementsForOrganization({
+          offerId,
+          organizationId: params.clinicId,
+          stripeSubscriptionId: subscriptionId,
+          stripeEventId: `activation:${checkoutSessionId}:${subscriptionId}`,
+          status: entitlementStatus,
+        });
+      }
+
+      const [activationUpdate, eventUpdate] = await Promise.all([
         supabase
           .from("pending_activations")
           .update({ used: true })
@@ -22597,6 +23017,7 @@ async function startServer() {
                 offer_id: offerId,
                 clinic_id: params.clinicId,
                 checkout_session_id: checkoutSessionId,
+                modular_contract: modularContract,
               },
               idempotency_key: conversionKey,
               created_at: now,
@@ -22605,14 +23026,15 @@ async function startServer() {
           { onConflict: "idempotency_key", ignoreDuplicates: true },
         ),
       ]);
-
-      const firstError = results.find((result: any) => result?.error)?.error;
-      if (firstError) throw firstError;
+      if (activationUpdate.error || eventUpdate.error) {
+        throw activationUpdate.error || eventUpdate.error;
+      }
     } catch (error: any) {
       if (isMissingRelationError(error)) {
         console.warn(
-          "[Sales Activation] Estrutura comercial ainda não aplicada; o acesso pago foi preservado.",
+          "[Sales Activation] Estrutura comercial ainda não aplicada; ativação modular permanece bloqueada até o schema existir.",
         );
+        if (modularContract) throw error;
         return;
       }
       console.error("[Sales Activation] Falha ao concluir vínculo comercial:", {
@@ -22622,6 +23044,10 @@ async function startServer() {
         leadId,
         message: sanitizeString(error?.message || String(error), 240),
       });
+      // New modular contracts must never fall back to legacy_full when their
+      // entitlement provisioning fails. Bubble the error so login/activation
+      // can retry instead of exposing the clinic workspace with broad access.
+      if (modularContract) throw error;
     }
   };
 
@@ -24819,6 +25245,52 @@ async function startServer() {
           }], { onConflict: 'user_id,clinic_id' });
       }
 
+      // Retry an interrupted paid modular activation on a later login.
+      // This is intentionally a single, tightly filtered lookup at login only;
+      // page navigation never polls commercial activation state.
+      const ownedCoordinatorClinicId = sanitizeString(profile?.clinic_id, 120);
+      if (
+        profile?.role === 'coordinator' &&
+        isUuid(ownedCoordinatorClinicId) &&
+        ownedCoordinatorClinicId === sanitizeString(user.id, 120) &&
+        safeAuthEmail
+      ) {
+        const { data: pendingSalesActivation, error: pendingSalesActivationError } = await supabase
+          .from('pending_activations')
+          .select('email,source,sales_offer_id,sales_lead_id,stripe_checkout_session_id,expires_at')
+          .eq('email', safeAuthEmail)
+          .eq('used', false)
+          .eq('source', 'sales_assisted_signup')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (pendingSalesActivationError && !isMissingRelationError(pendingSalesActivationError)) {
+          throw pendingSalesActivationError;
+        }
+        const retryOfferId = sanitizeString(pendingSalesActivation?.sales_offer_id, 120);
+        const retryLeadId = sanitizeString(pendingSalesActivation?.sales_lead_id, 120);
+        const retryCheckoutSessionId = sanitizeString(pendingSalesActivation?.stripe_checkout_session_id, 200);
+        const retryExpiresAt = pendingSalesActivation?.expires_at
+          ? new Date(pendingSalesActivation.expires_at).getTime()
+          : Number.POSITIVE_INFINITY;
+        if (
+          pendingSalesActivation &&
+          isUuid(retryOfferId) &&
+          isUuid(retryLeadId) &&
+          retryCheckoutSessionId &&
+          retryExpiresAt > Date.now()
+        ) {
+          await finalizeSalesActivationForUser({
+            email: safeAuthEmail,
+            userId: user.id,
+            clinicId: ownedCoordinatorClinicId,
+            offerId: retryOfferId,
+            leadId: retryLeadId,
+            checkoutSessionId: retryCheckoutSessionId,
+          });
+        }
+      }
+
       let workspaces = await fetchUserWorkspaces(user.id);
       // Existing professionals accept invitations from the dedicated, explicit
       // screen. Automatic acceptance remains only for a first-account
@@ -25738,6 +26210,9 @@ async function startServer() {
           clinicId: context.clinicId,
           role: context.role,
           capabilities: Array.from(context.capabilities).sort(),
+          modules: Array.from(context.modules).sort(),
+          moduleAccessMode: context.moduleAccessMode,
+          entitlementVersion: context.entitlementVersion,
           scopes: ROLE_DEFAULT_SCOPES[context.role] || [],
           overrides: context.overrides.map((item: any) => ({
             permissionKey: sanitizeString(item?.permission_key || item?.permissionKey, 160),
@@ -32651,7 +33126,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/portal/patients/:patientId/anamnesis', checkAuth, async (req: any, res) => {
+  app.get('/api/portal/patients/:patientId/anamnesis', checkAuth, requirePatientPortalModule('clinical_core'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId, 120);
       if (!isUuid(patientId) || !(await canPortalSessionAccessPatient(patientId, req.session.user))) {
@@ -32685,7 +33160,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/portal/patients/:patientId/anamnesis/draft', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.patch('/api/portal/patients/:patientId/anamnesis/draft', portalActionLimiter, checkAuth, requirePatientPortalModule('clinical_core'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId, 120);
       if (!isUuid(patientId) || !(await canPortalSessionAccessPatient(patientId, req.session.user))) {
@@ -32736,7 +33211,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/portal/patients/:patientId/anamnesis/submit', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/portal/patients/:patientId/anamnesis/submit', portalActionLimiter, checkAuth, requirePatientPortalModule('clinical_core'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId, 120);
       if (!isUuid(patientId) || !(await canPortalSessionAccessPatient(patientId, req.session.user))) {
@@ -44811,11 +45286,28 @@ async function startServer() {
     };
   };
 
+
   app.get('/api/portal/context', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
       const context = await resolvePatientPortalContext(req.session.user);
-      return res.json({ success: true, data: context });
+      const clinicId = sanitizeString(context?.clinicId, 120);
+      if (!isUuid(clinicId)) {
+        return res.status(403).json({ success: false, error: 'PORTAL_CLINIC_CONTEXT_INVALID' });
+      }
+      const moduleAccess = await resolveOrganizationModuleAccess(clinicId);
+      return res.json({
+        success: true,
+        data: {
+          ...context,
+          moduleAccessMode: moduleAccess.mode,
+          entitlementVersion: moduleAccess.version,
+          modules: Array.from(moduleAccess.modules).sort(),
+        },
+      });
     } catch (error: any) {
+      if (isClinicModuleSchemaError(error)) {
+        return res.status(503).json({ success: false, error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE' });
+      }
       return sendRouteDbError(res, '/api/portal/context [GET]', error, {
         requestId: requestIdForLogs(req)
       });
@@ -45099,7 +45591,7 @@ async function startServer() {
     return { ok: true, appointment: scopedAppointment };
   };
 
-  app.get('/api/portal/notifications', checkAuth, async (req: any, res) => {
+  app.get('/api/portal/notifications', checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {
     try {
       const userId = sanitizeString(req.session.user?.id, 120);
       const userEmail = sanitizeEmail(req.session.user?.email);
@@ -45379,7 +45871,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/portal/notifications/:notificationId', checkAuth, portalActionLimiter, async (req: any, res) => {
+  app.patch('/api/portal/notifications/:notificationId', checkAuth, requirePatientPortalModule('appointments_communication'), portalActionLimiter, async (req: any, res) => {
     try {
       const notificationId = sanitizeString(req.params.notificationId, 120);
       const userId = sanitizeString(req.session.user?.id, 120);
@@ -46900,7 +47392,7 @@ async function startServer() {
       .map(mapAuditLogToHumanHistory);
   };
 
-  app.get('/api/portal/appointments', noStoreDynamicResponse, checkAuth, async (req: any, res) => {
+  app.get('/api/portal/appointments', noStoreDynamicResponse, checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {
     try {
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const patientIds = await getPortalPatientIdsForUser(req.session.user);
@@ -47134,7 +47626,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/portal/appointments/:appointmentId', checkAuth, async (req: any, res) => {
+  app.get('/api/portal/appointments/:appointmentId', checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {
     try {
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
@@ -47232,7 +47724,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/portal/appointments/:appointmentId/confirm', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/portal/appointments/:appointmentId/confirm', portalActionLimiter, checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 16 * 1024, 'Payload de confirmação de sessão')) return;
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
@@ -47310,7 +47802,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/portal/appointments/:appointmentId/reschedule-slots', portalActionLimiter, noStoreDynamicResponse, checkAuth, async (req: any, res) => {
+  app.get('/api/portal/appointments/:appointmentId/reschedule-slots', portalActionLimiter, noStoreDynamicResponse, checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {
     try {
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
@@ -47327,7 +47819,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/portal/appointments/:appointmentId/request-reschedule', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/portal/appointments/:appointmentId/request-reschedule', portalActionLimiter, checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de solicitação de remarcação')) return;
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
@@ -47426,7 +47918,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/portal/appointments/:appointmentId/request-cancel', portalActionLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/portal/appointments/:appointmentId/request-cancel', portalActionLimiter, checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de solicitação de cancelamento')) return;
       const context = await fetchPortalAppointmentForUser(req.params.appointmentId, req.session.user);
@@ -55027,7 +55519,7 @@ async function startServer() {
     }
   };
 
-  app.get('/api/admin/tiss/provider-profile', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/tiss/provider-profile', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -55039,7 +55531,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tiss/provider-profile', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.patch('/api/admin/tiss/provider-profile', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Perfil TISS do prestador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -55101,7 +55593,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tiss/payer-profiles', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/tiss/payer-profiles', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -55141,7 +55633,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tiss/payer-profiles/:payerId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/tiss/payer-profiles/:payerId', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const payerId = sanitizeString(req.params.payerId, 120);
@@ -55155,7 +55647,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tiss/payer-profiles/:payerId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.patch('/api/admin/tiss/payer-profiles/:payerId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil TISS do pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -55404,7 +55896,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/patient-payer-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('patient.insurance.authorization.edit'), async (req: any, res) => {
+  app.post('/api/tiss/patient-payer-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('patient.insurance.authorization.edit'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Autorização do paciente')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -56092,7 +56584,7 @@ async function startServer() {
     return { data, tissPipeline };
   };
 
-  app.get('/api/tiss/professional-profile/me', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('session.billing_evidence.generate', 'session.start'), async (req: any, res) => {
+  app.get('/api/tiss/professional-profile/me', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireAnyClinicCapability('session.billing_evidence.generate', 'session.start'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const professionalId = sanitizeString(req.session.user?.id, 120);
@@ -56113,7 +56605,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/tiss/professional-profile/me', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('session.billing_evidence.generate', 'session.start'), async (req: any, res) => {
+  app.patch('/api/tiss/professional-profile/me', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireAnyClinicCapability('session.billing_evidence.generate', 'session.start'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil faturável do profissional')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -56135,7 +56627,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tiss/professional-profiles', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/tiss/professional-profiles', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -56159,7 +56651,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tiss/professional-profiles/:professionalId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/tiss/professional-profiles/:professionalId', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const professionalId = sanitizeString(req.params.professionalId, 120);
@@ -56174,7 +56666,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tiss/professional-profiles/:professionalId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.patch('/api/admin/tiss/professional-profiles/:professionalId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil faturável do profissional')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -56197,7 +56689,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/pre-guides', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
+  app.get('/api/tiss/pre-guides', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -56287,7 +56779,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/pre-guides/test-options', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
+  app.get('/api/tiss/pre-guides/test-options', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const payerId = sanitizeString(req.query?.payerId || req.query?.payer_id, 120);
@@ -56739,7 +57231,7 @@ async function startServer() {
     return `verto-tiss-oficial-${month}-${payerName}-lote-${batchNumber}.xml`;
   };
 
-  app.get('/api/tiss/official-documents', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -56810,7 +57302,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.generate'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.generate'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'XML TISS oficial')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57068,7 +57560,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/official-documents/tracking', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents/tracking', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -57103,7 +57595,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/official-documents/:documentId/tracking', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents/:documentId/tracking', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const documentId = sanitizeString(req.params.documentId, 120);
@@ -57130,7 +57622,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents/:documentId/tracking/sent', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents/:documentId/tracking/sent', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 12 * 1024, 'acompanhamento de lote XML')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57185,7 +57677,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents/:documentId/tracking/return', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.operator_return.manage'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents/:documentId/tracking/return', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.operator_return.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 12 * 1024, 'retorno de lote XML')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57295,7 +57787,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/tracking', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.operator_return.manage'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/tracking', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.operator_return.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 12 * 1024, 'acompanhamento de guia XML')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57388,7 +57880,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/appeal', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.denial.manage'), async (req: any, res) => {
+  app.post('/api/tiss/official-documents/:documentId/guides/:guideId/appeal', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.denial.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 12 * 1024, 'recurso de glosa')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57470,7 +57962,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/official-documents/:documentId/download', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents/:documentId/download', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const documentId = sanitizeString(req.params.documentId, 120);
@@ -57511,7 +58003,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/official-documents/:documentId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
+  app.get('/api/tiss/official-documents/:documentId', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const documentId = sanitizeString(req.params.documentId, 120);
@@ -57562,7 +58054,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/xml-drafts', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
+  app.get('/api/tiss/xml-drafts', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -57599,7 +58091,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/xml-drafts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.generate'), async (req: any, res) => {
+  app.post('/api/tiss/xml-drafts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.generate'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'XML TISS em rascunho')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -57822,7 +58314,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/xml-drafts/:draftId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
+  app.get('/api/tiss/xml-drafts/:draftId', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const draftId = sanitizeString(req.params.draftId, 120);
@@ -57845,7 +58337,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/xml-drafts/:draftId/validate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.validate'), async (req: any, res) => {
+  app.post('/api/tiss/xml-drafts/:draftId/validate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.validate'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const draftId = sanitizeString(req.params.draftId, 120);
@@ -57935,7 +58427,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/xml-drafts/:draftId/download', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.xml.export'), async (req: any, res) => {
+  app.get('/api/tiss/xml-drafts/:draftId/download', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.export'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const draftId = sanitizeString(req.params.draftId, 120);
@@ -57962,7 +58454,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/revenue-cycle/events', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
+  app.get('/api/tiss/revenue-cycle/events', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -57998,7 +58490,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/billing-batch-drafts', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
+  app.get('/api/tiss/billing-batch-drafts', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -58037,7 +58529,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/billing-batch-drafts/:batchId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
+  app.get('/api/tiss/billing-batch-drafts/:batchId', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const batchId = sanitizeString(req.params.batchId, 120);
@@ -58060,7 +58552,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/billing-batch-drafts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.batch.create'), async (req: any, res) => {
+  app.post('/api/tiss/billing-batch-drafts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.batch.create'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Lote rascunho TISS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58239,7 +58731,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/billing-batch-drafts/:batchId/cancel', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.batch.create'), async (req: any, res) => {
+  app.post('/api/tiss/billing-batch-drafts/:batchId/cancel', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.batch.create'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const batchId = sanitizeString(req.params.batchId, 120);
@@ -58318,7 +58810,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/pre-guides/coverage', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
+  app.get('/api/tiss/pre-guides/coverage', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -58455,7 +58947,7 @@ async function startServer() {
 
   const activeTissPreGuidePeriodRevalidations = new Set<string>();
 
-  app.post('/api/tiss/pre-guides/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.manage'), async (req: any, res) => {
+  app.post('/api/tiss/pre-guides/revalidate-period', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Revalidação de Pré-guias TISS do período')) return;
       const startedAt = Date.now();
@@ -58847,7 +59339,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/tiss/pre-guides/:appointmentId', noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
+  app.get('/api/tiss/pre-guides/:appointmentId', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -58881,7 +59373,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/tiss/pre-guides/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.manage'), handleTissPreGuideRevalidation);
+  app.post('/api/tiss/pre-guides/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.manage'), handleTissPreGuideRevalidation);
   app.post('/api/appointments/:appointmentId/tiss-pre-guide/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.manage'), handleTissPreGuideRevalidation);
 
   app.get('/api/payer-options', noStoreDynamicResponse, checkAuth, requireClinicCapability('patient.insurance.view'), async (req: any, res) => {
@@ -58918,7 +59410,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/payers', checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/payers', checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -58944,7 +59436,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/payers', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.post('/api/admin/payers', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -58995,7 +59487,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/payers/:payerId', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.patch('/api/admin/payers/:payerId', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -59032,7 +59524,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/payers/:payerId/requirements', checkAuth, requireClinicCapability('billing.antiglosa.view'), async (req: any, res) => {
+  app.get('/api/admin/payers/:payerId/requirements', checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.antiglosa.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const payerId = sanitizeString(req.params.payerId, 120);
@@ -59078,7 +59570,7 @@ async function startServer() {
     updated_at: new Date().toISOString()
   });
 
-  app.post('/api/admin/payers/:payerId/requirements', portalActionLimiter, checkAuth, requireClinicCapability('billing.antiglosa.manage'), async (req: any, res) => {
+  app.post('/api/admin/payers/:payerId/requirements', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.antiglosa.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de regra do pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -59282,7 +59774,7 @@ async function startServer() {
     return true;
   };
 
-  app.get('/api/admin/tuss/services', checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
+  app.get('/api/admin/tuss/services', checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -59306,7 +59798,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/services', portalActionLimiter, checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
+  app.post('/api/admin/tuss/services', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de procedimento TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -59357,7 +59849,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tuss/services/:serviceId', portalActionLimiter, checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
+  app.patch('/api/admin/tuss/services/:serviceId', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de procedimento TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -59394,7 +59886,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tuss/codes', checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
+  app.get('/api/admin/tuss/codes', checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -59418,7 +59910,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/codes', portalActionLimiter, checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
+  app.post('/api/admin/tuss/codes', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de codigo TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -59469,7 +59961,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tuss/codes/:codeId', portalActionLimiter, checkAuth, requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
+  app.patch('/api/admin/tuss/codes/:codeId', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.tuss.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de codigo TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -59504,7 +59996,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tuss/mappings', checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/tuss/mappings', checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -59545,7 +60037,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/mappings', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.post('/api/admin/tuss/mappings', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de mapeamento TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -59704,7 +60196,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tuss/mappings/:mappingId', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.patch('/api/admin/tuss/mappings/:mappingId', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de mapeamento TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -59844,7 +60336,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tuss/prices', checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/tuss/prices', checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -59901,7 +60393,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/prices', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.post('/api/admin/tuss/prices', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de tabela negociada TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -60026,7 +60518,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/tuss/prices/:priceId', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.patch('/api/admin/tuss/prices/:priceId', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de tabela negociada TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -60138,7 +60630,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/tuss/:entityType/:entityId/delete-impact', checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/tuss/:entityType/:entityId/delete-impact', checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     const entityType = sanitizeString(req.params.entityType, 40);
     const entityId = sanitizeString(req.params.entityId, 120);
     const normalizedEntityType = normalizeTussDeleteEntityType(entityType);
@@ -60198,7 +60690,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/admin/tuss/:entityType/:entityId', portalActionLimiter, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.delete('/api/admin/tuss/:entityType/:entityId', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     const entityType = sanitizeString(req.params.entityType, 40);
     const entityId = sanitizeString(req.params.entityId, 120);
     const normalizedEntityType = normalizeTussDeleteEntityType(entityType);
@@ -60266,7 +60758,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/mappings/:mappingId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.post('/api/admin/tuss/mappings/:mappingId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Payload de revalidação TUSS-ready')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -60494,7 +60986,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/tuss/mappings/:mappingId/sync-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.post('/api/admin/tuss/mappings/:mappingId/sync-authorizations', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 24 * 1024, 'Sincronização de autorizações TUSS')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -61373,7 +61865,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/closure/appointments', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('billing.sessions.view', 'session.history.view'), async (req: any, res) => {
+  app.get('/api/closure/appointments', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireAnyClinicCapability('billing.sessions.view', 'session.history.view'), async (req: any, res) => {
     const { page, limit, from, to } = parseClosurePageParams(req.query);
     const readStartedAt = Date.now();
     const emptyClosurePayload = (reason = '') => ({ success: true, data: [], page, limit, totals: {
@@ -61610,7 +62102,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/closure/appointments/:appointmentId', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('billing.sessions.view', 'session.history.view'), async (req: any, res) => {
+  app.get('/api/closure/appointments/:appointmentId', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireAnyClinicCapability('billing.sessions.view', 'session.history.view'), async (req: any, res) => {
     try {
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -61671,7 +62163,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/closure/appointments/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('billing.sessions.view', 'session.history.view'), async (req: any, res) => {
+  app.post('/api/closure/appointments/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireAnyClinicCapability('billing.sessions.view', 'session.history.view'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de revalidação de fechamento')) return;
       const appointmentId = sanitizeString(req.params.appointmentId, 120);
@@ -80462,7 +80954,7 @@ async function startServer() {
           await supabase
             .from("sales_offers")
             .select(
-              "id,simulation_id,status,expires_at,created_by,idempotency_key,created_at",
+              "id,simulation_id,status,expires_at,created_by,idempotency_key,modular_checkout_enabled,trial_days,created_at",
             )
             .eq("simulation_id", simulationId)
             .order("created_at", { ascending: false })
@@ -80489,12 +80981,25 @@ async function startServer() {
           offerCreatedBy,
           offerIdempotencyKey,
         );
+        let stripeReady = false;
+        if (existingOffer.modular_checkout_enabled === true) {
+          try {
+            const stripeEnvironment = resolveStripeEnvironment();
+            validateStripeSecretForEnvironment(stripeEnvironment);
+            stripeReady = true;
+          } catch {
+            stripeReady = false;
+          }
+        }
         return res.status(200).json({
           success: true,
           offer: existingOffer,
           publicUrl: buildSalesOfferPublicUrl(req, publicToken),
-          stripeReady: false,
-          modularCheckoutEnabled: false,
+          stripeReady,
+          modularCheckoutEnabled: existingOffer.modular_checkout_enabled === true,
+          trialDays: [0, 7, 14, 30].includes(Number(existingOffer.trial_days || 0))
+            ? Number(existingOffer.trial_days || 0)
+            : 0,
           idempotent: true,
           message:
             "A proposta modular já existia; o mesmo link foi recuperado.",
@@ -80631,7 +81136,7 @@ async function startServer() {
           + input.offerValidityDays * 24 * 60 * 60 * 1000,
       ).toISOString();
       const { data, error } = await supabase.rpc(
-        "create_sales_modular_offer_v1",
+        "create_sales_modular_offer_v2",
         {
           p_simulation_id: simulationId,
           p_lead_id: leadId,
@@ -80648,16 +81153,27 @@ async function startServer() {
         sanitizeString(offer?.created_by, 120) || actorUserId,
         sanitizeString(offer?.idempotency_key, 240) || idempotencyKey,
       );
+      let stripeReady = false;
+      try {
+        const stripeEnvironment = resolveStripeEnvironment();
+        validateStripeSecretForEnvironment(stripeEnvironment);
+        stripeReady = true;
+      } catch {
+        stripeReady = false;
+      }
       return res.status(data?.idempotent ? 200 : 201).json({
         success: true,
         offer,
         publicUrl: buildSalesOfferPublicUrl(req, publicToken),
-        stripeReady: false,
-        modularCheckoutEnabled: false,
+        stripeReady,
+        modularCheckoutEnabled: offer?.modular_checkout_enabled === true,
+        trialDays: [0, 7, 14, 30].includes(Number(offer?.trial_days || 0))
+          ? Number(offer?.trial_days || 0)
+          : 0,
         idempotent: data?.idempotent === true,
         message: data?.idempotent
           ? "A proposta modular já existia; o mesmo link foi recuperado."
-          : "Proposta pública modular criada sem acessar a Stripe.",
+          : "Proposta pública modular criada sem acessar a API da Stripe.",
       });
     } catch (error: any) {
       if (sendSalesProfitabilityPolicySchemaPending(res, error)) return;
@@ -81643,51 +82159,48 @@ async function startServer() {
     },
   );
 
-  app.post(
-    "/api/owner/sales/offers/:offerId/modular-checkout",
-    checkAuth,
-    checkPlatformAdmin,
-    modularCheckoutLimiter,
-    async (req: any, res) => {
-      const offerId = sanitizeString(req.params?.offerId, 120);
-      const actorUserId = sanitizeString(req.session?.user?.id, 120);
-      const idempotencyKey = sanitizeString(
-        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
-        180,
-      );
-      const regenerate = req.body?.regenerate === true;
-      if (
-        !isUuid(offerId)
-        || !isUuid(actorUserId)
-        || idempotencyKey.length < 12
-        || !hasVerifiedMfaSession(req.session?.user)
-      ) {
-        return res.status(403).json({
-          success: false,
-          code: "MODULAR_CHECKOUT_OWNER_MFA_REQUIRED",
-          error: "Esta ação exige administração da plataforma com MFA validado.",
+  const createOrReuseModularCheckout = async (
+    req: any,
+    res: any,
+    params: {
+      offerId: string;
+      actorUserId: string;
+      idempotencyKey: string;
+      regenerate?: boolean;
+      publicMode?: boolean;
+      publicOfferToken?: string;
+    },
+  ) => {
+    const {
+      offerId,
+      actorUserId,
+      idempotencyKey,
+      regenerate = false,
+      publicMode = false,
+      publicOfferToken,
+    } = params;
+    try {
+      const respondWithLink = (link: any, idempotent: boolean, statusCode = 200) => {
+        if (publicMode) {
+          return res.status(statusCode).json({
+            success: true,
+            url: sanitizeString(link?.checkout_url, 2000),
+            idempotent,
+          });
+        }
+        return res.status(statusCode).json({
+          success: true,
+          link: serializeSalesCheckoutLink(req, link),
+          idempotent,
         });
-      }
-      if (
-        req.body?.amount
-        || req.body?.price
-        || req.body?.prices
-        || req.body?.discount
-        || req.body?.lineItems
-        || req.body?.organizationId
-      ) {
-        return res.status(400).json({
-          success: false,
-          code: "MODULAR_CHECKOUT_BROWSER_VALUES_REJECTED",
-          error: "Valores e tenant são reconstruídos no servidor.",
-        });
-      }
-      try {
+      };
+      const stripeEnvironment = resolveStripeEnvironment();
+        validateStripeSecretForEnvironment(stripeEnvironment);
         const [offerResult, itemResult] = await Promise.all([
           supabase
             .from("sales_offers")
             .select(
-              "id,lead_id,offer_type,status,accepted_at,accepted_terms_at,accepted_terms_snapshot,expires_at,revoked_at,currency,catalog_version_id,simulation_snapshot,modular_snapshot,internal_justification",
+              "id,lead_id,offer_type,status,accepted_at,accepted_terms_at,accepted_terms_snapshot,expires_at,revoked_at,currency,catalog_version_id,simulation_snapshot,modular_snapshot,internal_justification,modular_checkout_enabled,trial_days",
             )
             .eq("id", offerId)
             .maybeSingle(),
@@ -81708,6 +82221,13 @@ async function startServer() {
             success: false,
             code: "MODULAR_OFFER_NOT_FOUND",
             error: "Proposta modular não encontrada.",
+          });
+        }
+        if (offer.modular_checkout_enabled !== true) {
+          return res.status(409).json({
+            success: false,
+            code: "MODULAR_CHECKOUT_NOT_ENABLED",
+            error: "O checkout modular não está habilitado para esta proposta.",
           });
         }
         if (!["ready", "sent", "opened", "checkout_created", "payment_pending"].includes(
@@ -81871,19 +82391,45 @@ async function startServer() {
           .createHash("sha256")
           .update(JSON.stringify({
             offerId,
-            environment: "test",
+            environment: stripeEnvironment,
+            trialDays: Number(offer.trial_days || 0),
             checkoutPlan: checkoutPlan.reconciliationHashInput,
           }))
           .digest("hex");
-        const checkoutPublicToken = deriveSalesCheckoutPublicToken(
+        const moduleSetHash = buildSalesModuleSetHash(
           offerId,
-          `${requestHash}:${idempotencyKey}`,
+          requestHash,
+          (itemResult.data || []).map((item: any) => sanitizeString(item?.item_key, 80)),
+        );
+        const { data: latestExpiredLink, error: latestExpiredError } = await supabase
+          .from("sales_checkout_links")
+          .select("id,updated_at")
+          .eq("offer_id", offerId)
+          .eq("environment", stripeEnvironment)
+          .eq("status", "expired")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (latestExpiredError) throw latestExpiredError;
+
+        // A legitimate expiry opens a new deterministic idempotency generation.
+        // Concurrent retries after the same expiry still converge on one Stripe
+        // Session, while a later expiry gets a different generation key.
+        let operationIdempotencyKey = latestExpiredLink?.id
+          ? crypto
+              .createHash("sha256")
+              .update(`${idempotencyKey}:expired:${latestExpiredLink.id}`)
+              .digest("hex")
+          : idempotencyKey;
+        let checkoutPublicToken = deriveSalesCheckoutPublicToken(
+          offerId,
+          `${requestHash}:${operationIdempotencyKey}`,
         );
         const { data: sameKey, error: sameKeyError } = await supabase
           .from("sales_checkout_links")
           .select("*")
           .eq("created_by", actorUserId)
-          .eq("idempotency_key", idempotencyKey)
+          .eq("idempotency_key", operationIdempotencyKey)
           .maybeSingle();
         if (sameKeyError) throw sameKeyError;
         if (sameKey) {
@@ -81894,33 +82440,45 @@ async function startServer() {
               error: "A chave já foi usada com outro payload.",
             });
           }
-          return res.json({
-            success: true,
-            link: serializeSalesCheckoutLink(req, sameKey),
-            idempotent: true,
-          });
+          if (!regenerate && ["active", "sent", "opened", "payment_pending"].includes(sanitizeString(sameKey.status, 40))) {
+            return respondWithLink(sameKey, true);
+          }
         }
         const { data: activeLink, error: activeLinkError } = await supabase
           .from("sales_checkout_links")
           .select("*")
           .eq("offer_id", offerId)
-          .eq("environment", "test")
+          .eq("environment", stripeEnvironment)
           .in("status", ["active", "sent", "opened", "payment_pending"])
           .maybeSingle();
         if (activeLinkError) throw activeLinkError;
         if (activeLink && !regenerate) {
-          return res.json({
-            success: true,
-            link: serializeSalesCheckoutLink(req, activeLink),
-            idempotent: true,
-          });
+          return respondWithLink(activeLink, true);
         }
         if (!activeLink) {
+          const { data: completedSubscriptionLink, error: completedSubscriptionError } = await supabase
+            .from("sales_checkout_links")
+            .select("id,stripe_subscription_id,status")
+            .eq("offer_id", offerId)
+            .eq("environment", stripeEnvironment)
+            .eq("status", "completed")
+            .not("stripe_subscription_id", "is", null)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (completedSubscriptionError) throw completedSubscriptionError;
+          if (completedSubscriptionLink?.stripe_subscription_id) {
+            return res.status(409).json({
+              success: false,
+              code: "MODULAR_CHECKOUT_ALREADY_COMPLETED",
+              error: "Esta proposta já originou uma assinatura confirmada.",
+            });
+          }
           const { data: failedSubscriptionLink, error: failedSubscriptionError } = await supabase
             .from("sales_checkout_links")
             .select("id,stripe_subscription_id,status")
             .eq("offer_id", offerId)
-            .eq("environment", "test")
+            .eq("environment", stripeEnvironment)
             .eq("status", "failed")
             .not("stripe_subscription_id", "is", null)
             .order("created_at", { ascending: false })
@@ -81935,15 +82493,15 @@ async function startServer() {
             });
           }
         }
-        const stripeSecret = sanitizeString(process.env.STRIPE_SECRET_KEY, 300);
-        if (!stripeSecret.startsWith("sk_test_")) {
-          return res.status(503).json({
-            success: false,
-            code: "MODULAR_CHECKOUT_TEST_CONFIGURATION_REQUIRED",
-            error: "Configure credenciais Stripe de teste para validar este fluxo.",
-          });
-        }
         if (activeLink && regenerate) {
+          operationIdempotencyKey = crypto
+            .createHash("sha256")
+            .update(`${idempotencyKey}:regenerate:${activeLink.id}`)
+            .digest("hex");
+          checkoutPublicToken = deriveSalesCheckoutPublicToken(
+            offerId,
+            `${requestHash}:${operationIdempotencyKey}`,
+          );
           await supabase
             .from("sales_checkout_links")
             .update({
@@ -81981,7 +82539,8 @@ async function startServer() {
               || offer.simulation_snapshot?.assumptionSetId,
             100,
           ),
-          environment: "test",
+          environment: stripeEnvironment,
+          moduleSetHash,
         };
         const session = await getStripe().checkout.sessions.create(
           {
@@ -81989,11 +82548,23 @@ async function startServer() {
             client_reference_id: offerId,
             customer_email:
               sanitizeEmail(lead.normalized_email || lead.email) || undefined,
-            success_url: `${origin}/oferta/pagamento?payment=success&session_id={CHECKOUT_SESSION_ID}`,
-            cancel_url: `${origin}/oferta/pagamento?payment=cancelled`,
+            success_url: publicOfferToken
+              ? `${buildSalesOfferPublicUrl(req, publicOfferToken)}?payment=success&session_id={CHECKOUT_SESSION_ID}`
+              : `${origin}/oferta/pagamento?payment=success&session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: publicOfferToken
+              ? `${buildSalesOfferPublicUrl(req, publicOfferToken)}?payment=cancel`
+              : `${origin}/oferta/pagamento?payment=cancelled`,
             expires_at: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
             metadata: stripeMetadata,
-            subscription_data: { metadata: stripeMetadata },
+            ...(Number(offer.trial_days || 0) > 0
+              ? { payment_method_collection: "always" as const }
+              : {}),
+            subscription_data: {
+              metadata: stripeMetadata,
+              ...(Number(offer.trial_days || 0) > 0
+                ? { trial_period_days: Number(offer.trial_days) }
+                : {}),
+            },
             line_items: checkoutPlan.initialLineItems.map((line) => ({
               quantity: 1,
               price_data: {
@@ -82012,7 +82583,7 @@ async function startServer() {
           {
             idempotencyKey: crypto
               .createHash("sha256")
-              .update(`modular-checkout:${offerId}:${requestHash}:${idempotencyKey}`)
+              .update(`modular-checkout:${stripeEnvironment}:${offerId}:${requestHash}:${operationIdempotencyKey}`)
               .digest("hex"),
           },
         );
@@ -82020,10 +82591,10 @@ async function startServer() {
         const linkPayload = {
           offer_id: offerId,
           lead_id: offer.lead_id,
-          environment: "test",
+          environment: stripeEnvironment,
           status: "active",
           request_hash: requestHash,
-          idempotency_key: idempotencyKey,
+          idempotency_key: operationIdempotencyKey,
           stripe_checkout_session_id: session.id,
           checkout_url: session.url,
           public_token_hash: hashSalesOfferToken(checkoutPublicToken),
@@ -82056,16 +82627,12 @@ async function startServer() {
               .from("sales_checkout_links")
               .select("*")
               .eq("offer_id", offerId)
-              .eq("environment", "test")
+              .eq("environment", stripeEnvironment)
               .in("status", ["active", "sent", "opened", "payment_pending"])
               .maybeSingle();
             if (racedLinkError) throw racedLinkError;
             if (racedLink) {
-              return res.json({
-                success: true,
-                link: serializeSalesCheckoutLink(req, racedLink),
-                idempotent: true,
-              });
+              return respondWithLink(racedLink, true);
             }
           }
           throw storeError;
@@ -82079,7 +82646,7 @@ async function startServer() {
               metadata: {
                 offer_id: offerId,
                 checkout_link_id: storedLink.id,
-                environment: "test",
+                environment: stripeEnvironment,
               },
               idempotency_key: `modular-checkout-created:${storedLink.id}`,
             }],
@@ -82096,11 +82663,7 @@ async function startServer() {
             .eq("lead_id", offer.lead_id)
             .in("status", ["ready", "sent", "opened", "checkout_created"]),
         ]);
-        return res.status(201).json({
-          success: true,
-          link: serializeSalesCheckoutLink(req, storedLink),
-          idempotent: false,
-        });
+        return respondWithLink(storedLink, false, 201);
       } catch (error: any) {
         console.error("[Sales Modular Checkout] Falha ao gerar link.", {
           offerId,
@@ -82114,6 +82677,56 @@ async function startServer() {
           error: "Não foi possível gerar o link de pagamento.",
         });
       }
+  };
+
+  app.post(
+    "/api/owner/sales/offers/:offerId/modular-checkout",
+    checkAuth,
+    checkPlatformAdmin,
+    modularCheckoutLimiter,
+    async (req: any, res) => {
+      const offerId = sanitizeString(req.params?.offerId, 120);
+      const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const idempotencyKey = sanitizeString(
+        req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
+        180,
+      );
+      const regenerate = req.body?.regenerate === true;
+      if (
+        !isUuid(offerId)
+        || !isUuid(actorUserId)
+        || idempotencyKey.length < 12
+        || !hasVerifiedMfaSession(req.session?.user)
+      ) {
+        return res.status(403).json({
+          success: false,
+          code: "MODULAR_CHECKOUT_OWNER_MFA_REQUIRED",
+          error: "Esta ação exige administração da plataforma com MFA validado.",
+        });
+      }
+      if (
+        req.body?.amount
+        || req.body?.price
+        || req.body?.prices
+        || req.body?.discount
+        || req.body?.lineItems
+        || req.body?.organizationId
+        || req.body?.modules
+        || req.body?.trialDays
+        || req.body?.environment
+      ) {
+        return res.status(400).json({
+          success: false,
+          code: "MODULAR_CHECKOUT_BROWSER_VALUES_REJECTED",
+          error: "Valores e tenant são reconstruídos no servidor.",
+        });
+      }
+      return createOrReuseModularCheckout(req, res, {
+        offerId,
+        actorUserId,
+        idempotencyKey,
+        regenerate,
+      });
     },
   );
 

@@ -135,6 +135,19 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalSelectedRescheduleSlots, setPortalSelectedRescheduleSlots] = useState<any[]>([]);
   const [portalActionSaving, setPortalActionSaving] = useState(false);
   const [portalSection, setPortalSection] = useState<PortalSection>('home');
+  const portalModuleMode = user?.portalContext?.moduleAccessMode === 'contract' ? 'contract' : 'legacy_full';
+  const portalModules = useMemo(
+    () => new Set(
+      Array.isArray(user?.portalContext?.modules)
+        ? user.portalContext.modules.map((value: any) => String(value || '').trim())
+        : []
+    ),
+    [user?.portalContext?.entitlementVersion, user?.portalContext?.modules],
+  );
+  const portalHasModule = (moduleKey: string) =>
+    portalModuleMode === 'legacy_full' || portalModules.has(moduleKey);
+  const clinicalPortalEnabled = portalHasModule('clinical_core');
+  const appointmentsPortalEnabled = portalHasModule('appointments_communication');
   const [portalAnamnesis, setPortalAnamnesis] = useState<any>(null);
   const [portalAnamnesisChecked, setPortalAnamnesisChecked] = useState(false);
   const [portalAnamnesisDraft, setPortalAnamnesisDraft] = useState<Record<string, any>>({});
@@ -149,6 +162,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const portalNotificationsRequestRef = useRef(0);
   const portalNotificationsLastLoadedAtRef = useRef(0);
   const portalFilesRequestRef = useRef(0);
+
+  useEffect(() => {
+    if (portalSection === 'appointments' && !appointmentsPortalEnabled) setPortalSection('home');
+    if (['anamnesis', 'notes', 'tasks', 'reports', 'documents'].includes(portalSection) && !clinicalPortalEnabled) {
+      setPortalSection('home');
+    }
+  }, [portalSection, appointmentsPortalEnabled, clinicalPortalEnabled]);
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -520,7 +540,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setPortalAppointmentsLoaded(false);
     setPortalAppointmentsRangeKey('');
     setPortalAppointmentsState({ loading: false, error: '', message: '' });
-  }, [user?.id, user?.email, portalPatientId]);
+  }, [user?.id, user?.email, portalPatientId, appointmentsPortalEnabled]);
 
   useEffect(() => {
     const shouldLoadPortalAppointments =
@@ -575,6 +595,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     portalNotificationsRequestRef.current += 1;
     setPortalNotifications([]);
     setPortalNotificationsLoaded(false);
+    if (!appointmentsPortalEnabled) {
+      setPortalNotificationsLoaded(true);
+      return;
+    }
     void loadPortalNotifications();
     const refreshNotifications = () => {
       if (document.visibilityState !== 'visible') return;
@@ -588,7 +612,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       document.removeEventListener('visibilitychange', refreshNotifications);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, user?.email, portalPatientId]);
+  }, [user?.id, user?.email, portalPatientId, appointmentsPortalEnabled]);
 
   const markPortalNotificationRead = async (notification: any, acknowledged = false) => {
     if (!notification?.id || (!acknowledged && notification?.read_at)) return;
@@ -2430,12 +2454,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const portalMenuItems = [
     { id: 'home', label: 'Início', icon: Smile },
-    { id: 'appointments', label: isKidsProfile ? 'Calendário' : 'Sessões', icon: CalendarDays },
-    { id: 'anamnesis', label: 'Anamnese', icon: FileSignature },
-    { id: 'notes', label: 'Anotações', icon: MessageCircle },
-    { id: 'documents', label: 'Documentos', icon: BookOpen },
-    { id: 'reports', label: 'Relatório', icon: FileText },
-    ...(!isKidsProfile ? [{ id: 'tasks', label: 'Tarefas', icon: Zap }] : []),
+    ...(appointmentsPortalEnabled
+      ? [{ id: 'appointments', label: isKidsProfile ? 'Calendário' : 'Sessões', icon: CalendarDays }]
+      : []),
+    ...(clinicalPortalEnabled
+      ? [
+          { id: 'anamnesis', label: 'Anamnese', icon: FileSignature },
+          { id: 'notes', label: 'Anotações', icon: MessageCircle },
+          { id: 'documents', label: 'Documentos', icon: BookOpen },
+          { id: 'reports', label: 'Relatório', icon: FileText },
+          ...(!isKidsProfile ? [{ id: 'tasks', label: 'Tarefas', icon: Zap }] : []),
+        ]
+      : []),
     { id: 'profile', label: 'Perfil', icon: Settings }
   ] as Array<{ id: PortalSection; label: string; icon: any }>;
 
@@ -2622,9 +2652,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const portalHomeSummary = (
     <React.Fragment>
-      {portalAnamnesisTopNotice}
-      {portalNotificationsSummary}
-      {!isKidsProfile && (
+      {clinicalPortalEnabled && portalAnamnesisTopNotice}
+      {appointmentsPortalEnabled && portalNotificationsSummary}
+      {!isKidsProfile && clinicalPortalEnabled && (
         <div className="mb-6 grid gap-3 sm:grid-cols-2">
           <button type="button" onClick={() => setPortalSection('tasks')} className="rounded-[24px] border border-emerald-100 bg-white p-4 text-left shadow-sm transition hover:bg-emerald-50">
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-600">Tarefas</p>
@@ -3528,7 +3558,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                                 );
                               })}
                             </div>
-                            {!isReadOnlyMode && (
+                            {!isReadOnlyMode && clinicalPortalEnabled && (
                               <button 
                                 onClick={() => { setFamilyUploadError(''); setIsFamilyLogOpen(true); setIsMenuOpen(false); }}
                                 className="w-full flex items-center gap-3 p-3 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
@@ -3568,7 +3598,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 {portalSection === 'documents' && portalDocumentsPanel}
                 {portalSection === 'profile' && portalProfilePanel}
 
-                {portalSection === 'home' && (
+                {portalSection === 'home' && clinicalPortalEnabled && (
                   <React.Fragment>
                 <div className="bg-white p-4 sm:p-6 rounded-[32px] sm:rounded-[40px] shadow-xl border border-blue-50 flex flex-col justify-center mb-6 relative overflow-hidden">
                     <div className="absolute top-0 right-0 w-24 sm:w-32 h-24 sm:h-32 bg-yellow-100 rounded-bl-full opacity-50 -z-0"></div>
@@ -4033,7 +4063,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       {portalSection === 'reports' && portalReportPanel}
       {portalSection === 'documents' && portalDocumentsPanel}
       {portalSection === 'profile' && portalProfilePanel}
-      {portalSection === 'home' && (
+      {portalSection === 'home' && clinicalPortalEnabled && (
         <React.Fragment>
       {!dailyCheckinDone ? ( 
         <div className="mb-8 animate-slide-up"> 

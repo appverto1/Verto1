@@ -7,9 +7,12 @@ const checkoutRoute = server.match(
 )?.[0] || '';
 
 assert.match(checkoutRoute, /offer_type, 30\) === "modular"/);
-assert.match(checkoutRoute, /PROPOSAL_MODULAR_CHECKOUT_NOT_ENABLED/);
-assert.match(checkoutRoute, /stripe\.checkout\.sessions\.create/);
-assert.match(checkoutRoute, /idempotencyKey: `sales-offer-checkout:/);
+assert.match(checkoutRoute, /createOrReuseModularCheckout/);
+assert.match(checkoutRoute, /MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
+assert.match(server, /const createOrReuseModularCheckout/);
+assert.match(server, /stripe\.checkout\.sessions\.create/);
+assert.match(server, /operationIdempotencyKey/);
+assert.match(server, /public-modular-checkout:/);
 assert.match(server, /processSalesAssistedCheckoutCompleted/);
 assert.match(server, /confirm_sales_assisted_checkout_payment/);
 

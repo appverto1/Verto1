@@ -76,6 +76,11 @@ import { SubscriptionDiscountSummary } from "./SubscriptionDiscountSummary";
 import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
 import { VERTO_BRAND_ASSETS } from "../constants/vertoBranding";
+import {
+  hasOrganizationModule,
+  type OrganizationModuleAccessMode,
+  type OrganizationModuleKey,
+} from "../constants/organizationModules";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BarChart,
@@ -203,6 +208,7 @@ type NavigationNode = {
   children?: NavigationNode[];
   clinicFinanceOnly?: boolean;
   patientFinanceOnly?: boolean;
+  requiredModule?: OrganizationModuleKey;
 };
 
 const COORDINATOR_SIDEBAR_PREFERENCE_KEY = "verto:coordinator-sidebar-expanded";
@@ -709,11 +715,17 @@ export function CoordinatorDashboard({
     return new Set<string>(getDefaultCapabilitiesForRole(normalizedRole));
   }, [normalizedRole]);
   const [effectiveCapabilities, setEffectiveCapabilities] = useState<Set<string>>(baseCapabilities);
+  const [organizationModules, setOrganizationModules] = useState<Set<OrganizationModuleKey>>(new Set());
+  const [moduleAccessMode, setModuleAccessMode] = useState<OrganizationModuleAccessMode>("legacy_full");
+  const [entitlementVersion, setEntitlementVersion] = useState(1);
   const [authorizationHydrated, setAuthorizationHydrated] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setEffectiveCapabilities(baseCapabilities);
+    setOrganizationModules(new Set());
+    setModuleAccessMode("legacy_full");
+    setEntitlementVersion(1);
     setAuthorizationHydrated(false);
     if (!isClinicBaseRole(normalizedRole)) {
       setAuthorizationHydrated(true);
@@ -723,6 +735,18 @@ export function CoordinatorDashboard({
       if (cancelled) return;
       if (result?.success && Array.isArray(result?.data?.capabilities)) {
         setEffectiveCapabilities(new Set(result.data.capabilities.map((value: any) => String(value || '').trim()).filter(Boolean)));
+        const nextMode = result?.data?.moduleAccessMode === "contract" ? "contract" : "legacy_full";
+        setModuleAccessMode(nextMode);
+        setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
+        setOrganizationModules(new Set(
+          Array.isArray(result?.data?.modules)
+            ? result.data.modules
+                .map((value: any) => String(value || '').trim())
+                .filter((value: string): value is OrganizationModuleKey =>
+                  ["clinical_core", "appointments_communication", "financial_management", "insurance_tiss", "school_management"].includes(value),
+                )
+            : [],
+        ));
       }
       setAuthorizationHydrated(true);
     }).catch(() => {
@@ -736,6 +760,13 @@ export function CoordinatorDashboard({
     [effectiveCapabilities],
   );
 
+  const hasModule = useCallback(
+    (moduleKey: OrganizationModuleKey) =>
+      hasOrganizationModule(moduleAccessMode, organizationModules, moduleKey),
+    [moduleAccessMode, organizationModules],
+  );
+
+  void entitlementVersion;
   const canCancelRecurringAppointments = hasCapability("calendar.appointment.cancel");
   const canDeleteRecurringAppointments = canCancelRecurringAppointments;
   const canAccessClinicFinance = hasCapability("finance.payments.view");
@@ -795,12 +826,28 @@ export function CoordinatorDashboard({
   const capabilityForTab = (tabId: string) => tabCapabilityMap[tabId];
 
   const canAccessTab = (tabId: string) => {
-    if (!authorizationHydrated && (normalizedRole === "director" || normalizedRole === "supervisor")) {
-      return tabId === "dashboard" || tabId === "patients";
+    // Do not render module-derived experiences from optimistic role defaults
+    // while the canonical tenant authorization is still loading.
+    if (!authorizationHydrated) {
+      return tabId === "dashboard" || tabId === "professionalProfile";
     }
+    const requiredModuleByTab: Partial<Record<string, OrganizationModuleKey>> = {
+      protocols: "clinical_core",
+      agenda: "appointments_communication",
+      rooms: "appointments_communication",
+      financial: "financial_management",
+      payers: "insurance_tiss",
+      patientAuthorizations: "insurance_tiss",
+      closure: "insurance_tiss",
+      conference: "insurance_tiss",
+      schools: "school_management",
+    };
+    const requiredModule = requiredModuleByTab[tabId];
+    if (requiredModule && !hasModule(requiredModule)) return false;
     if (tabId === "patientAuthorizations") return hasCapability("patient.insurance.authorization.view");
     if (tabId === "professionalProfile") return isClinicBaseRole(normalizedRole);
     if (tabId === "settings") return hasCapability("clinic.settings.view");
+    if (tabId === "billing") return hasCapability("clinic.settings.view");
     if (tabId === "financial") return canAccessClinicFinance;
     if (tabId === "closure" || tabId === "conference") return hasCapability("billing.preguide.view");
     const capability = capabilityForTab(tabId);
@@ -9929,6 +9976,7 @@ export function CoordinatorDashboard({
       {
         id: "tiss-root",
         label: "Convênios e TISS",
+        requiredModule: "insurance_tiss",
         icon: KeyRound,
         children: [
           {
@@ -9951,6 +9999,7 @@ export function CoordinatorDashboard({
       {
         id: "prebilling-root",
         label: "Pré-faturamento TISS",
+        requiredModule: "insurance_tiss",
         icon: FileChartColumnIncreasing,
         children: [
           {
@@ -9992,7 +10041,7 @@ export function CoordinatorDashboard({
           { id: "clinical-expenses", label: "Despesas", icon: ArrowDownRight, tab: "financial", intent: financialIntent("Despesas"), clinicFinanceOnly: true },
           { id: "clinical-cashflow", label: "Fluxo de caixa", icon: TrendingUp, tab: "financial", intent: financialIntent("Fluxo de caixa"), clinicFinanceOnly: true },
           { id: "clinical-transfers", label: "Repasses a profissionais", icon: CreditCard, tab: "financial", intent: financialIntent("Repasses a profissionais"), clinicFinanceOnly: true },
-          { id: "clinical-payers", label: "Convênios e lotes", icon: FileSpreadsheet, tab: "financial", intent: financialIntent("Convênios e lotes"), clinicFinanceOnly: true },
+          { id: "clinical-payers", label: "Convênios e lotes", icon: FileSpreadsheet, tab: "financial", intent: financialIntent("Convênios e lotes"), clinicFinanceOnly: true, requiredModule: "insurance_tiss" },
           {
             id: "finance-patient-operations",
             label: "Financeiro de pacientes",
@@ -10038,6 +10087,7 @@ export function CoordinatorDashboard({
   ];
 
   const filterNavigationNode = (item: NavigationNode): NavigationNode | null => {
+    if (item.requiredModule && !hasModule(item.requiredModule)) return null;
     if (item.clinicFinanceOnly && !canAccessClinicFinance) return null;
     if (item.patientFinanceOnly && !isReceptionist && !canAccessClinicFinance) return null;
     if (item.children?.length) {

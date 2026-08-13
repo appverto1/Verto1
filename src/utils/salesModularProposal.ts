@@ -197,6 +197,7 @@ export type SalesModularProposalInput = {
   globalDiscountBasisPoints: number;
   discountDurationMonths: number;
   offerValidityDays: number;
+  trialDays?: 0 | 7 | 14 | 30;
   onboardingInstallments?: number;
   usageProfile: SalesUsageProfile;
   driverOverrides?: SalesModularDriverOverrides;
@@ -1186,6 +1187,9 @@ export function validateSalesModularProposalInput(
     input.offerValidityDays > 90
   ) {
     errors.push('offerValidityDays');
+  }
+  if (![0, 7, 14, 30].includes(Number(input.trialDays ?? 0))) {
+    errors.push('trialDays');
   }
   if (
     !Number.isInteger(input.onboardingInstallments ?? 1) ||

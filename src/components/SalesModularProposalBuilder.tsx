@@ -476,6 +476,7 @@ export const SalesModularProposalBuilder = ({
           globalDiscountBasisPoints: 0,
           discountDurationMonths: 0,
           offerValidityDays: 14,
+          trialDays: 7,
           onboardingInstallments: 1,
           usageProfile: 'intensive',
           driverOverrides: {},
@@ -981,8 +982,9 @@ export const SalesModularProposalBuilder = ({
         Date.now() + input.offerValidityDays * 24 * 60 * 60 * 1000
       ).toISOString(),
       status: 'preview',
-      modularCheckoutEnabled: false,
-      stripeReady: false,
+      modularCheckoutEnabled: true,
+      stripeReady: true,
+      trialDays: input.trialDays ?? 0,
       commercialPhases: preview.commercialPhases.map((phase) => ({
         phaseNumber: phase.phaseNumber,
         startsAt: phase.startsAt,
@@ -3270,6 +3272,23 @@ export const SalesModularProposalBuilder = ({
                           {months} meses
                         </option>
                       ))}
+                    </select>
+                  </label>
+                  <label className="text-sm font-medium text-slate-700">
+                    Período de teste
+                    <select
+                      value={input.trialDays ?? 0}
+                      onChange={(event) =>
+                        updateInput({
+                          trialDays: Number(event.target.value) as 0 | 7 | 14 | 30
+                        })
+                      }
+                      className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal"
+                    >
+                      <option value={0}>Sem teste</option>
+                      <option value={7}>7 dias</option>
+                      <option value={14}>14 dias</option>
+                      <option value={30}>30 dias</option>
                     </select>
                   </label>
                   <label className="text-sm font-medium text-slate-700">

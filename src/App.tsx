@@ -3939,6 +3939,12 @@ export default function App() {
         const portalContextResult = await dataService.getPortalContext();
         if (!mounted || requestId !== requestGeneration) return;
         const portalContext = portalContextResult?.success && portalContextResult?.data ? portalContextResult.data : null;
+        const portalModuleMode = portalContext?.moduleAccessMode === 'contract' ? 'contract' : 'legacy_full';
+        const portalModules = new Set(
+          Array.isArray(portalContext?.modules) ? portalContext.modules.map((value: any) => String(value || '').trim()) : []
+        );
+        const portalHasModule = (moduleKey: string) =>
+          portalModuleMode === 'legacy_full' || portalModules.has(moduleKey);
         const resolvedContextPatientId = String(portalContext?.resolvedPatientId || '').trim();
         if (!resolvedContextPatientId) {
           console.warn('[PatientPortal] skipped patient-scoped fetch: missing resolvedPatientId');
@@ -3962,7 +3968,8 @@ export default function App() {
             String(previousContext.clinicName || '') === String(portalContext?.clinicName || '') &&
             String(previousContext.clinicLogoUrl || '') === String(portalContext?.clinicLogoUrl || '') &&
             String(previousContext.patientName || '') === String(portalContext?.patientName || '') &&
-            String(previousContext.portalDisplayName || '') === String(portalContext?.portalDisplayName || '')
+            String(previousContext.portalDisplayName || '') === String(portalContext?.portalDisplayName || '') &&
+            Number(previousContext.entitlementVersion || 0) === Number(portalContext?.entitlementVersion || 0)
           ) {
             return prev;
           }
@@ -3985,9 +3992,12 @@ export default function App() {
           patient_email: portalContext?.resolvedPatientEmail || user.email,
           email: portalContext?.resolvedPatientEmail || user.email
         });
+        const clinicalPortalEnabled = portalHasModule('clinical_core');
         const [historyRes, notesRes] = await Promise.allSettled([
-          dataService.getPatientSelfHistory(),
-          dataService.getNotesByEmail(portalContext?.resolvedPatientEmail || user.email)
+          clinicalPortalEnabled ? dataService.getPatientSelfHistory() : Promise.resolve({ success: true, data: [] }),
+          clinicalPortalEnabled
+            ? dataService.getNotesByEmail(portalContext?.resolvedPatientEmail || user.email)
+            : Promise.resolve({ success: true, data: [] })
         ]);
         if (!mounted || requestId !== requestGeneration) return;
 
@@ -4046,9 +4056,9 @@ export default function App() {
       }
 
       const [tasksRes, assignedTasksRes, protocolsRes] = await Promise.allSettled([
-        dataService.getPatientSelfTasks(),
-        dataService.getPatientSelfAssignedTasks(),
-        dataService.getPatientSelfProtocols()
+        clinicalPortalEnabled ? dataService.getPatientSelfTasks() : Promise.resolve({ success: true, data: [] }),
+        clinicalPortalEnabled ? dataService.getPatientSelfAssignedTasks() : Promise.resolve({ success: true, data: [] }),
+        clinicalPortalEnabled ? dataService.getPatientSelfProtocols() : Promise.resolve({ success: true, data: [] })
       ]);
       if (!mounted || requestId !== requestGeneration) return;
       const safeTasksRes = tasksRes.status === 'fulfilled' ? tasksRes.value : null;

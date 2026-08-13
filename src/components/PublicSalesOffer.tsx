@@ -142,8 +142,9 @@ export type ModularPublicOffer = {
   publicNotes?: string | null;
   expiresAt: string;
   status: string;
-  modularCheckoutEnabled: false;
-  stripeReady: false;
+  modularCheckoutEnabled: boolean;
+  stripeReady: boolean;
+  trialDays: 0 | 7 | 14 | 30;
   acceptedAt?: string | null;
   commercialPhases?: PublicOfferCommercialPhase[];
   capacityBlockPhases?: PublicCapacityBlockPhase[];
@@ -564,13 +565,19 @@ export const ModularOfferDetails = ({
         {formatSalesCommercialDate(offer.expiresAt)}.
       </div>
 
+      {offer.trialDays > 0 ? (
+        <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+          <p className="text-sm font-semibold text-emerald-900">{offer.trialDays} dias gratuitos</p>
+          <p className="mt-1 text-xs font-normal leading-5 text-emerald-800">
+            O cartão é cadastrado na Stripe e a primeira cobrança ocorre após o período de teste, conforme esta proposta.
+          </p>
+        </div>
+      ) : null}
+
       <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center">
-        <p className="text-sm font-medium text-slate-800">
-          Venda assistida pela equipe Verto
-        </p>
+        <p className="text-sm font-medium text-slate-800">Contratação protegida pela Verto</p>
         <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
-          Após seu aceite, um owner com MFA gera o link de pagamento individual; o checkout modular será habilitado somente por esse fluxo assistido.
-          Esta página não cria cadastro público nem ativa a clínica.
+          Depois do aceite, esta mesma página prepara ou reutiliza o Checkout da Stripe. Os módulos e valores são sempre reconstruídos do contrato congelado no servidor.
         </p>
       </div>
     </>
@@ -785,7 +792,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                         <div>
                           <p className="font-medium">Proposta aceita</p>
                           <p className="mt-1 font-normal leading-5 text-slate-600">
-                            Aceite registrado em {new Date(acceptedAt).toLocaleString('pt-BR')}. A equipe comercial poderá gerar o link de pagamento assistido.
+                            Aceite registrado em {new Date(acceptedAt).toLocaleString('pt-BR')}. Você já pode continuar para o cadastro do cartão.
                           </p>
                         </div>
                       </div>
@@ -814,6 +821,21 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                       </>
                     )}
                   </div>
+                  {acceptedAt ? (
+                    <button
+                      type="button"
+                      onClick={() => void continueToCheckout()}
+                      disabled={continuing || !offer.modularCheckoutEnabled || !offer.stripeReady}
+                      className="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {continuing ? <Loader2 size={17} className="animate-spin" /> : <CheckCircle2 size={17} />}
+                      {continuing
+                        ? 'Preparando Checkout...'
+                        : offer.modularCheckoutEnabled && offer.stripeReady
+                          ? 'Continuar para cadastro do cartão'
+                          : 'Configuração Stripe pendente'}
+                    </button>
+                  ) : null}
                   {error ? <p role="alert" className="mt-4 rounded-xl border border-rose-100 bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
                 </>
               ) : (

@@ -9,6 +9,9 @@ const migration = fs.readFileSync(
 const checkoutRoute = server.match(
   /app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout"[\s\S]*?app\.get\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout"/
 )?.[0] || '';
+const checkoutCore = server.match(
+  /const createOrReuseModularCheckout =[\s\S]*?app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout"/
+)?.[0] || '';
 const publicLegacyCheckout = server.match(
   /app\.post\(\s*"\/api\/public\/sales-offers\/:token\/checkout"[\s\S]*?app\.get\(\s*"\/api\/public\/sales-offers\/:token\/payment-status"/
 )?.[0] || '';
@@ -20,36 +23,38 @@ assert.match(server, /const STRIPE_API_VERSION: Stripe\.LatestApiVersion = '2026
 assert.match(server, /new Stripe\(key, \{ apiVersion: STRIPE_API_VERSION \}\)/);
 assert.match(checkoutRoute, /checkPlatformAdmin/, 'Checkout modular deve exigir administração da plataforma');
 assert.match(checkoutRoute, /hasVerifiedMfaSession/, 'MFA deve ser obrigatório para qualquer administrador da plataforma');
-assert.match(checkoutRoute, /MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
-assert.match(checkoutRoute, /accepted_terms_snapshot/);
+assert.match(checkoutCore, /MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
+assert.match(checkoutCore, /accepted_terms_snapshot/);
 assert.match(checkoutRoute, /MODULAR_CHECKOUT_BROWSER_VALUES_REJECTED/);
-assert.match(checkoutRoute, /MODULAR_CHECKOUT_RECONCILIATION_FAILED/);
-assert.match(checkoutRoute, /everyPhaseIsInternallyReconciled/);
-assert.match(checkoutRoute, /checkout\.sessions\.expire\(session\.id\)/, 'sessão Stripe órfã deve ser expirada se a persistência falhar');
-assert.match(checkoutRoute, /STRIPE_SECRET_KEY/);
-assert.match(checkoutRoute, /startsWith\("sk_test_"\)/, 'primeira liberação deve aceitar apenas Stripe test');
-assert.match(checkoutRoute, /mode: "subscription"/);
-assert.match(checkoutRoute, /client_reference_id: offerId/);
-assert.match(checkoutRoute, /idempotencyKey/);
-assert.match(checkoutRoute, /MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
-assert.match(checkoutRoute, /MODULAR_OFFER_EXPIRED/);
+assert.match(checkoutCore, /MODULAR_CHECKOUT_RECONCILIATION_FAILED/);
+assert.match(checkoutCore, /everyPhaseIsInternallyReconciled/);
+assert.match(checkoutCore, /checkout\.sessions\.expire\(session\.id\)/, 'sessão Stripe órfã deve ser expirada se a persistência falhar');
+assert.match(server, /resolveStripeEnvironment/);
+assert.match(server, /validateStripeSecretForEnvironment/);
+assert.match(fs.readFileSync('services/stripeEnvironment.ts', 'utf8'), /sk_test_/);
+assert.match(fs.readFileSync('services/stripeEnvironment.ts', 'utf8'), /sk_live_/);
+assert.match(checkoutCore, /mode: "subscription"/);
+assert.match(checkoutCore, /client_reference_id: offerId/);
+assert.match(checkoutCore, /idempotencyKey/);
+assert.match(checkoutCore, /MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
+assert.match(checkoutCore, /MODULAR_OFFER_EXPIRED/);
 assert.match(
-  checkoutRoute,
+  checkoutCore,
   /MODULAR_CHECKOUT_MARGIN_POLICY_REVIEW_REQUIRED/
 );
-assert.match(checkoutRoute, /MODULAR_CHECKOUT_PAYMENT_RECOVERY_REQUIRED/);
+assert.match(checkoutCore, /MODULAR_CHECKOUT_PAYMENT_RECOVERY_REQUIRED/);
 assert.match(
-  checkoutRoute,
-  /\.update\(`modular-checkout:\$\{offerId\}:\$\{requestHash\}:\$\{idempotencyKey\}`\)/,
-  'regeneração explícita deve produzir uma nova chave Stripe'
+  checkoutCore,
+  /operationIdempotencyKey/,
+  'regeneração e expiração devem produzir uma geração idempotente própria'
 );
 assert.doesNotMatch(
-  checkoutRoute.match(/const requestHash =[\s\S]*?\.digest\("hex"\);/)?.[0] || '',
+  checkoutCore.match(/const requestHash =[\s\S]*?\.digest\("hex"\);/)?.[0] || '',
   /actorUserId/,
   'request hash deve representar a proposta congelada, não o owner que clicou'
 );
 assert.match(server, /clinical_core_capacity/);
-assert.doesNotMatch(checkoutRoute, /patientName|patient_name|cpf|diagnosis|prontu/i, 'metadata não pode receber conteúdo clínico');
+assert.doesNotMatch(checkoutCore, /patientName|patient_name|cpf|diagnosis|prontu/i, 'metadata não pode receber conteúdo clínico');
 assert.match(checkoutBuilder, /clinical_core_capacity/);
 assert.match(checkoutBuilder, /billingInterval === 'monthly'/);
 assert.match(checkoutBuilder, /recurring: line\.billingInterval === 'monthly'/);
@@ -91,7 +96,8 @@ assert.match(server, /confirm_sales_assisted_checkout_payment/);
 assert.match(server, /pending_activations/);
 assert.match(server, /\.eq\("stripe_checkout_session_id", session\.id\)[\s\S]*?\.eq\("source", "sales_assisted_signup"\)/);
 
-assert.match(publicLegacyCheckout, /PROPOSAL_MODULAR_CHECKOUT_NOT_ENABLED/);
+assert.match(publicLegacyCheckout, /createOrReuseModularCheckout/);
+assert.match(publicLegacyCheckout, /MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
 assert.match(publicLegacyCheckout, /stripe\.checkout\.sessions\.create/);
 assert.match(publicLegacyCheckout, /sales-offer-checkout:/, 'Checkout legado deve continuar no mesmo fluxo');
 
