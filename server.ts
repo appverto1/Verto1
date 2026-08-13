@@ -5520,6 +5520,112 @@ function buildPatientPhotoViewUrl(storagePath: unknown): string | null {
   return `/api/storage/patient-photos/view?path=${encodeURIComponent(path)}`;
 }
 
+const PROFESSIONAL_PROFILE_PHOTO_ACCESS_TTL_SECONDS = 15 * 60;
+const PROFESSIONAL_PROFILE_PHOTO_ACCESS_MAX_FUTURE_SECONDS = 20 * 60;
+
+function isProfessionalProfileOnboardingPath(objectPath: unknown, expectedOwnerUserId?: unknown): boolean {
+  const parts = sanitizeString(objectPath, 1500).split('/').filter(Boolean);
+  if (parts[0] !== 'onboarding' || !isUuid(parts[1])) return false;
+  const expectedOwner = sanitizeString(expectedOwnerUserId, 120);
+  if (expectedOwner && parts[1] !== expectedOwner) return false;
+  const assetPath = parts.slice(2).join('/').toLowerCase();
+  return (
+    assetPath.startsWith('profile-') ||
+    assetPath.startsWith('perfil-') ||
+    assetPath.startsWith('profile/')
+  );
+}
+
+function professionalProfilePhotoAccessSignature(params: {
+  clinicId: string;
+  ownerUserId: string;
+  storagePath: string;
+  expiresAt: number;
+}): string {
+  const secret = sanitizeString(process.env.SESSION_SECRET, 1000);
+  if (!secret) return '';
+  return crypto
+    .createHmac('sha256', secret)
+    .update(`professional-profile-photo:${params.clinicId}:${params.ownerUserId}:${params.expiresAt}:${params.storagePath}`)
+    .digest('hex');
+}
+
+function buildProfessionalProfilePhotoViewUrl(
+  storagePath: unknown,
+  clinicIdInput: unknown,
+  ownerUserIdInput: unknown,
+): string | null {
+  const storagePathValue = extractPatientPhotosStoragePath(storagePath);
+  const clinicId = sanitizeString(clinicIdInput, 120);
+  const ownerUserId = sanitizeString(ownerUserIdInput, 120);
+  if (!storagePathValue || !isUuid(clinicId) || !isUuid(ownerUserId)) {
+    return buildPatientPhotoViewUrl(storagePathValue);
+  }
+  const pathParts = storagePathValue.split('/').filter(Boolean);
+  const accessObjectPath =
+    pathParts[0] === 'demo' && pathParts[1] === clinicId
+      ? pathParts.slice(2).join('/')
+      : storagePathValue;
+  if (!isProfessionalProfileOnboardingPath(accessObjectPath, ownerUserId)) {
+    return buildPatientPhotoViewUrl(storagePathValue);
+  }
+  const expiresAt = Math.floor(Date.now() / 1000) + PROFESSIONAL_PROFILE_PHOTO_ACCESS_TTL_SECONDS;
+  const signature = professionalProfilePhotoAccessSignature({
+    clinicId,
+    ownerUserId,
+    storagePath: storagePathValue,
+    expiresAt,
+  });
+  if (!signature) return buildPatientPhotoViewUrl(storagePathValue);
+  const query = new URLSearchParams({
+    path: storagePathValue,
+    clinic_id: clinicId,
+    owner_user_id: ownerUserId,
+    expires_at: String(expiresAt),
+    profile_signature: signature,
+  });
+  return `/api/storage/patient-photos/view?${query.toString()}`;
+}
+
+function verifyProfessionalProfilePhotoAccess(params: {
+  clinicId: unknown;
+  ownerUserId: unknown;
+  storagePath: unknown;
+  accessObjectPath: unknown;
+  expiresAt: unknown;
+  signature: unknown;
+}): boolean {
+  const clinicId = sanitizeString(params.clinicId, 120);
+  const ownerUserId = sanitizeString(params.ownerUserId, 120);
+  const storagePath = extractPatientPhotosStoragePath(params.storagePath);
+  const accessObjectPath = sanitizeString(params.accessObjectPath, 1500);
+  const signature = sanitizeString(params.signature, 128).toLowerCase();
+  const expiresAt = Number(params.expiresAt);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (
+    !isUuid(clinicId) ||
+    !isUuid(ownerUserId) ||
+    !storagePath ||
+    !isProfessionalProfileOnboardingPath(accessObjectPath, ownerUserId) ||
+    !Number.isInteger(expiresAt) ||
+    expiresAt < nowSeconds ||
+    expiresAt > nowSeconds + PROFESSIONAL_PROFILE_PHOTO_ACCESS_MAX_FUTURE_SECONDS ||
+    !/^[a-f0-9]{64}$/.test(signature)
+  ) {
+    return false;
+  }
+  const expected = professionalProfilePhotoAccessSignature({
+    clinicId,
+    ownerUserId,
+    storagePath,
+    expiresAt,
+  });
+  if (!expected) return false;
+  const providedBuffer = Buffer.from(signature, 'hex');
+  const expectedBuffer = Buffer.from(expected, 'hex');
+  return providedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
 function enrichPatientPhotoHistoryRow(row: any): any {
   if (!row || typeof row !== 'object') return row;
   const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
@@ -5709,6 +5815,16 @@ async function resolveProfessionalProfilePhotoUrl(profile: any, user?: any): Pro
     extractPatientPhotosStoragePath(user?.profile_picture_path) ||
     extractPatientPhotosStoragePath(user?.profile_picture);
   return resolvePatientPhotoUrl(profile?.profile_photo_url || user?.profile_picture, storagePath);
+}
+
+function scopeProfessionalProfilePhotoUrlForClinic(
+  rawUrl: unknown,
+  clinicId: unknown,
+  ownerUserId: unknown,
+): string | null {
+  const storagePath = extractPatientPhotosStoragePath(rawUrl);
+  if (!storagePath) return sanitizeSessionUrl(rawUrl);
+  return buildProfessionalProfilePhotoViewUrl(storagePath, clinicId, ownerUserId);
 }
 
 type DetectedUploadMime =
@@ -25886,7 +26002,9 @@ async function startServer() {
           users:user_id (
             id,
             name,
-            email
+            email,
+            profile_picture,
+            profile_picture_path
           )
         `)
         .eq('clinic_id', clinicId)
@@ -25921,10 +26039,12 @@ async function startServer() {
         const profilePicturePath =
           extractPatientPhotosStoragePath(metadata?.profilePicturePath) ||
           extractPatientPhotosStoragePath(metadata?.profile_picture_path) ||
-          extractPatientPhotosStoragePath(profile?.profile_photo_url);
+          extractPatientPhotosStoragePath(profile?.profile_photo_url) ||
+          extractPatientPhotosStoragePath(m?.users?.profile_picture_path) ||
+          extractPatientPhotosStoragePath(m?.users?.profile_picture);
         const profilePicture = profilePicturePath
-          ? buildPatientPhotoViewUrl(profilePicturePath)
-          : sanitizeSessionUrl(profile?.profile_photo_url);
+          ? buildProfessionalProfilePhotoViewUrl(profilePicturePath, clinicId, memberId)
+          : sanitizeSessionUrl(profile?.profile_photo_url || m?.users?.profile_picture);
         const membershipSchedule = m?.work_schedule && typeof m.work_schedule === 'object'
           ? sanitizeProfessionalWorkingSchedule(m.work_schedule, 50)
           : null;
@@ -31676,7 +31796,14 @@ async function startServer() {
             .select(usersSelect)
             .in('id', professionalIds);
           if (professionalsResult.error) throw professionalsResult.error;
-          professionals = professionalsResult.data || [];
+          professionals = (professionalsResult.data || []).map((professional: any) => ({
+            ...professional,
+            profile_picture: scopeProfessionalProfilePhotoUrlForClinic(
+              professional?.profile_picture_path || professional?.profile_picture,
+              clinicId,
+              professional?.id,
+            )
+          }));
 
           if (professionalIds.length > 0) {
             stage = 'profiles';
@@ -31692,6 +31819,14 @@ async function startServer() {
               ...profile,
               profile_photo_url: await resolveProfessionalProfilePhotoUrl(profile, professionalById.get(String(profile.user_id)))
             })));
+            professionalProfiles = professionalProfiles.map((profile: any) => ({
+              ...profile,
+              profile_photo_url: scopeProfessionalProfilePhotoUrlForClinic(
+                profile?.profile_photo_url,
+                clinicId,
+                profile?.user_id,
+              )
+            }));
 
             stage = 'memberships';
             table = 'clinic_memberships';
@@ -34487,7 +34622,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/storage/patient-photos/view', checkAuth, requireAnyClinicCapabilityOrPatientPortal('patient.demographics.view', 'clinical.record.view'), async (req: any, res) => {
+  app.get('/api/storage/patient-photos/view', checkAuth, requireAnyClinicCapabilityOrPatientPortal('patient.demographics.view', 'clinical.record.view', 'team.view'), async (req: any, res) => {
     try {
       const objectPath = extractPatientPhotosStoragePath(req.query?.path);
       const actorId = sanitizeString(req.session.user?.id, 120);
@@ -34517,6 +34652,20 @@ async function startServer() {
           ownerUserId === actorId ||
           ['admin', 'owner', 'coordinator'].includes(role)
         );
+        if (
+          !canViewOnboardingMedia &&
+          role !== 'patient' &&
+          sanitizeString(req.query?.clinic_id, 120) === activeClinicId
+        ) {
+          canViewOnboardingMedia = verifyProfessionalProfilePhotoAccess({
+            clinicId: req.query?.clinic_id,
+            ownerUserId: req.query?.owner_user_id,
+            storagePath: objectPath,
+            accessObjectPath,
+            expiresAt: req.query?.expires_at,
+            signature: req.query?.profile_signature,
+          }) && sanitizeString(req.query?.owner_user_id, 120) === ownerUserId;
+        }
         if (!canViewOnboardingMedia) {
           canViewOnboardingMedia = await canAccessCanonicalClinicLogo({
             objectPath,
@@ -65552,8 +65701,16 @@ async function startServer() {
           };
         })
       );
+      const scopedLinkedProfiles = resolvedLinkedProfiles.map((profile: any) => ({
+        ...profile,
+        profile_photo_url: scopeProfessionalProfilePhotoUrlForClinic(
+          profile?.profile_photo_url,
+          clinicId,
+          profile?.user_id,
+        )
+      }));
       const linkedProfileById = new Map(
-        resolvedLinkedProfiles.map((profile: any) => [String(profile.user_id), profile])
+        scopedLinkedProfiles.map((profile: any) => [String(profile.user_id), profile])
       );
       const linkedMembershipIds = new Set(
         (linkedMembershipsResult.data || []).map((membership: any) =>

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { MemberPermissionEditor } from './MemberPermissionEditor';
+import { SecureImage } from './SecureMedia';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CLINICAL_SPECIALTY_OPTIONS,
@@ -44,6 +45,10 @@ interface Member {
   created_at: string;
   workSchedule?: any;
   workScheduleConfigured?: boolean;
+  profilePicture?: string | null;
+  profile_picture?: string | null;
+  profilePhotoUrl?: string | null;
+  profile_photo_url?: string | null;
 }
 
 type BulkScheduleTargetMode = 'selected' | 'attendance' | 'sameRole' | 'sameProfile';
@@ -129,6 +134,14 @@ const formatWorkScheduleMemberTitle = (member: Member) => {
   }
   return nameWithoutGenericPrefix;
 };
+
+const memberPhotoSource = (member: Member) => String(
+  member?.profilePicture ||
+  member?.profile_picture ||
+  member?.profilePhotoUrl ||
+  member?.profile_photo_url ||
+  ''
+).trim();
 
 const formatInvitationRoleLabel = (invitation: any) => {
   const role = invitation?.role;
@@ -830,8 +843,13 @@ export function TeamManagement({
                 filteredMembers.map((member) => (
                   <div key={member.id} className="group flex items-center justify-between gap-4 overflow-visible px-5 py-4 transition hover:bg-slate-50/60 sm:px-6">
                     <div className="flex min-w-0 items-center gap-3">
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-base font-medium text-slate-500">
-                    {(String(member?.name || 'P').trim().charAt(0) || 'P').toUpperCase()}
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-slate-100 text-base font-medium text-slate-500">
+                        <SecureImage
+                          src={memberPhotoSource(member)}
+                          alt={`Foto de ${member.name || 'profissional'}`}
+                          className="h-full w-full object-cover"
+                          fallback={(String(member?.name || 'P').trim().charAt(0) || 'P').toUpperCase()}
+                        />
                       </div>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
