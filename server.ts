@@ -3662,77 +3662,6 @@ function normalizeCpf(value: unknown): string | null {
   return digits;
 }
 
-function isValidBrazilCpf(value: unknown): boolean {
-  const digits = sanitizeString(value, 40).replace(/\D/g, '');
-  if (!/^\d{11}$/.test(digits) || /^(\d)\1{10}$/.test(digits)) return false;
-  const calculateDigit = (length: number) => {
-    let total = 0;
-    for (let index = 0; index < length; index += 1) {
-      total += Number(digits[index]) * (length + 1 - index);
-    }
-    const remainder = (total * 10) % 11;
-    return remainder === 10 ? 0 : remainder;
-  };
-  return calculateDigit(9) === Number(digits[9]) && calculateDigit(10) === Number(digits[10]);
-}
-
-function isValidBrazilCnpj(value: unknown): boolean {
-  const digits = sanitizeString(value, 40).replace(/\D/g, '');
-  if (!/^\d{14}$/.test(digits) || /^(\d)\1{13}$/.test(digits)) return false;
-  const calculateDigit = (baseLength: 12 | 13) => {
-    const weights = baseLength === 12
-      ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
-      : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-    const total = weights.reduce((sum, weight, index) => sum + Number(digits[index]) * weight, 0);
-    const remainder = total % 11;
-    return remainder < 2 ? 0 : 11 - remainder;
-  };
-  return calculateDigit(12) === Number(digits[12]) && calculateDigit(13) === Number(digits[13]);
-}
-
-function readValidProfessionalIdentityDocument(profile: any): { type: 'CPF' | 'CNPJ'; number: string } | null {
-  if (!profile || typeof profile !== 'object') return null;
-  const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
-  const declaredType = sanitizeString(
-    metadata?.documentType || metadata?.document_type || profile?.documentType || profile?.document_type,
-    10
-  ).toUpperCase();
-  const declaredNumber = sanitizeString(
-    metadata?.documentNumber || metadata?.document_number || profile?.documentNumber || profile?.document_number,
-    40
-  ).replace(/\D/g, '');
-  const cpfCandidate = sanitizeString(
-    metadata?.cpf || metadata?.professionalCpf || profile?.cpf,
-    40
-  ).replace(/\D/g, '');
-  const cnpjCandidate = sanitizeString(
-    metadata?.cnpj || metadata?.professionalCnpj || profile?.cnpj,
-    40
-  ).replace(/\D/g, '');
-
-  if (declaredType === 'CPF' && isValidBrazilCpf(declaredNumber)) return { type: 'CPF', number: declaredNumber };
-  if (declaredType === 'CNPJ' && isValidBrazilCnpj(declaredNumber)) return { type: 'CNPJ', number: declaredNumber };
-  if (isValidBrazilCpf(cpfCandidate)) return { type: 'CPF', number: cpfCandidate };
-  if (isValidBrazilCnpj(cnpjCandidate)) return { type: 'CNPJ', number: cnpjCandidate };
-  if (isValidBrazilCpf(declaredNumber)) return { type: 'CPF', number: declaredNumber };
-  if (isValidBrazilCnpj(declaredNumber)) return { type: 'CNPJ', number: declaredNumber };
-  return null;
-}
-
-async function hasPortableProfessionalIdentity(userId: unknown): Promise<boolean> {
-  const safeUserId = sanitizeString(userId, 120);
-  if (!isUuid(safeUserId)) return false;
-  const profileResult = await fetchProfessionalProfileWithSchemaFallback({
-    supabase,
-    userId: safeUserId,
-    logger: console,
-  });
-  if (profileResult.error && !isMissingRelationError(profileResult.error)) throw profileResult.error;
-  const profile = profileResult.data as any;
-  if (!profile?.user_id) return false;
-  return Boolean(readValidProfessionalIdentityDocument(profile));
-}
-
 function sanitizeDate(value: unknown): string | null {
   const date = sanitizeString(value, 10);
   if (!DATE_ONLY_REGEX.test(date)) return null;
@@ -14390,108 +14319,6 @@ async function fetchUserWorkspaces(userId: string) {
   );
 }
 
-type PendingClinicInvitation = {
-  invitationId: string;
-  clinicId: string;
-  clinicName: string;
-  clinicLogoUrl: string | null;
-  role: string;
-  specialty: string | null;
-  invitedAt: string | null;
-};
-
-function compactPendingClinicInvitations(value: any): PendingClinicInvitation[] {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  return value.slice(0, 30).map((item: any): PendingClinicInvitation | null => {
-    const invitationId = sanitizeString(item?.invitationId || item?.id, 120);
-    const clinicId = sanitizeString(item?.clinicId || item?.clinic_id, 120);
-    const role = sanitizeString(item?.role, 40).toLowerCase();
-    if (!isUuid(invitationId) || !isUuid(clinicId) || !ensureClinicRole(role) || seen.has(invitationId)) return null;
-    seen.add(invitationId);
-    return {
-      invitationId,
-      clinicId,
-      clinicName: sanitizeString(item?.clinicName || item?.clinic_name, 160) || 'Clínica',
-      clinicLogoUrl: sanitizeSessionUrl(item?.clinicLogoUrl || item?.clinic_logo_url),
-      role,
-      specialty: normalizeClinicalSpecialty(item?.specialty) || null,
-      invitedAt: sanitizeString(item?.invitedAt || item?.created_at, 80) || null,
-    };
-  }).filter((item: PendingClinicInvitation | null): item is PendingClinicInvitation => Boolean(item));
-}
-
-async function fetchPendingClinicInvitationsForUser(params: {
-  userId: unknown;
-  email: unknown;
-  workspaces?: any[];
-}): Promise<PendingClinicInvitation[]> {
-  const userId = sanitizeString(params.userId, 120);
-  const email = sanitizeEmail(params.email);
-  if (!isUuid(userId) || !email) return [];
-  if (!(await hasPortableProfessionalIdentity(userId))) return [];
-
-  const activeClinicIds = new Set(
-    (Array.isArray(params.workspaces) ? params.workspaces : [])
-      .map((workspace: any) => sanitizeString(workspace?.clinicId || workspace?.clinic_id, 120))
-      .filter((clinicId: string) => isUuid(clinicId))
-  );
-
-  const fullSelect = 'id,email,clinic_id,clinic_name,role,status,required_onboarding_fields,created_at';
-  let invitationResult = await supabase
-    .from('invitations')
-    .select(fullSelect)
-    .eq('email', email)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false })
-    .limit(30);
-  if (invitationResult.error && extractMissingColumnName(invitationResult.error)) {
-    invitationResult = await supabase
-      .from('invitations')
-      .select('id,email,clinic_id,role,status,created_at')
-      .eq('email', email)
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false })
-      .limit(30);
-  }
-  if (invitationResult.error) throw invitationResult.error;
-
-  const invitationRows = (invitationResult.data || []).filter((row: any) => {
-    const clinicId = sanitizeString(row?.clinic_id, 120);
-    return isUuid(clinicId) && !activeClinicIds.has(clinicId) && ensureClinicRole(sanitizeString(row?.role, 40).toLowerCase());
-  });
-  const clinicIds = Array.from(new Set(
-    invitationRows.map((row: any) => sanitizeString(row?.clinic_id, 120)).filter((clinicId: string) => isUuid(clinicId))
-  ));
-  if (clinicIds.length === 0) return [];
-
-  let clinicResult = await supabase.from('clinics').select('id,name,logo_url').in('id', clinicIds);
-  if (clinicResult.error && extractMissingColumnName(clinicResult.error) === 'logo_url') {
-    clinicResult = await supabase.from('clinics').select('id,name').in('id', clinicIds);
-  }
-  if (clinicResult.error) throw clinicResult.error;
-  const clinicsById = new Map(
-    (clinicResult.data || []).map((clinic: any) => [sanitizeString(clinic?.id, 120), clinic])
-  );
-
-  return compactPendingClinicInvitations(invitationRows.map((row: any) => {
-    const clinicId = sanitizeString(row?.clinic_id, 120);
-    const clinic = clinicsById.get(clinicId) as any;
-    const requiredFields = row?.required_onboarding_fields && typeof row.required_onboarding_fields === 'object'
-      ? row.required_onboarding_fields
-      : {};
-    return {
-      invitationId: row?.id,
-      clinicId,
-      clinicName: sanitizeString(clinic?.name || row?.clinic_name, 160) || 'Clínica',
-      clinicLogoUrl: sanitizeSessionUrl(clinic?.logo_url),
-      role: row?.role,
-      specialty: readClinicalSpecialtyFromSource(requiredFields, ''),
-      invitedAt: row?.created_at,
-    };
-  }));
-}
-
 type AccessContextKind = 'clinic_workspace' | 'patient_portal';
 
 type UserAccessContext = {
@@ -15097,19 +14924,11 @@ async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
     await fetchUserWorkspaces(sessionUser.id),
     sessionUser
   );
-  const [accessContexts, pendingClinicInvitations] = await Promise.all([
-    fetchUserAccessContexts(sessionUser.id, workspaces),
-    fetchPendingClinicInvitationsForUser({
-      userId: sessionUser.id,
-      email: sessionUser.email,
-      workspaces,
-    }),
-  ]);
+  const accessContexts = await fetchUserAccessContexts(sessionUser.id, workspaces);
   const baseSessionUser = buildSessionUserPayload({
     ...sessionUser,
     workspaces,
-    accessContexts,
-    pendingClinicInvitations,
+    accessContexts
   });
   if (!baseSessionUser.activeAccessContext || baseSessionUser.mustSelectAccessContext) {
     return baseSessionUser;
@@ -15200,7 +15019,6 @@ function clinicInvitationAcceptanceError(error: any): Error & { code: string; st
     'CLINIC_INVITATION_NOT_FOUND',
     'CLINIC_INVITATION_EMAIL_MISMATCH',
     'CLINIC_INVITATION_ROLE_INVALID',
-    'CLINIC_INVITATION_SPECIALTY_INVALID',
     'CLINIC_INVITATION_ALREADY_USED',
     'CLINIC_INVITATION_NOT_AVAILABLE',
     'CLINIC_INVITATION_CONCURRENT_UPDATE',
@@ -15214,7 +15032,6 @@ function clinicInvitationAcceptanceError(error: any): Error & { code: string; st
     CLINIC_INVITATION_NOT_FOUND: 404,
     CLINIC_INVITATION_EMAIL_MISMATCH: 403,
     CLINIC_INVITATION_ROLE_INVALID: 422,
-    CLINIC_INVITATION_SPECIALTY_INVALID: 422,
     CLINIC_INVITATION_ALREADY_USED: 409,
     CLINIC_INVITATION_NOT_AVAILABLE: 409,
     CLINIC_INVITATION_CONCURRENT_UPDATE: 409,
@@ -15403,9 +15220,6 @@ function buildSessionUserPayload(input: any) {
   const workspaces = explicitDemoUser
     ? compactedWorkspaces.filter((workspace: any) => workspace.isDemo || workspace.billingModel === DEMO_SANDBOX_BILLING_MODEL)
     : compactedWorkspaces;
-  const pendingClinicInvitations = explicitDemoUser
-    ? []
-    : compactPendingClinicInvitations(input?.pendingClinicInvitations || input?.pending_clinic_invitations || []);
   const suppliedAccessContexts = compactAccessContextsForSession(input?.accessContexts || []);
   const accessContexts = suppliedAccessContexts.length > 0
     ? suppliedAccessContexts
@@ -15531,7 +15345,6 @@ function buildSessionUserPayload(input: any) {
       sanitizeString(input?.miniCurriculum || input?.clinicSettings?.therapistMiniCurriculum, 3000) ||
       null,
     clinicSettings: compactClinicSettingsForSession(input?.clinicSettings),
-    pendingClinicInvitations,
     professionalProfile: professionalProfile
       ? cleanObject({
           fullName:
@@ -24432,7 +24245,6 @@ async function startServer() {
     const requestId = requestIdForLogs(req);
     const { intendedRole } = req.body;
     const activationFlow = Boolean(req.body?.activationFlow);
-    const deferInvitationAcceptance = Boolean(req.body?.deferInvitationAcceptance);
     const passwordSetupCompleted = Boolean(req.body?.passwordSetupCompleted);
     const authProvider = sanitizeString(req.body?.provider, 40).toLowerCase();
     const activationEmail = sanitizeEmail(req.body?.activationEmail);
@@ -24671,6 +24483,8 @@ async function startServer() {
         }
       }
 
+      const profileExistedBeforeInvitationProvisioning = Boolean(profile);
+
       // If profile still doesn't exist (first time Google login), create it
       let commercialPaidActivation: {
         email: string;
@@ -24904,19 +24718,11 @@ async function startServer() {
 
       let workspaces = await fetchUserWorkspaces(user.id);
       // Existing professionals accept invitations from the dedicated, explicit
-      // screen. A first activation link, however, must accept the explicit
-      // invitation even if this request reconciled a legacy public profile by
-      // e-mail. The invitation id + authenticated e-mail are the authority.
-      // A first activation link is authoritative for the invited workspace,
-      // even when a legacy/public profile was reconciled by e-mail earlier in
-      // this request. The old `profileExistedBeforeInvitationProvisioning`
-      // gate left some invited users without an active clinic_membership,
-      // which then caused 402s and blocked onboarding uploads.
-      // Existing-account invitation flows explicitly defer acceptance to the
-      // dedicated confirmation screen.
+      // screen. Automatic acceptance remains only for a first-account
+      // activation link, which carries its own verified invitation id.
       const invitationForWorkspace =
+        !profileExistedBeforeInvitationProvisioning &&
         activationFlow &&
-        !deferInvitationAcceptance &&
         requestedInvitationId &&
         requestedClinicInvitation
           ? requestedClinicInvitation
@@ -24938,7 +24744,6 @@ async function startServer() {
             CLINIC_INVITATION_EMAIL_MISMATCH: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.',
             CLINIC_INVITATION_NOT_FOUND: 'Este convite não foi encontrado.',
             CLINIC_INVITATION_NOT_AVAILABLE: 'Este convite expirou, foi cancelado ou não está mais disponível.',
-            CLINIC_INVITATION_SPECIALTY_INVALID: 'A especialidade vinculada ao convite está inválida. Solicite ao responsável da clínica que revise e reenvie o convite.',
             CLINIC_INVITATION_MIGRATION_REQUIRED: 'A atualização segura de convites ainda não foi aplicada no banco de dados.',
           };
           return res.status(Number(acceptanceError?.statusCode) || 500).json({
@@ -25411,12 +25216,7 @@ async function startServer() {
         ...req.session.user,
         workspaces,
       });
-      res.json({
-        success: true,
-        data: workspaces,
-        pendingInvitations: req.session.user?.pendingClinicInvitations || [],
-        user: req.session.user,
-      });
+      res.json({ success: true, data: workspaces, user: req.session.user });
     } catch (error) {
       res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
@@ -26512,26 +26312,6 @@ async function startServer() {
       // invitation can be reused. The e-mail remains the only automatic link.
       let authUser = await findAuthUserByEmail(email);
 
-      if (isUuid(sanitizeString(authUser?.id, 120))) {
-        const { data: activeMembership, error: activeMembershipError } = await supabase
-          .from('clinic_memberships')
-          .select('user_id,clinic_id,role,status')
-          .eq('user_id', authUser.id)
-          .eq('clinic_id', clinicId)
-          .eq('status', 'active')
-          .limit(1)
-          .maybeSingle();
-        if (activeMembershipError) throw activeMembershipError;
-        if (activeMembership?.user_id) {
-          return res.status(409).json({
-            success: false,
-            code: 'CLINIC_MEMBER_ALREADY_ACTIVE',
-            error: 'Este profissional já possui acesso ativo a esta clínica.',
-            message: 'Use a gestão da equipe para alterar o papel ou as permissões deste profissional.'
-          });
-        }
-      }
-
       // Check for existing pending invitation.
       const { data: pendingInvitation, error: pendingInvitationError } = await supabase
         .from('invitations')
@@ -26719,13 +26499,9 @@ async function startServer() {
         ? await supabase.from('users').select('id,name').eq('id', authUser.id).maybeSingle()
         : { data: null, error: null } as any;
       if (invitedProfileResult.error) throw invitedProfileResult.error;
-      // A confirmed Supabase Auth identity is already an existing account,
-      // even when public.users has not been created/reconciled yet. Requiring
-      // the public profile here incorrectly sent confirmed users through a new
-      // password setup flow.
-      const reusedExistingAuthAccess = Boolean(authUserHadVerifiedEmail);
-      const existingProfessionalInAppEligible = Boolean(
-        reusedExistingAuthAccess && authUser?.id && await hasPortableProfessionalIdentity(authUser.id)
+      const invitedProfileExists = Boolean(invitedProfileResult.data?.id);
+      const reusedExistingAuthAccess = Boolean(
+        authUserHadVerifiedEmail && invitedProfileExists
       );
 
       if (authUser?.id && !reusedExistingAuthAccess) {
@@ -26749,52 +26525,6 @@ async function startServer() {
         authUser = updatedAuthData?.user || authUser;
       }
 
-      const invitedProfessionalName = sanitizeString(
-        invitedProfileResult.data?.name || authUser?.user_metadata?.full_name || authUser?.user_metadata?.name,
-        180
-      ) || null;
-      const responsibleProfessionalName = sanitizeString(user.name, 180) || null;
-
-      if (existingProfessionalInAppEligible) {
-        await persistIdentityAuditLog({
-          title: 'Convite interno de colaborador criado',
-          content: `Convite interno para ${maskEmail(email)} como ${invitedRoleLabel} em ${clinicName}. O profissional usará a conta Verto já existente.`,
-          identifier: email,
-          channel: 'in_app',
-          userId: authUser?.id || null,
-          request: req,
-          status: 'pending'
-        });
-        await persistActivityLog({
-          userId: sanitizeString(user.id, 120),
-          clinicId: sanitizeString(clinicId, 120),
-          actorName: sanitizeString(user.name || user.email || 'Coordenador', 180),
-          title: reusedExistingInvitation ? 'Convite interno atualizado' : 'Convite interno criado',
-          content: `Convite para ${maskEmail(email)} como ${invitedRoleLabel} disponibilizado no aplicativo Verto, sem recriar cadastro ou senha.`,
-          type: 'management',
-          actionType: reusedExistingInvitation ? 'clinic_in_app_invite_updated' : 'clinic_in_app_invite_created',
-          payloadDetails: JSON.stringify({
-            invitationId: data?.id || null,
-            invitedRole: role,
-            professionalTitle,
-            invitedProfessionalName,
-            email: maskEmail(email),
-            deliveryMode: 'in_app',
-            reusedExistingAuthAccess: true,
-          })
-        });
-        return res.json({
-          success: true,
-          data,
-          invitationEmailSent: false,
-          invitationDeliveryMode: 'in_app',
-          inAppInvitation: true,
-          reusedExistingProfile: true,
-          resent: reusedExistingInvitation,
-          message: 'Profissional já cadastrado na Verto. O convite foi disponibilizado no aplicativo dele.'
-        });
-      }
-
       const activationEntryUrl = reusedExistingAuthAccess
         ? getClinicInvitationAcceptanceUrl(data?.id)
         : getActivationRedirectUrl('coordinator', email, {
@@ -26814,6 +26544,11 @@ async function startServer() {
             'generateSupabaseActionLink(clinic_invite)'
           )) || activationEntryUrl;
 
+      const invitedProfessionalName = sanitizeString(
+        invitedProfileResult.data?.name || authUser?.user_metadata?.full_name || authUser?.user_metadata?.name,
+        180
+      ) || null;
+      const responsibleProfessionalName = sanitizeString(user.name, 180) || null;
       const invitationEmail = buildClinicInvitationEmailTemplate({
         clinic_name: clinicName,
         invited_professional_name: invitedProfessionalName,
@@ -27173,7 +26908,6 @@ async function startServer() {
         CLINIC_INVITATION_EMAIL_MISMATCH: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.',
         CLINIC_INVITATION_NOT_FOUND: 'Convite não encontrado.',
         CLINIC_INVITATION_NOT_AVAILABLE: 'Este convite expirou, foi cancelado ou não está mais disponível.',
-        CLINIC_INVITATION_SPECIALTY_INVALID: 'A especialidade vinculada ao convite está inválida. Solicite ao responsável da clínica que revise e reenvie o convite.',
         CLINIC_INVITATION_MIGRATION_REQUIRED: 'A atualização segura de convites ainda não foi aplicada no banco de dados.',
       };
       logRouteDbError('/api/clinic/accept-invite [POST]', error, {
@@ -39333,13 +39067,6 @@ async function startServer() {
       const role = (context.membership?.role || req.session.user.role) as AppRole;
       const clinicId = context.clinic.id;
       const isClinicManagedMember = ['invited_professional', 'clinic_member'].includes(context.onboardingMode);
-      if (isClinicManagedMember && !context.membership) {
-        return res.status(409).json({
-          success: false,
-          code: 'ONBOARDING_MEMBERSHIP_REQUIRED',
-          error: 'Seu convite ainda não concluiu o vínculo com a clínica. Abra novamente o link do convite para finalizar o acesso.'
-        });
-      }
       const fullName = sanitizeString(req.body?.fullName || req.body?.name, 180);
       const birthDate = sanitizeDate(req.body?.birthDate);
       const gender = sanitizeString(req.body?.gender, 40);
@@ -57333,7 +57060,8 @@ async function startServer() {
       }
       if (!data) return res.status(404).json(payerSafeError(404));
       const xmlContent = String(data.xml_content || '');
-      const calculatedHash = crypto.createHash('sha256').update(xmlContent, 'utf8').digest('hex');
+      const xmlBytes = Buffer.from(xmlContent, 'latin1');
+      const calculatedHash = crypto.createHash('sha256').update(xmlBytes).digest('hex');
       if (calculatedHash !== sanitizeString(data.xml_hash, 80)) {
         console.warn('[TissOfficial] download hash mismatch:', {
           documentId,
@@ -57345,10 +57073,10 @@ async function startServer() {
           error: 'A integridade do documento não pôde ser confirmada.'
         });
       }
-      res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+      res.setHeader('Content-Type', 'application/xml; charset=iso-8859-1');
       res.setHeader('Content-Disposition', `attachment; filename="${buildTissOfficialFileName(data)}"`);
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-      return res.status(200).send(xmlContent);
+      return res.status(200).send(xmlBytes);
     } catch (error: any) {
       console.warn('[TissOfficial] download failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível baixar o XML TISS oficial agora.' });

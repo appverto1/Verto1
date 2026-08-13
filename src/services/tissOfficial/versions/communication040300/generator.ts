@@ -426,7 +426,7 @@ function buildOfficialMessageXml(payload: OfficialTissCanonicalPayload, guides: 
   const generatedTime = normalizeTime(payload.generatedAt, payload.timeZone);
   const providerHeaderId = providerHeaderIdentifier(guides[0].providerIdentifier);
   const body = [
-    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<?xml version="1.0" encoding="ISO-8859-1"?>',
     `<ans:mensagemTISS xmlns:ans="${ANS_NAMESPACE}" xmlns:ds="${XMLDSIG_NAMESPACE}">`,
     "  <ans:cabecalho>",
     "    <ans:identificacaoTransacao>",
@@ -975,7 +975,21 @@ export const communication040300Strategy: TissXmlGenerationStrategy = {
       };
     }
     const xml = buildOfficialMessageXml(payload, guides, epilogueHash);
-    const xmlHash = sha256Hex(xml);
+    const recalculatedEpilogueHash = calculateTissEpilogueHash(xml);
+    if (recalculatedEpilogueHash !== epilogueHash) {
+      return {
+        ok: false,
+        code: "TISS_OFFICIAL_EPILOGUE_HASH_MISMATCH",
+        message: "O XML TISS não passou na verificação interna do hash do epílogo.",
+        issues: [{
+          code: "TISS_OFFICIAL_EPILOGUE_HASH_MISMATCH",
+          message: "O hash do epílogo divergiu após a serialização final do XML.",
+          severity: "blocking",
+          entity: "document"
+        }]
+      };
+    }
+    const xmlHash = sha256Hex(Buffer.from(xml, "latin1"));
     return {
       ok: true,
       xml,

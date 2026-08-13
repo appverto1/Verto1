@@ -89,7 +89,7 @@ export async function validateOfficialTissXml040300(xml: string): Promise<TissXs
       option: PARSE_OPTIONS
     });
     validator = XsdValidator.fromDoc(schemaDoc);
-    xmlDoc = XmlDocument.fromBuffer(Buffer.from(xml, "utf8"), {
+    xmlDoc = XmlDocument.fromBuffer(Buffer.from(xml, "latin1"), {
       option: PARSE_OPTIONS
     });
     validator.validate(xmlDoc);

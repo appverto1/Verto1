@@ -37,10 +37,17 @@ function decodeXmlText(value: string) {
 export function calculateTissEpilogueHash(xml: string) {
   const epilogueIndex = xml.indexOf("<ans:epilogo>");
   const transactionXml = epilogueIndex >= 0 ? xml.slice(0, epilogueIndex) : xml;
-  const values = Array.from(transactionXml.matchAll(/>([^<]+)</g))
-    .map((match) => match[1].trim())
-    .filter(Boolean)
+
+  // TISS: concatenate only the literal values of leaf elements, from left to right.
+  // Formatting whitespace between XML elements is not a field value, while whitespace
+  // inside a field value must not be trimmed or otherwise normalized.
+  const values = Array.from(
+    transactionXml.matchAll(/<([A-Za-z_][\w.-]*(?::[A-Za-z_][\w.-]*)?)(?:\s[^>]*)?>([^<>]*)<\/\1>/g),
+  )
+    .map((match) => match[2])
+    .filter((value) => value.length > 0)
     .map(decodeXmlText);
+
   const concatenated = values.join("");
   if (Array.from(concatenated).some((character) => character.codePointAt(0)! > 255)) {
     throw new Error("TISS_OFFICIAL_HASH_TEXT_NOT_ISO_8859_1");
