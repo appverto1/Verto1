@@ -501,6 +501,8 @@ export const CLINIC_STATE_SELECT_COLUMNS = [
   'appointments',
   'protocols',
   'specialty_settings',
+  'revision',
+  'section_versions',
   'updated_at'
 ];
 
@@ -913,6 +915,8 @@ const PATIENT_ANAMNESIS_OPTIONAL_COLUMNS = new Set([
 
 const CLINIC_STATE_OPTIONAL_COLUMNS = new Set([
   'specialty_settings',
+  'revision',
+  'section_versions',
   'updated_at'
 ]);
 

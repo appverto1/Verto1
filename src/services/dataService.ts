@@ -514,7 +514,17 @@ async function fetchWithAuthRetry(url: string, init: RequestInit) {
 async function safeJson(response: Response) {
   const text = await response.text();
   try {
-    return text ? JSON.parse(text) : {};
+    const parsed = text ? JSON.parse(text) : {};
+    if (!response.ok) {
+      const payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : { raw: parsed };
+      return {
+        ...payload,
+        success: false,
+        status: response.status,
+        error: payload?.error || payload?.message || `HTTP ${response.status}`
+      };
+    }
+    return parsed;
   } catch {
     return { success: false, error: `HTTP ${response.status}`, raw: text };
   }
@@ -876,7 +886,7 @@ function normalizeNoteVisibility(value: any): 'private' | 'shared_patient' | 'sh
   return 'private';
 }
 
-type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment';
+type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
 
 async function buildConditionalHeaders(endpoint: string, type: OfflineType, includeBearer = false) {
   const headers = await getAuthHeaders(includeBearer);
@@ -902,6 +912,13 @@ async function cacheResponseMetadata(endpoint: string, response: Response, lastU
 function createIdempotencyKey(scope: string, entityId?: string) {
   const baseId = entityId || generateId();
   return `${scope}:${baseId}:${Date.now()}:${crypto.randomUUID()}`;
+}
+
+let lastOfflineMutationTimestamp = 0;
+function nextOfflineMutationTimestamp() {
+  const now = Date.now();
+  lastOfflineMutationTimestamp = Math.max(now, lastOfflineMutationTimestamp + 1);
+  return lastOfflineMutationTimestamp;
 }
 
 function abaV2DisabledResponse(data: any = null) {
@@ -980,21 +997,26 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
 }
 
 // Helper to handle offline-first saving
-async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'DELETE' = 'POST') {
+async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST') {
   const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
+  // Every mutation gets its own durable outbox row. Reusing an id while a prior
+  // request is in-flight can let the older response acknowledge/delete the newer edit.
+  const queueId = `${type}:${id}:${crypto.randomUUID()}`;
   const payloadWithIdempotency = {
     ...(data || {}),
     idempotencyKey
   };
+  let locallyPersisted = false;
 
   // 1. Save locally first
   try {
     await saveEncryptedRecord({
-      id,
+      id: queueId,
+      entity_id: id,
       data: payloadWithIdempotency,
       type,
       sync_status: 'pending',
-      last_updated: Date.now(),
+      last_updated: nextOfflineMutationTimestamp(),
       retry_count: 0,
       last_attempt_at: null,
       next_retry_at: null,
@@ -1002,6 +1024,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       method,
       endpoint
     });
+    locallyPersisted = true;
   } catch (offlineError) {
     console.error(`[offline-cache] failed to persist ${type} locally:`, offlineError);
   }
@@ -1021,28 +1044,52 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     if (response.ok) {
       const result = await safeJson(response);
       if (result?.queued === true) {
-        await markRecordSyncFailure(id, {
+        await markRecordSyncFailure(queueId, {
           status: 503,
           retryable: true,
           error: result?.warning || 'Servidor enfileirou o sync para tentar depois.'
         });
         return {
-          success: false,
+          success: locallyPersisted,
           offline: true,
           pending: true,
+          durable: locallyPersisted,
           status: response.status,
           warning: result?.warning,
           details: result,
           data: payloadWithIdempotency
         };
       }
-      // 3. Mark as synced if successful
-      await markRecordSyncStatus(id, 'synced');
-      return result;
+      if (result?.success === false) {
+        const logicalError = result?.error || result?.message || 'O servidor recusou a persistência.';
+        await markRecordSyncFailure(queueId, {
+          status: 400,
+          retryable: false,
+          error: logicalError
+        });
+        return {
+          ...result,
+          success: false,
+          durable: locallyPersisted,
+          pending: false,
+          status: response.status,
+          error: logicalError,
+          data: payloadWithIdempotency
+        };
+      }
+      // 3. Mark as synced only after an explicit successful server contract.
+      await markRecordSyncStatus(queueId, 'synced');
+      return {
+        ...(result || {}),
+        success: true,
+        data: result?.data ?? payloadWithIdempotency,
+        durable: true,
+        pending: false
+      };
     }
     const errorPayload = await safeJson(response);
     if (response.status === 409 && isIdempotentConflictPayload(errorPayload)) {
-      await markRecordSyncStatus(id, 'synced');
+      await markRecordSyncStatus(queueId, 'synced');
       return {
         ...errorPayload,
         success: true,
@@ -1051,11 +1098,32 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
         data: errorPayload?.data || payloadWithIdempotency
       };
     }
+    if (response.status === 409 && errorPayload?.conflict === true) {
+      const conflictMessage =
+        errorPayload?.error ||
+        errorPayload?.message ||
+        'Outra alteração foi confirmada antes desta. A versão local foi preservada.';
+      await markRecordSyncStatus(queueId, 'conflict', {
+        last_attempt_at: Date.now(),
+        next_retry_at: null,
+        last_error: conflictMessage
+      });
+      return {
+        ...errorPayload,
+        success: locallyPersisted,
+        durable: locallyPersisted,
+        pending: locallyPersisted,
+        conflict: true,
+        status: response.status,
+        error: conflictMessage,
+        data: payloadWithIdempotency
+      };
+    }
     const isRetryable = response.status >= 500 || response.status === 429 || response.status === 408;
 
     if (!isRetryable) {
       // Validation/auth errors should not retry forever, but the local record is kept for audit/retry UI.
-      await markRecordSyncFailure(id, {
+      await markRecordSyncFailure(queueId, {
         status: response.status,
         retryable: false,
         error: errorPayload?.error || errorPayload?.message || `Falha permanente (${response.status})`
@@ -1075,7 +1143,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       };
     }
 
-    await markRecordSyncFailure(id, {
+    await markRecordSyncFailure(queueId, {
       status: response.status,
       retryable: true,
       error:
@@ -1084,9 +1152,10 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
         `Falha temporária (${response.status})`
     });
     return {
-      success: false,
+      success: locallyPersisted,
       offline: true,
       pending: true,
+      durable: locallyPersisted,
       status: response.status,
       code: errorPayload?.code || errorPayload?.error_code || undefined,
       error:
@@ -1098,11 +1167,20 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     };
   } catch (error) {
     console.log(`Working offline: ${type} saved locally.`);
-    await markRecordSyncFailure(id, {
-      retryable: true,
-      error: error instanceof Error ? error.message : String(error)
-    });
-    return { success: true, data: payloadWithIdempotency, offline: true, pending: true };
+    if (locallyPersisted) {
+      await markRecordSyncFailure(queueId, {
+        retryable: true,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+    return {
+      success: locallyPersisted,
+      data: payloadWithIdempotency,
+      offline: true,
+      pending: locallyPersisted,
+      durable: locallyPersisted,
+      error: locallyPersisted ? undefined : 'Não foi possível persistir localmente nem confirmar no servidor.'
+    };
   }
 }
 
@@ -1157,7 +1235,13 @@ export const dataService = {
           });
         }
         await cacheResponseMetadata(endpoint, response, latest || null);
-        return { ...result, data: normalizedPatients };
+        // Always render the canonical cache overlaid with pending mutations. A
+        // successful GET must not make an unconfirmed local edit disappear after F5.
+        const effectivePatients = (await getRecordsByType('patient')).map((record) => {
+          const { recordPayload: _recordPayload, idempotencyKey: _idempotencyKey, ...patientData } = record?.data || {};
+          return mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
+        });
+        return { ...result, data: effectivePatients };
       }
       const errorPayload = await safeJson(response);
       return {
@@ -1189,9 +1273,17 @@ export const dataService = {
     };
   },
 
-  async savePatient(patient: any) {
+  async savePatient(patient: any, options: { recordPayload?: any } = {}) {
     const id = patient.id || generateId();
-    const data = { ...patient, id, created_at: patient.created_at || new Date().toISOString() };
+    const recordPayload = options?.recordPayload && typeof options.recordPayload === 'object'
+      ? options.recordPayload
+      : undefined;
+    const data = {
+      ...patient,
+      id,
+      created_at: patient.created_at || new Date().toISOString(),
+      ...(recordPayload ? { recordPayload } : {})
+    };
     if (patient?.id) {
       return await saveOfflineFirst(id, data, 'patient', `/api/patients/${id}`, 'PATCH');
     }
@@ -1204,22 +1296,17 @@ export const dataService = {
       console.warn('[PatientPortal] skipped patient-scoped save: missing resolvedPatientId');
       return { success: false, error: 'Paciente não resolvido para este acesso.' };
     }
-    try {
-      const workspaceId = String(payload?.workspace_id || '').trim();
-      const response = await fetch(`/api/patient-records/${safePatientId}`, {
-        method: 'POST',
-        headers: await getAuthHeaders(),
-        credentials: 'include',
-        body: JSON.stringify({
-          workspace_id: workspaceId || undefined,
-          payload
-        })
-      });
-      return await response.json();
-    } catch (error) {
-      console.error('Error saving patient record:', error);
-      return { success: false, error: String(error) };
-    }
+    const workspaceId = String(payload?.workspace_id || '').trim();
+    return await saveOfflineFirst(
+      `record:${safePatientId}`,
+      {
+        workspace_id: workspaceId || undefined,
+        payload
+      },
+      'patient_record',
+      `/api/patient-records/${safePatientId}`,
+      'POST'
+    );
   },
 
   async getPatientRecord(patientId: string) {
@@ -1228,16 +1315,74 @@ export const dataService = {
       console.warn('[PatientPortal] skipped patient-scoped fetch: missing resolvedPatientId');
       return { success: false, data: null, error: 'Paciente não resolvido para este acesso.' };
     }
+    const readPendingAggregateRecordPayload = async () => {
+      const pendingPatient = (await getRecordsByType('patient')).find((record) =>
+        String(record?.entity_id || record?.id || '').trim() === safePatientId &&
+        record?.sync_status !== 'synced' &&
+        record?.data?.recordPayload &&
+        typeof record.data.recordPayload === 'object'
+      );
+      return pendingPatient?.data?.recordPayload && typeof pendingPatient.data.recordPayload === 'object'
+        ? pendingPatient.data.recordPayload
+        : null;
+    };
     try {
       const response = await fetch(`/api/patient-records/${safePatientId}`, {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
-      const result = await response.json();
-      const parsedPayload = parseJsonObject(result?.data?.payload);
-      const normalizedPayload = parsedPayload
-        ? mirrorPatientInsuranceEligibilityAliases(parsedPayload, { useResponsibleFallback: true })
-        : parsedPayload;
+      const result = await safeJson(response);
+      const pendingAggregatePayload = await readPendingAggregateRecordPayload();
+      if (!response.ok || result?.success === false) {
+        const local = await getRecordById(`record:${safePatientId}`);
+        const localPayload = local?.data?.payload && typeof local.data.payload === 'object' ? local.data.payload : null;
+        if (localPayload || pendingAggregatePayload) {
+          return {
+            success: true,
+            data: {
+              patient_id: safePatientId,
+              payload: {
+                ...(localPayload || {}),
+                ...(pendingAggregatePayload || {})
+              }
+            },
+            offline: true,
+            pending: Boolean(pendingAggregatePayload)
+          };
+        }
+        return result;
+      }
+      const parsedPayload = parseJsonObject(result?.data?.payload) || {};
+      const remotePayloadForCache = mirrorPatientInsuranceEligibilityAliases(
+        parsedPayload,
+        { useResponsibleFallback: true }
+      );
+      await saveEncryptedRecord({
+        id: `record:${safePatientId}`,
+        entity_id: `record:${safePatientId}`,
+        data: { payload: remotePayloadForCache || null },
+        type: 'patient_record',
+        sync_status: 'synced',
+        last_updated: Date.now(),
+        method: 'POST',
+        endpoint: `/api/patient-records/${safePatientId}`
+      });
+      // Re-read through the cache/outbox overlay after caching the remote row so
+      // a successful GET can never hide an unconfirmed local clinical edit.
+      const effectiveLocalRecord = await getRecordById(`record:${safePatientId}`);
+      const effectiveLocalPayload =
+        effectiveLocalRecord?.data?.payload && typeof effectiveLocalRecord.data.payload === 'object'
+          ? effectiveLocalRecord.data.payload
+          : {};
+      const effectivePayload = {
+        ...parsedPayload,
+        ...effectiveLocalPayload,
+        ...(pendingAggregatePayload || {})
+      };
+      const normalizedPayload = mirrorPatientInsuranceEligibilityAliases(
+        effectivePayload,
+        { useResponsibleFallback: true }
+      );
       return {
         ...result,
         data: result?.data
@@ -1245,10 +1390,33 @@ export const dataService = {
               ...result.data,
               payload: normalizedPayload || result.data.payload || null
             }
-          : result?.data
+          : result?.data,
+        pending: Boolean(
+          pendingAggregatePayload ||
+          (effectiveLocalRecord && effectiveLocalRecord.sync_status !== 'synced')
+        )
       };
     } catch (error) {
       console.error('Error fetching patient record:', error);
+      const [local, pendingAggregatePayload] = await Promise.all([
+        getRecordById(`record:${safePatientId}`),
+        readPendingAggregateRecordPayload()
+      ]);
+      const localPayload = local?.data?.payload && typeof local.data.payload === 'object' ? local.data.payload : null;
+      if (localPayload || pendingAggregatePayload) {
+        return {
+          success: true,
+          data: {
+            patient_id: safePatientId,
+            payload: {
+              ...(localPayload || {}),
+              ...(pendingAggregatePayload || {})
+            }
+          },
+          offline: true,
+          pending: Boolean(pendingAggregatePayload)
+        };
+      }
       return { success: false, error: String(error) };
     }
   },
@@ -1395,18 +1563,14 @@ export const dataService = {
   },
 
   async savePatientFinancialPlans(patientId: string, financialPlans: any[]) {
-    try {
-      const response = await fetch(`/api/patients/${encodeURIComponent(String(patientId))}/financial-plans`, {
-        method: 'PUT',
-        headers: await getAuthHeaders(),
-        credentials: 'include',
-        body: JSON.stringify({ financialPlans: Array.isArray(financialPlans) ? financialPlans : [] })
-      });
-      return await safeJson(response);
-    } catch (error) {
-      console.error('Error saving patient financial plans:', error);
-      return { success: false, error: String(error) };
-    }
+    const safePatientId = String(patientId || '').trim();
+    return await saveOfflineFirst(
+      `financial-plans:${safePatientId}`,
+      { financialPlans: Array.isArray(financialPlans) ? financialPlans : [] },
+      'patient_record',
+      `/api/patients/${encodeURIComponent(safePatientId)}/financial-plans`,
+      'PUT'
+    );
   },
 
   async getPatientFiles(patientId: string) {
@@ -1855,31 +2019,15 @@ export const dataService = {
     }
   },
 
-  async updatePatient(id: string, updates: any) {
-    return await saveOfflineFirst(id, updates, 'patient', `/api/patients/${id}`, 'PATCH');
+  async updatePatient(id: string, updates: any, options: { recordPayload?: any } = {}) {
+    const aggregatePayload = options?.recordPayload && typeof options.recordPayload === 'object'
+      ? { ...(updates || {}), recordPayload: options.recordPayload }
+      : updates;
+    return await saveOfflineFirst(id, aggregatePayload, 'patient', `/api/patients/${id}`, 'PATCH');
   },
 
   async deletePatient(id: string) {
-    try {
-      const endpoint = `/api/patients/${id}`;
-      const response = await fetchWithAuthRetry(endpoint, {
-        method: 'DELETE',
-        headers: await getAuthHeaders(),
-        credentials: 'include'
-      });
-      const result = await safeJson(response);
-      if (!response.ok) {
-        return {
-          success: false,
-          error: normalizeApiErrorMessage(result?.error || result?.message || `Falha ao arquivar paciente (${response.status})`),
-          details: result
-        };
-      }
-      return { success: true, data: result };
-    } catch (error) {
-      console.error('Error deleting patient:', error);
-      return { success: false, error: normalizeApiErrorMessage(error) };
-    }
+    return await saveOfflineFirst(id, { id }, 'patient', `/api/patients/${id}`, 'DELETE');
   },
 
   async getActivityLogs() {
@@ -1988,32 +2136,11 @@ export const dataService = {
   },
 
   async deleteNote(noteId: string) {
-    try {
-      const response = await fetch(`/api/notes/${noteId}`, {
-        method: 'DELETE',
-        headers: await getAuthHeaders(),
-        credentials: 'include'
-      });
-      return await safeJson(response);
-    } catch (error) {
-      console.error('Error deleting note:', error);
-      return { success: false, error: String(error) };
-    }
+    return await saveOfflineFirst(noteId, { id: noteId }, 'note', `/api/notes/${noteId}`, 'DELETE');
   },
 
   async updateNote(noteId: string, updates: any) {
-    try {
-      const response = await fetchWithAuthRetry(`/api/notes/${noteId}`, {
-        method: 'PATCH',
-        headers: await getAuthHeaders(),
-        credentials: 'include',
-        body: JSON.stringify(updates || {})
-      });
-      return await safeJson(response);
-    } catch (error) {
-      console.error('Error updating note:', error);
-      return { success: false, error: String(error) };
-    }
+    return await saveOfflineFirst(noteId, updates || {}, 'note', `/api/notes/${noteId}`, 'PATCH');
   },
 
   async getHistory(patientId: string, params: { limit?: number; cursor?: string; from?: string; to?: string } = {}) {
@@ -6040,32 +6167,11 @@ export const dataService = {
   },
 
   async updateHistoryItem(historyId: string, updates: any) {
-    try {
-      const response = await fetch(`/api/history/${historyId}`, {
-        method: 'PATCH',
-        headers: await getAuthHeaders(),
-        credentials: 'include',
-        body: JSON.stringify(updates || {})
-      });
-      return await safeJson(response);
-    } catch (error) {
-      console.error('Error updating history item:', error);
-      return { success: false, error: String(error) };
-    }
+    return await saveOfflineFirst(historyId, updates || {}, 'history', `/api/history/${historyId}`, 'PATCH');
   },
 
   async deleteHistoryItem(historyId: string) {
-    try {
-      const response = await fetch(`/api/history/${historyId}`, {
-        method: 'DELETE',
-        headers: await getAuthHeaders(),
-        credentials: 'include'
-      });
-      return await safeJson(response);
-    } catch (error) {
-      console.error('Error deleting history item:', error);
-      return { success: false, error: String(error) };
-    }
+    return await saveOfflineFirst(historyId, { id: historyId }, 'history', `/api/history/${historyId}`, 'DELETE');
   },
 
   async getTasks(patientId: string) {
@@ -6161,44 +6267,62 @@ export const dataService = {
   },
 
   async updateTask(taskId: string, updates: any) {
-    try {
-      const response = await fetchWithAuthRetry(`/api/tasks/${taskId}`, {
-        method: 'PATCH',
-        headers: await getAuthHeaders(),
-        credentials: 'include',
-        body: JSON.stringify(updates || {})
-      });
-      return await safeJson(response);
-    } catch (error) {
-      console.error('Error updating task:', error);
-      return { success: false, error: String(error) };
-    }
+    return await saveOfflineFirst(taskId, updates || {}, 'task', `/api/tasks/${taskId}`, 'PATCH');
   },
 
   async deleteTask(taskId: string) {
-    try {
-      const response = await fetch(`/api/tasks/${taskId}`, {
-        method: 'DELETE',
-        headers: await getAuthHeaders(),
-        credentials: 'include'
-      });
-      return await safeJson(response);
-    } catch (error) {
-      console.error('Error deleting task:', error);
-      return { success: false, error: String(error) };
-    }
+    return await saveOfflineFirst(taskId, { id: taskId }, 'task', `/api/tasks/${taskId}`, 'DELETE');
   },
 
   async getAssignedTasks(patientId: string) {
+    const safePatientId = String(patientId || '').trim();
+    const readLocalAssignedTasks = async () =>
+      (await getRecordsByType('assigned_task'))
+        .map((record) => record?.data || {})
+        .filter((row: any) => String(row?.patient_id || row?.patientId || '') === safePatientId);
     try {
-      const response = await fetch(endpointWithLimit(`/api/assigned-tasks/${patientId}`, 20), {
+      const response = await fetch(endpointWithLimit(`/api/assigned-tasks/${safePatientId}`, 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
-      return await safeJson(response);
+      const result = await safeJson(response);
+      const localRows = await readLocalAssignedTasks();
+      if (!response.ok || result?.success === false) {
+        return localRows.length > 0
+          ? { success: true, data: localRows, offline: true, pending: true }
+          : result;
+      }
+      const remoteRows = ensureArray(result?.data);
+      await Promise.all(remoteRows.map((row: any) => {
+        const rowId = String(row?.id || '').trim();
+        if (!rowId) return Promise.resolve(false);
+        return saveEncryptedRecord({
+          id: rowId,
+          entity_id: rowId,
+          data: row,
+          type: 'assigned_task',
+          sync_status: 'synced',
+          last_updated: row?.updated_at ? new Date(row.updated_at).getTime() || Date.now() : Date.now(),
+          method: 'POST',
+          endpoint: '/api/assigned-tasks'
+        });
+      }));
+      const merged = new Map<string, any>();
+      for (const row of remoteRows) {
+        const rowId = String(row?.id || '').trim();
+        if (rowId) merged.set(rowId, row);
+      }
+      for (const row of await readLocalAssignedTasks()) {
+        const rowId = String(row?.id || '').trim();
+        if (rowId) merged.set(rowId, { ...(merged.get(rowId) || {}), ...row });
+      }
+      return { ...result, data: Array.from(merged.values()) };
     } catch (error) {
       console.error('Error fetching assigned tasks:', error);
-      return { success: false, error: String(error), data: [] };
+      const localRows = await readLocalAssignedTasks();
+      return localRows.length > 0
+        ? { success: true, data: localRows, offline: true, pending: true }
+        : { success: false, error: String(error), data: [] };
     }
   },
 
@@ -6225,18 +6349,14 @@ export const dataService = {
     status?: 'pending' | 'completed';
     parent_assigned_task_id?: string;
   }) {
-    try {
-      const response = await fetchWithAuthRetry('/api/assigned-tasks', {
-        method: 'POST',
-        headers: await getAuthHeaders(),
-        credentials: 'include',
-        body: JSON.stringify(payload)
-      });
-      return await safeJson(response);
-    } catch (error) {
-      console.error('Error creating assigned task:', error);
-      return { success: false, error: String(error) };
-    }
+    const id = String(payload?.id || generateId()).trim();
+    return await saveOfflineFirst(
+      id,
+      { ...(payload || {}), id },
+      'assigned_task',
+      '/api/assigned-tasks',
+      'POST'
+    );
   },
 
   async completeAssignedTask(taskId: string, payload: {
@@ -6525,50 +6645,8 @@ export const dataService = {
   async saveUserProfile(userId: string, profile: any) {
     const data = { ...profile, updated_at: profile.updated_at || new Date().toISOString() };
     const endpoint = `/api/profile/${userId}`;
-    const queuePendingProfile = async (reason: string) => {
-      await saveEncryptedRecord({
-        id: `profile:${userId}`,
-        data,
-        type: 'profile',
-        sync_status: 'pending',
-        last_updated: Date.now(),
-        method: 'POST',
-        endpoint
-      });
-      return {
-        success: false,
-        queued: true,
-        error: reason || 'Perfil salvo localmente. A sincronização será retomada automaticamente.'
-      };
-    };
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: await getAuthHeaders(),
-        credentials: 'include',
-        body: JSON.stringify(data)
-      });
-      const result = await safeJson(response);
-      if (response.ok && result?.success !== false) {
-        await saveEncryptedRecord({
-          id: `profile:${userId}`,
-          data,
-          type: 'profile',
-          sync_status: 'synced',
-          last_updated: Date.now(),
-          method: 'POST',
-          endpoint
-        });
-        return result;
-      }
-      if (response.status === 408 || response.status === 429 || response.status >= 500) {
-        return await queuePendingProfile(result?.error || result?.message || `HTTP ${response.status}`);
-      }
-      return result;
-    } catch (error: any) {
-      console.error('Error saving user profile:', error);
-      return await queuePendingProfile(error?.message || String(error));
-    }
+    const result = await saveOfflineFirst(`profile:${userId}`, data, 'profile', endpoint, 'POST');
+    return result?.pending === true ? { ...result, queued: true } : result;
   },
 
   async getOnboardingContext() {
@@ -6625,51 +6703,8 @@ export const dataService = {
     profilePicturePath?: string | null;
   }) {
     const endpoint = '/api/patient/self/profile';
-    const payload = profile || {};
-    const queuePendingProfile = async (reason: string) => {
-      await saveEncryptedRecord({
-        id: 'profile:self',
-        data: payload,
-        type: 'profile',
-        sync_status: 'pending',
-        last_updated: Date.now(),
-        method: 'PATCH',
-        endpoint
-      });
-      return {
-        success: false,
-        queued: true,
-        error: reason || 'Perfil salvo localmente. A sincronização será retomada automaticamente.'
-      };
-    };
-    try {
-      const response = await fetch(endpoint, {
-        method: 'PATCH',
-        headers: await getAuthHeaders(),
-        credentials: 'include',
-        body: JSON.stringify(payload)
-      });
-      const result = await safeJson(response);
-      if (response.ok && result?.success !== false) {
-        await saveEncryptedRecord({
-          id: 'profile:self',
-          data: payload,
-          type: 'profile',
-          sync_status: 'synced',
-          last_updated: Date.now(),
-          method: 'PATCH',
-          endpoint
-        });
-        return result;
-      }
-      if (response.status === 408 || response.status === 429 || response.status >= 500) {
-        return await queuePendingProfile(result?.error || result?.message || `HTTP ${response.status}`);
-      }
-      return result;
-    } catch (error: any) {
-      console.error('Error updating patient profile:', error);
-      return await queuePendingProfile(error?.message || String(error));
-    }
+    const result = await saveOfflineFirst('profile:self', profile || {}, 'profile', endpoint, 'PATCH');
+    return result?.pending === true ? { ...result, queued: true } : result;
   },
 
   async getUserProfileMedia(userId: string) {
@@ -6794,18 +6829,13 @@ export const dataService = {
     scheduled_at?: string;
     status?: 'pending' | 'completed';
   }) {
-    try {
-      const response = await fetchWithAuthRetry(`/api/assigned-tasks/${taskId}`, {
-        method: 'PATCH',
-        headers: await getAuthHeaders(),
-        credentials: 'include',
-        body: JSON.stringify(payload || {})
-      });
-      return await safeJson(response);
-    } catch (error) {
-      console.error('Error updating assigned task:', error);
-      return { success: false, error: String(error) };
-    }
+    return await saveOfflineFirst(
+      String(taskId),
+      payload || {},
+      'assigned_task',
+      `/api/assigned-tasks/${encodeURIComponent(String(taskId))}`,
+      'PATCH'
+    );
   },
 
   async uploadDataUrl(bucket: string, path: string, dataUrl: string, contentTypeHint?: string) {
@@ -7306,6 +7336,39 @@ export const dataService = {
   },
 
   async getClinicState(workspaceId?: string) {
+    const workspaceKey = String(workspaceId || 'active').trim() || 'active';
+    const entityId = `clinic-state:${workspaceKey}`;
+    const buildFromLocal = async (error?: unknown) => {
+      const localRecord = await getRecordById(entityId);
+      const localState = localRecord?.data || {};
+      const backupProtocols = readClinicProtocolsBackup(workspaceId);
+      return {
+        success: Boolean(localRecord),
+        offline: true,
+        pending: Boolean(localRecord && localRecord.sync_status !== 'synced'),
+        error: localRecord ? undefined : String(error || 'Estado da clínica indisponível.'),
+        data: {
+          clinicId: localState?.clinicId || localState?.clinic_id || workspaceId || null,
+          rooms: ensureArray(localState?.rooms),
+          appointments: ensureArray(localState?.appointments),
+          protocols: Array.isArray(localState?.protocols) ? normalizeProtocolList(localState.protocols) : backupProtocols,
+          specialtySettings:
+            localState?.specialtySettings && typeof localState.specialtySettings === 'object'
+              ? localState.specialtySettings
+              : {},
+          updatedAt: localState?.updatedAt || localState?.updated_at || null,
+          revision: Number(localState?.revision || 0) || 0,
+          sectionVersions:
+            localState?._localSectionVersionsAfter && typeof localState._localSectionVersionsAfter === 'object'
+              ? localState._localSectionVersionsAfter
+              : localState?.sectionVersions && typeof localState.sectionVersions === 'object'
+                ? localState.sectionVersions
+                : {},
+          pendingPersistence: Boolean(localRecord && localRecord.sync_status !== 'synced')
+        }
+      };
+    };
+
     try {
       const response = await fetch('/api/clinic/state', {
         headers: {
@@ -7315,38 +7378,55 @@ export const dataService = {
         credentials: 'include'
       });
       const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        const localFallback = await buildFromLocal(result?.error || result?.warning || `HTTP ${response.status}`);
+        return localFallback.success ? localFallback : result;
+      }
+
       const clinicData = result?.data || {};
+      await saveEncryptedRecord({
+        id: entityId,
+        entity_id: entityId,
+        data: { ...clinicData, workspace_id: workspaceId || undefined },
+        type: 'clinic_state',
+        sync_status: 'synced',
+        last_updated: clinicData?.updatedAt ? new Date(clinicData.updatedAt).getTime() || Date.now() : Date.now(),
+        method: 'POST',
+        endpoint: '/api/clinic/state'
+      });
+      const effectiveRecord = await getRecordById(entityId);
+      const effectiveState = effectiveRecord?.data || clinicData;
       const remoteProtocols = normalizeProtocolList(clinicData?.protocols);
       const backupProtocols = readClinicProtocolsBackup(workspaceId);
-      const protocols = remoteProtocols.length > 0 || clinicData?.updatedAt ? remoteProtocols : backupProtocols;
+      const protocols = Array.isArray(effectiveState?.protocols)
+        ? normalizeProtocolList(effectiveState.protocols)
+        : remoteProtocols.length > 0 || clinicData?.updatedAt ? remoteProtocols : backupProtocols;
       return {
         ...result,
         data: {
-          clinicId: clinicData?.clinicId || workspaceId || null,
-          rooms: ensureArray(clinicData?.rooms),
-          appointments: ensureArray(clinicData?.appointments),
+          clinicId: effectiveState?.clinicId || clinicData?.clinicId || workspaceId || null,
+          rooms: ensureArray(effectiveState?.rooms),
+          appointments: ensureArray(effectiveState?.appointments),
           protocols,
           specialtySettings:
-            clinicData?.specialtySettings && typeof clinicData.specialtySettings === 'object'
-              ? clinicData.specialtySettings
+            effectiveState?.specialtySettings && typeof effectiveState.specialtySettings === 'object'
+              ? effectiveState.specialtySettings
               : {},
-          updatedAt: clinicData?.updatedAt || null
+          updatedAt: clinicData?.updatedAt || effectiveState?.updatedAt || null,
+          revision: Number(clinicData?.revision || 0) || 0,
+          sectionVersions:
+            effectiveRecord && effectiveRecord.sync_status !== 'synced' &&
+            effectiveState?._localSectionVersionsAfter && typeof effectiveState._localSectionVersionsAfter === 'object'
+              ? effectiveState._localSectionVersionsAfter
+              : clinicData?.sectionVersions && typeof clinicData.sectionVersions === 'object'
+                ? clinicData.sectionVersions
+                : {},
+          pendingPersistence: Boolean(effectiveRecord && effectiveRecord.sync_status !== 'synced')
         }
       };
     } catch (error) {
       console.error('Error fetching clinic state:', error);
-      return {
-        success: false,
-        error: String(error),
-        data: {
-          clinicId: workspaceId || null,
-          rooms: [],
-          appointments: [],
-          protocols: readClinicProtocolsBackup(workspaceId),
-          specialtySettings: {},
-          updatedAt: null
-        }
-      };
+      return await buildFromLocal(error);
     }
   },
 
@@ -7356,26 +7436,36 @@ export const dataService = {
     appointments?: any[];
     protocols?: any[];
     specialtySettings?: Record<string, number>;
+    expectedRevision?: number;
+    expectedSectionVersions?: Record<string, number>;
   }) {
     try {
-      if (Array.isArray(payload?.protocols) && payload.protocols.length > 0) {
+      if (Array.isArray(payload?.protocols)) {
         writeClinicProtocolsBackup(payload?.workspace_id, payload.protocols);
       }
-      const idempotencyKey = createIdempotencyKey('POST:/api/clinic/state');
-      const response = await fetch('/api/clinic/state', {
-        method: 'POST',
-        headers: {
-          ...(await getAuthHeaders()),
-          'X-Idempotency-Key': idempotencyKey
-        },
-        credentials: 'include',
-        body: JSON.stringify({
+      const workspaceKey = String(payload?.workspace_id || 'active').trim() || 'active';
+      const expectedVersions =
+        payload?.expectedSectionVersions && typeof payload.expectedSectionVersions === 'object'
+          ? payload.expectedSectionVersions
+          : {};
+      const localSectionVersionsAfter: Record<string, number> = { ...expectedVersions };
+      if (Array.isArray(payload?.rooms)) localSectionVersionsAfter.rooms = Number(expectedVersions.rooms || 0) + 1;
+      if (Array.isArray(payload?.appointments)) localSectionVersionsAfter.appointments = Number(expectedVersions.appointments || 0) + 1;
+      if (Array.isArray(payload?.protocols)) localSectionVersionsAfter.protocols = Number(expectedVersions.protocols || 0) + 1;
+      if (payload?.specialtySettings && typeof payload.specialtySettings === 'object') {
+        localSectionVersionsAfter.specialtySettings = Number(expectedVersions.specialtySettings || 0) + 1;
+      }
+      const result = await saveOfflineFirst(
+        `clinic-state:${workspaceKey}`,
+        {
           ...(payload || {}),
           workspace_id: payload?.workspace_id || undefined,
-          idempotencyKey
-        })
-      });
-      const result = await safeJson(response);
+          _localSectionVersionsAfter: localSectionVersionsAfter
+        },
+        'clinic_state',
+        '/api/clinic/state',
+        'POST'
+      );
       if (Array.isArray(result?.data?.protocols)) {
         writeClinicProtocolsBackup(payload?.workspace_id, result.data.protocols);
       }
@@ -7568,79 +7658,239 @@ export const dataService = {
   },
 
   async hydrateWorkspaceState(workspaceId?: string) {
-    const baseHeaders = await getAuthHeaders();
-    const headersWithWorkspace = {
-      ...baseHeaders,
-      ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
+    const workspaceKey = String(workspaceId || 'active').trim() || 'active';
+    const clinicStateEntityId = `clinic-state:${workspaceKey}`;
+    const buildLocalWorkspaceHydration = async (error?: unknown) => {
+      const [localPatientRecords, localClinicStateRecord] = await Promise.all([
+        getRecordsByType('patient'),
+        getRecordById(clinicStateEntityId),
+      ]);
+      const safeWorkspaceId = String(workspaceId || '').trim();
+      const localPatients = localPatientRecords
+        .map((record) => {
+          const { recordPayload: _recordPayload, idempotencyKey: _idempotencyKey, ...patientData } = record?.data || {};
+          return mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
+        })
+        .filter((patient: any) => {
+          const patientClinicId = String(patient?.clinic_id || patient?.clinicId || '').trim();
+          return !safeWorkspaceId || !patientClinicId || patientClinicId === safeWorkspaceId;
+        });
+      const localClinicState = localClinicStateRecord?.data || null;
+      if (!localClinicStateRecord && localPatients.length === 0) {
+        return {
+          success: false,
+          error: String(error || 'Não foi possível carregar o workspace nem recuperar uma cópia local persistida.'),
+        };
+      }
+
+      const backupProtocols = readClinicProtocolsBackup(workspaceId);
+      const localProtocols = Array.isArray(localClinicState?.protocols)
+        ? normalizeProtocolList(localClinicState.protocols)
+        : backupProtocols;
+      const effectiveLocalVersions =
+        localClinicState?._localSectionVersionsAfter && typeof localClinicState._localSectionVersionsAfter === 'object'
+          ? localClinicState._localSectionVersionsAfter
+          : localClinicState?.sectionVersions && typeof localClinicState.sectionVersions === 'object'
+            ? localClinicState.sectionVersions
+            : {};
+      const localSnapshot = {
+        rooms: ensureArray(localClinicState?.rooms),
+        appointments: ensureArray(localClinicState?.appointments),
+        protocols: localProtocols,
+        specialtySettings:
+          localClinicState?.specialtySettings && typeof localClinicState.specialtySettings === 'object'
+            ? localClinicState.specialtySettings
+            : {},
+      };
+
+      return {
+        success: true,
+        offline: true,
+        pending: Boolean(localClinicStateRecord && localClinicStateRecord.sync_status !== 'synced'),
+        data: {
+          clinicState: {
+            clinicId: localClinicState?.clinicId || localClinicState?.clinic_id || workspaceId || null,
+            ...localSnapshot,
+            updatedAt: localClinicState?.updatedAt || localClinicState?.updated_at || null,
+            revision: Number(localClinicState?.revision || 0) || 0,
+            sectionVersions: effectiveLocalVersions,
+            pendingPersistence: Boolean(localClinicStateRecord && localClinicStateRecord.sync_status !== 'synced'),
+            persistedSnapshot: localSnapshot,
+          },
+          clinicAnamnesisTemplate: {},
+          patients: localPatients,
+          notes: [],
+          history: [],
+          tasks: [],
+          clinicalRecords: [],
+        },
+      };
     };
 
-    const [clinicStateResponse, clinicTemplateResponse, patientsResponse] = await Promise.all([
-      fetch('/api/clinic/state', { headers: headersWithWorkspace, credentials: 'include' }),
-      fetch('/api/clinic/anamnesis-template', { headers: headersWithWorkspace, credentials: 'include' }),
-      fetch(endpointWithLimit('/api/patients', 200), { headers: headersWithWorkspace, credentials: 'include' })
-    ]);
-
-    const clinicStateRes = await safeJson(clinicStateResponse);
-    const clinicTemplateRes = await safeJson(clinicTemplateResponse);
-    const patientsRes = await safeJson(patientsResponse);
-    const patientList = normalizePatientListResponse(patientsRes);
-
-    if (!clinicStateResponse.ok || clinicStateRes?.success === false) {
-      return {
-        success: false,
-        error: clinicStateRes?.error || clinicStateRes?.warning || `Falha ao carregar estado da clínica (HTTP ${clinicStateResponse.status}).`
+    try {
+      const baseHeaders = await getAuthHeaders();
+      const headersWithWorkspace = {
+        ...baseHeaders,
+        ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
       };
-    }
 
-    if (!patientsResponse.ok || !patientList.success) {
-      return {
-        success: false,
-        code: patientList.success ? undefined : PATIENT_LIST_INVALID_RESPONSE_CODE,
-        error:
+      const [clinicStateResponse, clinicTemplateResponse, patientsResponse] = await Promise.all([
+        fetch('/api/clinic/state', { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch('/api/clinic/anamnesis-template', { headers: headersWithWorkspace, credentials: 'include' }),
+        fetch(endpointWithLimit('/api/patients', 200), { headers: headersWithWorkspace, credentials: 'include' })
+      ]);
+
+      const clinicStateRes = await safeJson(clinicStateResponse);
+      const clinicTemplateRes = await safeJson(clinicTemplateResponse);
+      const patientsRes = await safeJson(patientsResponse);
+      const patientList = normalizePatientListResponse(patientsRes);
+
+      if (!clinicStateResponse.ok || clinicStateRes?.success === false) {
+        const localFallback = await buildLocalWorkspaceHydration(
+          clinicStateRes?.error || clinicStateRes?.warning || `Falha ao carregar estado da clínica (HTTP ${clinicStateResponse.status}).`,
+        );
+        if (localFallback.success) return localFallback;
+        return {
+          success: false,
+          error: clinicStateRes?.error || clinicStateRes?.warning || `Falha ao carregar estado da clínica (HTTP ${clinicStateResponse.status}).`
+        };
+      }
+
+      if (!patientsResponse.ok || !patientList.success) {
+        const failureMessage =
           patientsRes?.error ||
           (patientList.success
             ? ''
             : 'A resposta da lista de pacientes não contém uma coleção válida.') ||
-          `Falha ao carregar pacientes do workspace (HTTP ${patientsResponse.status}).`
-      };
-    }
-
-    const patients = patientList.data.map((patient: any) =>
-      mirrorPatientInsuranceEligibilityAliases(patient || {}, { useResponsibleFallback: true }),
-    );
-    const notes: any[] = [];
-    const history: any[] = [];
-    const tasks: any[] = [];
-    const clinicalRecords: any[] = [];
-    const hydratedPatients: any[] = [...patients];
-
-    const clinicStateData = clinicStateRes?.data || {
-      clinicId: workspaceId || null,
-      rooms: [],
-      appointments: [],
-      protocols: [],
-      specialtySettings: {},
-      updatedAt: null
-    };
-    const remoteProtocols = normalizeProtocolList(clinicStateData?.protocols);
-    const backupProtocols = readClinicProtocolsBackup(workspaceId);
-    const clinicStateWithProtocolFallback = {
-      ...clinicStateData,
-      protocols: remoteProtocols.length > 0 || clinicStateData?.updatedAt ? remoteProtocols : backupProtocols
-    };
-
-    return {
-      success: true,
-      data: {
-        clinicState: clinicStateWithProtocolFallback,
-        clinicAnamnesisTemplate: clinicTemplateRes?.data || {},
-        patients: hydratedPatients,
-        notes,
-        history,
-        tasks,
-        clinicalRecords
+          `Falha ao carregar pacientes do workspace (HTTP ${patientsResponse.status}).`;
+        const localFallback = await buildLocalWorkspaceHydration(failureMessage);
+        if (localFallback.success) return localFallback;
+        return {
+          success: false,
+          code: patientList.success ? undefined : PATIENT_LIST_INVALID_RESPONSE_CODE,
+          error: failureMessage,
+        };
       }
-    };
+
+      const clinicStateData = clinicStateRes?.data || {
+        clinicId: workspaceId || null,
+        rooms: [],
+        appointments: [],
+        protocols: [],
+        specialtySettings: {},
+        updatedAt: null,
+        revision: 0,
+        sectionVersions: {}
+      };
+      await saveEncryptedRecord({
+        id: clinicStateEntityId,
+        entity_id: clinicStateEntityId,
+        data: { ...clinicStateData, workspace_id: workspaceId || undefined },
+        type: 'clinic_state',
+        sync_status: 'synced',
+        last_updated: clinicStateData?.updatedAt ? new Date(clinicStateData.updatedAt).getTime() || Date.now() : Date.now(),
+        method: 'POST',
+        endpoint: '/api/clinic/state'
+      });
+
+      const remotePatients = patientList.data.map((patient: any) =>
+        mirrorPatientInsuranceEligibilityAliases(patient || {}, { useResponsibleFallback: true }),
+      );
+      for (const patient of remotePatients) {
+        const patientId = String(patient?.id || '').trim();
+        if (!patientId) continue;
+        await saveEncryptedRecord({
+          id: patientId,
+          entity_id: patientId,
+          data: patient,
+          type: 'patient',
+          sync_status: 'synced',
+          last_updated: patient?.updated_at ? new Date(patient.updated_at).getTime() || Date.now() : Date.now(),
+          method: 'POST',
+          endpoint: '/api/patients'
+        });
+      }
+
+      // Re-read canonical caches through the outbox overlay. A reload/relogin must
+      // never hide a durable local mutation merely because a remote snapshot is stale.
+      const [effectiveClinicStateRecord, effectivePatientRecords] = await Promise.all([
+        getRecordById(clinicStateEntityId),
+        getRecordsByType('patient'),
+      ]);
+      const localClinicState = effectiveClinicStateRecord?.data || clinicStateData;
+      const remotePatientIds = new Set(remotePatients.map((patient: any) => String(patient?.id || '').trim()).filter(Boolean));
+      const safeWorkspaceId = String(workspaceId || '').trim();
+      const localPatients = effectivePatientRecords
+        .map((record) => {
+          const { recordPayload: _recordPayload, idempotencyKey: _idempotencyKey, ...patientData } = record?.data || {};
+          return mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
+        })
+        .filter((patient: any) => {
+          const patientId = String(patient?.id || '').trim();
+          const patientClinicId = String(patient?.clinic_id || patient?.clinicId || '').trim();
+          return remotePatientIds.has(patientId) || !safeWorkspaceId || !patientClinicId || patientClinicId === safeWorkspaceId;
+        });
+      const patientsById = new Map<string, any>();
+      for (const patient of remotePatients) {
+        const patientId = String(patient?.id || '').trim();
+        if (patientId) patientsById.set(patientId, patient);
+      }
+      for (const patient of localPatients) {
+        const patientId = String(patient?.id || '').trim();
+        if (patientId) patientsById.set(patientId, patient);
+      }
+      const patients = Array.from(patientsById.values());
+      const remoteProtocols = normalizeProtocolList(clinicStateData?.protocols);
+      const backupProtocols = readClinicProtocolsBackup(workspaceId);
+      const clinicStateWithProtocolFallback = {
+        ...clinicStateData,
+        rooms: Array.isArray(localClinicState?.rooms) ? localClinicState.rooms : ensureArray(clinicStateData?.rooms),
+        appointments: Array.isArray(localClinicState?.appointments) ? localClinicState.appointments : ensureArray(clinicStateData?.appointments),
+        protocols: Array.isArray(localClinicState?.protocols)
+          ? normalizeProtocolList(localClinicState.protocols)
+          : remoteProtocols.length > 0 || clinicStateData?.updatedAt ? remoteProtocols : backupProtocols,
+        specialtySettings:
+          localClinicState?.specialtySettings && typeof localClinicState.specialtySettings === 'object'
+            ? localClinicState.specialtySettings
+            : clinicStateData?.specialtySettings && typeof clinicStateData.specialtySettings === 'object'
+              ? clinicStateData.specialtySettings
+              : {},
+        revision: Number(clinicStateData?.revision || 0) || 0,
+        sectionVersions:
+          effectiveClinicStateRecord && effectiveClinicStateRecord.sync_status !== 'synced' &&
+          localClinicState?._localSectionVersionsAfter && typeof localClinicState._localSectionVersionsAfter === 'object'
+            ? localClinicState._localSectionVersionsAfter
+            : clinicStateData?.sectionVersions && typeof clinicStateData.sectionVersions === 'object'
+              ? clinicStateData.sectionVersions
+              : {},
+        pendingPersistence: Boolean(effectiveClinicStateRecord && effectiveClinicStateRecord.sync_status !== 'synced'),
+        persistedSnapshot: {
+          rooms: ensureArray(clinicStateData?.rooms),
+          appointments: ensureArray(clinicStateData?.appointments),
+          protocols: remoteProtocols.length > 0 || clinicStateData?.updatedAt ? remoteProtocols : backupProtocols,
+          specialtySettings:
+            clinicStateData?.specialtySettings && typeof clinicStateData.specialtySettings === 'object'
+              ? clinicStateData.specialtySettings
+              : {}
+        }
+      };
+
+      return {
+        success: true,
+        data: {
+          clinicState: clinicStateWithProtocolFallback,
+          clinicAnamnesisTemplate: clinicTemplateRes?.data || {},
+          patients,
+          notes: [],
+          history: [],
+          tasks: [],
+          clinicalRecords: []
+        }
+      };
+    } catch (error) {
+      console.error('Error hydrating workspace state:', error);
+      return await buildLocalWorkspaceHydration(error);
+    }
   },
   async getSchools(params: Record<string, any> = {}) {
     const endpoint = endpointWithQuery('/api/schools', params);

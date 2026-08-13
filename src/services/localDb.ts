@@ -1,8 +1,9 @@
-﻿import Dexie, { Table } from 'dexie';
+import Dexie, { Table } from 'dexie';
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
 import {
   OFFLINE_SYNC_MAX_RETRIES,
   isIdempotentConflictPayload,
+  isRecoverableFailedOfflineSyncRecord,
   type OfflineSyncStatus,
   resolveOfflineSyncFailure,
   shouldAttemptOfflineRecord
@@ -10,21 +11,30 @@ import {
 
 export interface OfflineRecord {
   id: string;
+  entity_id?: string;
   data: any;
-  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment';
+  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
   sync_status: OfflineSyncStatus;
   last_updated: number;
   retry_count?: number;
   last_attempt_at?: number | null;
   next_retry_at?: number | null;
   last_error?: string | null;
-  method: 'POST' | 'PATCH' | 'DELETE';
+  method: 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   endpoint: string;
 }
 
 interface OfflineRecordStored extends Omit<OfflineRecord, 'data'> {
   data_encrypted: string;
   user_id: string;
+}
+
+interface OfflineTombstone {
+  key: string;
+  user_id: string;
+  type: OfflineRecord['type'];
+  entity_id: string;
+  deleted_at: number;
 }
 
 export interface OfflineCacheMeta {
@@ -37,7 +47,9 @@ export interface OfflineCacheMeta {
 
 export class MyDatabase extends Dexie {
   records!: Table<OfflineRecordStored>;
+  cache_records!: Table<OfflineRecordStored>;
   cache_meta!: Table<OfflineCacheMeta>;
+  tombstones!: Table<OfflineTombstone>;
 
   constructor() {
     super('OfflineVertoDB');
@@ -52,6 +64,27 @@ export class MyDatabase extends Dexie {
     this.version(4).stores({
       records: 'id, type, sync_status, last_updated, [type+last_updated], user_id',
       cache_meta: 'endpoint, updated_at'
+    });
+    this.version(5).stores({
+      records: 'id, entity_id, type, sync_status, last_updated, [type+last_updated], user_id',
+      cache_records: 'id, entity_id, type, last_updated, [type+last_updated], user_id',
+      cache_meta: 'endpoint, updated_at',
+      tombstones: 'key, user_id, type, entity_id, deleted_at'
+    }).upgrade(async (transaction) => {
+      const records = await transaction.table('records').toArray();
+      const syncedRows = records
+        .filter((row: any) => row?.sync_status === 'synced')
+        .map((row: any) => ({ ...row, entity_id: row?.entity_id || row?.id }));
+      if (syncedRows.length > 0) {
+        await transaction.table('cache_records').bulkPut(syncedRows);
+        await transaction.table('records').bulkDelete(syncedRows.map((row: any) => row.id));
+      }
+      const unsyncedRows = records.filter((row: any) => row?.sync_status !== 'synced');
+      for (const row of unsyncedRows) {
+        if (!row?.entity_id) {
+          await transaction.table('records').update(row.id, { entity_id: row.id });
+        }
+      }
     });
   }
 }
@@ -259,6 +292,7 @@ async function mapStoredToOfflineRecord(row: OfflineRecordStored): Promise<Offli
   if (decrypted == null) return null;
   return {
     id: row.id,
+    entity_id: row.entity_id || row.id,
     type: row.type,
     sync_status: row.sync_status,
     last_updated: row.last_updated,
@@ -272,12 +306,44 @@ async function mapStoredToOfflineRecord(row: OfflineRecordStored): Promise<Offli
   };
 }
 
+function entityIdForRecord(record: Pick<OfflineRecord, 'id' | 'entity_id' | 'data'>): string {
+  return String(record.entity_id || record?.data?.id || record.id || '').trim();
+}
+
+function tombstoneKey(userId: string, type: OfflineRecord['type'], entityId: string) {
+  return `${userId}:${type}:${entityId}`;
+}
+
+async function setTombstone(userId: string, type: OfflineRecord['type'], entityId: string) {
+  if (!userId || !entityId) return;
+  await db.tombstones.put({
+    key: tombstoneKey(userId, type, entityId),
+    user_id: userId,
+    type,
+    entity_id: entityId,
+    deleted_at: Date.now()
+  });
+}
+
+async function removeTombstone(userId: string, type: OfflineRecord['type'], entityId: string) {
+  if (!userId || !entityId) return;
+  await db.tombstones.delete(tombstoneKey(userId, type, entityId));
+}
+
+async function isTombstoned(userId: string, type: OfflineRecord['type'], entityId: string) {
+  if (!userId || !entityId) return false;
+  return Boolean(await db.tombstones.get(tombstoneKey(userId, type, entityId)));
+}
+
 export async function saveEncryptedRecord(record: OfflineRecord) {
   const userId = await getCurrentUserIdOrNull();
   if (!userId) return false;
+  const entityId = entityIdForRecord(record);
+  if (!entityId) return false;
   const dataEncrypted = await encryptPayload(userId, record.data);
   const row: OfflineRecordStored = {
     id: record.id,
+    entity_id: entityId,
     data_encrypted: dataEncrypted,
     type: record.type,
     sync_status: record.sync_status,
@@ -290,9 +356,49 @@ export async function saveEncryptedRecord(record: OfflineRecord) {
     endpoint: record.endpoint,
     user_id: userId
   };
-  persistLogBackup(row);
-  await db.records.put(row);
+  if (record.sync_status === 'synced') {
+    const cacheRow = { ...row, id: entityId, entity_id: entityId, sync_status: 'synced' as OfflineSyncStatus };
+    await db.cache_records.put(cacheRow);
+    // A server snapshot can be briefly stale after a confirmed DELETE. Keep any
+    // tombstone until an explicit successful create/update mutation removes it.
+    await db.records
+      .where('entity_id')
+      .equals(entityId)
+      .and((candidate) => candidate.user_id === userId && candidate.type === record.type && candidate.sync_status === 'synced')
+      .delete();
+  } else {
+    if (record.method === 'DELETE') await setTombstone(userId, record.type, entityId);
+    persistLogBackup(row);
+    await db.records.put(row);
+  }
   return true;
+}
+
+function mergeOfflineEntityData(
+  type: OfflineRecord['type'],
+  base: any,
+  next: any,
+  method?: OfflineRecord['method']
+) {
+  if (!base || typeof base !== 'object' || Array.isArray(base)) return next;
+  if (!next || typeof next !== 'object' || Array.isArray(next)) return next;
+
+  // patient_record mutations carry a partial clinical payload nested under `payload`.
+  // Preserve fields that were not part of the current mutation.
+  if (type === 'patient_record') {
+    const basePayload = base?.payload && typeof base.payload === 'object' && !Array.isArray(base.payload) ? base.payload : {};
+    const nextPayload = next?.payload && typeof next.payload === 'object' && !Array.isArray(next.payload) ? next.payload : {};
+    return {
+      ...base,
+      ...next,
+      payload: { ...basePayload, ...nextPayload }
+    };
+  }
+
+  // clinic_state is persisted as section-level POSTs; those POSTs are patches, not
+  // replacements. PATCH mutations for other entities follow the same merge rule.
+  if (method === 'PATCH' || type === 'clinic_state') return { ...base, ...next };
+  return next;
 }
 
 export async function markRecordSyncStatus(
@@ -301,7 +407,11 @@ export async function markRecordSyncStatus(
   metadata: Partial<Pick<OfflineRecord, 'retry_count' | 'last_attempt_at' | 'next_retry_at' | 'last_error'>> = {}
 ) {
   const row = await db.records.get(id);
-  const nextLastUpdated = Date.now();
+  if (!row) return;
+  // `last_updated` is the mutation's causal-order timestamp. Retry/ACK state
+  // transitions must never rewrite it, otherwise a failed older write can appear
+  // newer than a later queued write and allow the later mutation to overtake it.
+  const nextLastUpdated = Number(row.last_updated || 0) || Date.now();
   const patch = {
     sync_status: status,
     last_updated: nextLastUpdated,
@@ -310,7 +420,34 @@ export async function markRecordSyncStatus(
     next_retry_at: status === 'synced' || status === 'failed' || status === 'conflict' ? null : metadata.next_retry_at ?? (row as any)?.next_retry_at ?? null,
     last_error: status === 'synced' ? null : metadata.last_error ?? (row as any)?.last_error ?? null
   };
-  await db.records.update(id, patch);
+  if (status === 'synced') {
+    const decoded = await decryptPayload(row.user_id, row.data_encrypted);
+    const entityId = String(row.entity_id || row.id || '').trim();
+    if (row.method === 'DELETE') {
+      await db.cache_records.delete(entityId);
+      await setTombstone(row.user_id, row.type, entityId);
+    } else if (decoded != null) {
+      const existingCache = await db.cache_records.get(entityId);
+      const existingData = existingCache ? await decryptPayload(existingCache.user_id, existingCache.data_encrypted) : null;
+      const mergedData = mergeOfflineEntityData(row.type, existingData, decoded, row.method);
+      const encrypted = await encryptPayload(row.user_id, mergedData);
+      await db.cache_records.put({
+        ...row,
+        id: entityId,
+        entity_id: entityId,
+        data_encrypted: encrypted,
+        sync_status: 'synced',
+        last_updated: nextLastUpdated,
+        retry_count: 0,
+        next_retry_at: null,
+        last_error: null
+      });
+      await removeTombstone(row.user_id, row.type, entityId);
+    }
+    await db.records.delete(id);
+  } else {
+    await db.records.update(id, patch);
+  }
   if (row?.type === 'log' && row?.user_id) {
     if (status === 'synced') {
       removeLogBackup(row.user_id, id);
@@ -329,6 +466,9 @@ export async function markRecordSyncFailure(id: string, params: { status?: numbe
     maxRetries: OFFLINE_SYNC_MAX_RETRIES
   });
   await markRecordSyncStatus(id, resolved.sync_status, resolved);
+  if (row?.method === 'DELETE' && resolved.sync_status === 'failed') {
+    await removeTombstone(row.user_id, row.type, String(row.entity_id || row.id || '').trim());
+  }
   return resolved;
 }
 
@@ -342,31 +482,111 @@ export async function resetFailedSyncRecord(id: string) {
 }
 
 export async function getRecordById(id: string): Promise<OfflineRecord | null> {
-  const row = await db.records.get(id);
-  if (!row) return null;
-  return await mapStoredToOfflineRecord(row);
+  const currentUserId = await getCurrentUserIdOrNull();
+  if (!currentUserId) return null;
+  const cached = await db.cache_records.get(id);
+  let base = cached?.user_id === currentUserId ? await mapStoredToOfflineRecord(cached) : null;
+  const queuedRows = (await db.records.where('entity_id').equals(id).toArray())
+    .filter((row) =>
+      row.user_id === currentUserId &&
+      (row.sync_status !== 'failed' || isRecoverableFailedOfflineSyncRecord(row))
+    )
+    .sort((a, b) => a.last_updated - b.last_updated);
+  for (const row of queuedRows) {
+    const queued = await mapStoredToOfflineRecord(row);
+    if (!queued) continue;
+    if (queued.method === 'DELETE') return null;
+    base = {
+      ...queued,
+      id,
+      entity_id: id,
+      data: mergeOfflineEntityData(queued.type, base?.data, queued.data, queued.method)
+    };
+  }
+  if (!base) {
+    const legacy = await db.records.get(id);
+    if (
+      legacy?.user_id === currentUserId &&
+      (legacy.sync_status !== 'failed' || isRecoverableFailedOfflineSyncRecord(legacy))
+    ) {
+      base = await mapStoredToOfflineRecord(legacy);
+    }
+  }
+  if (base && await isTombstoned(currentUserId, base.type, id)) return null;
+  return base;
 }
 
 export async function getRecordsByType(type: OfflineRecord['type']): Promise<OfflineRecord[]> {
-  const rows = await db.records.where('type').equals(type).toArray();
-  const decoded = await Promise.all(rows.map(mapStoredToOfflineRecord));
-  return decoded.filter(Boolean) as OfflineRecord[];
+  const currentUserId = await getCurrentUserIdOrNull();
+  if (!currentUserId) return [];
+  const cachedRows = (await db.cache_records.where('type').equals(type).toArray())
+    .filter((row) => row.user_id === currentUserId);
+  const queuedRows = (await db.records.where('type').equals(type).toArray())
+    .filter((row) =>
+      row.user_id === currentUserId &&
+      (row.sync_status !== 'failed' || isRecoverableFailedOfflineSyncRecord(row))
+    )
+    .sort((a, b) => a.last_updated - b.last_updated);
+  const [cachedDecoded, queuedDecoded] = await Promise.all([
+    Promise.all(cachedRows.map(mapStoredToOfflineRecord)),
+    Promise.all(queuedRows.map(mapStoredToOfflineRecord))
+  ]);
+  const merged = new Map<string, OfflineRecord>();
+  for (const record of cachedDecoded.filter(Boolean) as OfflineRecord[]) {
+    const entityId = entityIdForRecord(record);
+    if (entityId) merged.set(entityId, { ...record, id: entityId, entity_id: entityId });
+  }
+  for (const record of queuedDecoded.filter(Boolean) as OfflineRecord[]) {
+    const entityId = entityIdForRecord(record);
+    if (!entityId) continue;
+    if (record.method === 'DELETE') {
+      merged.delete(entityId);
+      continue;
+    }
+    const existing = merged.get(entityId);
+    merged.set(entityId, {
+      ...record,
+      id: entityId,
+      entity_id: entityId,
+      data: mergeOfflineEntityData(record.type, existing?.data, record.data, record.method)
+    });
+  }
+  const tombstones = (await db.tombstones.where('type').equals(type).toArray())
+    .filter((row) => row.user_id === currentUserId);
+  for (const tombstone of tombstones) merged.delete(tombstone.entity_id);
+  return Array.from(merged.values());
 }
 
 export async function getPendingRecords(): Promise<OfflineRecord[]> {
   const currentUserId = await getCurrentUserIdOrNull();
   if (!currentUserId) return [];
-  const rows = (await db.records.where('sync_status').equals('pending').toArray())
-    .filter((row) => row.user_id === currentUserId);
-  const backupRows = currentUserId
-    ? Object.values(readLogBackups(currentUserId)).filter((row) => row.sync_status === 'pending')
-    : [];
+  const [pendingRows, failedRows, conflictRows] = await Promise.all([
+    db.records.where('sync_status').equals('pending').toArray(),
+    db.records.where('sync_status').equals('failed').toArray(),
+    db.records.where('sync_status').equals('conflict').toArray()
+  ]);
+  const rows = pendingRows.filter((row) => row.user_id === currentUserId);
+  const blockers = [
+    ...failedRows.filter((row) => isRecoverableFailedOfflineSyncRecord(row)),
+    ...conflictRows,
+  ].filter((row) => row.user_id === currentUserId);
+  const backupRows = Object.values(readLogBackups(currentUserId)).filter((row) => row.sync_status === 'pending');
   const mergedRows = Array.from(
     new Map([...rows, ...backupRows].map((row) => [row.id, row])).values()
   );
   const decoded = await Promise.all(mergedRows.map(mapStoredToOfflineRecord));
   const now = Date.now();
-  return (decoded.filter(Boolean) as OfflineRecord[]).filter((record) => shouldAttemptOfflineRecord(record, now));
+  return (decoded.filter(Boolean) as OfflineRecord[]).filter((record) => {
+    if (!shouldAttemptOfflineRecord(record, now)) return false;
+    const entityId = entityIdForRecord(record);
+    // Never let a newer mutation overtake an unresolved older mutation for the
+    // same entity. This preserves causal ordering across reloads/relogins.
+    return !blockers.some((blocker) =>
+      blocker.type === record.type &&
+      String(blocker.entity_id || blocker.id || '').trim() === entityId &&
+      Number(blocker.last_updated || 0) <= Number(record.last_updated || 0)
+    );
+  });
 }
 
 export async function getFailedSyncRecords(): Promise<OfflineRecord[]> {
@@ -381,7 +601,12 @@ export async function getFailedSyncRecords(): Promise<OfflineRecord[]> {
 }
 
 export async function getLatestTypeUpdate(type: OfflineRecord['type']): Promise<number | null> {
-  const rows = await db.records.where('type').equals(type).toArray();
+  const currentUserId = await getCurrentUserIdOrNull();
+  if (!currentUserId) return null;
+  const rows = [
+    ...(await db.cache_records.where('type').equals(type).toArray()),
+    ...(await db.records.where('type').equals(type).toArray())
+  ].filter((row) => row.user_id === currentUserId);
   if (!rows.length) return null;
   return rows.reduce((max, row) => Math.max(max, row.last_updated || 0), 0);
 }
@@ -404,9 +629,19 @@ export async function getEndpointCacheMeta(endpoint: string): Promise<OfflineCac
 export async function clearSensitiveOfflineCacheForUser(userId?: string | null) {
   const safeUserId = String(userId || '').trim();
   if (safeUserId) {
-    await db.records.where('user_id').equals(safeUserId).delete();
-    localStorage.removeItem(logBackupKeyForUser(safeUserId));
-    localStorage.removeItem(persistentSeedKeyForUser(safeUserId));
+    const userRows = await db.records.where('user_id').equals(safeUserId).toArray();
+    const syncedLegacyIds = userRows.filter((row) => row.sync_status === 'synced').map((row) => row.id);
+    if (syncedLegacyIds.length > 0) await db.records.bulkDelete(syncedLegacyIds);
+
+    // Never destroy the canonical cache/crypto material required to replay or
+    // reconstruct an unconfirmed mutation. Logout only clears fully-synced data.
+    const hasUnsynced = userRows.some((row) => row.sync_status !== 'synced');
+    if (!hasUnsynced) {
+      await db.cache_records.where('user_id').equals(safeUserId).delete();
+      await db.tombstones.where('user_id').equals(safeUserId).delete();
+      localStorage.removeItem(logBackupKeyForUser(safeUserId));
+      localStorage.removeItem(persistentSeedKeyForUser(safeUserId));
+    }
   }
   await db.cache_meta.clear();
   sessionStorage.removeItem(SESSION_SEED_KEY);
@@ -435,8 +670,14 @@ export const syncOfflineData = async () => {
     }
 
     pending.sort((a, b) => a.last_updated - b.last_updated);
+    const blockedEntities = new Set<string>();
 
     for (const record of pending) {
+      const syncEntityKey = `${record.type}:${entityIdForRecord(record)}`;
+      if (blockedEntities.has(syncEntityKey)) {
+        (record as any).data = null;
+        continue;
+      }
       try {
         const session = await ensureFreshSession();
         const token = session?.access_token;
@@ -451,7 +692,8 @@ export const syncOfflineData = async () => {
           method: record.method,
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': token ? `Bearer ${token}` : ''
+            'Authorization': token ? `Bearer ${token}` : '',
+            ...(record?.data?.idempotencyKey ? { 'X-Idempotency-Key': String(record.data.idempotencyKey) } : {})
           },
           credentials: 'include',
           body: JSON.stringify(record.data)
@@ -459,24 +701,27 @@ export const syncOfflineData = async () => {
 
         const responsePayload = await response.json().catch(() => ({ error: 'Unknown error' }));
 
-        if ((response.ok && responsePayload?.queued !== true) || (response.status === 409 && isIdempotentConflictPayload(responsePayload))) {
+        if ((response.ok && responsePayload?.queued !== true && responsePayload?.success !== false) || (response.status === 409 && isIdempotentConflictPayload(responsePayload))) {
           await markRecordSyncStatus(record.id, 'synced');
           console.log(`Synced ${record.type}: ${record.id}`);
-        } else if (response.ok && responsePayload?.queued === true) {
+        } else if (response.ok && (responsePayload?.queued === true || responsePayload?.success === false)) {
           const failure = await markRecordSyncFailure(record.id, {
-            status: 503,
+            status: responsePayload?.queued === true ? 503 : 400,
+            retryable: responsePayload?.queued === true,
             error: responsePayload?.warning || 'Servidor enfileirou o sync para tentar depois.'
           });
+          blockedEntities.add(syncEntityKey);
           console.warn(`Server queued ${record.type} sync for later: ${record.id}`, failure);
-        } else if (record.type === 'appointment' && response.status === 409) {
-          const errorMessage = responsePayload?.error || responsePayload?.message || 'Conflito de agenda encontrado ao sincronizar.';
+        } else if (response.status === 409 && (responsePayload?.conflict === true || record.type === 'appointment')) {
+          const errorMessage = responsePayload?.error || responsePayload?.message || 'Conflito de persistência encontrado ao sincronizar.';
           await markRecordSyncStatus(record.id, 'conflict', {
             retry_count: record.retry_count || 0,
             last_attempt_at: Date.now(),
             next_retry_at: null,
             last_error: errorMessage
           });
-          console.warn(`Marked appointment ${record.id} as CONFLICT during offline sync.`);
+          blockedEntities.add(syncEntityKey);
+          console.warn(`Marked ${record.type} ${record.id} as CONFLICT during offline sync.`);
         } else {
           console.error(`Server rejected ${record.type} sync:`, responsePayload);
           const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
@@ -485,6 +730,7 @@ export const syncOfflineData = async () => {
             retryable,
             error: responsePayload?.error || responsePayload?.message || `Server error ${response.status}`
           });
+          blockedEntities.add(syncEntityKey);
           if (failure.sync_status === 'failed') {
             console.warn(`Marked ${record.type} ${record.id} as FAILED after ${failure.retry_count} attempt(s).`);
           }
@@ -495,6 +741,7 @@ export const syncOfflineData = async () => {
           retryable,
           error: error?.message || error
         });
+        blockedEntities.add(syncEntityKey);
         console.error(`Failed to sync ${record.type}:`, error);
         if (failure.sync_status === 'failed') {
           console.warn(`Marked ${record.type} ${record.id} as FAILED after ${failure.retry_count} attempt(s).`);

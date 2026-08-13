@@ -2648,6 +2648,17 @@ export default function App() {
   const [clinicStateHydrated, setClinicStateHydrated] = useState(false);
   const [clinicStateSyncReady, setClinicStateSyncReady] = useState(false);
   const clinicStateSyncTimerRef = useRef<any>(null);
+  const clinicStateSectionVersionsRef = useRef<Record<string, number>>({
+    rooms: 0,
+    appointments: 0,
+    protocols: 0,
+    specialtySettings: 0,
+  });
+  const clinicStatePersistedSnapshotRef = useRef({
+    rooms: JSON.stringify([]),
+    protocols: JSON.stringify([]),
+    specialtySettings: JSON.stringify({}),
+  });
   const profileMediaFetchRef = useRef<{ userId: string; fetchedAt: number; inFlight: boolean } | null>(null);
   const activityLogsFetchRef = useRef<{ key: string; fetchedAt: number; inFlight: boolean } | null>(null);
   const inactivityTimerRef = useRef<any>(null);
@@ -3636,6 +3647,17 @@ export default function App() {
     hydratedPatientDetailIdsRef.current.clear();
     patientDetailRequestsRef.current.clear();
     setSpecialtySettings({});
+    clinicStateSectionVersionsRef.current = {
+      rooms: 0,
+      appointments: 0,
+      protocols: 0,
+      specialtySettings: 0,
+    };
+    clinicStatePersistedSnapshotRef.current = {
+      rooms: JSON.stringify([]),
+      protocols: JSON.stringify([]),
+      specialtySettings: JSON.stringify({}),
+    };
   };
 
   const hydrateState = async (nextUser: any) => {
@@ -3677,6 +3699,29 @@ export default function App() {
       }
 
       const hydrated = result.data;
+      const hydratedSectionVersions =
+        hydrated.clinicState?.sectionVersions && typeof hydrated.clinicState.sectionVersions === 'object'
+          ? hydrated.clinicState.sectionVersions
+          : {};
+      clinicStateSectionVersionsRef.current = {
+        rooms: Number(hydratedSectionVersions?.rooms || 0) || 0,
+        appointments: Number(hydratedSectionVersions?.appointments || 0) || 0,
+        protocols: Number(hydratedSectionVersions?.protocols || 0) || 0,
+        specialtySettings: Number(hydratedSectionVersions?.specialtySettings || 0) || 0,
+      };
+      const persistedClinicSnapshot =
+        hydrated.clinicState?.persistedSnapshot && typeof hydrated.clinicState.persistedSnapshot === 'object'
+          ? hydrated.clinicState.persistedSnapshot
+          : hydrated.clinicState || {};
+      clinicStatePersistedSnapshotRef.current = {
+        rooms: JSON.stringify(Array.isArray(persistedClinicSnapshot?.rooms) ? persistedClinicSnapshot.rooms : []),
+        protocols: JSON.stringify(Array.isArray(persistedClinicSnapshot?.protocols) ? persistedClinicSnapshot.protocols : []),
+        specialtySettings: JSON.stringify(
+          persistedClinicSnapshot?.specialtySettings && typeof persistedClinicSnapshot.specialtySettings === 'object'
+            ? persistedClinicSnapshot.specialtySettings
+            : {},
+        ),
+      };
       const remoteAppointments = Array.isArray(hydrated.clinicState?.appointments) ? hydrated.clinicState.appointments : [];
       const offlineAppointmentResult = await dataService.getOfflineAppointmentDrafts?.();
       const offlineAppointments = Array.isArray(offlineAppointmentResult?.data) ? offlineAppointmentResult.data : [];
@@ -4151,21 +4196,89 @@ export default function App() {
       clearTimeout(clinicStateSyncTimerRef.current);
     }
 
+    const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
+    const role = String(user?.role || '').toLowerCase();
+    const currentSnapshot = {
+      rooms: JSON.stringify(Array.isArray(rooms) ? rooms : []),
+      protocols: JSON.stringify(Array.isArray(protocols) ? protocols : []),
+      specialtySettings: JSON.stringify(
+        specialtySettings && typeof specialtySettings === 'object' ? specialtySettings : {},
+      ),
+    };
+    const canPersistClinicalConfiguration =
+      role === 'director' || role === 'coordinator' || role === 'admin' || role === 'owner';
+    const dirtySections = {
+      rooms:
+        (canPersistClinicalConfiguration || role === 'receptionist') &&
+        currentSnapshot.rooms !== clinicStatePersistedSnapshotRef.current.rooms,
+      protocols:
+        canPersistClinicalConfiguration &&
+        currentSnapshot.protocols !== clinicStatePersistedSnapshotRef.current.protocols,
+      specialtySettings:
+        canPersistClinicalConfiguration &&
+        currentSnapshot.specialtySettings !== clinicStatePersistedSnapshotRef.current.specialtySettings,
+    };
+    if (!dirtySections.rooms && !dirtySections.protocols && !dirtySections.specialtySettings) return;
+
     clinicStateSyncTimerRef.current = setTimeout(async () => {
       try {
-        const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || '').trim();
-        const role = String(user?.role || '').toLowerCase();
         const payload: any = {
-          workspace_id: workspaceId || undefined
+          workspace_id: workspaceId || undefined,
+          expectedSectionVersions: { ...clinicStateSectionVersionsRef.current },
         };
-        if (role === 'director' || role === 'coordinator' || role === 'admin' || role === 'owner') {
-          payload.rooms = rooms;
-          payload.protocols = protocols;
-          payload.specialtySettings = specialtySettings;
-        } else if (role === 'receptionist') {
-          payload.rooms = rooms;
+        if (dirtySections.rooms) payload.rooms = rooms;
+        if (dirtySections.protocols) payload.protocols = protocols;
+        if (dirtySections.specialtySettings) payload.specialtySettings = specialtySettings;
+
+        const result = await dataService.saveClinicState(payload);
+        if (result?.conflict === true) {
+          // Keep the local draft/outbox intact. Never auto-retry with the newer
+          // server version because that would silently overwrite another user's edit.
+          if (import.meta.env.DEV) {
+            console.error('Conflito de persistência no estado clínico:', sanitizeTechnicalErrorMessage(result?.error));
+          }
+          return;
         }
-        await dataService.saveClinicState(payload);
+
+        if (!result?.success) {
+          if (import.meta.env.DEV) {
+            console.error('Estado clínico não confirmado:', sanitizeTechnicalErrorMessage(result?.error || result?.warning));
+          }
+          return;
+        }
+        if (result?.pending === true) {
+          // The mutation is already durable in the local outbox. Advance the local
+          // baseline/version chain so later offline edits are replayed in order
+          // instead of all competing against the same server version.
+          const virtualVersions = { ...clinicStateSectionVersionsRef.current };
+          if (dirtySections.rooms) {
+            clinicStatePersistedSnapshotRef.current.rooms = currentSnapshot.rooms;
+            virtualVersions.rooms = Number(virtualVersions.rooms || 0) + 1;
+          }
+          if (dirtySections.protocols) {
+            clinicStatePersistedSnapshotRef.current.protocols = currentSnapshot.protocols;
+            virtualVersions.protocols = Number(virtualVersions.protocols || 0) + 1;
+          }
+          if (dirtySections.specialtySettings) {
+            clinicStatePersistedSnapshotRef.current.specialtySettings = currentSnapshot.specialtySettings;
+            virtualVersions.specialtySettings = Number(virtualVersions.specialtySettings || 0) + 1;
+          }
+          clinicStateSectionVersionsRef.current = virtualVersions;
+          return;
+        }
+
+        if (dirtySections.rooms) clinicStatePersistedSnapshotRef.current.rooms = currentSnapshot.rooms;
+        if (dirtySections.protocols) clinicStatePersistedSnapshotRef.current.protocols = currentSnapshot.protocols;
+        if (dirtySections.specialtySettings) {
+          clinicStatePersistedSnapshotRef.current.specialtySettings = currentSnapshot.specialtySettings;
+        }
+        const confirmedVersions = result?.data?.sectionVersions;
+        if (confirmedVersions && typeof confirmedVersions === 'object') {
+          clinicStateSectionVersionsRef.current = {
+            ...clinicStateSectionVersionsRef.current,
+            ...confirmedVersions,
+          };
+        }
       } catch (error) {
         if (import.meta.env.DEV) console.error('Erro ao sincronizar estado clinico:', sanitizeTechnicalErrorMessage(error));
       }
@@ -4312,59 +4425,67 @@ export default function App() {
     return true;
   };
   const handleUpdateTask = async (id: any, fields: any) => {
-    let mergedTask: any = null;
-    setTasks(prev => prev.map(t => {
-      if (t.id !== id) return t;
-      mergedTask = { ...t, ...fields };
-      return mergedTask;
-    }));
-    onAddActivityLog("AtualizaÃ§Ã£o de Tarefa", `Tarefa "${safeDisplayValue(mergedTask?.title, 'selecionada')}" atualizada.`);
+    const currentTask = tasks.find((task: any) => String(task?.id) === String(id));
+    if (!currentTask) return { success: false, error: 'Tarefa não encontrada.' };
+    const mergedTask: any = { ...currentTask, ...fields };
+    const patient = allPatients.find(p => p.id === mergedTask.patientId);
+    const isAdultTask = Number(patient?.age || 0) > 12;
 
-    // Sync to Backend
-    if (mergedTask) {
-      const patient = allPatients.find(p => p.id === mergedTask.patientId);
-      const isAdultTask = Number(patient?.age || 0) > 12;
-      if (isAdultTask) {
-        const assignedId = String(mergedTask.assignedTaskId || mergedTask.id || '').trim();
-        if (assignedId) {
-          await dataService.updateAssignedTask(assignedId, {
-            task_type: mergedTask.type || 'task',
-            task_data: {
-              title: mergedTask.title,
-              description: mergedTask.description || '',
-              icon: mergedTask.icon || '',
-              color: mergedTask.color || '',
-              linkedTask: mergedTask.linkedTask || mergedTask.linked_task || '',
-              linkedProtocolId: mergedTask.linkedProtocolId || '',
-              maxScore:
-                Number.isFinite(Number(mergedTask.maxScore))
-                  ? Math.max(1, Math.min(10, Number(mergedTask.maxScore)))
-                  : undefined
-            },
-            scheduled_at: mergedTask.scheduledAt || mergedTask.scheduled_at || undefined,
-            status: mergedTask.completed ? 'completed' : 'pending'
-          });
-        }
-      } else {
-        await dataService.updateTask(String(id), {
-          id: String(id),
-          patient_id: String(mergedTask.patientId),
-          patient_email: patient?.email || mergedTask.patient_email || null,
+    let persistenceResult: any = null;
+    if (isAdultTask) {
+      const assignedId = String(mergedTask.assignedTaskId || mergedTask.id || '').trim();
+      if (!assignedId) return { success: false, error: 'Tarefa atribuída sem identificador persistente.' };
+      persistenceResult = await dataService.updateAssignedTask(assignedId, {
+        task_type: mergedTask.type || 'task',
+        task_data: {
           title: mergedTask.title,
           description: mergedTask.description || '',
-          type: mergedTask.type || 'task',
-          max_score:
-            Number.isFinite(Number(mergedTask.maxScore))
-              ? Math.max(1, Math.min(100, Number(mergedTask.maxScore)))
-              : undefined,
           icon: mergedTask.icon || '',
           color: mergedTask.color || '',
-          completed: Boolean(mergedTask.completed),
-          is_daily_reminder: Boolean(mergedTask.isDailyReminder || mergedTask.is_daily_reminder),
-          linked_task: mergedTask.linkedTask || mergedTask.linked_task || null
-        });
-      }
+          linkedTask: mergedTask.linkedTask || mergedTask.linked_task || '',
+          linkedProtocolId: mergedTask.linkedProtocolId || '',
+          maxScore:
+            Number.isFinite(Number(mergedTask.maxScore))
+              ? Math.max(1, Math.min(10, Number(mergedTask.maxScore)))
+              : undefined
+        },
+        scheduled_at: mergedTask.scheduledAt || mergedTask.scheduled_at || undefined,
+        status: mergedTask.completed ? 'completed' : 'pending'
+      });
+    } else {
+      persistenceResult = await dataService.updateTask(String(id), {
+        id: String(id),
+        patient_id: String(mergedTask.patientId),
+        patient_email: patient?.email || mergedTask.patient_email || null,
+        title: mergedTask.title,
+        description: mergedTask.description || '',
+        type: mergedTask.type || 'task',
+        max_score:
+          Number.isFinite(Number(mergedTask.maxScore))
+            ? Math.max(1, Math.min(100, Number(mergedTask.maxScore)))
+            : undefined,
+        icon: mergedTask.icon || '',
+        color: mergedTask.color || '',
+        completed: Boolean(mergedTask.completed),
+        is_daily_reminder: Boolean(mergedTask.isDailyReminder || mergedTask.is_daily_reminder),
+        linked_task: mergedTask.linkedTask || mergedTask.linked_task || null
+      });
     }
+
+    if (!persistenceResult?.success) {
+      console.error('Falha ao persistir atualização de tarefa:', persistenceResult?.error || persistenceResult?.warning);
+      return {
+        success: false,
+        error: persistenceResult?.error || persistenceResult?.warning || 'Não foi possível persistir a tarefa.'
+      };
+    }
+
+    setTasks(prev => prev.map(task => String(task?.id) === String(id) ? mergedTask : task));
+    void onAddActivityLog(
+      "AtualizaÃ§Ã£o de Tarefa",
+      `Tarefa "${safeDisplayValue(mergedTask?.title, 'selecionada')}" atualizada.`,
+    );
+    return { success: true, pending: Boolean(persistenceResult?.pending) };
   };
   const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string) => {
     const normalizeNoteVisibility = (raw: string) => {
@@ -5361,7 +5482,26 @@ export default function App() {
       }
     }
 
-    // 2. Save patient record
+    // 2. Persist patient + clinical record as one durable aggregate whenever possible.
+    const recordPayloadForCreate = {
+      workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+      ...buildPatientAnamnesisSnapshot(data, data.anamnesisData),
+      lastAnamnesisAt: data.lastAnamnesisAt || null,
+      financialPlans: Array.isArray(data.financialPlans) ? data.financialPlans : [],
+      monthlyTreatmentValue: Number(data.monthlyTreatmentValue || 0) || 0,
+      billingDueDay: data.billingDueDay || null,
+      billingMethod: data.billingMethod || null,
+      patientProfileType: resolvedProfileType,
+      panelType: resolvedProfileType,
+      portalType: resolvedPortalType,
+      diagnosis: data.diagnosis || "",
+      pei: Array.isArray(data.pei) ? data.pei : [],
+      evaluationLinks:
+        data.evaluationLinks && typeof data.evaluationLinks === 'object' ? data.evaluationLinks : {},
+      interventionTaskLinks:
+        data.interventionTaskLinks && typeof data.interventionTaskLinks === 'object' ? data.interventionTaskLinks : {},
+      anamnese: buildPatientAnamnesisSnapshot(data, data.anamnesisData)
+    };
     const fbResult = await dataService.savePatient({
       name: data.name,
       socialName: data.socialName || data.nomeSocial || '',
@@ -5403,7 +5543,7 @@ export default function App() {
       responsibleEmail: resolvedGuardian?.email || '',
       responsibleRelationship: resolvedGuardian?.relacao || '',
       clientRecordId: String(newId)
-    });
+    }, { recordPayload: recordPayloadForCreate });
 
     let persistedPatientId: string | number = newId;
     let resolvedPersistedPatientId = false;
@@ -5550,27 +5690,12 @@ export default function App() {
       resolvedPersistedPatientId &&
       Boolean(String(persistedPatientId || "").trim()) &&
       !String(persistedPatientId).startsWith("temp_");
+    const patientRecordAlreadyDurable = fbResult?.recordPersisted === true || fbResult?.pending === true;
 
-    if (canPersistPatientRecord) {
-      const patientRecordResult = await dataService.savePatientRecord(String(persistedPatientId), {
-        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-        ...buildPatientAnamnesisSnapshot(data, data.anamnesisData),
-        lastAnamnesisAt: data.lastAnamnesisAt || null,
-        financialPlans: Array.isArray(data.financialPlans) ? data.financialPlans : [],
-        monthlyTreatmentValue: Number(data.monthlyTreatmentValue || 0) || 0,
-        billingDueDay: data.billingDueDay || null,
-        billingMethod: data.billingMethod || null,
-        patientProfileType: resolvedProfileType,
-        panelType: resolvedProfileType,
-        portalType: resolvedPortalType,
-        diagnosis: data.diagnosis || "",
-        pei: Array.isArray(data.pei) ? data.pei : [],
-        evaluationLinks:
-          data.evaluationLinks && typeof data.evaluationLinks === 'object' ? data.evaluationLinks : {},
-        interventionTaskLinks:
-          data.interventionTaskLinks && typeof data.interventionTaskLinks === 'object' ? data.interventionTaskLinks : {},
-        anamnese: buildPatientAnamnesisSnapshot(data, data.anamnesisData)
-      });
+    // Idempotent reconciliation with a pre-existing patient can still require a
+    // dedicated record write. Fresh creates are persisted atomically by POST /api/patients.
+    if (canPersistPatientRecord && !patientRecordAlreadyDurable) {
+      const patientRecordResult = await dataService.savePatientRecord(String(persistedPatientId), recordPayloadForCreate);
       if (!patientRecordResult?.success) {
         const errorMessage = toReadableError(patientRecordResult?.error || patientRecordResult?.warning || 'Falha ao persistir prontuário financeiro.');
         alert(`Paciente criado, mas os dados financeiros do prontuário não foram confirmados no banco: ${errorMessage}`);
@@ -5659,17 +5784,101 @@ export default function App() {
     const normalizedPatientStatus = String(updatedData?.status || '').toLowerCase();
     const isArchivePatient = normalizedPatientStatus === 'archived';
     const isDeleteOrUnlink = updatedData?.clinic_id === null || normalizedPatientStatus === 'deleted' || isArchivePatient;
+    const shouldPersistPatientRecord =
+      !isDeleteOrUnlink &&
+      (
+        syncedAnamnesisData !== undefined ||
+        anamnesisData !== undefined ||
+        diagnosis !== undefined ||
+        updatedData?.type !== undefined ||
+        updatedData?.patientProfileType !== undefined ||
+        updatedData?.panelType !== undefined ||
+        pei !== undefined ||
+        evaluationLinks !== undefined ||
+        interventionTaskLinks !== undefined ||
+        updatedData?.lastAnamnesisAt !== undefined ||
+        updatedData?.financialPlans !== undefined ||
+        updatedData?.monthlyTreatmentValue !== undefined ||
+        updatedData?.billingDueDay !== undefined ||
+        updatedData?.billingMethod !== undefined ||
+        hasInsuranceEligibilityPatch
+      );
+    let recordPayloadForAtomicSave: any = null;
+    if (shouldPersistPatientRecord) {
+      recordPayloadForAtomicSave = {
+        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+        lastAnamnesisAt: updatedData?.lastAnamnesisAt || null,
+        ...(diagnosis !== undefined && { diagnosis: diagnosis || "" }),
+        ...(updatedData?.type !== undefined || updatedData?.patientProfileType !== undefined || updatedData?.panelType !== undefined
+          ? { patientProfileType: updatedProfileType, panelType: updatedProfileType, portalType: updatedPortalType }
+          : {}),
+        ...(updatedData?.financialPlans !== undefined && {
+          financialPlans: Array.isArray(updatedData.financialPlans) ? updatedData.financialPlans : [],
+        }),
+        ...(updatedData?.monthlyTreatmentValue !== undefined && {
+          monthlyTreatmentValue: Number(updatedData.monthlyTreatmentValue || 0) || 0,
+        }),
+        ...(updatedData?.billingDueDay !== undefined && { billingDueDay: updatedData.billingDueDay || null }),
+        ...(updatedData?.billingMethod !== undefined && { billingMethod: updatedData.billingMethod || null }),
+        ...(hasInsuranceEligibilityPatch && {
+          insuranceType: updatedInsuranceEligibility.insuranceType,
+          insurancePayerId: updatedInsuranceEligibility.insurancePayerId,
+          insurance_payer_id: updatedInsuranceEligibility.insurancePayerId,
+          convenioPayerId: updatedInsuranceEligibility.insurancePayerId,
+          convenio_payer_id: updatedInsuranceEligibility.insurancePayerId,
+          insuranceName: updatedInsuranceEligibility.insuranceName,
+          insuranceCardNumber: updatedInsuranceEligibility.insuranceCardNumber,
+          cardNumber: updatedInsuranceEligibility.insuranceCardNumber,
+          insuranceCardValidUntil: updatedInsuranceEligibility.insuranceCardValidUntil,
+          insurancePlanCategory: updatedInsuranceEligibility.insurancePlanCategory,
+          insuranceHolderName: updatedInsuranceEligibility.insuranceHolderName,
+          insuranceHolderCpf: updatedInsuranceEligibility.insuranceHolderCpf,
+          insuranceHolderRelationship: updatedInsuranceEligibility.insuranceHolderRelationship,
+          insuranceEligibilityNotes: updatedInsuranceEligibility.insuranceEligibilityNotes,
+          eligibilityNotes: updatedInsuranceEligibility.insuranceEligibilityNotes,
+          convenioTipo: updatedInsuranceEligibility.convenioTipo,
+          convenioNome: updatedInsuranceEligibility.convenioNome,
+          convenioCarteirinha: updatedInsuranceEligibility.convenioCarteirinha,
+          convenioCarteirinhaValidade: updatedInsuranceEligibility.convenioCarteirinhaValidade,
+          convenioPlanoCategoria: updatedInsuranceEligibility.convenioPlanoCategoria,
+          convenioTitularNome: updatedInsuranceEligibility.convenioTitularNome,
+          convenioTitularCpf: updatedInsuranceEligibility.convenioTitularCpf,
+          convenioTitularRelacao: updatedInsuranceEligibility.convenioTitularRelacao,
+          convenioElegibilidadeObs: updatedInsuranceEligibility.convenioElegibilidadeObs,
+        }),
+        ...(pei !== undefined && { pei }),
+        ...(evaluationLinks !== undefined && { evaluationLinks }),
+        ...(interventionTaskLinks !== undefined && { interventionTaskLinks }),
+      };
+      if (syncedAnamnesisData !== undefined) {
+        Object.assign(recordPayloadForAtomicSave, {
+          ...buildPatientAnamnesisSnapshot(mergedIdentityPatient, syncedAnamnesisData),
+          anamnese: syncedAnamnesisData || {},
+        });
+      }
+    }
+
+    const previousPatientSnapshot = currentPatient ? { ...currentPatient } : null;
+    const previousClinicalRecordSnapshot = clinicalRecords.find((record: any) => String(record?.patientId) === String(updatedData?.id));
+    const previousAgendaSnapshots = therapistAgenda.filter((entry: any) => String(entry?.id) === String(updatedData?.id));
+    const rollbackOptimisticPatientState = () => {
+      setAllPatients((prev) => {
+        const withoutTarget = prev.filter((patient: any) => String(patient?.id) !== String(updatedData?.id));
+        return previousPatientSnapshot ? [...withoutTarget, previousPatientSnapshot] : withoutTarget;
+      });
+      setClinicalRecords((prev) => {
+        const withoutTarget = prev.filter((record: any) => String(record?.patientId) !== String(updatedData?.id));
+        return previousClinicalRecordSnapshot ? [...withoutTarget, previousClinicalRecordSnapshot] : withoutTarget;
+      });
+      setTherapistAgenda((prev) => {
+        const withoutTarget = prev.filter((entry: any) => String(entry?.id) !== String(updatedData?.id));
+        return previousAgendaSnapshots.length > 0 ? [...withoutTarget, ...previousAgendaSnapshots] : withoutTarget;
+      });
+    };
 
     // If unlinking or archiving, remove from the active patient list while the backend preserves history.
     if (isDeleteOrUnlink) {
       setAllPatients(prev => prev.filter(p => p.id !== updatedData.id));
-      onAddActivityLog(
-        isArchivePatient ? "Arquivamento de Paciente" : "Desvinculação de Paciente",
-        isArchivePatient
-          ? `${formatPatientLabel(mergedIdentityPatient)} foi arquivado com histórico preservado.`
-          : `${formatPatientLabel(mergedIdentityPatient)} foi desvinculado.`,
-        'management',
-      );
     } else {
       if (Object.keys(identityData).length > 1) { // More than just 'id'
         setAllPatients(prev => prev.map(p => p.id === updatedData.id ? {
@@ -5728,7 +5937,6 @@ export default function App() {
       }
 
       setTherapistAgenda(prev => prev.map(a => a.id === updatedData.id ? { ...a, name: updatedData.name || a.name } : a)); 
-      onAddActivityLog("Atualização de Cadastro", `Dados de ${formatPatientLabel(mergedIdentityPatient)} atualizados.`, 'management');
     }
 
     let billingSync: any = null;
@@ -5739,11 +5947,19 @@ export default function App() {
       if (isDeleteOrUnlink) {
         const deleteResult = await dataService.deletePatient(String(updatedData.id));
         if (!deleteResult?.success) {
+          rollbackOptimisticPatientState();
           const errorMessage = toReadableError(deleteResult?.error || 'Erro desconhecido');
           alert(`Não foi possível arquivar/desvincular paciente: ${errorMessage}`);
           return { success: false, error: errorMessage };
         }
         billingSync = (deleteResult as any)?.billing || deleteResult?.data?.billing || null;
+        void onAddActivityLog(
+          isArchivePatient ? "Arquivamento de Paciente" : "Desvinculação de Paciente",
+          isArchivePatient
+            ? `${formatPatientLabel(mergedIdentityPatient)} foi arquivado com histórico preservado.`
+            : `${formatPatientLabel(mergedIdentityPatient)} foi desvinculado.`,
+          'management',
+        );
       } else {
         const patientUpdatePayload = {
           name: preserveCurrentFullName ? undefined : updatedData.name,
@@ -5815,94 +6031,23 @@ export default function App() {
           clinic_id: updatedData.clinic_id,
           status: updatedData.status
         };
-        const updateResult = await dataService.updatePatient(String(updatedData.id), patientUpdatePayload);
+        const updateResult = await dataService.updatePatient(
+          String(updatedData.id),
+          patientUpdatePayload,
+          { recordPayload: recordPayloadForAtomicSave || undefined },
+        );
         if (!updateResult?.success) {
+          rollbackOptimisticPatientState();
           const errorMessage = toReadableError(updateResult?.error || updateResult?.warning || 'Erro desconhecido');
           alert(`Não foi possível confirmar a persistência do cadastro: ${errorMessage}`);
           return { success: false, error: errorMessage };
         }
         billingSync = updateResult?.billing || updateResult?.data?.billing || null;
-      }
-
-      if (
-        !isDeleteOrUnlink &&
-        (
-          syncedAnamnesisData !== undefined ||
-          anamnesisData !== undefined ||
-          diagnosis !== undefined ||
-          updatedData?.type !== undefined ||
-          updatedData?.patientProfileType !== undefined ||
-          updatedData?.panelType !== undefined ||
-          pei !== undefined ||
-          evaluationLinks !== undefined ||
-          interventionTaskLinks !== undefined ||
-          updatedData?.lastAnamnesisAt !== undefined
-          || updatedData?.financialPlans !== undefined
-          || updatedData?.monthlyTreatmentValue !== undefined
-          || updatedData?.billingDueDay !== undefined
-          || updatedData?.billingMethod !== undefined
-          || hasInsuranceEligibilityPatch
-        )
-      ) {
-        const recordPayload: any = {
-          workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-          lastAnamnesisAt: updatedData?.lastAnamnesisAt || null,
-          ...(diagnosis !== undefined && { diagnosis: diagnosis || "" }),
-          ...(updatedData?.type !== undefined || updatedData?.patientProfileType !== undefined || updatedData?.panelType !== undefined
-            ? { patientProfileType: updatedProfileType, panelType: updatedProfileType, portalType: updatedPortalType }
-            : {}),
-          ...(updatedData?.financialPlans !== undefined && {
-            financialPlans: Array.isArray(updatedData.financialPlans) ? updatedData.financialPlans : [],
-          }),
-          ...(updatedData?.monthlyTreatmentValue !== undefined && {
-            monthlyTreatmentValue: Number(updatedData.monthlyTreatmentValue || 0) || 0,
-          }),
-          ...(updatedData?.billingDueDay !== undefined && { billingDueDay: updatedData.billingDueDay || null }),
-          ...(updatedData?.billingMethod !== undefined && { billingMethod: updatedData.billingMethod || null }),
-          ...(hasInsuranceEligibilityPatch && {
-            insuranceType: updatedInsuranceEligibility.insuranceType,
-            insurancePayerId: updatedInsuranceEligibility.insurancePayerId,
-            insurance_payer_id: updatedInsuranceEligibility.insurancePayerId,
-            convenioPayerId: updatedInsuranceEligibility.insurancePayerId,
-            convenio_payer_id: updatedInsuranceEligibility.insurancePayerId,
-            insuranceName: updatedInsuranceEligibility.insuranceName,
-            insuranceCardNumber: updatedInsuranceEligibility.insuranceCardNumber,
-            cardNumber: updatedInsuranceEligibility.insuranceCardNumber,
-            insuranceCardValidUntil: updatedInsuranceEligibility.insuranceCardValidUntil,
-            insurancePlanCategory: updatedInsuranceEligibility.insurancePlanCategory,
-            insuranceHolderName: updatedInsuranceEligibility.insuranceHolderName,
-            insuranceHolderCpf: updatedInsuranceEligibility.insuranceHolderCpf,
-            insuranceHolderRelationship: updatedInsuranceEligibility.insuranceHolderRelationship,
-            insuranceEligibilityNotes: updatedInsuranceEligibility.insuranceEligibilityNotes,
-            eligibilityNotes: updatedInsuranceEligibility.insuranceEligibilityNotes,
-            convenioTipo: updatedInsuranceEligibility.convenioTipo,
-            convenioNome: updatedInsuranceEligibility.convenioNome,
-            convenioCarteirinha: updatedInsuranceEligibility.convenioCarteirinha,
-            convenioCarteirinhaValidade: updatedInsuranceEligibility.convenioCarteirinhaValidade,
-            convenioPlanoCategoria: updatedInsuranceEligibility.convenioPlanoCategoria,
-            convenioTitularNome: updatedInsuranceEligibility.convenioTitularNome,
-            convenioTitularCpf: updatedInsuranceEligibility.convenioTitularCpf,
-            convenioTitularRelacao: updatedInsuranceEligibility.convenioTitularRelacao,
-            convenioElegibilidadeObs: updatedInsuranceEligibility.convenioElegibilidadeObs,
-          }),
-          ...(pei !== undefined && { pei }),
-          ...(evaluationLinks !== undefined && { evaluationLinks }),
-          ...(interventionTaskLinks !== undefined && { interventionTaskLinks }),
-        };
-
-        if (syncedAnamnesisData !== undefined) {
-          Object.assign(recordPayload, {
-            ...buildPatientAnamnesisSnapshot(mergedIdentityPatient, syncedAnamnesisData),
-            anamnese: syncedAnamnesisData || {},
-          });
-        }
-
-        const patientRecordResult = await dataService.savePatientRecord(String(updatedData.id), recordPayload);
-        if (!patientRecordResult?.success) {
-          const errorMessage = toReadableError(patientRecordResult?.error || patientRecordResult?.warning || 'Erro desconhecido');
-          alert(`Não foi possível confirmar a persistência do prontuário financeiro: ${errorMessage}`);
-          return { success: false, error: errorMessage };
-        }
+        void onAddActivityLog(
+          "Atualização de Cadastro",
+          `Dados de ${formatPatientLabel(mergedIdentityPatient)} atualizados.`,
+          'management',
+        );
       }
     }
     return { success: true, billing: billingSync };
@@ -6462,9 +6607,11 @@ export default function App() {
     const isConventionalAdult = userType === 'conventional' || userType === 'adult_conventional';
     const normalizedEnergy = typeof l === 'number' && Number.isFinite(l) ? l : null;
     const persistedEnergy = isConventionalAdult ? null : normalizedEnergy;
+    const historyId = crypto.randomUUID();
+    const patientId = String(identity.patientId || user.id);
     const item = {
-      id: Date.now(),
-      patientId: identity.patientId || user.id,
+      id: historyId,
+      patientId,
       type: 'checkin',
       title: "Check-in",
       time: new Date().toLocaleTimeString(),
@@ -6474,10 +6621,10 @@ export default function App() {
       dateGroup: "Hoje",
       tag: t
     };
-    setHistory(prev => [item, ...prev]);
     try {
-      await dataService.addHistoryItem({
-        patient_id: String(identity.patientId || user.id),
+      const historyResult = await dataService.addHistoryItem({
+        id: historyId,
+        patient_id: patientId,
         patient_email: identity.patientEmail,
         patient_name: identity.patientName,
         type: 'checkin',
@@ -6486,8 +6633,13 @@ export default function App() {
         note: n,
         icon: i
       });
-      await dataService.addPatientLog({
-        patient_id: String(identity.patientId || user.id),
+      if (!historyResult?.success) {
+        console.error('Falha ao persistir histórico do check-in:', historyResult?.error || historyResult?.warning);
+        return;
+      }
+
+      const logResult = await dataService.addPatientLog({
+        patient_id: patientId,
         professional_id: identity.professionalId || user?.professional_id || user?.therapist_id || null,
         type: 'mood',
         value: {
@@ -6499,6 +6651,13 @@ export default function App() {
         },
         timestamp: new Date().toISOString()
       });
+      if (!logResult?.success) {
+        await dataService.deleteHistoryItem(historyId);
+        console.error('Falha ao persistir log do check-in:', logResult?.error || logResult?.warning);
+        return;
+      }
+
+      setHistory(prev => [item, ...prev]);
     } catch (error) {
       console.error('Falha ao persistir check-in do paciente:', error);
     }
@@ -7048,7 +7207,7 @@ export default function App() {
       );
 
       try {
-        await dataService.savePatientRecord(String(pid), {
+        const peiPersistenceResult = await dataService.savePatientRecord(String(pid), {
           workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
           diagnosis: clinicalRecord?.diagnosis || targetPatient?.diagnosis || '',
           anamnese: clinicalRecord?.anamnesisData || targetPatient?.anamnesisData || {},
@@ -7062,7 +7221,25 @@ export default function App() {
               ? clinicalRecord.interventionTaskLinks
               : {}
         });
+        if (!peiPersistenceResult?.success) {
+          setAllPatients((allPrev: any[]) =>
+            allPrev.map((p: any) => (p.id === pid ? { ...p, pei: sourcePei } : p))
+          );
+          setClinicalRecords((prev: any[]) =>
+            prev.map((r: any) => (r.patientId === pid ? { ...r, pei: sourcePei } : r))
+          );
+          console.error(
+            'Falha ao confirmar persistência da atualização de PEI:',
+            peiPersistenceResult?.error || peiPersistenceResult?.warning,
+          );
+        }
       } catch (error) {
+        setAllPatients((allPrev: any[]) =>
+          allPrev.map((p: any) => (p.id === pid ? { ...p, pei: sourcePei } : p))
+        );
+        setClinicalRecords((prev: any[]) =>
+          prev.map((r: any) => (r.patientId === pid ? { ...r, pei: sourcePei } : r))
+        );
         console.error('Falha ao persistir atualizaÃ§Ã£o de PEI no prontuÃ¡rio:', error);
       }
     }
@@ -7072,12 +7249,22 @@ export default function App() {
 
   const handleDeleteHistoryItem = async (id: any) => {
     const item = history.find(h => h.id === id);
-    setHistory(prev => prev.filter(h => h.id !== id));
-    onAddActivityLog("ExclusÃ£o de Registro", `Registro de atividade "${safeDisplayValue(item?.title, 'selecionado')}" excluÃ­do do histÃ³rico.`, 'system');
     try {
-      await dataService.deleteHistoryItem(String(id));
+      const deleteResult = await dataService.deleteHistoryItem(String(id));
+      if (!deleteResult?.success) {
+        console.error('Falha ao excluir histórico no servidor:', deleteResult?.error || deleteResult?.warning);
+        return { success: false, error: deleteResult?.error || deleteResult?.warning };
+      }
+      setHistory(prev => prev.filter(h => h.id !== id));
+      void onAddActivityLog(
+        "ExclusÃ£o de Registro",
+        `Registro de atividade "${safeDisplayValue(item?.title, 'selecionado')}" excluÃ­do do histÃ³rico.`,
+        'system',
+      );
+      return { success: true };
     } catch (error) {
       console.error('Falha ao excluir histÃ³rico no servidor:', error);
+      return { success: false, error: String(error) };
     }
   };
   
@@ -7136,6 +7323,9 @@ export default function App() {
           const delResult = await dataService.deleteNote(String(note.id));
           if (!delResult?.success) {
             console.warn('[notes-share] falha ao remover cÃ³pia:', delResult);
+            setTherapistNotes(normalizeAndDecorateNotes(notesSnapshot));
+            alert(String(delResult?.error || 'Não foi possível persistir a remoção do compartilhamento.'));
+            return;
           }
         }
         onAddActivityLog(
@@ -7179,6 +7369,9 @@ export default function App() {
           const delResult = await dataService.deleteNote(String(existingCopy.id));
           if (!delResult?.success) {
             console.warn('[notes-share] falha ao remover compartilhamento:', delResult);
+            setTherapistNotes(normalizeAndDecorateNotes(notesSnapshot));
+            alert(String(delResult?.error || 'Não foi possível persistir a remoção do compartilhamento.'));
+            return;
           }
         }
         onAddActivityLog(

@@ -9383,13 +9383,12 @@ async function queryPatientsWithSchemaFallback(params: {
 }
 
 async function upsertPatientWithSchemaFallback(payload: Record<string, any>) {
-  let safePayload: Record<string, any> = cleanObject({ ...payload });
+  const safePayload: Record<string, any> = cleanObject({ ...payload });
   let selectColumns = PATIENT_MUTATION_SELECT
     .split(',')
     .map((column) => sanitizeString(column, 120))
     .filter(Boolean);
   let lastResult: { data: any; error: any } = { data: null, error: null };
-  let triedLegacyPendingStatus = false;
 
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const result = await supabase
@@ -9401,30 +9400,18 @@ async function upsertPatientWithSchemaFallback(payload: Record<string, any>) {
     if (!result.error) return result;
 
     const missingColumn = extractMissingColumnName(result.error);
-    if (!missingColumn) {
-      const message = extractSupabaseErrorMessage(result.error).toLowerCase();
-      if (
-        !triedLegacyPendingStatus &&
-        Object.prototype.hasOwnProperty.call(safePayload, 'status') &&
-        (sanitizeString(result.error?.code, 20) === '23514' || message.includes('check constraint'))
-      ) {
-        triedLegacyPendingStatus = true;
-        safePayload.status = 'pending';
-        console.warn('[Patients] status clinico pendente adaptado para schema legado.');
-        continue;
-      }
-      return result;
-    }
+    if (!missingColumn) return result;
 
+    // A missing response-only column may be omitted safely. A missing write
+    // column must fail closed: never acknowledge a patient mutation after
+    // silently dropping a field the user asked to persist.
     if (Object.prototype.hasOwnProperty.call(safePayload, missingColumn)) {
-      delete safePayload[missingColumn];
-      console.warn('[Patients] coluna opcional removida do payload de cadastro:', { missingColumn });
-      continue;
+      return result;
     }
 
     if (selectColumns.includes(missingColumn) && selectColumns.length > 1) {
       selectColumns = selectColumns.filter((column) => column !== missingColumn);
-      console.warn('[Patients] coluna opcional removida do retorno de cadastro:', { missingColumn });
+      console.warn('[Patients] coluna opcional removida apenas do retorno por schema legado:', { missingColumn });
       continue;
     }
 
@@ -27825,7 +27812,12 @@ async function startServer() {
             canViewSpecialtySettings && data?.specialty_settings && typeof data.specialty_settings === 'object'
               ? data.specialty_settings
               : {},
-          updatedAt: data?.updated_at || null
+          updatedAt: data?.updated_at || null,
+          revision: Number(data?.revision || 0) || 0,
+          sectionVersions:
+            data?.section_versions && typeof data.section_versions === 'object'
+              ? data.section_versions
+              : {}
         }
       });
     } catch (error: any) {
@@ -27892,9 +27884,20 @@ async function startServer() {
 
       const previous = await supabase
         .from('clinic_state')
-        .select('rooms, appointments, protocols, specialty_settings')
+        .select('rooms, appointments, protocols, specialty_settings, revision, section_versions')
         .eq('clinic_id', clinicId)
         .maybeSingle();
+      if (previous.error) {
+        const missingColumn = extractMissingColumnName(previous.error);
+        if (missingColumn === 'revision' || missingColumn === 'section_versions' || isMissingRelationError(previous.error)) {
+          return res.status(503).json({
+            success: false,
+            code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+            error: 'A migração de garantias de persistência ainda não foi aplicada no Supabase.'
+          });
+        }
+        throw previous.error;
+      }
 
       if (nextAppointments !== undefined) {
         const effectiveSpecialtySettings =
@@ -27968,31 +27971,72 @@ async function startServer() {
             )
           : undefined;
 
-      const payload = cleanObject({
-        clinic_id: clinicId,
-        rooms: nextRooms,
-        appointments: appointmentsForPayload,
-        protocols: nextProtocols,
-        specialty_settings: nextSpecialtySettings,
-        updated_by: actorId,
-        updated_at: new Date().toISOString()
+      const expectedSectionVersionsRaw =
+        req.body?.expectedSectionVersions && typeof req.body.expectedSectionVersions === 'object'
+          ? req.body.expectedSectionVersions
+          : {};
+      const expectedSectionVersions = cleanObject({
+        rooms: Number.isFinite(Number(expectedSectionVersionsRaw?.rooms)) ? Number(expectedSectionVersionsRaw.rooms) : undefined,
+        appointments: Number.isFinite(Number(expectedSectionVersionsRaw?.appointments)) ? Number(expectedSectionVersionsRaw.appointments) : undefined,
+        protocols: Number.isFinite(Number(expectedSectionVersionsRaw?.protocols)) ? Number(expectedSectionVersionsRaw.protocols) : undefined,
+        specialtySettings: Number.isFinite(Number(expectedSectionVersionsRaw?.specialtySettings)) ? Number(expectedSectionVersionsRaw.specialtySettings) : undefined,
+      });
+      const { data: persistenceResult, error } = await supabase.rpc('verto_save_clinic_state_sections', {
+        p_clinic_id: clinicId,
+        p_updated_by: isUuid(actorId) ? actorId : null,
+        p_expected_section_versions: expectedSectionVersions,
+        p_rooms: nextRooms !== undefined ? nextRooms : null,
+        p_appointments: appointmentsForPayload !== undefined ? appointmentsForPayload : null,
+        p_protocols: nextProtocols !== undefined ? nextProtocols : null,
+        p_specialty_settings: nextSpecialtySettings !== undefined ? nextSpecialtySettings : null,
+        p_idempotency_key: sanitizeString(
+          req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'],
+          260
+        ) || null,
       });
 
-      const { data, error } = await supabase
-        .from('clinic_state')
-        .upsert([payload], { onConflict: 'clinic_id' })
-        .select('clinic_id, rooms, appointments, protocols, specialty_settings, updated_at')
-        .single();
-
       if (error) {
-        if (String(error?.message || '').toLowerCase().includes('clinic_state')) {
-          return res.status(200).json({
+        const message = String(error?.message || '').toLowerCase();
+        if (sanitizeString(error?.code, 40) === '42883' || message.includes('verto_save_clinic_state_sections')) {
+          return res.status(503).json({
             success: false,
-            warning: 'Tabela clinic_state não existe. Rode a migração de ativação do Supabase.'
+            code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+            error: 'A migração de garantias de persistência ainda não foi aplicada no Supabase.'
           });
         }
         throw error;
       }
+      if (persistenceResult?.success === false && persistenceResult?.conflict === true) {
+        return res.status(409).json({
+          success: false,
+          code: 'CLINIC_STATE_CONCURRENT_EDIT',
+          conflict: true,
+          section: sanitizeString(persistenceResult?.section, 80),
+          revision: Number(persistenceResult?.revision || 0) || 0,
+          sectionVersions:
+            persistenceResult?.sectionVersions && typeof persistenceResult.sectionVersions === 'object'
+              ? persistenceResult.sectionVersions
+              : {},
+          error: 'Outra alteração foi persistida nesta mesma seção. Sua edição local foi preservada para reconciliação.'
+        });
+      }
+      const persistedState = persistenceResult?.data || {};
+      const data = {
+        clinic_id: persistedState?.clinicId || clinicId,
+        rooms: Array.isArray(persistedState?.rooms) ? persistedState.rooms : [],
+        appointments: Array.isArray(persistedState?.appointments) ? persistedState.appointments : [],
+        protocols: Array.isArray(persistedState?.protocols) ? persistedState.protocols : [],
+        specialty_settings:
+          persistedState?.specialtySettings && typeof persistedState.specialtySettings === 'object'
+            ? persistedState.specialtySettings
+            : {},
+        updated_at: persistedState?.updatedAt || new Date().toISOString(),
+        revision: Number(persistedState?.revision || 0) || 0,
+        section_versions:
+          persistedState?.sectionVersions && typeof persistedState.sectionVersions === 'object'
+            ? persistedState.sectionVersions
+            : {},
+      };
 
       if (nextAppointments !== undefined) {
         const mirroredAppointments = Array.isArray(data.appointments)
@@ -28113,7 +28157,9 @@ async function startServer() {
           appointments: Array.isArray(data.appointments) ? data.appointments : [],
           protocols: normalizeProtocolArrayForRoute(data.protocols),
           specialtySettings: data.specialty_settings && typeof data.specialty_settings === 'object' ? data.specialty_settings : {},
-          updatedAt: data.updated_at || null
+          updatedAt: data.updated_at || null,
+          revision: Number(data.revision || 0) || 0,
+          sectionVersions: data.section_versions || {}
         }
       });
     } catch (error) {
@@ -35011,6 +35057,11 @@ async function startServer() {
   app.post('/api/patients', checkAuth, requireClinicCapability('patient.create'), async (req: any, res) => {
     try {
       const context = req.authorizationContext as ResolvedClinicCapabilityContext;
+      const aggregateRecordPayloadRaw =
+        req.body?.recordPayload && typeof req.body.recordPayload === 'object' && !Array.isArray(req.body.recordPayload)
+          ? req.body.recordPayload
+          : null;
+      if (aggregateRecordPayloadRaw && !enforcePayloadLimit(req, res, 768 * 1024, 'Cadastro e prontuário do paciente')) return;
       const safeName = sanitizeString(req.body?.name || req.body?.nome, 160);
       const safeClinicId = sanitizeString(context.clinicId, 100);
       const demoClinicState = await fetchClinicDemoState(safeClinicId);
@@ -35058,6 +35109,7 @@ async function startServer() {
         req.body?.anamnesisData,
         req.body?.anamnesis_data,
         req.body?.anamnese,
+        aggregateRecordPayloadRaw,
       ].some((value) => value !== undefined && value !== null && String(value).trim() !== '');
       if (hasClinicalCreatePayload && !context.capabilities.has('clinical.record.view')) {
         return res.status(403).json({
@@ -35246,9 +35298,104 @@ async function startServer() {
         return sendBillingUpgradeRequired(res, activationCheck.payload);
       }
 
-      const { data, error } = await upsertPatientWithSchemaFallback(safeBody);
-      
-      if (error) throw error;
+      let data: any = null;
+      let recordPersisted = false;
+      let financialPlanSyncWarning: string | null = null;
+
+      if (aggregateRecordPayloadRaw) {
+        const patientIdForInsert = isUuid(sanitizeString(safeBody.id, 120))
+          ? sanitizeString(safeBody.id, 120)
+          : crypto.randomUUID();
+        const patientPayloadForAtomicInsert = { ...safeBody, id: patientIdForInsert };
+        const redactedRecordPayload = redactPatientRecordPayloadForCapabilities(
+          aggregateRecordPayloadRaw,
+          req.session.user,
+          context.capabilities,
+        );
+        const sanitizedRecordPayload = normalizePatientInsuranceEligibilityPayload(
+          sanitizeClinicalPayload(redactedRecordPayload) || {},
+        );
+        const encryptedRecordPayload = encryptJsonPayload(sanitizedRecordPayload);
+        const pseudonymSeed = [
+          sanitizeString(sanitizedRecordPayload?.cpf, 30),
+          sanitizeString(sanitizedRecordPayload?.email, 320),
+          sanitizePhone(sanitizedRecordPayload?.telefone) || '',
+        ].filter(Boolean).join('|') || patientIdForInsert;
+        const patientRecordRow = cleanObject({
+          patient_id: patientIdForInsert,
+          clinic_id: safeClinicId,
+          therapist_id: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+          pseudonym_id: `pt_${pseudonymizeValue(pseudonymSeed)}`,
+          payload_encrypted: encryptedRecordPayload || null,
+          payload_preview: cleanObject({
+            nome: sanitizeString(sanitizedRecordPayload?.nome || safeBody.name, 120),
+            nomeSocial: sanitizeString(sanitizedRecordPayload?.nomeSocial || safeBody.social_name, 120),
+            grupo: sanitizeString(sanitizedRecordPayload?.grupo || safeBody.patient_group, 60),
+            convenioNome: sanitizeString(sanitizedRecordPayload?.convenioNome || safeBody.insurance_name, 120),
+          }),
+          updated_at: new Date().toISOString(),
+        });
+        const aggregateMutation = await supabase.rpc('verto_create_patient_aggregate_atomic', {
+          p_patient: patientPayloadForAtomicInsert,
+          p_patient_record: patientRecordRow,
+        });
+        if (aggregateMutation.error) {
+          const message = String(aggregateMutation.error?.message || '').toLowerCase();
+          if (sanitizeString(aggregateMutation.error?.code, 40) === '42883' || message.includes('verto_create_patient_aggregate_atomic')) {
+            return res.status(503).json({
+              success: false,
+              code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+              error: 'A migração de garantias de persistência ainda não foi aplicada no Supabase.',
+            });
+          }
+          throw aggregateMutation.error;
+        }
+        if (aggregateMutation.data?.success === false) {
+          return res.status(409).json({
+            success: false,
+            code: 'PATIENT_ATOMIC_PERSISTENCE_REJECTED',
+            error: aggregateMutation.data?.error || 'O cadastro não foi persistido atomicamente.',
+          });
+        }
+        data = aggregateMutation.data?.data || patientPayloadForAtomicInsert;
+        recordPersisted = true;
+
+        if (
+          context.capabilities.has('finance.entries.manage') &&
+          Object.prototype.hasOwnProperty.call(aggregateRecordPayloadRaw, 'financialPlans')
+        ) {
+          const financialPlanSync = await persistPatientFinancialPlans({
+            patientId: patientIdForInsert,
+            clinicId: safeClinicId,
+            actorId: sanitizeString(req.session.user?.id, 120),
+            financialPlans: Array.isArray(aggregateRecordPayloadRaw.financialPlans)
+              ? aggregateRecordPayloadRaw.financialPlans
+              : [],
+          });
+          if (!financialPlanSync.success) {
+            financialPlanSyncWarning = sanitizeString(
+              financialPlanSync.warning || financialPlanSync.error || 'O plano financeiro permanecerá disponível no prontuário criptografado.',
+              500,
+            );
+          }
+        }
+      } else {
+        const mutation = await upsertPatientWithSchemaFallback(safeBody);
+        if (mutation.error) {
+          const missingColumn = extractMissingColumnName(mutation.error);
+          if (missingColumn && Object.prototype.hasOwnProperty.call(safeBody, missingColumn)) {
+            return res.status(503).json({
+              success: false,
+              code: 'PATIENT_PERSISTENCE_SCHEMA_MISMATCH',
+              field: missingColumn,
+              error: `O campo ${missingColumn} ainda não existe no schema ativo. Nenhum campo foi descartado silenciosamente.`,
+            });
+          }
+          throw mutation.error;
+        }
+        data = mutation.data;
+      }
+
       const clinicForSync = sanitizeString(
         (data as any)?.clinic_id || safeBody.clinic_id || currentClinicId(req.session.user),
         120
@@ -35266,7 +35413,13 @@ async function startServer() {
         content: `Paciente ${safeBody.name} foi salvo no sistema.`,
         type: 'management'
       });
-      res.json({ success: true, data, billing: billingSync });
+      res.json({
+        success: true,
+        data,
+        billing: billingSync,
+        recordPersisted,
+        ...(financialPlanSyncWarning ? { warning: financialPlanSyncWarning } : {}),
+      });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patients [POST]', error, {
         userId: sanitizeString(req.session?.user?.id, 120),
@@ -35795,7 +35948,15 @@ async function startServer() {
         req.body?.anamnesis_data,
         req.body?.anamnese,
       ].some((value) => value !== undefined);
+      const aggregateRecordPayloadRaw =
+        req.body?.recordPayload && typeof req.body.recordPayload === 'object' && !Array.isArray(req.body.recordPayload)
+          ? req.body.recordPayload
+          : null;
+      if (aggregateRecordPayloadRaw && !enforcePayloadLimit(req, res, 768 * 1024, 'Atualização e prontuário do paciente')) return;
       if (hasClinicalPatch && !context.capabilities.has('clinical.record.view')) {
+        return res.status(403).json({ success: false, error: 'CLINICAL_RECORD_CAPABILITY_REQUIRED' });
+      }
+      if (aggregateRecordPayloadRaw && !context.capabilities.has('clinical.record.view')) {
         return res.status(403).json({ success: false, error: 'CLINICAL_RECORD_CAPABILITY_REQUIRED' });
       }
       if (rawTherapistId !== undefined && !canAssignTherapist) {
@@ -36092,8 +36253,118 @@ async function startServer() {
 
       let updatedPatient: any = null;
       let error: any = null;
-      let safePatientUpdates: Record<string, any> = { ...updates };
-      while (Object.keys(safePatientUpdates).length > 0) {
+      const safePatientUpdates: Record<string, any> = { ...updates };
+
+      if (aggregateRecordPayloadRaw) {
+        let aggregateScopeQuery = supabase
+          .from('patients')
+          .select('id, clinic_id, therapist_id, status, email')
+          .eq('id', req.params.id)
+          .eq('is_active', true)
+          .is('deleted_at', null);
+        if (!hasGlobalClinicAccess(req.session.user) && scopedClinicId) {
+          aggregateScopeQuery = aggregateScopeQuery.eq('clinic_id', scopedClinicId);
+        }
+        if (explicitDemoUser) aggregateScopeQuery = aggregateScopeQuery.eq('is_demo', true);
+        if (role === 'therapist') {
+          aggregateScopeQuery = aggregateScopeQuery.eq('therapist_id', sanitizeString(req.session.user?.id, 120));
+        }
+        const { data: aggregatePatient, error: aggregateScopeError } = await aggregateScopeQuery.maybeSingle();
+        if (aggregateScopeError) throw aggregateScopeError;
+        if (!aggregatePatient?.id) {
+          return res.status(404).json({ success: false, error: 'Paciente não encontrado no escopo da clínica.' });
+        }
+
+        const aggregateClinicId = sanitizeString(aggregatePatient?.clinic_id || scopedClinicId, 120);
+        if (!isUuid(aggregateClinicId)) {
+          return res.status(400).json({ success: false, error: 'Clínica inválida para persistência do paciente.' });
+        }
+        const redactedRecordPayload = redactPatientRecordPayloadForCapabilities(
+          aggregateRecordPayloadRaw,
+          req.session.user,
+          context.capabilities,
+        );
+        const sanitizedRecordPatch = sanitizeClinicalPayload(redactedRecordPayload);
+        const existingRecordResult = await supabase
+          .from('patient_records')
+          .select('payload_encrypted')
+          .eq('patient_id', req.params.id)
+          .eq('clinic_id', aggregateClinicId)
+          .maybeSingle();
+        if (existingRecordResult.error) {
+          if (isMissingRelationError(existingRecordResult.error)) {
+            return res.status(503).json({
+              success: false,
+              code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+              error: 'A persistência criptografada do prontuário ainda não está disponível no banco.'
+            });
+          }
+          throw existingRecordResult.error;
+        }
+        const existingEncryptedPayload = String(existingRecordResult.data?.payload_encrypted || '').trim();
+        const existingRecordPayload = decryptJsonPayload(existingEncryptedPayload) || {};
+        if (existingEncryptedPayload && !existingRecordPayload) {
+          return res.status(409).json({
+            success: false,
+            error: 'Não foi possível descriptografar o prontuário existente. Nenhum dado foi sobrescrito.'
+          });
+        }
+        const mergedRecordPayload = normalizePatientInsuranceEligibilityPayload(sanitizeClinicalPayload(cleanObject({
+          ...existingRecordPayload,
+          ...sanitizedRecordPatch
+        })) || {});
+        const encryptedRecordPayload = encryptJsonPayload(mergedRecordPayload);
+        const pseudonymSeed = [
+          sanitizeString(mergedRecordPayload?.cpf, 30),
+          sanitizeString(mergedRecordPayload?.email, 320),
+          sanitizePhone(mergedRecordPayload?.telefone) || ''
+        ].filter(Boolean).join('|') || sanitizeString(req.params.id, 120);
+        const patientRecordRow = cleanObject({
+          patient_id: sanitizeString(req.params.id, 120),
+          clinic_id: aggregateClinicId,
+          therapist_id: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+          pseudonym_id: `pt_${pseudonymizeValue(pseudonymSeed)}`,
+          payload_encrypted: encryptedRecordPayload || null,
+          payload_preview: cleanObject({
+            nome: sanitizeString(mergedRecordPayload?.nome, 120),
+            nomeSocial: sanitizeString(mergedRecordPayload?.nomeSocial, 120),
+            grupo: sanitizeString(mergedRecordPayload?.grupo, 60),
+            convenioNome: sanitizeString(mergedRecordPayload?.convenioNome, 120)
+          }),
+          updated_at: new Date().toISOString()
+        });
+        const aggregateMutation = await supabase.rpc('verto_update_patient_aggregate_atomic', {
+          p_patient_id: sanitizeString(req.params.id, 120),
+          p_clinic_id: aggregateClinicId,
+          p_patient_patch: safePatientUpdates,
+          p_patient_record: patientRecordRow,
+          p_expected_record_ciphertext: existingEncryptedPayload || null,
+          p_idempotency_key: sanitizeString(
+            req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'],
+            260
+          ) || null
+        });
+        if (aggregateMutation.error) {
+          const message = String(aggregateMutation.error?.message || '').toLowerCase();
+          if (sanitizeString(aggregateMutation.error?.code, 40) === '42883' || message.includes('verto_update_patient_aggregate_atomic')) {
+            return res.status(503).json({
+              success: false,
+              code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+              error: 'A migração de garantias de persistência ainda não foi aplicada no Supabase.'
+            });
+          }
+          throw aggregateMutation.error;
+        }
+        if (aggregateMutation.data?.success === false) {
+          return res.status(409).json({
+            success: false,
+            conflict: aggregateMutation.data?.conflict === true,
+            code: sanitizeString(aggregateMutation.data?.code, 80) || 'PATIENT_ATOMIC_PERSISTENCE_REJECTED',
+            error: aggregateMutation.data?.error || 'A alteração não foi persistida atomicamente.'
+          });
+        }
+        updatedPatient = aggregateMutation.data?.data || aggregatePatient;
+      } else if (Object.keys(safePatientUpdates).length > 0) {
         let patientUpdateQuery = supabase
           .from('patients')
           .update(safePatientUpdates)
@@ -36114,12 +36385,18 @@ async function startServer() {
           .maybeSingle();
         updatedPatient = result.data;
         error = result.error;
-        if (!error) break;
-        const missingColumn = extractMissingColumnName(error);
-        if (!missingColumn || !(missingColumn in safePatientUpdates)) break;
-        delete safePatientUpdates[missingColumn];
-      }
-      if (Object.keys(safePatientUpdates).length === 0 && error) {
+        if (error) {
+          const missingColumn = extractMissingColumnName(error);
+          if (missingColumn) {
+            return res.status(503).json({
+              success: false,
+              code: 'PATIENT_PERSISTENCE_SCHEMA_MISMATCH',
+              field: missingColumn,
+              error: `O campo ${missingColumn} ainda não existe no schema ativo. Nenhum campo foi descartado silenciosamente.`
+            });
+          }
+        }
+      } else {
         let patientSelectQuery = supabase
           .from('patients')
           .select('id, clinic_id, status, email, therapist_id')
@@ -36168,24 +36445,27 @@ async function startServer() {
             ? 'waiting_treatment'
             : nextPatientStatus || 'active';
 
-        let safeUserPatch: Record<string, any> = cleanObject({
+        const safeUserPatch: Record<string, any> = cleanObject({
           status: mappedUserStatus,
           clinic_id: hasClinicLink ? sanitizeString(updatedPatient?.clinic_id, 120) : null,
           updated_at: new Date().toISOString()
         });
-
-        while (Object.keys(safeUserPatch).length > 0) {
-          const { error: userPatchError } = await supabase
-            .from('users')
-            .update(safeUserPatch)
-            .eq('email', patientEmail)
-            .eq('role', 'patient');
-          if (!userPatchError) break;
+        const { error: userPatchError } = await supabase
+          .from('users')
+          .update(safeUserPatch)
+          .eq('email', patientEmail)
+          .eq('role', 'patient');
+        if (userPatchError) {
           const missingColumn = extractMissingColumnName(userPatchError);
-          if (!missingColumn || !(missingColumn in safeUserPatch)) {
-            throw userPatchError;
+          if (missingColumn) {
+            return res.status(503).json({
+              success: false,
+              code: 'PATIENT_USER_PERSISTENCE_SCHEMA_MISMATCH',
+              field: missingColumn,
+              error: `O schema de usuários não possui o campo ${missingColumn}. A alteração não foi reportada como concluída.`
+            });
           }
-          delete safeUserPatch[missingColumn];
+          throw userPatchError;
         }
       }
 
@@ -36358,27 +36638,43 @@ async function startServer() {
         updated_at: new Date().toISOString()
       });
 
-      const writeResult = await writePatientRecordSafely({
-        patientId,
-        clinicId,
-        sessionUser: req.session.user,
-        row
+      // Commit the read/merge/write under the same row locks used by aggregate
+      // patient edits. The expected ciphertext prevents silent last-write-wins.
+      const writeResult = await supabase.rpc('verto_update_patient_aggregate_atomic', {
+        p_patient_id: patientId,
+        p_clinic_id: clinicId,
+        p_patient_patch: {},
+        p_patient_record: row,
+        p_expected_record_ciphertext: existingEncryptedPayload || null,
+        p_idempotency_key: sanitizeString(
+          req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'],
+          260
+        ) || null
       });
 
-      if (!writeResult.success) {
-        const error = writeResult.error;
-        if (String(error?.message || '').toLowerCase().includes('patient_records')) {
-          return res.status(200).json({
+      if (writeResult.error) {
+        const message = String(writeResult.error?.message || '').toLowerCase();
+        if (sanitizeString(writeResult.error?.code, 40) === '42883' || message.includes('verto_update_patient_aggregate_atomic')) {
+          return res.status(503).json({
             success: false,
-            warning: 'Tabela patient_records ainda não existe. Execute o SQL de segurança para persistência criptografada.'
+            code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+            error: 'A migração de garantias de persistência ainda não foi aplicada no Supabase.'
           });
         }
-        logRouteDbError('/api/patient-records/:patientId [POST]', error, {
+        logRouteDbError('/api/patient-records/:patientId [POST]', writeResult.error, {
           patientId,
           clinicId,
           actorId: sanitizeString(req.session.user?.id, 120)
         });
-        throw error;
+        throw writeResult.error;
+      }
+      if (writeResult.data?.success === false) {
+        return res.status(409).json({
+          success: false,
+          conflict: writeResult.data?.conflict === true,
+          code: sanitizeString(writeResult.data?.code, 80) || 'PATIENT_RECORD_CONCURRENT_EDIT',
+          error: writeResult.data?.error || 'O prontuário foi alterado em outra sessão. A versão local foi preservada.'
+        });
       }
 
       let financialPlanSyncWarning: string | null = null;
@@ -37768,34 +38064,17 @@ async function startServer() {
     clinicId?: string | null;
     payload: Record<string, any>;
   }) => {
-    let candidate = cleanObject(params.payload);
-    const triedMissingColumns = new Set<string>();
-
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      if (Object.keys(candidate).length === 0) {
-        return { error: { message: 'Nenhum campo seguro disponível para arquivamento do paciente.' }, payload: candidate };
-      }
-
-      let query = supabase
-        .from('patients')
-        .update(candidate)
-        .eq('id', params.patientId);
-      if (params.clinicId) query = query.eq('clinic_id', params.clinicId);
-      const { error } = await query;
-      if (!error) return { error: null, payload: candidate };
-
-      const missingColumn = extractMissingColumnName(error);
-      if (!missingColumn || triedMissingColumns.has(missingColumn) || !(missingColumn in candidate)) {
-        return { error, payload: candidate };
-      }
-
-      triedMissingColumns.add(missingColumn);
-      const nextCandidate = { ...candidate };
-      delete nextCandidate[missingColumn];
-      candidate = nextCandidate;
+    const candidate = cleanObject(params.payload);
+    if (Object.keys(candidate).length === 0) {
+      return { error: { message: 'Nenhum campo seguro disponível para arquivamento do paciente.' }, payload: candidate };
     }
-
-    return { error: { message: 'Falha ao atualizar paciente após fallback de schema.' }, payload: candidate };
+    let query = supabase
+      .from('patients')
+      .update(candidate)
+      .eq('id', params.patientId);
+    if (params.clinicId) query = query.eq('clinic_id', params.clinicId);
+    const { error } = await query;
+    return { error: error || null, payload: candidate };
   };
 
   app.delete('/api/patients/:id', checkAuth, requireClinicCapability('patient.archive'), async (req: any, res) => {
