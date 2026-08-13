@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
@@ -268,6 +268,7 @@ type TissBillingBatchDraftRow = {
 };
 
 type TissPreGuideTabProps = {
+  workspaceScopeKey?: string;
   from: string;
   to: string;
   patientId?: string;
@@ -835,6 +836,7 @@ function EditorField({
 }
 
 export function TissPreGuideTab({
+  workspaceScopeKey = "",
   from,
   to,
   patientId = "",
@@ -933,6 +935,20 @@ export function TissPreGuideTab({
   const [officialGuideAppealMode, setOfficialGuideAppealMode] = useState(false);
   const [revenueCycleEvents, setRevenueCycleEvents] = useState<TissRevenueCycleEventRow[]>([]);
   const [revenueCycleEventsLoading, setRevenueCycleEventsLoading] = useState(false);
+  const rowsRequestSequenceRef = useRef(0);
+  const coverageRequestSequenceRef = useRef(0);
+  const xmlDraftsRequestSequenceRef = useRef(0);
+  const batchDraftsRequestSequenceRef = useRef(0);
+  const officialDocumentsRequestSequenceRef = useRef(0);
+  const rowsInFlightRef = useRef(new Map<string, Promise<any>>());
+  const coverageInFlightRef = useRef(new Map<string, Promise<any>>());
+  const xmlDraftsInFlightRef = useRef(new Map<string, Promise<any>>());
+  const batchDraftsInFlightRef = useRef(new Map<string, Promise<any>>());
+  const officialDocumentsInFlightRef = useRef(new Map<string, Promise<any>>());
+  const xmlDraftsLoadedKeyRef = useRef("");
+  const batchDraftsLoadedKeyRef = useRef("");
+  const officialDocumentsLoadedKeyRef = useRef("");
+  const [rowsRefreshVersion, setRowsRefreshVersion] = useState(0);
 
   useEffect(() => {
     if (initialPanel === "batchDrafts" || initialPanel === "xmlDrafts") {
@@ -958,6 +974,41 @@ export function TissPreGuideTab({
   const stalePreGuides = Number(coverage?.stalePreGuides || 0);
   const eligibleForPreGuide = Number(coverage?.eligibleForPreGuide || 0);
   const competenceMonth = `${from.slice(0, 7)}-01`;
+  const listScopeKey = useMemo(
+    () => JSON.stringify([workspaceScopeKey, from, to, patientId, professionalId, payerId]),
+    [workspaceScopeKey, from, patientId, payerId, professionalId, to]
+  );
+  const previousListScopeKeyRef = useRef(listScopeKey);
+  const auxiliaryScopeKey = useMemo(
+    () => JSON.stringify([workspaceScopeKey, competenceMonth, payerId]),
+    [workspaceScopeKey, competenceMonth, payerId]
+  );
+
+  useEffect(() => {
+    rowsRequestSequenceRef.current += 1;
+    coverageRequestSequenceRef.current += 1;
+    xmlDraftsRequestSequenceRef.current += 1;
+    batchDraftsRequestSequenceRef.current += 1;
+    officialDocumentsRequestSequenceRef.current += 1;
+    rowsInFlightRef.current.clear();
+    coverageInFlightRef.current.clear();
+    xmlDraftsInFlightRef.current.clear();
+    batchDraftsInFlightRef.current.clear();
+    officialDocumentsInFlightRef.current.clear();
+    xmlDraftsLoadedKeyRef.current = "";
+    batchDraftsLoadedKeyRef.current = "";
+    officialDocumentsLoadedKeyRef.current = "";
+    setRows([]);
+    setKpis({});
+    setCoverage(null);
+    setTotal(0);
+    setDetail(null);
+    setXmlDrafts([]);
+    setBatchDrafts([]);
+    setOfficialDocuments([]);
+    setSelectedOfficialPreGuideIds([]);
+    setError("");
+  }, [workspaceScopeKey]);
   const validRows = useMemo(() => rows.filter((row) => String(row.status || "") === "valid"), [rows]);
   const visibleXmlPayers = useMemo(() => {
     const byId = new Map<string, string>();
@@ -1074,6 +1125,7 @@ export function TissPreGuideTab({
   }, [eligibleOfficialRowIdKey, eligibleOfficialRows]);
 
   const loadRows = useCallback(async (overrides: { page?: number; quickFilter?: QuickFilter | "" } = {}) => {
+    const requestSequence = ++rowsRequestSequenceRef.current;
     setLoading(true);
     setError("");
     try {
@@ -1087,20 +1139,18 @@ export function TissPreGuideTab({
         page: overrides.page ?? page,
         pageSize: PAGE_SIZE,
       };
-      const [result, coverageResult] = await Promise.all([
-        dataService.getTissPreGuides(query),
-        dataService.getTissPreGuideCoverage({
-          from: query.from,
-          to: query.to,
-          patientId,
-          professionalId,
-          payerId,
-          limit: 2000,
-        }),
-      ]);
-      if (coverageResult?.success) {
-        setCoverage(coverageResult.coverage || coverageResult.data || null);
+      const requestKey = JSON.stringify(query);
+      let request = rowsInFlightRef.current.get(requestKey);
+      if (!request) {
+        request = dataService.getTissPreGuides(query);
+        rowsInFlightRef.current.set(requestKey, request);
+        const clearRequest = () => {
+          if (rowsInFlightRef.current.get(requestKey) === request) rowsInFlightRef.current.delete(requestKey);
+        };
+        void request.then(clearRequest, clearRequest);
       }
+      const result = await request;
+      if (requestSequence !== rowsRequestSequenceRef.current) return;
       if (!result?.success) {
         setRows([]);
         setKpis({});
@@ -1111,66 +1161,172 @@ export function TissPreGuideTab({
       setRows(Array.isArray(result.data) ? result.data : []);
       setKpis(result.kpis || {});
       setTotal(Number(result.total || 0));
+    } catch {
+      if (requestSequence === rowsRequestSequenceRef.current) {
+        setError("Não foi possível carregar as Pré-guias TISS agora.");
+      }
     } finally {
-      setLoading(false);
+      if (requestSequence === rowsRequestSequenceRef.current) setLoading(false);
     }
   }, [from, page, patientId, payerId, professionalId, quickFilter, to]);
 
-  const loadXmlDrafts = useCallback(async () => {
+  const loadCoverage = useCallback(async () => {
+    const requestSequence = ++coverageRequestSequenceRef.current;
+    try {
+      const query = {
+        from: toApiDate(from),
+        to: toApiDate(to, true),
+        patientId,
+        professionalId,
+        payerId,
+        limit: 2000,
+      };
+      const requestKey = JSON.stringify(query);
+      let request = coverageInFlightRef.current.get(requestKey);
+      if (!request) {
+        request = dataService.getTissPreGuideCoverage(query);
+        coverageInFlightRef.current.set(requestKey, request);
+        const clearRequest = () => {
+          if (coverageInFlightRef.current.get(requestKey) === request) coverageInFlightRef.current.delete(requestKey);
+        };
+        void request.then(clearRequest, clearRequest);
+      }
+      const result = await request;
+      if (requestSequence !== coverageRequestSequenceRef.current) return;
+      setCoverage(result?.success ? result.coverage || result.data || null : null);
+    } catch {
+      if (requestSequence === coverageRequestSequenceRef.current) setCoverage(null);
+    }
+  }, [from, patientId, payerId, professionalId, to]);
+
+  const loadXmlDrafts = useCallback(async (force = false) => {
+    if (!force && xmlDraftsLoadedKeyRef.current === auxiliaryScopeKey) return;
+    const requestSequence = ++xmlDraftsRequestSequenceRef.current;
+    if (xmlDraftsLoadedKeyRef.current !== auxiliaryScopeKey) setXmlDrafts([]);
     setXmlDraftsLoading(true);
     try {
-      const result = await dataService.getTissXmlDrafts({
+      const query = {
         payerId,
         competenceMonth,
         page: 1,
         pageSize: 20,
-      });
-      setXmlDrafts(result?.success && Array.isArray(result.data) ? result.data : []);
+      };
+      let request = xmlDraftsInFlightRef.current.get(auxiliaryScopeKey);
+      if (!request) {
+        request = dataService.getTissXmlDrafts(query);
+        xmlDraftsInFlightRef.current.set(auxiliaryScopeKey, request);
+        const clearRequest = () => {
+          if (xmlDraftsInFlightRef.current.get(auxiliaryScopeKey) === request) xmlDraftsInFlightRef.current.delete(auxiliaryScopeKey);
+        };
+        void request.then(clearRequest, clearRequest);
+      }
+      const result = await request;
+      if (requestSequence !== xmlDraftsRequestSequenceRef.current) return;
+      if (result?.success && Array.isArray(result.data)) {
+        setXmlDrafts(result.data);
+        xmlDraftsLoadedKeyRef.current = auxiliaryScopeKey;
+      } else {
+        setXmlDrafts([]);
+      }
     } finally {
-      setXmlDraftsLoading(false);
+      if (requestSequence === xmlDraftsRequestSequenceRef.current) setXmlDraftsLoading(false);
     }
-  }, [competenceMonth, payerId]);
+  }, [auxiliaryScopeKey, competenceMonth, payerId]);
 
-  const loadOfficialDocuments = useCallback(async () => {
+  const loadOfficialDocuments = useCallback(async (force = false) => {
+    if (!force && officialDocumentsLoadedKeyRef.current === auxiliaryScopeKey) return;
+    const requestSequence = ++officialDocumentsRequestSequenceRef.current;
+    if (officialDocumentsLoadedKeyRef.current !== auxiliaryScopeKey) setOfficialDocuments([]);
     setOfficialDocumentsLoading(true);
     try {
-      const result = await dataService.listTissOfficialDocuments({
+      const query = {
         payerId,
         competenceMonth,
         page: 1,
         pageSize: 20,
-      });
-      setOfficialDocuments(result?.success && Array.isArray(result.data) ? result.data : []);
+      };
+      let request = officialDocumentsInFlightRef.current.get(auxiliaryScopeKey);
+      if (!request) {
+        request = dataService.listTissOfficialDocuments(query);
+        officialDocumentsInFlightRef.current.set(auxiliaryScopeKey, request);
+        const clearRequest = () => {
+          if (officialDocumentsInFlightRef.current.get(auxiliaryScopeKey) === request) officialDocumentsInFlightRef.current.delete(auxiliaryScopeKey);
+        };
+        void request.then(clearRequest, clearRequest);
+      }
+      const result = await request;
+      if (requestSequence !== officialDocumentsRequestSequenceRef.current) return;
+      if (result?.success && Array.isArray(result.data)) {
+        setOfficialDocuments(result.data);
+        officialDocumentsLoadedKeyRef.current = auxiliaryScopeKey;
+      } else {
+        setOfficialDocuments([]);
+      }
     } finally {
-      setOfficialDocumentsLoading(false);
+      if (requestSequence === officialDocumentsRequestSequenceRef.current) setOfficialDocumentsLoading(false);
     }
-  }, [competenceMonth, payerId]);
+  }, [auxiliaryScopeKey, competenceMonth, payerId]);
 
-  const loadBatchDrafts = useCallback(async () => {
+  const loadBatchDrafts = useCallback(async (force = false) => {
+    if (!force && batchDraftsLoadedKeyRef.current === auxiliaryScopeKey) return;
+    const requestSequence = ++batchDraftsRequestSequenceRef.current;
+    if (batchDraftsLoadedKeyRef.current !== auxiliaryScopeKey) setBatchDrafts([]);
     setBatchDraftsLoading(true);
     try {
-      const result = await dataService.getTissBillingBatchDrafts({
+      const query = {
         payerId,
         competenceMonth,
         page: 1,
         pageSize: 20,
-      });
-      setBatchDrafts(result?.success && Array.isArray(result.data) ? result.data : []);
+      };
+      let request = batchDraftsInFlightRef.current.get(auxiliaryScopeKey);
+      if (!request) {
+        request = dataService.getTissBillingBatchDrafts(query);
+        batchDraftsInFlightRef.current.set(auxiliaryScopeKey, request);
+        const clearRequest = () => {
+          if (batchDraftsInFlightRef.current.get(auxiliaryScopeKey) === request) batchDraftsInFlightRef.current.delete(auxiliaryScopeKey);
+        };
+        void request.then(clearRequest, clearRequest);
+      }
+      const result = await request;
+      if (requestSequence !== batchDraftsRequestSequenceRef.current) return;
+      if (result?.success && Array.isArray(result.data)) {
+        setBatchDrafts(result.data);
+        batchDraftsLoadedKeyRef.current = auxiliaryScopeKey;
+      } else {
+        setBatchDrafts([]);
+      }
     } finally {
-      setBatchDraftsLoading(false);
+      if (requestSequence === batchDraftsRequestSequenceRef.current) setBatchDraftsLoading(false);
     }
-  }, [competenceMonth, payerId]);
+  }, [auxiliaryScopeKey, competenceMonth, payerId]);
 
   useEffect(() => {
+    const scopeChanged = previousListScopeKeyRef.current !== listScopeKey;
+    if (scopeChanged) {
+      previousListScopeKeyRef.current = listScopeKey;
+      rowsRequestSequenceRef.current += 1;
+      if (page !== 1) {
+        setPage(1);
+        return;
+      }
+    }
     void loadRows();
-    void loadXmlDrafts();
-    void loadBatchDrafts();
-    void loadOfficialDocuments();
-  }, [loadRows, loadXmlDrafts, loadBatchDrafts, loadOfficialDocuments]);
+  }, [listScopeKey, loadRows, page, quickFilter, rowsRefreshVersion]);
 
   useEffect(() => {
-    setPage(1);
-  }, [from, patientId, payerId, professionalId, to]);
+    void loadCoverage();
+  }, [loadCoverage]);
+
+  useEffect(() => {
+    void loadOfficialDocuments();
+  }, [loadOfficialDocuments]);
+
+  useEffect(() => {
+    if (!internalToolsOpen) return;
+    if (activePanel === "xmlDrafts") void loadXmlDrafts();
+    else void loadBatchDrafts();
+  }, [activePanel, internalToolsOpen, loadBatchDrafts, loadXmlDrafts]);
 
   const openDetail = async (row: TissPreGuideRow) => {
     if (!row.appointmentId) return;
@@ -1219,7 +1375,8 @@ export function TissPreGuideTab({
         if (eventsResult?.success && Array.isArray(eventsResult.data)) setRevenueCycleEvents(eventsResult.data);
       }
       setMessage(result.message || "Pré-guia revalidada com dados globais atualizados.");
-      await loadRows();
+      setRowsRefreshVersion((current) => current + 1);
+      void loadCoverage();
     } finally {
       setRevalidatingId("");
     }
@@ -1265,7 +1422,8 @@ export function TissPreGuideTab({
       }
       setQuickFilter("");
       setPage(1);
-      await loadRows({ page: 1, quickFilter: "" });
+      setRowsRefreshVersion((current) => current + 1);
+      void loadCoverage();
     } finally {
       setPeriodRevalidating(false);
     }
@@ -1309,8 +1467,8 @@ export function TissPreGuideTab({
       setActivePanel("xmlDrafts");
       setInternalToolsOpen(true);
       setMessage(result.message || "XML TISS em rascunho gerado para conferência interna.");
-      await loadXmlDrafts();
-      await loadBatchDrafts();
+      batchDraftsLoadedKeyRef.current = "";
+      await loadXmlDrafts(true);
     } finally {
       setXmlDraftGenerating(false);
     }
@@ -1418,7 +1576,7 @@ export function TissPreGuideTab({
       setCreatedOfficialDocument(result.data);
       setCreatedXmlDraft(null);
       setMessage(result.message || "Lote XML validado com sucesso. Nenhum dado foi enviado automaticamente à operadora.");
-      await Promise.all([loadRows(), loadOfficialDocuments()]);
+      await Promise.all([loadRows(), loadOfficialDocuments(true)]);
     } finally {
       setOfficialDocumentGenerating(false);
     }
@@ -1506,7 +1664,6 @@ export function TissPreGuideTab({
       setOfficialTrackingAction(null);
       setOfficialTrackingDocument(null);
       setMessage(result.message || "Envio do lote XML registrado.");
-      await loadOfficialDocuments();
     } finally {
       setOfficialTrackingSaving(false);
     }
@@ -1531,7 +1688,6 @@ export function TissPreGuideTab({
       setOfficialTrackingAction(null);
       setOfficialTrackingDocument(null);
       setMessage(result.message || "Retorno da operadora registrado.");
-      await loadOfficialDocuments();
     } finally {
       setOfficialTrackingSaving(false);
     }
@@ -1578,7 +1734,6 @@ export function TissPreGuideTab({
       setOfficialGuideTrackingEdit(null);
       setOfficialGuideAppealMode(false);
       setMessage(result.message || "Acompanhamento da guia atualizado.");
-      await loadOfficialDocuments();
     } finally {
       setOfficialGuideTrackingSaving(false);
     }
@@ -1617,7 +1772,7 @@ export function TissPreGuideTab({
       setActivePanel("batchDrafts");
       setInternalToolsOpen(true);
       setMessage(result.message || "Lote rascunho criado para conferência interna. Nenhum dado foi enviado à operadora.");
-      await Promise.all([loadRows(), loadBatchDrafts()]);
+      await Promise.all([loadRows(), loadBatchDrafts(true)]);
     } finally {
       setBatchDraftCreating(false);
     }
@@ -1648,7 +1803,7 @@ export function TissPreGuideTab({
         return;
       }
       setMessage(result.message || "Lote rascunho cancelado. Nenhum dado havia sido enviado à operadora.");
-      await Promise.all([loadRows(), loadBatchDrafts()]);
+      await Promise.all([loadRows(), loadBatchDrafts(true)]);
       if (batchDraftDetail?.id === batch.id) setBatchDraftDetail(result.data || null);
     } finally {
       setBatchDraftCancellingId("");
@@ -2472,7 +2627,7 @@ export function TissPreGuideTab({
           </div>
           <button
             type="button"
-            onClick={() => void loadOfficialDocuments()}
+            onClick={() => void loadOfficialDocuments(true)}
             disabled={officialDocumentsLoading}
             className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 disabled:opacity-60"
           >
@@ -2616,7 +2771,7 @@ export function TissPreGuideTab({
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => void loadBatchDrafts()}
+                onClick={() => void loadBatchDrafts(true)}
                 disabled={batchDraftsLoading}
                 className="inline-flex items-center gap-2 rounded-md border border-cyan-200 bg-white px-3 py-2 text-sm text-cyan-800 hover:bg-cyan-100 disabled:opacity-60"
               >
@@ -2771,7 +2926,7 @@ export function TissPreGuideTab({
             <div className="text-sm font-semibold text-slate-800">Rascunhos XML TISS</div>
             <div className="mt-0.5 text-xs text-slate-500">Prévia XML para conferência interna. Não enviado à operadora.</div>
           </div>
-          <button type="button" onClick={() => void loadXmlDrafts()} disabled={xmlDraftsLoading} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 disabled:opacity-60">
+          <button type="button" onClick={() => void loadXmlDrafts(true)} disabled={xmlDraftsLoading} className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700 disabled:opacity-60">
             {xmlDraftsLoading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
             Atualizar rascunhos
           </button>

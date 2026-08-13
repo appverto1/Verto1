@@ -53,6 +53,7 @@ type LaunchRequest = {
 } | null;
 
 type Props = {
+  workspaceScopeKey?: string;
   activeSection: string;
   month: string;
   patients: any[];
@@ -205,6 +206,7 @@ const StatusBadge = ({ status }: { status: PatientFinancialStatus }) => (
 );
 
 export function PatientFinanceWorkspace({
+  workspaceScopeKey = '',
   activeSection,
   month,
   patients,
@@ -252,6 +254,7 @@ export function PatientFinanceWorkspace({
   const [policy, setPolicy] = useState<any>(null);
   const [policySaving, setPolicySaving] = useState(false);
   const [sendingReminderChargeId, setSendingReminderChargeId] = useState('');
+  const [openingDocumentKey, setOpeningDocumentKey] = useState('');
 
   const canManagePolicy = capabilities instanceof Set
     ? capabilities.has('finance.entries.manage')
@@ -263,6 +266,10 @@ export function PatientFinanceWorkspace({
 
   useEffect(() => {
     let cancelled = false;
+    setLedger(emptyLedger);
+    setPolicy(null);
+    setSelectedChargeId('');
+    setSelectedAppointmentIds([]);
     setLoading(true);
     setLoadError('');
     dataService.getPatientFinanceLedger(month).then((result: any) => {
@@ -281,7 +288,7 @@ export function PatientFinanceWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [month]);
+  }, [month, workspaceScopeKey]);
 
   const appointmentRows = useMemo(() => buildPatientFinancialAppointmentRows({
     appointments: ledger.appointments,
@@ -607,6 +614,45 @@ export function PatientFinanceWorkspace({
     onToast?.(result?.message || 'Lembrete financeiro enviado.', 'success');
   };
 
+  const openFinancialDocument = async (transaction: any, kind: 'proof' | 'receipt') => {
+    const transactionId = String(transaction?.id || '').trim();
+    if (!transactionId) return;
+    const documentKey = `${transactionId}:${kind}`;
+    if (openingDocumentKey) return;
+    const previewWindow = window.open('', '_blank');
+    if (previewWindow) previewWindow.opener = null;
+    setOpeningDocumentKey(documentKey);
+    try {
+      const result = await dataService.getPatientFinanceTransactionDocument(transactionId, kind);
+      const documentUrl = String(result?.data?.url || '').trim();
+      if (!result?.success || !documentUrl) {
+        previewWindow?.close();
+        onToast?.(result?.error || 'Não foi possível abrir o documento financeiro.', 'error');
+        return;
+      }
+      let targetUrl = documentUrl;
+      if (/^data:/i.test(documentUrl)) {
+        const documentBlob = await fetch(documentUrl).then((response) => response.blob());
+        targetUrl = URL.createObjectURL(documentBlob);
+        window.setTimeout(() => URL.revokeObjectURL(targetUrl), 60_000);
+      }
+      if (previewWindow) {
+        previewWindow.location.replace(targetUrl);
+      } else {
+        const anchor = document.createElement('a');
+        anchor.href = targetUrl;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.click();
+      }
+    } catch {
+      previewWindow?.close();
+      onToast?.('Não foi possível abrir o documento financeiro.', 'error');
+    } finally {
+      setOpeningDocumentKey('');
+    }
+  };
+
   const activeView = activeSection === 'Recebimentos de pacientes'
     ? 'receipts'
     : activeSection === 'Cobranças'
@@ -671,8 +717,8 @@ export function PatientFinanceWorkspace({
   );
   const documentTransactions = (ledger.transactions || []).filter((transaction: any) =>
     transactionMatchesFilters(transaction) && (
-      transaction?.proof_url ||
-      transaction?.receipt_url ||
+      transaction?.has_proof ||
+      transaction?.has_receipt ||
       String(transaction?.document_status || '').toUpperCase() !== 'PENDING'
     )
   );
@@ -853,8 +899,8 @@ export function PatientFinanceWorkspace({
             const charge = chargesById.get(String(transaction.payment_id || transaction.paymentId));
             return <div key={transaction.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-medium text-slate-900">{charge?.patientName || 'Paciente'}</p><p className="mt-1 text-xs text-slate-500">{patientFinancialTransactionLabel(transaction)} · {formatDisplayDateTime(transaction.transaction_at, { separator: ', ' })}</p></div><p className={String(transaction.transaction_type).toUpperCase() === 'REFUND' ? 'font-semibold text-rose-600' : 'font-semibold text-emerald-600'}>{currency(transaction.amount)}</p></div>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500"><span>{methodLabel(transaction.method)}</span><span>•</span><span>{charge?.items?.length || 0} sessão(s)</span><span>•</span><span>{transaction.proof_url ? 'Comprovante anexado' : 'Comprovante pendente'}</span></div>
-              <div className="mt-3 flex flex-wrap gap-2">{transaction.proof_url && <a href={transaction.proof_url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:border-violet-200 hover:text-violet-700">Abrir comprovante</a>}{charge?.paid > 0 && !transaction.receipt_url && <button type="button" onClick={() => openOperation('receipt', charge)} className="rounded-lg border border-violet-200 px-3 py-1.5 text-xs text-violet-700 hover:bg-violet-50">Emitir recibo</button>}{transaction.receipt_url && <a href={transaction.receipt_url} target="_blank" rel="noreferrer" className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50">Abrir recibo</a>}</div>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500"><span>{methodLabel(transaction.method)}</span><span>•</span><span>{charge?.items?.length || 0} sessão(s)</span><span>•</span><span>{transaction.has_proof ? 'Comprovante anexado' : 'Comprovante pendente'}</span></div>
+              <div className="mt-3 flex flex-wrap gap-2">{transaction.has_proof && <button type="button" disabled={Boolean(openingDocumentKey)} onClick={() => void openFinancialDocument(transaction, 'proof')} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:border-violet-200 hover:text-violet-700 disabled:opacity-50">{openingDocumentKey === `${transaction.id}:proof` ? 'Abrindo...' : 'Abrir comprovante'}</button>}{charge?.paid > 0 && !transaction.has_receipt && <button type="button" onClick={() => openOperation('receipt', charge)} className="rounded-lg border border-violet-200 px-3 py-1.5 text-xs text-violet-700 hover:bg-violet-50">Emitir recibo</button>}{transaction.has_receipt && <button type="button" disabled={Boolean(openingDocumentKey)} onClick={() => void openFinancialDocument(transaction, 'receipt')} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">{openingDocumentKey === `${transaction.id}:receipt` ? 'Abrindo...' : 'Abrir recibo'}</button>}</div>
             </div>;
           })}
           {!receiptTransactions.length && <p className="rounded-2xl border border-slate-100 bg-white p-5 text-sm text-slate-500">Nenhum recebimento confirmado no período.</p>}
@@ -865,11 +911,11 @@ export function PatientFinanceWorkspace({
         <div className="grid gap-3 lg:grid-cols-2">
           {documentTransactions.map((transaction: any) => {
             const charge = chargesById.get(String(transaction.payment_id || transaction.paymentId));
-            const hasReceipt = Boolean(transaction.receipt_url || transaction.receipt_number);
+            const hasReceipt = Boolean(transaction.has_receipt || transaction.receipt_number);
             return <div key={transaction.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
               <div className="flex items-start justify-between gap-3"><div><p className="text-sm font-medium text-slate-900">{charge?.patientName || 'Paciente'}</p><p className="mt-1 text-xs text-slate-500">Pagamento de {currency(transaction.amount)} · {formatDisplayDate(transaction.transaction_at)}</p></div><FileCheck2 size={18} className={hasReceipt ? 'text-emerald-600' : 'text-amber-500'} /></div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs"><span className="rounded-lg bg-slate-50 p-2">{documentStatusLabel(transaction.document_status)}</span><span className="rounded-lg bg-slate-50 p-2">Recibo: {hasReceipt ? 'emitido' : 'pendente'}</span></div>
-              <div className="mt-3 flex flex-wrap gap-2">{transaction.proof_url && <a href={transaction.proof_url} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:border-violet-200 hover:text-violet-700">Visualizar comprovante</a>}{transaction.receipt_url && <a href={transaction.receipt_url} target="_blank" rel="noreferrer" className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50">Visualizar recibo</a>}{!hasReceipt && charge?.paid > 0 && <button type="button" onClick={() => openOperation('receipt', charge)} className="rounded-lg border border-violet-200 px-3 py-1.5 text-xs text-violet-700 hover:bg-violet-50">Emitir recibo</button>}</div>
+              <div className="mt-3 flex flex-wrap gap-2">{transaction.has_proof && <button type="button" disabled={Boolean(openingDocumentKey)} onClick={() => void openFinancialDocument(transaction, 'proof')} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:border-violet-200 hover:text-violet-700 disabled:opacity-50">{openingDocumentKey === `${transaction.id}:proof` ? 'Abrindo...' : 'Visualizar comprovante'}</button>}{transaction.has_receipt && <button type="button" disabled={Boolean(openingDocumentKey)} onClick={() => void openFinancialDocument(transaction, 'receipt')} className="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">{openingDocumentKey === `${transaction.id}:receipt` ? 'Abrindo...' : 'Visualizar recibo'}</button>}{!hasReceipt && charge?.paid > 0 && <button type="button" onClick={() => openOperation('receipt', charge)} className="rounded-lg border border-violet-200 px-3 py-1.5 text-xs text-violet-700 hover:bg-violet-50">Emitir recibo</button>}</div>
             </div>;
           })}
           {!documentTransactions.length && <p className="rounded-2xl border border-slate-100 bg-white p-5 text-sm text-slate-500">Nenhum recibo ou comprovante vinculado a pagamento.</p>}

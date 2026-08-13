@@ -1224,6 +1224,7 @@ export function getPayerSetupReadiness(input: {
 }
 
 type PayerRequirementsPanelProps = {
+  workspaceScopeKey?: string;
   initialSection?: "convenios" | "tuss" | "prices" | "rules";
   initialPayerId?: string;
   navigationIntentKey?: number;
@@ -1233,6 +1234,7 @@ type PayerRequirementsPanelProps = {
 };
 
 export function PayerRequirementsPanel({
+  workspaceScopeKey = "",
   initialSection,
   initialPayerId,
   navigationIntentKey,
@@ -1310,6 +1312,43 @@ export function PayerRequirementsPanel({
   const tussMappingSaveInFlightRef = useRef(false);
   const supportActionInFlightRef = useRef(false);
   const procedurePriceAmountInputRef = useRef<HTMLInputElement | null>(null);
+  const tussCatalogLoadedRef = useRef(false);
+  const tussCatalogDataRef = useRef<{ services: TussService[]; codes: TussCode[] } | null>(null);
+  const tussCatalogInFlightRef = useRef<Promise<{ services: TussService[]; codes: TussCode[] }> | null>(null);
+  const tussConfigRequestRef = useRef(0);
+  const tussConfigInFlightRef = useRef<{ payerId: string; requestId: number } | null>(null);
+  const requirementsRequestRef = useRef(0);
+  const payerTissProfileRequestRef = useRef(0);
+  const payersRequestRef = useRef(0);
+  const workspaceScopeRef = useRef(workspaceScopeKey);
+
+  useEffect(() => {
+    workspaceScopeRef.current = workspaceScopeKey;
+    payersRequestRef.current += 1;
+    tussConfigRequestRef.current += 1;
+    requirementsRequestRef.current += 1;
+    payerTissProfileRequestRef.current += 1;
+    tussConfigInFlightRef.current = null;
+    tussCatalogLoadedRef.current = false;
+    tussCatalogDataRef.current = null;
+    tussCatalogInFlightRef.current = null;
+    setPayers([]);
+    setSelectedPayerId("");
+    setRequirements([]);
+    setTussServices([]);
+    setTussCodes([]);
+    setTussMappings([]);
+    setProcedurePrices([]);
+    setSetupPatients([]);
+    setSetupAppointments([]);
+    setSetupPatientId("");
+    setSetupAppointmentId("");
+    setSetupTestLoadState({ loading: false, error: "" });
+    setSetupTestResult({ status: "not_tested", issues: [] });
+    setDeleteModal(null);
+    setAuthorizationSyncModal(null);
+    setError("");
+  }, [workspaceScopeKey]);
 
   const setLocalFeedback = (section: string, feedback: SectionFeedback) => {
     setSectionFeedback((current) => ({ ...current, [section]: feedback }));
@@ -1794,10 +1833,13 @@ export function PayerRequirementsPanel({
   };
 
   const loadPayers = async () => {
+    const requestId = ++payersRequestRef.current;
+    const requestWorkspace = workspaceScopeRef.current;
     setLoading(true);
     setError("");
     try {
       const result = await dataService.getPayers({ status: "ACTIVE", limit: 80 });
+      if (requestId !== payersRequestRef.current || requestWorkspace !== workspaceScopeRef.current) return;
       if (!result?.success) {
         const loadError = String(result?.error || "").trim();
         setError(/pagadores/i.test(loadError) ? "Não foi possível carregar os convênios." : loadError || "Não foi possível carregar os convênios.");
@@ -1811,20 +1853,29 @@ export function PayerRequirementsPanel({
         if (initialPayerId && rows.some((payer: Payer) => payer.id === initialPayerId)) return initialPayerId;
         return rows[0]?.id || "";
       });
+    } catch (requestError: any) {
+      if (requestId !== payersRequestRef.current || requestWorkspace !== workspaceScopeRef.current) return;
+      setPayers([]);
+      setError(requestError?.message || "Não foi possível carregar os convênios.");
     } finally {
-      setLoading(false);
+      if (requestId === payersRequestRef.current && requestWorkspace === workspaceScopeRef.current) setLoading(false);
     }
   };
 
   const loadRequirements = async (payerId: string) => {
+    const requestId = ++requirementsRequestRef.current;
     if (!payerId) {
       setRequirements([]);
+      setLoading(false);
       return;
     }
     setLoading(true);
     setError("");
+    setRequirements([]);
+    setRequirementForm(defaultRequirement(payerId));
     try {
       const result = await dataService.getPayerRequirements(payerId);
+      if (requestId !== requirementsRequestRef.current) return;
       if (!result?.success) {
         setError(result?.error || "Não foi possível carregar regras agora.");
         setRequirements([]);
@@ -1832,24 +1883,78 @@ export function PayerRequirementsPanel({
       }
       setRequirements(Array.isArray(result.data) ? result.data : []);
       setRequirementForm(defaultRequirement(payerId));
+    } catch (requestError: any) {
+      if (requestId !== requirementsRequestRef.current) return;
+      setRequirements([]);
+      setError(requestError?.message || "Não foi possível carregar regras agora.");
     } finally {
-      setLoading(false);
+      if (requestId === requirementsRequestRef.current) setLoading(false);
     }
   };
 
   const loadTussConfig = async (payerId: string) => {
+    if (!payerId) {
+      tussConfigRequestRef.current += 1;
+      tussConfigInFlightRef.current = null;
+      setTussMappings([]);
+      setProcedurePrices([]);
+      setTussLoading(false);
+      return;
+    }
+    if (tussConfigInFlightRef.current?.payerId === payerId) return;
+    const requestId = ++tussConfigRequestRef.current;
+    const requestWorkspace = workspaceScopeRef.current;
+    tussConfigInFlightRef.current = { payerId, requestId };
     setTussLoading(true);
+    setTussMappings([]);
+    setProcedurePrices([]);
+    setEditingTussMappingId("");
+    setEditingProcedurePriceId("");
+    setTussMappingForm(defaultTussMappingForm);
+    setProcedurePriceForm(defaultProcedurePriceForm);
     try {
-      const [servicesResult, codesResult, mappingsResult, pricesResult] = await Promise.all([
-        dataService.getTussServices({ limit: 160 }),
-        dataService.getTussCodes({ limit: 240 }),
+      if (!tussCatalogInFlightRef.current && !tussCatalogLoadedRef.current) {
+        const catalogRequest = Promise.all([
+          dataService.getTussServices({ limit: 160 }),
+          dataService.getTussCodes({ limit: 240 }),
+        ]).then(([servicesResult, codesResult]) => {
+          if (requestId !== tussConfigRequestRef.current || requestWorkspace !== workspaceScopeRef.current) {
+            throw new Error("TUSS_WORKSPACE_CHANGED");
+          }
+          if (!servicesResult?.success || !Array.isArray(servicesResult.data) || !codesResult?.success || !Array.isArray(codesResult.data)) {
+            throw new Error("Não foi possível carregar os catálogos TUSS agora.");
+          }
+          const catalog = { services: servicesResult.data, codes: codesResult.data };
+          // O ref guarda a fonte canônica antes de marcar o cache como pronto.
+          // Assim uma troca rápida de pagador nunca reutiliza arrays React ainda vazios.
+          tussCatalogDataRef.current = catalog;
+          setTussServices(catalog.services);
+          setTussCodes(catalog.codes);
+          tussCatalogLoadedRef.current = true;
+          return catalog;
+        });
+        tussCatalogInFlightRef.current = catalogRequest;
+        void catalogRequest.finally(() => {
+          if (tussCatalogInFlightRef.current === catalogRequest) tussCatalogInFlightRef.current = null;
+        });
+      }
+
+      const catalogPromise = tussCatalogLoadedRef.current && tussCatalogDataRef.current
+        ? Promise.resolve(tussCatalogDataRef.current)
+        : tussCatalogInFlightRef.current!;
+      const [catalog, mappingsResult, pricesResult] = await Promise.all([
+        catalogPromise,
         dataService.getPayerTussMappings({ payerId, limit: 180 }),
-        payerId ? dataService.getPayerProcedurePrices({ payerId, limit: 180 }) : Promise.resolve({ success: true, data: [] }),
+        dataService.getPayerProcedurePrices({ payerId, limit: 180 }),
       ]);
-      const services = servicesResult?.success && Array.isArray(servicesResult.data) ? servicesResult.data : [];
-      const codes = codesResult?.success && Array.isArray(codesResult.data) ? codesResult.data : [];
-      const mappings = mappingsResult?.success && Array.isArray(mappingsResult.data) ? mappingsResult.data : [];
-      const prices = pricesResult?.success && Array.isArray(pricesResult.data) ? pricesResult.data : [];
+      if (requestId !== tussConfigRequestRef.current || requestWorkspace !== workspaceScopeRef.current) return;
+      if (!mappingsResult?.success || !Array.isArray(mappingsResult.data) || !pricesResult?.success || !Array.isArray(pricesResult.data)) {
+        throw new Error("Não foi possível carregar o De/Para e os valores deste convênio.");
+      }
+      const services = catalog.services;
+      const codes = catalog.codes;
+      const mappings = mappingsResult.data;
+      const prices = pricesResult.data;
       setTussServices(services);
       setTussCodes(codes);
       setTussMappings(mappings);
@@ -1878,35 +1983,51 @@ export function PayerRequirementsPanel({
             payerTussMappingId: activeMapping?.id || "",
           });
       setEditingProcedurePriceId(activePrice?.id || "");
+    } catch (requestError: any) {
+      if (requestId !== tussConfigRequestRef.current || requestWorkspace !== workspaceScopeRef.current) return;
+      setTussMappings([]);
+      setProcedurePrices([]);
+      setEditingTussMappingId("");
+      setEditingProcedurePriceId("");
+      setError(requestError?.message || "Não foi possível carregar a configuração TUSS agora.");
     } finally {
-      setTussLoading(false);
+      if (tussConfigInFlightRef.current?.requestId === requestId) tussConfigInFlightRef.current = null;
+      if (requestId === tussConfigRequestRef.current && requestWorkspace === workspaceScopeRef.current) setTussLoading(false);
     }
   };
 
   const loadPayerTissProfile = async (payerId: string) => {
+    const requestId = ++payerTissProfileRequestRef.current;
     setPayerTissFieldErrors({});
     if (!payerId) {
       setPayerTissForm(defaultPayerTissForm);
+      setPayerTissLoading(false);
       return;
     }
     setPayerTissLoading(true);
     setPayerTissMessage("");
+    setPayerTissForm(defaultPayerTissForm);
     try {
       const result = await dataService.getPayerTissProfile(payerId);
+      if (requestId !== payerTissProfileRequestRef.current) return;
       if (!result?.success) {
         setError(result?.error || "Não foi possível carregar os dados TISS da operadora agora.");
         setPayerTissForm(defaultPayerTissForm);
         return;
       }
       setPayerTissForm(normalizePayerTissProfile(result.data || {}));
+    } catch (requestError: any) {
+      if (requestId !== payerTissProfileRequestRef.current) return;
+      setPayerTissForm(defaultPayerTissForm);
+      setError(requestError?.message || "Não foi possível carregar os dados TISS da operadora agora.");
     } finally {
-      setPayerTissLoading(false);
+      if (requestId === payerTissProfileRequestRef.current) setPayerTissLoading(false);
     }
   };
 
   useEffect(() => {
     void loadPayers();
-  }, []);
+  }, [workspaceScopeKey]);
 
   useEffect(() => {
     void loadRequirements(selectedPayerId);
@@ -4322,7 +4443,7 @@ export function PayerRequirementsPanel({
             <SaveActionButton
               status={sectionFeedback.requirements?.status === "saving" ? "loading" : sectionFeedback.requirements?.status === "success" ? "success" : sectionFeedback.requirements?.status === "error" ? "error" : "idle"}
               idleLabel="Salvar alterações"
-              disabled={!selectedPayerId || saving}
+              disabled={!selectedPayerId || saving || loading}
               onClick={() => void saveRequirement()}
             />
           </div>
@@ -4372,6 +4493,7 @@ export function PayerRequirementsPanel({
           <button
             type="button"
             onClick={() => void loadTussConfig(selectedPayerId)}
+            disabled={tussLoading}
             className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600"
           >
             {tussLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
@@ -4904,7 +5026,7 @@ export function PayerRequirementsPanel({
                 status={sectionFeedback.mapping?.status === "saving" ? "loading" : sectionFeedback.mapping?.status === "success" ? "success" : "idle"}
                 idleLabel="Salvar alterações"
                 loadingLabel="Atualizando Pré-Guia..."
-                disabled={!selectedPayerId || !tussMappingForm.serviceCatalogId || saving}
+                disabled={!selectedPayerId || !tussMappingForm.serviceCatalogId || saving || tussLoading}
                 onClick={() => void createTussMapping()}
               />
             </div>
@@ -5016,7 +5138,7 @@ export function PayerRequirementsPanel({
               status={sectionFeedback.price?.status === "saving" ? "loading" : sectionFeedback.price?.status === "success" ? "success" : sectionFeedback.price?.status === "error" ? "error" : "idle"}
               idleLabel="Salvar alterações"
               loadingLabel="Atualizando Pré-Guia..."
-              disabled={!selectedPayerId || !procedurePriceForm.serviceCatalogId || procedurePriceForm.amountCents === "" || saving}
+              disabled={!selectedPayerId || !procedurePriceForm.serviceCatalogId || procedurePriceForm.amountCents === "" || saving || tussLoading}
               onClick={() => void saveProcedurePrice()}
             />
           </div>

@@ -6,7 +6,11 @@ type SupabaseLike = {
 type LoggerLike = Pick<Console, 'warn'>;
 
 const SCHEMA_CAPABILITY_CACHE_TTL_MS = 5 * 60_000;
-type SchemaCapabilityEntry = { missingColumns: Set<string>; expiresAt: number };
+type SchemaCapabilityEntry = {
+  missingColumns: Set<string>;
+  expiresAt: number;
+  source: 'catalog' | 'last_known_good' | 'conservative_baseline';
+};
 const schemaCapabilitiesByClient = new WeakMap<object, Map<string, SchemaCapabilityEntry>>();
 const schemaCapabilityHydrationByClient = new WeakMap<object, Map<string, Promise<void>>>();
 
@@ -34,18 +38,46 @@ function rememberMissingColumn(client: SupabaseLike, table: string, column: stri
   const map = schemaCapabilityMap(client);
   const current = readCachedMissingColumns(client, table);
   current.add(column);
-  map.set(table, { missingColumns: current, expiresAt: Date.now() + SCHEMA_CAPABILITY_CACHE_TTL_MS });
+  map.set(table, {
+    missingColumns: current,
+    expiresAt: Date.now() + SCHEMA_CAPABILITY_CACHE_TTL_MS,
+    source: 'last_known_good'
+  });
 }
 
 async function hydrateMissingColumnsFromCriticalStatus(
   client: SupabaseLike,
   table: string,
-  candidateColumns: Set<string>
+  candidateColumns: Set<string>,
+  conservativeAvailableColumns?: Set<string>
 ) {
   const map = schemaCapabilityMap(client);
   const cached = map.get(table);
   if (cached && cached.expiresAt > Date.now()) return;
-  if (typeof client.rpc !== 'function') return;
+
+  const rememberConservativeBaseline = () => {
+    if (cached) {
+      map.set(table, {
+        missingColumns: new Set(cached.missingColumns),
+        expiresAt: Date.now() + SCHEMA_CAPABILITY_CACHE_TTL_MS,
+        source: 'last_known_good'
+      });
+      return;
+    }
+    if (!conservativeAvailableColumns) return;
+    map.set(table, {
+      missingColumns: new Set(
+        Array.from(candidateColumns).filter((column) => !conservativeAvailableColumns.has(column))
+      ),
+      expiresAt: Date.now() + SCHEMA_CAPABILITY_CACHE_TTL_MS,
+      source: 'conservative_baseline'
+    });
+  };
+
+  if (typeof client.rpc !== 'function') {
+    rememberConservativeBaseline();
+    return;
+  }
 
   const key = client as unknown as object;
   let hydrationMap = schemaCapabilityHydrationByClient.get(key);
@@ -59,18 +91,25 @@ async function hydrateMissingColumnsFromCriticalStatus(
   const hydration = (async () => {
     try {
       const result = await client.rpc?.('get_verto_route_schema_capabilities');
+      if (result?.error) throw result.error;
       const columns = result?.data?.[table]?.columns;
-      if (!columns || typeof columns !== 'object' || Array.isArray(columns)) return;
+      if (!columns || typeof columns !== 'object' || Array.isArray(columns)) {
+        rememberConservativeBaseline();
+        return;
+      }
       const missingColumns = new Set(
-        Array.from(candidateColumns).filter((column) => columns[column] === false)
+        Array.from(candidateColumns).filter((column) => columns[column] !== true)
       );
       map.set(table, {
         missingColumns,
-        expiresAt: Date.now() + SCHEMA_CAPABILITY_CACHE_TTL_MS
+        expiresAt: Date.now() + SCHEMA_CAPABILITY_CACHE_TTL_MS,
+        source: 'catalog'
       });
     } catch {
-      // The error-driven fallback below remains available when the catalog
-      // probe is unavailable during a rolling deploy.
+      // Rolling deploys keep using the last confirmed shape. On installations
+      // without the catalog RPC, the conservative baseline avoids issuing
+      // deliberately invalid selects while retaining the legacy core fields.
+      rememberConservativeBaseline();
     }
   })().finally(() => {
     hydrationMap?.delete(table);
@@ -355,6 +394,8 @@ export const TASK_SELECT_COLUMNS = [
   'patient_email',
   'title',
   'description',
+  'type',
+  'icon',
   'color',
   'completed',
   'is_daily_reminder',
@@ -858,6 +899,26 @@ const TASK_OPTIONAL_COLUMNS = new Set([
   'scheduled_at',
   'therapist_id',
   'pro_score',
+  'max_score',
+  'created_at',
+  'updated_at',
+  'is_active',
+  'deleted_at'
+]);
+
+// Last known good shape from the versioned tasks alignment plus the confirmed
+// production audit. The six explicitly absent legacy fields stay out of this
+// rolling-deploy baseline; after the capability RPC is present, its catalog is
+// authoritative for every optional field.
+const TASK_CONSERVATIVE_AVAILABLE_COLUMNS = new Set([
+  'id',
+  'patient_id',
+  'patient_email',
+  'title',
+  'description',
+  'type',
+  'icon',
+  'therapist_id',
   'max_score',
   'created_at',
   'updated_at',
@@ -1576,6 +1637,12 @@ export async function fetchTasksWithSchemaFallback(params: {
   requestId?: string | null;
   logger?: LoggerLike;
 }) {
+  await hydrateMissingColumnsFromCriticalStatus(
+    params.supabase,
+    'tasks',
+    TASK_OPTIONAL_COLUMNS,
+    TASK_CONSERVATIVE_AVAILABLE_COLUMNS
+  );
   const result = await fetchListWithColumnFallback({
     supabase: params.supabase,
     route: params.route || '/api/tasks/:patientId',
@@ -1615,6 +1682,31 @@ export async function fetchTasksWithSchemaFallback(params: {
     ...result,
     data: Array.isArray(result.data) ? result.data.map(normalizeTaskRowForUi) : result.data
   };
+}
+
+export async function resolveTaskSchemaCapabilities(supabase: SupabaseLike) {
+  await hydrateMissingColumnsFromCriticalStatus(
+    supabase,
+    'tasks',
+    TASK_OPTIONAL_COLUMNS,
+    TASK_CONSERVATIVE_AVAILABLE_COLUMNS
+  );
+  const missingColumns = readCachedMissingColumns(supabase, 'tasks');
+  const columns = TASK_SELECT_COLUMNS.filter((column) => !missingColumns.has(column));
+  return {
+    columns,
+    select: joinColumns(columns),
+    missingColumns
+  };
+}
+
+export function filterTaskPayloadForSchema(
+  payload: Record<string, any>,
+  missingColumns: ReadonlySet<string>
+) {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([column]) => !missingColumns.has(column))
+  );
 }
 
 export async function fetchAssignedTasksWithSchemaFallback(params: {
@@ -1692,6 +1784,7 @@ export async function fetchPatientFilesWithSchemaFallback(params: {
   supabase: SupabaseLike;
   patientId: string | null;
   clinicId: string | null;
+  fileId?: string | null;
   limit: number;
   logger?: LoggerLike;
 }) {
@@ -1710,6 +1803,8 @@ export async function fetchPatientFilesWithSchemaFallback(params: {
 
       const clinicId = cleanString(params.clinicId, 120);
       if (clinicId && !removedColumns.has('clinic_id')) query = query.eq('clinic_id', clinicId);
+      const fileId = cleanString(params.fileId, 120);
+      if (fileId) query = query.eq('id', fileId);
 
       return query.order('created_at', { ascending: false }).limit(params.limit);
     }
@@ -1922,6 +2017,11 @@ function normalizeTaskRowForUi(row: any): any {
     type: row.type ?? 'task',
     icon: row.icon ?? '📋',
     color: row.color ?? 'bg-blue-100 text-blue-600',
+    completed: row.completed ?? false,
+    is_daily_reminder: row.is_daily_reminder ?? false,
+    linked_task: row.linked_task ?? null,
+    scheduled_at: row.scheduled_at ?? null,
+    pro_score: row.pro_score ?? null,
     updated_at: row.updated_at ?? row.created_at ?? null,
     updatedAt: row.updatedAt ?? row.updated_at ?? row.created_at ?? null
   };

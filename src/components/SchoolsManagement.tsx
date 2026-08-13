@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Archive,
   Building2,
@@ -26,6 +26,10 @@ import {
 import { dataService } from '../services/dataService';
 import { SchoolEnrollmentDialog } from './SchoolEnrollmentDialog';
 import { SchoolMeetingWorkspace } from './SchoolMeetingWorkspace';
+
+const notifySchoolOptionsChanged = () => {
+  window.dispatchEvent(new Event('verto:school-options-changed'));
+};
 
 type School = {
   id: string;
@@ -146,6 +150,7 @@ const Modal = ({ title, children, onClose, wide = false }: { title: string; chil
 );
 
 export function SchoolsManagement({
+  workspaceScopeKey = '',
   patients = [],
   professionals = [],
   userRole = 'coordinator',
@@ -153,6 +158,7 @@ export function SchoolsManagement({
   onOpenPatient,
   onScheduleSchoolSession,
 }: {
+  workspaceScopeKey?: string;
   patients?: any[];
   professionals?: any[];
   userRole?: string;
@@ -164,12 +170,16 @@ export function SchoolsManagement({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [network, setNetwork] = useState('');
   const [schoolType, setSchoolType] = useState('');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, pageSize: 25, total: 0, totalPages: 1, hasNextPage: false });
   const [selectedSchool, setSelectedSchool] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailSectionLoading, setDetailSectionLoading] = useState('');
+  const loadedDetailSectionsRef = useRef(new Set<string>());
+  const detailSectionRequestsRef = useRef(new Map<string, Promise<void>>());
   const [activeDetailTab, setActiveDetailTab] = useState<'summary' | 'patients' | 'contacts' | 'meetings' | 'documents' | 'history'>('summary');
   const [showCreateSchool, setShowCreateSchool] = useState(false);
   const [showMeeting, setShowMeeting] = useState(false);
@@ -177,6 +187,7 @@ export function SchoolsManagement({
   const [schoolPatients, setSchoolPatients] = useState<any[]>([]);
   const [selectedPatientIds, setSelectedPatientIds] = useState<string[]>([]);
   const [patientFilter, setPatientFilter] = useState({ unitId: '', gradeLevel: '', className: '', shift: '' });
+  const [debouncedPatientFilter, setDebouncedPatientFilter] = useState(patientFilter);
   const [patientLoading, setPatientLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
@@ -210,36 +221,134 @@ export function SchoolsManagement({
   const canManage = hasCapability('school.manage');
   const canManageMeetings = hasCapability('school.meetings.manage');
 
-  const loadSchools = useCallback(async () => {
-    setLoading(true); setError('');
-    const result = await dataService.getSchools({ page, pageSize: 25, search, network, type: schoolType });
-    if (result?.success) {
-      setSchools(result.data || []);
-      setPagination(result.pagination || { page, pageSize: 25, total: 0, totalPages: 1, hasNextPage: false });
-    } else setError(result?.message || result?.error || 'Não foi possível carregar as escolas.');
-    setLoading(false);
-  }, [page, search, network, schoolType]);
+  useEffect(() => {
+    loadedDetailSectionsRef.current.clear();
+    detailSectionRequestsRef.current.clear();
+    setSchools([]);
+    setSelectedSchool(null);
+    setSelectedMeetingId('');
+    setSchoolPatients([]);
+    setSelectedPatientIds([]);
+    setError('');
+    setPage(1);
+  }, [workspaceScopeKey]);
 
-  useEffect(() => { void loadSchools(); }, [loadSchools]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedPatientFilter(patientFilter), 300);
+    return () => window.clearTimeout(timer);
+  }, [patientFilter]);
+
+  const loadSchools = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true); setError('');
+    try {
+      const result = await dataService.getSchools({ page, pageSize: 25, search: debouncedSearch, network, type: schoolType }, { signal });
+      if (signal?.aborted) return;
+      if (result?.success) {
+        setSchools(result.data || []);
+        setPagination(result.pagination || { page, pageSize: 25, total: 0, totalPages: 1, hasNextPage: false });
+      } else setError(result?.message || result?.error || 'Não foi possível carregar as escolas.');
+    } catch (requestError: any) {
+      if (!signal?.aborted) setError(requestError?.message || 'Não foi possível carregar as escolas.');
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [page, debouncedSearch, network, schoolType]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadSchools(controller.signal);
+    return () => controller.abort();
+  }, [loadSchools]);
 
   const openSchool = async (school: School) => {
+    loadedDetailSectionsRef.current.clear();
+    detailSectionRequestsRef.current.clear();
+    setDetailSectionLoading('');
     setDetailLoading(true); setSelectedSchool({ ...school }); setActiveDetailTab('summary');
-    const result = await dataService.getSchoolDetail(school.id);
-    if (result?.success) setSelectedSchool(result.data);
+    const result = await dataService.getSchoolDetail(school.id, { section: 'summary' });
+    if (result?.success) {
+      loadedDetailSectionsRef.current.add(`${school.id}:summary`);
+      setSelectedSchool((current: any) => String(current?.id) === String(school.id) ? { ...current, ...result.data } : current);
+    }
     else setError(result?.message || 'Não foi possível abrir a escola.');
     setDetailLoading(false);
   };
 
-  const loadSchoolPatients = useCallback(async () => {
-    if (!selectedSchool?.id) return;
-    setPatientLoading(true);
-    const result = await dataService.searchSchoolPatients({ schoolId: selectedSchool.id, ...patientFilter, page: 1, pageSize: 100 });
-    setSchoolPatients(result?.success ? result.data || [] : []);
-    setPatientLoading(false);
-  }, [selectedSchool?.id, patientFilter]);
+  const loadSchoolDetailSection = useCallback((section: 'meetings' | 'documents' | 'history', force = false) => {
+    const schoolId = String(selectedSchool?.id || '');
+    if (!schoolId) return Promise.resolve();
+    const key = `${schoolId}:${section}`;
+    if (!force && loadedDetailSectionsRef.current.has(key)) return Promise.resolve();
+    const inFlight = detailSectionRequestsRef.current.get(key);
+    if (!force && inFlight) return inFlight;
+
+    setDetailSectionLoading(section);
+    let request!: Promise<void>;
+    request = (async () => {
+      try {
+        const result = section === 'meetings'
+          ? await dataService.getSchoolMeetings({ schoolId, page: 1, pageSize: 100 })
+          : section === 'documents'
+            ? await dataService.getSchoolDocuments({ schoolId })
+            : await dataService.getSchoolDetail(schoolId, { section: 'audit' });
+        if (!result?.success) throw new Error(result?.message || result?.error || 'Não foi possível carregar esta seção.');
+        const sectionPatch = section === 'history'
+          ? { audit: result.data?.audit || [] }
+          : { [section]: result.data || [] };
+        setSelectedSchool((current: any) => String(current?.id) === schoolId ? { ...current, ...sectionPatch } : current);
+        loadedDetailSectionsRef.current.add(key);
+      } catch (requestError: any) {
+        setError(requestError?.message || 'Não foi possível carregar esta seção.');
+      } finally {
+        if (detailSectionRequestsRef.current.get(key) === request) {
+          detailSectionRequestsRef.current.delete(key);
+          setDetailSectionLoading((current) => current === section ? '' : current);
+        }
+      }
+    })();
+    detailSectionRequestsRef.current.set(key, request);
+    return request;
+  }, [selectedSchool?.id]);
 
   useEffect(() => {
-    if (selectedSchool?.id && (activeDetailTab === 'patients' || showMeeting)) void loadSchoolPatients();
+    if (activeDetailTab === 'meetings' || activeDetailTab === 'documents' || activeDetailTab === 'history') {
+      void loadSchoolDetailSection(activeDetailTab);
+    }
+  }, [activeDetailTab, loadSchoolDetailSection]);
+
+  const loadSchoolPatients = useCallback(async (signal?: AbortSignal) => {
+    if (!selectedSchool?.id) return;
+    setPatientLoading(true);
+    setSchoolPatients([]);
+    try {
+      const result = await dataService.searchSchoolPatients({ schoolId: selectedSchool.id, ...debouncedPatientFilter, page: 1, pageSize: 100 }, { signal });
+      if (signal?.aborted) return;
+      if (!result?.success) throw new Error(result?.message || result?.error || 'Não foi possível carregar os pacientes desta escola.');
+      setSchoolPatients(result.data || []);
+      if (!debouncedPatientFilter.unitId && !debouncedPatientFilter.gradeLevel && !debouncedPatientFilter.className && !debouncedPatientFilter.shift) {
+        const total = Number(result.pagination?.total ?? result.data?.length ?? 0);
+        setSelectedSchool((current: any) => current ? { ...current, patientCount: Math.max(0, total) } : current);
+      }
+    } catch (requestError: any) {
+      if (!signal?.aborted) setError(requestError?.message || 'Não foi possível carregar os pacientes desta escola.');
+    } finally {
+      if (!signal?.aborted) setPatientLoading(false);
+    }
+  }, [selectedSchool?.id, debouncedPatientFilter]);
+
+  useEffect(() => {
+    if (!selectedSchool?.id || (activeDetailTab !== 'patients' && !showMeeting)) return;
+    const controller = new AbortController();
+    void loadSchoolPatients(controller.signal);
+    return () => controller.abort();
   }, [selectedSchool?.id, activeDetailTab, showMeeting, loadSchoolPatients]);
 
   const submitSchool = async (confirmPossibleDuplicate = false) => {
@@ -259,6 +368,7 @@ export function SchoolsManagement({
       } else setNotice('Escola cadastrada com segurança.');
       setPendingReviewForNewSchool(null);
       setShowCreateSchool(false); setPossibleDuplicates([]); setSchoolForm({ displayName: '', legalName: '', schoolType: 'OTHER', educationNetwork: 'OTHER', taxId: '', inepCode: '', email: '', phone: '', whatsapp: '', postalCode: '', street: '', streetNumber: '', addressComplement: '', district: '', city: '', state: '', notes: '' });
+      notifySchoolOptionsChanged();
       void loadSchools();
     } else if (result?.error === 'POSSIBLE_SCHOOL_DUPLICATE') setPossibleDuplicates(result.candidates || []);
     else setNotice(result?.message || 'Não foi possível cadastrar a escola.');
@@ -278,7 +388,7 @@ export function SchoolsManagement({
     });
     if (result?.success) {
       setShowMeeting(false); setSelectedPatientIds([]); setNotice(`Reunião criada para ${selectedPatientIds.length} paciente(s), sem duplicar o evento.`);
-      const detail = await dataService.getSchoolDetail(selectedSchool.id); if (detail?.success) setSelectedSchool(detail.data);
+      await loadSchoolDetailSection('meetings', true);
     } else setNotice(result?.message || 'Não foi possível criar a reunião. Revise escola, unidade e autorizações.');
     setSaving(false);
   };
@@ -286,8 +396,13 @@ export function SchoolsManagement({
   const filteredPatientIds = useMemo(() => schoolPatients.map((row) => row.patient_id), [schoolPatients]);
   const refreshSelectedSchool = async () => {
     if (!selectedSchool?.id) return;
-    const result = await dataService.getSchoolDetail(selectedSchool.id);
-    if (result?.success) setSelectedSchool(result.data);
+    const result = await dataService.getSchoolDetail(selectedSchool.id, { section: 'summary' });
+    if (result?.success) {
+      setSelectedSchool((current: any) => current ? { ...current, ...result.data } : current);
+      if (activeDetailTab === 'meetings' || activeDetailTab === 'documents' || activeDetailTab === 'history') {
+        await loadSchoolDetailSection(activeDetailTab, true);
+      }
+    }
   };
 
   const endSchoolEnrollment = async () => {
@@ -314,8 +429,8 @@ export function SchoolsManagement({
       setNotice('Este vínculo documental não possui paciente canônico para gerar acesso seguro.');
       return;
     }
-    const result = await dataService.getPatientFiles(String(link.patient_id));
-    const file = result?.success ? (result.data || []).find((row: any) => String(row.id) === String(link.document_id)) : null;
+    const result = await dataService.getPatientFile(String(link.patient_id), String(link.document_id));
+    const file = result?.success ? result.data : null;
     if (file?.signedUrl) window.open(file.signedUrl, '_blank', 'noopener,noreferrer');
     else setNotice('Não foi possível gerar um acesso seguro ao documento.');
   };
@@ -369,6 +484,7 @@ export function SchoolsManagement({
     if (result?.success) {
       setShowEditSchool(false);
       setNotice('Dados e endereço da escola atualizados. Novos agendamentos usarão o endereço atual; sessões já salvas mantêm o snapshot histórico.');
+      notifySchoolOptionsChanged();
       await Promise.all([refreshSelectedSchool(), loadSchools()]);
     } else {
       setNotice(result?.message || result?.error || 'Não foi possível atualizar os dados da escola.');
@@ -381,7 +497,7 @@ export function SchoolsManagement({
     setSaving(true);
     const payload = { ...unitForm, idempotencyKey: crypto.randomUUID() };
     const result = editingUnit ? await dataService.updateSchoolUnit(selectedSchool.id, editingUnit.id, payload) : await dataService.createSchoolUnit(selectedSchool.id, payload);
-    if (result?.success) { setShowUnitForm(false); setEditingUnit(null); setUnitForm({ name: '', code: '', postalCode: '', street: '', streetNumber: '', addressComplement: '', district: '', city: '', state: '', phone: '', isActive: true, reason: '' }); setNotice('Unidade e endereço salvos sem perder o histórico.'); await refreshSelectedSchool(); } else setNotice(result?.message || 'Não foi possível salvar a unidade.');
+    if (result?.success) { setShowUnitForm(false); setEditingUnit(null); setUnitForm({ name: '', code: '', postalCode: '', street: '', streetNumber: '', addressComplement: '', district: '', city: '', state: '', phone: '', isActive: true, reason: '' }); setNotice('Unidade e endereço salvos sem perder o histórico.'); notifySchoolOptionsChanged(); await refreshSelectedSchool(); } else setNotice(result?.message || 'Não foi possível salvar a unidade.');
     setSaving(false);
   };
 
@@ -434,10 +550,10 @@ export function SchoolsManagement({
 
       <div className="rounded-2xl border border-slate-200/80 bg-white p-2 shadow-[0_1px_2px_rgba(15,23,42,0.03)] sm:p-3">
         <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(260px,1fr)_190px_190px_auto]">
-          <label className="relative"><span className="sr-only">Buscar instituição</span><Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={17} aria-hidden="true"/><input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} placeholder="Buscar por nome, unidade ou cidade" className="min-h-11 w-full rounded-xl border border-slate-200 bg-slate-50/70 py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100" /></label>
+          <label className="relative"><span className="sr-only">Buscar instituição</span><Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={17} aria-hidden="true"/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por nome, unidade ou cidade" className="min-h-11 w-full rounded-xl border border-slate-200 bg-slate-50/70 py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-2 focus:ring-violet-100" /></label>
           <label><span className="sr-only">Filtrar por rede</span><select aria-label="Filtrar por rede" value={network} onChange={(e) => { setNetwork(e.target.value); setPage(1); }} className="min-h-11 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 text-sm text-slate-700 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"><option value="">Todas as redes</option>{Object.entries(NETWORK_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label><span className="sr-only">Filtrar por tipo</span><select aria-label="Filtrar por tipo" value={schoolType} onChange={(e) => { setSchoolType(e.target.value); setPage(1); }} className="min-h-11 w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 text-sm text-slate-700 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"><option value="">Todos os tipos</option>{Object.entries(TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <button type="button" disabled={!hasActiveFilters} onClick={() => { setSearch(''); setNetwork(''); setSchoolType(''); setPage(1); }} className="min-h-11 rounded-xl border border-transparent px-4 text-sm font-medium text-slate-600 transition hover:border-slate-200 hover:bg-slate-50 disabled:cursor-default disabled:opacity-40">Limpar filtros</button>
+          <button type="button" disabled={!hasActiveFilters} onClick={() => { setSearch(''); setDebouncedSearch(''); setNetwork(''); setSchoolType(''); setPage(1); }} className="min-h-11 rounded-xl border border-transparent px-4 text-sm font-medium text-slate-600 transition hover:border-slate-200 hover:bg-slate-50 disabled:cursor-default disabled:opacity-40">Limpar filtros</button>
         </div>
       </div>
 
@@ -483,7 +599,7 @@ export function SchoolsManagement({
           <div className="flex gap-2 overflow-x-auto pb-3">{([
             ['summary','Resumo',Building2],['patients','Pacientes',Users],['contacts','Contatos',Contact],['meetings','Reuniões e visitas',CalendarDays],['documents','Documentos',FileText],['history','Histórico',ClipboardList],
           ] as const).map(([id,label,Icon]) => <button key={id} type="button" onClick={() => setActiveDetailTab(id)} className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold ${activeDetailTab===id?'bg-violet-100 text-violet-700':'bg-slate-50 text-slate-600'}`}><Icon size={15} />{label}</button>)}</div>
-          {activeDetailTab === 'summary' && <div className="space-y-4"><div className="grid grid-cols-1 gap-4 lg:grid-cols-3"><div className="rounded-2xl bg-slate-50 p-4 lg:col-span-2"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold text-slate-900">Dados institucionais</h3>{canManage&&<button type="button" onClick={openSchoolEditor} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 text-xs font-semibold text-violet-700"><Pencil size={15}/> Editar dados e endereço</button>}</div><dl className="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2"><div className="sm:col-span-2"><dt className="text-xs text-slate-400">Endereço</dt><dd className="font-medium text-slate-700">{formatSchoolAddress(selectedSchool) || 'Endereço não informado'}</dd>{!formatSchoolAddress(selectedSchool)&&<p className="mt-1 text-xs text-amber-700">Preencha o endereço para permitir sessões clínicas nesta instituição.</p>}</div><div><dt className="text-xs text-slate-400">Rede</dt><dd className="font-medium text-slate-700">{NETWORK_LABELS[selectedSchool.education_network] || 'Outra'}</dd></div><div><dt className="text-xs text-slate-400">Tipo</dt><dd className="font-medium text-slate-700">{TYPE_LABELS[selectedSchool.school_type] || 'Outro'}</dd></div><div><dt className="text-xs text-slate-400">Contatos ativos</dt><dd className="font-medium text-slate-700">{selectedSchool.contacts?.filter((c:any)=>c.is_active).length || 0}</dd></div></dl></div><div className="rounded-2xl border border-violet-100 bg-violet-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-violet-500">Pacientes atuais</p><p className="mt-2 text-3xl font-semibold text-violet-900">{new Set((selectedSchool.enrollments||[]).filter((e:any)=>e.is_current).map((e:any)=>e.patient_id)).size}</p><button type="button" onClick={() => setActiveDetailTab('patients')} className="mt-4 text-sm font-semibold text-violet-700">Abrir vínculos →</button></div></div><section className="rounded-2xl border border-slate-100 p-4"><div className="flex items-center justify-between"><div><h3 className="font-semibold text-slate-900">Unidades e campi</h3><p className="text-xs text-slate-500">Quando houver unidades ativas, o agendamento usa o endereço da unidade selecionada.</p></div>{canManage&&<button onClick={()=>{setEditingUnit(null);setUnitForm({name:'',code:'',postalCode:'',street:'',streetNumber:'',addressComplement:'',district:'',city:'',state:'',phone:'',isActive:true,reason:''});setShowUnitForm(true)}} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white"><Plus size={14} className="mr-1 inline"/>Unidade</button>}</div><div className="mt-3 grid gap-2 md:grid-cols-2">{(selectedSchool.units||[]).map((unit:any)=><button key={unit.id} type="button" onClick={()=>{if(!canManage)return;setEditingUnit(unit);setUnitForm({name:unit.name||'',code:unit.code||'',postalCode:unit.postal_code||'',street:unit.street||'',streetNumber:unit.street_number||'',addressComplement:unit.address_complement||'',district:unit.district||'',city:unit.city||'',state:unit.state||'',phone:unit.phone||'',isActive:unit.is_active!==false,reason:''});setShowUnitForm(true)}} className="rounded-2xl border border-slate-100 p-3 text-left"><p className="font-semibold text-slate-800">{unit.name}</p><p className="mt-1 text-xs text-slate-500">{formatSchoolAddress(unit)||'Endereço não informado'} · {unit.is_active?'Ativa':'Arquivada'}</p></button>)}</div></section></div>}
+          {activeDetailTab === 'summary' && <div className="space-y-4"><div className="grid grid-cols-1 gap-4 lg:grid-cols-3"><div className="rounded-2xl bg-slate-50 p-4 lg:col-span-2"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold text-slate-900">Dados institucionais</h3>{canManage&&<button type="button" onClick={openSchoolEditor} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 text-xs font-semibold text-violet-700"><Pencil size={15}/> Editar dados e endereço</button>}</div><dl className="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2"><div className="sm:col-span-2"><dt className="text-xs text-slate-400">Endereço</dt><dd className="font-medium text-slate-700">{formatSchoolAddress(selectedSchool) || 'Endereço não informado'}</dd>{!formatSchoolAddress(selectedSchool)&&<p className="mt-1 text-xs text-amber-700">Preencha o endereço para permitir sessões clínicas nesta instituição.</p>}</div><div><dt className="text-xs text-slate-400">Rede</dt><dd className="font-medium text-slate-700">{NETWORK_LABELS[selectedSchool.education_network] || 'Outra'}</dd></div><div><dt className="text-xs text-slate-400">Tipo</dt><dd className="font-medium text-slate-700">{TYPE_LABELS[selectedSchool.school_type] || 'Outro'}</dd></div><div><dt className="text-xs text-slate-400">Contatos ativos</dt><dd className="font-medium text-slate-700">{selectedSchool.contacts?.filter((c:any)=>c.is_active).length || 0}</dd></div></dl></div><div className="rounded-2xl border border-violet-100 bg-violet-50 p-4"><p className="text-xs font-semibold uppercase tracking-wide text-violet-500">Pacientes atuais</p><p className="mt-2 text-3xl font-semibold text-violet-900">{Math.max(0, Number(selectedSchool.patientCount || 0))}</p><button type="button" onClick={() => setActiveDetailTab('patients')} className="mt-4 text-sm font-semibold text-violet-700">Abrir vínculos →</button></div></div><section className="rounded-2xl border border-slate-100 p-4"><div className="flex items-center justify-between"><div><h3 className="font-semibold text-slate-900">Unidades e campi</h3><p className="text-xs text-slate-500">Quando houver unidades ativas, o agendamento usa o endereço da unidade selecionada.</p></div>{canManage&&<button onClick={()=>{setEditingUnit(null);setUnitForm({name:'',code:'',postalCode:'',street:'',streetNumber:'',addressComplement:'',district:'',city:'',state:'',phone:'',isActive:true,reason:''});setShowUnitForm(true)}} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white"><Plus size={14} className="mr-1 inline"/>Unidade</button>}</div><div className="mt-3 grid gap-2 md:grid-cols-2">{(selectedSchool.units||[]).map((unit:any)=><button key={unit.id} type="button" onClick={()=>{if(!canManage)return;setEditingUnit(unit);setUnitForm({name:unit.name||'',code:unit.code||'',postalCode:unit.postal_code||'',street:unit.street||'',streetNumber:unit.street_number||'',addressComplement:unit.address_complement||'',district:unit.district||'',city:unit.city||'',state:unit.state||'',phone:unit.phone||'',isActive:unit.is_active!==false,reason:''});setShowUnitForm(true)}} className="rounded-2xl border border-slate-100 p-3 text-left"><p className="font-semibold text-slate-800">{unit.name}</p><p className="mt-1 text-xs text-slate-500">{formatSchoolAddress(unit)||'Endereço não informado'} · {unit.is_active?'Ativa':'Arquivada'}</p></button>)}</div></section></div>}
           {activeDetailTab === 'patients' && <div className="space-y-4"><div className="grid grid-cols-1 gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-4"><select value={patientFilter.unitId} onChange={(e)=>setPatientFilter((f)=>({...f,unitId:e.target.value}))} className="rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="">Todas as unidades</option>{(selectedSchool.units||[]).map((u:any)=><option key={u.id} value={u.id}>{u.name}</option>)}</select><input placeholder="Série/ano" value={patientFilter.gradeLevel} onChange={(e)=>setPatientFilter((f)=>({...f,gradeLevel:e.target.value}))} className="rounded-xl border border-slate-200 p-3 text-sm" /><input placeholder="Turma" value={patientFilter.className} onChange={(e)=>setPatientFilter((f)=>({...f,className:e.target.value}))} className="rounded-xl border border-slate-200 p-3 text-sm" /><select value={patientFilter.shift} onChange={(e)=>setPatientFilter((f)=>({...f,shift:e.target.value}))} className="rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="">Todos os turnos</option><option value="MORNING">Manhã</option><option value="AFTERNOON">Tarde</option><option value="EVENING">Noite</option><option value="FULL_TIME">Integral</option></select></div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <label className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-slate-700">
@@ -525,11 +641,12 @@ export function SchoolsManagement({
               </div>
             )}
           </div>}
+          {detailSectionLoading === activeDetailTab && <div className="flex min-h-40 items-center justify-center" role="status" aria-label="Carregando seção"><Loader2 className="animate-spin text-violet-600" size={24}/></div>}
           {activeDetailTab === 'contacts' && <div><div className="mb-3 flex justify-end">{canManage&&<button onClick={()=>{setEditingContact(null);setContactForm({name:'',role:'OTHER',schoolUnitId:'',email:'',phone:'',whatsapp:'',isPrimary:false,isActive:true,reason:''});setShowContactForm(true)}} className="rounded-xl bg-violet-600 px-3 py-2 text-xs font-semibold text-white"><Plus size={14} className="mr-1 inline"/>Contato</button>}</div><div className="grid grid-cols-1 gap-3 md:grid-cols-2">{(selectedSchool.contacts||[]).length ? selectedSchool.contacts.map((contact:any)=><button type="button" onClick={()=>{if(!canManage)return;setEditingContact(contact);setContactForm({name:contact.name||'',role:contact.role||'OTHER',schoolUnitId:contact.school_unit_id||'',email:contact.email||'',phone:contact.phone||'',whatsapp:contact.whatsapp||'',isPrimary:Boolean(contact.is_primary),isActive:contact.is_active!==false,reason:''});setShowContactForm(true)}} key={contact.id} className="rounded-2xl border border-slate-100 p-4 text-left"><div className="flex items-start justify-between"><div><p className="font-semibold text-slate-900">{contact.name}</p><p className="text-xs text-slate-500">{contact.role} · {contact.is_active?'Ativo':'Inativo'}</p></div>{contact.is_primary&&<span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] font-semibold text-violet-700">Principal</span>}</div><div className="mt-3 space-y-1 text-sm text-slate-600"><p>{contact.email||'E-mail não informado'}</p><p>{contact.whatsapp||contact.phone||'Telefone não informado'}</p></div></button>):<div className="md:col-span-2 rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">Nenhum contato cadastrado.</div>}</div></div>}
           {activeDetailTab === 'meetings' && <div className="space-y-3"><div className="flex justify-end">{canManageMeetings && <button type="button" onClick={()=>{setActiveDetailTab('patients');setShowMeeting(true)}} className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white"><Plus size={16}/> Nova reunião em lote</button>}</div>{(selectedSchool.meetings||[]).map((meeting:any)=><button type="button" onClick={()=>setSelectedMeetingId(meeting.id)} key={meeting.id} className="w-full rounded-2xl border border-slate-100 p-4 text-left hover:border-violet-200"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-semibold text-slate-900">{meeting.title}</p><p className="mt-1 text-xs text-slate-500">{MEETING_TYPE_LABELS[meeting.meeting_type]||meeting.meeting_type} · {formatDateTime(meeting.scheduled_start)}</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-600">{STATUS_LABELS[meeting.status]||meeting.status}</span></div></button>)}</div>}
           {activeDetailTab === 'documents' && <div className="space-y-2">{(selectedSchool.documents||[]).map((doc:any)=><div key={doc.id} className="flex flex-col gap-3 rounded-2xl border border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="truncate font-semibold text-slate-800">{doc.document?.file_name || doc.document_type || 'Documento escolar'}</p><p className="mt-1 text-xs text-slate-500">{doc.document_type} · {doc.visibility}{doc.patients?.name ? ` · ${doc.patients.name}` : ''}{doc.school_meetings?.title ? ` · ${doc.school_meetings.title}` : ''}</p><p className="mt-1 text-[11px] text-slate-400">Vinculado em {formatDateTime(doc.created_at)}</p></div><div className="flex shrink-0 gap-2"><button type="button" onClick={()=>void openSchoolDocument(doc)} className="inline-flex items-center gap-1.5 rounded-xl border border-violet-200 px-3 py-2 text-xs font-semibold text-violet-700"><ExternalLink size={14}/> Abrir</button>{canManageMeetings&&<button type="button" onClick={()=>void archiveSchoolDocument(doc)} className="rounded-xl border border-rose-200 p-2 text-rose-600" aria-label="Arquivar vínculo documental"><Trash2 size={15}/></button>}</div></div>)}{!(selectedSchool.documents||[]).length&&<div className="rounded-2xl border border-dashed border-slate-200 p-10 text-center"><FileText className="mx-auto text-slate-300" size={36}/><p className="mt-3 font-semibold text-slate-700">Nenhum documento vinculado</p><p className="mt-1 text-sm text-slate-500">Vincule documentos existentes do prontuário pelo detalhe de uma reunião escolar.</p></div>}</div>}
           {activeDetailTab === 'history' && <div className="space-y-2">{(selectedSchool.audit||[]).map((event:any)=><div key={event.id} className="rounded-2xl border border-slate-100 p-4"><div className="flex justify-between gap-3"><p className="font-semibold text-slate-800">{event.action}</p><span className="text-xs text-slate-400">{formatDateTime(event.created_at)}</span></div><p className="mt-1 text-xs text-slate-500">{event.reason||'Ação auditada sem motivo adicional.'}</p></div>)}{!(selectedSchool.audit||[]).length&&<div className="rounded-2xl border border-dashed border-slate-200 p-10 text-center text-sm text-slate-500">Nenhum evento disponível para seu papel.</div>}</div>}
-          {canManage && <div className="mt-6 flex justify-end border-t border-slate-100 pt-4"><button type="button" onClick={async()=>{if(!confirm('Arquivar esta escola? O histórico será preservado.'))return; const result=await dataService.updateSchool(selectedSchool.id,{archive:true,reason:'Arquivamento administrativo'});if(result?.success){setSelectedSchool(null);setNotice('Escola arquivada sem apagar o histórico.');void loadSchools();}}} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600"><Archive size={16}/> Arquivar escola</button></div>}
+          {canManage && <div className="mt-6 flex justify-end border-t border-slate-100 pt-4"><button type="button" onClick={async()=>{if(!confirm('Arquivar esta escola? O histórico será preservado.'))return; const result=await dataService.updateSchool(selectedSchool.id,{archive:true,reason:'Arquivamento administrativo'});if(result?.success){setSelectedSchool(null);setNotice('Escola arquivada sem apagar o histórico.');notifySchoolOptionsChanged();void loadSchools();}}} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600"><Archive size={16}/> Arquivar escola</button></div>}
         </>}
       </Modal>}
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CalendarClock,
   CheckCircle2,
@@ -89,6 +89,12 @@ export function SchoolMeetingWorkspace({
   const [candidatePagination, setCandidatePagination] = useState<any>(null);
   const [candidateLoading, setCandidateLoading] = useState(false);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
+  const [candidateRefreshVersion, setCandidateRefreshVersion] = useState(0);
+  const candidateRequestSequenceRef = useRef(0);
+  const candidateInFlightRef = useRef(new Map<string, Promise<any>>());
+  const candidateContextRef = useRef('');
+  const candidatePageRef = useRef(1);
+  const activePatientIdsRef = useRef(new Set<string>());
   const hasCapability = (capability: string) => {
     if (capabilities instanceof Set) return capabilities.has(capability);
     if (Array.isArray(capabilities)) return capabilities.includes(capability);
@@ -132,7 +138,7 @@ export function SchoolMeetingWorkspace({
           priority: row.priority || 'MEDIUM',
         }));
       if (referralDrafts.length) setReferrals(referralDrafts);
-    } else {
+      } else {
       setError(meetingResult?.message || 'Não foi possível abrir a reunião.');
     }
     if (noteResult?.success) {
@@ -164,6 +170,8 @@ export function SchoolMeetingWorkspace({
     [detail],
   );
   const patientIds = useMemo(() => new Set(activePatients.map((row: any) => String(row.patient_id))), [activePatients]);
+  activePatientIdsRef.current = patientIds;
+  candidatePageRef.current = candidatePage;
   const responsibleOptions = useMemo(() => {
     const map = new Map<string, string>();
     activePatients.forEach((row: any) => {
@@ -197,7 +205,7 @@ export function SchoolMeetingWorkspace({
     }
     if (reason) payload.reason = reason;
     const result = await dataService.updateSchoolMeeting(meetingId, payload);
-    if (result?.success) {
+      if (result?.success) {
       setNotice('Reunião atualizada com histórico preservado.');
       emitChange(result.data || result.meeting);
       await load();
@@ -208,27 +216,51 @@ export function SchoolMeetingWorkspace({
   };
 
   const loadCandidates = useCallback(async (page = 1) => {
-    if (!detail?.school_id) return;
+    const schoolId = String(detail?.school_id || '');
+    const schoolUnitId = String(detail?.school_unit_id || '');
+    if (!schoolId) return;
+    const requestSequence = ++candidateRequestSequenceRef.current;
+    const requestKey = JSON.stringify({ meetingId, schoolId, schoolUnitId, page });
     setCandidateLoading(true);
-    const result = await dataService.searchSchoolPatients({
-      schoolId: detail.school_id,
-      unitId: detail.school_unit_id || '',
-      page,
-      pageSize: 50,
-    });
+    try {
+      let request = candidateInFlightRef.current.get(requestKey);
+      if (!request) {
+        request = dataService.searchSchoolPatients({
+          schoolId,
+          unitId: schoolUnitId,
+          page,
+          pageSize: 50,
+        });
+        candidateInFlightRef.current.set(requestKey, request);
+        void request.finally(() => {
+          if (candidateInFlightRef.current.get(requestKey) === request) candidateInFlightRef.current.delete(requestKey);
+        });
+      }
+      const result = await request;
+      if (requestSequence !== candidateRequestSequenceRef.current) return;
     if (result?.success) {
-      setCandidateRows((result.data || []).filter((row: any) => !patientIds.has(String(row.patient_id))));
+      setCandidateRows((result.data || []).filter((row: any) => !activePatientIdsRef.current.has(String(row.patient_id))));
       setCandidatePagination(result.pagination || null);
       setCandidatePage(page);
     } else {
       setNotice(result?.message || 'Não foi possível carregar pacientes elegíveis.');
     }
-    setCandidateLoading(false);
-  }, [detail?.school_id, detail?.school_unit_id, patientIds]);
+    } catch (requestError: any) {
+      if (requestSequence === candidateRequestSequenceRef.current) {
+        setNotice(requestError?.message || 'Nao foi possivel carregar pacientes elegiveis.');
+      }
+    } finally {
+      if (requestSequence === candidateRequestSequenceRef.current) setCandidateLoading(false);
+    }
+  }, [detail?.school_id, detail?.school_unit_id, meetingId]);
 
   useEffect(() => {
-    if (canManageMeeting && tab === 'participants' && detail?.school_id) void loadCandidates(1);
-  }, [canManageMeeting, tab, detail?.school_id, detail?.school_unit_id, loadCandidates]);
+    if (!canManageMeeting || tab !== 'participants' || !detail?.school_id) return;
+    const contextKey = `${meetingId}:${detail.school_id}:${detail.school_unit_id || ''}`;
+    const contextChanged = candidateContextRef.current !== contextKey;
+    candidateContextRef.current = contextKey;
+    void loadCandidates(contextChanged ? 1 : candidatePageRef.current);
+  }, [canManageMeeting, candidateRefreshVersion, detail?.school_id, detail?.school_unit_id, loadCandidates, meetingId, tab]);
 
   const addPatients = async () => {
     if (!selectedCandidateIds.length) return;
@@ -241,7 +273,7 @@ export function SchoolMeetingWorkspace({
       setSelectedCandidateIds([]);
       setNotice('Pacientes adicionados em lote.');
       await load();
-      await loadCandidates(candidatePage);
+      setCandidateRefreshVersion((value) => value + 1);
     } else setNotice(result?.message || 'Não foi possível adicionar os pacientes.');
     setSaving(false);
   };
@@ -253,7 +285,10 @@ export function SchoolMeetingWorkspace({
       reason: 'Remoção pela gestão da reunião',
       idempotencyKey: idempotencyKey(),
     });
-    if (result?.success) await load();
+    if (result?.success) {
+      await load();
+      setCandidateRefreshVersion((value) => value + 1);
+    }
     else setNotice(result?.message || 'Não foi possível remover o paciente.');
   };
 
@@ -357,8 +392,8 @@ export function SchoolMeetingWorkspace({
 
   const openDocument = async (link: any) => {
     if (!link.patient_id) return setNotice('Documento sem paciente canônico associado.');
-    const result = await dataService.getPatientFiles(String(link.patient_id));
-    const file = result?.success ? (result.data || []).find((row: any) => String(row.id) === String(link.document_id)) : null;
+    const result = await dataService.getPatientFile(String(link.patient_id), String(link.document_id));
+    const file = result?.success ? result.data : null;
     if (file?.signedUrl) window.open(file.signedUrl, '_blank', 'noopener,noreferrer');
     else setNotice('Não foi possível gerar um acesso seguro ao documento.');
   };

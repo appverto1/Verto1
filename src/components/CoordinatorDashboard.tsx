@@ -772,6 +772,10 @@ export function CoordinatorDashboard({
   const canAccessClinicFinance = hasCapability("finance.payments.view");
   const canCreatePatients = hasCapability("patient.create");
   const canManageRooms = hasCapability("clinic.rooms.manage");
+  const workspaceScopeKey = useMemo(
+    () => String(user?.activeWorkspaceId || user?.clinicId || "").trim(),
+    [user?.activeWorkspaceId, user?.clinicId],
+  );
   const dashboardResumeKey = useMemo(() => {
     const userId = String(user?.id || "").trim();
     const workspaceId =
@@ -908,6 +912,8 @@ export function CoordinatorDashboard({
     action?: "charge" | "payment" | "partial_payment" | "discount" | "courtesy" | "refund" | "receipt" | "due_date" | "cancel" | "history";
   } | null>(null);
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
+  const therapistMembersRequestSeqRef = useRef(0);
+  const therapistMembersWorkspaceRef = useRef("");
   const [patientTherapistFilter, setPatientTherapistFilter] = useState<string>("all");
   const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
   const [patientSchoolFilter, setPatientSchoolFilter] = useState("");
@@ -920,6 +926,13 @@ export function CoordinatorDashboard({
   const [patientSchoolPage, setPatientSchoolPage] = useState(1);
   const [patientSchoolPagination, setPatientSchoolPagination] = useState<any>(null);
   const [patientSchoolOptions, setPatientSchoolOptions] = useState<any[]>([]);
+  const patientSchoolOptionsLoadedForRef = useRef("");
+  const patientSchoolOptionsRequestForRef = useRef("");
+  const [patientSchoolOptionsWorkspaceId, setPatientSchoolOptionsWorkspaceId] = useState("");
+  const [patientSchoolOptionsLoading, setPatientSchoolOptionsLoading] = useState(false);
+  const [patientSchoolOptionsLoadError, setPatientSchoolOptionsLoadError] = useState("");
+  const [patientSchoolOptionsRevision, setPatientSchoolOptionsRevision] = useState(0);
+  const patientSchoolOptionsRequestSeqRef = useRef(0);
   const [schoolFilteredPatientRows, setSchoolFilteredPatientRows] = useState<any[]>([]);
   const [schoolPatientFilterLoading, setSchoolPatientFilterLoading] = useState(false);
   const [selectedSchoolPatientIds, setSelectedSchoolPatientIds] = useState<string[]>([]);
@@ -994,11 +1007,21 @@ export function CoordinatorDashboard({
   };
 
   useEffect(() => {
-    let isMounted = true;
+    const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
+    const requestSeq = therapistMembersRequestSeqRef.current + 1;
+    therapistMembersRequestSeqRef.current = requestSeq;
+    therapistMembersWorkspaceRef.current = workspaceId;
+    setTherapistMembersById({});
+    if (!workspaceId) return;
     const loadTherapistMembers = async () => {
       try {
         const result = await dataService.getClinicMembers();
-        if (!isMounted || !result?.success || !Array.isArray(result?.data)) return;
+        if (
+          therapistMembersRequestSeqRef.current !== requestSeq ||
+          therapistMembersWorkspaceRef.current !== workspaceId ||
+          !result?.success ||
+          !Array.isArray(result?.data)
+        ) return;
         const byId: Record<string, any> = {};
         result.data.forEach((member: any) => {
           const ids = collectProfessionalIdentifierCandidates(member);
@@ -1015,10 +1038,7 @@ export function CoordinatorDashboard({
         console.error("Erro ao carregar profissionais para exibição de responsáveis:", error);
       }
     };
-    loadTherapistMembers();
-    return () => {
-      isMounted = false;
-    };
+    void loadTherapistMembers();
   }, [user?.activeWorkspaceId, user?.clinicId]);
 
   const therapistFilterOptions = useMemo(() => {
@@ -1132,19 +1152,81 @@ export function CoordinatorDashboard({
   };
 
   useEffect(() => {
-    let active = true;
-    dataService.getSchools({ page: 1, pageSize: 100 })
-      .then((result: any) => { if (active && result?.success) setPatientSchoolOptions(result.data || []); })
-      .catch(() => undefined);
-    return () => { active = false; };
+    const invalidateSchoolOptions = () => {
+      patientSchoolOptionsLoadedForRef.current = "";
+      setPatientSchoolOptionsRevision((value) => value + 1);
+    };
+    window.addEventListener("verto:school-options-changed", invalidateSchoolOptions);
+    return () => window.removeEventListener("verto:school-options-changed", invalidateSchoolOptions);
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "patients") return;
+    const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
+    const requestSeq = patientSchoolOptionsRequestSeqRef.current + 1;
+    patientSchoolOptionsRequestSeqRef.current = requestSeq;
+    if (!workspaceId) {
+      patientSchoolOptionsLoadedForRef.current = "";
+      patientSchoolOptionsRequestForRef.current = "";
+      setPatientSchoolOptions([]);
+      setPatientSchoolOptionsWorkspaceId("");
+      setPatientSchoolOptionsLoading(false);
+      setPatientSchoolOptionsLoadError("");
+      return;
+    }
+    if (patientSchoolOptionsLoadedForRef.current === workspaceId) return;
+
+    const previousWorkspaceId = patientSchoolOptionsLoadedForRef.current || patientSchoolOptionsRequestForRef.current;
+    const workspaceChanged = Boolean(previousWorkspaceId && previousWorkspaceId !== workspaceId);
+    patientSchoolOptionsLoadedForRef.current = "";
+    patientSchoolOptionsRequestForRef.current = workspaceId;
+    setPatientSchoolOptions([]);
+    setPatientSchoolOptionsWorkspaceId("");
+    setPatientSchoolOptionsLoading(true);
+    setPatientSchoolOptionsLoadError("");
+    if (workspaceChanged) {
+      setPatientSchoolFilter("");
+      setPatientSchoolUnitFilter("");
+      setSelectedSchoolPatientIds([]);
+    }
+
+    const controller = new AbortController();
+    dataService.getSchoolAutocomplete("", 1, 100, { signal: controller.signal })
+      .then((result: any) => {
+        if (controller.signal.aborted || patientSchoolOptionsRequestSeqRef.current !== requestSeq || patientSchoolOptionsRequestForRef.current !== workspaceId) return;
+        if (!result?.success || !Array.isArray(result.data)) {
+          throw new Error(result?.message || result?.error || "Não foi possível carregar as escolas.");
+        }
+        patientSchoolOptionsLoadedForRef.current = workspaceId;
+        setPatientSchoolOptionsWorkspaceId(workspaceId);
+        setPatientSchoolOptions(result.data);
+      })
+      .catch((requestError: any) => {
+        if (controller.signal.aborted || patientSchoolOptionsRequestSeqRef.current !== requestSeq || patientSchoolOptionsRequestForRef.current !== workspaceId) return;
+        console.warn("Falha ao carregar opções escolares do workspace.", requestError);
+        setPatientSchoolOptionsLoadError("Não foi possível carregar as escolas. Tente novamente.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && patientSchoolOptionsRequestSeqRef.current === requestSeq && patientSchoolOptionsRequestForRef.current === workspaceId) {
+          patientSchoolOptionsRequestForRef.current = "";
+          setPatientSchoolOptionsLoading(false);
+        }
+      });
+    return () => controller.abort();
+  }, [activeTab, patientSchoolOptionsRevision, user?.activeWorkspaceId, user?.clinicId]);
+
+  const patientSchoolOptionsForCurrentWorkspace =
+    patientSchoolOptionsWorkspaceId === String(user?.activeWorkspaceId || user?.clinicId || "").trim()
+      ? patientSchoolOptions
+      : [];
 
   useEffect(() => {
     setPatientSchoolPage(1);
   }, [patientSchoolFilter, patientSchoolUnitFilter, patientSchoolGradeFilter, patientSchoolClassFilter, patientSchoolShiftFilter, patientSchoolConsentFilter, patientSchoolIncludeHistorical, patientTherapistFilter]);
 
   useEffect(() => {
-    if (!patientSchoolFilter) {
+    const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
+    if (!patientSchoolFilter || patientSchoolOptionsWorkspaceId !== workspaceId) {
       setSchoolFilteredPatientRows([]);
       setPatientSchoolPagination(null);
       setSelectedSchoolPatientIds([]);
@@ -1172,7 +1254,7 @@ export function CoordinatorDashboard({
       if (active) { setSchoolFilteredPatientRows([]); setPatientSchoolPagination(null); setSchoolPatientFilterLoading(false); }
     });
     return () => { active = false; };
-  }, [patientSchoolFilter, patientSchoolUnitFilter, patientSchoolGradeFilter, patientSchoolClassFilter, patientSchoolShiftFilter, patientSchoolConsentFilter, patientSchoolIncludeHistorical, patientSchoolPage, patientTherapistFilter]);
+  }, [patientSchoolFilter, patientSchoolUnitFilter, patientSchoolGradeFilter, patientSchoolClassFilter, patientSchoolShiftFilter, patientSchoolConsentFilter, patientSchoolIncludeHistorical, patientSchoolPage, patientTherapistFilter, patientSchoolOptionsWorkspaceId, user?.activeWorkspaceId, user?.clinicId]);
 
   const createSchoolBatchMeetingFromPatients = async () => {
     if (!patientSchoolFilter || selectedSchoolPatientIds.length === 0) return;
@@ -1683,6 +1765,10 @@ export function CoordinatorDashboard({
   const [financialEntries, setFinancialEntries] = useState<any[]>([]);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isProfessionalPaymentModalOpen, setIsProfessionalPaymentModalOpen] = useState(false);
+  const [isPaymentSaving, setIsPaymentSaving] = useState(false);
+  const [isProfessionalPaymentSaving, setIsProfessionalPaymentSaving] = useState(false);
+  const paymentSaveInFlightRef = useRef(false);
+  const professionalPaymentSaveInFlightRef = useRef(false);
   const [editingPayment, setEditingPayment] = useState<any>(null);
   const [editingPaymentScope, setEditingPaymentScope] = useState<"single" | "future">("single");
   const [editingProfessionalPayment, setEditingProfessionalPayment] = useState<any>(null);
@@ -2139,11 +2225,11 @@ export function CoordinatorDashboard({
   }>({ services: [], codes: [], mappings: [], prices: [] });
 
   useEffect(() => {
-    if (activeTab === "settings" || isAnamnesisTemplateModalOpen) {
+    if (isAnamnesisTemplateModalOpen) {
       loadClinicAnamnesisTemplate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, isAnamnesisTemplateModalOpen]);
+  }, [isAnamnesisTemplateModalOpen]);
 
   useEffect(() => {
     loadClinicAnamnesisTemplate();
@@ -3076,23 +3162,6 @@ export function CoordinatorDashboard({
     }
   }, [user?.id]);
 
-  useEffect(() => {
-    if (activeTab !== "settings" && activeTab !== "professionalProfile") return;
-    let cancelled = false;
-    const refresh = async () => {
-      if (cancelled) return;
-      await refreshSignedMediaUrls();
-    };
-    void refresh();
-    const interval = setInterval(() => {
-      void refresh();
-    }, 1000 * 60 * 4);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [activeTab, refreshSignedMediaUrls]);
-
   const retryMediaIfBroken = useCallback(
     async (mediaType: "signature" | "profile" | "logo") => {
       if (activeTab !== "settings" && activeTab !== "professionalProfile") return;
@@ -3169,6 +3238,7 @@ export function CoordinatorDashboard({
   }, [activeTab, canAccessClinicFinance]);
 
   const handleAddPayment = async () => {
+    if (paymentSaveInFlightRef.current) return;
     if (!selectedPaymentPatient || !paymentAmount)
       return alert("Preencha todos os campos");
     const normalizedAmount = parseMoneyInput(paymentAmount);
@@ -3177,7 +3247,10 @@ export function CoordinatorDashboard({
       return alert("Informe um valor válido.");
     }
 
-    if (editingPayment?.id) {
+    paymentSaveInFlightRef.current = true;
+    setIsPaymentSaving(true);
+    try {
+      if (editingPayment?.id) {
       const targets = editingPaymentScope === "future"
         ? getFutureSeriesItems(payments, editingPayment)
         : [editingPayment];
@@ -3196,10 +3269,11 @@ export function CoordinatorDashboard({
         insurance_name: paymentType === "convênio" ? paymentInsurance : null,
         specialty: paymentSpecialty || null,
       };
-      const results = await Promise.all(targets.map((payment: any) => dataService.updatePayment(String(payment.id), patch)));
-      const failed = results.find((result) => !result?.success);
-      if (failed) {
-        showToast(failed?.error || "Não foi possível editar o pagamento.", "error");
+      const result = targets.length > 1
+        ? await dataService.updatePaymentsBatch(targets.map((payment: any) => String(payment.id)), patch)
+        : await dataService.updatePayment(String(targets[0].id), patch);
+      if (!result?.success) {
+        showToast(result?.error || "Não foi possível editar o pagamento.", "error");
         return;
       }
       setPayments((prev) =>
@@ -3213,8 +3287,8 @@ export function CoordinatorDashboard({
       setEditingPayment(null);
       setPaymentAdditionalAmount("");
       showToast(editingPaymentScope === "future" ? "Pagamentos futuros atualizados." : "Pagamento atualizado.");
-      return;
-    }
+        return;
+      }
 
     const dueDays = parseDueDays(paymentRecurrenceDueDays, paymentDueDate || paymentDate);
     const dueDates = paymentIsRecurring
@@ -3249,32 +3323,42 @@ export function CoordinatorDashboard({
       };
     });
 
-    const results = await Promise.all(paymentsToCreate.map((payment) => dataService.savePayment(payment)));
-    const failed = results.find((result) => !result?.success);
-    if (!failed) {
-      setPayments((prev) => [
-        ...results.map((result, index) => result.data || paymentsToCreate[index]),
-        ...prev,
-      ]);
-      setIsPaymentModalOpen(false);
-      setEditingPayment(null);
-      setPaymentAmount("");
-      setSelectedPaymentPatient(null);
-      setPaymentReceipt(null);
-      setPaymentReceiptName("");
-      setPaymentSpecialty("");
-      setPaymentIsRecurring(false);
-      setPaymentRecurrenceDueDays("");
-      setPaymentAdditionalAmount("");
-      setPaymentAdditionalScope("next");
-      alert(paymentReceipt ? "Pagamento registrado como pago." : "Cobrança registrada como pendente.");
-      onAddActivityLog(
-        paymentReceipt ? "Pagamento registrado" : "Cobrança registrada",
-        `${paymentReceipt ? "Pagamento" : "Cobrança"} de R$ ${formatMoneyInput(paymentAmount)} para ${selectedPaymentPatient?.name || "paciente"}${paymentIsRecurring ? ` em ${dueDates.length} vencimentos recorrentes` : ""}.`,
-        "management",
-      );
-    } else {
-      alert("Erro ao salvar pagamento.");
+      const result = paymentsToCreate.length > 1
+        ? await dataService.savePaymentsBatch(paymentsToCreate)
+        : await dataService.savePayment(paymentsToCreate[0]);
+      if (result?.success) {
+        const persistedPayments = Array.isArray(result.data)
+          ? result.data
+          : [result.data || paymentsToCreate[0]];
+        setPayments((prev) => [
+          ...persistedPayments,
+          ...prev,
+        ]);
+        setIsPaymentModalOpen(false);
+        setEditingPayment(null);
+        setPaymentAmount("");
+        setSelectedPaymentPatient(null);
+        setPaymentReceipt(null);
+        setPaymentReceiptName("");
+        setPaymentSpecialty("");
+        setPaymentIsRecurring(false);
+        setPaymentRecurrenceDueDays("");
+        setPaymentAdditionalAmount("");
+        setPaymentAdditionalScope("next");
+        alert(paymentReceipt ? "Pagamento registrado como pago." : "Cobrança registrada como pendente.");
+        onAddActivityLog(
+          paymentReceipt ? "Pagamento registrado" : "Cobrança registrada",
+          `${paymentReceipt ? "Pagamento" : "Cobrança"} de R$ ${formatMoneyInput(paymentAmount)} para ${selectedPaymentPatient?.name || "paciente"}${paymentIsRecurring ? ` em ${dueDates.length} vencimentos recorrentes` : ""}.`,
+          "management",
+        );
+      } else {
+        alert(result?.error || "Erro ao salvar pagamento.");
+      }
+    } catch (requestError: any) {
+      showToast(requestError?.message || "Não foi possível salvar o pagamento.", "error");
+    } finally {
+      paymentSaveInFlightRef.current = false;
+      setIsPaymentSaving(false);
     }
   };
 
@@ -3364,6 +3448,7 @@ export function CoordinatorDashboard({
   };
 
   const handleAddProfessionalPayment = async () => {
+    if (professionalPaymentSaveInFlightRef.current) return;
     const member = therapistFilterOptions.find((item) => item.id === selectedProfessionalPaymentId);
     const amount = parseMoneyInput(professionalPaymentAmount);
     const additionalAmount = parseMoneyInput(professionalPaymentAdditionalAmount);
@@ -3375,7 +3460,11 @@ export function CoordinatorDashboard({
       showToast("Informe o motivo do ajuste manual do repasse.", "error");
       return;
     }
-    if (editingProfessionalPayment?.id) {
+
+    professionalPaymentSaveInFlightRef.current = true;
+    setIsProfessionalPaymentSaving(true);
+    try {
+      if (editingProfessionalPayment?.id) {
       const targets = editingProfessionalPaymentScope === "future"
         ? getFutureSeriesItems(professionalPayments, editingProfessionalPayment)
         : [editingProfessionalPayment];
@@ -3393,12 +3482,11 @@ export function CoordinatorDashboard({
         method: professionalPaymentMethod,
         status: professionalPaymentStatus,
       };
-      const results = await Promise.all(targets.map((payment: any) =>
-        dataService.updateProfessionalPayment(String(payment.id), patch),
-      ));
-      const failed = results.find((result) => !result?.success);
-      if (failed) {
-        showToast(failed?.error || "Não foi possível editar o pagamento profissional.", "error");
+      const result = targets.length > 1
+        ? await dataService.updateProfessionalPaymentsBatch(targets.map((payment: any) => String(payment.id)), patch)
+        : await dataService.updateProfessionalPayment(String(targets[0].id), patch);
+      if (!result?.success) {
+        showToast(result?.error || "Não foi possível editar o pagamento profissional.", "error");
         return;
       }
       setProfessionalPayments((prev) =>
@@ -3413,56 +3501,66 @@ export function CoordinatorDashboard({
       setProfessionalPaymentAdditionalAmount("");
       setProfessionalPaymentAdjustmentReason("");
       showToast(editingProfessionalPaymentScope === "future" ? "Pagamentos profissionais futuros atualizados." : "Pagamento profissional atualizado.");
-      return;
-    }
-    const dueDays = parseDueDays(professionalPaymentRecurrenceDueDays, professionalPaymentDueDate || professionalPaymentDate);
-    const dueDates = professionalPaymentIsRecurring
-      ? buildMonthlyDueDates(professionalPaymentDueDate || professionalPaymentDate, dueDays, Number(professionalPaymentRecurrenceMonths) || 1)
-      : [professionalPaymentDueDate || professionalPaymentDate];
-    const recurrenceGroupId = professionalPaymentIsRecurring ? createFinancialSeriesId() : null;
-    const payloads = dueDates.map((dueDate, index) => {
-      const shouldApplyAdditional =
-        additionalAmount > 0 &&
-        (professionalPaymentAdditionalScope === "future" || index === 0);
-      return {
-        professional_id: member.id,
-        professional_name: member.label,
-        specialty: member.specialty || null,
-        amount: amount + (shouldApplyAdditional ? additionalAmount : 0),
-        base_amount: amount,
-        additional_amount: shouldApplyAdditional ? additionalAmount : 0,
-        additional_scope: additionalAmount > 0 ? professionalPaymentAdditionalScope : null,
-        adjustment_reason: shouldApplyAdditional && additionalAmount > 0 ? professionalPaymentAdjustmentReason.trim() : null,
-        payment_date: index === 0 ? professionalPaymentDate : dueDate,
-        due_date: dueDate,
-        method: professionalPaymentMethod,
-        status: index === 0 ? professionalPaymentStatus : "pending",
-        is_recurring: professionalPaymentIsRecurring,
-        recurrence_group_id: recurrenceGroupId,
-        recurrence_index: index + 1,
-        recurrence_total: dueDates.length,
-        recurrence_frequency: professionalPaymentIsRecurring ? "monthly" : null,
-      };
-    });
-    const results = await Promise.all(payloads.map((payload) => dataService.saveProfessionalPayment(payload)));
-    const failed = results.find((result) => !result?.success);
-    if (!failed) {
-      setProfessionalPayments((prev) => [
-        ...results.map((result, index) => result.data || payloads[index]),
-        ...prev,
-      ]);
-      setIsProfessionalPaymentModalOpen(false);
-      setSelectedProfessionalPaymentId("");
-      setProfessionalPaymentAmount("");
-      setProfessionalPaymentStatus("pending");
-      setProfessionalPaymentIsRecurring(false);
-      setProfessionalPaymentRecurrenceDueDays("");
-      setProfessionalPaymentAdditionalAmount("");
-      setProfessionalPaymentAdditionalScope("next");
-      setProfessionalPaymentAdjustmentReason("");
-      showToast(professionalPaymentIsRecurring ? "Pagamentos profissionais recorrentes registrados." : "Pagamento profissional registrado.");
-    } else {
-      showToast(failed?.error || "Não foi possível salvar o pagamento profissional.", "error");
+        return;
+      }
+      const dueDays = parseDueDays(professionalPaymentRecurrenceDueDays, professionalPaymentDueDate || professionalPaymentDate);
+      const dueDates = professionalPaymentIsRecurring
+        ? buildMonthlyDueDates(professionalPaymentDueDate || professionalPaymentDate, dueDays, Number(professionalPaymentRecurrenceMonths) || 1)
+        : [professionalPaymentDueDate || professionalPaymentDate];
+      const recurrenceGroupId = professionalPaymentIsRecurring ? createFinancialSeriesId() : null;
+      const payloads = dueDates.map((dueDate, index) => {
+        const shouldApplyAdditional =
+          additionalAmount > 0 &&
+          (professionalPaymentAdditionalScope === "future" || index === 0);
+        return {
+          professional_id: member.id,
+          professional_name: member.label,
+          specialty: member.specialty || null,
+          amount: amount + (shouldApplyAdditional ? additionalAmount : 0),
+          base_amount: amount,
+          additional_amount: shouldApplyAdditional ? additionalAmount : 0,
+          additional_scope: additionalAmount > 0 ? professionalPaymentAdditionalScope : null,
+          adjustment_reason: shouldApplyAdditional && additionalAmount > 0 ? professionalPaymentAdjustmentReason.trim() : null,
+          payment_date: index === 0 ? professionalPaymentDate : dueDate,
+          due_date: dueDate,
+          method: professionalPaymentMethod,
+          status: index === 0 ? professionalPaymentStatus : "pending",
+          is_recurring: professionalPaymentIsRecurring,
+          recurrence_group_id: recurrenceGroupId,
+          recurrence_index: index + 1,
+          recurrence_total: dueDates.length,
+          recurrence_frequency: professionalPaymentIsRecurring ? "monthly" : null,
+        };
+      });
+      const result = payloads.length > 1
+        ? await dataService.saveProfessionalPaymentsBatch(payloads)
+        : await dataService.saveProfessionalPayment(payloads[0]);
+      if (result?.success) {
+        const persistedPayments = Array.isArray(result.data)
+          ? result.data
+          : [result.data || payloads[0]];
+        setProfessionalPayments((prev) => [
+          ...persistedPayments,
+          ...prev,
+        ]);
+        setIsProfessionalPaymentModalOpen(false);
+        setSelectedProfessionalPaymentId("");
+        setProfessionalPaymentAmount("");
+        setProfessionalPaymentStatus("pending");
+        setProfessionalPaymentIsRecurring(false);
+        setProfessionalPaymentRecurrenceDueDays("");
+        setProfessionalPaymentAdditionalAmount("");
+        setProfessionalPaymentAdditionalScope("next");
+        setProfessionalPaymentAdjustmentReason("");
+        showToast(professionalPaymentIsRecurring ? "Pagamentos profissionais recorrentes registrados." : "Pagamento profissional registrado.");
+      } else {
+        showToast(result?.error || "Não foi possível salvar o pagamento profissional.", "error");
+      }
+    } catch (requestError: any) {
+      showToast(requestError?.message || "Não foi possível salvar o pagamento profissional.", "error");
+    } finally {
+      professionalPaymentSaveInFlightRef.current = false;
+      setIsProfessionalPaymentSaving(false);
     }
   };
 
@@ -11101,9 +11199,11 @@ export function CoordinatorDashboard({
                 <div className="flex-shrink-0 border-t border-slate-100 bg-white p-4">
                   <button
                     onClick={handleAddPayment}
-                    className="w-full rounded-2xl bg-[#7a32fc] py-4 text-sm font-semibold text-white shadow-lg shadow-purple-500/20"
+                    disabled={isPaymentSaving}
+                    aria-busy={isPaymentSaving}
+                    className="w-full rounded-2xl bg-[#7a32fc] py-4 text-sm font-semibold text-white shadow-lg shadow-purple-500/20 disabled:cursor-wait disabled:opacity-60"
                   >
-                    {paymentReceipt ? "Confirmar pagamento" : "Registrar cobrança pendente"}
+                    {isPaymentSaving ? "Salvando…" : paymentReceipt ? "Confirmar pagamento" : "Registrar cobrança pendente"}
                   </button>
                 </div>
               </div>
@@ -11355,9 +11455,11 @@ export function CoordinatorDashboard({
                   <button
                     type="button"
                     onClick={handleAddProfessionalPayment}
-                    className="min-h-[48px] flex-1 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-purple-500/20 transition hover:bg-[#6d28e8]"
+                    disabled={isProfessionalPaymentSaving}
+                    aria-busy={isProfessionalPaymentSaving}
+                    className="min-h-[48px] flex-1 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-purple-500/20 transition hover:bg-[#6d28e8] disabled:cursor-wait disabled:opacity-60"
                   >
-                    Salvar repasse
+                    {isProfessionalPaymentSaving ? "Salvando…" : "Salvar repasse"}
                   </button>
                 </div>
               </div>
@@ -11765,18 +11867,21 @@ export function CoordinatorDashboard({
                     data-patient-finance-pending-view={patientFinanceActiveSection === "Pendências de pacientes" ? "" : undefined}
                     data-patient-finance-documents-view={patientFinanceActiveSection === "Recibos" ? "" : undefined}
                   >
-                    <PatientFinanceWorkspace
-                      activeSection={patientFinanceActiveSection}
-                      month={financialMonth}
-                      patients={allPatients}
-                      professionals={therapistFilterOptions}
-                      currentUser={user}
-                      capabilities={effectiveCapabilities}
-                      launchRequest={patientFinanceLaunchRequest}
-                      onLaunchHandled={() => setPatientFinanceLaunchRequest(null)}
-                      onPaymentsLoaded={setPayments}
-                      onToast={showToast}
-                    />
+                    <React.Fragment key={`patient-finance:${workspaceScopeKey}`}>
+                      <PatientFinanceWorkspace
+                        workspaceScopeKey={workspaceScopeKey}
+                        activeSection={patientFinanceActiveSection}
+                        month={financialMonth}
+                        patients={allPatients}
+                        professionals={therapistFilterOptions}
+                        currentUser={user}
+                        capabilities={effectiveCapabilities}
+                        launchRequest={patientFinanceLaunchRequest}
+                        onLaunchHandled={() => setPatientFinanceLaunchRequest(null)}
+                        onPaymentsLoaded={setPayments}
+                        onToast={showToast}
+                      />
+                    </React.Fragment>
                   </div>
                 )}
 
@@ -12790,9 +12895,24 @@ export function CoordinatorDashboard({
                       </select>
                     </div>
                   )}
+                  {patientSchoolOptionsLoadError && (
+                    <div className="flex flex-col gap-3 rounded-2xl border border-rose-100 bg-rose-50/70 p-3 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between" role="alert">
+                      <span>{patientSchoolOptionsLoadError}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          patientSchoolOptionsLoadedForRef.current = "";
+                          setPatientSchoolOptionsRevision((value) => value + 1);
+                        }}
+                        className="min-h-10 rounded-xl border border-rose-200 bg-white px-3 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        Tentar novamente
+                      </button>
+                    </div>
+                  )}
                   <div className="grid w-full gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Escola</span><select value={patientSchoolFilter} onChange={(event) => { setPatientSchoolFilter(event.target.value); setPatientSchoolUnitFilter(""); setSelectedSchoolPatientIds([]); }} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none"><option value="">Todas as escolas</option>{patientSchoolOptions.map((school: any) => <option key={school.id} value={school.id}>{school.display_name}</option>)}</select></label>
-                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Unidade</span><select value={patientSchoolUnitFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolUnitFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50"><option value="">Todas as unidades</option>{(patientSchoolOptions.find((school: any) => String(school.id) === patientSchoolFilter)?.units || []).map((unit: any) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
+                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Escola</span><select value={patientSchoolFilter} disabled={patientSchoolOptionsLoading || Boolean(patientSchoolOptionsLoadError)} onChange={(event) => { setPatientSchoolFilter(event.target.value); setPatientSchoolUnitFilter(""); setSelectedSchoolPatientIds([]); }} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50"><option value="">{patientSchoolOptionsLoading ? "Carregando escolas…" : "Todas as escolas"}</option>{patientSchoolOptionsForCurrentWorkspace.map((school: any) => <option key={school.id} value={school.id}>{school.display_name}</option>)}</select></label>
+                    <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Unidade</span><select value={patientSchoolUnitFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolUnitFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50"><option value="">Todas as unidades</option>{(patientSchoolOptionsForCurrentWorkspace.find((school: any) => String(school.id) === patientSchoolFilter)?.units || []).map((unit: any) => <option key={unit.id} value={unit.id}>{unit.name}</option>)}</select></label>
                     <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Série/ano</span><input value={patientSchoolGradeFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolGradeFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50" /></label>
                     <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Turma</span><input value={patientSchoolClassFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolClassFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50" /></label>
                     <label><span className="mb-1.5 ml-1 block text-[10px] font-semibold uppercase tracking-widest text-slate-400">Turno</span><select value={patientSchoolShiftFilter} disabled={!patientSchoolFilter} onChange={(event) => setPatientSchoolShiftFilter(event.target.value)} className="w-full rounded-xl border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 outline-none disabled:opacity-50"><option value="">Todos</option><option value="MORNING">Manhã</option><option value="AFTERNOON">Tarde</option><option value="EVENING">Noite</option><option value="FULL_TIME">Integral</option></select></label>
@@ -13110,14 +13230,17 @@ export function CoordinatorDashboard({
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
               >
-                <SchoolsManagement
-                  patients={allPatients}
-                  professionals={Object.values(therapistMembersById)}
-                  userRole={role}
-                  capabilities={effectiveCapabilities}
-                  onOpenPatient={(patientId, patientName) => onPatientClick(patientId, { tab: "school" }, patientName)}
-                  onScheduleSchoolSession={openSchoolSessionFromEnrollment}
-                />
+                <React.Fragment key={`schools:${workspaceScopeKey}`}>
+                  <SchoolsManagement
+                    workspaceScopeKey={workspaceScopeKey}
+                    patients={allPatients}
+                    professionals={Object.values(therapistMembersById)}
+                    userRole={role}
+                    capabilities={effectiveCapabilities}
+                    onOpenPatient={(patientId, patientName) => onPatientClick(patientId, { tab: "school" }, patientName)}
+                    onScheduleSchoolSession={openSchoolSessionFromEnrollment}
+                  />
+                </React.Fragment>
               </motion.div>
             )}
             {activeTab === "agenda" && (
@@ -13162,18 +13285,20 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-6"
               >
-                <MonthlyConferenceCenter
-                  patients={visiblePatients}
-                  professionals={Object.values(therapistMembersById)}
-                  payers={clinicPayers}
-                  canExport={!isTherapist}
-                  initialTab={financialNavigationContext.conferenceTab}
-                  tissInitialPanel={financialNavigationContext.tissPanel}
-                  initialPayerId={financialNavigationContext.payerId}
-                  navigationIntentKey={financialNavigationContext.intentKey}
-                  onOpenAppointment={openAppointmentFromAdministrativeFlow}
-                  onOpenPatient={openPatientEditFromAdministrativeFlow}
-                  onNavigatePayers={(section = "convenios") => {
+                <React.Fragment key={`conference:${workspaceScopeKey}`}>
+                  <MonthlyConferenceCenter
+                    workspaceScopeKey={workspaceScopeKey}
+                    patients={visiblePatients}
+                    professionals={Object.values(therapistMembersById)}
+                    payers={clinicPayers}
+                    canExport={!isTherapist}
+                    initialTab={financialNavigationContext.conferenceTab}
+                    tissInitialPanel={financialNavigationContext.tissPanel}
+                    initialPayerId={financialNavigationContext.payerId}
+                    navigationIntentKey={financialNavigationContext.intentKey}
+                    onOpenAppointment={openAppointmentFromAdministrativeFlow}
+                    onOpenPatient={openPatientEditFromAdministrativeFlow}
+                    onNavigatePayers={(section = "convenios") => {
                     const labels: Record<PayerNavigationSection, string> = {
                       convenios: "Convênios",
                       tuss: "De/Para TUSS",
@@ -13181,17 +13306,18 @@ export function CoordinatorDashboard({
                       rules: "Regras TISS",
                     };
                     navigateToTab("payers", payerIntent(section, labels[section]));
-                  }}
-                  onNavigateSettings={() => navigateToTab("settings")}
-                  onNavigateProfessionals={() => navigateToTab("team")}
-                  onOpenReport={(appointment) =>
+                    }}
+                    onNavigateSettings={() => navigateToTab("settings")}
+                    onNavigateProfessionals={() => navigateToTab("team")}
+                    onOpenReport={(appointment) =>
                     onPatientClick(
                       undefined,
                       { tab: "report" },
                       appointment?.patient_name || "Paciente",
                     )
-                  }
-                />
+                    }
+                  />
+                </React.Fragment>
               </motion.div>
             )}
             {activeTab === "patientAuthorizations" && (
@@ -13392,7 +13518,9 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-6"
               >
-                <PayerRequirementsPanel
+                <React.Fragment key={`payers:${workspaceScopeKey}`}>
+                  <PayerRequirementsPanel
+                  workspaceScopeKey={workspaceScopeKey}
                   initialSection={financialNavigationContext.payerSection}
                   initialPayerId={financialNavigationContext.payerId}
                   navigationIntentKey={financialNavigationContext.intentKey}
@@ -13411,7 +13539,8 @@ export function CoordinatorDashboard({
                       payerName,
                     });
                   }}
-                />
+                  />
+                </React.Fragment>
               </motion.div>
             )}
             {activeTab === "billing" && (

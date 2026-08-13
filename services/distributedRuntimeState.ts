@@ -171,9 +171,13 @@ export async function releaseDistributedJobLease(params: {
 }
 
 export async function checkDistributedRuntimeState(supabase: SupabaseLike) {
-  const tables = ['runtime_active_sessions', 'runtime_rate_limits', 'runtime_job_leases'];
-  for (const table of tables) {
-    const { error } = await supabase.from(table).select('*').limit(1);
+  const probes = [
+    ['runtime_active_sessions', 'user_id'],
+    ['runtime_rate_limits', 'scope'],
+    ['runtime_job_leases', 'job_key'],
+  ] as const;
+  for (const [table, identityColumn] of probes) {
+    const { error } = await supabase.from(table).select(identityColumn).limit(1);
     if (error) return false;
   }
   const { data, error } = await supabase.rpc('runtime_validate_active_session_v2', {

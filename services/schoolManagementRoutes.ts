@@ -27,6 +27,66 @@ const safeArray = (value: any) => Array.isArray(value) ? value : [];
 const uniq = (values: any[]) => Array.from(new Set(values.map(String).filter(Boolean)));
 const parseListParam = (value: any) => uniq(String(value || '').split(',').map((item) => item.trim()).filter(Boolean));
 const nowIso = () => new Date().toISOString();
+const SCHOOL_DETAIL_COLUMNS = [
+  'id','organization_id','clinic_id','legal_name','display_name','trade_name','school_type','education_network',
+  'tax_id','inep_code','email','phone','whatsapp','website','postal_code','street','street_number',
+  'address_complement','district','city','state','country','notes','responsible_professional_id','is_active',
+  'created_at','updated_at','archived_at'
+].join(',');
+const SCHOOL_UNIT_DETAIL_COLUMNS = [
+  'id','organization_id','school_id','name','code','email','phone','whatsapp','postal_code','street','street_number',
+  'address_complement','district','city','state','country','is_active','created_at','updated_at','archived_at'
+].join(',');
+const SCHOOL_CONTACT_DETAIL_COLUMNS = [
+  'id','organization_id','school_id','school_unit_id','name','role','department','email','phone','whatsapp',
+  'preferred_contact_method','notes','is_primary','is_active','created_at','updated_at','archived_at'
+].join(',');
+const SCHOOL_MEETING_COLUMNS = [
+  'id','organization_id','clinic_id','school_id','school_unit_id','meeting_type','title','description','agenda',
+  'scheduled_start','scheduled_end','timezone','location_type','location','online_meeting_url','status','created_by',
+  'responsible_professional_id','completed_at','cancelled_at','cancellation_reason','created_at','updated_at','version',
+  'last_transition_at','previous_scheduled_start','previous_scheduled_end'
+].join(',');
+const SCHOOL_DOCUMENT_COLUMNS = [
+  'id','organization_id','clinic_id','school_id','school_unit_id','patient_id','meeting_id','document_id',
+  'document_type','visibility','document_date','created_by','created_at','updated_at','archived_at'
+].join(',');
+const SCHOOL_AUDIT_SUMMARY_COLUMNS = 'id,organization_id,clinic_id,actor_id,resource_type,resource_id,action,reason,created_at';
+const SCHOOL_MEETING_PATIENT_COLUMNS = [
+  'id','organization_id','meeting_id','patient_id','school_enrollment_id','participation_status','patient_agenda',
+  'included_by','created_at','updated_at','removed_at','removed_by','removal_reason','attendance_marked_at',
+  'attendance_marked_by','attendance_notes','actual_joined_at'
+].join(',');
+const SCHOOL_MEETING_PARTICIPANT_COLUMNS = [
+  'id','organization_id','meeting_id','participant_type','professional_id','responsible_id','school_contact_id',
+  'external_name','external_email','attendance_status','invited_at','confirmed_at','attended','notes','created_by',
+  'created_at','updated_at','removed_at','removed_by','removal_reason','attendance_marked_at','attendance_marked_by',
+  'attendance_notes','actual_joined_at'
+].join(',');
+const SCHOOL_MEETING_MINUTES_COLUMNS = [
+  'id','organization_id','clinic_id','meeting_id','actual_start','actual_end','general_summary','decisions','referrals',
+  'next_meeting_at','status','completed_by','completed_at','created_by','updated_by','created_at','updated_at',
+  'task_sync_status','task_sync_error'
+].join(',');
+const SCHOOL_MEETING_REFERRAL_COLUMNS = [
+  'id','organization_id','clinic_id','meeting_id','patient_id','title','description','responsible_user_id','due_at',
+  'priority','status','task_id','task_error','created_by','created_at','updated_at'
+].join(',');
+const SCHOOL_ENROLLMENT_COLUMNS = [
+  'id','organization_id','clinic_id','patient_id','school_id','school_unit_id','academic_year','grade_level',
+  'class_name','shift','enrollment_code','teacher_contact_id','coordinator_contact_id','is_current','started_at',
+  'ended_at','exit_reason','notes','created_at','updated_at','enrollment_type','ended_by'
+].join(',');
+const SCHOOL_CONSENT_COLUMNS = [
+  'id','organization_id','clinic_id','patient_id','school_enrollment_id','consent_type','status',
+  'granted_by_responsible_id','granted_at','expires_at','revoked_at','revocation_reason','document_id','notes',
+  'created_by','updated_by','created_at','updated_at','consent_version','is_current','supersedes_consent_id','effective_at'
+].join(',');
+const SCHOOL_MIGRATION_REVIEW_COLUMNS = [
+  'id','organization_id','clinic_id','patient_id','original_value','normalized_value','candidate_school_ids','status',
+  'resolution_notes','resolved_by','resolved_at','created_at','source_field','decision','selected_school_id',
+  'selected_school_unit_id','review_error','updated_at'
+].join(',');
 const deterministicUuid = (value: string) => {
   const hex = crypto.createHash('sha256').update(value).digest('hex').slice(0, 32).split('');
   hex[12] = '5';
@@ -115,7 +175,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
   };
 
   const ensureMeeting = async (scope: any, meetingId: string, requireClinical = false) => {
-    const result = await supabase.from('school_meetings').select('*,schools(id,display_name),school_units(id,name)').eq('id', meetingId).eq('organization_id', scope.organizationId).eq('clinic_id', scope.clinicId).maybeSingle();
+    const result = await supabase.from('school_meetings').select(`${SCHOOL_MEETING_COLUMNS},schools(id,display_name),school_units(id,name)`).eq('id', meetingId).eq('organization_id', scope.organizationId).eq('clinic_id', scope.clinicId).maybeSingle();
     if (result.error) throw result.error;
     if (!result.data) throw new Error('SCHOOL_MEETING_NOT_FOUND');
     if (requireClinical && scope.role === 'receptionist') throw new Error('ACCESS_DENIED');
@@ -336,6 +396,45 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
     } catch (error) { errorResponse(res, error); }
   });
 
+  app.get('/api/schools/:schoolId/enrollment-options', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req: any, res: any) => {
+    try {
+      const scope = await workspace(req);
+      const schoolId = sanitizeString(req.params.schoolId, 120);
+      const school = await ensureSchoolVisible(scope, schoolId);
+      const [units, contacts] = await Promise.all([
+        supabase
+          .from('school_units')
+          .select('id,school_id,name,is_active,archived_at')
+          .eq('organization_id', scope.organizationId)
+          .eq('school_id', schoolId)
+          .eq('is_active', true)
+          .is('archived_at', null)
+          .order('name'),
+        supabase
+          .from('school_contacts')
+          .select('id,school_id,school_unit_id,name,role,is_primary,is_active,archived_at')
+          .eq('organization_id', scope.organizationId)
+          .eq('school_id', schoolId)
+          .eq('is_active', true)
+          .is('archived_at', null)
+          .order('is_primary', { ascending: false })
+          .order('name'),
+      ] as any);
+      if (units.error) throw units.error;
+      if (contacts.error) throw contacts.error;
+      res.json({
+        success: true,
+        data: {
+          id: school.id,
+          units: units.data || [],
+          contacts: contacts.data || [],
+        },
+      });
+    } catch (error) {
+      errorResponse(res, error, 'Não foi possível carregar as opções do vínculo escolar.');
+    }
+  });
+
   app.post('/api/schools', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req: any, res: any) => {
     try {
       const scope = await workspace(req); const body = req.body || {};
@@ -365,16 +464,34 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
       const scope = await workspace(req);
       const schoolId = sanitizeString(req.params.schoolId, 120);
       await ensureSchoolVisible(scope, schoolId);
-      const school = await supabase.from('schools').select('*').eq('id', schoolId).eq('organization_id', scope.organizationId).maybeSingle();
+      const school = await supabase.from('schools').select(SCHOOL_DETAIL_COLUMNS).eq('id', schoolId).eq('organization_id', scope.organizationId).maybeSingle();
       if (school.error) throw school.error;
       if (!school.data) throw new Error('SCHOOL_NOT_FOUND');
+
+      const section = sanitizeString(req.query?.section, 30).toLowerCase();
+      if (section === 'summary') {
+        const [units, contacts] = await Promise.all([
+          supabase.from('school_units').select(SCHOOL_UNIT_DETAIL_COLUMNS).eq('organization_id', scope.organizationId).eq('school_id', schoolId).order('name'),
+          supabase.from('school_contacts').select(SCHOOL_CONTACT_DETAIL_COLUMNS).eq('organization_id', scope.organizationId).eq('school_id', schoolId).order('is_primary', { ascending: false }).order('name'),
+        ] as any);
+        if (units.error) throw units.error;
+        if (contacts.error) throw contacts.error;
+        return res.json({ success: true, data: { ...school.data, units: units.data || [], contacts: contacts.data || [] } });
+      }
+      if (section === 'audit') {
+        const audit = !['director', 'coordinator'].includes(scope.role)
+          ? { data: [] }
+          : await supabase.from('school_audit_events').select(SCHOOL_AUDIT_SUMMARY_COLUMNS).eq('organization_id', scope.organizationId).eq('resource_type', 'SCHOOL').eq('resource_id', schoolId).order('created_at', { ascending: false }).limit(100);
+        if ((audit as any).error) throw (audit as any).error;
+        return res.json({ success: true, data: { id: school.data.id, audit: (audit as any).data || [] } });
+      }
       const [units, contacts, enrollments, meetings, documents, audit] = await Promise.all([
-        supabase.from('school_units').select('*').eq('organization_id', scope.organizationId).eq('school_id', schoolId).order('name'),
-        supabase.from('school_contacts').select('*').eq('organization_id', scope.organizationId).eq('school_id', schoolId).order('is_primary', { ascending: false }).order('name'),
+        supabase.from('school_units').select(SCHOOL_UNIT_DETAIL_COLUMNS).eq('organization_id', scope.organizationId).eq('school_id', schoolId).order('name'),
+        supabase.from('school_contacts').select(SCHOOL_CONTACT_DETAIL_COLUMNS).eq('organization_id', scope.organizationId).eq('school_id', schoolId).order('is_primary', { ascending: false }).order('name'),
         supabase.from('patient_school_enrollments').select('id,patient_id,school_unit_id,academic_year,grade_level,class_name,shift,enrollment_type,is_current,started_at,ended_at').eq('organization_id', scope.organizationId).eq('school_id', schoolId).order('started_at', { ascending: false }).limit(500),
-        supabase.from('school_meetings').select('*').eq('organization_id', scope.organizationId).eq('school_id', schoolId).eq('clinic_id', scope.clinicId).order('scheduled_start', { ascending: false }).limit(200),
-        supabase.from('school_document_links').select('*').eq('organization_id', scope.organizationId).eq('school_id', schoolId).is('archived_at', null).order('created_at', { ascending: false }).limit(200),
-        !['director', 'coordinator'].includes(scope.role) ? Promise.resolve({ data: [] }) : supabase.from('school_audit_events').select('*').eq('organization_id', scope.organizationId).eq('resource_type', 'SCHOOL').eq('resource_id', schoolId).order('created_at', { ascending: false }).limit(100)
+        supabase.from('school_meetings').select(SCHOOL_MEETING_COLUMNS).eq('organization_id', scope.organizationId).eq('school_id', schoolId).eq('clinic_id', scope.clinicId).order('scheduled_start', { ascending: false }).limit(200),
+        supabase.from('school_document_links').select(SCHOOL_DOCUMENT_COLUMNS).eq('organization_id', scope.organizationId).eq('school_id', schoolId).is('archived_at', null).order('created_at', { ascending: false }).limit(200),
+        !['director', 'coordinator'].includes(scope.role) ? Promise.resolve({ data: [] }) : supabase.from('school_audit_events').select(SCHOOL_AUDIT_SUMMARY_COLUMNS).eq('organization_id', scope.organizationId).eq('resource_type', 'SCHOOL').eq('resource_id', schoolId).order('created_at', { ascending: false }).limit(100)
       ] as any);
       for (const result of [units, contacts, enrollments, meetings, documents, audit]) if (result?.error) throw result.error;
 
@@ -426,16 +543,16 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
   });
 
   app.get('/api/schools/:schoolId/units', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req: any, res: any) => {
-    try { const scope = await workspace(req); await ensureSchoolVisible(scope, sanitizeString(req.params.schoolId,120)); const result = await supabase.from('school_units').select('*').eq('organization_id', scope.organizationId).eq('school_id', sanitizeString(req.params.schoolId,120)).order('name'); if (result.error) throw result.error; res.json({ success: true, data: result.data || [] }); } catch (error) { errorResponse(res,error); }
+    try { const scope = await workspace(req); await ensureSchoolVisible(scope, sanitizeString(req.params.schoolId,120)); const result = await supabase.from('school_units').select(SCHOOL_UNIT_DETAIL_COLUMNS).eq('organization_id', scope.organizationId).eq('school_id', sanitizeString(req.params.schoolId,120)).order('name'); if (result.error) throw result.error; res.json({ success: true, data: result.data || [] }); } catch (error) { errorResponse(res,error); }
   });
   app.post('/api/schools/:schoolId/units', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req: any,res:any)=>{ try{ const scope=await workspace(req); await ensureSchoolVisible(scope,sanitizeString(req.params.schoolId,120)); const result=await rpc('school_upsert_unit_v2',scope,{p_school_id:sanitizeString(req.params.schoolId,120),p_unit_id:null,p_payload:req.body||{}},req.body||{}); res.status(201).json(result);}catch(error){errorResponse(res,error);} });
   app.patch('/api/schools/:schoolId/units/:unitId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req: any,res:any)=>{ try{ const scope=await workspace(req); await ensureSchoolVisible(scope,sanitizeString(req.params.schoolId,120)); const result=await rpc('school_upsert_unit_v2',scope,{p_school_id:sanitizeString(req.params.schoolId,120),p_unit_id:sanitizeString(req.params.unitId,120),p_payload:req.body||{}},req.body||{}); res.json(result);}catch(error){errorResponse(res,error);} });
 
-  app.get('/api/schools/:schoolId/contacts', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req:any,res:any)=>{ try{const scope=await workspace(req);await ensureSchoolVisible(scope,sanitizeString(req.params.schoolId,120));const result=await supabase.from('school_contacts').select('*').eq('organization_id',scope.organizationId).eq('school_id',sanitizeString(req.params.schoolId,120)).order('is_primary',{ascending:false}).order('name');if(result.error)throw result.error;res.json({success:true,data:result.data||[]});}catch(error){errorResponse(res,error);} });
+  app.get('/api/schools/:schoolId/contacts', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req:any,res:any)=>{ try{const scope=await workspace(req);await ensureSchoolVisible(scope,sanitizeString(req.params.schoolId,120));const result=await supabase.from('school_contacts').select(SCHOOL_CONTACT_DETAIL_COLUMNS).eq('organization_id',scope.organizationId).eq('school_id',sanitizeString(req.params.schoolId,120)).order('is_primary',{ascending:false}).order('name');if(result.error)throw result.error;res.json({success:true,data:result.data||[]});}catch(error){errorResponse(res,error);} });
   app.post('/api/schools/:schoolId/contacts', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req:any,res:any)=>{try{const scope=await workspace(req);await ensureSchoolVisible(scope,sanitizeString(req.params.schoolId,120));const result=await rpc('school_upsert_contact_v2',scope,{p_school_id:sanitizeString(req.params.schoolId,120),p_contact_id:null,p_payload:req.body||{}},req.body||{});res.status(201).json(result);}catch(error){errorResponse(res,error);} });
   app.patch('/api/schools/:schoolId/contacts/:contactId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req:any,res:any)=>{try{const scope=await workspace(req);await ensureSchoolVisible(scope,sanitizeString(req.params.schoolId,120));const result=await rpc('school_upsert_contact_v2',scope,{p_school_id:sanitizeString(req.params.schoolId,120),p_contact_id:sanitizeString(req.params.contactId,120),p_payload:req.body||{}},req.body||{});res.json(result);}catch(error){errorResponse(res,error);} });
 
-  app.get('/api/patients/:patientId/school-enrollments', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await supabase.from('patient_school_enrollments').select('*,schools(id,display_name,city,state),school_units(id,name),teacher:school_contacts!patient_school_enrollments_teacher_contact_id_fkey(id,name),coordinator:school_contacts!patient_school_enrollments_coordinator_contact_id_fkey(id,name)').eq('organization_id',scope.organizationId).eq('patient_id',patientId).order('started_at',{ascending:false});if(result.error)throw result.error;res.json({success:true,data:result.data||[]});}catch(error){errorResponse(res,error);} });
+  app.get('/api/patients/:patientId/school-enrollments', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await supabase.from('patient_school_enrollments').select(`${SCHOOL_ENROLLMENT_COLUMNS},schools(id,display_name,city,state),school_units(id,name),teacher:school_contacts!patient_school_enrollments_teacher_contact_id_fkey(id,name),coordinator:school_contacts!patient_school_enrollments_coordinator_contact_id_fkey(id,name)`).eq('organization_id',scope.organizationId).eq('patient_id',patientId).order('started_at',{ascending:false});if(result.error)throw result.error;res.json({success:true,data:result.data||[]});}catch(error){errorResponse(res,error);} });
   app.post('/api/patients/:patientId/school-enrollments', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await rpc('school_save_enrollment_v3',scope,{p_patient_id:patientId,p_payload:req.body||{}},req.body||{});res.status(201).json(result);}catch(error){errorResponse(res,error);} });
   app.patch('/api/patients/:patientId/school-enrollments/:enrollmentId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const body={...(req.body||{}),enrollmentId:sanitizeString(req.params.enrollmentId,120)};const result=await rpc('school_save_enrollment_v3',scope,{p_patient_id:patientId,p_payload:body},body);res.json(result);}catch(error){errorResponse(res,error);} });
   app.post('/api/patients/:patientId/school-enrollments/:enrollmentId/end', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const body=req.body||{};const result=await rpc('school_end_enrollment_v2',scope,{p_patient_id:patientId,p_enrollment_id:sanitizeString(req.params.enrollmentId,120),p_reason:sanitizeString(body.reason,1000)||null},body);res.json(result);}catch(error){errorResponse(res,error);} });
@@ -573,7 +690,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
     } catch(error){errorResponse(res,error,'Não foi possível carregar os locais de atendimento deste paciente.');}
   });
 
-  app.get('/api/patients/:patientId/school-consents', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await supabase.from('school_consents').select('*,patient_school_enrollments(id,school_id,school_unit_id),schools:patient_school_enrollments(schools(id,display_name))').eq('organization_id',scope.organizationId).eq('patient_id',patientId).order('effective_at',{ascending:false});if(result.error)throw result.error;res.json({success:true,data:result.data||[],current:(result.data||[]).filter((c:any)=>c.is_current)});}catch(error){errorResponse(res,error);} });
+  app.get('/api/patients/:patientId/school-consents', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await supabase.from('school_consents').select(`${SCHOOL_CONSENT_COLUMNS},patient_school_enrollments(id,school_id,school_unit_id),schools:patient_school_enrollments(schools(id,display_name))`).eq('organization_id',scope.organizationId).eq('patient_id',patientId).order('effective_at',{ascending:false});if(result.error)throw result.error;res.json({success:true,data:result.data||[],current:(result.data||[]).filter((c:any)=>c.is_current)});}catch(error){errorResponse(res,error);} });
   app.post('/api/patients/:patientId/school-consents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const body=req.body||{};const result=await rpc('school_record_consent_v2',scope,{p_patient_id:patientId,p_payload:body},body);const patient=await supabase.from('patients').select('id,email,responsible_user_id').eq('id',patientId).eq('clinic_id',scope.clinicId).maybeSingle();if(patient.data){const status=String(body.status||'PENDING').toUpperCase();const notification=await supabase.from('portal_notifications').upsert({organization_id:scope.organizationId,clinic_id:scope.clinicId,recipient_user_id:patient.data.responsible_user_id||null,recipient_email:patient.data.email||null,patient_id:patientId,type:status==='PENDING'?'SCHOOL_CONSENT_PENDING':'SCHOOL_CONSENT_UPDATED',title:status==='PENDING'?'Autorização escolar pendente':'Autorização escolar atualizada',message:'O status de uma autorização escolar foi atualizado.',idempotency_key:`school:consent:${safeIdempotencyKey(body.idempotencyKey)}`,metadata:{consentType:body.consentType,status,administrativeOnly:true}},{onConflict:'idempotency_key',ignoreDuplicates:true});if(notification.error)throw notification.error;}res.status(201).json(result);}catch(error){errorResponse(res,error);} });
 
   app.get('/api/schools/patients/search', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req:any,res:any)=>{
@@ -632,10 +749,15 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
       const meetings=meetingIds.length?await supabase.from('school_meetings').select('id,title,status,scheduled_start').eq('organization_id',scope.organizationId).eq('clinic_id',scope.clinicId).in('id',meetingIds).order('scheduled_start',{ascending:false}):{data:[]};
       if((meetings as any).error)throw (meetings as any).error;
       const patientMap=new Map((patientResult.data||[]).map((patient:any)=>[String(patient.id),patient]));
+      const consentByPatient=new Map<string,any[]>();
+      for(const consent of consents.data||[]){const key=String(consent.patient_id);const rows=consentByPatient.get(key)||[];rows.push(consent);consentByPatient.set(key,rows);}
+      const meetingById=new Map((meetings.data||[]).map((meeting:any)=>[String(meeting.id),meeting]));
+      const meetingsByPatient=new Map<string,any[]>();
+      for(const link of meetingLinks.data||[]){const meeting=meetingById.get(String(link.meeting_id));if(!meeting)continue;const key=String(link.patient_id);const rows=meetingsByPatient.get(key)||[];rows.push(meeting);meetingsByPatient.set(key,rows);}
       const now=Date.now();
       const rows=(result.data||[]).map((row:any)=>{
-        const patientMeetings=(meetingLinks.data||[]).filter((link:any)=>String(link.patient_id)===String(row.patient_id)).map((link:any)=>(meetings.data||[]).find((meeting:any)=>meeting.id===link.meeting_id)).filter(Boolean);
-        return{...row,patient:patientMap.get(String(row.patient_id)),consents:(consents.data||[]).filter((consent:any)=>String(consent.patient_id)===String(row.patient_id)),lastMeeting:patientMeetings.filter((meeting:any)=>meeting.scheduled_start&&new Date(meeting.scheduled_start).getTime()<now).sort((a:any,b:any)=>String(b.scheduled_start).localeCompare(String(a.scheduled_start)))[0]||null,nextMeeting:patientMeetings.filter((meeting:any)=>meeting.scheduled_start&&new Date(meeting.scheduled_start).getTime()>=now&&['SCHEDULED','CONFIRMED','RESCHEDULED'].includes(meeting.status)).sort((a:any,b:any)=>String(a.scheduled_start).localeCompare(String(b.scheduled_start)))[0]||null};
+        const patientKey=String(row.patient_id);const patientMeetings=meetingsByPatient.get(patientKey)||[];
+        return{...row,patient:patientMap.get(patientKey),consents:consentByPatient.get(patientKey)||[],lastMeeting:patientMeetings.filter((meeting:any)=>meeting.scheduled_start&&new Date(meeting.scheduled_start).getTime()<now).sort((a:any,b:any)=>String(b.scheduled_start).localeCompare(String(a.scheduled_start)))[0]||null,nextMeeting:patientMeetings.filter((meeting:any)=>meeting.scheduled_start&&new Date(meeting.scheduled_start).getTime()>=now&&['SCHEDULED','CONFIRMED','RESCHEDULED'].includes(meeting.status)).sort((a:any,b:any)=>String(a.scheduled_start).localeCompare(String(b.scheduled_start)))[0]||null};
       });
       const total=Number(result.count||0);
       res.json({success:true,data:rows,pagination:{page,pageSize,total,totalPages:Math.max(1,Math.ceil(total/pageSize)),hasNextPage:page*pageSize<total},filtersApplied:req.query||{}});
@@ -656,7 +778,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
         visibleMeetingIds=uniq([...(links.data||[]).map((row:any)=>row.meeting_id),...(participants.data||[]).map((row:any)=>row.meeting_id),...(responsible.data||[]).map((row:any)=>row.id)]);
         if(!visibleMeetingIds.length)return res.json({success:true,data:[],pagination:{page,pageSize,total:0,totalPages:1,hasNextPage:false}});
       }
-      let query=supabase.from('school_meetings').select('*,schools(id,display_name),school_units(id,name)',{count:'exact'}).eq('organization_id',scope.organizationId).eq('clinic_id',scope.clinicId);
+      let query=supabase.from('school_meetings').select(`${SCHOOL_MEETING_COLUMNS},schools(id,display_name),school_units(id,name)`,{count:'exact'}).eq('organization_id',scope.organizationId).eq('clinic_id',scope.clinicId);
       if(visibleMeetingIds)query=query.in('id',visibleMeetingIds);
       for(const [q,c] of [['schoolId','school_id'],['unitId','school_unit_id'],['status','status'],['meetingType','meeting_type']] as any[]){const values=parseListParam(req.query?.[q]);if(values.length===1)query=query.eq(c,values[0]);else if(values.length>1)query=query.in(c,values);}
       if(req.query?.from)query=query.gte('scheduled_start',sanitizeString(req.query.from,80));if(req.query?.to)query=query.lte('scheduled_start',sanitizeString(req.query.to,80));
@@ -670,11 +792,11 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
     try{
       const scope=await workspace(req);const meeting=await ensureMeeting(scope,sanitizeString(req.params.meetingId,120));
       const [patientLinks,participants,minutes,documents,referrals,contacts]=await Promise.all([
-        supabase.from('school_meeting_patients').select('*,patients(id,name,email,therapist_id,responsible_user_id),patient_school_enrollments(id,grade_level,class_name,shift)').eq('meeting_id',meeting.id).order('created_at'),
-        supabase.from('school_meeting_participants').select('*,school_contacts(id,name,role,email,phone)').eq('meeting_id',meeting.id).order('created_at'),
-        scope.role === 'receptionist' ? Promise.resolve({ data: null }) : supabase.from('school_meeting_minutes').select('*').eq('meeting_id',meeting.id).maybeSingle(),
-        supabase.from('school_document_links').select('*').eq('meeting_id',meeting.id).is('archived_at',null).order('created_at',{ascending:false}),
-        scope.role === 'receptionist' ? Promise.resolve({ data: [] }) : supabase.from('school_meeting_referrals').select('*').eq('meeting_id',meeting.id).order('created_at'),
+        supabase.from('school_meeting_patients').select(`${SCHOOL_MEETING_PATIENT_COLUMNS},patients(id,name,email,therapist_id,responsible_user_id),patient_school_enrollments(id,grade_level,class_name,shift)`).eq('meeting_id',meeting.id).order('created_at'),
+        supabase.from('school_meeting_participants').select(`${SCHOOL_MEETING_PARTICIPANT_COLUMNS},school_contacts(id,name,role,email,phone)`).eq('meeting_id',meeting.id).order('created_at'),
+        scope.role === 'receptionist' ? Promise.resolve({ data: null }) : supabase.from('school_meeting_minutes').select(SCHOOL_MEETING_MINUTES_COLUMNS).eq('meeting_id',meeting.id).maybeSingle(),
+        supabase.from('school_document_links').select(SCHOOL_DOCUMENT_COLUMNS).eq('meeting_id',meeting.id).is('archived_at',null).order('created_at',{ascending:false}),
+        scope.role === 'receptionist' ? Promise.resolve({ data: [] }) : supabase.from('school_meeting_referrals').select(SCHOOL_MEETING_REFERRAL_COLUMNS).eq('meeting_id',meeting.id).order('created_at'),
         supabase.from('school_contacts').select('id,name,role,email,phone,school_unit_id,is_active').eq('organization_id',scope.organizationId).eq('school_id',meeting.school_id).eq('is_active',true).is('archived_at',null).order('name')
       ] as any);
       for(const result of [patientLinks,participants,minutes,documents,referrals,contacts])if(result?.error)throw result.error;
@@ -714,7 +836,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
     }catch(error){errorResponse(res,error);}
   });
 
-  app.get('/api/school-meetings/:meetingId/patients', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async(req:any,res:any)=>{try{const scope=await workspace(req);const meeting=await ensureMeeting(scope,sanitizeString(req.params.meetingId,120));const result=await supabase.from('school_meeting_patients').select('*,patients(id,name,email,therapist_id,responsible_user_id),patient_school_enrollments(id,grade_level,class_name,shift)').eq('meeting_id',meeting.id).order('created_at');if(result.error)throw result.error;const allowed=await canAccessPatients(scope,(result.data||[]).map((row:any)=>row.patient_id));res.json({success:true,data:(result.data||[]).filter((row:any)=>!Array.isArray(scope.scopedPatientIds)||allowed.has(String(row.patient_id)))});}catch(error){errorResponse(res,error);} });
+  app.get('/api/school-meetings/:meetingId/patients', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async(req:any,res:any)=>{try{const scope=await workspace(req);const meeting=await ensureMeeting(scope,sanitizeString(req.params.meetingId,120));const result=await supabase.from('school_meeting_patients').select(`${SCHOOL_MEETING_PATIENT_COLUMNS},patients(id,name,email,therapist_id,responsible_user_id),patient_school_enrollments(id,grade_level,class_name,shift)`).eq('meeting_id',meeting.id).order('created_at');if(result.error)throw result.error;const allowed=await canAccessPatients(scope,(result.data||[]).map((row:any)=>row.patient_id));res.json({success:true,data:(result.data||[]).filter((row:any)=>!Array.isArray(scope.scopedPatientIds)||allowed.has(String(row.patient_id)))});}catch(error){errorResponse(res,error);} });
   app.post('/api/school-meetings/:meetingId/patients', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.meetings.manage'), async(req:any,res:any)=>{try{const scope=await workspace(req);const meetingId=sanitizeString(req.params.meetingId,120);const meeting=await ensureMeeting(scope,meetingId);const patientIds=uniq(safeArray(req.body?.patientIds));const allowed=await canAccessPatients(scope,patientIds);if(allowed.size!==patientIds.length)throw new Error('PATIENT_ACCESS_DENIED');const result=await rpc('school_modify_meeting_patients_v2',scope,{p_meeting_id:meetingId,p_action:'ADD',p_patient_ids:patientIds,p_reason:null},req.body||{});await notifyMeeting(scope,meeting,'SCHOOL_MEETING_PATIENTS_ADDED','Participantes adicionados à reunião escolar',sanitizeString(meeting.title,180),`patients-added:${safeIdempotencyKey(req.body?.idempotencyKey)}`);res.json(result);}catch(error){errorResponse(res,error);} });
   app.delete('/api/school-meetings/:meetingId/patients', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.meetings.manage'), async(req:any,res:any)=>{try{const scope=await workspace(req);const meetingId=sanitizeString(req.params.meetingId,120);const meeting=await ensureMeeting(scope,meetingId);const body=req.body||{};const result=await rpc('school_modify_meeting_patients_v2',scope,{p_meeting_id:meetingId,p_action:'REMOVE',p_patient_ids:uniq(safeArray(body.patientIds)),p_reason:sanitizeString(body.reason,1000)},body);await notifyMeeting(scope,meeting,'SCHOOL_MEETING_PATIENTS_REMOVED','Participação atualizada na reunião escolar',sanitizeString(meeting.title,180),`patients-removed:${safeIdempotencyKey(body.idempotencyKey)}`);res.json(result);}catch(error){errorResponse(res,error);} });
 
@@ -730,7 +852,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
     try{
       const scope=await workspace(req);const meetingId=sanitizeString(req.params.meetingId,120);const meeting=await ensureMeeting(scope,meetingId,true);const body=req.body||{};
       const result=await rpc('school_save_minutes_v2',scope,{p_meeting_id:meetingId,p_payload:body,p_patient_notes:safeArray(body.patientNotes),p_referrals:safeArray(body.referrals)},body);
-      const pending=await supabase.from('school_meeting_referrals').select('*').eq('organization_id',scope.organizationId).eq('clinic_id',scope.clinicId).eq('meeting_id',meetingId).eq('status','PENDING_TASK').order('created_at');
+      const pending=await supabase.from('school_meeting_referrals').select(SCHOOL_MEETING_REFERRAL_COLUMNS).eq('organization_id',scope.organizationId).eq('clinic_id',scope.clinicId).eq('meeting_id',meetingId).eq('status','PENDING_TASK').order('created_at');
       if(pending.error)throw pending.error;
       if((pending.data||[]).length){
         const patientIds=uniq((pending.data||[]).map((referral:any)=>referral.patient_id).filter(Boolean));
@@ -773,14 +895,14 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
     }catch(error){errorResponse(res,error,'Não foi possível salvar a ata e os encaminhamentos.');}
   });
 
-  app.get('/api/school-documents', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async(req:any,res:any)=>{try{const scope=await workspace(req);const requestedSchoolId=sanitizeString(req.query?.schoolId,120);if(requestedSchoolId)await ensureSchoolVisible(scope,requestedSchoolId);let query=supabase.from('school_document_links').select('*').eq('organization_id',scope.organizationId).is('archived_at',null);for(const [q,c] of [['schoolId','school_id'],['unitId','school_unit_id'],['meetingId','meeting_id'],['patientId','patient_id']] as any[]){const v=sanitizeString(req.query?.[q],120);if(v)query=query.eq(c,v);}const result=await query.order('created_at',{ascending:false}).limit(200);if(result.error)throw result.error;const patientRows=(result.data||[]).filter((r:any)=>r.patient_id);const allowed=await canAccessPatients(scope,patientRows.map((r:any)=>r.patient_id));const visible=(result.data||[]).filter((r:any)=>{ if(!r.patient_id)return true; if(scope.role==='receptionist')return false; return allowed.has(String(r.patient_id)); });const docIds=uniq(visible.map((r:any)=>r.document_id));const files=docIds.length?await supabase.from('patient_files').select('id,file_name,file_type,file_size,created_at,patient_id').in('id',docIds):{data:[]};const fileMap=new Map((files.data||[]).map((f:any)=>[String(f.id),f]));res.json({success:true,data:visible.map((link:any)=>({...link,document:fileMap.get(String(link.document_id))||null}))});}catch(error){errorResponse(res,error);} });
+  app.get('/api/school-documents', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async(req:any,res:any)=>{try{const scope=await workspace(req);const requestedSchoolId=sanitizeString(req.query?.schoolId,120);if(requestedSchoolId)await ensureSchoolVisible(scope,requestedSchoolId);let query=supabase.from('school_document_links').select(SCHOOL_DOCUMENT_COLUMNS).eq('organization_id',scope.organizationId).is('archived_at',null);for(const [q,c] of [['schoolId','school_id'],['unitId','school_unit_id'],['meetingId','meeting_id'],['patientId','patient_id']] as any[]){const v=sanitizeString(req.query?.[q],120);if(v)query=query.eq(c,v);}const result=await query.order('created_at',{ascending:false}).limit(200);if(result.error)throw result.error;const patientRows=(result.data||[]).filter((r:any)=>r.patient_id);const allowed=await canAccessPatients(scope,patientRows.map((r:any)=>r.patient_id));const visible=(result.data||[]).filter((r:any)=>{ if(!r.patient_id)return true; if(scope.role==='receptionist')return false; return allowed.has(String(r.patient_id)); });const docIds=uniq(visible.map((r:any)=>r.document_id));const files=docIds.length?await supabase.from('patient_files').select('id,file_name,file_type,file_size,created_at,patient_id').in('id',docIds):{data:[]};const fileMap=new Map((files.data||[]).map((f:any)=>[String(f.id),f]));res.json({success:true,data:visible.map((link:any)=>({...link,document:fileMap.get(String(link.document_id))||null}))});}catch(error){errorResponse(res,error);} });
   app.post('/api/school-documents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.meetings.manage'), async(req:any,res:any)=>{try{const scope=await workspace(req);const body=req.body||{};const schoolId=sanitizeString(body.schoolId,120);if(schoolId)await ensureSchoolVisible(scope,schoolId);const patientId=sanitizeString(body.patientId,120);if(patientId){if(scope.role==='receptionist')throw new Error('ACCESS_DENIED');const allowed=await canAccessPatients(scope,[patientId],true);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');}const result=await rpc('school_link_document_v2',scope,{p_payload:body},body);if(patientId){const patient=await supabase.from('patients').select('id,email,responsible_user_id').eq('id',patientId).eq('clinic_id',scope.clinicId).maybeSingle();if(patient.data){const notification=await supabase.from('portal_notifications').upsert({organization_id:scope.organizationId,clinic_id:scope.clinicId,recipient_user_id:patient.data.responsible_user_id||null,recipient_email:patient.data.email||null,patient_id:patientId,type:'SCHOOL_DOCUMENT_ADDED',title:'Documento escolar adicionado',message:'Um novo documento escolar foi vinculado.',idempotency_key:`school:document:${safeIdempotencyKey(body.idempotencyKey)}`,metadata:{schoolId:body.schoolId||null,meetingId:body.meetingId||null,administrativeOnly:true}},{onConflict:'idempotency_key',ignoreDuplicates:true});if(notification.error)throw notification.error;}}res.status(201).json(result);}catch(error){errorResponse(res,error);} });
   app.patch('/api/school-documents/:linkId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.meetings.manage'), async(req:any,res:any)=>{try{const scope=await workspace(req);const body=req.body||{};const result=await rpc('school_update_document_v2',scope,{p_link_id:sanitizeString(req.params.linkId,120),p_payload:body},body);res.json(result);}catch(error){errorResponse(res,error);} });
 
   app.get('/api/school-migration-review', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async(req:any,res:any)=>{
     try{
       const scope=await workspace(req);const {page,pageSize,from,to}=pagination(req);
-      let query=supabase.from('school_migration_review_queue').select('*,patients(id,name,email)',{count:'exact'}).eq('organization_id',scope.organizationId).eq('clinic_id',scope.clinicId);
+      let query=supabase.from('school_migration_review_queue').select(`${SCHOOL_MIGRATION_REVIEW_COLUMNS},patients(id,name,email)`,{count:'exact'}).eq('organization_id',scope.organizationId).eq('clinic_id',scope.clinicId);
       const status=sanitizeString(req.query?.status,30).toUpperCase();if(status)query=query.eq('status',status);
       const result=await query.order('created_at').range(from,to);if(result.error)throw result.error;
       const [stats,schools]=await Promise.all([
@@ -814,18 +936,22 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
         meetingIds.length?supabase.from('school_meeting_participants').select('meeting_id,professional_id').in('meeting_id',meetingIds).is('removed_at',null):Promise.resolve({data:[]})
       ] as any);
       if(patientLinks.error)throw patientLinks.error;if(participants.error)throw participants.error;
+      const patientIdsByMeeting=new Map<string,string[]>();
+      for(const link of patientLinks.data||[]){const key=String(link.meeting_id);const rows=patientIdsByMeeting.get(key)||[];const patientId=String(link.patient_id);if(patientId&&!rows.includes(patientId))rows.push(patientId);patientIdsByMeeting.set(key,rows);}
+      const professionalIdsByMeeting=new Map<string,string[]>();
+      for(const participant of participants.data||[]){const key=String(participant.meeting_id);const rows=professionalIdsByMeeting.get(key)||[];const professionalId=String(participant.professional_id);if(professionalId&&!rows.includes(professionalId))rows.push(professionalId);professionalIdsByMeeting.set(key,rows);}
       const professionalIds=parseListParam(req.query?.professionalId);
       const requestedPatientIds=parseListParam(req.query?.patientId);
       let rows=result.data||[];
-      if(professionalIds.length)rows=rows.filter((meeting:any)=>professionalIds.includes(String(meeting.responsible_professional_id))||(participants.data||[]).some((participant:any)=>participant.meeting_id===meeting.id&&professionalIds.includes(String(participant.professional_id))));
-      if(requestedPatientIds.length)rows=rows.filter((meeting:any)=>(patientLinks.data||[]).some((link:any)=>link.meeting_id===meeting.id&&requestedPatientIds.includes(String(link.patient_id))));
+      if(professionalIds.length)rows=rows.filter((meeting:any)=>professionalIds.includes(String(meeting.responsible_professional_id))||(professionalIdsByMeeting.get(String(meeting.id))||[]).some((id)=>professionalIds.includes(id)));
+      if(requestedPatientIds.length)rows=rows.filter((meeting:any)=>(patientIdsByMeeting.get(String(meeting.id))||[]).some((id)=>requestedPatientIds.includes(id)));
       if(Array.isArray(scope.scopedPatientIds)){
         const allowed=await canAccessPatients(scope,(patientLinks.data||[]).map((row:any)=>row.patient_id));
-        rows=rows.filter((meeting:any)=>meeting.responsible_professional_id===scope.actorId||(participants.data||[]).some((participant:any)=>participant.meeting_id===meeting.id&&participant.professional_id===scope.actorId)||(patientLinks.data||[]).some((link:any)=>link.meeting_id===meeting.id&&allowed.has(String(link.patient_id))));
+        rows=rows.filter((meeting:any)=>meeting.responsible_professional_id===scope.actorId||(professionalIdsByMeeting.get(String(meeting.id))||[]).includes(String(scope.actorId))||(patientIdsByMeeting.get(String(meeting.id))||[]).some((id)=>allowed.has(id)));
       }
       res.json({success:true,data:rows.map((meeting:any)=>{
-        const meetingProfessionalIds=uniq([meeting.responsible_professional_id,...(participants.data||[]).filter((participant:any)=>participant.meeting_id===meeting.id).map((participant:any)=>participant.professional_id)]);
-        const meetingPatientIds=uniq((patientLinks.data||[]).filter((link:any)=>link.meeting_id===meeting.id).map((link:any)=>link.patient_id));
+        const meetingProfessionalIds=uniq([meeting.responsible_professional_id,...(professionalIdsByMeeting.get(String(meeting.id))||[])]);
+        const meetingPatientIds=patientIdsByMeeting.get(String(meeting.id))||[];
         return{id:`school-${meeting.id}`,schoolMeetingId:meeting.id,title:meeting.title,start:meeting.scheduled_start,end:meeting.scheduled_end,eventType:meeting.meeting_type,type:meeting.meeting_type,status:meeting.status,locationType:meeting.location_type,location:meeting.location,schoolId:meeting.school_id,schoolUnitId:meeting.school_unit_id,schoolName:meeting.schools?.display_name,schoolUnitName:meeting.school_units?.name,responsibleProfessionalId:meeting.responsible_professional_id,therapist_id:meeting.responsible_professional_id,professionalIds:meetingProfessionalIds,patientIds:meetingPatientIds,patientCount:meetingPatientIds.length,source:'school_meeting'};
       })});
     }catch(error){errorResponse(res,error);}

@@ -118,6 +118,7 @@ type ConferenceRow = {
 };
 
 type MonthlyConferenceCenterProps = {
+  workspaceScopeKey?: string;
   patients?: any[];
   professionals?: any[];
   payers?: any[];
@@ -451,6 +452,7 @@ function pendingStatusText(row: ConferenceRow, label: string, pendingText: strin
 }
 
 export function MonthlyConferenceCenter({
+  workspaceScopeKey = "",
   patients = [],
   professionals = [],
   payers = [],
@@ -1153,6 +1155,7 @@ export function MonthlyConferenceCenter({
 
       {activeTab === "preGuides" ? (
         <TissPreGuideTab
+          workspaceScopeKey={workspaceScopeKey}
           from={from}
           to={to}
           patientId={patientId}

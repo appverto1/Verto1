@@ -23,6 +23,11 @@ type NormalizedPushSubscription = {
   };
 };
 
+export type AppointmentPushSubscriptionEntry = {
+  row: any;
+  subscription: NormalizedPushSubscription;
+};
+
 type ResolvePatientIdsParams = {
   supabase: any;
   patientId?: string | null;
@@ -77,6 +82,7 @@ type SendAppointmentNotificationParams = {
   title?: string;
   body?: string;
   reminderKind?: string;
+  preloadedSubscriptions?: AppointmentPushSubscriptionEntry[];
   logger?: Logger;
 };
 
@@ -624,6 +630,184 @@ export async function findPushSubscriptionsForPatient(params: {
   );
 }
 
+export async function findPushSubscriptionsForRecipients(params: {
+  supabase: any;
+  recipients: Array<{
+    key: string;
+    patientIds: string[];
+    patientEmail?: string | null;
+    legacyUserIds?: string[];
+    clinicId?: string | null;
+  }>;
+  logger?: Logger;
+}) {
+  const recipients = params.recipients
+    .map((recipient) => ({
+      key: sanitizeText(recipient.key, 240),
+      patientIds: Array.from(new Set(recipient.patientIds.filter((id) => isUuid(id)))),
+      patientEmail: sanitizeEmail(recipient.patientEmail),
+      legacyUserIds: Array.from(new Set((recipient.legacyUserIds || []).filter((id) => isUuid(id)))),
+      clinicId: sanitizeText(recipient.clinicId, 120),
+    }))
+    .filter((recipient) => recipient.key && (recipient.patientIds.length > 0 || recipient.patientEmail));
+  const result = new Map<string, AppointmentPushSubscriptionEntry[]>();
+  for (const recipient of recipients) result.set(recipient.key, []);
+  if (recipients.length === 0) return { complete: true, subscriptionsByRecipientKey: result };
+
+  const patientIds = Array.from(new Set(recipients.flatMap((recipient) => recipient.patientIds)));
+  const selectColumns = 'endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id';
+  const chunkFilterValues = (values: string[], maxItems = 100, maxCharacters = 3000) => {
+    const chunks: string[][] = [];
+    let current: string[] = [];
+    let currentCharacters = 0;
+    for (const value of values) {
+      const nextCharacters = value.length + 1;
+      if (current.length > 0 && (current.length >= maxItems || currentCharacters + nextCharacters > maxCharacters)) {
+        chunks.push(current);
+        current = [];
+        currentCharacters = 0;
+      }
+      current.push(value);
+      currentCharacters += nextCharacters;
+    }
+    if (current.length > 0) chunks.push(current);
+    return chunks;
+  };
+  const read = async (column: 'patient_id' | 'user_id', values: string[]) => {
+    if (values.length === 0) return { rows: [] as any[], failed: false };
+    const rows: any[] = [];
+    for (const chunk of chunkFilterValues(values)) {
+      for (let page = 0; page < 20; page += 1) {
+        const from = page * 500;
+        const { data, error } = await params.supabase
+          .from('push_subscriptions')
+          .select(selectColumns)
+          .in(column, chunk)
+          .order('endpoint', { ascending: true })
+          .range(from, from + 499);
+        if (error) {
+          params.logger?.warn?.('[Push] Busca compartilhada de subscriptions falhou; usando fallback individual.', {
+            column,
+            count: chunk.length,
+            message: error.message,
+          });
+          return { rows: [] as any[], failed: true };
+        }
+        const pageRows = Array.isArray(data) ? data : [];
+        rows.push(...pageRows);
+        if (pageRows.length < 500) break;
+        if (page === 19) return { rows: [] as any[], failed: true };
+      }
+    }
+    return { rows, failed: false };
+  };
+  const readEmails = async (values: string[]) => {
+    if (values.length === 0) return { rows: [] as any[], failed: false };
+    const rows: any[] = [];
+    const chunks = chunkFilterValues(values, 50, 2500);
+    for (const chunk of chunks) {
+      const filters = chunk.map((email) => {
+        const quotedEmail = `"${email.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+        return `user_email.ilike.${quotedEmail}`;
+      }).join(',');
+      for (let page = 0; page < 20; page += 1) {
+        const from = page * 500;
+        const { data, error } = await params.supabase
+          .from('push_subscriptions')
+          .select(selectColumns)
+          .or(filters)
+          .order('endpoint', { ascending: true })
+          .range(from, from + 499);
+        if (error) {
+          params.logger?.warn?.('[Push] Busca compartilhada de subscriptions por email falhou; usando fallback individual.', {
+            count: chunk.length,
+            message: error.message,
+          });
+          return { rows: [] as any[], failed: true };
+        }
+        const pageRows = Array.isArray(data) ? data : [];
+        rows.push(...pageRows);
+        if (pageRows.length < 500) break;
+        if (page === 19) return { rows: [] as any[], failed: true };
+      }
+    }
+    return { rows, failed: false };
+  };
+
+  const patientRows = await read('patient_id', patientIds);
+  if (patientRows.failed) {
+    return { complete: false, subscriptionsByRecipientKey: result };
+  }
+
+  const clinicMatches = (recipient: (typeof recipients)[number], row: any, requireClinic = false) => {
+    const rowClinicId = sanitizeText(row?.clinic_id, 120);
+    if (!recipient.clinicId) return true;
+    if (!rowClinicId) return !requireClinic;
+    return rowClinicId === recipient.clinicId;
+  };
+  const recipientsWithoutPatientSubscription = recipients.filter((recipient) => {
+    const patientIdSet = new Set(recipient.patientIds);
+    return !patientRows.rows.some((row: any) =>
+      clinicMatches(recipient, row) && patientIdSet.has(sanitizeText(row?.patient_id, 120)),
+    );
+  });
+  const userIds = Array.from(new Set(recipientsWithoutPatientSubscription.flatMap((recipient) => [
+    ...recipient.patientIds,
+    ...recipient.legacyUserIds,
+  ])));
+  const userRows = await read('user_id', userIds);
+  if (userRows.failed) {
+    return { complete: false, subscriptionsByRecipientKey: result };
+  }
+  const recipientsWithoutExactSubscription = recipientsWithoutPatientSubscription.filter((recipient) => {
+    const userIdSet = new Set([...recipient.patientIds, ...recipient.legacyUserIds]);
+    return !userRows.rows.some((row: any) =>
+      clinicMatches(recipient, row) && userIdSet.has(sanitizeText(row?.user_id, 120)),
+    );
+  });
+  const patientEmails = Array.from(new Set(
+    recipientsWithoutExactSubscription.map((recipient) => recipient.patientEmail).filter(Boolean),
+  ));
+  const emailRows = await readEmails(patientEmails);
+  if (emailRows.failed) {
+    return { complete: false, subscriptionsByRecipientKey: result };
+  }
+
+  for (const recipient of recipients) {
+    const patientIdSet = new Set(recipient.patientIds);
+    const userIdSet = new Set([...recipient.patientIds, ...recipient.legacyUserIds]);
+    const patientMatches = patientRows.rows.filter((row: any) =>
+      clinicMatches(recipient, row) && patientIdSet.has(sanitizeText(row?.patient_id, 120)),
+    );
+    const userMatches = patientMatches.length > 0
+      ? []
+      : userRows.rows.filter((row: any) =>
+          clinicMatches(recipient, row) && userIdSet.has(sanitizeText(row?.user_id, 120)),
+        );
+    const matchingRows = patientMatches.length > 0
+      ? patientMatches
+      : userMatches.length > 0
+        ? userMatches
+        : emailRows.rows.filter((row: any) =>
+          clinicMatches(recipient, row, true) &&
+          Boolean(recipient.patientEmail) &&
+          sanitizeEmail(row?.user_email) === recipient.patientEmail,
+        );
+    result.set(recipient.key, Array.from(new Map(
+      matchingRows
+        .map((row: any) => {
+          const subscription = normalizePushSubscription(row);
+          return subscription
+            ? [subscription.endpoint, { row, subscription } as AppointmentPushSubscriptionEntry]
+            : null;
+        })
+        .filter(Boolean) as Array<[string, AppointmentPushSubscriptionEntry]>,
+    ).values()));
+  }
+
+  return { complete: true, subscriptionsByRecipientKey: result };
+}
+
 export async function sendAppointmentNotification(params: SendAppointmentNotificationParams) {
   const logger = params.logger || console;
   const prevalidatedPatientIds = Array.from(new Set(
@@ -640,14 +824,16 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
         logger,
       });
   const legacyIds = isUuid(params.patientId) ? [params.patientId] : [];
-  const rows = await findPushSubscriptionsForPatient({
-    supabase: params.supabase,
-    patientIds,
-    patientEmail: params.patientEmail,
-    legacyUserIds: legacyIds,
-    clinicId: params.appointment.clinicId || params.clinicId,
-    logger
-  });
+  const rows = params.preloadedSubscriptions !== undefined
+    ? params.preloadedSubscriptions
+    : await findPushSubscriptionsForPatient({
+        supabase: params.supabase,
+        patientIds,
+        patientEmail: params.patientEmail,
+        legacyUserIds: legacyIds,
+        clinicId: params.appointment.clinicId || params.clinicId,
+        logger
+      });
 
   if (!rows.length) {
     logger.warn('[Push] Nenhuma subscription encontrada para consulta.', {
@@ -715,6 +901,7 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
 
   let sent = 0;
   let failed = 0;
+  const invalidEndpoints = new Set<string>();
 
   for (const entry of rows) {
     try {
@@ -729,12 +916,21 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
         message: error?.message || String(error)
       });
       if (isGonePushError(error)) {
-        await deleteInvalidPushSubscription({
-          supabase: params.supabase,
-          endpoint: entry.subscription.endpoint,
-          logger
-        });
+        invalidEndpoints.add(entry.subscription.endpoint);
       }
+    }
+  }
+
+  if (invalidEndpoints.size > 0) {
+    const { error } = await params.supabase
+      .from('push_subscriptions')
+      .delete()
+      .in('endpoint', Array.from(invalidEndpoints));
+    if (error) {
+      logger.warn('[Push] Falha ao remover subscriptions expiradas em lote.', {
+        count: invalidEndpoints.size,
+        message: error.message,
+      });
     }
   }
 

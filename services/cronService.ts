@@ -3,7 +3,10 @@ import crypto from 'crypto';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
-import { sendAppointmentNotification } from './pushNotificationService';
+import {
+  findPushSubscriptionsForRecipients,
+  sendAppointmentNotification,
+} from './pushNotificationService';
 import {
   buildPatientReminderNotificationPayload,
   resolveBrandingContext,
@@ -395,7 +398,7 @@ async function fetchAppointmentsTable(
     options.logger.warn('[Appointment Reminder Cron] Query appointments falhou.', {
       message: error.message
     });
-    return appointments;
+    return { appointments, available: false };
   }
 
   const rows = Array.isArray(data) ? data : [];
@@ -433,7 +436,7 @@ async function fetchAppointmentsTable(
     });
   }
 
-  return appointments;
+  return { appointments, available: true };
 }
 
 async function fetchClinicStateAppointments(
@@ -442,19 +445,85 @@ async function fetchClinicStateAppointments(
   queryScheduledEndUtc: dayjs.Dayjs,
 ) {
   const appointments = new Map<string, ReminderAppointment>();
-  const { data, error } = await options.supabase
-    .from('clinic_state')
-    .select('clinic_id, appointments')
-    .limit(500);
-
-  if (error) {
-    options.logger.warn('[Appointment Reminder Cron] Query clinic_state falhou.', {
-      message: error.message
+  let states: any[] = [];
+  const compactRows: any[] = [];
+  const pageSize = 500;
+  const maxPages = 200;
+  const legacyBlobFallbackMaxPages = 4;
+  let afterClinicId: string | null = null;
+  let afterOrdinality: number | null = null;
+  let compactError: any = null;
+  let compactComplete = false;
+  const seenCursors = new Set<string>();
+  for (let page = 0; page < maxPages; page += 1) {
+    const compactResult = await options.supabase.rpc('get_legacy_due_appointments_v1', {
+      p_window_start: queryScheduledStartUtc.toISOString(),
+      p_window_end: queryScheduledEndUtc.toISOString(),
+      p_limit: pageSize,
+      p_after_clinic_id: afterClinicId,
+      p_after_ordinality: afterOrdinality,
     });
-    return appointments;
+    if (compactResult.error || !Array.isArray(compactResult.data)) {
+      compactError = compactResult.error || new Error('LEGACY_APPOINTMENT_PAGE_INVALID');
+      break;
+    }
+    const rows = compactResult.data;
+    compactRows.push(...rows);
+    if (rows.length < pageSize) {
+      compactComplete = true;
+      break;
+    }
+    const lastRow = rows[rows.length - 1];
+    const nextClinicId = sanitizeText(lastRow?.clinic_id, 120);
+    const nextOrdinality = Number(lastRow?.appointment_ordinality);
+    const cursorKey = `${nextClinicId}:${nextOrdinality}`;
+    if (!nextClinicId || !Number.isSafeInteger(nextOrdinality) || nextOrdinality < 1 || seenCursors.has(cursorKey)) {
+      compactError = new Error('LEGACY_APPOINTMENT_CURSOR_INVALID');
+      break;
+    }
+    seenCursors.add(cursorKey);
+    afterClinicId = nextClinicId;
+    afterOrdinality = nextOrdinality;
+  }
+  if (!compactComplete && !compactError) {
+    compactError = new Error('LEGACY_APPOINTMENT_PAGE_LIMIT_REACHED');
   }
 
-  for (const state of data || []) {
+  if (compactComplete) {
+    states = compactRows.map((row: any) => ({
+      clinic_id: row?.clinic_id,
+      appointments: row?.appointment ? [row.appointment] : [],
+    }));
+  } else {
+    options.logger.warn('[Appointment Reminder Cron] RPC legado compacto indisponivel; usando leitura compativel.', {
+      message: compactError?.message,
+    });
+    for (let page = 0; page < legacyBlobFallbackMaxPages; page += 1) {
+      const from = page * pageSize;
+      const legacyResult = await options.supabase
+        .from('clinic_state')
+        .select('clinic_id, appointments')
+        .order('clinic_id')
+        .range(from, from + pageSize - 1);
+      if (legacyResult.error) {
+        options.logger.warn('[Appointment Reminder Cron] Query clinic_state falhou.', {
+          message: legacyResult.error.message
+        });
+        return appointments;
+      }
+      const rows = legacyResult.data || [];
+      states.push(...rows);
+      if (rows.length < pageSize) break;
+      if (page === legacyBlobFallbackMaxPages - 1) {
+        options.logger.error('[Appointment Reminder Cron] Fallback legado atingiu o limite seguro; aplique a migration de economia para reativar a leitura compacta.', {
+          clinicRowsRead: states.length,
+          limit: legacyBlobFallbackMaxPages * pageSize,
+        });
+      }
+    }
+  }
+
+  for (const state of states) {
     const clinicId = sanitizeText(state?.clinic_id, 120);
     const rows = Array.isArray(state?.appointments) ? state.appointments : [];
     for (const appointment of rows) {
@@ -552,29 +621,47 @@ async function hydrateReminderAppointmentPatients(
   ));
   if (patientIdsToHydrate.length === 0) return appointments;
 
-  let patientResult = await options.supabase
-    .from('patients')
-    .select('id,name,email,clinic_id,responsible_user_id,is_active,deleted_at,metadata')
-    .in('id', patientIdsToHydrate)
-    .limit(patientIdsToHydrate.length);
-  if (patientResult.error && extractReminderMissingColumnName(patientResult.error) === 'metadata') {
-    patientResult = await options.supabase
-      .from('patients')
-      .select('id,name,email,clinic_id,responsible_user_id,is_active,deleted_at')
-      .in('id', patientIdsToHydrate)
-      .limit(patientIdsToHydrate.length);
+  const patientChunks: string[][] = [];
+  for (let index = 0; index < patientIdsToHydrate.length; index += 100) {
+    patientChunks.push(patientIdsToHydrate.slice(index, index + 100));
   }
-  const { data, error } = patientResult;
-  if (error) {
+  const patientRows: any[] = [];
+  let patientLoadError: any = null;
+  for (let index = 0; index < patientChunks.length; index += 4) {
+    const chunkResults = await Promise.all(patientChunks.slice(index, index + 4).map(async (ids) => {
+      let result = await options.supabase
+        .from('patients')
+        .select('id,name,email,clinic_id,responsible_user_id,is_active,deleted_at,metadata')
+        .in('id', ids)
+        .limit(ids.length);
+      if (result.error && extractReminderMissingColumnName(result.error) === 'metadata') {
+        result = await options.supabase
+          .from('patients')
+          .select('id,name,email,clinic_id,responsible_user_id,is_active,deleted_at')
+          .in('id', ids)
+          .limit(ids.length);
+      }
+      return result;
+    }));
+    for (const result of chunkResults) {
+      if (result.error) {
+        patientLoadError = result.error;
+        break;
+      }
+      patientRows.push(...(result.data || []));
+    }
+    if (patientLoadError) break;
+  }
+  if (patientLoadError) {
     options.logger.warn('[Appointment Reminder Cron] Dados dos pacientes nao carregados.', {
       count: patientIdsToHydrate.length,
-      message: error.message
+      message: patientLoadError.message
     });
     return appointments;
   }
 
   const patientsById = new Map<string, { name: string; email: string; clinicId: string; recipientUserId: string }>();
-  for (const row of data || []) {
+  for (const row of patientRows) {
     const id = sanitizeText(row?.id, 120);
     const name = resolvePortalPatientDisplayName(row);
     if (!id || row?.is_active === false || row?.deleted_at) continue;
@@ -621,17 +708,25 @@ async function fetchReminderAppointments(
   queryScheduledStartUtc: dayjs.Dayjs,
   queryScheduledEndUtc: dayjs.Dayjs,
 ) {
-  const tableAppointments = await fetchAppointmentsTable(
+  const tableResult = await fetchAppointmentsTable(
     options,
     queryScheduledStartUtc,
     queryScheduledEndUtc,
   );
+  const tableAppointments = tableResult.appointments;
+  if (!tableResult.available) {
+    options.logger.warn(
+      '[Appointment Reminder Cron] Fonte canonica indisponivel; preservando consultas do espelho legado.',
+    );
+  }
+  // During the non-destructive transition, legacy-only rows must remain eligible.
+  // The RPC filters the JSON in PostgreSQL and returns only this reminder window;
+  // it never transfers every historical clinic_state.appointments blob.
   const clinicAppointments = await fetchClinicStateAppointments(
     options,
     queryScheduledStartUtc,
     queryScheduledEndUtc,
   );
-
   for (const appointment of clinicAppointments.values()) {
     mergeAppointment(tableAppointments, appointment);
   }
@@ -1264,6 +1359,11 @@ async function runAppointmentReminderJob(
     let sent12h = 0;
     let failed = 0;
 
+    const dueAppointments: Array<{
+      appointment: ReminderAppointment;
+      dueReminder: (typeof REMINDER_STEPS)[number];
+      dedupeKey: string;
+    }> = [];
     for (const appointment of appointments) {
       if (!appointment.appointmentId || !appointment.patientId || !appointment.scheduledAt) continue;
       if (!isActiveAppointmentStatus(appointment.status)) continue;
@@ -1285,7 +1385,40 @@ async function runAppointmentReminderJob(
         continue;
       }
       recentlySentReminders.set(dedupeKey, nowMs);
+      dueAppointments.push({ appointment, dueReminder, dedupeKey });
+    }
 
+    let subscriptionBatch: {
+      complete: boolean;
+      subscriptionsByRecipientKey: Map<string, any[]>;
+    } = { complete: false, subscriptionsByRecipientKey: new Map() };
+    if (options.vapidPublicKey && options.vapidPrivateKey) {
+      try {
+        subscriptionBatch = await findPushSubscriptionsForRecipients({
+          supabase: options.supabase,
+          recipients: dueAppointments.map(({ appointment, dedupeKey }) => ({
+            key: dedupeKey,
+            patientIds: [appointment.patientId],
+            legacyUserIds: [appointment.patientId],
+            patientEmail: appointment.patientEmail,
+            clinicId: appointment.clinicId || appointment.patientClinicId,
+          })),
+          logger: options.logger,
+        });
+      } catch (subscriptionError: any) {
+        // Keep the functional per-recipient lookup as a controlled fallback.
+        // The reminders remain eligible and the in-memory dedupe keys are not
+        // stranded when one batch preload has a transient failure.
+        options.logger.warn('[Appointment Reminder Cron] Preload de assinaturas falhou; usando lookup individual.', {
+          message: subscriptionError?.message,
+          reminders: dueAppointments.length,
+        });
+      }
+    } else {
+      subscriptionBatch = { complete: true, subscriptionsByRecipientKey: new Map() };
+    }
+
+    for (const { appointment, dueReminder, dedupeKey } of dueAppointments) {
       try {
         const scheduled = dayjs(appointment.scheduledAt).tz(BRAZIL_TIMEZONE);
         const clinicBranding = await resolveReminderClinicBranding(options, appointment.clinicId);
@@ -1357,6 +1490,9 @@ async function runAppointmentReminderJob(
               },
               clinicId: appointment.clinicId || null,
               reminderKind: dueReminder.kind,
+              preloadedSubscriptions: subscriptionBatch.complete
+                ? subscriptionBatch.subscriptionsByRecipientKey.get(dedupeKey) || []
+                : undefined,
               logger: options.logger
             })
           : { sent: 0, failed: 0, subscriptions: 0 };

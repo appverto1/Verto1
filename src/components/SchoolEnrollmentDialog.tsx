@@ -95,6 +95,7 @@ export function SchoolEnrollmentDialog({
     setSchoolOptions([]);
     setCurrentPrimary(null);
     setError('');
+    setLoadingDetails(false);
     setShowCreateSchool(false);
     setConsents(initialConsents());
     setConsentExpiresAt('');
@@ -119,46 +120,56 @@ export function SchoolEnrollmentDialog({
 
   useEffect(() => {
     if (!open || fixedPatient || !fixedSchool?.id || isEditing) return;
+    const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setLoadingOptions(true);
       const result = await dataService.searchPatientsForSchool(fixedSchool.id, {
         search: patientSearch,
         page: 1,
         pageSize: 20,
-      });
+      }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setPatientOptions(result?.success ? result.data || [] : []);
       if (!result?.success) setError(result?.message || 'Não foi possível buscar pacientes.');
       setLoadingOptions(false);
     }, 300);
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [open, fixedPatient, fixedSchool?.id, isEditing, patientSearch]);
 
   useEffect(() => {
     if (!open || fixedSchool || !fixedPatient?.id || isEditing) return;
+    const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       setLoadingOptions(true);
-      const result = await dataService.getSchoolAutocomplete(schoolSearch, 1, 20);
+      const result = await dataService.getSchoolAutocomplete(schoolSearch, 1, 20, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setSchoolOptions(result?.success ? result.data || [] : []);
       if (!result?.success) setError(result?.message || 'Não foi possível buscar escolas.');
       setLoadingOptions(false);
     }, 300);
-    return () => window.clearTimeout(timer);
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [open, fixedSchool, fixedPatient?.id, isEditing, schoolSearch]);
 
+  const hasEnrollmentOptions = Boolean(school && Array.isArray(school.units) && Array.isArray(school.contacts));
+
   useEffect(() => {
-    if (!open || !school?.id) return;
-    let cancelled = false;
+    if (!open || !school?.id || hasEnrollmentOptions) return;
+    const controller = new AbortController();
     setLoadingDetails(true);
-    void dataService.getSchoolDetail(school.id).then((result: any) => {
-      if (cancelled) return;
-      if (result?.success) setSchool((current) => ({ ...(current || {}), ...(result.data || {}) }));
-      else setError(result?.message || 'Não foi possível carregar unidades e contatos desta escola.');
-      setLoadingDetails(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, school?.id]);
+    void dataService.getSchoolEnrollmentOptions(school.id, { signal: controller.signal })
+      .then((result: any) => {
+        if (controller.signal.aborted) return;
+        if (result?.success) setSchool((current) => ({ ...(current || {}), ...(result.data || {}) }));
+        else setError(result?.message || 'Não foi possível carregar unidades e contatos desta escola.');
+      })
+      .catch((requestError: any) => {
+        if (!controller.signal.aborted) setError(requestError?.message || 'Não foi possível carregar unidades e contatos desta escola.');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingDetails(false);
+      });
+    return () => controller.abort();
+  }, [open, school?.id, hasEnrollmentOptions]);
 
   useEffect(() => {
     if (!open || !patient?.id) {
@@ -204,6 +215,7 @@ export function SchoolEnrollmentDialog({
   };
 
   const selectSchool = (option: any) => {
+    setLoadingDetails(false);
     setSchool(option);
     setSchoolOptions([]);
     setSchoolSearch(option.display_name || '');

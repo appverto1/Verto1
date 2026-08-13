@@ -463,6 +463,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [peiMaintenanceReviewRow, setPeiMaintenanceReviewRow] = useState<any>(null);
   const [peiMaintenanceReviewTargetId, setPeiMaintenanceReviewTargetId] = useState('');
   const [peiMaintenanceLinkableTargetsState, setPeiMaintenanceLinkableTargetsState] = useState<any>({ loading: false, error: '', items: [], loadedFor: '' });
+  const peiMaintenanceLinkableTargetsRequestRef = React.useRef<{ patientId: string; promise: Promise<any> } | null>(null);
   const [peiMaintenanceAppointmentsState, setPeiMaintenanceAppointmentsState] = useState<any>({ loading: false, error: '', items: [] });
   const [selectedPeiMaintenanceAppointmentId, setSelectedPeiMaintenanceAppointmentId] = useState('');
   const [peiMaintenanceActionKey, setPeiMaintenanceActionKey] = useState('');
@@ -1135,10 +1136,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const safeUrl = typeof file?.url === 'string' ? file.url : (typeof file?.signedUrl === 'string' ? file.signedUrl : '');
     const contentDataUrl = safeContent.startsWith('data:') ? safeContent : '';
     const sourceUrl = safeUrl || contentDataUrl || undefined;
-    const objectUrl =
-      contentDataUrl && safeType.includes('pdf')
-        ? createObjectUrlFromDataUrl(contentDataUrl, safeType)
-        : sourceUrl;
     return {
       id: String(file?.id || Date.now()),
       name: safeName,
@@ -1148,7 +1145,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       source: file?.source || 'upload',
       content: safeContent,
       url: safeUrl || undefined,
-      objectUrl
+      // PDFs em base64 so viram Blob quando o usuario realmente abre o preview.
+      objectUrl: safeUrl || (safeType.includes('pdf') ? undefined : sourceUrl)
     };
   };
 
@@ -1181,33 +1179,80 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return content || '';
   };
 
-  useEffect(() => {
-    const loadPersistedFiles = async () => {
-      if (!patient?.id) return;
-      setIsLoadingFiles(true);
-      try {
-        const result = await dataService.getPatientFiles(String(patient.id));
-        if (result?.success && Array.isArray(result?.data)) {
-          setPatientFiles(result.data.map(normalizeFileRecord));
-          return;
-        }
-        const persistedFiles = Array.isArray(patient?.patientRecordPayload?.files)
-          ? patient.patientRecordPayload.files
-          : Array.isArray(patient?.files)
-            ? patient.files
-            : [];
-        setPatientFiles(persistedFiles.map(normalizeFileRecord));
-      } catch (error) {
-        console.error('Erro ao carregar arquivos persistidos do paciente:', error);
-      } finally {
-        setIsLoadingFiles(false);
-      }
-    };
-    loadPersistedFiles();
-  }, [patient?.id]);
-  
   const [patientFiles, setPatientFiles] = useState<any[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [patientFilesLoadError, setPatientFilesLoadError] = useState<string | null>(null);
+  const [patientFilesReloadKey, setPatientFilesReloadKey] = useState(0);
+  const patientFilesPatientIdRef = React.useRef(String(patient?.id || ''));
+  const patientFilesLoadedForRef = React.useRef('');
+  const patientFilesRequestInFlightRef = React.useRef('');
+  const [previewFile, setPreviewFile] = useState<any>(null);
+
+  const openPatientFilePreview = (file: any) => {
+    const objectUrl = resolveFileViewUrl(file);
+    setPreviewFile(objectUrl ? { ...file, objectUrl } : file);
+  };
+
+  useEffect(() => () => {
+    const objectUrl = String(previewFile?.objectUrl || '');
+    if (!objectUrl.startsWith('blob:')) return;
+    try {
+      URL.revokeObjectURL(objectUrl);
+    } catch {}
+  }, [previewFile?.objectUrl]);
+
+  useEffect(() => {
+    const patientId = String(patient?.id || '');
+    if (patientFilesPatientIdRef.current === patientId) return;
+    patientFilesPatientIdRef.current = patientId;
+    patientFilesLoadedForRef.current = '';
+    setPatientFiles([]);
+    setPreviewFile(null);
+    setIsLoadingFiles(false);
+    setPatientFilesLoadError(null);
+  }, [patient?.id]);
+
+  useEffect(() => {
+    const patientId = String(patient?.id || '');
+    const shouldLoadFiles = activeTab === 'files' || Boolean(previewFile);
+    if (!patientId || !shouldLoadFiles) return;
+    if (
+      patientFilesLoadedForRef.current === patientId ||
+      patientFilesRequestInFlightRef.current === patientId
+    ) return;
+
+    patientFilesRequestInFlightRef.current = patientId;
+    setIsLoadingFiles(true);
+    setPatientFilesLoadError(null);
+    const loadPersistedFiles = async () => {
+      let loaded = false;
+      try {
+        const result = await dataService.getPatientFiles(patientId);
+        if (patientFilesPatientIdRef.current !== patientId) return;
+        if (result?.success && Array.isArray(result?.data)) {
+          setPatientFiles(result.data.map(normalizeFileRecord));
+          loaded = true;
+          return;
+        }
+        throw new Error('Resposta inválida ao carregar arquivos do prontuário.');
+      } catch (error) {
+        if (patientFilesPatientIdRef.current === patientId) {
+          console.error('Erro ao carregar arquivos persistidos do paciente:', error);
+          setPatientFilesLoadError('Não foi possível carregar os arquivos. Tente novamente.');
+        }
+      } finally {
+        if (patientFilesPatientIdRef.current === patientId) {
+          if (loaded) patientFilesLoadedForRef.current = patientId;
+          setIsLoadingFiles(false);
+        }
+        if (patientFilesRequestInFlightRef.current === patientId) {
+          patientFilesRequestInFlightRef.current = '';
+        }
+      }
+    };
+    void loadPersistedFiles();
+  }, [activeTab, patient?.id, patientFilesReloadKey, previewFile]);
+  
   const [showAnamnesisFileModal, setShowAnamnesisFileModal] = useState(false);
   const [pendingAnamnesisPayload, setPendingAnamnesisPayload] = useState<string>("");
   const [pendingAnamnesisData, setPendingAnamnesisData] = useState<any>(null);
@@ -1220,11 +1265,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     () => hasCapability('session.no_show.classify'),
     [capabilities],
   );
-  const [previewFile, setPreviewFile] = useState<any>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [assignedTasks, setAssignedTasks] = useState<any[]>([]);
   const [isLoadingAssignedTasks, setIsLoadingAssignedTasks] = useState(false);
+  const [assignedTasksLoadError, setAssignedTasksLoadError] = useState<string | null>(null);
+  const [assignedTasksReloadKey, setAssignedTasksReloadKey] = useState(0);
+  const assignedTasksLoadedForRef = React.useRef('');
+  const assignedTasksRequestRef = React.useRef<{ patientId: string; promise: Promise<any> } | null>(null);
   const [assignedReviewDrafts, setAssignedReviewDrafts] = useState<Record<string, { score: string; note: string }>>({});
   const [generatedReviewNotes, setGeneratedReviewNotes] = useState<any[]>([]);
   const [suggestedInterventionTasks, setSuggestedInterventionTasks] = useState<any[]>([]);
@@ -1300,6 +1348,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [abaSessionFilter, setAbaSessionFilter] = useState("all");
   const [abaRecordSearch, setAbaRecordSearch] = useState("");
   const [abaRecordsRefreshKey, setAbaRecordsRefreshKey] = useState(0);
+  const abaRecordsPatientIdRef = React.useRef(String(patient?.id || ''));
+  const abaRecordsLoadedKeyRef = React.useRef('');
+  const abaRecordsFailedKeyRef = React.useRef('');
+  const abaRecordsExpectedKeyRef = React.useRef('');
+  const abaRecordsRequestRef = React.useRef<{ key: string; promise: Promise<void> } | null>(null);
   const [isAbaPanelExpanded, setIsAbaPanelExpanded] = useState(false);
   const notes = useMemo(() => {
     const baseNotes = Array.isArray(externalNotes) ? externalNotes : [];
@@ -1318,6 +1371,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [configuredDefaultSessionMinutes, patient?.id, scheduledSessionDurationMinutes, scheduledSessionForPatient]);
 
   useEffect(() => {
+    const nextPatientId = String(patient?.id || '');
+    if (abaRecordsPatientIdRef.current !== nextPatientId) {
+      abaRecordsPatientIdRef.current = nextPatientId;
+      abaRecordsLoadedKeyRef.current = '';
+      abaRecordsFailedKeyRef.current = '';
+      abaRecordsExpectedKeyRef.current = '';
+      setAbaSessions([]);
+      setAbaTrials([]);
+      setAbaBehaviorEvents([]);
+      setAbaMasteryEvaluations([]);
+      setAbaPatientSummary(null);
+      setAbaMaintenanceOverview({ schedules: [], probeResults: [], alerts: [], summary: null });
+      setAbaRecordsError('');
+      setIsLoadingAbaRecords(false);
+    }
     peiMaintenancePanelPatientIdRef.current = String(patient?.id || '');
     peiMaintenancePanelRequestSeqRef.current += 1;
     setGeneratedReviewNotes([]);
@@ -1352,58 +1420,118 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [patient, sessionPatientOverride]);
 
   useEffect(() => {
-    let cancelled = false;
+    const patientId = String(patient?.id || '');
+    if (!patientId || !isKidsProfile || !abaV2Enabled) return;
+
+    const requestKey = `${patientId}:${abaRecordsRefreshKey}`;
+    abaRecordsExpectedKeyRef.current = requestKey;
+
+    // O detalhamento desta tela alimenta apenas o PEI. Historico usa sua pagina
+    // paginada, Graficos possui workspace proprio e Sessao carrega o necessario
+    // no fluxo de atendimento, portanto nao devem repetir este burst de 6 leituras.
+    if (activeTab !== 'plan') return;
+
+    if (abaRecordsLoadedKeyRef.current === requestKey) return;
+    // Uma tentativa incompleta aguarda retry explicito. Assim, alternar abas nao
+    // dispara novamente o mesmo conjunto de leituras e o vazio de fallback nao
+    // e promovido a cache valido.
+    if (abaRecordsFailedKeyRef.current === requestKey) return;
+    if (abaRecordsRequestRef.current?.key === requestKey) return;
+
     const loadAbaRecords = async () => {
-      if (!patient?.id || !isKidsProfile || !abaV2Enabled) {
-        setAbaSessions([]);
-        setAbaTrials([]);
-        setAbaBehaviorEvents([]);
-        setAbaMasteryEvaluations([]);
-        setAbaPatientSummary(null);
-        setAbaMaintenanceOverview({ schedules: [], probeResults: [], alerts: [], summary: null });
-        setAbaMaintenancePanel(null);
-        return;
-      }
       setIsLoadingAbaRecords(true);
       setAbaRecordsError("");
       try {
         const recentRecordLimit = 10;
         const peiProgressRecordLimit = 50;
         const [patientSummaryResult, sessionsResult, trialsResult, behaviorResult, masteryResult, maintenanceResult] = await Promise.allSettled([
-          dataService.getPatientAbaSummary(String(patient.id)),
-          dataService.getAbaSessions(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
-          dataService.getAbaTrials(String(patient.id), { page: 1, pageSize: peiProgressRecordLimit }),
-          dataService.getAbaBehaviorEvents(String(patient.id), { page: 1, pageSize: recentRecordLimit }),
-          dataService.getAbaMasteryEvaluations(String(patient.id), { page: 1, pageSize: peiProgressRecordLimit }),
-          dataService.getAbaMaintenanceOverview(String(patient.id), { page: 1, pageSize: recentRecordLimit })
+          dataService.getPatientAbaSummary(patientId),
+          dataService.getAbaSessions(patientId, { page: 1, pageSize: recentRecordLimit }),
+          dataService.getAbaTrials(patientId, { page: 1, pageSize: peiProgressRecordLimit }),
+          dataService.getAbaBehaviorEvents(patientId, { page: 1, pageSize: recentRecordLimit }),
+          dataService.getAbaMasteryEvaluations(patientId, { page: 1, pageSize: peiProgressRecordLimit }),
+          dataService.getAbaMaintenanceOverview(patientId, { page: 1, pageSize: recentRecordLimit })
         ]);
-        if (cancelled) return;
-        const readData = (result: PromiseSettledResult<any>) =>
-          result.status === 'fulfilled' && Array.isArray(result.value?.data) ? result.value.data : [];
-        setAbaPatientSummary(patientSummaryResult.status === 'fulfilled' ? patientSummaryResult.value?.data || null : null);
-        setAbaSessions(readData(sessionsResult));
-        setAbaTrials(readData(trialsResult));
-        setAbaBehaviorEvents(readData(behaviorResult));
-        setAbaMasteryEvaluations(readData(masteryResult));
-        setAbaMaintenanceOverview(maintenanceResult.status === 'fulfilled' ? maintenanceResult.value?.data || { schedules: [], probeResults: [], alerts: [], summary: null } : { schedules: [], probeResults: [], alerts: [], summary: null });
-        if ([patientSummaryResult, sessionsResult, trialsResult, behaviorResult, masteryResult, maintenanceResult].some((result) => result.status === 'rejected')) {
-          setAbaRecordsError("Alguns registros ABA nao puderam ser carregados agora.");
+        if (abaRecordsExpectedKeyRef.current !== requestKey) return;
+        const hasOwnData = (value: any) => Boolean(value && Object.prototype.hasOwnProperty.call(value, 'data'));
+        const readListData = (result: PromiseSettledResult<any>) => {
+          if (result.status !== 'fulfilled') return { confirmed: false, data: null as any[] | null };
+          const payload = result.value;
+          if (payload?.success === false || !Array.isArray(payload?.data)) {
+            return { confirmed: false, data: null as any[] | null };
+          }
+          const data = payload.data as any[];
+          // Respostas canonicas paginadas confirmam inclusive um vazio real.
+          // Fallbacks offline nao paginados so sao considerados utilizaveis
+          // quando possuem registros persistidos localmente.
+          const hasCanonicalPage = Number.isFinite(Number(payload?.page)) && Number(payload?.page) >= 1;
+          const confirmed = hasCanonicalPage || data.length > 0;
+          return { confirmed, data: confirmed ? data : null };
+        };
+        const readMaintenanceData = (result: PromiseSettledResult<any>) => {
+          if (result.status !== 'fulfilled') return { confirmed: false, data: null as any };
+          const payload = result.value;
+          const data = payload?.data;
+          if (payload?.success === false || !data || typeof data !== 'object' || Array.isArray(data)) {
+            return { confirmed: false, data: null as any };
+          }
+          const hasPersistedData = ['schedules', 'probeResults', 'alerts']
+            .some((key) => Array.isArray(data?.[key]) && data[key].length > 0) || Boolean(data?.summary);
+          const hasCanonicalPage = Number.isFinite(Number(payload?.page)) && Number(payload?.page) >= 1;
+          const confirmed = hasCanonicalPage || hasPersistedData;
+          return { confirmed, data: confirmed ? data : null };
+        };
+
+        const summaryConfirmed = patientSummaryResult.status === 'fulfilled'
+          && patientSummaryResult.value?.success !== false
+          && hasOwnData(patientSummaryResult.value);
+        const sessionsRead = readListData(sessionsResult);
+        const trialsRead = readListData(trialsResult);
+        const behaviorRead = readListData(behaviorResult);
+        const masteryRead = readListData(masteryResult);
+        const maintenanceRead = readMaintenanceData(maintenanceResult);
+        const allAbaSourcesConfirmed = summaryConfirmed
+          && sessionsRead.confirmed
+          && trialsRead.confirmed
+          && behaviorRead.confirmed
+          && masteryRead.confirmed
+          && maintenanceRead.confirmed;
+
+        // Uma falha parcial nunca apaga o ultimo conjunto conhecido. Dados
+        // offline nao vazios continuam validos e podem atualizar sua secao.
+        if (summaryConfirmed && (patientSummaryResult.value?.data != null || allAbaSourcesConfirmed)) {
+          setAbaPatientSummary(patientSummaryResult.value?.data || null);
+        }
+        if (sessionsRead.data !== null) setAbaSessions(sessionsRead.data);
+        if (trialsRead.data !== null) setAbaTrials(trialsRead.data);
+        if (behaviorRead.data !== null) setAbaBehaviorEvents(behaviorRead.data);
+        if (masteryRead.data !== null) setAbaMasteryEvaluations(masteryRead.data);
+        if (maintenanceRead.data !== null) setAbaMaintenanceOverview(maintenanceRead.data);
+
+        if (allAbaSourcesConfirmed) {
+          abaRecordsFailedKeyRef.current = '';
+          abaRecordsLoadedKeyRef.current = requestKey;
+        } else {
+          abaRecordsFailedKeyRef.current = requestKey;
+          setAbaRecordsError('Alguns registros ABA não puderam ser confirmados. Tente novamente.');
         }
       } catch (error) {
-        if (!cancelled) {
+        if (abaRecordsExpectedKeyRef.current === requestKey) {
           console.error('Falha ao carregar registros ABA:', error);
-          setAbaRecordsError("Nao foi possivel carregar os registros ABA.");
+          abaRecordsFailedKeyRef.current = requestKey;
+          setAbaRecordsError('Não foi possível carregar os registros ABA. Tente novamente.');
         }
       } finally {
-        if (!cancelled) setIsLoadingAbaRecords(false);
+        if (abaRecordsExpectedKeyRef.current === requestKey) setIsLoadingAbaRecords(false);
+        if (abaRecordsRequestRef.current?.key === requestKey) {
+          abaRecordsRequestRef.current = null;
+        }
       }
     };
 
-    void loadAbaRecords();
-    return () => {
-      cancelled = true;
-    };
-  }, [patient?.id, isKidsProfile, abaV2Enabled, abaRecordsRefreshKey]);
+    const promise = loadAbaRecords();
+    abaRecordsRequestRef.current = { key: requestKey, promise };
+  }, [activeTab, patient?.id, isKidsProfile, abaV2Enabled, abaRecordsRefreshKey]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -2297,28 +2425,55 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   useEffect(() => {
-    const loadAssignedTasks = async () => {
-      if (!patient?.id || patientAgeYears === null || patientAgeYears <= 12) {
-        setAssignedTasks([]);
-        return;
-      }
+    const patientId = String(patient?.id || '');
+    if (!patientId || patientAgeYears === null || patientAgeYears <= 12) {
+      assignedTasksLoadedForRef.current = '';
+      setAssignedTasks([]);
+      setIsLoadingAssignedTasks(false);
+      setAssignedTasksLoadError(null);
+      return;
+    }
+    if (assignedTasksLoadedForRef.current === patientId) return;
+
+    if (assignedTasksRequestRef.current?.patientId !== patientId) {
+      setAssignedTasks([]);
       setIsLoadingAssignedTasks(true);
-      try {
-        const result = await dataService.getAssignedTasks(String(patient.id));
+      setAssignedTasksLoadError(null);
+      const promise = dataService.getAssignedTasks(patientId);
+      assignedTasksRequestRef.current = { patientId, promise };
+    }
+
+    let cancelled = false;
+    const request = assignedTasksRequestRef.current;
+    void request?.promise
+      .then((result: any) => {
+        if (cancelled || String(patient?.id || '') !== patientId) return;
         if (result?.success && Array.isArray(result?.data)) {
           setAssignedTasks(result.data);
-        } else {
-          setAssignedTasks([]);
+          assignedTasksLoadedForRef.current = patientId;
+          return;
         }
-      } catch (error) {
+        setAssignedTasksLoadError('Não foi possível carregar as tarefas concluídas.');
+      })
+      .catch((error: any) => {
+        if (cancelled || String(patient?.id || '') !== patientId) return;
         console.error('Erro ao carregar tarefas atribuídas:', error);
         setAssignedTasks([]);
-      } finally {
-        setIsLoadingAssignedTasks(false);
-      }
+        setAssignedTasksLoadError('Não foi possível carregar as tarefas concluídas.');
+      })
+      .finally(() => {
+        if (!cancelled && String(patient?.id || '') === patientId) {
+          setIsLoadingAssignedTasks(false);
+        }
+        if (assignedTasksRequestRef.current === request) {
+          assignedTasksRequestRef.current = null;
+        }
+      });
+
+    return () => {
+      cancelled = true;
     };
-    loadAssignedTasks();
-  }, [patient?.id, patientAgeYears, activeTab]);
+  }, [assignedTasksReloadKey, patient?.id, patientAgeYears]);
 
   const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
     const explicitMin = Number(
@@ -3786,8 +3941,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             )}
 
             {abaRecordsError && (
-              <div className={`mb-4 rounded-2xl border p-3 text-xs font-semibold ${isPanelDark ? 'bg-amber-500/10 border-amber-400/20 text-amber-100' : 'bg-amber-50 border-amber-100 text-amber-700'}`}>
-                {abaRecordsError}
+              <div role="alert" className={`mb-4 flex flex-col gap-3 rounded-2xl border p-3 text-xs font-semibold sm:flex-row sm:items-center sm:justify-between ${isPanelDark ? 'bg-amber-500/10 border-amber-400/20 text-amber-100' : 'bg-amber-50 border-amber-100 text-amber-700'}`}>
+                <span>{abaRecordsError}</span>
+                <button
+                  type="button"
+                  onClick={() => setAbaRecordsRefreshKey((value) => value + 1)}
+                  disabled={isLoadingAbaRecords}
+                  className={`min-h-10 shrink-0 rounded-xl border px-3 py-2 text-[10px] font-semibold uppercase tracking-wider transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${isPanelDark ? 'border-amber-300/30 bg-slate-900/50 text-amber-100 hover:bg-slate-800' : 'border-amber-200 bg-white text-amber-800 hover:bg-amber-100'}`}
+                >
+                  Tentar novamente
+                </button>
               </div>
             )}
 
@@ -3834,8 +3997,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             ) : (
               <div className={`rounded-3xl border border-dashed py-10 text-center ${isPanelDark ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-slate-50'}`}>
                 <Target size={34} className={`mx-auto mb-3 ${isPanelDark ? 'text-slate-600' : 'text-slate-300'}`} />
-                <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Nenhum registro ABA encontrado com estes filtros.</p>
-                <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Registre uma tentativa ou comportamento no modo tela cheia e atualize esta lista.</p>
+                <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                  {abaRecordsError
+                    ? 'Os registros disponíveis não puderam ser confirmados.'
+                    : 'Nenhum registro ABA encontrado com estes filtros.'}
+                </p>
+                {!abaRecordsError && (
+                  <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Registre uma tentativa ou comportamento no modo tela cheia e atualize esta lista.</p>
+                )}
               </div>
             )}
           </div>
@@ -6659,7 +6828,60 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     history
   }), [peiGoals, abaMasteryEvaluations, abaMaintenanceOverview, history]);
 
-  const refreshPeiMaintenancePanel = React.useCallback(async () => {
+  const loadPeiMaintenanceLinkableTargets = React.useCallback((requestPatientId: string, force = false) => {
+    if (!requestPatientId || !abaV2Enabled) {
+      return Promise.resolve({ success: false, data: [] });
+    }
+    if (!force && peiMaintenanceLinkableTargetsState.loadedFor === requestPatientId) {
+      return Promise.resolve({ success: true, data: peiMaintenanceLinkableTargetsState.items || [] });
+    }
+    if (!force && peiMaintenanceLinkableTargetsRequestRef.current?.patientId === requestPatientId) {
+      return peiMaintenanceLinkableTargetsRequestRef.current.promise;
+    }
+
+    setPeiMaintenanceLinkableTargetsState((previous: any) => ({ ...previous, loading: true, error: '' }));
+    const promise = dataService.getAbaLinkableTargetsForMaintenance(requestPatientId, { limit: 200 })
+      .then((result: any) => {
+        if (
+          peiMaintenancePanelPatientIdRef.current !== requestPatientId ||
+          peiMaintenanceLinkableTargetsRequestRef.current?.promise !== promise
+        ) return result;
+        const successful = result?.success !== false && Array.isArray(result?.data);
+        setPeiMaintenanceLinkableTargetsState((previous: any) => ({
+          loading: false,
+          error: successful ? '' : result?.message || result?.error || 'Nao foi possivel carregar habilidades do PEI.',
+          items: successful
+            ? result.data
+            : Array.isArray(previous?.items) ? previous.items : [],
+          loadedFor: successful ? requestPatientId : previous?.loadedFor || ''
+        }));
+        return result;
+      })
+      .catch((error: any) => {
+        if (
+          peiMaintenancePanelPatientIdRef.current === requestPatientId &&
+          peiMaintenanceLinkableTargetsRequestRef.current?.promise === promise
+        ) {
+          setPeiMaintenanceLinkableTargetsState((previous: any) => ({
+            ...previous,
+            loading: false,
+            error: previous?.items?.length ? '' : 'Nao foi possivel carregar habilidades do PEI.',
+            items: Array.isArray(previous?.items) ? previous.items : [],
+            loadedFor: previous?.loadedFor || ''
+          }));
+        }
+        return { success: false, error: error?.message || 'Nao foi possivel carregar habilidades do PEI.', data: [] };
+      })
+      .finally(() => {
+        if (peiMaintenanceLinkableTargetsRequestRef.current?.promise === promise) {
+          peiMaintenanceLinkableTargetsRequestRef.current = null;
+        }
+      });
+    peiMaintenanceLinkableTargetsRequestRef.current = { patientId: requestPatientId, promise };
+    return promise;
+  }, [abaV2Enabled, peiMaintenanceLinkableTargetsState.items, peiMaintenanceLinkableTargetsState.loadedFor]);
+
+  const refreshPeiMaintenancePanel = React.useCallback(async (options: { refreshLinkableTargets?: boolean } = {}) => {
     if (!patient?.id || !isKidsProfile || !abaV2Enabled) return;
     const requestPatientId = String(patient.id);
     const requestId = peiMaintenancePanelRequestSeqRef.current + 1;
@@ -6667,9 +6889,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setIsLoadingPeiMaintenancePanel(true);
     setPeiMaintenancePanelMessage('');
     try {
-      const [panelResult, linkableResult] = await Promise.all([
+      const [panelResult] = await Promise.all([
         dataService.getAbaMaintenancePanel(requestPatientId, { page: 1, pageSize: 200 }),
-        dataService.getAbaLinkableTargetsForMaintenance(requestPatientId, { limit: 200 })
+        loadPeiMaintenanceLinkableTargets(requestPatientId, Boolean(options.refreshLinkableTargets))
       ]);
 
       const ignoredAsStale =
@@ -6714,9 +6936,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         alerts: Array.isArray(mappedPanel.raw?.alerts) ? mappedPanel.raw.alerts : [],
         summary: mappedPanel.raw?.summary || null
       });
-      if (linkableResult?.success !== false) {
-        setPeiMaintenanceLinkableTargetsState({ loading: false, error: '', items: Array.isArray(linkableResult?.data) ? linkableResult.data : [], loadedFor: requestPatientId });
-      }
       setHasLoadedPeiMaintenancePanel(true);
       debugPeiMaintenancePanelLoad({
         source: mappedPanel.source,
@@ -6755,7 +6974,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setIsLoadingPeiMaintenancePanel(false);
       }
     }
-  }, [abaV2Enabled, debugPeiMaintenancePanelLoad, isKidsProfile, patient?.id]);
+  }, [abaV2Enabled, debugPeiMaintenancePanelLoad, isKidsProfile, loadPeiMaintenanceLinkableTargets, patient?.id]);
 
   const applyPeiMaintenanceScheduleResult = React.useCallback((result: any, fallbackRow: any = null) => {
     if (!patient?.id || result?.success === false) return;
@@ -6931,34 +7150,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [patient?.id, peiMaintenanceAssignSchedule, peiMaintenanceScheduleMode, peiMaintenanceScheduleRow]);
 
   useEffect(() => {
-    let cancelled = false;
     const shouldLoadLinkableTargets = Boolean(
       peiMaintenanceReviewRow ||
       peiMaintenanceScheduleRow ||
       (activeTab === 'plan' && activePeiPlanSubtab === 'maintenance')
     );
     if (!shouldLoadLinkableTargets || !patient?.id || !abaV2Enabled) return;
-    if (peiMaintenanceLinkableTargetsState.loadedFor === String(patient.id)) return;
-    setPeiMaintenanceLinkableTargetsState((prev: any) => ({ ...prev, loading: true, error: '' }));
-    dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 })
-      .then((result: any) => {
-        if (cancelled) return;
-        setPeiMaintenanceLinkableTargetsState({
-          loading: false,
-          error: result?.success === false ? result?.message || result?.error || 'Nao foi possivel carregar habilidades do PEI.' : '',
-          items: Array.isArray(result?.data) ? result.data : [],
-          loadedFor: String(patient.id)
-        });
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPeiMaintenanceLinkableTargetsState({ loading: false, error: 'Nao foi possivel carregar habilidades do PEI.', items: [], loadedFor: String(patient.id) });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [abaV2Enabled, activePeiPlanSubtab, activeTab, patient?.id, peiMaintenanceLinkableTargetsState.items.length, peiMaintenanceLinkableTargetsState.loadedFor, peiMaintenanceReviewRow, peiMaintenanceScheduleRow]);
+    void loadPeiMaintenanceLinkableTargets(String(patient.id));
+  }, [abaV2Enabled, activePeiPlanSubtab, activeTab, loadPeiMaintenanceLinkableTargets, patient?.id, peiMaintenanceReviewRow, peiMaintenanceScheduleRow]);
 
   const getPersistedUuid = (value: any) => {
     const id = String(value || '').trim();
@@ -7421,7 +7620,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       );
       // O refresh target-first vira a fonte final; se contradisser o optimistic,
       // mostramos o erro em vez de reaplicar estado local por cima do banco.
-      void refreshPeiMaintenancePanel().then((mappedPanel: any) => {
+      void refreshPeiMaintenancePanel({ refreshLinkableTargets: true }).then((mappedPanel: any) => {
         if (!mappedPanel || expectedTargetIds.size === 0) return;
         const confirmedTargetIds = new Set(
           [
@@ -7462,22 +7661,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       try {
         selectedSkill = await ensurePeiMaintenanceScheduleSelection(row);
         if (selectedSkill) {
-          try {
-            const result = await dataService.getAbaLinkableTargetsForMaintenance(String(patient.id), { limit: 200 });
-            setPeiMaintenanceLinkableTargetsState({
-              loading: false,
-              error: result?.success === false ? result?.message || result?.error || 'Nao foi possivel carregar habilidades do PEI.' : '',
-              items: Array.isArray(result?.data) ? result.data : [],
-              loadedFor: String(patient.id)
-            });
-          } catch {
-            setPeiMaintenanceLinkableTargetsState((prev: any) => ({
-              ...prev,
-              loading: false,
-              error: prev?.items?.length ? '' : 'Nao foi possivel carregar habilidades do PEI.',
-              loadedFor: String(patient.id)
-            }));
-          }
+          await loadPeiMaintenanceLinkableTargets(String(patient.id), true);
         }
       } catch {
         selectedSkill = null;
@@ -10991,6 +11175,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     </h3>
                     {isLoadingAssignedTasks ? (
                       <p className="text-sm text-gray-400 italic py-3">Carregando tarefas concluídas...</p>
+                    ) : assignedTasksLoadError ? (
+                      <div className="rounded-2xl border border-red-100 bg-red-50/60 p-4" role="alert">
+                        <p className="text-sm text-red-700">{assignedTasksLoadError}</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            assignedTasksLoadedForRef.current = '';
+                            setAssignedTasksReloadKey((value) => value + 1);
+                          }}
+                          className="mt-3 min-h-11 rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-700 hover:bg-red-100"
+                        >
+                          Tentar novamente
+                        </button>
+                      </div>
                     ) : pendingAssignedReviews.length === 0 ? (
                       <p className="text-sm text-gray-400 italic py-3">Sem tarefas pendentes de pontuação profissional.</p>
                     ) : (
@@ -11136,6 +11334,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <div className={`text-center py-10 rounded-3xl border border-dashed transition-colors ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-white/50 border-gray-200'}`}>
                   <p className={`text-sm font-medium ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Carregando arquivos do prontuário...</p>
                 </div>
+              ) : patientFilesLoadError ? (
+                <div className={`rounded-3xl border border-dashed px-5 py-8 text-center ${isPanelDark ? 'border-red-400/30 bg-red-500/5' : 'border-red-200 bg-red-50/60'}`} role="alert">
+                  <p className={`text-sm font-medium ${isPanelDark ? 'text-red-200' : 'text-red-700'}`}>{patientFilesLoadError}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      patientFilesLoadedForRef.current = '';
+                      setPatientFilesReloadKey((value) => value + 1);
+                    }}
+                    className={`mt-4 min-h-11 rounded-xl border px-4 py-2 text-sm font-semibold transition-colors ${isPanelDark ? 'border-red-300/30 text-red-100 hover:bg-red-400/10' : 'border-red-200 bg-white text-red-700 hover:bg-red-100'}`}
+                  >
+                    Tentar novamente
+                  </button>
+                </div>
               ) : patientFiles.length > 0 ? patientFiles.map((file: any) => (
                 <div key={file.id} className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between group transition-all animate-slide-up ${isPanelDark ? 'bg-[#101b2e] border-slate-700 hover:border-violet-400/30' : 'bg-white border-gray-100 hover:border-blue-100'}`}>
                   <div className="flex items-center gap-4">
@@ -11150,7 +11362,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   <div className="flex items-center gap-2">
                     <button
                       title="Visualizar"
-                      onClick={() => setPreviewFile(file)}
+                      onClick={() => openPatientFilePreview(file)}
                       className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-violet-200 hover:bg-slate-800' : 'text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50'}`}
                     >
                       <Eye size={18} />

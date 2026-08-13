@@ -30,6 +30,7 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
   const [section, setSection] = useState<BillerSection>('preguides');
   const [payerId, setPayerId] = useState('');
   const [navigationRevision, setNavigationRevision] = useState(0);
+  const workspaceScopeKey = String(user?.activeWorkspaceId || user?.clinicId || user?.activeAccessContext?.clinicId || '').trim();
 
   const clinicName = String(
     user?.activeAccessContext?.clinicName ||
@@ -115,22 +116,26 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
         </div>
 
         {conferenceMode ? (
-          <MonthlyConferenceCenter
-            key={`${section}:${navigationRevision}`}
-            canExport={true}
-            initialTab={section === 'conference' ? 'sessions' : 'preGuides'}
-            tissInitialPanel={section === 'xml' ? 'xmlDrafts' : 'preGuides'}
-            initialPayerId={payerId}
-            navigationIntentKey={navigationRevision}
-            onNavigatePayers={() => navigateToPayers(payerId)}
-          />
+          <React.Fragment key={`conference:${workspaceScopeKey}`}>
+            <MonthlyConferenceCenter
+              workspaceScopeKey={workspaceScopeKey}
+              canExport={true}
+              initialTab={section === 'conference' ? 'sessions' : 'preGuides'}
+              tissInitialPanel={section === 'xml' ? 'xmlDrafts' : 'preGuides'}
+              initialPayerId={payerId}
+              navigationIntentKey={navigationRevision}
+              onNavigatePayers={() => navigateToPayers(payerId)}
+            />
+          </React.Fragment>
         ) : (
-          <PayerRequirementsPanel
-            key={`payers:${navigationRevision}`}
-            initialPayerId={payerId}
-            navigationIntentKey={navigationRevision}
-            onNavigateToPreGuides={(context) => navigateToPreguides(context.payerId)}
-          />
+          <React.Fragment key={`payers:${workspaceScopeKey}`}>
+            <PayerRequirementsPanel
+              workspaceScopeKey={workspaceScopeKey}
+              initialPayerId={payerId}
+              navigationIntentKey={navigationRevision}
+              onNavigateToPreGuides={(context) => navigateToPreguides(context.payerId)}
+            />
+          </React.Fragment>
         )}
 
         <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-400">

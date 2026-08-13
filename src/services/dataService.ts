@@ -1586,6 +1586,24 @@ export const dataService = {
     }
   },
 
+  async getPatientFile(patientId: string, fileId: string) {
+    try {
+      const query = new URLSearchParams({ fileId: String(fileId || '').trim() });
+      const response = await fetch(`/api/patient-files/${encodeURIComponent(String(patientId))}?${query.toString()}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      return {
+        ...result,
+        data: Array.isArray(result?.data) ? result.data[0] || null : result?.data || null
+      };
+    } catch (error) {
+      console.error('Error fetching patient file:', error);
+      return { success: false, error: String(error), data: null };
+    }
+  },
+
   async uploadPatientFile(patientId: string, payload: any) {
     try {
       if (payload?.fileBlob instanceof Blob) {
@@ -6426,6 +6444,23 @@ export const dataService = {
     }
   },
 
+  async getPatientFinanceTransactionDocument(transactionId: string, kind: 'proof' | 'receipt') {
+    try {
+      const endpoint = endpointWithQuery(
+        `/api/patient-finance/transactions/${encodeURIComponent(String(transactionId))}/document`,
+        { kind }
+      );
+      const response = await fetchWithAuthRetry(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient finance document:', error);
+      return { success: false, data: null, error: 'Não foi possível abrir o documento financeiro agora.' };
+    }
+  },
+
   async getPrivatePricingCatalog(patientId?: string) {
     try {
       const endpoint = endpointWithQuery('/api/private-pricing/catalog', {
@@ -6591,12 +6626,45 @@ export const dataService = {
     return await saveOfflineFirst(id, payment, 'payment', '/api/payments');
   },
 
+  async savePaymentsBatch(payments: any[]) {
+    const items = (Array.isArray(payments) ? payments : []).map((payment) => ({
+      ...(payment || {}),
+      id: String(payment?.id || generateId())
+    }));
+    const seriesId = String(items[0]?.recurrence_group_id || items[0]?.recurrenceGroupId || generateId());
+    const result = await saveOfflineFirst(
+      `payment-series:${seriesId}`,
+      { items, requestedAt: new Date().toISOString() },
+      'payment',
+      '/api/payments/batch',
+      'POST'
+    );
+    const persistedItems = Array.isArray(result?.data)
+      ? result.data
+      : Array.isArray(result?.data?.items)
+        ? result.data.items
+        : items;
+    return { ...result, data: persistedItems };
+  },
+
   async updatePayment(paymentId: string, updates: any) {
     return await saveOfflineFirst(
       String(paymentId),
       updates,
       'payment',
       `/api/payments/${encodeURIComponent(String(paymentId))}`,
+      'PATCH'
+    );
+  },
+
+  async updatePaymentsBatch(paymentIds: string[], updates: any) {
+    const ids = Array.from(new Set((Array.isArray(paymentIds) ? paymentIds : []).map((id) => String(id || '').trim()).filter(Boolean)));
+    const seriesId = String(updates?.recurrence_group_id || updates?.recurrenceGroupId || ids[0] || generateId());
+    return await saveOfflineFirst(
+      `payment-series-update:${seriesId}`,
+      { ids, updates: updates || {}, requestedAt: new Date().toISOString() },
+      'payment',
+      '/api/payments/batch',
       'PATCH'
     );
   },
@@ -6619,12 +6687,45 @@ export const dataService = {
     return await saveOfflineFirst(id, payment, 'payment', '/api/financial/professional-payments');
   },
 
+  async saveProfessionalPaymentsBatch(payments: any[]) {
+    const items = (Array.isArray(payments) ? payments : []).map((payment) => ({
+      ...(payment || {}),
+      id: String(payment?.id || generateId())
+    }));
+    const seriesId = String(items[0]?.recurrence_group_id || items[0]?.recurrenceGroupId || generateId());
+    const result = await saveOfflineFirst(
+      `professional-payment-series:${seriesId}`,
+      { items, requestedAt: new Date().toISOString() },
+      'payment',
+      '/api/financial/professional-payments/batch',
+      'POST'
+    );
+    const persistedItems = Array.isArray(result?.data)
+      ? result.data
+      : Array.isArray(result?.data?.items)
+        ? result.data.items
+        : items;
+    return { ...result, data: persistedItems };
+  },
+
   async updateProfessionalPayment(paymentId: string, updates: any) {
     return await saveOfflineFirst(
       String(paymentId),
       updates,
       'payment',
       `/api/financial/professional-payments/${encodeURIComponent(String(paymentId))}`,
+      'PATCH'
+    );
+  },
+
+  async updateProfessionalPaymentsBatch(paymentIds: string[], updates: any) {
+    const ids = Array.from(new Set((Array.isArray(paymentIds) ? paymentIds : []).map((id) => String(id || '').trim()).filter(Boolean)));
+    const seriesId = String(updates?.recurrence_group_id || updates?.recurrenceGroupId || ids[0] || generateId());
+    return await saveOfflineFirst(
+      `professional-payment-series-update:${seriesId}`,
+      { ids, updates: updates || {}, requestedAt: new Date().toISOString() },
+      'payment',
+      '/api/financial/professional-payments/batch',
       'PATCH'
     );
   },
@@ -7892,16 +7993,16 @@ export const dataService = {
       return await buildLocalWorkspaceHydration(error);
     }
   },
-  async getSchools(params: Record<string, any> = {}) {
+  async getSchools(params: Record<string, any> = {}, options: { signal?: AbortSignal } = {}) {
     const endpoint = endpointWithQuery('/api/schools', params);
-    return await fetchNoStoreJsonWithRetry(endpoint, { credentials: 'include' }, {
+    return await fetchNoStoreJsonWithRetry(endpoint, { credentials: 'include', signal: options.signal }, {
       helperName: 'getSchools', operation: 'list', table: 'schools,school_units,school_contacts,patient_school_enrollments,school_meetings', hasExplicitColumns: true, requiresPatientOrSession: false
     }, 'A lista de escolas ficou desatualizada.');
   },
 
-  async getSchoolAutocomplete(search = '', page = 1, pageSize = 20) {
+  async getSchoolAutocomplete(search = '', page = 1, pageSize = 20, options: { signal?: AbortSignal } = {}) {
     const endpoint = endpointWithQuery('/api/schools/autocomplete', { search, page, pageSize });
-    return await fetchNoStoreJsonWithRetry(endpoint, { credentials: 'include' }, {
+    return await fetchNoStoreJsonWithRetry(endpoint, { credentials: 'include', signal: options.signal }, {
       helperName: 'getSchoolAutocomplete', operation: 'list', table: 'schools', hasExplicitColumns: true, requiresPatientOrSession: false
     }, 'A busca de escolas ficou desatualizada.');
   },
@@ -7924,10 +8025,17 @@ export const dataService = {
     return result;
   },
 
-  async getSchoolDetail(schoolId: string) {
-    return await fetchNoStoreJsonWithRetry(`/api/schools/${encodeURIComponent(schoolId)}`, { credentials: 'include' }, {
+  async getSchoolDetail(schoolId: string, options: { section?: 'summary' | 'audit'; signal?: AbortSignal } = {}) {
+    const endpoint = endpointWithQuery(`/api/schools/${encodeURIComponent(schoolId)}`, { section: options.section });
+    return await fetchNoStoreJsonWithRetry(endpoint, { credentials: 'include', signal: options.signal }, {
       helperName: 'getSchoolDetail', operation: 'detail', table: 'schools,school_units,school_contacts,patient_school_enrollments,school_meetings,school_document_links', hasExplicitColumns: true, requiresPatientOrSession: false
     }, 'O detalhe da escola ficou desatualizado.');
+  },
+
+  async getSchoolEnrollmentOptions(schoolId: string, options: { signal?: AbortSignal } = {}) {
+    return await fetchNoStoreJsonWithRetry(`/api/schools/${encodeURIComponent(schoolId)}/enrollment-options`, { credentials: 'include', signal: options.signal }, {
+      helperName: 'getSchoolEnrollmentOptions', operation: 'detail', table: 'schools,school_units,school_contacts', hasExplicitColumns: true, requiresPatientOrSession: false
+    }, 'As opções do vínculo escolar ficaram desatualizadas.');
   },
 
   async createSchoolUnit(schoolId: string, payload: any) {
@@ -7964,12 +8072,12 @@ export const dataService = {
     const result = await response.json().catch(() => ({})); return response.ok ? result : { success: false, status: response.status, ...result };
   },
 
-  async searchSchoolPatients(params: Record<string, any>) {
-    return await fetchNoStoreJsonWithRetry(endpointWithQuery('/api/schools/patients/search', params), { credentials: 'include' }, { helperName: 'searchSchoolPatients', operation: 'list', table: 'patient_school_enrollments,patients,school_consents,school_meeting_patients', hasExplicitColumns: true, requiresPatientOrSession: false }, 'A lista de pacientes por escola ficou desatualizada.');
+  async searchSchoolPatients(params: Record<string, any>, options: { signal?: AbortSignal } = {}) {
+    return await fetchNoStoreJsonWithRetry(endpointWithQuery('/api/schools/patients/search', params), { credentials: 'include', signal: options.signal }, { helperName: 'searchSchoolPatients', operation: 'list', table: 'patient_school_enrollments,patients,school_consents,school_meeting_patients', hasExplicitColumns: true, requiresPatientOrSession: false }, 'A lista de pacientes por escola ficou desatualizada.');
   },
 
-  async searchPatientsForSchool(schoolId: string, params: Record<string, any> = {}) {
-    return await fetchNoStoreJsonWithRetry(endpointWithQuery(`/api/schools/${encodeURIComponent(schoolId)}/patients/autocomplete`, params), { credentials: 'include' }, { helperName: 'searchPatientsForSchool', operation: 'list', table: 'patients,patient_school_enrollments', hasExplicitColumns: true, requiresPatientOrSession: false }, 'A busca de pacientes ficou desatualizada.');
+  async searchPatientsForSchool(schoolId: string, params: Record<string, any> = {}, options: { signal?: AbortSignal } = {}) {
+    return await fetchNoStoreJsonWithRetry(endpointWithQuery(`/api/schools/${encodeURIComponent(schoolId)}/patients/autocomplete`, params), { credentials: 'include', signal: options.signal }, { helperName: 'searchPatientsForSchool', operation: 'list', table: 'patients,patient_school_enrollments', hasExplicitColumns: true, requiresPatientOrSession: false }, 'A busca de pacientes ficou desatualizada.');
   },
 
   async getPatientCareLocations(patientId: string) {

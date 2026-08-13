@@ -266,6 +266,14 @@ import {
   validateTissPreGuide
 } from './src/services/tissPreGuideEngine';
 import {
+  buildTissPreGuideEligibilityContexts,
+  chunkTissPreGuideScopeIds,
+  consumeTissAuthorizationBalance,
+  groupTissRowsByPatientAndPayer,
+  tissPatientPayerBatchKey,
+  tissPreGuideContextNeedsBatchResolution
+} from './src/services/tissPreGuideBatchContext';
+import {
   validateAntiGlosaForPreGuide
 } from './src/services/tissAntiGlosaChecklist';
 import {
@@ -334,7 +342,7 @@ import {
   PROFILE_SELECT as USER_PROFILE_SELECT,
   PROFESSIONAL_PAYMENT_SELECT,
   PROFESSIONAL_PROFILE_SELECT,
-  TASK_SELECT,
+  filterTaskPayloadForSchema,
   fetchAssignedTasksWithSchemaFallback,
   fetchClinicAnamnesisTemplateWithSchemaFallback,
   fetchNotesWithSchemaFallback,
@@ -354,7 +362,8 @@ import {
   fetchProfileByEmailWithSchemaFallback,
   fetchProfessionalProfileWithSchemaFallback,
   fetchProfileWithSchemaFallback,
-  fetchTasksWithSchemaFallback
+  fetchTasksWithSchemaFallback,
+  resolveTaskSchemaCapabilities
 } from './src/utils/routeSchemaFallbacks';
 import {
   composePatientProfessionalLinks,
@@ -1905,6 +1914,15 @@ function salesApplicationOrigin(req: any): string {
     500,
   ).replace(/\/+$/, "");
 }
+
+const SALES_CHECKOUT_LINK_SELECT = [
+  'id', 'offer_id', 'lead_id', 'environment', 'status', 'request_hash', 'idempotency_key',
+  'stripe_checkout_session_id', 'stripe_subscription_id', 'stripe_schedule_id', 'stripe_customer_id',
+  'checkout_url', 'public_token_hash', 'catalog_snapshot_version', 'assumptions_snapshot_version',
+  'checkout_plan_snapshot', 'initial_amount_cents', 'promotional_monthly_cents', 'future_monthly_cents',
+  'one_time_cents', 'expires_at', 'last_opened_at', 'payment_completed_at', 'logically_expired_at',
+  'created_by', 'created_at', 'updated_at'
+].join(',');
 
 function serializeSalesCheckoutLink(req: any, link: any) {
   if (!link?.offer_id || !link?.request_hash || !link?.idempotency_key) return link;
@@ -12727,6 +12745,32 @@ const serializeAppointmentTissAuthorizationSuggestion = (authorization: any, ref
 const appointmentTissRecordIsActive = (value: unknown) =>
   value !== false && sanitizeString(value, 20).toLowerCase() !== 'false';
 
+type AppointmentTissBillingBatchContext = {
+  organizationId: string;
+  payersById: Map<string, any>;
+  payersByNormalizedName: Map<string, any[]>;
+  services: any[];
+  servicesById: Map<string, any>;
+  codesById: Map<string, any>;
+  mappingsById: Map<string, any>;
+  mappingsByPayerId: Map<string, any[]>;
+  authorizationsByPatientAndPayer: Map<string, any[]>;
+  authorizationBalances: Map<string, ConfirmedTissAuthorizationBalance>;
+};
+
+const normalizeAppointmentTissPayerName = (value: any) =>
+  sanitizeString(value, 180)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+
+const isAppointmentTissBatchContextForOrganization = (
+  context: AppointmentTissBillingBatchContext | undefined,
+  organizationId: string
+) => Boolean(context && context.organizationId === organizationId);
+
 const appointmentTissMappingIsValidForDate = (mapping: any, isoDate: string) => {
   const date = appointmentDateKeyForAuthorization(isoDate);
   const validFrom = sanitizeString(mapping?.valid_from, 40).slice(0, 10);
@@ -12784,6 +12828,40 @@ async function fetchTussCodeByIdForAppointmentTissBilling(organizationId: string
   return data || null;
 }
 
+function findMatchingTussServiceCatalogForAppointmentTissBilling(
+  servicesInput: any[],
+  serviceType: any,
+  procedureCode?: any,
+  serviceCatalogId?: any
+) {
+  const services = (Array.isArray(servicesInput) ? servicesInput : [])
+    .filter((service: any) => service?.active !== false);
+  const requestedServiceCatalogId = sanitizeString(serviceCatalogId, 120);
+  if (requestedServiceCatalogId) {
+    if (!isUuid(requestedServiceCatalogId)) return null;
+    return services.find((service: any) => sanitizeString(service?.id, 120) === requestedServiceCatalogId) || null;
+  }
+  const procedureKey = sanitizeString(procedureCode, 80).toLowerCase();
+  if (procedureKey) {
+    const byCode = services.find((service: any) => sanitizeString(service?.internal_code, 80).toLowerCase() === procedureKey);
+    if (byCode) return byCode;
+  }
+  const serviceKey = normalizeBillingServiceMatchKey(serviceType);
+  const activeMatch = services.find((service: any) => normalizeBillingServiceMatchKey(service?.service_type) === serviceKey) ||
+    services.find((service: any) => normalizeBillingServiceMatchKey(service?.name) === serviceKey) ||
+    null;
+  if (activeMatch) return activeMatch;
+  return services.find((service: any) => {
+    const serviceCompositeKey = [
+      service?.service_type,
+      service?.name,
+      service?.internal_code,
+      service?.specialty
+    ].map(normalizeBillingServiceMatchKey).filter(Boolean).join('_');
+    return Boolean(serviceKey && serviceCompositeKey && (serviceCompositeKey.includes(serviceKey) || serviceKey.includes(serviceCompositeKey)));
+  }) || null;
+}
+
 async function fetchMatchingTussServiceCatalogForAppointmentTissBilling(
   organizationId: string,
   serviceType: any,
@@ -12811,35 +12889,108 @@ async function fetchMatchingTussServiceCatalogForAppointmentTissBilling(
     if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
     throw error;
   }
-  const services = Array.isArray(data) ? data : [];
-  const procedureKey = sanitizeString(procedureCode, 80).toLowerCase();
-  if (procedureKey) {
-    const byCode = services.find((service: any) => sanitizeString(service?.internal_code, 80).toLowerCase() === procedureKey);
-    if (byCode) return byCode;
-  }
-  const serviceKey = normalizeBillingServiceMatchKey(serviceType);
-  const activeMatch = services.find((service: any) => normalizeBillingServiceMatchKey(service?.service_type) === serviceKey) ||
-    services.find((service: any) => normalizeBillingServiceMatchKey(service?.name) === serviceKey) ||
-    null;
-  if (activeMatch) return activeMatch;
-  return services.find((service: any) => {
-    const serviceCompositeKey = [
-      service?.service_type,
-      service?.name,
-      service?.internal_code,
-      service?.specialty
-    ].map(normalizeBillingServiceMatchKey).filter(Boolean).join('_');
-    return Boolean(serviceKey && serviceCompositeKey && (serviceCompositeKey.includes(serviceKey) || serviceKey.includes(serviceCompositeKey)));
-  }) || null;
+  return findMatchingTussServiceCatalogForAppointmentTissBilling(
+    Array.isArray(data) ? data : [],
+    serviceType,
+    procedureCode,
+    serviceCatalogId
+  );
+}
+
+function serializePayerBillableServiceOptionsForAppointmentTissBilling(params: {
+  mappings: any[];
+  servicesById: Map<string, any>;
+  codesById: Map<string, any>;
+  appointmentDate?: any;
+  includeAllValidityPeriods?: boolean;
+}) {
+  const referenceDate = appointmentDateKeyForAuthorization(params.appointmentDate);
+  const mappings = (Array.isArray(params.mappings) ? params.mappings : []).filter((mapping: any) =>
+    appointmentTissRecordIsActive(mapping?.active) &&
+    (params.includeAllValidityPeriods === true || appointmentTissMappingIsValidForDate(mapping, referenceDate))
+  );
+  const seen = new Set<string>();
+  return mappings
+    .map((mapping: any) => {
+      const serviceCatalogId = sanitizeString(mapping?.service_catalog_id, 120);
+      const tussCodeId = sanitizeString(mapping?.tuss_code_id, 120);
+      const service = params.servicesById.get(serviceCatalogId);
+      const code = params.codesById.get(tussCodeId);
+      if (!service?.id || service?.active === false || !code?.id || code?.active === false) return null;
+      const mappingMetadata =
+        mapping?.metadata && typeof mapping.metadata === 'object' && !Array.isArray(mapping.metadata)
+          ? mapping.metadata
+          : {};
+      const officialTussCode = sanitizeString(code?.code, 80).toUpperCase();
+      const authorizedCode = sanitizeString(
+        mapping?.authorized_code ||
+          mapping?.authorizedCode ||
+          mappingMetadata?.authorized_code ||
+          mappingMetadata?.authorizedCode ||
+          officialTussCode,
+        80
+      ).toUpperCase();
+      const billingCode = sanitizeString(
+        mapping?.billing_code ||
+          mapping?.billingCode ||
+          mappingMetadata?.billing_code ||
+          mappingMetadata?.billingCode ||
+          authorizedCode ||
+          officialTussCode,
+        80
+      ).toUpperCase();
+      const tussCode = authorizedCode || officialTussCode;
+      const dedupeKey = params.includeAllValidityPeriods === true
+        ? sanitizeString(mapping?.id, 120)
+        : `${serviceCatalogId}:${tussCodeId}:${tussCode}`;
+      if (seen.has(dedupeKey)) return null;
+      seen.add(dedupeKey);
+      return cleanObject({
+        serviceCatalogId,
+        serviceName: sanitizeString(service?.name, 180) || 'Procedimento',
+        serviceType: sanitizeString(service?.service_type, 120) || null,
+        specialty: sanitizeString(service?.specialty, 120) || null,
+        internalCode: sanitizeString(service?.internal_code, 80) || null,
+        payerTussMappingId: sanitizeString(mapping?.id, 120) || null,
+        tussCodeId,
+        tussCode: tussCode || sanitizeString(code?.code, 80) || null,
+        officialTussCode: officialTussCode || null,
+        authorizedCode: authorizedCode || null,
+        billingCode: billingCode || null,
+        tussDescription: sanitizeString(code?.description, 240) || null,
+        billingUnit: sanitizeString(mapping?.billing_unit, 60) || null,
+        validFrom: sanitizeString(mapping?.valid_from, 40) || null,
+        validTo: sanitizeString(mapping?.valid_to, 40) || null
+      });
+    })
+    .filter(Boolean)
+    .sort((left: any, right: any) =>
+      sanitizeString(left?.serviceName, 180).localeCompare(
+        sanitizeString(right?.serviceName, 180),
+        'pt-BR'
+      )
+    );
 }
 
 async function listPayerBillableServiceOptionsForAppointmentTissBilling(
   organizationId: string,
   payerId: string,
   appointmentDate?: any,
-  options?: { includeAllValidityPeriods?: boolean }
+  options?: {
+    includeAllValidityPeriods?: boolean;
+    batchContext?: AppointmentTissBillingBatchContext;
+  }
 ) {
   if (!isUuid(organizationId) || !isUuid(payerId)) return [];
+  if (isAppointmentTissBatchContextForOrganization(options?.batchContext, organizationId)) {
+    return serializePayerBillableServiceOptionsForAppointmentTissBilling({
+      mappings: options?.batchContext?.mappingsByPayerId.get(payerId) || [],
+      servicesById: options!.batchContext!.servicesById,
+      codesById: options!.batchContext!.codesById,
+      appointmentDate,
+      includeAllValidityPeriods: options?.includeAllValidityPeriods === true
+    });
+  }
   const { data, error } = await supabase
     .from('payer_tuss_mappings')
     .select(PAYER_TUSS_MAPPING_SELECT)
@@ -12852,10 +13003,7 @@ async function listPayerBillableServiceOptionsForAppointmentTissBilling(
     if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return [];
     throw error;
   }
-  const referenceDate = appointmentDateKeyForAuthorization(appointmentDate);
-  const mappings = (Array.isArray(data) ? data : []).filter((mapping: any) =>
-    options?.includeAllValidityPeriods === true || appointmentTissMappingIsValidForDate(mapping, referenceDate)
-  );
+  const mappings = Array.isArray(data) ? data : [];
   const serviceIds = Array.from(
     new Set(
       mappings
@@ -12900,76 +13048,35 @@ async function listPayerBillableServiceOptionsForAppointmentTissBilling(
   const codesById = new Map<string, any>(
     (codesResult.error ? [] : codesResult.data || []).map((row: any) => [sanitizeString(row?.id, 120), row])
   );
-  const seen = new Set<string>();
-  return mappings
-    .map((mapping: any) => {
-      const serviceCatalogId = sanitizeString(mapping?.service_catalog_id, 120);
-      const tussCodeId = sanitizeString(mapping?.tuss_code_id, 120);
-      const service = servicesById.get(serviceCatalogId);
-      const code = codesById.get(tussCodeId);
-      if (!service?.id || service?.active === false || !code?.id || code?.active === false) return null;
-      const mappingMetadata =
-        mapping?.metadata && typeof mapping.metadata === 'object' && !Array.isArray(mapping.metadata)
-          ? mapping.metadata
-          : {};
-      const officialTussCode = sanitizeString(code?.code, 80).toUpperCase();
-      const authorizedCode = sanitizeString(
-        mapping?.authorized_code ||
-          mapping?.authorizedCode ||
-          mappingMetadata?.authorized_code ||
-          mappingMetadata?.authorizedCode ||
-          officialTussCode,
-        80
-      ).toUpperCase();
-      const billingCode = sanitizeString(
-        mapping?.billing_code ||
-          mapping?.billingCode ||
-          mappingMetadata?.billing_code ||
-          mappingMetadata?.billingCode ||
-          authorizedCode ||
-          officialTussCode,
-        80
-      ).toUpperCase();
-      const tussCode = authorizedCode || officialTussCode;
-      const dedupeKey = options?.includeAllValidityPeriods === true
-        ? sanitizeString(mapping?.id, 120)
-        : `${serviceCatalogId}:${tussCodeId}:${tussCode}`;
-      if (seen.has(dedupeKey)) return null;
-      seen.add(dedupeKey);
-      return cleanObject({
-        serviceCatalogId,
-        serviceName: sanitizeString(service?.name, 180) || 'Procedimento',
-        serviceType: sanitizeString(service?.service_type, 120) || null,
-        specialty: sanitizeString(service?.specialty, 120) || null,
-        internalCode: sanitizeString(service?.internal_code, 80) || null,
-        payerTussMappingId: sanitizeString(mapping?.id, 120) || null,
-        tussCodeId,
-        tussCode: tussCode || sanitizeString(code?.code, 80) || null,
-        officialTussCode: officialTussCode || null,
-        authorizedCode: authorizedCode || null,
-        billingCode: billingCode || null,
-        tussDescription: sanitizeString(code?.description, 240) || null,
-        billingUnit: sanitizeString(mapping?.billing_unit, 60) || null,
-        validFrom: sanitizeString(mapping?.valid_from, 40) || null,
-        validTo: sanitizeString(mapping?.valid_to, 40) || null
-      });
-    })
-    .filter(Boolean)
-    .sort((left: any, right: any) =>
-      sanitizeString(left?.serviceName, 180).localeCompare(
-        sanitizeString(right?.serviceName, 180),
-        'pt-BR'
-      )
-    );
+  return serializePayerBillableServiceOptionsForAppointmentTissBilling({
+    mappings,
+    servicesById,
+    codesById,
+    appointmentDate,
+    includeAllValidityPeriods: options?.includeAllValidityPeriods === true
+  });
 }
 
 async function fetchActivePayerTussMappingForAppointmentTissBilling(
   organizationId: string,
   payerId: string,
   serviceCatalogId: string,
-  appointmentDate: any
+  appointmentDate: any,
+  batchContext?: AppointmentTissBillingBatchContext
 ) {
   if (!isUuid(organizationId) || !isUuid(payerId) || !isUuid(serviceCatalogId)) return null;
+  if (isAppointmentTissBatchContextForOrganization(batchContext, organizationId)) {
+    const date = appointmentDateKeyForAuthorization(appointmentDate);
+    return (batchContext?.mappingsByPayerId.get(payerId) || [])
+      .filter((mapping: any) =>
+        appointmentTissRecordIsActive(mapping?.active) &&
+        sanitizeString(mapping?.service_catalog_id, 120) === serviceCatalogId
+      )
+      .sort((left: any, right: any) =>
+        sanitizeString(right?.valid_from, 40).localeCompare(sanitizeString(left?.valid_from, 40))
+      )
+      .find((mapping: any) => appointmentTissMappingIsValidForDate(mapping, date)) || null;
+  }
   const { data, error } = await supabase
     .from('payer_tuss_mappings')
     .select(PAYER_TUSS_MAPPING_SELECT)
@@ -12987,13 +13094,25 @@ async function fetchActivePayerTussMappingForAppointmentTissBilling(
   return (Array.isArray(data) ? data : []).find((mapping: any) => appointmentTissMappingIsValidForDate(mapping, date)) || null;
 }
 
-async function hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId: string, rows: any[]) {
+async function hydratePatientPayerAuthorizationsForAppointmentTissBilling(
+  organizationId: string,
+  rows: any[],
+  batchContext?: AppointmentTissBillingBatchContext
+) {
   const safeRows = Array.isArray(rows) ? rows : [];
+  const useBatchContext = isAppointmentTissBatchContextForOrganization(batchContext, organizationId);
   const payerIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.payer_id, 120)).filter((id: string) => isUuid(id))));
   const serviceIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.service_catalog_id, 120)).filter((id: string) => isUuid(id))));
   const codeIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.tuss_code_id, 120)).filter((id: string) => isUuid(id))));
   const mappingIds = Array.from(new Set(safeRows.map((row: any) => sanitizeString(row?.payer_tuss_mapping_id, 120)).filter((id: string) => isUuid(id))));
-  const [payersResult, servicesResult, codesResult, mappingsResult] = await Promise.all([
+  const [payersResult, servicesResult, codesResult, mappingsResult] = useBatchContext
+    ? [
+        { data: Array.from(batchContext!.payersById.values()), error: null },
+        { data: Array.from(batchContext!.servicesById.values()), error: null },
+        { data: Array.from(batchContext!.codesById.values()), error: null },
+        { data: Array.from(batchContext!.mappingsById.values()), error: null }
+      ] as any
+    : await Promise.all([
     payerIds.length > 0
       ? supabase.from('clinic_payers').select(CLINIC_PAYER_SELECT).eq('organization_id', organizationId).in('id', payerIds).limit(payerIds.length)
       : Promise.resolve({ data: [], error: null } as any),
@@ -13006,7 +13125,7 @@ async function hydratePatientPayerAuthorizationsForAppointmentTissBilling(organi
     mappingIds.length > 0
       ? supabase.from('payer_tuss_mappings').select(PAYER_TUSS_MAPPING_SELECT).eq('organization_id', organizationId).in('id', mappingIds).limit(mappingIds.length)
       : Promise.resolve({ data: [], error: null } as any)
-  ]);
+      ]);
   for (const result of [payersResult, servicesResult, codesResult, mappingsResult]) {
     if (result.error && !hasMissingFinancialSchema(result.error) && !isMissingRelationError(result.error)) throw result.error;
   }
@@ -13064,6 +13183,7 @@ type ConfirmedTissAuthorizationBalance = TissAuthorizationBalance & {
   errorCode: string | null;
   preGuideCount: number;
   officialPreGuideCount: number;
+  committedAppointmentIds: Set<string>;
 };
 
 const readTissAuthorizationIdFromBillingMetadata = (value: any) => {
@@ -13129,7 +13249,8 @@ async function fetchPatientTissAuthorizationBalances(params: {
         confirmed: false,
         errorCode,
         preGuideCount: 0,
-        officialPreGuideCount: 0
+        officialPreGuideCount: 0,
+        committedAppointmentIds: new Set<string>()
       });
     }
     return balances;
@@ -13321,7 +13442,15 @@ async function fetchPatientTissAuthorizationBalances(params: {
         confirmed,
         errorCode: confirmed ? null : 'TISS_AUTHORIZATION_COMMITMENT_INCOMPLETE',
         preGuideCount: preGuideCountByAuthorizationId.get(authorization.authorizationId) || 0,
-        officialPreGuideCount: officialPreGuideCountByAuthorizationId.get(authorization.authorizationId) || 0
+        officialPreGuideCount: officialPreGuideCountByAuthorizationId.get(authorization.authorizationId) || 0,
+        committedAppointmentIds: new Set(
+          commitments
+            .filter((commitment) =>
+              commitment.authorizationId === authorization.authorizationId &&
+              (commitment.futureReservation || commitment.historicalOfficialCommitment)
+            )
+            .map((commitment) => commitment.appointmentId)
+        )
       });
     }
   } catch (error: any) {
@@ -13335,6 +13464,210 @@ async function fetchPatientTissAuthorizationBalances(params: {
   return balances;
 }
 
+async function preloadAppointmentTissBillingBatchContext(params: {
+  organizationId: string;
+  appointments: any[];
+  contextsByAppointment: Map<string, any>;
+  payers: any[];
+}): Promise<AppointmentTissBillingBatchContext | undefined> {
+  const organizationId = sanitizeString(params.organizationId, 120);
+  if (!isUuid(organizationId)) return undefined;
+  const contextsByAppointment = params.contextsByAppointment instanceof Map
+    ? params.contextsByAppointment
+    : new Map<string, any>();
+  const patientIds = Array.from(new Set(
+    (Array.isArray(params.appointments) ? params.appointments : [])
+      .map((appointment: any) => sanitizeString(appointment?.patient_id || appointment?.patientId, 120))
+      .filter((id: string) => isUuid(id))
+  ));
+  const payerIds = Array.from(new Set(
+    (Array.isArray(params.appointments) ? params.appointments : [])
+      .map((appointment: any) => {
+        const appointmentId = sanitizeString(appointment?.id || appointment?.appointment_id, 120);
+        const context = contextsByAppointment.get(appointmentId) || {};
+        return sanitizeString(context?.payer_id || context?.payerId || appointment?.payer_id || appointment?.payerId, 120);
+      })
+      .filter((id: string) => isUuid(id))
+  ));
+  if (patientIds.length === 0 || payerIds.length === 0) return undefined;
+
+  const loadChunked = async (
+    table: string,
+    selectColumns: string,
+    scopeColumn: string,
+    ids: string[]
+  ) => {
+    const chunks = chunkTissPreGuideScopeIds(ids, 100);
+    const results = await Promise.all(chunks.map((chunk) =>
+      supabase
+        .from(table)
+        .select(selectColumns)
+        .eq('organization_id', organizationId)
+        .in(scopeColumn, chunk)
+        .limit(1000)
+    ));
+    const rows: any[] = [];
+    for (const result of results) {
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error) || isMissingRelationError(result.error)) return null;
+        throw result.error;
+      }
+      const resultRows = Array.isArray(result.data) ? result.data : [];
+      // A capped reference set cannot be used as authority. The caller falls
+      // back to the existing per-appointment path instead of assuming absence.
+      if (resultRows.length >= 1000) return null;
+      rows.push(...resultRows);
+    }
+    return rows;
+  };
+
+  const [authorizationRows, mappingRows] = await Promise.all([
+    loadChunked(
+      'patient_payer_authorizations',
+      PATIENT_PAYER_AUTHORIZATION_SELECT,
+      'patient_id',
+      patientIds
+    ),
+    loadChunked(
+      'payer_tuss_mappings',
+      PAYER_TUSS_MAPPING_SELECT,
+      'payer_id',
+      payerIds
+    )
+  ]);
+  if (!authorizationRows || !mappingRows) return undefined;
+
+  const relevantAuthorizationRows = authorizationRows.filter((row: any) =>
+    payerIds.includes(sanitizeString(row?.payer_id, 120))
+  );
+  const requestedServiceIds = (Array.isArray(params.appointments) ? params.appointments : [])
+    .flatMap((appointment: any) => {
+      const appointmentId = sanitizeString(appointment?.id || appointment?.appointment_id, 120);
+      const context = contextsByAppointment.get(appointmentId) || {};
+      return [
+        appointment?.service_catalog_id,
+        appointment?.serviceCatalogId,
+        context?.service_catalog_id,
+        context?.serviceCatalogId
+      ];
+    });
+  const serviceIds = Array.from(new Set([
+    ...requestedServiceIds,
+    ...mappingRows.map((row: any) => row?.service_catalog_id),
+    ...relevantAuthorizationRows.map((row: any) => row?.service_catalog_id)
+  ].map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id))));
+  const codeIds = Array.from(new Set([
+    ...mappingRows.map((row: any) => row?.tuss_code_id),
+    ...relevantAuthorizationRows.map((row: any) => row?.tuss_code_id)
+  ].map((id) => sanitizeString(id, 120)).filter((id) => isUuid(id))));
+  const [serviceRows, codeRows] = await Promise.all([
+    serviceIds.length > 0
+      ? loadChunked('tuss_service_catalog', TUSS_SERVICE_CATALOG_SELECT, 'id', serviceIds)
+      : Promise.resolve([]),
+    codeIds.length > 0
+      ? loadChunked('tuss_codes', TUSS_CODE_SELECT, 'id', codeIds)
+      : Promise.resolve([])
+  ]);
+  if (!serviceRows || !codeRows) return undefined;
+
+  const payerRows = (Array.isArray(params.payers) ? params.payers : [])
+    .filter((payer: any) => payerIds.includes(sanitizeString(payer?.id, 120)));
+  const context: AppointmentTissBillingBatchContext = {
+    organizationId,
+    payersById: new Map(payerRows.map((payer: any) => [sanitizeString(payer?.id, 120), payer])),
+    payersByNormalizedName: new Map<string, any[]>(),
+    services: serviceRows,
+    servicesById: new Map(serviceRows.map((row: any) => [sanitizeString(row?.id, 120), row])),
+    codesById: new Map(codeRows.map((row: any) => [sanitizeString(row?.id, 120), row])),
+    mappingsById: new Map(mappingRows.map((row: any) => [sanitizeString(row?.id, 120), row])),
+    mappingsByPayerId: new Map<string, any[]>(),
+    authorizationsByPatientAndPayer: new Map<string, any[]>(),
+    authorizationBalances: new Map<string, ConfirmedTissAuthorizationBalance>()
+  };
+  for (const payer of payerRows) {
+    const key = normalizeAppointmentTissPayerName(payer?.name);
+    if (!key) continue;
+    const rows = context.payersByNormalizedName.get(key) || [];
+    rows.push(payer);
+    context.payersByNormalizedName.set(key, rows);
+  }
+  for (const mapping of mappingRows) {
+    const mappingPayerId = sanitizeString(mapping?.payer_id, 120);
+    if (!isUuid(mappingPayerId)) continue;
+    const rows = context.mappingsByPayerId.get(mappingPayerId) || [];
+    rows.push(mapping);
+    context.mappingsByPayerId.set(mappingPayerId, rows);
+  }
+  const hydratedAuthorizations = await hydratePatientPayerAuthorizationsForAppointmentTissBilling(
+    organizationId,
+    relevantAuthorizationRows,
+    context
+  );
+  context.authorizationsByPatientAndPayer = groupTissRowsByPatientAndPayer(hydratedAuthorizations);
+  context.authorizationBalances = await fetchPatientTissAuthorizationBalances({
+    organizationId,
+    authorizations: hydratedAuthorizations
+  });
+  return context;
+}
+
+async function loadOrganizationRowsByAppointmentIds(params: {
+  organizationId: string;
+  appointmentIds: string[];
+  table: string;
+  selectColumns: string;
+}) {
+  const chunks = chunkTissPreGuideScopeIds(params.appointmentIds, 100);
+  const data: any[] = [];
+  for (let index = 0; index < chunks.length; index += 4) {
+    const results = await Promise.all(chunks.slice(index, index + 4).map((ids) =>
+      supabase
+        .from(params.table)
+        .select(params.selectColumns)
+        .eq('organization_id', params.organizationId)
+        .in('appointment_id', ids)
+        .limit(1000)
+    ));
+    for (const result of results) {
+      if (result.error) return { data: [], error: result.error };
+      data.push(...(Array.isArray(result.data) ? result.data : []));
+    }
+  }
+  return { data, error: null };
+}
+
+function registerTissPreGuideCommitmentInBatchContext(
+  context: AppointmentTissBillingBatchContext | undefined,
+  preGuide: any
+) {
+  if (!context || !preGuide) return;
+  const authorizationId = readTissAuthorizationIdFromPreGuideSnapshot(
+    preGuide?.snapshot || preGuide?.snapshot_data
+  );
+  const appointmentId = sanitizeString(preGuide?.appointmentId || preGuide?.appointment_id, 120);
+  if (!isUuid(authorizationId) || !isUuid(appointmentId)) return;
+  const balance = context.authorizationBalances.get(authorizationId);
+  if (!balance?.confirmed || balance.committedAppointmentIds.has(appointmentId)) return;
+
+  const status = sanitizeString(preGuide?.status, 80).toLowerCase();
+  const activePreGuide = !['cancelled', 'canceled', 'deleted', 'refused'].includes(status);
+  const officialPreGuide = activePreGuide && isUuid(
+    sanitizeString(preGuide?.officialDocumentId || preGuide?.official_document_id, 120)
+  );
+  const scheduledStart = sanitizeString(preGuide?.scheduledStart || preGuide?.scheduled_start, 100);
+  const scheduledTime = Date.parse(scheduledStart);
+  const isHistorical = Number.isFinite(scheduledTime) && scheduledTime < Date.now();
+  const reservesBalance = (!isHistorical && activePreGuide) || (isHistorical && officialPreGuide);
+
+  consumeTissAuthorizationBalance({
+    balance,
+    appointmentId,
+    activePreGuide,
+    officialPreGuide,
+    historical: isHistorical
+  });
+}
+
 async function resolveAppointmentTissAuthorizationForBilling(params: {
   organizationId: string;
   patientId: string;
@@ -13346,6 +13679,7 @@ async function resolveAppointmentTissAuthorizationForBilling(params: {
   appointmentDate?: any;
   authorizationId?: any;
   currentAppointmentId?: any;
+  batchContext?: AppointmentTissBillingBatchContext;
 }) {
   const organizationId = sanitizeString(params.organizationId, 120);
   const patientId = sanitizeString(params.patientId, 120);
@@ -13354,14 +13688,21 @@ async function resolveAppointmentTissAuthorizationForBilling(params: {
     const referenceDateKey = appointmentDateKeyForAuthorization(params.appointmentDate);
     let payerId = sanitizeString(params.payerId, 120);
     const payerName = sanitizeString(params.payerName, 180);
-    let payer: any = isUuid(payerId) ? await fetchPayerForAppointmentTissBilling(payerId, organizationId) : null;
+    const useBatchContext = isAppointmentTissBatchContextForOrganization(params.batchContext, organizationId);
+    let payer: any = isUuid(payerId)
+      ? useBatchContext
+        ? params.batchContext?.payersById.get(payerId) || null
+        : await fetchPayerForAppointmentTissBilling(payerId, organizationId)
+      : null;
     if (!payer?.id && payerName) {
-      const payerResult = await supabase
-        .from('clinic_payers')
-        .select(CLINIC_PAYER_SELECT)
-        .eq('organization_id', organizationId)
-        .ilike('name', payerName)
-        .limit(2);
+      const payerResult = useBatchContext
+        ? { data: params.batchContext?.payersByNormalizedName.get(normalizeAppointmentTissPayerName(payerName)) || [], error: null }
+        : await supabase
+            .from('clinic_payers')
+            .select(CLINIC_PAYER_SELECT)
+            .eq('organization_id', organizationId)
+            .ilike('name', payerName)
+            .limit(2);
       if (payerResult.error && !hasMissingFinancialSchema(payerResult.error) && !isMissingRelationError(payerResult.error)) throw payerResult.error;
       payer = Array.isArray(payerResult.data) && payerResult.data.length === 1 ? payerResult.data[0] : null;
       payerId = sanitizeString(payer?.id, 120);
@@ -13369,40 +13710,73 @@ async function resolveAppointmentTissAuthorizationForBilling(params: {
     if (!isUuid(payerId)) return null;
 
     const serviceType = sanitizeString(params.serviceType, 120);
-    const serviceCatalog = await fetchMatchingTussServiceCatalogForAppointmentTissBilling(
-      organizationId,
-      serviceType,
-      params.procedureCode,
-      params.serviceCatalogId
-    );
+    const serviceCatalog = useBatchContext
+      ? findMatchingTussServiceCatalogForAppointmentTissBilling(
+          params.batchContext?.services || [],
+          serviceType,
+          params.procedureCode,
+          params.serviceCatalogId
+        )
+      : await fetchMatchingTussServiceCatalogForAppointmentTissBilling(
+          organizationId,
+          serviceType,
+          params.procedureCode,
+          params.serviceCatalogId
+        );
     const mapping = serviceCatalog?.id
-      ? await fetchActivePayerTussMappingForAppointmentTissBilling(organizationId, payerId, sanitizeString(serviceCatalog.id, 120), referenceDateKey)
+      ? await fetchActivePayerTussMappingForAppointmentTissBilling(
+          organizationId,
+          payerId,
+          sanitizeString(serviceCatalog.id, 120),
+          referenceDateKey,
+          params.batchContext
+        )
       : null;
     const tussCode = isUuid(sanitizeString(mapping?.tuss_code_id, 120))
-      ? await fetchTussCodeByIdForAppointmentTissBilling(organizationId, sanitizeString(mapping.tuss_code_id, 120))
+      ? useBatchContext
+        ? params.batchContext?.codesById.get(sanitizeString(mapping.tuss_code_id, 120)) || null
+        : await fetchTussCodeByIdForAppointmentTissBilling(organizationId, sanitizeString(mapping.tuss_code_id, 120))
       : null;
     if (!mapping?.id || !tussCode?.id) return null;
 
-    let query = supabase
-      .from('patient_payer_authorizations')
-      .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
-      .eq('organization_id', organizationId)
-      .eq('patient_id', patientId)
-      .eq('payer_id', payerId)
-      .limit(120);
     const requestedAuthorizationId = sanitizeString(params.authorizationId, 120);
-    if (isUuid(requestedAuthorizationId)) query = query.eq('id', requestedAuthorizationId);
-    const { data, error } = await query;
+    let data: any[] | null = null;
+    let error: any = null;
+    if (useBatchContext) {
+      const rows = params.batchContext?.authorizationsByPatientAndPayer.get(
+        tissPatientPayerBatchKey(patientId, payerId)
+      ) || [];
+      data = isUuid(requestedAuthorizationId)
+        ? rows.filter((row: any) => sanitizeString(row?.id, 120) === requestedAuthorizationId)
+        : rows;
+    } else {
+      let query = supabase
+        .from('patient_payer_authorizations')
+        .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('payer_id', payerId)
+        .limit(120);
+      if (isUuid(requestedAuthorizationId)) query = query.eq('id', requestedAuthorizationId);
+      const result = await query;
+      data = result.data;
+      error = result.error;
+    }
     if (error) {
       if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return null;
       throw error;
     }
-    const hydratedRows = await hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId, Array.isArray(data) ? data : []);
-    const authorizationBalances = await fetchPatientTissAuthorizationBalances({
-      organizationId,
-      authorizations: hydratedRows,
-      currentAppointmentId: params.currentAppointmentId
-    });
+    const hydratedRows = useBatchContext
+      ? Array.isArray(data) ? data : []
+      : await hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId, Array.isArray(data) ? data : []);
+    const authorizationBalances = useBatchContext
+      ? params.batchContext!.authorizationBalances
+      : await fetchPatientTissAuthorizationBalances({
+          organizationId,
+          authorizations: hydratedRows,
+          currentAppointmentId: params.currentAppointmentId
+        });
+    const currentAppointmentId = sanitizeString(params.currentAppointmentId, 120);
     const hydrated = hydratedRows.map((authorization: any) => {
       const authorizationBalance = authorizationBalances.get(sanitizeString(authorization?.id, 120));
       return {
@@ -13411,7 +13785,9 @@ async function resolveAppointmentTissAuthorizationForBilling(params: {
         availableQuantity: authorizationBalance?.confirmed ? authorizationBalance.available : null,
         balanceConfirmed: authorizationBalance?.confirmed === true,
         balanceErrorCode: authorizationBalance?.errorCode || null,
-        currentAppointmentReserved: authorizationBalance?.currentAppointmentReserved === true
+        currentAppointmentReserved: useBatchContext
+          ? Boolean(currentAppointmentId && authorizationBalance?.committedAppointmentIds.has(currentAppointmentId))
+          : authorizationBalance?.currentAppointmentReserved === true
       };
     });
     const enriched = hydrated.map((authorization: any) => ({
@@ -13449,6 +13825,7 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
   procedureCode?: any;
   appointmentDate?: any;
   currentAppointmentId?: any;
+  batchContext?: AppointmentTissBillingBatchContext;
 }) {
   const organizationId = sanitizeString(params.organizationId, 120);
   const patientId = sanitizeString(params.patientId, 120);
@@ -13457,14 +13834,21 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
     const referenceDateKey = appointmentDateKeyForAuthorization(params.appointmentDate);
     let payerId = sanitizeString(params.payerId, 120);
     const payerName = sanitizeString(params.payerName, 180);
-    let payer: any = isUuid(payerId) ? await fetchPayerForAppointmentTissBilling(payerId, organizationId) : null;
+    const useBatchContext = isAppointmentTissBatchContextForOrganization(params.batchContext, organizationId);
+    let payer: any = isUuid(payerId)
+      ? useBatchContext
+        ? params.batchContext?.payersById.get(payerId) || null
+        : await fetchPayerForAppointmentTissBilling(payerId, organizationId)
+      : null;
     if (!payer?.id && payerName) {
-      const payerResult = await supabase
-        .from('clinic_payers')
-        .select(CLINIC_PAYER_SELECT)
-        .eq('organization_id', organizationId)
-        .ilike('name', payerName)
-        .limit(2);
+      const payerResult = useBatchContext
+        ? { data: params.batchContext?.payersByNormalizedName.get(normalizeAppointmentTissPayerName(payerName)) || [], error: null }
+        : await supabase
+            .from('clinic_payers')
+            .select(CLINIC_PAYER_SELECT)
+            .eq('organization_id', organizationId)
+            .ilike('name', payerName)
+            .limit(2);
       if (payerResult.error && !hasMissingFinancialSchema(payerResult.error) && !isMissingRelationError(payerResult.error)) throw payerResult.error;
       payer = Array.isArray(payerResult.data) && payerResult.data.length === 1 ? payerResult.data[0] : null;
       payerId = sanitizeString(payer?.id, 120);
@@ -13472,33 +13856,61 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
     if (!isUuid(payerId)) return [];
 
     const serviceType = sanitizeString(params.serviceType, 120);
-    const serviceCatalog = await fetchMatchingTussServiceCatalogForAppointmentTissBilling(
-      organizationId,
-      serviceType,
-      params.procedureCode,
-      params.serviceCatalogId
-    );
+    const serviceCatalog = useBatchContext
+      ? findMatchingTussServiceCatalogForAppointmentTissBilling(
+          params.batchContext?.services || [],
+          serviceType,
+          params.procedureCode,
+          params.serviceCatalogId
+        )
+      : await fetchMatchingTussServiceCatalogForAppointmentTissBilling(
+          organizationId,
+          serviceType,
+          params.procedureCode,
+          params.serviceCatalogId
+        );
     const mapping = serviceCatalog?.id
-      ? await fetchActivePayerTussMappingForAppointmentTissBilling(organizationId, payerId, sanitizeString(serviceCatalog.id, 120), referenceDateKey)
+      ? await fetchActivePayerTussMappingForAppointmentTissBilling(
+          organizationId,
+          payerId,
+          sanitizeString(serviceCatalog.id, 120),
+          referenceDateKey,
+          params.batchContext
+        )
       : null;
 
-    const { data, error } = await supabase
-      .from('patient_payer_authorizations')
-      .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
-      .eq('organization_id', organizationId)
-      .eq('patient_id', patientId)
-      .eq('payer_id', payerId)
-      .limit(120);
+    let data: any[] | null = null;
+    let error: any = null;
+    if (useBatchContext) {
+      data = params.batchContext?.authorizationsByPatientAndPayer.get(
+        tissPatientPayerBatchKey(patientId, payerId)
+      ) || [];
+    } else {
+      const result = await supabase
+        .from('patient_payer_authorizations')
+        .select(PATIENT_PAYER_AUTHORIZATION_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('payer_id', payerId)
+        .limit(120);
+      data = result.data;
+      error = result.error;
+    }
     if (error) {
       if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return [];
       throw error;
     }
-    const hydratedRows = await hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId, Array.isArray(data) ? data : []);
-    const authorizationBalances = await fetchPatientTissAuthorizationBalances({
-      organizationId,
-      authorizations: hydratedRows,
-      currentAppointmentId: params.currentAppointmentId
-    });
+    const hydratedRows = useBatchContext
+      ? Array.isArray(data) ? data : []
+      : await hydratePatientPayerAuthorizationsForAppointmentTissBilling(organizationId, Array.isArray(data) ? data : []);
+    const authorizationBalances = useBatchContext
+      ? params.batchContext!.authorizationBalances
+      : await fetchPatientTissAuthorizationBalances({
+          organizationId,
+          authorizations: hydratedRows,
+          currentAppointmentId: params.currentAppointmentId
+        });
+    const currentAppointmentId = sanitizeString(params.currentAppointmentId, 120);
     const hydrated = hydratedRows.map((authorization: any) => {
       const authorizationBalance = authorizationBalances.get(sanitizeString(authorization?.id, 120));
       return {
@@ -13507,14 +13919,18 @@ async function listAppointmentTissAuthorizationOptionsForBilling(params: {
         availableQuantity: authorizationBalance?.confirmed ? authorizationBalance.available : null,
         balanceConfirmed: authorizationBalance?.confirmed === true,
         balanceErrorCode: authorizationBalance?.errorCode || null,
-        currentAppointmentReserved: authorizationBalance?.currentAppointmentReserved === true
+        currentAppointmentReserved: useBatchContext
+          ? Boolean(currentAppointmentId && authorizationBalance?.committedAppointmentIds.has(currentAppointmentId))
+          : authorizationBalance?.currentAppointmentReserved === true
       };
     });
     const expectedServiceCatalogId = sanitizeString(serviceCatalog?.id, 120);
     const expectedMappingId = sanitizeString(mapping?.id, 120);
     const expectedTussCodeId = sanitizeString(mapping?.tuss_code_id || mapping?.tussCodeId, 120);
     const expectedTussCodeRow = isUuid(expectedTussCodeId)
-      ? await fetchTussCodeByIdForAppointmentTissBilling(organizationId, expectedTussCodeId)
+      ? useBatchContext
+        ? params.batchContext?.codesById.get(expectedTussCodeId) || null
+        : await fetchTussCodeByIdForAppointmentTissBilling(organizationId, expectedTussCodeId)
       : null;
     const mappingMetadata = mapping?.metadata && typeof mapping.metadata === 'object' && !Array.isArray(mapping.metadata) ? mapping.metadata : {};
     const expectedTussCode = sanitizeString(
@@ -13616,6 +14032,13 @@ async function resolveAppointmentBillingSuggestion(params: {
   appointmentDate?: string | null;
   procedureCode?: string | null;
   currentAppointmentId?: string | null;
+  preloadedBatchSources?: {
+    enabled: true;
+    financialPlans: any[];
+    patient: any | null;
+    payers: any[];
+    tissBillingContext?: AppointmentTissBillingBatchContext;
+  };
 }) {
   const organizationId = sanitizeString(params.organizationId, 120);
   const patientId = sanitizeString(params.patientId, 120);
@@ -13627,23 +14050,28 @@ async function resolveAppointmentBillingSuggestion(params: {
   const procedureCode = sanitizeString(params.procedureCode, 80);
   const requestedServiceCatalogId = sanitizeString(params.serviceCatalogId, 120);
 
-  const planResult = await supabase
-    .from('patient_financial_plans')
-    .select(PATIENT_FINANCIAL_PLAN_SELECT)
-    .eq('organization_id', organizationId)
-    .eq('patient_id', patientId)
-    .eq('status', 'ACTIVE')
-    .eq('billing_mode', 'INSURANCE')
-    .limit(20);
+  const usePreloadedBatchSources = params.preloadedBatchSources?.enabled === true;
+  const planResult = usePreloadedBatchSources
+    ? { data: params.preloadedBatchSources?.financialPlans || [], error: null }
+    : await supabase
+        .from('patient_financial_plans')
+        .select(PATIENT_FINANCIAL_PLAN_SELECT)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .eq('status', 'ACTIVE')
+        .eq('billing_mode', 'INSURANCE')
+        .limit(20);
   if (planResult.error && !hasMissingFinancialSchema(planResult.error)) throw planResult.error;
   const plans = planResult.error ? [] : Array.isArray(planResult.data) ? planResult.data : [];
-  const patientResult = await supabase
-    .from('patients')
-    .select('id, insurance_type, insurance_name, insurance_card_number, insurance_card_valid_until, insurance_plan_category, insurance_holder_name')
-    .eq('id', patientId)
-    .eq('clinic_id', organizationId)
-    .limit(1)
-    .maybeSingle();
+  const patientResult = usePreloadedBatchSources
+    ? { data: params.preloadedBatchSources?.patient || null, error: null }
+    : await supabase
+        .from('patients')
+        .select('id, insurance_type, insurance_name, insurance_card_number, insurance_card_valid_until, insurance_plan_category, insurance_holder_name')
+        .eq('id', patientId)
+        .eq('clinic_id', organizationId)
+        .limit(1)
+        .maybeSingle();
   if (patientResult.error) {
     if (!hasMissingFinancialSchema(patientResult.error)) throw patientResult.error;
   }
@@ -13673,6 +14101,15 @@ async function resolveAppointmentBillingSuggestion(params: {
     patientInsuranceFallbackMatches(payerName) ? patientInsuranceHolderName : '';
   const patientInsuranceValidityForPayer = (payerName?: any) =>
     patientInsuranceFallbackMatches(payerName) ? patientInsuranceCardValidUntil : '';
+  const findPreloadedPayer = (payerId?: any, payerName?: any) => {
+    if (!usePreloadedBatchSources) return null;
+    const safePayerId = sanitizeString(payerId, 120);
+    const payerNameKey = normalizePayerFallbackKey(payerName);
+    const payers = Array.isArray(params.preloadedBatchSources?.payers) ? params.preloadedBatchSources.payers : [];
+    if (isUuid(safePayerId)) return payers.find((payer: any) => sanitizeString(payer?.id, 120) === safePayerId) || null;
+    const matches = payers.filter((payer: any) => normalizePayerFallbackKey(payer?.name) === payerNameKey);
+    return matches.length === 1 ? matches[0] : null;
+  };
   const usablePlans = plans.filter((plan: any) =>
     isUuid(sanitizeString(plan?.payer_id, 120)) || Boolean(sanitizeString(plan?.payer_name_snapshot, 180))
   );
@@ -13702,13 +14139,15 @@ async function resolveAppointmentBillingSuggestion(params: {
         serviceCatalogId: requestedServiceCatalogId,
         procedureCode,
         appointmentDate,
-        currentAppointmentId: params.currentAppointmentId
+        currentAppointmentId: params.currentAppointmentId,
+        batchContext: params.preloadedBatchSources?.tissBillingContext
       }),
       isUuid(effectivePayerId)
         ? listPayerBillableServiceOptionsForAppointmentTissBilling(
             organizationId,
             effectivePayerId,
-            appointmentDate
+            appointmentDate,
+            { batchContext: params.preloadedBatchSources?.tissBillingContext }
           )
         : Promise.resolve([])
     ]);
@@ -13727,7 +14166,8 @@ async function resolveAppointmentBillingSuggestion(params: {
         serviceCatalogId: requestedServiceCatalogId,
         procedureCode,
         appointmentDate,
-        currentAppointmentId: params.currentAppointmentId
+        currentAppointmentId: params.currentAppointmentId,
+        batchContext: params.preloadedBatchSources?.tissBillingContext
       });
     const resolvedServiceCatalogId = sanitizeString(
       requestedServiceCatalogId ||
@@ -13764,13 +14204,15 @@ async function resolveAppointmentBillingSuggestion(params: {
     let payerName = sanitizeString(selectedPlan.payer_name_snapshot, 180);
     const payerId = sanitizeString(selectedPlan.payer_id, 120);
     if (!payerName && isUuid(payerId)) {
-      const payerResult = await supabase
-        .from('clinic_payers')
-        .select('id, name')
-        .eq('organization_id', organizationId)
-        .eq('id', payerId)
-        .limit(1)
-        .maybeSingle();
+      const payerResult = usePreloadedBatchSources
+        ? { data: findPreloadedPayer(payerId, null), error: null }
+        : await supabase
+            .from('clinic_payers')
+            .select('id, name')
+            .eq('organization_id', organizationId)
+            .eq('id', payerId)
+            .limit(1)
+            .maybeSingle();
       if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
       payerName = sanitizeString(payerResult.data?.name, 180);
     }
@@ -13792,13 +14234,15 @@ async function resolveAppointmentBillingSuggestion(params: {
   if (isUuid(requestedPayerId) || requestedPayerName) {
     let payerName = requestedPayerName;
     if (!payerName && isUuid(requestedPayerId)) {
-      const payerResult = await supabase
-        .from('clinic_payers')
-        .select('id, name')
-        .eq('organization_id', organizationId)
-        .eq('id', requestedPayerId)
-        .limit(1)
-        .maybeSingle();
+      const payerResult = usePreloadedBatchSources
+        ? { data: findPreloadedPayer(requestedPayerId, null), error: null }
+        : await supabase
+            .from('clinic_payers')
+            .select('id, name')
+            .eq('organization_id', organizationId)
+            .eq('id', requestedPayerId)
+            .limit(1)
+            .maybeSingle();
       if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
       payerName = sanitizeString(payerResult.data?.name, 180);
     }
@@ -13824,12 +14268,14 @@ async function resolveAppointmentBillingSuggestion(params: {
     .trim()
     .toLowerCase();
   if (!insuranceName || insuranceType === 'particular' || insuranceType === 'private') return null;
-  const payerResult = await supabase
-    .from('clinic_payers')
-    .select('id, name')
-    .eq('organization_id', organizationId)
-    .ilike('name', insuranceName)
-    .limit(2);
+  const payerResult = usePreloadedBatchSources
+    ? { data: (params.preloadedBatchSources?.payers || []).filter((payer: any) => normalizePayerFallbackKey(payer?.name) === normalizePayerFallbackKey(insuranceName)), error: null }
+    : await supabase
+        .from('clinic_payers')
+        .select('id, name')
+        .eq('organization_id', organizationId)
+        .ilike('name', insuranceName)
+        .limit(2);
   if (payerResult.error && !hasMissingFinancialSchema(payerResult.error)) throw payerResult.error;
   const matchingPayer = Array.isArray(payerResult.data) && payerResult.data.length === 1 ? payerResult.data[0] : null;
   return attachTissAuthorization({
@@ -15319,30 +15765,86 @@ async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
   });
 }
 
+const AUTH_USER_EMAIL_CACHE_TTL_MS = 60_000;
+const authUserByEmailCache = new Map<string, { user: any; expiresAt: number }>();
+const authUserByEmailInFlight = new Map<string, Promise<any | null>>();
+
 async function findAuthUserByEmail(email: string): Promise<any | null> {
   if (!supabase) return null;
   const target = sanitizeEmail(email);
   if (!target) return null;
 
-  let page = 1;
-  const perPage = 200;
-  for (;;) {
-    const listResult = await withTimeoutOrFallback(
-      supabase.auth.admin.listUsers({ page, perPage }),
-      7000,
-      { data: { users: [] }, error: null } as any,
-      'supabase.auth.admin.listUsers'
+  const cached = authUserByEmailCache.get(target);
+  if (cached && cached.expiresAt > Date.now()) return cached.user;
+  if (cached) authUserByEmailCache.delete(target);
+  const existingRequest = authUserByEmailInFlight.get(target);
+  if (existingRequest) return await existingRequest;
+
+  const request = (async () => {
+    // In the normal Verto lifecycle public.users.id is the canonical Auth UID.
+    // Resolve that indexed projection first, then fetch exactly one Auth user.
+    // The paginated Admin lookup remains only for identities that have not yet
+    // materialized a public profile (for example, a brand-new invitation).
+    const localIdentity = await withTimeoutOrFallback(
+      supabase
+        .from('users')
+        .select('id,email')
+        .eq('email', target)
+        .limit(2),
+      5000,
+      { data: [], error: null } as any,
+      'users.lookupAuthIdentityByEmail'
     );
-    const { data, error } = listResult;
-    if (error) return null;
-    const users = data?.users || [];
-    const found = users.find((u: any) => sanitizeEmail(u.email) === target);
-    if (found) return found;
-    if (users.length < perPage) break;
-    page += 1;
-    if (page > 20) break;
+    const localMatch = (Array.isArray(localIdentity?.data) ? localIdentity.data : [])
+      .find((row: any) => sanitizeEmail(row?.email) === target && isUuid(row?.id));
+    if (localMatch?.id) {
+      const directResult = await withTimeoutOrFallback(
+        supabase.auth.admin.getUserById(localMatch.id),
+        7000,
+        { data: { user: null }, error: null } as any,
+        'supabase.auth.admin.getUserById'
+      );
+      const directUser = directResult?.data?.user || null;
+      if (directUser && sanitizeEmail(directUser.email) === target) {
+        authUserByEmailCache.set(target, {
+          user: directUser,
+          expiresAt: Date.now() + AUTH_USER_EMAIL_CACHE_TTL_MS,
+        });
+        return directUser;
+      }
+    }
+
+    let page = 1;
+    const perPage = 200;
+    while (page <= 20) {
+      const listResult = await withTimeoutOrFallback(
+        supabase.auth.admin.listUsers({ page, perPage }),
+        7000,
+        { data: { users: [] }, error: null } as any,
+        'supabase.auth.admin.listUsers'
+      );
+      const { data, error } = listResult;
+      if (error) return null;
+      const users = data?.users || [];
+      const found = users.find((user: any) => sanitizeEmail(user.email) === target);
+      if (found) {
+        authUserByEmailCache.set(target, {
+          user: found,
+          expiresAt: Date.now() + AUTH_USER_EMAIL_CACHE_TTL_MS,
+        });
+        return found;
+      }
+      if (users.length < perPage) break;
+      page += 1;
+    }
+    return null;
+  })();
+  authUserByEmailInFlight.set(target, request);
+  try {
+    return await request;
+  } finally {
+    if (authUserByEmailInFlight.get(target) === request) authUserByEmailInFlight.delete(target);
   }
-  return null;
 }
 
 
@@ -37565,20 +38067,45 @@ async function startServer() {
   };
 
   const buildPatientFilesFromPayload = async (patientId: string, payloadFiles: any[]) => {
-    const mapped: any[] = [];
-    for (const rawFile of payloadFiles || []) {
+    const rawFiles = Array.isArray(payloadFiles) ? payloadFiles : [];
+    const signedUrlByBucketAndPath = new Map<string, string>();
+    const pathsByBucket = new Map<string, Set<string>>();
+    for (const rawFile of rawFiles) {
       const path = sanitizeString(rawFile?.path, 500);
       const bucket = sanitizeString(rawFile?.bucket, 120) || 'patient-files-private';
-      let signedUrl = sanitizeUrl(rawFile?.signedUrl || rawFile?.url) || null;
-
       if (path) {
-        const { data: signed, error: signedError } = await supabase.storage
-          .from(bucket)
-          .createSignedUrl(path, 60 * 10);
-        if (!signedError && signed?.signedUrl) {
-          signedUrl = signed.signedUrl;
-        }
+        const bucketPaths = pathsByBucket.get(bucket) || new Set<string>();
+        bucketPaths.add(path);
+        pathsByBucket.set(bucket, bucketPaths);
       }
+    }
+
+    await Promise.all(Array.from(pathsByBucket.entries()).map(async ([bucket, pathSet]) => {
+      const paths = Array.from(pathSet);
+      const { data: signedRows, error: signedError } = await supabase.storage
+        .from(bucket)
+        .createSignedUrls(paths, 60 * 10);
+      if (signedError) {
+        console.warn('[PatientFiles] Falha ao assinar lote de URLs legadas.', {
+          bucket,
+          fileCount: paths.length,
+          message: signedError.message
+        });
+        return;
+      }
+      for (const signed of signedRows || []) {
+        const path = sanitizeString((signed as any)?.path, 500);
+        const signedUrl = sanitizeUrl((signed as any)?.signedUrl);
+        if (path && signedUrl) signedUrlByBucketAndPath.set(`${bucket}:${path}`, signedUrl);
+      }
+    }));
+
+    const mapped: any[] = [];
+    for (const rawFile of rawFiles) {
+      const path = sanitizeString(rawFile?.path, 500);
+      const bucket = sanitizeString(rawFile?.bucket, 120) || 'patient-files-private';
+      const signedUrl = (path ? signedUrlByBucketAndPath.get(`${bucket}:${path}`) : null) ||
+        sanitizeUrl(rawFile?.signedUrl || rawFile?.url) || null;
 
       mapped.push({
         id: sanitizeString(rawFile?.id, 120) || crypto.randomUUID(),
@@ -37811,16 +38338,13 @@ async function startServer() {
       if (!isUuid(patientId)) return res.json({ success: true, data: [] });
 
       const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
-      const fallbackPayload = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
-      const fallbackFiles = await buildPatientFilesFromPayload(
-        patientId,
-        Array.isArray(fallbackPayload?.payload?.files) ? fallbackPayload.payload.files : []
-      );
+      const requestedFileId = sanitizeString(req.query?.fileId, 120);
       const fileResult = await fetchPatientFilesWithSchemaFallback({
         supabase,
         patientId,
         clinicId,
-        limit: parseBoundedListLimit(req.query?.limit, 50, 100),
+        fileId: requestedFileId || null,
+        limit: requestedFileId ? 1 : parseBoundedListLimit(req.query?.limit, 50, 100),
         logger: console
       });
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
@@ -37837,26 +38361,61 @@ async function startServer() {
           ['patient', 'family', 'shared_patient'].includes(sanitizeString(metadata?.visibility, 40).toLowerCase())
         );
       };
+      const rawCanonicalRows = Array.isArray(fileResult.data) ? fileResult.data : [];
       const data = isPatientPortal
-        ? (Array.isArray(fileResult.data) ? fileResult.data : []).filter(isFileVisibleToPatient)
-        : fileResult.data;
+        ? rawCanonicalRows.filter(isFileVisibleToPatient)
+        : rawCanonicalRows;
       const error = fileResult.error;
 
       if (error) {
         if (isMissingRelationError(error) || String(error?.message || '').toLowerCase().includes('patient_files')) {
+          const fallbackPayload = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
+          const rawFallbackFiles = Array.isArray(fallbackPayload?.payload?.files)
+            ? fallbackPayload.payload.files
+            : [];
+          const fallbackFiles = await buildPatientFilesFromPayload(
+            patientId,
+            requestedFileId
+              ? rawFallbackFiles.filter((row: any) => sanitizeString(row?.id, 120) === requestedFileId)
+              : rawFallbackFiles
+          );
           return res.status(200).json({ success: true, data: fallbackFiles, warning: 'Tabela patient_files não criada; usando fallback do prontuário.' });
         }
         throw error;
       }
 
-      const withUrls: any[] = [];
-      for (const row of data || []) {
-        const { data: signed, error: signedError } = await supabase.storage
+      if (requestedFileId && isPatientPortal && rawCanonicalRows.length > 0 && data.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+
+      const canonicalRows = Array.isArray(data) ? data : [];
+      const canonicalPaths = Array.from(new Set(
+        canonicalRows
+          .map((row: any) => sanitizeString(row?.storage_path, 800))
+          .filter(Boolean)
+      ));
+      const signedUrlByPath = new Map<string, string>();
+      if (canonicalPaths.length > 0) {
+        const { data: signedRows, error: signedError } = await supabase.storage
           .from('patient-files-private')
-          .createSignedUrl(row.storage_path, 60 * 10);
+          .createSignedUrls(canonicalPaths, 60 * 10);
         if (signedError) {
-          console.warn('[PatientFiles] Falha ao assinar URL:', signedError.message);
+          console.warn('[PatientFiles] Falha ao assinar lote de URLs.', {
+            fileCount: canonicalPaths.length,
+            message: signedError.message
+          });
+        } else {
+          for (const signed of signedRows || []) {
+            const path = sanitizeString((signed as any)?.path, 800);
+            const signedUrl = sanitizeUrl((signed as any)?.signedUrl);
+            if (path && signedUrl) signedUrlByPath.set(path, signedUrl);
+          }
         }
+      }
+
+      const withUrls: any[] = [];
+      for (const row of canonicalRows) {
+        const storagePath = sanitizeString(row?.storage_path, 800);
         withUrls.push({
           id: row.id,
           patientId: row.patient_id,
@@ -37867,9 +38426,27 @@ async function startServer() {
           source: row.source || 'upload',
           createdAt: row.created_at,
           metadata: row.metadata || {},
-          signedUrl: signed?.signedUrl || null
+          signedUrl: signedUrlByPath.get(storagePath) || null
         });
       }
+
+      // Links escolares e institucionais apontam para um arquivo canônico.
+      // Uma busca por ID não precisa ler e descriptografar todo o prontuário
+      // legado quando a linha já existe em patient_files.
+      if (requestedFileId && withUrls.length > 0) {
+        return res.json({ success: true, data: withUrls });
+      }
+
+      const fallbackPayload = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
+      const rawFallbackFiles = Array.isArray(fallbackPayload?.payload?.files)
+        ? fallbackPayload.payload.files
+        : [];
+      const fallbackFiles = await buildPatientFilesFromPayload(
+        patientId,
+        requestedFileId
+          ? rawFallbackFiles.filter((row: any) => sanitizeString(row?.id, 120) === requestedFileId)
+          : rawFallbackFiles
+      );
 
       const merged = new Map<string, any>();
       const visibleFallbackFiles = isPatientPortal ? fallbackFiles.filter(isFileVisibleToPatient) : fallbackFiles;
@@ -41087,28 +41664,14 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Acesso negado ao paciente informado.' });
       }
 
-      let safePayload: Record<string, any> = { ...payload };
-      let data: any = null;
-      while (Object.keys(safePayload).length > 0) {
-        const result = await supabase
-          .from('tasks')
-          .upsert([safePayload], { onConflict: 'id' })
-          .select(TASK_SELECT)
-          .single();
-        if (!result.error) {
-          data = result.data;
-          break;
-        }
-        const missingColumn = extractMissingColumnName(result.error);
-        if (missingColumn && missingColumn in safePayload) {
-          delete safePayload[missingColumn];
-          continue;
-        }
-        throw result.error;
-      }
-      if (!data) {
-        return res.status(500).json({ error: 'Não foi possível persistir tarefa por incompatibilidade de schema.' });
-      }
+      const taskSchema = await resolveTaskSchemaCapabilities(supabase);
+      const safePayload = filterTaskPayloadForSchema(payload, taskSchema.missingColumns);
+      const { data, error: persistTaskError } = await supabase
+        .from('tasks')
+        .upsert([safePayload], { onConflict: 'id' })
+        .select(taskSchema.select)
+        .single();
+      if (persistTaskError) throw persistTaskError;
       try {
         await persistActivityLog({
           userId: sanitizeString(req.session.user?.id, 120),
@@ -41142,9 +41705,10 @@ async function startServer() {
     try {
       const taskId = sanitizeString(req.params.taskId, 120);
       if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
+      const taskSchema = await resolveTaskSchemaCapabilities(supabase);
       const { data: existing, error: existingError } = await supabase
         .from('tasks')
-        .select(TASK_SELECT)
+        .select(taskSchema.select)
         .eq('id', taskId)
         .maybeSingle();
       if (existingError) throw existingError;
@@ -41176,11 +41740,12 @@ async function startServer() {
               : undefined,
         updated_at: new Date().toISOString()
       });
+      const safeUpdates = filterTaskPayloadForSchema(updates, taskSchema.missingColumns);
       const { data, error } = await supabase
         .from('tasks')
-        .update(updates)
+        .update(safeUpdates)
         .eq('id', taskId)
-        .select(TASK_SELECT)
+        .select(taskSchema.select)
         .single();
       if (error) throw error;
       return res.json({ success: true, data });
@@ -41194,6 +41759,7 @@ async function startServer() {
     try {
       const taskId = sanitizeString(req.params.taskId, 120);
       if (!taskId) return res.status(400).json({ success: false, error: 'taskId inválido.' });
+      const taskSchema = await resolveTaskSchemaCapabilities(supabase);
       const { data: existing, error: existingError } = await supabase
         .from('tasks')
         .select('id, patient_id')
@@ -41205,31 +41771,22 @@ async function startServer() {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
       const now = new Date().toISOString();
-      let softDeletePatch: Record<string, any> = {
+      const softDeletePatch = filterTaskPayloadForSchema({
         deleted_at: now,
         is_active: false,
         updated_at: now
-      };
-      let softDeleteError: any = null;
-      while (Object.keys(softDeletePatch).length > 0) {
-        if (!('deleted_at' in softDeletePatch) && !('is_active' in softDeletePatch)) break;
-        const result = await supabase
+      }, taskSchema.missingColumns);
+      const hasSoftDeleteField = 'deleted_at' in softDeletePatch || 'is_active' in softDeletePatch;
+      if (hasSoftDeleteField) {
+        const { error: softDeleteError } = await supabase
           .from('tasks')
           .update(softDeletePatch)
           .eq('id', taskId);
-        softDeleteError = result.error;
         if (!softDeleteError) {
           return res.json({ success: true, softDeleted: true });
         }
-        const missingColumn = extractMissingColumnName(softDeleteError);
-        if (missingColumn && missingColumn in softDeletePatch) {
-          delete softDeletePatch[missingColumn];
-          continue;
-        }
-        break;
+        throw softDeleteError;
       }
-      const hasSoftDeleteField = 'deleted_at' in softDeletePatch || 'is_active' in softDeletePatch;
-      if (softDeleteError && hasSoftDeleteField) throw softDeleteError;
       const { error } = await supabase.from('tasks').delete().eq('id', taskId);
       if (error) throw error;
       return res.json({ success: true, softDeleted: false, warning: 'Schema de tarefas sem colunas de arquivamento; exclusão física usada como fallback.' });
@@ -41538,24 +42095,33 @@ async function startServer() {
         if (typeof task?.completed === 'boolean') return !task.completed;
         return true;
       };
-      const { data: legacyTasksByEmail, error: legacyTasksByEmailError } = await supabase
-        .from('tasks')
-        .select(TASK_SELECT)
-        .ilike('patient_email', patientEmail)
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      const legacyTasksByEmailResult = await fetchTasksWithSchemaFallback({
+        supabase,
+        patientEmail,
+        emailMatch: 'ilike',
+        limit,
+        route: '/api/patient/self/assigned-tasks',
+        requestId: requestIdForLogs(req),
+        logger: console
+      });
+      const legacyTasksByEmail = legacyTasksByEmailResult.data;
+      const legacyTasksByEmailError = legacyTasksByEmailResult.error;
       if (legacyTasksByEmailError) {
         console.warn('[PatientSelfAssignedTasks] fallback tasks by email warning:', legacyTasksByEmailError.message || String(legacyTasksByEmailError));
       }
 
       let legacyTasksById: any[] = [];
       if (patientIds.length > 0) {
-        const { data: legacyTasksByIdData, error: legacyTasksByIdError } = await supabase
-          .from('tasks')
-          .select(TASK_SELECT)
-          .in('patient_id', patientIds)
-          .order('created_at', { ascending: false })
-          .limit(limit);
+        const legacyTasksByIdResult = await fetchTasksWithSchemaFallback({
+          supabase,
+          patientIds,
+          limit,
+          route: '/api/patient/self/assigned-tasks',
+          requestId: requestIdForLogs(req),
+          logger: console
+        });
+        const legacyTasksByIdData = legacyTasksByIdResult.data;
+        const legacyTasksByIdError = legacyTasksByIdResult.error;
         if (legacyTasksByIdError) {
           console.warn('[PatientSelfAssignedTasks] fallback tasks by id warning:', legacyTasksByIdError.message || String(legacyTasksByIdError));
         } else {
@@ -49859,6 +50425,13 @@ async function startServer() {
     patientId: string;
     appointment: any;
     billingContext: any;
+    preloadedBatchSources?: {
+      enabled: true;
+      financialPlans: any[];
+      patient: any | null;
+      payers: any[];
+      tissBillingContext?: AppointmentTissBillingBatchContext;
+    };
   }) => {
     const organizationId = sanitizeString(params.organizationId, 120);
     const patientId = sanitizeString(params.patientId, 120);
@@ -49892,7 +50465,8 @@ async function startServer() {
         payerId: sanitizeString(base?.payer_id || appointmentPayerId, 120) || null,
         payerName: sanitizeString(base?.payer_name_snapshot || appointmentPayerName, 180) || null,
         appointmentDate,
-        procedureCode
+        procedureCode,
+        preloadedBatchSources: params.preloadedBatchSources
       });
     } catch (error: any) {
       console.warn('[Closure] billing suggestion skipped:', {
@@ -49980,6 +50554,13 @@ async function startServer() {
     organizationId: string;
     appointment: any;
     billingContext?: any;
+    preloadedBatchSources?: {
+      enabled: true;
+      financialPlans: any[];
+      patient: any | null;
+      payers: any[];
+      tissBillingContext?: AppointmentTissBillingBatchContext;
+    };
   }) => {
     const organizationId = sanitizeString(params.organizationId, 120);
     const appointment = mergeAppointmentBillingPayload(params.appointment || {});
@@ -50023,7 +50604,8 @@ async function startServer() {
         organizationId,
         patientId,
         appointment,
-        billingContext: rawContext
+        billingContext: rawContext,
+        preloadedBatchSources: params.preloadedBatchSources
       });
       const mergedEffectiveContext = mergeBillingContextMetadata(effectiveContext || rawContext) || rawContext;
       return resolvePayerIdByTrustedName(mergedEffectiveContext);
@@ -50034,6 +50616,126 @@ async function startServer() {
       });
       return resolvePayerIdByTrustedName(rawContext);
     }
+  };
+
+  const resolveTissPreGuideEligibilityContextsInBatch = async (params: {
+    organizationId: string;
+    appointments: any[];
+    contextsByAppointment: Map<string, any>;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const appointments = (Array.isArray(params.appointments) ? params.appointments : [])
+      .map((appointment: any) => mergeAppointmentBillingPayload(appointment || {}));
+    const contextsByAppointment = params.contextsByAppointment instanceof Map
+      ? params.contextsByAppointment
+      : new Map<string, any>();
+    const unresolvedPatientIds = Array.from(new Set(
+      appointments
+        .filter((appointment: any) => {
+          const appointmentId = sanitizeString(appointment?.id || appointment?.appointment_id, 120);
+          return tissPreGuideContextNeedsBatchResolution(
+            appointment,
+            contextsByAppointment.get(appointmentId) || {}
+          );
+        })
+        .map((appointment: any) => sanitizeString(appointment?.patient_id || appointment?.patientId, 120))
+        .filter((patientId: string) => isUuid(patientId))
+    ));
+    const needsPayerBatch = unresolvedPatientIds.length > 0 || appointments.some((appointment: any) => {
+      const appointmentId = sanitizeString(appointment?.id || appointment?.appointment_id, 120);
+      const context = contextsByAppointment.get(appointmentId) || {};
+      const eligibility = evaluateTissPreGuideEligibility({ appointment, billingContext: context });
+      return eligibility.eligible && !sanitizeString(
+        context?.payer_name_snapshot || appointment?.payer_name_snapshot || appointment?.payerName,
+        180
+      );
+    });
+
+    if (!isUuid(organizationId) || appointments.length === 0) {
+      return {
+        contextsByAppointment: buildTissPreGuideEligibilityContexts({
+          appointments,
+          contextsByAppointment,
+          financialPlans: [],
+          patients: [],
+          payers: []
+        }),
+        financialPlansByPatient: new Map<string, any[]>(),
+        patientsById: new Map<string, any>(),
+        payers: [] as any[]
+      };
+    }
+
+    const patientIdChunks = chunkTissPreGuideScopeIds(unresolvedPatientIds);
+    const loadChunkedRows = async (
+      loader: (patientIds: string[]) => Promise<{ data: any[] | null; error: any }>
+    ) => {
+      const rows: any[] = [];
+      const concurrency = 4;
+      for (let index = 0; index < patientIdChunks.length; index += concurrency) {
+        const results = await Promise.all(patientIdChunks.slice(index, index + concurrency).map(loader));
+        for (const result of results) {
+          if (result.error) {
+            if (sanitizeString(result.error?.message || result.error?.details, 500).includes('get_patient_financial_plans_batch_v1')) {
+              throw result.error;
+            }
+            if (hasMissingFinancialSchema(result.error) || isMissingRelationError(result.error)) continue;
+            throw result.error;
+          }
+          if (Array.isArray(result.data)) rows.push(...result.data);
+        }
+      }
+      return rows;
+    };
+
+    const [financialPlans, patients, payerResult] = await Promise.all([
+      loadChunkedRows((patientIds) => supabase.rpc('get_patient_financial_plans_batch_v1', {
+        p_organization_id: organizationId,
+        p_patient_ids: patientIds,
+        p_per_patient_limit: 20,
+      }) as any),
+      loadChunkedRows((patientIds) => supabase
+        .from('patients')
+        .select('id,insurance_type,insurance_name,insurance_card_number,insurance_card_valid_until,insurance_plan_category,insurance_holder_name')
+        .eq('clinic_id', organizationId)
+        .in('id', patientIds)
+        .limit(patientIds.length) as any),
+      needsPayerBatch
+        ? supabase
+            .from('clinic_payers')
+            .select('id,name,status')
+            .eq('organization_id', organizationId)
+            .limit(1000)
+        : Promise.resolve({ data: [], error: null } as any)
+    ]);
+    if (payerResult.error && !hasMissingFinancialSchema(payerResult.error) && !isMissingRelationError(payerResult.error)) {
+      throw payerResult.error;
+    }
+
+    const payers = payerResult.error ? [] : Array.isArray(payerResult.data) ? payerResult.data : [];
+    const financialPlansByPatient = new Map<string, any[]>();
+    for (const plan of financialPlans) {
+      const patientId = sanitizeString(plan?.patient_id, 120);
+      if (!isUuid(patientId)) continue;
+      financialPlansByPatient.set(patientId, [...(financialPlansByPatient.get(patientId) || []), plan]);
+    }
+    const patientsById = new Map<string, any>(
+      patients
+        .map((patient: any) => [sanitizeString(patient?.id, 120), patient] as const)
+        .filter(([patientId]) => isUuid(patientId))
+    );
+    return {
+      contextsByAppointment: buildTissPreGuideEligibilityContexts({
+        appointments,
+        contextsByAppointment,
+        financialPlans,
+        patients,
+        payers
+      }),
+      financialPlansByPatient,
+      patientsById,
+      payers
+    };
   };
 
   const upsertAppointmentClosureCheckRow = async (payload: any) => {
@@ -55086,6 +55788,15 @@ async function startServer() {
     appointmentId: string;
     user: any;
     scopedAppointment?: any;
+    prefetchedBillingContext?: any;
+    patientAccessPrevalidated?: boolean;
+    preloadedBatchSources?: {
+      enabled: true;
+      financialPlans: any[];
+      patient: any | null;
+      payers: any[];
+      tissBillingContext?: AppointmentTissBillingBatchContext;
+    };
     source?: string;
     forceClosure?: boolean;
     overwriteExplicitContext?: boolean;
@@ -55109,23 +55820,35 @@ async function startServer() {
     const billingAppointment = mergeAppointmentBillingPayload(appointment);
     const patientId = sanitizeString(billingAppointment?.patient_id || billingAppointment?.patientId, 120);
     if (!isUuid(patientId)) return { ok: false, status: 404, error: 'Sessão sem paciente válido.' };
-    if (!(await canAccessPatientBillingInCurrentClinic(patientId, params.user))) {
+    const accessWasPrevalidated = params.patientAccessPrevalidated === true && Boolean(params.scopedAppointment?.id);
+    if (!accessWasPrevalidated && !(await canAccessPatientBillingInCurrentClinic(patientId, params.user))) {
       return { ok: false, status: 404, error: 'Sessão não encontrada.' };
     }
 
-    await upsertInitialBillingContextFromAppointment({
-      organizationId,
-      appointmentId,
-      patientId,
-      appointment: billingAppointment,
-      overwriteExplicit: Boolean(params.overwriteExplicitContext)
-    });
+    const hasPrefetchedBillingContext = Boolean(
+      params.prefetchedBillingContext &&
+      sanitizeString(params.prefetchedBillingContext?.appointment_id, 120) === appointmentId
+    );
+    if (!hasPrefetchedBillingContext || params.overwriteExplicitContext) {
+      await upsertInitialBillingContextFromAppointment({
+        organizationId,
+        appointmentId,
+        patientId,
+        appointment: billingAppointment,
+        overwriteExplicit: Boolean(params.overwriteExplicitContext)
+      });
+    }
 
-    const persistedBillingContext = mergeBillingContextMetadata(await fetchAppointmentBillingContextRow(organizationId, appointmentId));
+    const persistedBillingContext = mergeBillingContextMetadata(
+      hasPrefetchedBillingContext && !params.overwriteExplicitContext
+        ? params.prefetchedBillingContext
+        : await fetchAppointmentBillingContextRow(organizationId, appointmentId)
+    );
     const billingContext = await resolveEffectiveTissPreGuideBillingContext({
       organizationId,
       appointment: billingAppointment,
-      billingContext: persistedBillingContext
+      billingContext: persistedBillingContext,
+      preloadedBatchSources: params.preloadedBatchSources
     });
     let payer: any = null;
     let billingItem: any = null;
@@ -58843,21 +59566,21 @@ async function startServer() {
       ));
 
       const contextQuery = appointmentIds.length > 0
-        ? supabase
-            .from('appointment_billing_contexts')
-            .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
-            .eq('organization_id', organizationId)
-            .in('appointment_id', appointmentIds)
-            .limit(appointmentIds.length)
+        ? loadOrganizationRowsByAppointmentIds({
+            organizationId,
+            appointmentIds,
+            table: 'appointment_billing_contexts',
+            selectColumns: APPOINTMENT_BILLING_CONTEXT_SELECT,
+          })
         : Promise.resolve({ data: [], error: null } as any);
 
       const billingItemQuery = appointmentIds.length > 0
-        ? supabase
-            .from('appointment_billing_items')
-            .select('id,appointment_id,service_catalog_id,tuss_code_id,amount_cents')
-            .eq('organization_id', organizationId)
-            .in('appointment_id', appointmentIds)
-            .limit(appointmentIds.length)
+        ? loadOrganizationRowsByAppointmentIds({
+            organizationId,
+            appointmentIds,
+            table: 'appointment_billing_items',
+            selectColumns: 'id,appointment_id,service_catalog_id,tuss_code_id,amount_cents',
+          })
         : Promise.resolve({ data: [], error: null } as any);
 
       let preGuideQuery = supabase
@@ -58894,6 +59617,12 @@ async function startServer() {
           .map((row: any) => [sanitizeString(row?.appointment_id, 120), row])
           .filter(([appointmentId]: any) => isUuid(appointmentId))
       );
+      const eligibilityBatch = await resolveTissPreGuideEligibilityContextsInBatch({
+        organizationId,
+        appointments: scopedAppointments,
+        contextsByAppointment
+      });
+      const effectiveContextsByAppointment = eligibilityBatch.contextsByAppointment;
 
       const coverage = {
         totalAppointmentsInPeriod: scopedAppointments.length,
@@ -58913,11 +59642,7 @@ async function startServer() {
 
       for (const appointment of scopedAppointments) {
         const appointmentId = sanitizeString(appointment?.id, 120);
-        const billingContext = await resolveEffectiveTissPreGuideBillingContext({
-          organizationId,
-          appointment,
-          billingContext: contextsByAppointment.get(appointmentId) || null
-        });
+        const billingContext = effectiveContextsByAppointment.get(appointmentId) || contextsByAppointment.get(appointmentId) || {};
         const eligibility = evaluateTissPreGuideEligibility({ appointment, billingContext });
         if (eligibility.financialContext === 'INSURANCE') coverage.billableAppointments += 1;
         if (eligibility.reason === 'not_applicable') coverage.notBillableAppointments += 1;
@@ -59004,24 +59729,9 @@ async function startServer() {
       ));
       const [contextResult, existingPreGuideResult, billingItemResult] = appointmentIds.length > 0
         ? await Promise.all([
-            supabase
-              .from('appointment_billing_contexts')
-              .select(APPOINTMENT_BILLING_CONTEXT_SELECT)
-              .eq('organization_id', organizationId)
-              .in('appointment_id', appointmentIds)
-              .limit(appointmentIds.length),
-            supabase
-              .from('appointment_tiss_pre_guides')
-              .select('appointment_id,status,stale_reason')
-              .eq('organization_id', organizationId)
-              .in('appointment_id', appointmentIds)
-              .limit(appointmentIds.length),
-            supabase
-              .from('appointment_billing_items')
-              .select('id,appointment_id,service_catalog_id,tuss_code_id,amount_cents')
-              .eq('organization_id', organizationId)
-              .in('appointment_id', appointmentIds)
-              .limit(appointmentIds.length)
+            loadOrganizationRowsByAppointmentIds({ organizationId, appointmentIds, table: 'appointment_billing_contexts', selectColumns: APPOINTMENT_BILLING_CONTEXT_SELECT }),
+            loadOrganizationRowsByAppointmentIds({ organizationId, appointmentIds, table: 'appointment_tiss_pre_guides', selectColumns: 'appointment_id,status,stale_reason' }),
+            loadOrganizationRowsByAppointmentIds({ organizationId, appointmentIds, table: 'appointment_billing_items', selectColumns: 'id,appointment_id,service_catalog_id,tuss_code_id,amount_cents' })
           ])
         : [
             { data: [], error: null },
@@ -59064,16 +59774,16 @@ async function startServer() {
       const eligibleAppointments: any[] = [];
       const details: any[] = [];
       const detailsByAppointment = new Map<string, any>();
-      const effectiveContextsByAppointment = new Map<string, any>();
+      const eligibilityBatch = await resolveTissPreGuideEligibilityContextsInBatch({
+        organizationId,
+        appointments: scopedAppointments,
+        contextsByAppointment
+      });
+      const effectiveContextsByAppointment = eligibilityBatch.contextsByAppointment;
       const validationStartedAt = Date.now();
       for (const appointment of scopedAppointments) {
         const appointmentId = sanitizeString(appointment?.id, 120);
-        const billingContext = await resolveEffectiveTissPreGuideBillingContext({
-          organizationId,
-          appointment,
-          billingContext: contextsByAppointment.get(appointmentId) || null
-        });
-        effectiveContextsByAppointment.set(appointmentId, billingContext);
+        const billingContext = effectiveContextsByAppointment.get(appointmentId) || contextsByAppointment.get(appointmentId) || {};
         const eligibility = evaluateTissPreGuideEligibility({ appointment, billingContext });
         if (eligibility.financialContext === 'INSURANCE') diagnostics.billableWithInsurance += 1;
         if (isUuid(eligibility.payerId || '')) diagnostics.withRealPayer += 1;
@@ -59191,6 +59901,23 @@ async function startServer() {
           details: []
         });
       }
+      let tissBillingBatchContext: AppointmentTissBillingBatchContext | undefined;
+      try {
+        tissBillingBatchContext = await preloadAppointmentTissBillingBatchContext({
+          organizationId,
+          appointments: eligibleAppointments,
+          contextsByAppointment: effectiveContextsByAppointment,
+          payers: eligibilityBatch.payers
+        });
+      } catch (batchContextError: any) {
+        // Optimization failure must never weaken the canonical validation.
+        // The existing per-appointment queries remain the safe fallback.
+        console.warn('[TissPreGuide] billing batch preload unavailable; using canonical item validation.', {
+          organizationId,
+          code: sanitizeString(batchContextError?.code, 80) || null,
+          message: sanitizeTextField(batchContextError?.message, 300) || String(batchContextError)
+        });
+      }
       const items: any[] = [];
       const errorDetails: Array<{ appointmentId: string; code: string }> = [];
       const persistStartedAt = Date.now();
@@ -59198,9 +59925,22 @@ async function startServer() {
         const appointmentId = sanitizeString(appointment?.id, 120);
         try {
           const effectiveContext = effectiveContextsByAppointment.get(appointmentId) || {};
+          const batchPatientId = sanitizeString(appointment?.patient_id || appointment?.patientId, 120);
+          const preloadedBatchSources = eligibilityBatch.patientsById.has(batchPatientId)
+            ? {
+                enabled: true as const,
+                financialPlans: eligibilityBatch.financialPlansByPatient.get(batchPatientId) || [],
+                patient: eligibilityBatch.patientsById.get(batchPatientId) || null,
+                payers: eligibilityBatch.payers,
+                tissBillingContext: tissBillingBatchContext
+              }
+            : undefined;
           const generated = await revalidateAppointmentBillingForAppointment({
             appointmentId,
             user: req.session.user,
+            prefetchedBillingContext: contextsByAppointment.get(appointmentId) || undefined,
+            patientAccessPrevalidated: true,
+            preloadedBatchSources,
             scopedAppointment: cleanObject({
               ...appointment,
               payer_id: effectiveContext?.payer_id || appointment?.payer_id || null,
@@ -59234,7 +59974,12 @@ async function startServer() {
           return { appointmentId, ok: false, code, controlledError: true };
         }
       };
-      const revalidationConcurrency = Math.min(8, Math.max(1, Number(req.body?.concurrency || 6) || 6));
+      // The preloaded balance is a request-local snapshot. Its consumers are
+      // serialized and the snapshot advances after every persisted pre-guide,
+      // preventing two sessions from spending the same last authorization unit.
+      const revalidationConcurrency = tissBillingBatchContext
+        ? 1
+        : Math.min(8, Math.max(1, Number(req.body?.concurrency || 6) || 6));
       for (let index = 0; index < eligibleAppointments.length; index += revalidationConcurrency) {
         const batch = eligibleAppointments.slice(index, index + revalidationConcurrency);
         const batchResults = await Promise.all(batch.map(processEligibleAppointment));
@@ -59257,7 +60002,11 @@ async function startServer() {
             continue;
           }
           const preGuide = (result as any).preGuide;
-          if (existingPreGuideIds.has(appointmentId)) {
+          const wasExistingPreGuide = existingPreGuideIds.has(appointmentId);
+          if (!wasExistingPreGuide) {
+            registerTissPreGuideCommitmentInBatchContext(tissBillingBatchContext, preGuide);
+          }
+          if (wasExistingPreGuide) {
             counts.updated += 1;
             if (stalePreGuideIds.has(appointmentId)) counts.staleUpdated += 1;
           } else {
@@ -65778,6 +66527,14 @@ async function startServer() {
     'review_due_date', 'responsible_professional_ids', 'version', 'activated_at',
     'approved_at', 'completed_at', 'created_by', 'created_at', 'updated_at'
   ].join(',');
+  const PATIENT_THERAPEUTIC_PLAN_SELECT = [
+    'id', 'organization_id', 'clinic_id', 'patient_id', 'mode', 'specialty',
+    'responsible_professional_id', 'participant_professional_ids', 'participant_specialties',
+    'common_objectives', 'specialty_objectives', 'scope_snapshot', 'source_template_id',
+    'source_template_version', 'status', 'edit_version', 'created_by', 'updated_by',
+    'created_at', 'updated_at', 'idempotency_key', 'request_hash', 'pts_payload',
+    'pts_schema_version', 'review_due_date', 'last_reviewed_at'
+  ].join(',');
   const THERAPEUTIC_TARGET_SELECT = [
     'id', 'organization_id', 'clinic_id', 'patient_id', 'program_id', 'name',
     'description', 'target_type', 'phase', 'protocol_id', 'protocol_title',
@@ -66870,7 +67627,7 @@ async function startServer() {
         .digest('hex');
       const { data: idempotentPlan, error: idempotentPlanError } = await supabase
         .from('patient_therapeutic_plans')
-        .select('*')
+        .select(PATIENT_THERAPEUTIC_PLAN_SELECT)
         .eq('organization_id', organizationId)
         .eq('idempotency_key', idempotencyKey)
         .limit(1)
@@ -66931,13 +67688,13 @@ async function startServer() {
       const { data, error } = await supabase
         .from('patient_therapeutic_plans')
         .insert(payload)
-        .select('*')
+        .select(PATIENT_THERAPEUTIC_PLAN_SELECT)
         .single();
       if (error) {
         if (String(error.code || '') === '23505') {
           const { data: retryPlan, error: retryError } = await supabase
             .from('patient_therapeutic_plans')
-            .select('*')
+            .select(PATIENT_THERAPEUTIC_PLAN_SELECT)
             .eq('organization_id', organizationId)
             .eq('idempotency_key', idempotencyKey)
             .limit(1)
@@ -66985,7 +67742,7 @@ async function startServer() {
       const role = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
       const { data: existing, error: existingError } = await supabase
         .from('patient_therapeutic_plans')
-        .select('*')
+        .select(PATIENT_THERAPEUTIC_PLAN_SELECT)
         .eq('id', planId)
         .eq('organization_id', organizationId)
         .eq('patient_id', patientId)
@@ -75551,29 +76308,13 @@ async function startServer() {
     'professional_id', 'service_type', 'appointment_scheduled_at', 'payer_name', 'competence_month',
     'amount', 'original_amount', 'base_amount', 'additional_amount', 'discount_amount', 'paid_amount',
     'refunded_amount', 'balance_amount', 'payment_date', 'due_date', 'method', 'status',
-    'financial_status', 'is_courtesy', 'source', 'last_payment_at', 'receipt_url',
+    'financial_status', 'is_courtesy', 'source', 'last_payment_at',
     'receipt_file_name', 'receipt_content_type', 'notes', 'created_by', 'created_at', 'updated_at',
     'canceled_at', 'canceled_by', 'payer_id', 'service_catalog_id',
     'private_price_rule_id', 'patient_pricing_agreement_id', 'financial_snapshot_id',
     'private_price_source', 'private_price_source_label',
     'private_financial_classification', 'cancellation_free_until',
     'pricing_override_reason'
-  ].join(',');
-  const PATIENT_FINANCE_ITEM_SELECT = [
-    'id', 'organization_id', 'clinic_id', 'payment_id', 'appointment_id', 'patient_id',
-    'professional_id', 'patient_name_snapshot', 'professional_name_snapshot',
-    'service_type_snapshot', 'specialty_snapshot', 'appointment_scheduled_at', 'quantity',
-    'unit_amount', 'subtotal', 'active', 'created_at'
-  ].join(',');
-  const PATIENT_FINANCE_TRANSACTION_SELECT = [
-    'id', 'organization_id', 'clinic_id', 'payment_id', 'patient_id', 'transaction_type',
-    'amount', 'method', 'transaction_at', 'status', 'proof_url', 'proof_file_name',
-    'proof_content_type', 'receipt_url', 'receipt_number', 'document_status', 'notes',
-    'created_by', 'created_at', 'voided_at', 'voided_by'
-  ].join(',');
-  const PATIENT_FINANCE_EVENT_SELECT = [
-    'id', 'organization_id', 'clinic_id', 'payment_id', 'transaction_id', 'appointment_id',
-    'event_type', 'before_state', 'after_state', 'notes', 'created_by', 'created_at'
   ].join(',');
   // `source_payload` is optional in legacy appointment schemas and is not required by the ledger.
   const PATIENT_FINANCE_APPOINTMENT_SELECT = [
@@ -75902,31 +76643,34 @@ async function startServer() {
         .order('scheduled_at', { ascending: false })
         .limit(1000);
 
-      const [chargesResult, itemsResult, transactionsResult, eventsResult, initialAppointmentsResult, policyResult, snapshotsResult] = await Promise.all([
-        supabase
-          .from('payments')
-          .select(PATIENT_FINANCE_CHARGE_SELECT)
-          .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
-          .order('updated_at', { ascending: false })
-          .limit(500),
-        supabase
-          .from('payment_appointment_items')
-          .select(PATIENT_FINANCE_ITEM_SELECT)
-          .eq('organization_id', organizationId)
-          .order('appointment_scheduled_at', { ascending: false })
-          .limit(1000),
-        supabase
-          .from('payment_transactions')
-          .select(PATIENT_FINANCE_TRANSACTION_SELECT)
-          .eq('organization_id', organizationId)
-          .order('transaction_at', { ascending: false })
-          .limit(1000),
-        supabase
-          .from('payment_audit_events')
-          .select(PATIENT_FINANCE_EVENT_SELECT)
-          .eq('organization_id', organizationId)
-          .order('created_at', { ascending: false })
-          .limit(1000),
+      const chargesResult = await supabase
+        .from('payments')
+        .select(PATIENT_FINANCE_CHARGE_SELECT)
+        .or(`organization_id.eq.${organizationId},clinic_id.eq.${organizationId}`)
+        .order('updated_at', { ascending: false })
+        .limit(500);
+      if (chargesResult.error) {
+        const safe = patientFinanceErrorResponse(chargesResult.error);
+        return res.status(safe.status).json({ success: false, error: safe.error });
+      }
+      const visibleChargeIds = Array.from(new Set(
+        (chargesResult.data || [])
+          .map((charge: any) => sanitizeString(charge?.id, 120))
+          .filter(Boolean),
+      ));
+      const emptyRelatedResult = () => Promise.resolve({
+        data: { items: [], transactions: [], events: [] },
+        error: null
+      });
+
+      const [relatedResult, initialAppointmentsResult, policyResult, snapshotsResult] = await Promise.all([
+        visibleChargeIds.length > 0
+          ? supabase.rpc('get_patient_finance_ledger_children_v1', {
+              p_organization_id: organizationId,
+              p_payment_ids: visibleChargeIds,
+              p_limit: 1000
+            })
+          : emptyRelatedResult(),
         readLedgerAppointments(PATIENT_FINANCE_APPOINTMENT_SELECT),
         supabase
           .from('clinic_patient_finance_policies')
@@ -75949,7 +76693,7 @@ async function startServer() {
         appointmentQueryCount += 1;
       }
 
-      const primaryError = [chargesResult, itemsResult, transactionsResult, eventsResult, appointmentsResult, snapshotsResult]
+      const primaryError = [relatedResult, appointmentsResult, snapshotsResult]
         .map((result: any) => result.error)
         .find(Boolean);
       if (primaryError) {
@@ -75957,6 +76701,20 @@ async function startServer() {
         return res.status(safe.status).json({ success: false, error: safe.error });
       }
       if (policyResult.error && !hasMissingFinancialSchema(policyResult.error) && !isMissingRelationError(policyResult.error)) throw policyResult.error;
+      const relatedPayload = relatedResult.data && typeof relatedResult.data === 'object'
+        ? relatedResult.data as Record<string, any>
+        : null;
+      if (
+        visibleChargeIds.length > 0 &&
+        (!relatedPayload ||
+          !Array.isArray(relatedPayload.items) ||
+          !Array.isArray(relatedPayload.transactions) ||
+          !Array.isArray(relatedPayload.events))
+      ) {
+        const invalidBatchError: any = new Error('PATIENT_FINANCE_LEDGER_BATCH_INVALID');
+        invalidBatchError.code = 'PATIENT_FINANCE_LEDGER_BATCH_INVALID';
+        throw invalidBatchError;
+      }
 
       const appointmentIds = (appointmentsResult.data || [])
         .map((appointment: any) => sanitizeString(appointment?.id, 120))
@@ -75977,9 +76735,9 @@ async function startServer() {
         success: true,
         data: {
           charges: chargesResult.data || [],
-          items: itemsResult.data || [],
-          transactions: transactionsResult.data || [],
-          events: eventsResult.data || [],
+          items: relatedPayload?.items || [],
+          transactions: relatedPayload?.transactions || [],
+          events: relatedPayload?.events || [],
           appointments: appointmentsResult.data || [],
           privateSnapshots: snapshotsResult.data || [],
           billingContexts,
@@ -75995,9 +76753,62 @@ async function startServer() {
           }
         },
         meta: {
-          queryCount: 6 + appointmentQueryCount + (appointmentIds.length > 0 ? 1 : 0),
+          queryCount:
+            3 +
+            appointmentQueryCount +
+            (appointmentIds.length > 0 ? 1 : 0) +
+            (visibleChargeIds.length > 0 ? 1 : 0),
           rangeStart: rangeStart.toISOString(),
           rangeEnd: rangeEnd.toISOString()
+        }
+      });
+    } catch (error: any) {
+      const safe = patientFinanceErrorResponse(error);
+      return res.status(safe.status).json({ success: false, error: safe.error });
+    }
+  });
+
+  app.get('/api/patient-finance/transactions/:transactionId/document', noStoreDynamicResponse, checkAuth, requireClinicCapability('finance.payments.view'), async (req: any, res) => {
+    try {
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const transactionId = sanitizeString(req.params.transactionId, 120);
+      const requestedKind = sanitizeString(req.query?.kind, 20).toLowerCase();
+      if (!isUuid(organizationId) || !isUuid(transactionId) || !['proof', 'receipt'].includes(requestedKind)) {
+        return res.status(400).json({ success: false, error: 'Documento financeiro inválido.' });
+      }
+
+      const documentResult = await supabase
+        .from('payment_transactions')
+        .select('id,organization_id,proof_url,proof_file_name,proof_content_type,receipt_url,receipt_number')
+        .eq('id', transactionId)
+        .eq('organization_id', organizationId)
+        .limit(1)
+        .maybeSingle();
+      if (documentResult.error) throw documentResult.error;
+      if (!documentResult.data) {
+        return res.status(404).json({ success: false, error: 'Documento financeiro não encontrado nesta clínica.' });
+      }
+
+      const rawUrl = requestedKind === 'proof'
+        ? documentResult.data.proof_url
+        : documentResult.data.receipt_url;
+      const url = sanitizeReceiptUrl(rawUrl);
+      if (!url) {
+        return res.status(404).json({ success: false, error: 'Documento financeiro indisponível.' });
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          id: transactionId,
+          kind: requestedKind,
+          url,
+          fileName: requestedKind === 'proof'
+            ? sanitizeString(documentResult.data.proof_file_name, 240) || null
+            : `recibo-${sanitizeString(documentResult.data.receipt_number, 120) || transactionId}.pdf`,
+          contentType: requestedKind === 'proof'
+            ? sanitizeString(documentResult.data.proof_content_type, 120) || null
+            : 'application/pdf'
         }
       });
     } catch (error: any) {
@@ -76413,6 +77224,250 @@ async function startServer() {
     }
   });
 
+  const MAX_FINANCIAL_SERIES_ITEMS = 2000;
+  const financialSeriesIdempotencyKey = (req: any) => sanitizeString(
+    req.body?.idempotencyKey || req.body?.idempotency_key || req.headers?.['x-idempotency-key'],
+    220
+  );
+  const financialSeriesItems = (req: any) => Array.isArray(req.body?.items) ? req.body.items : [];
+  const financialSeriesIds = (req: any) => Array.from(new Set(
+    (Array.isArray(req.body?.ids) ? req.body.ids : [])
+      .map((id: any) => sanitizeString(id, 120))
+      .filter(Boolean)
+  ));
+  const isDuplicateFinancialSeriesError = (error: any) => sanitizeString(error?.code, 40) === '23505';
+  const loadProfessionalPaymentIdentities = async (clinicId: string, professionalIds: string[]) => {
+    const uniqueIds = Array.from(new Set(professionalIds.filter(isUuid)));
+    if (uniqueIds.length === 0) return new Map<string, { name: string; specialty: string | null }>();
+    const [membershipsResult, profilesResult] = await Promise.all([
+      supabase
+        .from('clinic_memberships')
+        .select('user_id,role,status,specialty,users:user_id(name)')
+        .eq('clinic_id', clinicId)
+        .eq('role', 'therapist')
+        .eq('status', 'active')
+        .in('user_id', uniqueIds)
+        .limit(uniqueIds.length),
+      supabase
+        .from('professional_profiles')
+        .select('user_id,full_name,specialty')
+        .in('user_id', uniqueIds)
+        .limit(uniqueIds.length),
+    ]);
+    if (membershipsResult.error) throw membershipsResult.error;
+    if (profilesResult.error) throw profilesResult.error;
+    const profilesById = new Map(
+      (profilesResult.data || []).map((profile: any) => [sanitizeString(profile?.user_id, 120), profile]),
+    );
+    return new Map(
+      (membershipsResult.data || []).map((membership: any) => {
+        const userId = sanitizeString(membership?.user_id, 120);
+        const profile: any = profilesById.get(userId) || {};
+        const name = sanitizeString(profile?.full_name || membership?.users?.name, 180);
+        const specialty =
+          normalizeClinicalSpecialty(membership?.specialty) ||
+          normalizeClinicalSpecialty(profile?.specialty) ||
+          null;
+        return [userId, { name, specialty }] as const;
+      }).filter(([userId, identity]) => Boolean(userId && identity.name)),
+    );
+  };
+  const loadPersistedFinancialSeriesRows = async (params: {
+    table: 'payments' | 'professional_payments';
+    select: string;
+    clinicId: string;
+    ids: string[];
+  }) => {
+    const chunks: string[][] = [];
+    for (let index = 0; index < params.ids.length; index += 100) {
+      chunks.push(params.ids.slice(index, index + 100));
+    }
+    const rows: any[] = [];
+    for (let index = 0; index < chunks.length; index += 4) {
+      const results = await Promise.all(chunks.slice(index, index + 4).map((ids) =>
+        supabase
+          .from(params.table)
+          .select(params.select)
+          .eq('clinic_id', params.clinicId)
+          .in('id', ids)
+          .limit(ids.length)
+      ));
+      for (const result of results) {
+        if (result.error) throw result.error;
+        rows.push(...(result.data || []));
+      }
+    }
+    return rows;
+  };
+
+  app.post('/api/payments/batch', checkAuth, requireClinicCapability('finance.payments.receive'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 4 * 1024 * 1024, 'Série financeira')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      // Patient finance is clinic-scoped throughout the canonical ledger contract.
+      // Never let a browser/session-wide organization alias make a persisted row
+      // unreadable from the clinic that owns the patient.
+      const organizationId = clinicId;
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const idempotencyKey = financialSeriesIdempotencyKey(req);
+      const rawItems = financialSeriesItems(req);
+
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (idempotencyKey.length < 12) {
+        return res.status(400).json({ success: false, error: 'Identificador idempotente da série inválido.' });
+      }
+      if (rawItems.length < 2 || rawItems.length > MAX_FINANCIAL_SERIES_ITEMS) {
+        return res.status(400).json({ success: false, error: 'A série deve conter entre 2 e 2.000 parcelas.' });
+      }
+
+      const now = new Date().toISOString();
+      const seriesIdentityHash = stableHashPayload({ clinicId, idempotencyKey });
+      const recurrenceGroups = new Set<string>();
+      const recurrenceIndexes = new Set<number>();
+      const payloads: Record<string, any>[] = [];
+
+      for (let index = 0; index < rawItems.length; index += 1) {
+        const item = rawItems[index] || {};
+        const id = sanitizeString(item?.id, 120);
+        const patientId = sanitizeString(item?.patient_id || item?.patientId, 120);
+        const amount = Number(item?.amount);
+        const recurrenceGroupId = sanitizeString(item?.recurrence_group_id || item?.recurrenceGroupId, 120);
+        const recurrenceIndex = Number(item?.recurrence_index ?? item?.recurrenceIndex);
+        const recurrenceTotal = Number(item?.recurrence_total ?? item?.recurrenceTotal);
+        const paymentDate = sanitizeDate(item?.payment_date || item?.paymentDate);
+        const dueDate = sanitizeDate(item?.due_date || item?.dueDate);
+        const receiptUrl = sanitizeReceiptUrl(item?.receipt_url || item?.receiptUrl);
+        const requestedStatus = sanitizeString(item?.status, 40).toLowerCase();
+
+        if (!isUuid(id) || !isUuid(patientId) || !Number.isFinite(amount) || amount < 0 || amount > 1_000_000) {
+          return res.status(400).json({ success: false, error: `Parcela ${index + 1} inválida.` });
+        }
+        if (!recurrenceGroupId || !Number.isInteger(recurrenceIndex) || recurrenceIndex < 1 || recurrenceTotal !== rawItems.length) {
+          return res.status(400).json({ success: false, error: `Recorrência da parcela ${index + 1} inválida.` });
+        }
+        if (!paymentDate || !dueDate) {
+          return res.status(400).json({ success: false, error: `Datas da parcela ${index + 1} inválidas.` });
+        }
+        if (recurrenceIndexes.has(recurrenceIndex)) {
+          return res.status(400).json({ success: false, error: 'A série possui índices de recorrência duplicados.' });
+        }
+        recurrenceGroups.add(recurrenceGroupId);
+        recurrenceIndexes.add(recurrenceIndex);
+
+        const status = receiptUrl
+          ? 'paid'
+          : paymentStatuses.has(requestedStatus)
+            ? requestedStatus
+            : 'pending';
+        payloads.push(cleanObject({
+          id,
+          organization_id: isUuid(organizationId) ? organizationId : undefined,
+          clinic_id: clinicId,
+          patient_id: patientId,
+          patient_name: sanitizeString(item?.patient_name || item?.patientName, 160),
+          amount,
+          payment_date: paymentDate,
+          due_date: dueDate,
+          method: sanitizeString(item?.method, 80),
+          status,
+          receipt_url: receiptUrl,
+          receipt_file_name: sanitizeString(item?.receipt_file_name || item?.receiptFileName, 240),
+          receipt_content_type: sanitizeString(item?.receipt_content_type || item?.receiptContentType, 120),
+          type: sanitizeString(item?.type, 80),
+          insurance_name: sanitizeString(item?.insurance_name || item?.insuranceName, 120),
+          specialty: sanitizeString(item?.specialty, 120),
+          base_amount: item?.base_amount !== undefined ? asSafeNumber(item?.base_amount, 0, 1_000_000) : undefined,
+          additional_amount: item?.additional_amount !== undefined ? asSafeNumber(item?.additional_amount, 0, 1_000_000) : undefined,
+          additional_scope: sanitizeString(item?.additional_scope, 40),
+          adjustment_reason: sanitizeString(item?.adjustment_reason || item?.adjustmentReason, 600),
+          is_recurring: true,
+          recurrence_group_id: recurrenceGroupId,
+          recurrence_index: recurrenceIndex,
+          recurrence_total: recurrenceTotal,
+          recurrence_frequency: sanitizeString(item?.recurrence_frequency || item?.recurrenceFrequency, 40) || 'monthly',
+          notes: sanitizeString(item?.notes, 1200),
+          idempotency_key: isUuid(organizationId) ? `financial-series:${seriesIdentityHash}:${recurrenceIndex}` : undefined,
+          created_by: actorId,
+          created_at: now,
+          updated_at: now
+        }));
+      }
+
+      if (recurrenceGroups.size !== 1) {
+        return res.status(400).json({ success: false, error: 'Todas as parcelas devem pertencer à mesma série.' });
+      }
+
+      const patientIds = Array.from(new Set(payloads.map((payload) => payload.patient_id)));
+      const patientScopeResult = await supabase
+        .from('patients')
+        .select('id,name')
+        .eq('clinic_id', clinicId)
+        .in('id', patientIds)
+        .is('deleted_at', null)
+        .limit(patientIds.length);
+      if (patientScopeResult.error) throw patientScopeResult.error;
+      const patientNamesById = new Map(
+        (patientScopeResult.data || []).map((patient: any) => [
+          sanitizeString(patient?.id, 120),
+          sanitizeString(patient?.name, 160),
+        ]),
+      );
+      for (const payload of payloads) {
+        payload.patient_name = patientNamesById.get(payload.patient_id) || payload.patient_name;
+      }
+      if ((patientScopeResult.data || []).length !== patientIds.length) {
+        return res.status(403).json({ success: false, error: 'Um dos pacientes não pertence à clínica atual.' });
+      }
+      const requestHash = stableHashPayload({
+        clinicId,
+        idempotencyKey,
+        items: payloads.map(({ created_at: _createdAt, updated_at: _updatedAt, ...payload }) => payload),
+      });
+      for (const payload of payloads) payload.series_request_hash = requestHash;
+
+      const result = await supabase.from('payments').insert(payloads).select(PAYMENT_SELECT);
+      if (result.error) {
+        if (isDuplicateFinancialSeriesError(result.error)) {
+          const retryRows = await loadPersistedFinancialSeriesRows({
+            table: 'payments',
+            select: `${PAYMENT_SELECT},series_request_hash`,
+            clinicId,
+            ids: payloads.map((payload) => payload.id),
+          });
+          if (
+            retryRows.length === payloads.length &&
+            retryRows.every((row: any) => sanitizeString(row?.series_request_hash, 80) === requestHash)
+          ) {
+            const retryById = new Map(retryRows.map((row: any) => [sanitizeString(row?.id, 120), row]));
+            const persistedRows = payloads.map((payload) => {
+              const { series_request_hash: _requestHash, ...row } = retryById.get(payload.id) || {};
+              return row;
+            });
+            return res.json({
+              success: true,
+              idempotent: true,
+              code: 'FINANCIAL_SERIES_ALREADY_PERSISTED',
+              data: persistedRows
+            });
+          }
+          return res.status(409).json({
+            success: false,
+            code: 'FINANCIAL_SERIES_IDEMPOTENCY_CONFLICT',
+            error: 'Esta chave de série já foi usada com outro conteúdo.'
+          });
+        }
+        throw result.error;
+      }
+
+      return res.status(201).json({ success: true, data: result.data || payloads });
+    } catch (error: any) {
+      if (hasMissingFinancialSchema(error)) {
+        return res.status(503).json({ success: false, error: 'Estrutura de recorrência financeira ainda não aplicada.' });
+      }
+      return sendRouteDbError(res, '/api/payments/batch [POST]', error, { requestId: requestIdForLogs(req) });
+    }
+  });
+
   app.post('/api/payments', checkAuth, requireClinicCapability('finance.payments.receive'), async (req: any, res) => {
     try {
       const receiptUrl = sanitizeReceiptUrl(req.body?.receipt_url);
@@ -76487,6 +77542,115 @@ async function startServer() {
       res.json({ success: true, data: data || payloadBase });
     } catch (error) {
       res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.patch('/api/payments/batch', checkAuth, requireClinicCapability('finance.payments.edit'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 512 * 1024, 'Atualização da série financeira')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const paymentIds = financialSeriesIds(req);
+      const input = req.body?.updates || {};
+      const idempotencyKey = financialSeriesIdempotencyKey(req);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (idempotencyKey.length < 12) {
+        return res.status(400).json({ success: false, error: 'Identificação idempotente da atualização inválida.' });
+      }
+      if (paymentIds.length < 2 || paymentIds.length > MAX_FINANCIAL_SERIES_ITEMS || paymentIds.some((id) => !isUuid(id))) {
+        return res.status(400).json({ success: false, error: 'Parcelas da série inválidas.' });
+      }
+
+      const receiptInputProvided = input?.receipt_url !== undefined || input?.receiptUrl !== undefined;
+      const receiptUrl = sanitizeReceiptUrl(input?.receipt_url || input?.receiptUrl);
+      if (receiptInputProvided && (input?.receipt_url || input?.receiptUrl) && !receiptUrl) {
+        return res.status(400).json({ success: false, error: 'Comprovante inválido.' });
+      }
+      const requestedStatus = sanitizeString(input?.status, 40).toLowerCase();
+      for (const [field, value] of [
+        ['amount', input?.amount],
+        ['base_amount', input?.base_amount],
+        ['additional_amount', input?.additional_amount],
+      ] as const) {
+        if (value !== undefined && asSafeNumber(value, 0, 1_000_000) === null) {
+          return res.status(400).json({ success: false, error: `Valor invalido em ${field}.` });
+        }
+      }
+      if ((input?.payment_date !== undefined || input?.paymentDate !== undefined) &&
+          !(sanitizeDate(input?.payment_date) || sanitizeDate(input?.paymentDate))) {
+        return res.status(400).json({ success: false, error: 'Data de pagamento invalida.' });
+      }
+      if ((input?.due_date !== undefined || input?.dueDate !== undefined) &&
+          !(sanitizeDate(input?.due_date) || sanitizeDate(input?.dueDate))) {
+        return res.status(400).json({ success: false, error: 'Data de vencimento invalida.' });
+      }
+      const patchBase = cleanObject({
+        amount: input?.amount !== undefined ? asSafeNumber(input?.amount, 0, 1_000_000) : undefined,
+        payment_date: input?.payment_date !== undefined || input?.paymentDate !== undefined
+          ? sanitizeDate(input?.payment_date) || sanitizeDate(input?.paymentDate)
+          : undefined,
+        due_date: input?.due_date !== undefined || input?.dueDate !== undefined
+          ? sanitizeDate(input?.due_date) || sanitizeDate(input?.dueDate)
+          : undefined,
+        method: input?.method !== undefined ? sanitizeString(input?.method, 80) : undefined,
+        status: receiptUrl ? 'paid' : paymentStatuses.has(requestedStatus) ? requestedStatus : undefined,
+        receipt_url: receiptUrl || undefined,
+        receipt_file_name: input?.receipt_file_name !== undefined || input?.receiptFileName !== undefined
+          ? sanitizeString(input?.receipt_file_name || input?.receiptFileName, 240)
+          : undefined,
+        receipt_content_type: input?.receipt_content_type !== undefined || input?.receiptContentType !== undefined
+          ? sanitizeString(input?.receipt_content_type || input?.receiptContentType, 120)
+          : undefined,
+        type: input?.type !== undefined ? sanitizeString(input?.type, 80) : undefined,
+        insurance_name: input?.insurance_name !== undefined || input?.insuranceName !== undefined
+          ? sanitizeString(input?.insurance_name || input?.insuranceName, 120)
+          : undefined,
+        specialty: input?.specialty !== undefined ? sanitizeString(input?.specialty, 120) : undefined,
+        base_amount: input?.base_amount !== undefined ? asSafeNumber(input?.base_amount, 0, 1_000_000) : undefined,
+        additional_amount: input?.additional_amount !== undefined ? asSafeNumber(input?.additional_amount, 0, 1_000_000) : undefined,
+        additional_scope: input?.additional_scope !== undefined ? sanitizeString(input?.additional_scope, 40) : undefined,
+        adjustment_reason: input?.adjustment_reason !== undefined || input?.adjustmentReason !== undefined
+          ? sanitizeString(input?.adjustment_reason || input?.adjustmentReason, 600)
+          : undefined,
+        notes: input?.notes !== undefined ? sanitizeString(input?.notes, 1200) : undefined
+      });
+      if (Object.keys(patchBase).length === 0) {
+        return res.status(400).json({ success: false, error: 'Nada para atualizar.' });
+      }
+      const updateKeyHash = stableHashPayload({ clinicId, scope: 'payments', idempotencyKey });
+      const updateRequestHash = stableHashPayload({
+        ids: [...paymentIds].sort(),
+        patch: patchBase,
+        updateKeyHash,
+      });
+      const result = await supabase.rpc('apply_financial_series_update_v1', {
+        p_clinic_id: clinicId,
+        p_mutation_scope: 'payments',
+        p_row_ids: paymentIds,
+        p_patch: patchBase,
+        p_idempotency_key_hash: updateKeyHash,
+        p_request_hash: updateRequestHash,
+        p_actor_id: sanitizeString(req.session.user?.id, 120) || null,
+      });
+      if (result.error) throw result.error;
+      return res.json(result.data || { success: true, data: paymentIds.map((id) => ({ id })) });
+    } catch (error: any) {
+      const errorText = sanitizeString(error?.message || error?.details, 500);
+      if (errorText.includes('FINANCIAL_SERIES_UPDATE_IDEMPOTENCY_CONFLICT')) {
+        return res.status(409).json({ success: false, code: 'FINANCIAL_SERIES_UPDATE_IDEMPOTENCY_CONFLICT', error: 'Esta chave de atualização já foi usada com outro conteúdo.' });
+      }
+      if (errorText.includes('FINANCIAL_SERIES_UPDATE_SCOPE_MISMATCH')) {
+        return res.status(404).json({ success: false, error: 'Uma ou mais parcelas não existem na clínica atual.' });
+      }
+      if (errorText.includes('FINANCIAL_SERIES_UPDATE_INVALID')) {
+        return res.status(400).json({ success: false, error: 'Atualização da série inválida.' });
+      }
+      if (errorText.includes('apply_financial_series_update_v1')) {
+        return res.status(503).json({ success: false, error: 'Estrutura de recorrência financeira ainda não aplicada.' });
+      }
+      if (hasMissingFinancialSchema(error)) {
+        return res.status(503).json({ success: false, error: 'Estrutura de recorrência financeira ainda não aplicada.' });
+      }
+      return sendRouteDbError(res, '/api/payments/batch [PATCH]', error, { requestId: requestIdForLogs(req) });
     }
   });
 
@@ -76585,6 +77749,139 @@ async function startServer() {
     }
   });
 
+  app.post('/api/financial/professional-payments/batch', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 2 * 1024 * 1024, 'Série de repasses')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const idempotencyKey = financialSeriesIdempotencyKey(req);
+      const rawItems = financialSeriesItems(req);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (idempotencyKey.length < 12) {
+        return res.status(400).json({ success: false, error: 'Identificador idempotente da série inválido.' });
+      }
+      if (rawItems.length < 2 || rawItems.length > MAX_FINANCIAL_SERIES_ITEMS) {
+        return res.status(400).json({ success: false, error: 'A série deve conter entre 2 e 2.000 parcelas.' });
+      }
+
+      const now = new Date().toISOString();
+      const recurrenceGroups = new Set<string>();
+      const recurrenceIndexes = new Set<number>();
+      const payloads: Record<string, any>[] = [];
+      for (let index = 0; index < rawItems.length; index += 1) {
+        const item = rawItems[index] || {};
+        const id = sanitizeString(item?.id, 120);
+        const professionalId = sanitizeString(item?.professional_id || item?.professionalId, 120);
+        const professionalName = sanitizeString(item?.professional_name || item?.professionalName, 180);
+        const amount = Number(item?.amount);
+        const recurrenceGroupId = sanitizeString(item?.recurrence_group_id || item?.recurrenceGroupId, 120);
+        const recurrenceIndex = Number(item?.recurrence_index ?? item?.recurrenceIndex);
+        const recurrenceTotal = Number(item?.recurrence_total ?? item?.recurrenceTotal);
+        const paymentDate = sanitizeDate(item?.payment_date || item?.paymentDate);
+        const dueDate = sanitizeDate(item?.due_date || item?.dueDate);
+        const requestedStatus = sanitizeString(item?.status, 40).toLowerCase();
+
+        if (!isUuid(id) || !isUuid(professionalId) || !professionalName || !Number.isFinite(amount) || amount < 0 || amount > 1_000_000) {
+          return res.status(400).json({ success: false, error: `Parcela ${index + 1} do repasse inválida.` });
+        }
+        if (!recurrenceGroupId || !Number.isInteger(recurrenceIndex) || recurrenceIndex < 1 || recurrenceTotal !== rawItems.length) {
+          return res.status(400).json({ success: false, error: `Recorrência da parcela ${index + 1} inválida.` });
+        }
+        if (!paymentDate || !dueDate || recurrenceIndexes.has(recurrenceIndex)) {
+          return res.status(400).json({ success: false, error: `Datas ou índice da parcela ${index + 1} inválidos.` });
+        }
+        recurrenceGroups.add(recurrenceGroupId);
+        recurrenceIndexes.add(recurrenceIndex);
+        payloads.push(cleanObject({
+          id,
+          clinic_id: clinicId,
+          professional_id: professionalId,
+          professional_name: professionalName,
+          specialty: sanitizeString(item?.specialty, 120),
+          amount,
+          payment_date: paymentDate,
+          due_date: dueDate,
+          method: sanitizeString(item?.method, 80) || 'pix',
+          status: paymentStatuses.has(requestedStatus) ? requestedStatus : 'pending',
+          base_amount: item?.base_amount !== undefined ? asSafeNumber(item?.base_amount, 0, 1_000_000) : undefined,
+          additional_amount: item?.additional_amount !== undefined ? asSafeNumber(item?.additional_amount, 0, 1_000_000) : undefined,
+          additional_scope: sanitizeString(item?.additional_scope, 40),
+          adjustment_reason: sanitizeString(item?.adjustment_reason || item?.adjustmentReason, 600),
+          is_recurring: true,
+          recurrence_group_id: recurrenceGroupId,
+          recurrence_index: recurrenceIndex,
+          recurrence_total: recurrenceTotal,
+          recurrence_frequency: sanitizeString(item?.recurrence_frequency || item?.recurrenceFrequency, 40) || 'monthly',
+          notes: sanitizeString(item?.notes, 1200),
+          idempotency_key: `professional-financial-series:${stableHashPayload({ clinicId, idempotencyKey })}:${recurrenceIndex}`,
+          created_by: actorId,
+          created_at: now,
+          updated_at: now
+        }));
+      }
+      if (recurrenceGroups.size !== 1) {
+        return res.status(400).json({ success: false, error: 'Todas as parcelas devem pertencer à mesma série.' });
+      }
+
+      const professionalIds = Array.from(new Set(payloads.map((payload) => payload.professional_id)));
+      const professionalIdentities = await loadProfessionalPaymentIdentities(clinicId, professionalIds);
+      if (professionalIdentities.size !== professionalIds.length) {
+        return res.status(403).json({ success: false, error: 'Um dos profissionais não pertence à clínica atual.' });
+      }
+      for (const payload of payloads) {
+        const identity = professionalIdentities.get(payload.professional_id)!;
+        payload.professional_name = identity.name;
+        payload.specialty = identity.specialty;
+      }
+      const requestHash = stableHashPayload({
+        clinicId,
+        idempotencyKey,
+        items: payloads.map(({ created_at: _createdAt, updated_at: _updatedAt, ...payload }) => payload),
+      });
+      for (const payload of payloads) payload.series_request_hash = requestHash;
+
+      const result = await supabase.from('professional_payments').insert(payloads).select(PROFESSIONAL_PAYMENT_SELECT);
+      if (result.error) {
+        if (isDuplicateFinancialSeriesError(result.error)) {
+          const retryRows = await loadPersistedFinancialSeriesRows({
+            table: 'professional_payments',
+            select: `${PROFESSIONAL_PAYMENT_SELECT},series_request_hash`,
+            clinicId,
+            ids: payloads.map((payload) => payload.id),
+          });
+          if (
+            retryRows.length === payloads.length &&
+            retryRows.every((row: any) => sanitizeString(row?.series_request_hash, 80) === requestHash)
+          ) {
+            const retryById = new Map(retryRows.map((row: any) => [sanitizeString(row?.id, 120), row]));
+            const persistedRows = payloads.map((payload) => {
+              const { series_request_hash: _requestHash, ...row } = retryById.get(payload.id) || {};
+              return row;
+            });
+            return res.json({
+              success: true,
+              idempotent: true,
+              code: 'PROFESSIONAL_FINANCIAL_SERIES_ALREADY_PERSISTED',
+              data: persistedRows
+            });
+          }
+          return res.status(409).json({
+            success: false,
+            code: 'PROFESSIONAL_FINANCIAL_SERIES_IDEMPOTENCY_CONFLICT',
+            error: 'Esta chave de série de repasses já foi usada com outro conteúdo.'
+          });
+        }
+        throw result.error;
+      }
+      return res.status(201).json({ success: true, data: result.data || payloads });
+    } catch (error: any) {
+      if (hasMissingFinancialSchema(error)) {
+        return res.status(503).json({ success: false, error: 'Estrutura de recorrência de repasses ainda não aplicada.' });
+      }
+      return sendRouteDbError(res, '/api/financial/professional-payments/batch [POST]', error, { requestId: requestIdForLogs(req) });
+    }
+  });
+
   app.post('/api/financial/professional-payments', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
     try {
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase() || 'pending';
@@ -76641,6 +77938,130 @@ async function startServer() {
       res.json({ success: true, data: data || payload });
     } catch (error) {
       res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.patch('/api/financial/professional-payments/batch', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 512 * 1024, 'Atualização da série de repasses')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const paymentIds = financialSeriesIds(req);
+      const input = req.body?.updates || {};
+      const idempotencyKey = financialSeriesIdempotencyKey(req);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (idempotencyKey.length < 12) {
+        return res.status(400).json({ success: false, error: 'Identificação idempotente da atualização inválida.' });
+      }
+      if (paymentIds.length < 2 || paymentIds.length > MAX_FINANCIAL_SERIES_ITEMS || paymentIds.some((id) => !isUuid(id))) {
+        return res.status(400).json({ success: false, error: 'Parcelas da série de repasses inválidas.' });
+      }
+
+      const requestedStatus = sanitizeString(input?.status, 40).toLowerCase();
+      const professionalIdInputProvided =
+        input?.professional_id !== undefined || input?.professionalId !== undefined;
+      const professionalIdentityInputProvided =
+        input?.professional_name !== undefined ||
+        input?.professionalName !== undefined ||
+        input?.specialty !== undefined;
+      for (const [field, value] of [
+        ['amount', input?.amount],
+        ['base_amount', input?.base_amount],
+        ['additional_amount', input?.additional_amount],
+      ] as const) {
+        if (value !== undefined && asSafeNumber(value, 0, 1_000_000) === null) {
+          return res.status(400).json({ success: false, error: `Valor invalido em ${field}.` });
+        }
+      }
+      if ((input?.payment_date !== undefined || input?.paymentDate !== undefined) &&
+          !(sanitizeDate(input?.payment_date) || sanitizeDate(input?.paymentDate))) {
+        return res.status(400).json({ success: false, error: 'Data de pagamento invalida.' });
+      }
+      if ((input?.due_date !== undefined || input?.dueDate !== undefined) &&
+          !(sanitizeDate(input?.due_date) || sanitizeDate(input?.dueDate))) {
+        return res.status(400).json({ success: false, error: 'Data de vencimento invalida.' });
+      }
+      const patchBase = cleanObject({
+        professional_id: professionalIdInputProvided
+          ? sanitizeString(input?.professional_id || input?.professionalId, 120)
+          : undefined,
+        professional_name: input?.professional_name !== undefined || input?.professionalName !== undefined
+          ? sanitizeString(input?.professional_name || input?.professionalName, 180)
+          : undefined,
+        specialty: input?.specialty !== undefined ? sanitizeString(input?.specialty, 120) : undefined,
+        amount: input?.amount !== undefined ? asSafeNumber(input?.amount, 0, 1_000_000) : undefined,
+        payment_date: input?.payment_date !== undefined || input?.paymentDate !== undefined
+          ? sanitizeDate(input?.payment_date) || sanitizeDate(input?.paymentDate)
+          : undefined,
+        due_date: input?.due_date !== undefined || input?.dueDate !== undefined
+          ? sanitizeDate(input?.due_date) || sanitizeDate(input?.dueDate)
+          : undefined,
+        method: input?.method !== undefined ? sanitizeString(input?.method, 80) : undefined,
+        status: paymentStatuses.has(requestedStatus) ? requestedStatus : undefined,
+        base_amount: input?.base_amount !== undefined ? asSafeNumber(input?.base_amount, 0, 1_000_000) : undefined,
+        additional_amount: input?.additional_amount !== undefined ? asSafeNumber(input?.additional_amount, 0, 1_000_000) : undefined,
+        additional_scope: input?.additional_scope !== undefined ? sanitizeString(input?.additional_scope, 40) : undefined,
+        adjustment_reason: input?.adjustment_reason !== undefined || input?.adjustmentReason !== undefined
+          ? sanitizeString(input?.adjustment_reason || input?.adjustmentReason, 600)
+          : undefined,
+        notes: input?.notes !== undefined ? sanitizeString(input?.notes, 1200) : undefined
+      });
+      if (Object.keys(patchBase).length === 0) {
+        return res.status(400).json({ success: false, error: 'Nada para atualizar.' });
+      }
+      if (professionalIdentityInputProvided && !professionalIdInputProvided) {
+        return res.status(400).json({
+          success: false,
+          code: 'PROFESSIONAL_PAYMENT_IDENTITY_REQUIRES_ID',
+          error: 'Selecione o profissional para atualizar nome ou especialidade do repasse.'
+        });
+      }
+      if (professionalIdInputProvided) {
+        if (!isUuid(patchBase.professional_id)) {
+          return res.status(400).json({ success: false, error: 'Profissional inválido.' });
+        }
+        const identities = await loadProfessionalPaymentIdentities(clinicId, [patchBase.professional_id]);
+        const identity = identities.get(patchBase.professional_id);
+        if (!identity) {
+          return res.status(403).json({ success: false, error: 'O profissional não pertence à clínica atual.' });
+        }
+        patchBase.professional_name = identity.name;
+        patchBase.specialty = identity.specialty;
+      }
+      const updateKeyHash = stableHashPayload({ clinicId, scope: 'professional_payments', idempotencyKey });
+      const updateRequestHash = stableHashPayload({
+        ids: [...paymentIds].sort(),
+        patch: patchBase,
+        updateKeyHash,
+      });
+      const result = await supabase.rpc('apply_financial_series_update_v1', {
+        p_clinic_id: clinicId,
+        p_mutation_scope: 'professional_payments',
+        p_row_ids: paymentIds,
+        p_patch: patchBase,
+        p_idempotency_key_hash: updateKeyHash,
+        p_request_hash: updateRequestHash,
+        p_actor_id: sanitizeString(req.session.user?.id, 120) || null,
+      });
+      if (result.error) throw result.error;
+      return res.json(result.data || { success: true, data: paymentIds.map((id) => ({ id })) });
+    } catch (error: any) {
+      const errorText = sanitizeString(error?.message || error?.details, 500);
+      if (errorText.includes('FINANCIAL_SERIES_UPDATE_IDEMPOTENCY_CONFLICT')) {
+        return res.status(409).json({ success: false, code: 'PROFESSIONAL_FINANCIAL_SERIES_UPDATE_IDEMPOTENCY_CONFLICT', error: 'Esta chave de atualização já foi usada com outro conteúdo.' });
+      }
+      if (errorText.includes('FINANCIAL_SERIES_UPDATE_SCOPE_MISMATCH')) {
+        return res.status(404).json({ success: false, error: 'Uma ou mais parcelas de repasse não existem na clínica atual.' });
+      }
+      if (errorText.includes('FINANCIAL_SERIES_UPDATE_INVALID')) {
+        return res.status(400).json({ success: false, error: 'Atualização da série de repasses inválida.' });
+      }
+      if (errorText.includes('apply_financial_series_update_v1')) {
+        return res.status(503).json({ success: false, error: 'Estrutura de recorrência de repasses ainda não aplicada.' });
+      }
+      if (hasMissingFinancialSchema(error)) {
+        return res.status(503).json({ success: false, error: 'Estrutura de recorrência de repasses ainda não aplicada.' });
+      }
+      return sendRouteDbError(res, '/api/financial/professional-payments/batch [PATCH]', error, { requestId: requestIdForLogs(req) });
     }
   });
 
@@ -82427,7 +83848,7 @@ async function startServer() {
         );
         const { data: sameKey, error: sameKeyError } = await supabase
           .from("sales_checkout_links")
-          .select("*")
+          .select(SALES_CHECKOUT_LINK_SELECT)
           .eq("created_by", actorUserId)
           .eq("idempotency_key", operationIdempotencyKey)
           .maybeSingle();
@@ -82446,7 +83867,7 @@ async function startServer() {
         }
         const { data: activeLink, error: activeLinkError } = await supabase
           .from("sales_checkout_links")
-          .select("*")
+          .select(SALES_CHECKOUT_LINK_SELECT)
           .eq("offer_id", offerId)
           .eq("environment", stripeEnvironment)
           .in("status", ["active", "sent", "opened", "payment_pending"])
@@ -82618,14 +84039,14 @@ async function startServer() {
         const { data: storedLink, error: storeError } = await supabase
           .from("sales_checkout_links")
           .insert([linkPayload])
-          .select("*")
+          .select(SALES_CHECKOUT_LINK_SELECT)
           .single();
         if (storeError) {
           await getStripe().checkout.sessions.expire(session.id).catch(() => undefined);
           if (String(storeError.code || "") === "23505") {
             const { data: racedLink, error: racedLinkError } = await supabase
               .from("sales_checkout_links")
-              .select("*")
+              .select(SALES_CHECKOUT_LINK_SELECT)
               .eq("offer_id", offerId)
               .eq("environment", stripeEnvironment)
               .in("status", ["active", "sent", "opened", "payment_pending"])
@@ -82739,7 +84160,7 @@ async function startServer() {
       if (!isUuid(offerId)) return res.status(400).json({ success: false, error: "OFFER_INVALID" });
       const { data, error } = await supabase
         .from("sales_checkout_links")
-        .select("*")
+        .select(SALES_CHECKOUT_LINK_SELECT)
         .eq("offer_id", offerId)
         .order("created_at", { ascending: false })
         .limit(20);
@@ -84329,6 +85750,11 @@ async function startServer() {
     void runWithDistributedJobLease('distributed-runtime-cleanup', 10 * 60, async () => {
       const { error } = await supabase.rpc('runtime_cleanup_distributed_state_v1');
       if (error) throw error;
+      const { error: financialMutationCleanupError } = await supabase.rpc(
+        'cleanup_financial_series_mutation_requests_v1',
+        { p_retention_days: 180 },
+      );
+      if (financialMutationCleanupError) throw financialMutationCleanupError;
     });
   }, 24 * 60 * 60 * 1000);
 
