@@ -8461,7 +8461,21 @@ export default function App() {
         ) : user.role === 'admin' || user.role === 'owner' ? (
           <AdminDashboard onLogout={handleLogout} />
         ) : (
-          <AdminDashboard onLogout={handleLogout} />
+          <main className="min-h-screen bg-slate-50 px-5 py-10">
+            <section className="mx-auto max-w-lg rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
+              <h1 className="text-xl font-semibold text-slate-900">Acesso não configurado</h1>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Seu perfil não possui um papel de acesso reconhecido para este ambiente. Nenhuma área administrativa foi liberada.
+              </p>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="mt-6 min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
+              >
+                Sair e entrar novamente
+              </button>
+            </section>
+          </main>
         )}
         </Suspense>
       </LazyImportBoundary>

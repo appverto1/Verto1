@@ -71,7 +71,7 @@ assert.match(server, /requirePatientPortalModule\('appointments_communication'\)
 assert.match(server, /requirePatientPortalModule\('clinical_core'\)/);
 assert.match(server, /moduleAccessMode/);
 assert.match(server, /entitlementVersion/);
-assert.match(server, /apply_sales_offer_module_entitlements_v1/);
+assert.match(server, /apply_sales_offer_module_entitlements_v2/);
 assert.match(server, /Retry an interrupted paid modular activation on a later login/);
 
 assert.match(migration, /trial_days integer not null default 0/);

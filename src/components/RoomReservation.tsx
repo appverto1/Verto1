@@ -49,7 +49,7 @@ export const RoomReservationTable = ({
   onDeleteReservation: (id: string) => void 
 }) => {
   const timeSlots = Array.from({ length: 14 }, (_, i) => `${String(i + 8).padStart(2, '0')}:00`);
-  const canManageReservations = ['coordinator', 'receptionist', 'admin', 'owner'].includes(String(user?.role || '').toLowerCase());
+  const canManageReservations = ['director', 'coordinator', 'receptionist', 'admin', 'owner'].includes(String(user?.role || '').toLowerCase());
 
   return (
     <div className="bg-white rounded-[32px] shadow-sm border border-slate-100 overflow-hidden">

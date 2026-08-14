@@ -15,6 +15,10 @@ export type OfferProfitabilityRating =
 
 export type SalesAssumptionValues = {
   officialUnitAmountCents: number;
+  meiDasMonthlyCents?: number | null;
+  supabaseMonthlyCostCents?: number | null;
+  railwayMonthlyCostCents?: number | null;
+  currentOperatingMarginTargetBasisPoints?: number | null;
   stripeFeeBasisPoints: number | null;
   stripeFixedFeeCents: number | null;
   revenueTaxBasisPoints: number | null;

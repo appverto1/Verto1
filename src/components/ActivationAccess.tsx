@@ -1,8 +1,9 @@
-﻿import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { getSupabase } from '../lib/supabase';
 import { GoogleIcon } from './GoogleIcon';
 import { LogoVerto } from './Common';
 import { extractPasswordRecoveryUrlState } from '../utils/passwordRecoveryUrl';
+import { Eye, EyeOff } from 'lucide-react';
 
 type ActivationAccessProps = {
   onLogin: (
@@ -54,6 +55,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [mfaToken, setMfaToken] = useState('');
   const [requiresMfa, setRequiresMfa] = useState(false);
   const [newPassword, setNewPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [identifiedEmail, setIdentifiedEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -196,7 +198,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       setIdentifiedEmail(sessionEmail);
       setEmail(sessionEmail);
       setIsActivationLinkContext(true);
-      if (resolvedInvitationId || ['coordinator', 'admin', 'therapist', 'receptionist'].includes(metadataInvitedRole)) {
+      if (resolvedInvitationId || ['director', 'coordinator', 'supervisor', 'admin', 'therapist', 'receptionist', 'biller'].includes(metadataInvitedRole)) {
         setIntendedRole('coordinator');
       }
       if (resolvedInvitationId) {
@@ -608,13 +610,24 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
                 />
               </div>
             ) : null}
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder={isExistingAccountInvite ? 'Senha atual' : 'Nova senha'}
-              className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]"
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder={isExistingAccountInvite ? 'Senha atual' : 'Nova senha'}
+                autoComplete={isExistingAccountInvite ? 'current-password' : 'new-password'}
+                className="w-full h-11 rounded-xl border border-slate-200 px-3 pr-11 text-sm outline-none focus:border-[#7a32fc]"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((current) => !current)}
+                aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-400 transition hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-300"
+              >
+                {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+              </button>
+            </div>
             {!isExistingAccountInvite ? <p className="text-xs text-slate-400">{passwordHint}</p> : null}
             <button
               onClick={handleSetPassword}

@@ -1,4 +1,4 @@
-﻿import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   BarChart3,
@@ -12,13 +12,15 @@ import {
   LayoutDashboard,
   Loader2,
   LogOut,
+  Mail,
   MessageCircle,
   Phone,
   RotateCcw,
   Settings2,
   Shield,
   TrendingUp,
-  Users
+  Users,
+  X
 } from 'lucide-react';
 import {
   Area,
@@ -157,6 +159,68 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [grantingComplimentaryPlan, setGrantingComplimentaryPlan] = useState(false);
   const [demoSandboxes, setDemoSandboxes] = useState<any[]>([]);
   const [demoAction, setDemoAction] = useState<string | null>(null);
+  const [accessEmailTarget, setAccessEmailTarget] = useState<any | null>(null);
+  const [accessEmailDraft, setAccessEmailDraft] = useState('');
+  const [accessEmailReason, setAccessEmailReason] = useState('');
+  const [accessEmailSaving, setAccessEmailSaving] = useState(false);
+  const [accessEmailFeedback, setAccessEmailFeedback] = useState<string | null>(null);
+
+  const openAccessEmailEditor = (customer: any) => {
+    setAccessEmailTarget(customer);
+    setAccessEmailDraft(String(customer?.email || '').trim());
+    setAccessEmailReason('');
+    setAccessEmailFeedback(null);
+  };
+
+  const closeAccessEmailEditor = () => {
+    if (accessEmailSaving) return;
+    setAccessEmailTarget(null);
+    setAccessEmailDraft('');
+    setAccessEmailReason('');
+    setAccessEmailFeedback(null);
+  };
+
+  const handleAccessEmailChange = async () => {
+    const userId = String(accessEmailTarget?.id || '').trim();
+    const nextEmail = accessEmailDraft.trim().toLowerCase();
+    const reason = accessEmailReason.trim();
+    if (!userId || !nextEmail) {
+      setAccessEmailFeedback('Informe o novo e-mail de acesso.');
+      return;
+    }
+    if (nextEmail === String(accessEmailTarget?.email || '').trim().toLowerCase()) {
+      setAccessEmailFeedback('O novo e-mail deve ser diferente do atual.');
+      return;
+    }
+    if (reason.length < 6) {
+      setAccessEmailFeedback('Registre brevemente a solicitação do usuário.');
+      return;
+    }
+
+    setAccessEmailSaving(true);
+    setAccessEmailFeedback(null);
+    try {
+      const response = await fetch(`/api/owner/users/${encodeURIComponent(userId)}/access-email`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: nextEmail, requestReason: reason }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.error || 'Não foi possível alterar o e-mail de acesso.');
+      }
+      setAllCustomers((current) => current.map((customer) =>
+        String(customer.id) === userId ? { ...customer, email: nextEmail } : customer
+      ));
+      setAccessEmailFeedback('E-mail de acesso alterado. O usuário deverá entrar novamente usando o novo endereço.');
+      setAccessEmailTarget((current: any) => current ? { ...current, email: nextEmail } : current);
+    } catch (changeError: any) {
+      setAccessEmailFeedback(changeError?.message || 'Não foi possível alterar o e-mail de acesso.');
+    } finally {
+      setAccessEmailSaving(false);
+    }
+  };
 
   const selectedCatalogEntry = useMemo(
     () => VERTO_PROTOCOL_EDITOR_CATALOG.find((entry) => entry.key === selectedCatalogProtocolKey) || VERTO_PROTOCOL_EDITOR_CATALOG[0],
@@ -965,6 +1029,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     <th className="py-3">Valor</th>
                     <th className="py-3">Status</th>
                     <th className="py-3">Criado em</th>
+                    <th className="py-3 text-right">Acesso</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -988,11 +1053,106 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <td className="py-3 text-sm text-slate-500">
                         {customer.created_at ? new Date(customer.created_at).toLocaleDateString('pt-BR') : '-'}
                       </td>
+                      <td className="py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => openAccessEmailEditor(customer)}
+                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700"
+                        >
+                          <Mail size={14} aria-hidden="true" />
+                          Trocar e-mail
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+
+            {accessEmailTarget ? (
+              <div
+                className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/35 px-4 py-8 backdrop-blur-[2px]"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="access-email-title"
+              >
+                <div className="w-full max-w-lg rounded-[28px] border border-slate-200 bg-white p-6 shadow-2xl">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-[0.16em] text-violet-600">Acesso do usuário</p>
+                      <h3 id="access-email-title" className="mt-1 text-xl font-semibold text-slate-900">Trocar e-mail de acesso</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-500">
+                        Altera somente a identidade de login e o e-mail do perfil. Não altera e-mail contratual, proposta ou cobrança Stripe.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={closeAccessEmailEditor}
+                      disabled={accessEmailSaving}
+                      aria-label="Fechar"
+                      className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                    >
+                      <X size={18} aria-hidden="true" />
+                    </button>
+                  </div>
+
+                  <div className="mt-5 rounded-2xl bg-slate-50 p-4">
+                    <p className="text-sm font-semibold text-slate-800">{accessEmailTarget.name || 'Usuário'}</p>
+                    <p className="mt-1 text-xs text-slate-500">Atual: {accessEmailTarget.email || 'sem e-mail'}</p>
+                  </div>
+
+                  <div className="mt-5 space-y-4">
+                    <label className="block">
+                      <span className="mb-1.5 block text-xs font-semibold text-slate-600">Novo e-mail de acesso</span>
+                      <input
+                        type="email"
+                        value={accessEmailDraft}
+                        onChange={(event) => setAccessEmailDraft(event.target.value)}
+                        autoComplete="off"
+                        className="h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none transition focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1.5 block text-xs font-semibold text-slate-600">Registro da solicitação</span>
+                      <textarea
+                        value={accessEmailReason}
+                        onChange={(event) => setAccessEmailReason(event.target.value)}
+                        maxLength={500}
+                        rows={3}
+                        placeholder="Ex.: Usuária solicitou atualização do e-mail de acesso por WhatsApp."
+                        className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none transition focus:border-violet-300 focus:ring-2 focus:ring-violet-100"
+                      />
+                    </label>
+                  </div>
+
+                  {accessEmailFeedback ? (
+                    <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-600">
+                      {accessEmailFeedback}
+                    </div>
+                  ) : null}
+
+                  <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <button
+                      type="button"
+                      onClick={closeAccessEmailEditor}
+                      disabled={accessEmailSaving}
+                      className="h-11 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleAccessEmailChange()}
+                      disabled={accessEmailSaving}
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
+                    >
+                      {accessEmailSaving ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Mail size={16} aria-hidden="true" />}
+                      {accessEmailSaving ? 'Alterando...' : 'Confirmar novo e-mail'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
               <h3 className="text-lg font-black mb-4">Pesquisa do MÃ³dulo Financeiro</h3>

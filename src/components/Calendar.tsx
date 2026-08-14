@@ -1566,7 +1566,7 @@ export const ClinicalAgendaBoard = ({
   const pendingVisibilityRefreshRef = useRef(false);
   const rescheduleAvailabilityLastRequestedAtRef = useRef(0);
   const localAgendaIdsRef = useRef(new Set<string>());
-  const canEditBillingContext = ['coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
+  const canEditBillingContext = ['director', 'coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
   const roomLookup = useMemo(() => {
     const map = new Map<string, any>();
     (rooms || []).forEach((room: any) => {

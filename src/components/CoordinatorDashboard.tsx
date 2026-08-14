@@ -4788,7 +4788,7 @@ export function CoordinatorDashboard({
           : sessionLocationType === "escola"
             ? "SCHOOL"
             : "OTHER";
-  const canManagePrivateSessionAmount = ["owner", "admin"].includes(
+  const canManagePrivateSessionAmount = ["owner", "admin", "director"].includes(
     String(user?.role || "").toLowerCase(),
   );
   const canOperatePrivateSessionAmount = ["coordinator", "receptionist"].includes(
@@ -7797,7 +7797,7 @@ export function CoordinatorDashboard({
   );
 
   useEffect(() => {
-    if (!["coordinator", "receptionist", "admin", "owner"].includes(role)) return;
+    if (!["director", "coordinator", "receptionist", "admin", "owner"].includes(role)) return;
     dueSoonPatientPayments.forEach((payment: any) => {
       const paymentId = String(payment?.id || `${payment?.patient_id}-${payment?.due_date}`);
       const noticeKey = `verto:payment-due-soon:${paymentId}:${payment?.due_date}`;
