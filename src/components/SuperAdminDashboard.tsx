@@ -164,6 +164,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [accessEmailReason, setAccessEmailReason] = useState('');
   const [accessEmailSaving, setAccessEmailSaving] = useState(false);
   const [accessEmailFeedback, setAccessEmailFeedback] = useState<string | null>(null);
+  const [resendingCustomerAccessId, setResendingCustomerAccessId] = useState<string | null>(null);
 
   const openAccessEmailEditor = (customer: any) => {
     setAccessEmailTarget(customer);
@@ -178,6 +179,57 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     setAccessEmailDraft('');
     setAccessEmailReason('');
     setAccessEmailFeedback(null);
+  };
+
+  const handleResendCustomerAccess = async (customer: any) => {
+    const customerId = String(customer?.id || '').trim();
+    const offerId = String(customer?.access_recovery?.offer_id || '').trim();
+    if (!customerId || !offerId) {
+      alert('Não há uma ativação comercial pendente para este usuário.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Reenviar um novo link de primeiro acesso para ${String(customer?.email || 'este usuário')}? O link anterior será invalidado e nenhuma nova cobrança será criada.`
+    );
+    if (!confirmed) return;
+
+    setResendingCustomerAccessId(customerId);
+    try {
+      const response = await fetch(
+        `/api/owner/sales/offers/${encodeURIComponent(offerId)}/resend-activation`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        }
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.message || payload?.error || 'Não foi possível reenviar o acesso.');
+      }
+
+      const sentAt = new Date().toISOString();
+      setAllCustomers((current) => current.map((item) =>
+        String(item?.id || '') === customerId
+          ? {
+              ...item,
+              access_recovery: {
+                ...(item?.access_recovery || {}),
+                activation_email_sent_at: sentAt,
+                expires_at: payload?.expiresAt || item?.access_recovery?.expires_at || null,
+                activation_email_error_code: null,
+              },
+            }
+          : item
+      ));
+      alert(payload?.message || 'Novo link de primeiro acesso enviado com sucesso.');
+    } catch (error: any) {
+      alert(error?.message || 'Não foi possível reenviar o acesso.');
+    } finally {
+      setResendingCustomerAccessId(null);
+    }
   };
 
   const handleAccessEmailChange = async () => {
@@ -1054,14 +1106,32 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         {customer.created_at ? new Date(customer.created_at).toLocaleDateString('pt-BR') : '-'}
                       </td>
                       <td className="py-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => openAccessEmailEditor(customer)}
-                          className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700"
-                        >
-                          <Mail size={14} aria-hidden="true" />
-                          Trocar e-mail
-                        </button>
+                        <div className="inline-flex flex-wrap items-center justify-end gap-2">
+                          {customer?.access_recovery?.can_resend_activation ? (
+                            <button
+                              type="button"
+                              onClick={() => handleResendCustomerAccess(customer)}
+                              disabled={resendingCustomerAccessId === String(customer?.id || '')}
+                              className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 transition hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              title="Gera um novo link de primeiro acesso sem criar nova proposta ou nova cobrança"
+                            >
+                              {resendingCustomerAccessId === String(customer?.id || '') ? (
+                                <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                              ) : (
+                                <KeyRound size={14} aria-hidden="true" />
+                              )}
+                              {resendingCustomerAccessId === String(customer?.id || '') ? 'Reenviando...' : 'Reenviar acesso'}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => openAccessEmailEditor(customer)}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-700"
+                          >
+                            <Mail size={14} aria-hidden="true" />
+                            Trocar e-mail
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

@@ -79032,15 +79032,49 @@ async function startServer() {
   });
 
   app.get('/api/owner/clients', checkAuth, checkOwner, async (req: any, res) => {
+    res.setHeader('Cache-Control', 'no-store');
     try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('id, name, email, plan_name, plan_price, subscription_status, created_at')
-        .order('created_at', { ascending: false })
-        .limit(500);
+      const [{ data: users, error: usersError }, { data: pendingActivations, error: activationsError }] = await Promise.all([
+        supabase
+          .from('users')
+          .select('id, name, email, plan_name, plan_price, subscription_status, created_at')
+          .order('created_at', { ascending: false })
+          .limit(500),
+        supabase
+          .from('pending_activations')
+          .select('email,sales_offer_id,expires_at,created_at')
+          .eq('source', 'sales_assisted_signup')
+          .eq('used', false)
+          .order('created_at', { ascending: false })
+          .limit(500),
+      ]);
 
-      if (error) throw error;
-      return res.json({ success: true, data: data || [] });
+      if (usersError) throw usersError;
+      if (activationsError && !isMissingRelationError(activationsError)) throw activationsError;
+
+      // Resolve first-access recovery in memory from one bounded read. This keeps
+      // the customer list free from N+1 queries and never exposes activation tokens.
+      const recoveryByEmail = new Map<string, any>();
+      for (const activation of pendingActivations || []) {
+        const email = sanitizeEmail((activation as any)?.email);
+        const offerId = sanitizeString((activation as any)?.sales_offer_id, 120);
+        if (!email || !isUuid(offerId) || recoveryByEmail.has(email)) continue;
+        recoveryByEmail.set(email, {
+          offer_id: offerId,
+          can_resend_activation: true,
+          expires_at: (activation as any)?.expires_at || null,
+        });
+      }
+
+      const data = (users || []).map((user: any) => {
+        const email = sanitizeEmail(user?.email);
+        return {
+          ...user,
+          access_recovery: email ? recoveryByEmail.get(email) || null : null,
+        };
+      });
+
+      return res.json({ success: true, data });
     } catch (error) {
       return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
