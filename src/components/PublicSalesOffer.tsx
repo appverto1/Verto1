@@ -554,9 +554,9 @@ export const ModularOfferDetails = ({
       <div className="mt-4 flex items-start gap-3 rounded-2xl border border-violet-100 bg-violet-50 p-4">
         <Layers3 size={18} className="mt-0.5 shrink-0 text-violet-700" />
         <p className="text-sm font-normal leading-6 text-violet-950">
-          Comece com a Fundação Verto e os módulos necessários hoje. Novos
-          módulos e blocos de capacidade podem ser adicionados conforme a
-          operação crescer, sem duplicar a base da plataforma.
+          {hasPlatformFoundation
+            ? 'Comece com a Fundação Verto e os módulos necessários hoje. Novos módulos e blocos de capacidade podem ser adicionados conforme a operação crescer, sem duplicar a base da plataforma.'
+            : 'Comece com os módulos necessários hoje. Novos módulos e blocos de capacidade podem ser adicionados conforme a operação crescer.'}
         </p>
       </div>
 

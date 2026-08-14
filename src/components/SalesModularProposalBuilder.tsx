@@ -25,7 +25,6 @@ import {
   isSalesPackageTierCompatible,
   recommendSalesPackageTier,
   resolveSalesPackageTierSelection,
-  SALES_PLATFORM_FOUNDATION_PUBLIC_NAME,
   salesModularProposalRequiresVersionedProfitabilityPolicy,
   salesPackageDemand,
   type SalesModularLineSelection,
@@ -468,8 +467,8 @@ export const SalesModularProposalBuilder = ({
         if (!core) throw new Error('PRICING_ITEM_NOT_FOUND');
         const initialInput: SalesModularProposalInput = {
           commercialPricingMode: 'manual_module_prices',
-          platformFoundationPricingMode: 'automatic_target',
-          platformFoundationMonthlyAmountCents: null,
+          platformFoundationPricingMode: 'manual',
+          platformFoundationMonthlyAmountCents: 0,
           patientQuantity,
           expectedPatientQuantity12Months: patientQuantity,
           basePackageTierId: recommendedTier.id,
@@ -835,8 +834,8 @@ export const SalesModularProposalBuilder = ({
         const result = calculateSalesModularProposal(
           {
             ...input,
-            platformFoundationPricingMode: 'automatic_target',
-            platformFoundationMonthlyAmountCents: null,
+            platformFoundationPricingMode: 'manual',
+            platformFoundationMonthlyAmountCents: 0,
             patientQuantity: economySimulatorPatients,
             expectedPatientQuantity12Months: economySimulatorPatients,
             basePackageTierId: customTier.id,
@@ -855,9 +854,7 @@ export const SalesModularProposalBuilder = ({
         );
         rows.push({
           key: String(mask),
-          label: `${SALES_PLATFORM_FOUNDATION_PUBLIC_NAME} + ${selectedModules
-            .map((item) => item.publicName)
-            .join(' + ')}`,
+          label: selectedModules.map((item) => item.publicName).join(' + '),
           revenueCents: result.postPromotion.recurringRevenueCents,
           costCents: result.postPromotion.totalEstimatedCostCents,
           marginBasisPoints: result.postPromotion.ebitdaMarginBasisPoints,
@@ -973,7 +970,13 @@ export const SalesModularProposalBuilder = ({
             }
           : null
       },
-      items: preview.lines.map((line) => ({
+      items: preview.lines
+        .filter(
+          (line) =>
+            line.itemKey !== 'platform_foundation' &&
+            line.itemKey !== 'onboarding'
+        )
+        .map((line) => ({
         itemKey: line.itemKey,
         publicName: line.publicName,
         description: line.description,
@@ -1175,7 +1178,7 @@ export const SalesModularProposalBuilder = ({
         return catalogItem?.billingInterval !== 'one_time';
       });
       if (remainingRecurringItems.length < 1) {
-        setError('Selecione pelo menos um módulo recorrente além da Fundação Verto.');
+        setError('Selecione pelo menos um módulo recorrente.');
         return;
       }
       updateInput({
@@ -1384,10 +1387,10 @@ export const SalesModularProposalBuilder = ({
       ...snapshotInput,
       trialDays: normalizeSalesTrialDays(snapshotInput.trialDays, 0),
       commercialPricingMode: 'manual_module_prices',
-      // Duplicar um cenário histórico é a ação explícita que o moderniza para
-      // a Fundação automática; o snapshot original permanece inalterado.
-      platformFoundationPricingMode: 'automatic_target',
-      platformFoundationMonthlyAmountCents: null,
+      // Duplicar um cenário histórico cria uma nova composição comercial sem
+      // expor a infraestrutura como módulo; o snapshot original permanece intacto.
+      platformFoundationPricingMode: 'manual',
+      platformFoundationMonthlyAmountCents: 0,
       usageProfile: 'intensive',
       driverOverrides: {},
       basePackageSelectionMode: inferredMode,
@@ -1397,7 +1400,13 @@ export const SalesModularProposalBuilder = ({
             simulation.results_snapshot?.basePackage?.limitQuantity ??
             snapshotDemand
           : null,
-      lines: snapshotInput.lines.map((line) => {
+      lines: snapshotInput.lines
+        .filter(
+          (line) =>
+            line.itemKey !== 'onboarding' &&
+            line.itemKey !== 'platform_foundation'
+        )
+        .map((line) => {
         const item = catalog?.items.find(
           (candidate) => candidate.itemKey === line.itemKey
         );
@@ -1814,12 +1823,12 @@ export const SalesModularProposalBuilder = ({
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h2 className="text-base font-semibold text-slate-900">
-                      Fundação, capacidade e módulo clínico
+                      Capacidade e módulo clínico
                     </h2>
                     <p className="mt-1 text-sm font-normal text-slate-500">
-                      A Fundação Verto entra uma única vez. A faixa abaixo
-                      dimensiona pacientes e armazenamento, mesmo quando o
-                      cliente contrata somente outro módulo.
+                      Dimensione pacientes, armazenamento e capacidade. Custos
+                      compartilhados da plataforma permanecem apenas no cálculo
+                      interno de rentabilidade e não são vendidos como módulo.
                     </p>
                   </div>
                   <button
@@ -1830,111 +1839,31 @@ export const SalesModularProposalBuilder = ({
                     <Settings2 size={16} /> Premissas financeiras
                   </button>
                 </div>
-                <div className="mt-4 rounded-2xl border border-violet-200 bg-violet-50/70 p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-violet-950">
-                        {SALES_PLATFORM_FOUNDATION_PUBLIC_NAME}
-                      </p>
-                      <p className="mt-1 text-xs font-normal leading-5 text-violet-800">
-                        Base segura, infraestrutura, auditoria, operação e
-                        suporte-base. O modo automático completa o valor
-                        necessário para a meta EBITDA do conjunto, sem repetir
-                        os custos dentro de cada módulo.
-                      </p>
-                    </div>
-                    <span className="rounded-full border border-violet-200 bg-white px-3 py-1 text-xs font-semibold text-violet-800">
-                      {currency(preview?.platformFoundation.recurringAmountCents)}
-                      /mês
-                    </span>
-                  </div>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <label className="text-sm font-medium text-slate-700">
-                      Formação do valor da fundação
-                      <select
-                        value={
-                          input.platformFoundationPricingMode === 'manual'
-                            ? 'manual'
-                            : 'automatic_target'
-                        }
-                        onChange={(event) =>
-                          updateInput({
-                            platformFoundationPricingMode:
-                              event.target.value === 'manual'
-                                ? 'manual'
-                                : 'automatic_target',
-                            platformFoundationMonthlyAmountCents:
-                              event.target.value === 'manual'
-                                ? preview?.platformFoundation
-                                    .recurringAmountCents ?? 0
-                                : null
-                          })
-                        }
-                        className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                      >
-                        <option value="automatic_target">
-                          Automático para a meta EBITDA
-                        </option>
-                        <option value="manual">
-                          Valor comercial manual
-                        </option>
-                      </select>
-                    </label>
-                    <label className="text-sm font-medium text-slate-700">
-                      Mensalidade da fundação
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        disabled={
-                          input.platformFoundationPricingMode !== 'manual'
-                        }
-                        value={
-                          input.platformFoundationPricingMode === 'manual'
-                            ? Number(
-                                input.platformFoundationMonthlyAmountCents || 0
-                              ) / 100
-                            : Number(
-                                preview?.platformFoundation
-                                  .recurringAmountCents || 0
-                              ) / 100
-                        }
-                        onChange={(event) =>
-                          updateInput({
-                            platformFoundationMonthlyAmountCents: Math.max(
-                              0,
-                              Math.round(Number(event.target.value || 0) * 100)
-                            )
-                          })
-                        }
-                        className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none disabled:bg-violet-100/60 disabled:text-violet-700 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                      />
-                    </label>
-                  </div>
-                  <div className="mt-3 grid gap-2 text-xs text-violet-900 sm:grid-cols-3">
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <p className="text-sm font-semibold text-slate-900">
+                    Custos compartilhados da plataforma
+                  </p>
+                  <p className="mt-1 text-xs font-normal leading-5 text-slate-600">
+                    Estes valores continuam compondo o EBITDA e o preço-alvo, mas
+                    não aparecem na proposta pública nem no Checkout. Se houver
+                    gap para a meta, ajuste os preços dos módulos contratados.
+                  </p>
+                  <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-4">
                     <span>
-                      Valor recomendado:{' '}
-                      <strong>
-                        {currency(
-                          preview?.platformFoundation
-                            .recommendedRecurringAmountCents
-                        )}
-                      </strong>
+                      Custo compartilhado:{' '}
+                      <strong>{currency(preview?.platformFoundation.sharedCostCents)}</strong>
                     </span>
                     <span>
-                      Custos compartilhados:{' '}
-                      <strong>
-                        {currency(preview?.platformFoundation.sharedCostCents)}
-                      </strong>
+                      Tarifa fixa Stripe:{' '}
+                      <strong>{currency(preview?.platformFoundation.fixedPaymentFeeCents)}</strong>
                     </span>
                     <span>
                       Receita dos módulos:{' '}
-                      <strong>
-                        {currency(
-                          preview?.platformFoundation
-                            .moduleRecurringRevenueCents
-                        )}
-                      </strong>
+                      <strong>{currency(preview?.platformFoundation.moduleRecurringRevenueCents)}</strong>
+                    </span>
+                    <span>
+                      Gap para a meta EBITDA:{' '}
+                      <strong>{currency(preview?.platformFoundation.recommendedRecurringAmountCents)}</strong>
                     </span>
                   </div>
                 </div>
@@ -2024,8 +1953,8 @@ export const SalesModularProposalBuilder = ({
                         Verto Clínica + ABA
                       </p>
                       <p className="mt-1 text-xs font-normal text-slate-500">
-                        Módulo clínico opcional. A Fundação Verto e a faixa de
-                        capacidade permanecem mesmo quando ele não é contratado.
+                        Módulo clínico opcional. A capacidade técnica e os custos
+                        compartilhados continuam considerados internamente.
                       </p>
                     </div>
                     <button
@@ -2593,12 +2522,6 @@ export const SalesModularProposalBuilder = ({
                         : preview.basePackage.availableQuantity}
                     </span>
                     <span>
-                      Fundação Verto:{' '}
-                      {currency(
-                        preview.platformFoundation.recurringAmountCents
-                      )}
-                    </span>
-                    <span>
                       Módulos após benefícios:{' '}
                       {currency(
                         preview.platformFoundation.moduleRecurringRevenueCents
@@ -2673,13 +2596,17 @@ export const SalesModularProposalBuilder = ({
                   Módulos e adicionais
                 </h2>
                 <p className="mt-1 text-sm font-normal text-slate-500">
-                  Escolha apenas os módulos necessários. A Fundação Verto entra
-                  uma única vez e o módulo clínico também pode ser contratado ou
-                  removido separadamente.
+                  Escolha apenas os módulos que serão efetivamente contratados.
+                  Custos de plataforma permanecem internos e a implantação não é
+                  ofertada nesta fase comercial.
                 </p>
                 <div className="mt-4 space-y-3">
                   {catalog.items
-                    .filter((item) => item.itemKey !== 'clinical_core')
+                    .filter(
+                      (item) =>
+                        item.itemKey !== 'clinical_core' &&
+                        item.itemKey !== 'onboarding'
+                    )
                     .map((item) => {
                     const line = input.lines.find(
                       (selection) => selection.itemKey === item.itemKey
@@ -3340,7 +3267,13 @@ export const SalesModularProposalBuilder = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {preview.lines.map((line) => {
+                        {preview.lines
+                          .filter(
+                            (line) =>
+                              line.itemKey !== 'platform_foundation' &&
+                              line.itemKey !== 'onboarding'
+                          )
+                          .map((line) => {
                           const totalCostCents = [
                             line.promotional.directCostCents,
                             line.promotional.transactionAndTaxCostAllocatedCents,
@@ -3606,10 +3539,11 @@ export const SalesModularProposalBuilder = ({
                     <h2 className="text-base font-semibold text-slate-900">
                       Projeções da proposta
                     </h2>
-                    <p className="mt-1 text-sm font-normal text-slate-500">
-                      Implantação reconhecida conforme o parcelamento comercial,
-                      sem criar cobrança na Stripe.
-                    </p>
+                    {preview.oneTimeRevenueCents > 0 ? (
+                      <p className="mt-1 text-sm font-normal text-slate-500">
+                        Valor pontual reconhecido conforme a condição comercial.
+                      </p>
+                    ) : null}
                   </div>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <div className="rounded-xl border border-violet-100 bg-violet-50 p-3">
@@ -3641,7 +3575,9 @@ export const SalesModularProposalBuilder = ({
                         <tr>
                           <th className="px-3 py-2 font-medium">Horizonte</th>
                           <th className="px-3 py-2 font-medium">Receita recorrente</th>
-                          <th className="px-3 py-2 font-medium">Implantação</th>
+                          {preview.oneTimeRevenueCents > 0 ? (
+                            <th className="px-3 py-2 font-medium">Valor pontual</th>
+                          ) : null}
                           <th className="px-3 py-2 font-medium">Desconto acumulado</th>
                           <th className="px-3 py-2 font-medium">
                             EBITDA atribuído
@@ -3660,9 +3596,11 @@ export const SalesModularProposalBuilder = ({
                               <td className="px-3 py-3">
                                 {currency(projection.recurringRevenueCents)}
                               </td>
-                              <td className="px-3 py-3">
-                                {currency(projection.oneTimeRevenueCents)}
-                              </td>
+                              {preview.oneTimeRevenueCents > 0 ? (
+                                <td className="px-3 py-3">
+                                  {currency(projection.oneTimeRevenueCents)}
+                                </td>
+                              ) : null}
                               <td className="px-3 py-3">
                                 {currency(projection.discountImpactCents)}
                               </td>
@@ -3678,21 +3616,21 @@ export const SalesModularProposalBuilder = ({
                       </tbody>
                     </table>
                   </div>
-                  <dl className="mt-4 grid gap-3 sm:grid-cols-3">
-                    <div className="rounded-xl bg-slate-50 p-3">
-                      <dt className="text-xs text-slate-500">
-                        Implantação total
-                      </dt>
-                      <dd className="mt-1 text-sm font-semibold text-slate-900">
-                        {currency(preview.oneTimeRevenueCents)}
-                      </dd>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {input.onboardingInstallments ?? 1}{' '}
-                        {(input.onboardingInstallments ?? 1) === 1
-                          ? 'parcela'
-                          : 'parcelas'}
-                      </p>
-                    </div>
+                  <dl
+                    className={`mt-4 grid gap-3 ${
+                      preview.oneTimeRevenueCents > 0
+                        ? 'sm:grid-cols-3'
+                        : 'sm:grid-cols-2'
+                    }`}
+                  >
+                    {preview.oneTimeRevenueCents > 0 ? (
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <dt className="text-xs text-slate-500">Valor pontual total</dt>
+                        <dd className="mt-1 text-sm font-semibold text-slate-900">
+                          {currency(preview.oneTimeRevenueCents)}
+                        </dd>
+                      </div>
+                    ) : null}
                     <div className="rounded-xl bg-slate-50 p-3">
                       <dt className="text-xs text-slate-500">
                         Preço-alvo de margem
@@ -3729,9 +3667,9 @@ export const SalesModularProposalBuilder = ({
                           Economia da clínica
                         </h2>
                         <p className="mt-1 max-w-2xl text-sm font-normal leading-6 text-slate-600">
-                          A Fundação Verto absorve os custos compartilhados e a tarifa
-                          fixa uma única vez. Cada módulo mostra apenas seu custo e sua
-                          margem incremental.
+                          Custos compartilhados da plataforma e a tarifa fixa são
+                          considerados uma única vez no consolidado. Cada módulo mostra
+                          apenas seu custo direto e sua margem incremental.
                         </p>
                       </div>
                       <span
@@ -5158,7 +5096,13 @@ export const SalesModularProposalBuilder = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {preview.lines.map((line) => (
+                        {preview.lines
+                          .filter(
+                            (line) =>
+                              line.itemKey !== 'platform_foundation' &&
+                              line.itemKey !== 'onboarding'
+                          )
+                          .map((line) => (
                           <tr key={line.lineKey}>
                             <td className="px-3 py-3 font-medium text-slate-800">
                               {line.publicName}
@@ -5304,7 +5248,9 @@ export const SalesModularProposalBuilder = ({
                       <span>Inicial: {currency(checkoutLink.initial_amount_cents)}</span>
                       <span>Promocional: {currency(checkoutLink.promotional_monthly_cents)}/mês</span>
                       <span>Futura: {currency(checkoutLink.future_monthly_cents)}/mês</span>
-                      <span>Implantação: {currency(checkoutLink.one_time_cents)}</span>
+                      {checkoutLink.one_time_cents > 0 ? (
+                        <span>Implantação: {currency(checkoutLink.one_time_cents)}</span>
+                      ) : null}
                       <span>Criado em: {new Date(checkoutLink.created_at).toLocaleString('pt-BR')}</span>
                       <span>Expira em: {checkoutLink.expires_at ? new Date(checkoutLink.expires_at).toLocaleString('pt-BR') : 'sem data'}</span>
                       <span>Cliente: {lead?.clinicName || lead?.name || 'não informado'}</span>

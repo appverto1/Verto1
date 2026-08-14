@@ -2342,6 +2342,16 @@ const SALES_MODULAR_SIMULATION_SELECT =
   `${SALES_OFFER_SIMULATION_SELECT},simulation_type,scenario_name,catalog_version_id,request_hash,modular_input_snapshot,public_notes`;
 const SALES_MODULAR_SIMULATION_ITEM_SELECT =
   "id,simulation_id,catalog_version_id,catalog_item_id,tier_id,item_key,public_name_snapshot,public_description_snapshot,pricing_mode_snapshot,quantity,limit_quantity,included_quantity,gross_recurring_amount_cents,recurring_amount_cents,post_promotion_recurring_amount_cents,one_time_amount_cents,item_discount_basis_points,item_discount_cents,allocated_global_discount_cents,direct_cost_cents,transaction_tax_cost_allocated_cents,shared_cost_allocated_cents,contribution_margin_cents,contribution_margin_basis_points,ebitda_cents,ebitda_margin_basis_points,below_ebitda_cost_allocated_cents,profit_tax_allocated_cents,net_income_cents,net_margin_basis_points,cost_source,cost_model_snapshot,result_snapshot,public_metadata,sort_order,created_at";
+const SALES_CUSTOMER_FACING_PRESENTATION_VERSION = 2;
+const SALES_INTERNAL_COMMERCIAL_ITEM_KEYS = new Set([
+  "platform_foundation",
+  "onboarding",
+]);
+const isSalesInternalCommercialItemKey = (value: unknown) =>
+  SALES_INTERNAL_COMMERCIAL_ITEM_KEYS.has(sanitizeString(value, 80));
+const salesOfferUsesCustomerFacingModulesOnly = (snapshot: any) =>
+  Number(snapshot?.commercialPresentationVersion || 0) >=
+    SALES_CUSTOMER_FACING_PRESENTATION_VERSION;
 const SALES_FEATURE_PROFITABILITY_SELECT =
   "item_key,public_name,simulated_count,proposed_count,average_proposed_revenue_cents,average_item_discount_basis_points,average_direct_cost_cents,average_ebitda_cents,average_ebitda_margin_basis_points,minimum_ebitda_margin_basis_points,maximum_ebitda_margin_basis_points,average_ticket_cents,selected_basis_points,proposed_basis_points,has_insufficient_data,data_scope";
 
@@ -22604,6 +22614,48 @@ async function startServer() {
             && typeof (offer as any).modular_snapshot === "object"
               ? (offer as any).modular_snapshot
               : {};
+          const customerFacingModulesOnly =
+            salesOfferUsesCustomerFacingModulesOnly(modularSnapshot);
+          const customerFacingItems = customerFacingModulesOnly
+            ? (modularItems || []).filter(
+                (item: any) =>
+                  !isSalesInternalCommercialItemKey(item?.item_key),
+              )
+            : modularItems || [];
+          const internalItemHasBillableValue = customerFacingModulesOnly
+            && (modularItems || []).some((item: any) => {
+              if (!isSalesInternalCommercialItemKey(item?.item_key)) return false;
+              return [
+                item?.gross_recurring_amount_cents,
+                item?.recurring_amount_cents,
+                item?.post_promotion_recurring_amount_cents,
+                item?.one_time_amount_cents,
+              ].some((value) => Number(value || 0) !== 0);
+            });
+          const customerFacingCommercialPhases = customerFacingModulesOnly
+            && Array.isArray(modularSnapshot.commercialPhases)
+              ? modularSnapshot.commercialPhases.map((phase: any) => ({
+                  ...phase,
+                  lines: Array.isArray(phase?.lines)
+                    ? phase.lines.filter(
+                        (line: any) =>
+                          !isSalesInternalCommercialItemKey(line?.itemKey),
+                      )
+                    : [],
+                }))
+              : modularSnapshot.commercialPhases;
+          if (internalItemHasBillableValue) {
+            console.error(
+              "[Sales Offer] Item interno com valor comercial em proposta customer-facing.",
+              { offerId: sanitizeString(offer.id, 120) },
+            );
+            return res.status(409).json({
+              success: false,
+              error: "OFFER_UNAVAILABLE",
+              message:
+                "Esta proposta precisa ser regenerada antes de ser apresentada ao cliente.",
+            });
+          }
           if (
             sanitizeString(offer.status, 40) === "ready"
             || sanitizeString(offer.status, 40) === "sent"
@@ -22635,7 +22687,7 @@ async function startServer() {
               basePackage: sanitizePublicBasePackage(
                 modularSnapshot.basePackage,
               ),
-              items: (modularItems || []).map((item: any) => ({
+              items: customerFacingItems.map((item: any) => ({
                 itemKey: sanitizeString(item.item_key, 80),
                 publicName: sanitizeString(
                   item.public_name_snapshot,
@@ -22712,7 +22764,7 @@ async function startServer() {
               status: offer.status,
               acceptedAt: offer.accepted_at || null,
               commercialPhases: sanitizePublicCommercialPhases(
-                modularSnapshot.commercialPhases,
+                customerFacingCommercialPhases,
               ),
               capacityBlockPhases: sanitizePublicCapacityBlockPhases(
                 modularSnapshot.commercialPricing?.capacityBlockPhases,
@@ -82242,9 +82294,27 @@ async function startServer() {
         });
       }
       try {
-        const input = normalizeSalesModularProposalRequest(
+        const requestedInput = normalizeSalesModularProposalRequest(
           req.body?.input || req.body,
         );
+        const internalRequestedLine = requestedInput.lines.find((line) =>
+          isSalesInternalCommercialItemKey(line.itemKey)
+        );
+        if (internalRequestedLine) {
+          return res.status(422).json({
+            success: false,
+            code: "PROPOSAL_ITEM_NOT_CUSTOMER_FACING",
+            fields: [internalRequestedLine.itemKey],
+            error:
+              "Este item não faz parte da oferta comercial atual. Atualize a composição e salve novamente.",
+          });
+        }
+        const input: SalesModularProposalInput = {
+          ...requestedInput,
+          platformFoundationPricingMode: "manual",
+          platformFoundationMonthlyAmountCents: 0,
+          onboardingInstallments: 1,
+        };
         const invalidFields = validateSalesModularProposalInput(input);
         if (invalidFields.length > 0) {
           return res.status(422).json({
@@ -82375,6 +82445,8 @@ async function startServer() {
         }
         const resultSnapshot = {
           ...results,
+          commercialPresentationVersion:
+            SALES_CUSTOMER_FACING_PRESENTATION_VERSION,
           commercialReview: {
             ...review,
             canGeneratePublicOffer:
@@ -82400,12 +82472,23 @@ async function startServer() {
             }),
           )
           .digest("hex");
-        const baseLine = results.lines.find(
-          (line) => line.itemKey === "platform_foundation",
-        ) || results.lines.find(
-          (line) => line.itemKey === "clinical_core",
+        const recurringCustomerLines = results.lines.filter(
+          (line) =>
+            !isSalesInternalCommercialItemKey(line.itemKey)
+            && Number.isSafeInteger(line.grossRecurringRevenueCents)
+            && line.grossRecurringRevenueCents > 0,
         );
-        if (!baseLine) throw new Error("PRICING_ITEM_NOT_FOUND");
+        const baseLine = recurringCustomerLines.find(
+          (line) => line.itemKey === "clinical_core",
+        ) || recurringCustomerLines[0];
+        if (!baseLine) {
+          return res.status(422).json({
+            success: false,
+            code: "PROPOSAL_RECURRING_REVENUE_REQUIRED",
+            error:
+              "Defina valor recorrente em pelo menos um módulo contratado antes de salvar.",
+          });
+        }
         const discountType =
           input.globalDiscountBasisPoints > 0 ? "coupon" : "none";
         const catalogSortOrder = new Map(
@@ -84561,6 +84644,46 @@ async function startServer() {
             error: "Os valores congelados da proposta não reconciliam com seus itens.",
           });
         }
+        const customerFacingModulesOnly =
+          salesOfferUsesCustomerFacingModulesOnly(snapshot);
+        const internalStoredItemHasBillableValue = customerFacingModulesOnly
+          && (itemResult.data || []).some((item: any) => {
+            if (!isSalesInternalCommercialItemKey(item?.item_key)) return false;
+            return [
+              item?.gross_recurring_amount_cents,
+              item?.recurring_amount_cents,
+              item?.post_promotion_recurring_amount_cents,
+              item?.one_time_amount_cents,
+            ].some((value) => Number(value || 0) !== 0);
+          });
+        const internalPhaseHasBillableValue = customerFacingModulesOnly
+          && phases.some((phase: any) =>
+            Array.isArray(phase?.lines)
+            && phase.lines.some(
+              (line: any) =>
+                isSalesInternalCommercialItemKey(line?.itemKey)
+                && Number(line?.activePriceCents || 0) !== 0,
+            )
+          );
+        if (internalStoredItemHasBillableValue || internalPhaseHasBillableValue) {
+          return res.status(409).json({
+            success: false,
+            code: "MODULAR_CHECKOUT_INTERNAL_LINE_NONZERO",
+            error:
+              "A proposta contém um item interno com valor comercial. Gere uma nova versão antes do Checkout.",
+          });
+        }
+        const checkoutPhases = customerFacingModulesOnly
+          ? phases.map((phase: any) => ({
+              ...phase,
+              lines: Array.isArray(phase?.lines)
+                ? phase.lines.filter(
+                    (line: any) =>
+                      !isSalesInternalCommercialItemKey(line?.itemKey),
+                  )
+                : [],
+            }))
+          : phases;
         const capacity =
           snapshot.capacity
           || snapshot.basePackage?.capacity
@@ -84568,7 +84691,7 @@ async function startServer() {
           || null;
         const checkoutPlan = buildFrozenStripeCheckoutPlan({
           currency: sanitizeString(offer.currency, 12) || "brl",
-          phases,
+          phases: checkoutPhases,
           capacity,
           effectiveAt: new Date().toISOString(),
         });
