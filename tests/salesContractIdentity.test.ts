@@ -27,6 +27,14 @@ assert.match(builder, /contractEmail: frozenContractEmail/);
 assert.match(builder, /useState\(''\)/, 'novo contrato não deve herdar silenciosamente o e-mail do lead');
 assert.match(builder, /não é usado automaticamente/);
 assert.match(builder, /!contractEmailValid/);
+assert.match(builder, /disabled=\{contractEmailLocked\}/);
+assert.match(builder, /historicalOfferMissingContractIdentity/);
+assert.match(builder, /Duplicar cenário para nova proposta/);
+assert.doesNotMatch(
+  builder,
+  /disabled=\{Boolean\(activeOfferId\)\}/,
+  'offer histórico sem contract_email não pode tornar o campo impossível de editar'
+);
 
 assert.match(modularOfferPreparation, /PROPOSAL_CONTRACT_EMAIL_REQUIRED/);
 assert.match(modularOfferPreparation, /create_sales_modular_offer_v3/);

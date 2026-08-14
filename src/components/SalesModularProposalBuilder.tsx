@@ -1498,6 +1498,15 @@ export const SalesModularProposalBuilder = ({
 
   const activeOfferId =
     preparedOffer?.offer?.id || selectedSimulation?.offer?.id || '';
+  const frozenOfferContractEmail = normalizeContractEmail(
+    preparedOffer?.offer?.contract_email ||
+      selectedSimulation?.offer?.contract_email ||
+      ''
+  );
+  const contractEmailLocked = isValidContractEmail(frozenOfferContractEmail);
+  const historicalOfferMissingContractIdentity = Boolean(
+    activeOfferId && !contractEmailLocked
+  );
 
   useEffect(() => {
     if (!activeOfferId) {
@@ -1752,7 +1761,7 @@ export const SalesModularProposalBuilder = ({
                     value={contractEmail}
                     maxLength={254}
                     autoComplete="email"
-                    disabled={Boolean(activeOfferId)}
+                    disabled={contractEmailLocked}
                     onChange={(event) => {
                       setContractEmail(event.target.value);
                       setPreparedOffer(null);
@@ -1766,7 +1775,7 @@ export const SalesModularProposalBuilder = ({
                     placeholder="responsavel@clinica.com.br"
                   />
                 </label>
-                {lead?.email && !activeOfferId ? (
+                {lead?.email && !contractEmailLocked ? (
                   <p className="mt-2 text-xs font-normal text-amber-700">
                     O lead possui {normalizeContractEmail(lead.email)} no histórico. Por segurança, ele não é usado automaticamente: confirme o e-mail da contratação acima.
                   </p>
@@ -1775,11 +1784,30 @@ export const SalesModularProposalBuilder = ({
                   <p className="mt-2 text-xs font-normal text-rose-600">
                     Informe um e-mail válido antes de gerar a proposta pública.
                   </p>
-                ) : activeOfferId ? (
+                ) : contractEmailLocked ? (
                   <p className="mt-2 text-xs font-normal text-emerald-700">
-                    E-mail congelado nesta proposta: {normalizedContractEmail}
+                    E-mail congelado nesta proposta: {frozenOfferContractEmail}
                   </p>
-                ) : null}
+                ) : historicalOfferMissingContractIdentity ? (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                    <p className="text-xs font-normal leading-5 text-amber-800">
+                      Esta proposta foi criada antes da identidade contratual e não pode ser alterada retroativamente. O e-mail acima será usado somente em uma nova versão do cenário.
+                    </p>
+                    {selectedSimulation ? (
+                      <button
+                        type="button"
+                        onClick={() => duplicateSimulation(selectedSimulation)}
+                        className="mt-2 inline-flex min-h-9 items-center gap-1 rounded-lg border border-amber-300 bg-white px-3 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                      >
+                        <Copy size={14} /> Duplicar cenário para nova proposta
+                      </button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs font-normal text-slate-500">
+                    Este e-mail será congelado quando a proposta pública for gerada.
+                  </p>
+                )}
               </section>
 
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -5366,6 +5394,7 @@ export const SalesModularProposalBuilder = ({
                   Boolean(busy) ||
                   !selectedSimulation ||
                   !contractEmailValid ||
+                  historicalOfferMissingContractIdentity ||
                   selectedSimulationTrialMismatch ||
                   (!selectedSimulation.offer &&
                     selectedSimulationRequiresVersionedProfitabilityPolicy &&
@@ -5395,6 +5424,8 @@ export const SalesModularProposalBuilder = ({
             <p className="mt-2 text-right text-xs font-normal text-slate-500">
               {!contractEmailValid
                   ? 'Confirme um e-mail válido do responsável pela contratação. Ele será congelado na proposta e usado no Checkout e na ativação.'
+                  : historicalOfferMissingContractIdentity
+                  ? 'Esta proposta histórica não possui identidade contratual. Duplique o cenário, salve e selecione a nova versão antes de gerar o novo link.'
                   : selectedSimulationTrialMismatch
                   ? 'O período de teste do rascunho difere do cenário congelado. Salve e selecione um novo cenário antes de gerar a proposta.'
                   : selectedSimulation &&
