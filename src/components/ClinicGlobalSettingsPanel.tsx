@@ -1661,9 +1661,7 @@ export function ClinicGlobalSettingsPanel({
                 </div>
               </div>
             )}
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h4 className="text-sm font-bold uppercase tracking-widest text-slate-400">Gestão da clínica</h4>
-              <p className="mt-2 text-sm text-slate-500">Acompanhe as permissões de cada papel para organizar acessos, responsabilidades e rotinas da equipe.</p>
+            <div className="lg:col-span-2">
               <RoleCapabilityMatrix
                 moduleAccessMode={moduleAccessMode}
                 organizationModules={organizationModules}

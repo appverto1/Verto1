@@ -27577,8 +27577,7 @@ async function startServer() {
             id,
             name,
             email,
-            profile_picture,
-            profile_picture_path
+            profile_picture
           )
         `)
         .eq('clinic_id', clinicId)
@@ -27614,7 +27613,6 @@ async function startServer() {
           extractPatientPhotosStoragePath(metadata?.profilePicturePath) ||
           extractPatientPhotosStoragePath(metadata?.profile_picture_path) ||
           extractPatientPhotosStoragePath(profile?.profile_photo_url) ||
-          extractPatientPhotosStoragePath(m?.users?.profile_picture_path) ||
           extractPatientPhotosStoragePath(m?.users?.profile_picture);
         const profilePicture = profilePicturePath
           ? buildProfessionalProfilePhotoViewUrl(profilePicturePath, clinicId, memberId)
@@ -27665,7 +27663,7 @@ async function startServer() {
       });
       res.json({ success: true, data: members });
     } catch (error: any) {
-      logRouteDbError('/api/notes/:patientId [GET]', error, { patientId: sanitizeString(req.params.patientId, 120) });
+      logRouteDbError('/api/clinic/members [GET]', error, { clinicId: sanitizeString(currentClinicId(req.session?.user), 120) });
       res.status(500).json({ error: 'Falha na operação de dados.' });
     }
   });

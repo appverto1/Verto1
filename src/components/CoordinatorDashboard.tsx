@@ -807,6 +807,8 @@ export function CoordinatorDashboard({
     return requirements.some((capability) => hasCapability(capability)) ? "full" : "none";
   };
 
+  const hasAppointmentsCommunicationModule = authorizationHydrated && hasModule("appointments_communication");
+
   const tabCapabilityMap: Record<string, string | null> = {
     dashboard: "engagement-widgets",
     patients: isTherapist ? "medical-records" : "patient-intake",
@@ -7748,28 +7750,34 @@ export function CoordinatorDashboard({
   }, [birthdayPatients.length]);
 
   const dashboardDailyStats = useMemo(() => {
-    const stats = [
-      {
-        id: "agenda",
-        label: "Sessões hoje",
-        value: confirmedTodayCount,
-        hint: "confirmadas",
-        icon: Calendar,
-        accent: "bg-emerald-500",
-        color: "text-emerald-600",
-        iconBg: theme === "dark" ? "bg-emerald-400/15" : "bg-emerald-50",
-      },
-      {
-        id: "agenda",
-        label: "Desmarcados",
-        value: canceledTodayCount,
-        hint: "para hoje",
-        icon: XCircle,
-        accent: "bg-rose-500",
-        color: "text-rose-600",
-        iconBg: theme === "dark" ? "bg-rose-400/15" : "bg-rose-50",
-      },
-      {
+    const stats: any[] = [];
+
+    if (hasAppointmentsCommunicationModule) {
+      stats.push(
+        {
+          id: "agenda",
+          label: "Sessões hoje",
+          value: confirmedTodayCount,
+          hint: "confirmadas",
+          icon: Calendar,
+          accent: "bg-emerald-500",
+          color: "text-emerald-600",
+          iconBg: theme === "dark" ? "bg-emerald-400/15" : "bg-emerald-50",
+        },
+        {
+          id: "agenda",
+          label: "Desmarcados",
+          value: canceledTodayCount,
+          hint: "para hoje",
+          icon: XCircle,
+          accent: "bg-rose-500",
+          color: "text-rose-600",
+          iconBg: theme === "dark" ? "bg-rose-400/15" : "bg-rose-50",
+        },
+      );
+    }
+
+    stats.push({
         id: "birthdays",
         label: "Aniversariantes",
         value: birthdayTodayCount,
@@ -7778,8 +7786,7 @@ export function CoordinatorDashboard({
         accent: "bg-sky-500",
         color: "text-sky-600",
         iconBg: theme === "dark" ? "bg-sky-400/15" : "bg-sky-50",
-      },
-    ];
+      });
 
     if (canAccessClinicFinance) {
       stats.push({
@@ -7800,6 +7807,7 @@ export function CoordinatorDashboard({
     canceledTodayCount,
     canAccessClinicFinance,
     confirmedTodayCount,
+    hasAppointmentsCommunicationModule,
     overduePatientPayments.length,
     theme,
   ]);
@@ -9765,15 +9773,19 @@ export function CoordinatorDashboard({
         </section>
       )}
 
-      {/* Agenda Global Section */}
-      <section className="space-y-4 sm:space-y-6">
-        {renderAgendaContent()}
-      </section>
+      {hasAppointmentsCommunicationModule && (
+        <>
+          {/* Agenda Global Section */}
+          <section className="space-y-4 sm:space-y-6">
+            {renderAgendaContent()}
+          </section>
 
-      {/* Gestão de Salas Section */}
-      <section className="space-y-4 sm:space-y-6">
-        {renderRoomsContent()}
-      </section>
+          {/* Gestão de Salas Section */}
+          <section className="space-y-4 sm:space-y-6">
+            {renderRoomsContent()}
+          </section>
+        </>
+      )}
 
       {capabilityStatusForRole("team-compensation") !== "none" && (
         <section className="space-y-4 sm:space-y-6">
@@ -14378,7 +14390,7 @@ export function CoordinatorDashboard({
                     )}
 
                     {!isTherapist && (
-                      <div className="space-y-4">
+                      <div className="space-y-4 md:col-span-2">
                         <div>
                           <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">
                             Gestão da clínica
@@ -14387,7 +14399,11 @@ export function CoordinatorDashboard({
                             Acompanhe as permissões de cada papel para organizar acessos, responsabilidades e rotinas da equipe.
                           </p>
                         </div>
-                        <RoleCapabilityMatrix />
+                        <RoleCapabilityMatrix
+                          moduleAccessMode={moduleAccessMode}
+                          organizationModules={organizationModules}
+                          canManagePermissions={hasCapability("team.permissions.manage")}
+                        />
                       </div>
                     )}
                   </div>
