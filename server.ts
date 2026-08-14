@@ -85479,7 +85479,7 @@ async function startServer() {
         const { data: activation, error: activationError } = await supabase
           .from("pending_activations")
           .select(
-            "id,email,token,used,source,sales_offer_id,sales_lead_id,stripe_checkout_session_id,activation_email_attempts",
+            "id,email,token,expires_at,used,source,sales_offer_id,sales_lead_id,stripe_checkout_session_id,activation_email_sent_at,activation_email_last_attempt_at,activation_email_error_code,activation_email_attempts",
           )
           .eq("source", "sales_assisted_signup")
           .eq("sales_offer_id", offerId)
@@ -85577,28 +85577,49 @@ async function startServer() {
             emailError?.code || emailError?.name || "ACTIVATION_EMAIL_FAILED",
             120,
           );
-          await Promise.all([
-            supabase
-              .from("pending_activations")
-              .update({
-                activation_email_last_attempt_at: new Date().toISOString(),
-                activation_email_error_code: errorCode,
-                activation_email_attempts: attempts + 1,
-              })
-              .eq("id", activation.id)
-              .eq("used", false),
-            supabase
-              .from("sales_offers")
-              .update({
-                provisioning_status: "email_pending",
-                provisioning_error_code: errorCode,
-                provisioning_updated_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", offerId)
-              .eq("lead_id", leadId)
-              .eq("status", "paid"),
-          ]);
+          const failedAt = new Date().toISOString();
+
+          // The new credential only becomes useful if the e-mail is delivered.
+          // Restore the previous token/expiry on delivery failure so a retry does
+          // not invalidate the last link the customer may still have.
+          const rollbackActivation = await supabase
+            .from("pending_activations")
+            .update({
+              token: previousTokenHash || null,
+              expires_at: activation.expires_at || null,
+              activation_email_sent_at: activation.activation_email_sent_at || null,
+              activation_email_last_attempt_at: failedAt,
+              activation_email_error_code: errorCode,
+              activation_email_attempts: attempts + 1,
+            })
+            .eq("id", activation.id)
+            .eq("token", reissueTokenHash)
+            .eq("used", false);
+          if (rollbackActivation.error) {
+            console.error("[Owner Sales] Falha ao restaurar ativacao apos erro de e-mail.", {
+              offerId,
+              code: sanitizeString(rollbackActivation.error.code, 80),
+              message: sanitizeString(rollbackActivation.error.message, 180),
+            });
+          }
+
+          const offerFailureUpdate = await supabase
+            .from("sales_offers")
+            .update({
+              provisioning_status: "email_pending",
+              provisioning_error_code: errorCode,
+              provisioning_updated_at: failedAt,
+              updated_at: failedAt,
+            })
+            .eq("id", offerId)
+            .eq("lead_id", leadId)
+            .eq("status", "paid");
+          if (offerFailureUpdate.error) {
+            console.warn("[Owner Sales] Falha ao registrar erro de reenvio de ativacao.", {
+              offerId,
+              code: sanitizeString(offerFailureUpdate.error.code, 80),
+            });
+          }
           throw emailError;
         }
 
@@ -85630,12 +85651,15 @@ async function startServer() {
             [
               {
                 lead_id: leadId,
-                event_type: "activation_reissued",
+                // sales_lead_event_type is a PostgreSQL enum. Reuse the existing
+                // canonical event instead of inventing an enum value at runtime.
+                event_type: "activation_sent",
                 actor_user_id: req.session.user.id,
                 metadata: {
                   offer_id: offerId,
                   checkout_session_id: checkoutSessionId,
                   expires_at: expiresAt,
+                  reissued: true,
                 },
                 idempotency_key: `activation-reissued:${activation.id}:${reissueTokenHash.slice(0, 16)}`,
               },
@@ -85646,13 +85670,24 @@ async function startServer() {
         const persistenceError = [activationUpdate, offerUpdate, auditEvent].find(
           (result: any) => result?.error,
         )?.error;
-        if (persistenceError) throw persistenceError;
+        if (persistenceError) {
+          // The critical operation is already complete: the token is rotated and
+          // the e-mail containing that exact token was accepted by the provider.
+          // Never return 5xx here, otherwise a harmless audit/status failure makes
+          // the operator retry and invalidates the link that was just delivered.
+          console.warn("[Owner Sales] Reenvio concluido com falha apenas de bookkeeping.", {
+            offerId,
+            code: sanitizeString(persistenceError?.code, 80),
+            message: sanitizeString(persistenceError?.message || String(persistenceError), 180),
+          });
+        }
 
         return res.json({
           success: true,
           paymentConfirmed: true,
           activationEmailSent: true,
           expiresAt,
+          bookkeepingWarning: Boolean(persistenceError),
           message: "Novo link de ativação enviado. O link anterior foi invalidado.",
         });
       } catch (error: any) {
@@ -85663,6 +85698,7 @@ async function startServer() {
         return res.status(503).json({
           success: false,
           error: "SALES_ACTIVATION_RESEND_FAILED",
+          message: "Não foi possível reenviar o acesso agora. Nenhuma cobrança foi criada; tente novamente em instantes.",
         });
       }
     },

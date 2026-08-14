@@ -29,3 +29,24 @@ assert.ok(reissueRoute, 'secure sales activation reissue route must remain avail
 assert.doesNotMatch(reissueRoute, /checkout\.sessions\.create|subscriptions\.update/, 'first-access recovery must not create or mutate Stripe billing');
 
 console.log('ownerCustomerFirstAccessRecovery.test.mjs: OK');
+
+assert.doesNotMatch(
+  reissueRoute,
+  /event_type:\s*["']activation_reissued["']/,
+  'reissue must not invent a PostgreSQL enum value that does not exist in sales_lead_event_type',
+);
+assert.match(
+  reissueRoute,
+  /event_type:\s*["']activation_sent["'][\s\S]*?reissued:\s*true/,
+  'reissue audit must use the existing activation_sent enum with reissued metadata',
+);
+assert.match(
+  reissueRoute,
+  /token:\s*previousTokenHash \|\| null[\s\S]*?\.eq\("token", reissueTokenHash\)/,
+  'failed e-mail delivery must restore the previous activation credential',
+);
+assert.match(
+  reissueRoute,
+  /bookkeepingWarning:\s*Boolean\(persistenceError\)/,
+  'post-delivery bookkeeping failures must not turn a successfully delivered link into HTTP 5xx',
+);

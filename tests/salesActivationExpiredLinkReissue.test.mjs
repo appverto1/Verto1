@@ -16,7 +16,14 @@ assert.match(route, /expires_at: expiresAt/);
 assert.match(route, /\.eq\("used", false\)/);
 assert.match(route, /SALES_ACTIVATION_ALREADY_USED/);
 assert.match(route, /sales-activation-reissue:/);
-assert.match(route, /activation_reissued/);
+assert.doesNotMatch(
+  route,
+  /event_type:\s*["']activation_reissued["']/,
+  'reissue must not use an enum value absent from sales_lead_event_type',
+);
+assert.match(route, /event_type:\s*["']activation_sent["'][\s\S]*?reissued:\s*true/);
+assert.match(route, /token:\s*previousTokenHash \|\| null[\s\S]*?\.eq\("token", reissueTokenHash\)/);
+assert.match(route, /bookkeepingWarning:\s*Boolean\(persistenceError\)/);
 assert.doesNotMatch(route, /processSalesAssistedCheckoutCompleted\(/, 'reissue must not replay checkout/payment');
 assert.doesNotMatch(route, /subscriptions\.update|checkout\.sessions\.create/, 'reissue must not mutate Stripe');
 
