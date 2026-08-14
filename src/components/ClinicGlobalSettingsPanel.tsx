@@ -7,6 +7,7 @@ import { SecureImage } from "./SecureMedia";
 import { dataService } from "../services/dataService";
 import { normalizeAbaPromptTypeConfig, type AbaPromptTypeConfig } from "../utils/abaPromptLevels";
 import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStorage } from "../utils/brMasks";
+import type { OrganizationModuleAccessMode, OrganizationModuleKey } from "../constants/organizationModules";
 
 type SettingsValues = Record<string, any>;
 
@@ -19,7 +20,11 @@ type ClinicGlobalSettingsPanelProps = {
   onOpenAnamnesisTemplate: () => void;
   canManageClinicSettings: boolean;
   canManageBilling: boolean;
+  canManagePermissions: boolean;
   normalizedPlanName: string;
+  hasInsuranceTissModule: boolean;
+  moduleAccessMode: OrganizationModuleAccessMode;
+  organizationModules: ReadonlySet<OrganizationModuleKey>;
   navigateToTab: (tab: string) => void;
   onSave: () => void | Promise<void>;
   values: SettingsValues;
@@ -1271,7 +1276,11 @@ export function ClinicGlobalSettingsPanel({
   onOpenAnamnesisTemplate,
   canManageClinicSettings,
   canManageBilling,
+  canManagePermissions,
   normalizedPlanName,
+  hasInsuranceTissModule,
+  moduleAccessMode,
+  organizationModules,
   navigateToTab,
   onSave,
   values,
@@ -1556,12 +1565,14 @@ export function ClinicGlobalSettingsPanel({
                     CNES
                     <input type="text" value={values.clinicCnesCode} onChange={(event) => setters.setClinicCnesCode(onlyDigits(event.target.value, 12))} placeholder="CNES da clínica" className={inputClass} />
                   </label>
-                  <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-normal leading-relaxed text-indigo-800">
-                    O código contratual do prestador é específico de cada operadora. Configure-o em
-                    <button type="button" onClick={() => navigateToTab("payers")} className="ml-1 font-semibold underline underline-offset-2">
-                      Convênios e TISS
-                    </button>.
-                  </div>
+                  {hasInsuranceTissModule && (
+                    <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-normal leading-relaxed text-indigo-800">
+                      O código contratual do prestador é específico de cada operadora. Configure-o em
+                      <button type="button" onClick={() => navigateToTab("payers")} className="ml-1 font-semibold underline underline-offset-2">
+                        Convênios e TISS
+                      </button>.
+                    </div>
+                  )}
                   <div className="md:col-span-2">
                     <MediaDropzone
                       label="Logotipo da Clínica"
@@ -1597,9 +1608,18 @@ export function ClinicGlobalSettingsPanel({
                 </div>
               </SectionCard>
 
-              <SectionCard title="Dados fiscais e documentais" description="Dados fiscais e estruturais globais da clínica usados em documentos e Pré-guias." complete={clinicFiscalComplete} hasAnyData={Boolean(values.clinicLegalName || values.clinicCnesCode)}>
-                <p className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-semibold text-indigo-800">
-                  Razão social, documento e CNES são globais. O código atribuído à clínica pelo convênio deve ser configurado dentro de cada operadora.
+              <SectionCard
+                title="Dados fiscais e documentais"
+                description={hasInsuranceTissModule
+                  ? "Dados fiscais e estruturais globais da clínica usados em documentos e Pré-guias."
+                  : "Dados fiscais e estruturais globais reutilizados nos documentos institucionais da clínica."}
+                complete={clinicFiscalComplete}
+                hasAnyData={Boolean(values.clinicLegalName || values.clinicCnesCode)}
+              >
+                <p className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-sm font-normal text-indigo-800">
+                  {hasInsuranceTissModule
+                    ? "Razão social, documento e CNES são globais. O código atribuído à clínica pelo convênio deve ser configurado dentro de cada operadora."
+                    : "Razão social, documento e CNES permanecem disponíveis para documentos e cadastros institucionais."}
                 </p>
               </SectionCard>
 
@@ -1615,7 +1635,9 @@ export function ClinicGlobalSettingsPanel({
 
               <AbaPromptTypesClinicalSettings />
 
-              <BillingTissSettingsPanel onEditClinicData={scrollToClinicData} onNavigatePayers={() => navigateToTab("payers")} onNavigateProfessionals={() => navigateToTab("team")} />
+              {hasInsuranceTissModule && (
+                <BillingTissSettingsPanel onEditClinicData={scrollToClinicData} onNavigatePayers={() => navigateToTab("payers")} onNavigateProfessionals={() => navigateToTab("team")} />
+              )}
             </>
           ) : (
             <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm font-semibold text-slate-500 shadow-sm">
@@ -1642,7 +1664,11 @@ export function ClinicGlobalSettingsPanel({
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h4 className="text-sm font-bold uppercase tracking-widest text-slate-400">Gestão da clínica</h4>
               <p className="mt-2 text-sm text-slate-500">Acompanhe as permissões de cada papel para organizar acessos, responsabilidades e rotinas da equipe.</p>
-              <RoleCapabilityMatrix />
+              <RoleCapabilityMatrix
+                moduleAccessMode={moduleAccessMode}
+                organizationModules={organizationModules}
+                canManagePermissions={canManagePermissions}
+              />
             </div>
           </div>
         </>

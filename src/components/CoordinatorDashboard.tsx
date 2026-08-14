@@ -8408,7 +8408,7 @@ export function CoordinatorDashboard({
       clinicCnesCode: cleanClinicCnesCode || null,
     };
 
-    if (saveScope === "clinic" && canManageClinicSettings) {
+    if (saveScope === "clinic" && canManageClinicSettings && hasModule("insurance_tiss")) {
       try {
         const providerResult = await dataService.updateClinicTissProfile({
           legalName: cleanClinicLegalName || cleanClinicName || null,
@@ -13753,7 +13753,11 @@ export function CoordinatorDashboard({
                   onOpenAnamnesisTemplate={() => setIsAnamnesisTemplateModalOpen(true)}
                   canManageClinicSettings={false}
                   canManageBilling={false}
+                  canManagePermissions={hasCapability("team.permissions.manage")}
                   normalizedPlanName={normalizedPlanName}
+                  hasInsuranceTissModule={hasModule("insurance_tiss")}
+                  moduleAccessMode={moduleAccessMode}
+                  organizationModules={organizationModules}
                   navigateToTab={navigateToTab}
                   onSave={() => handleSaveClinicSettings("professional")}
                   values={{
@@ -13792,7 +13796,11 @@ export function CoordinatorDashboard({
                   onOpenAnamnesisTemplate={() => setIsAnamnesisTemplateModalOpen(true)}
                   canManageClinicSettings={canManageClinicSettings}
                   canManageBilling={canManageBilling}
+                  canManagePermissions={hasCapability("team.permissions.manage")}
                   normalizedPlanName={normalizedPlanName}
+                  hasInsuranceTissModule={hasModule("insurance_tiss")}
+                  moduleAccessMode={moduleAccessMode}
+                  organizationModules={organizationModules}
                   navigateToTab={navigateToTab}
                   onSave={() => handleSaveClinicSettings("clinic")}
                   values={{
@@ -14331,7 +14339,7 @@ export function CoordinatorDashboard({
                       </div>
                     )}
 
-                    {!isTherapist && canManageClinicSettings && (
+                    {!isTherapist && canManageClinicSettings && hasModule("insurance_tiss") && (
                       <div className="md:col-span-2">
                         <BillingTissSettingsPanel
                           onNavigatePayers={() => navigateToTab("payers")}

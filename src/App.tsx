@@ -8309,6 +8309,12 @@ export default function App() {
                     ...baseUser,
                     profilePicture: profileUpload.url || baseUser.profilePicture || baseUser.profile_picture || null,
                     profile_picture: profileUpload.url || baseUser.profile_picture || baseUser.profilePicture || null,
+                    profilePicturePath:
+                      profileUpload.path ||
+                      baseUser.profilePicturePath ||
+                      baseUser.profile_picture_path ||
+                      baseUser?.professionalProfile?.metadata?.profilePicturePath ||
+                      null,
                     cpf:
                       data?.cpf ??
                       data?.professionalProfile?.cpf ??
@@ -8357,6 +8363,17 @@ export default function App() {
                         data?.professionalProfile?.profilePicture ||
                         baseUser?.professionalProfile?.profilePicture ||
                         null,
+                      profilePhotoUrl:
+                        profileUpload.url ||
+                        data?.professionalProfile?.profilePhotoUrl ||
+                        baseUser?.professionalProfile?.profilePhotoUrl ||
+                        null,
+                      profilePicturePath:
+                        profileUpload.path ||
+                        data?.professionalProfile?.profilePicturePath ||
+                        baseUser?.professionalProfile?.profilePicturePath ||
+                        baseUser?.professionalProfile?.metadata?.profilePicturePath ||
+                        null,
                       signatureDataUrl:
                         signatureUpload.url ||
                         data?.professionalProfile?.signatureDataUrl ||
@@ -8393,6 +8410,11 @@ export default function App() {
                           data?.professionalRoleTitle ||
                           data?.professionalProfile?.roleTitle ||
                           baseUser?.professionalProfile?.metadata?.professionalRoleTitle ||
+                          undefined,
+                        profilePicturePath:
+                          profileUpload.path ||
+                          data?.professionalProfile?.profilePicturePath ||
+                          baseUser?.professionalProfile?.metadata?.profilePicturePath ||
                           undefined,
                       },
                     },

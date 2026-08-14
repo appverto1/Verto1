@@ -10,6 +10,7 @@ import {
   ArrowLeftRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { SecureImage } from './SecureMedia';
 
 interface SettingsMenuProps {
   user: any;
@@ -117,6 +118,16 @@ export function SettingsMenu({
   const profileImageUrl = String(
     user?.profilePictureUrl ||
     user?.profilePicture ||
+    user?.profile_picture ||
+    user?.profilePhotoUrl ||
+    user?.profile_photo_url ||
+    user?.profilePicturePath ||
+    user?.profile_picture_path ||
+    user?.professionalProfile?.profilePhotoUrl ||
+    user?.professionalProfile?.profile_photo_url ||
+    user?.professionalProfile?.profilePicture ||
+    user?.professionalProfile?.profilePicturePath ||
+    user?.professionalProfile?.metadata?.profilePicturePath ||
     user?.avatarUrl ||
     user?.avatar_url ||
     ''
@@ -177,10 +188,11 @@ export function SettingsMenu({
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-purple-50 text-sm font-medium text-[#7a32fc]">
                   {profileImageUrl && !profileImageFailed ? (
-                    <img
+                    <SecureImage
                       src={profileImageUrl}
                       alt=""
                       className="h-full w-full object-cover"
+                      fallback={userInitials}
                       onError={() => setProfileImageFailed(true)}
                     />
                   ) : userInitials}

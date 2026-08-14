@@ -7041,6 +7041,53 @@ export const dataService = {
     }
   },
 
+  async getClinicCapabilityMembers(permissionKey: string) {
+    try {
+      const response = await fetch(`/api/clinic/authorization/capabilities/${encodeURIComponent(String(permissionKey))}/members`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: result?.message || result?.error || 'Não foi possível carregar os profissionais para este acesso.'
+        };
+      }
+      return result;
+    } catch (error) {
+      console.error('Error fetching clinic capability members:', error);
+      return { success: false, error: 'Não foi possível carregar os profissionais para este acesso.' };
+    }
+  },
+
+  async updateClinicCapabilityMembers(
+    permissionKey: string,
+    memberIds: string[],
+    effect: 'allow' | 'deny' | null,
+    reason?: string,
+  ) {
+    try {
+      const response = await fetch(`/api/clinic/authorization/capabilities/${encodeURIComponent(String(permissionKey))}/members`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ memberIds, effect, reason: reason || undefined })
+      });
+      const result = await safeJson(response);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: result?.message || result?.error || 'Não foi possível atualizar os acessos selecionados.'
+        };
+      }
+      return result;
+    } catch (error) {
+      console.error('Error updating clinic capability members:', error);
+      return { success: false, error: 'Não foi possível atualizar os acessos selecionados.' };
+    }
+  },
+
   async getMemberWorkSchedule(memberId: string) {
     try {
       const response = await fetch(`/api/clinic/members/${encodeURIComponent(String(memberId))}/work-schedule`, {

@@ -419,6 +419,7 @@ import {
 import {
   filterCapabilitiesByOrganizationModules,
   hasOrganizationModule,
+  moduleAllowsCapability,
   isOrganizationModuleKey,
   requiredModuleForCapability,
   type OrganizationModuleAccessMode,
@@ -5522,7 +5523,25 @@ function sanitizeReceiptUrl(value: unknown): string | null {
 }
 
 function sanitizeSessionUrl(value: unknown): string | null {
-  const url = sanitizeUrl(value);
+  const raw = sanitizeString(value, 1500);
+  if (!raw) return null;
+
+  // Internal patient-photo proxy URLs are authenticated, stable view URLs.
+  // Preserve them in the session instead of dropping them simply because they
+  // are same-origin relative paths. Rebuild from the canonical storage path to
+  // prevent arbitrary relative URLs from entering the session payload.
+  if (
+    raw.startsWith('/api/storage/patient-photos/view?') ||
+    raw.startsWith('patient-photos/') ||
+    raw.startsWith('onboarding/') ||
+    raw.startsWith('patients/') ||
+    raw.includes('/storage/v1/object/sign/patient-photos/')
+  ) {
+    const storagePath = extractPatientPhotosStoragePath(raw);
+    if (storagePath) return buildPatientPhotoViewUrl(storagePath);
+  }
+
+  const url = sanitizeUrl(raw);
   if (!url) return null;
   // Never keep large data URLs inside session payload.
   if (url.startsWith('data:image/')) return null;
@@ -16116,8 +16135,19 @@ function buildSessionUserPayload(input: any) {
     role: ensureRole(resolvedRole) ? resolvedRole : 'therapist',
     isPlatformAdmin: input?.isPlatformAdmin === true,
     name: sanitizeString(input?.name, 180),
-    profilePicture: sanitizeSessionUrl(input?.profilePicture),
-    profilePicturePath: sanitizeString(input?.profilePicturePath || input?.profile_picture_path, 500) || null,
+    profilePicture:
+      sanitizeSessionUrl(input?.profilePicture) ||
+      sanitizeSessionUrl(professionalProfile?.profilePhotoUrl || professionalProfile?.profile_photo_url || professionalProfile?.profilePicture) ||
+      sanitizeSessionUrl(professionalMetadata?.profilePicturePath) ||
+      null,
+    profilePicturePath:
+      sanitizeString(
+        input?.profilePicturePath ||
+        input?.profile_picture_path ||
+        professionalProfile?.profilePicturePath ||
+        professionalMetadata?.profilePicturePath,
+        500
+      ) || null,
     address: sanitizeString(input?.address, 320) || null,
     type: sanitizeString(input?.type, 80) || null,
     age: typeof input?.age === 'number' ? input.age : null,
@@ -16224,6 +16254,21 @@ function buildSessionUserPayload(input: any) {
           miniCurriculum:
             sanitizeString(professionalProfile.miniCurriculum || professionalProfile.mini_curriculum, 3000) ||
             null,
+          profilePhotoUrl:
+            sanitizeSessionUrl(
+              professionalProfile.profilePhotoUrl ||
+              professionalProfile.profile_photo_url ||
+              professionalProfile.profilePicture ||
+              input?.profilePicture
+            ) || null,
+          profilePicturePath:
+            sanitizeString(
+              professionalProfile.profilePicturePath ||
+              professionalMetadata?.profilePicturePath ||
+              input?.profilePicturePath ||
+              input?.profile_picture_path,
+              500
+            ) || null,
           metadata: Object.keys(professionalMetadata).length > 0 ? professionalMetadata : null
         })
       : null,
@@ -27041,6 +27086,251 @@ async function startServer() {
     }
   });
 
+  app.get('/api/clinic/authorization/capabilities/:permissionKey/members', checkAuth, requireClinicCapability('team.permissions.manage'), async (req: any, res) => {
+    try {
+      const actorContext = req.authorizationContext as ResolvedClinicCapabilityContext;
+      const permissionKey = sanitizeString(req.params?.permissionKey, 160);
+      if (!isCapabilityKey(permissionKey) || !isDelegableCapability(permissionKey)) {
+        return res.status(400).json({ success: false, error: 'CLINIC_PERMISSION_INVALID' });
+      }
+      if (!moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, permissionKey)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_MODULE_NOT_ENTITLED',
+          message: 'Este acesso pertence a um módulo não contratado pela clínica.'
+        });
+      }
+
+      const { data: memberships, error: membershipError } = await supabase
+        .from('clinic_memberships')
+        .select('id,user_id,clinic_id,role,status,users:user_id(id,name,email)')
+        .eq('clinic_id', actorContext.clinicId)
+        .eq('status', 'active')
+        .limit(500);
+      if (membershipError) throw membershipError;
+
+      const activeMemberships = (Array.isArray(memberships) ? memberships : []).filter((membership: any) => {
+        const membershipId = sanitizeString(membership?.id, 120);
+        const memberId = sanitizeString(membership?.user_id, 120);
+        const role = sanitizeString(membership?.role, 40).toLowerCase();
+        return isUuid(membershipId) && isUuid(memberId) && isClinicBaseRole(role);
+      });
+      const membershipIds = activeMemberships.map((membership: any) => sanitizeString(membership?.id, 120));
+      const overrideByMembershipId = new Map<string, 'allow' | 'deny'>();
+      if (membershipIds.length > 0) {
+        const { data: overrideRows, error: overrideError } = await supabase
+          .from('clinic_membership_permission_overrides')
+          .select('membership_id,effect')
+          .eq('permission_key', permissionKey)
+          .in('membership_id', membershipIds)
+          .limit(500);
+        if (overrideError) throw overrideError;
+        (overrideRows || []).forEach((row: any) => {
+          const membershipId = sanitizeString(row?.membership_id, 120);
+          const effect = sanitizeString(row?.effect, 20).toLowerCase();
+          if (isUuid(membershipId) && (effect === 'allow' || effect === 'deny')) {
+            overrideByMembershipId.set(membershipId, effect);
+          }
+        });
+      }
+
+      const members = activeMemberships.map((membership: any) => {
+        const membershipId = sanitizeString(membership?.id, 120);
+        const memberId = sanitizeString(membership?.user_id, 120);
+        const role = sanitizeString(membership?.role, 40).toLowerCase() as ClinicBaseRole;
+        const linkedUser = Array.isArray(membership?.users) ? membership.users[0] : membership?.users;
+        const overrideEffect = overrideByMembershipId.get(membershipId) || null;
+        const defaultEnabled = moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, permissionKey)
+          && roleHasDefaultCapability(role, permissionKey);
+        const effective = resolveEffectiveClinicCapabilities(
+          role,
+          overrideEffect ? [{ permission_key: permissionKey, effect: overrideEffect }] : [],
+        );
+        const effectiveEnabled = moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, permissionKey)
+          && effective?.capabilities.has(permissionKey) === true;
+        const canEnable = canDelegateClinicCapability({
+          actorRole: actorContext.role,
+          targetRole: role,
+          actorUserId: actorContext.userId,
+          targetUserId: memberId,
+          capability: permissionKey,
+          actorCapabilities: actorContext.capabilities,
+          requestedEffect: 'allow',
+        });
+        const canDisable = canDelegateClinicCapability({
+          actorRole: actorContext.role,
+          targetRole: role,
+          actorUserId: actorContext.userId,
+          targetUserId: memberId,
+          capability: permissionKey,
+          actorCapabilities: actorContext.capabilities,
+          requestedEffect: 'deny',
+        });
+        return {
+          memberId,
+          membershipId,
+          name: sanitizeString(linkedUser?.name, 180) || null,
+          email: sanitizeEmail(linkedUser?.email) || null,
+          role,
+          defaultEnabled,
+          effectiveEnabled,
+          overrideEffect,
+          editable: canEnable || canDisable || Boolean(overrideEffect),
+          canEnable,
+          canDisable,
+        };
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          permissionKey,
+          members,
+        },
+      });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/clinic/authorization/capabilities/:permissionKey/members [GET]', error, {
+        permissionKey: sanitizeString(req.params?.permissionKey, 160),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+      });
+    }
+  });
+
+  app.patch('/api/clinic/authorization/capabilities/:permissionKey/members', portalActionLimiter, checkAuth, requireClinicCapability('team.permissions.manage'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Permissões em lote')) return;
+      const actorContext = req.authorizationContext as ResolvedClinicCapabilityContext;
+      const permissionKey = sanitizeString(req.params?.permissionKey, 160);
+      const requestedEffectRaw = req.body?.effect;
+      const effect = requestedEffectRaw === null || requestedEffectRaw === undefined || requestedEffectRaw === ''
+        ? null
+        : sanitizeString(requestedEffectRaw, 20).toLowerCase();
+      const reason = sanitizeTextField(req.body?.reason, 500) || null;
+      const rawMemberIds = Array.isArray(req.body?.memberIds) ? req.body.memberIds : [];
+      if (rawMemberIds.length < 1 || rawMemberIds.length > 100) {
+        return res.status(400).json({ success: false, error: 'CLINIC_PERMISSION_MEMBERS_LIMIT' });
+      }
+      const normalizedMemberIds = rawMemberIds.map((value: any) => sanitizeString(value, 120));
+      if (normalizedMemberIds.some((value: string) => !isUuid(value))) {
+        return res.status(400).json({ success: false, error: 'CLINIC_PERMISSION_MEMBER_INVALID' });
+      }
+      const memberIds = Array.from(new Set(normalizedMemberIds)) as string[];
+
+      if (!isCapabilityKey(permissionKey) || !isDelegableCapability(permissionKey)) {
+        return res.status(400).json({ success: false, error: 'CLINIC_PERMISSION_INVALID' });
+      }
+      if (effect !== null && effect !== 'allow' && effect !== 'deny') {
+        return res.status(400).json({ success: false, error: 'CLINIC_PERMISSION_EFFECT_INVALID' });
+      }
+      if (memberIds.length === 0) {
+        return res.status(400).json({ success: false, error: 'CLINIC_PERMISSION_MEMBERS_REQUIRED' });
+      }
+      if (!moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, permissionKey)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_MODULE_NOT_ENTITLED',
+          message: 'Este acesso pertence a um módulo não contratado pela clínica.'
+        });
+      }
+
+      const { data: memberships, error: membershipError } = await supabase
+        .from('clinic_memberships')
+        .select('id,user_id,clinic_id,role,status')
+        .eq('clinic_id', actorContext.clinicId)
+        .eq('status', 'active')
+        .in('user_id', memberIds)
+        .limit(100);
+      if (membershipError) throw membershipError;
+      const membershipRows = Array.isArray(memberships) ? memberships : [];
+      const membershipByUserId = new Map(
+        membershipRows.map((membership: any) => [sanitizeString(membership?.user_id, 120), membership]),
+      );
+      if (membershipByUserId.size !== memberIds.length) {
+        return res.status(404).json({
+          success: false,
+          error: 'CLINIC_MEMBER_NOT_FOUND',
+          message: 'Um ou mais profissionais não possuem vínculo ativo nesta clínica.'
+        });
+      }
+
+      const validatedMemberships = memberIds.map((memberId) => {
+        const membership: any = membershipByUserId.get(memberId);
+        const membershipId = sanitizeString(membership?.id, 120);
+        const membershipRole = sanitizeString(membership?.role, 40).toLowerCase();
+        if (!isUuid(membershipId) || !isClinicBaseRole(membershipRole)) {
+          throw Object.assign(new Error('CLINIC_MEMBER_NOT_FOUND'), { code: 'CLINIC_MEMBER_NOT_FOUND' });
+        }
+        if (!canDelegateClinicCapability({
+          actorRole: actorContext.role,
+          targetRole: membershipRole,
+          actorUserId: actorContext.userId,
+          targetUserId: memberId,
+          capability: permissionKey,
+          actorCapabilities: actorContext.capabilities,
+          requestedEffect: effect,
+        })) {
+          throw Object.assign(new Error('CLINIC_PERMISSION_DELEGATION_DENIED'), {
+            code: memberId === actorContext.userId ? 'SELF_PERMISSION_CHANGE_DENIED' : 'CLINIC_PERMISSION_DELEGATION_DENIED',
+          });
+        }
+        return { membershipId, memberId, membershipRole };
+      });
+
+      const { error: rpcError } = await supabase.rpc('set_clinic_membership_permission_overrides_bulk_v1', {
+        p_membership_ids: validatedMemberships.map((membership) => membership.membershipId),
+        p_permission_key: permissionKey,
+        p_effect: effect,
+        p_actor_user_id: actorContext.userId,
+        p_reason: reason,
+      });
+      if (rpcError) throw rpcError;
+
+      return res.json({
+        success: true,
+        data: {
+          permissionKey,
+          effect,
+          updatedCount: validatedMemberships.length,
+          members: validatedMemberships.map((membership) => ({
+            memberId: membership.memberId,
+            membershipId: membership.membershipId,
+            defaultEnabled: roleHasDefaultCapability(membership.membershipRole, permissionKey),
+            effectiveEnabled: effect === 'allow'
+              ? true
+              : effect === 'deny'
+                ? false
+                : roleHasDefaultCapability(membership.membershipRole, permissionKey),
+          })),
+        },
+      });
+    } catch (error: any) {
+      const errorCode = sanitizeString(error?.code, 80);
+      if (errorCode === 'SELF_PERMISSION_CHANGE_DENIED' || errorCode === 'CLINIC_PERMISSION_DELEGATION_DENIED') {
+        return res.status(403).json({
+          success: false,
+          error: errorCode,
+          message: errorCode === 'SELF_PERMISSION_CHANGE_DENIED'
+            ? 'Você não pode alterar as próprias permissões.'
+            : 'Seu acesso atual não permite alterar um ou mais profissionais selecionados.'
+        });
+      }
+      if (
+        isMissingRelationError(error)
+        || sanitizeString(error?.message, 300).includes('set_clinic_membership_permission_overrides_bulk_v1')
+      ) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_PERMISSION_BULK_RPC_MIGRATION_REQUIRED',
+          message: 'A função atômica de permissões em lote ainda não foi aplicada no banco.'
+        });
+      }
+      return sendRouteDbError(res, '/api/clinic/authorization/capabilities/:permissionKey/members [PATCH]', error, {
+        permissionKey: sanitizeString(req.params?.permissionKey, 160),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+      });
+    }
+  });
+
   app.get('/api/clinic/members/:memberId/authorization', checkAuth, requireClinicCapability('team.permissions.manage'), async (req: any, res) => {
     try {
       const actorContext = req.authorizationContext as ResolvedClinicCapabilityContext;
@@ -27111,9 +27401,9 @@ async function startServer() {
           role: membershipRole,
           scopes: ROLE_DEFAULT_SCOPES[membershipRole] || [],
           catalog: CAPABILITY_CATALOG
-            .filter((definition) => definition.delegable)
+            .filter((definition) => definition.delegable && moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, definition.key))
             .map((definition) => {
-              const defaultEnabled = defaults.has(definition.key);
+              const defaultEnabled = moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, definition.key) && defaults.has(definition.key);
               const overrideEffect = overrideMap.get(definition.key) || null;
               const canEnable = canDelegateClinicCapability({
                 actorRole: actorContext.role,
@@ -27139,7 +27429,9 @@ async function startServer() {
                 domain: definition.domain,
                 sensitive: definition.sensitive === true,
                 defaultEnabled,
-                effectiveEnabled: effective.capabilities.has(definition.key),
+                effectiveEnabled:
+                  moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, definition.key) &&
+                  effective.capabilities.has(definition.key),
                 overrideEffect,
                 editable: canEnable || canDisable || Boolean(overrideEffect),
                 canEnable,
@@ -27180,6 +27472,13 @@ async function startServer() {
           success: false,
           error: 'CLINIC_PERMISSION_NOT_DELEGABLE',
           message: 'Esta permissão é estrutural e não pode ser delegada.'
+        });
+      }
+      if (!moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, permissionKey)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_MODULE_NOT_ENTITLED',
+          message: 'Este acesso pertence a um módulo não contratado pela clínica.'
         });
       }
 
@@ -41728,6 +42027,9 @@ async function startServer() {
               sanitizeString(req.body?.miniCurriculum || professionalProfileInput?.miniCurriculum, 3000) ||
               req.session.user?.professionalProfile?.miniCurriculum ||
               null,
+            profilePhotoUrl: resolvedProfilePictureUrl || null,
+            profilePicture: resolvedProfilePictureUrl || null,
+            profilePicturePath: profilePicturePath || mergedMetadata?.profilePicturePath || null,
             metadata: mergedMetadata
           });
           req.session.user.signatureDataUrl = resolvedSignatureUrl;
