@@ -9688,7 +9688,7 @@ export function CoordinatorDashboard({
           </div>
         </section>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 xl:grid-cols-1">
+        <div className="grid grid-cols-1 content-start auto-rows-max gap-4 sm:grid-cols-4 xl:grid-cols-1">
           {dashboardDailyStats.map((stat) => (
             <button
               key={stat.label}
