@@ -23508,8 +23508,12 @@ async function startServer() {
       return { error: "SALES_ACTIVATION_NOT_AUTHORIZED" as const };
     }
     if (sanitizeString((offerResult.data as any).offer_type, 30) === "modular") {
+      // contract_email is the immutable commercial contact captured in the offer.
+      // activation.email is the current login identity and may legitimately change
+      // after an audited Super Admin access-email update. Authorization is already
+      // anchored to the paid offer + lead + Stripe Checkout session + secret token.
       const contractEmail = sanitizeEmail((offerResult.data as any).contract_email);
-      if (!contractEmail || contractEmail !== email) {
+      if (!contractEmail) {
         return { error: "SALES_ACTIVATION_NOT_AUTHORIZED" as const };
       }
     }
@@ -79030,7 +79034,7 @@ async function startServer() {
   app.get('/api/owner/clients', checkAuth, checkOwner, async (req: any, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
-      const [{ data: users, error: usersError }, { data: pendingActivations, error: activationsError }] = await Promise.all([
+      const [usersResult, activationsResult, authUsersResult] = await Promise.all([
         supabase
           .from('users')
           .select('id, name, email, plan_name, plan_price, subscription_status, created_at')
@@ -79043,36 +79047,267 @@ async function startServer() {
           .eq('used', false)
           .order('created_at', { ascending: false })
           .limit(500),
+        withTimeoutOrFallback(
+          supabase.auth.admin.listUsers({ page: 1, perPage: 500 }),
+          7000,
+          { data: { users: [] }, error: null } as any,
+          'owner.clients.authUsers',
+        ),
       ]);
 
+      const { data: users, error: usersError } = usersResult;
+      const { data: pendingActivations, error: activationsError } = activationsResult;
+      const { data: authUsersData, error: authUsersError } = authUsersResult;
       if (usersError) throw usersError;
       if (activationsError && !isMissingRelationError(activationsError)) throw activationsError;
+      if (authUsersError) {
+        console.warn('[Owner Clients] Auth metadata indisponível; mantendo fallback seguro por e-mail.', {
+          code: sanitizeString((authUsersError as any)?.code, 80),
+        });
+      }
 
-      // Resolve first-access recovery in memory from one bounded read. This keeps
-      // the customer list free from N+1 queries and never exposes activation tokens.
+      // Resolve first-access recovery in memory from bounded reads. Prefer the
+      // server-controlled Auth metadata offer id so an audited access-email change
+      // cannot make recovery disappear merely because the commercial contact e-mail
+      // remains historically unchanged. No per-customer/N+1 Auth lookup is needed.
+      const activationByOffer = new Map<string, any>();
       const recoveryByEmail = new Map<string, any>();
       for (const activation of pendingActivations || []) {
         const email = sanitizeEmail((activation as any)?.email);
         const offerId = sanitizeString((activation as any)?.sales_offer_id, 120);
-        if (!email || !isUuid(offerId) || recoveryByEmail.has(email)) continue;
-        recoveryByEmail.set(email, {
-          offer_id: offerId,
-          can_resend_activation: true,
-          expires_at: (activation as any)?.expires_at || null,
-        });
+        if (!isUuid(offerId)) continue;
+        if (!activationByOffer.has(offerId)) activationByOffer.set(offerId, activation);
+        if (email && !recoveryByEmail.has(email)) recoveryByEmail.set(email, activation);
+      }
+
+      const authOfferByUserId = new Map<string, string>();
+      for (const authUser of authUsersData?.users || []) {
+        const userId = sanitizeString((authUser as any)?.id, 120);
+        const offerId = sanitizeString((authUser as any)?.user_metadata?.sales_activation_offer_id, 120);
+        if (isUuid(userId) && isUuid(offerId)) authOfferByUserId.set(userId, offerId);
       }
 
       const data = (users || []).map((user: any) => {
+        const userId = sanitizeString(user?.id, 120);
         const email = sanitizeEmail(user?.email);
-        return {
-          ...user,
-          access_recovery: email ? recoveryByEmail.get(email) || null : null,
-        };
+        const metadataOfferId = authOfferByUserId.get(userId) || '';
+        const activation =
+          (isUuid(metadataOfferId) ? activationByOffer.get(metadataOfferId) : null) ||
+          (email ? recoveryByEmail.get(email) : null) ||
+          null;
+        const activationEmail = sanitizeEmail((activation as any)?.email);
+        const offerId = sanitizeString((activation as any)?.sales_offer_id, 120);
+        const accessRecovery = activation && isUuid(offerId)
+          ? {
+              offer_id: offerId,
+              can_generate_activation_link: true,
+              can_resend_activation: Boolean(email && activationEmail === email),
+              access_email_mismatch: Boolean(email && activationEmail && activationEmail !== email),
+              expires_at: (activation as any)?.expires_at || null,
+            }
+          : null;
+        return { ...user, access_recovery: accessRecovery };
       });
 
       return res.json({ success: true, data });
     } catch (error) {
       return res.status(500).json({ error: 'Erro interno do servidor.' });
+    }
+  });
+
+  app.post('/api/owner/users/:userId/access-link', checkAuth, checkOwner, resendActivationLimiter, async (req: any, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (Buffer.byteLength(JSON.stringify(req.body || {}), 'utf8') > 4096) {
+      return res.status(413).json({ success: false, error: 'Dados enviados excedem o limite permitido.' });
+    }
+
+    const targetUserId = sanitizeString(req.params?.userId, 120);
+    const requestedOfferId = sanitizeString(req.body?.offerId, 120);
+    if (!isUuid(targetUserId) || !isUuid(requestedOfferId)) {
+      return res.status(400).json({ success: false, error: 'Usuário ou proposta inválidos.' });
+    }
+
+    try {
+      const [{ data: profile, error: profileError }, authResult, { data: offer, error: offerError }] = await Promise.all([
+        supabase
+          .from('users')
+          .select('id,name,email')
+          .eq('id', targetUserId)
+          .maybeSingle(),
+        supabase.auth.admin.getUserById(targetUserId),
+        supabase
+          .from('sales_offers')
+          .select('id,lead_id,status,stripe_checkout_session_id,offer_type,contract_email')
+          .eq('id', requestedOfferId)
+          .eq('status', 'paid')
+          .maybeSingle(),
+      ]);
+      if (profileError) throw profileError;
+      if (offerError) throw offerError;
+      if (authResult.error) throw authResult.error;
+      if (!profile?.id || !authResult.data?.user?.id || !offer?.id) {
+        return res.status(404).json({ success: false, error: 'Ativação paga não encontrada para este usuário.' });
+      }
+
+      const accessEmail = sanitizeEmail(profile.email);
+      const authEmail = sanitizeEmail(authResult.data.user.email);
+      if (!accessEmail || authEmail !== accessEmail) {
+        return res.status(409).json({
+          success: false,
+          error: 'ACCESS_IDENTITY_EMAIL_MISMATCH',
+          message: 'O e-mail do perfil e a identidade de login estão divergentes. Corrija o e-mail de acesso antes de gerar o link.',
+        });
+      }
+
+      const leadId = sanitizeString(offer.lead_id, 120);
+      const checkoutSessionId = sanitizeString(offer.stripe_checkout_session_id, 200);
+      if (!isUuid(leadId) || !checkoutSessionId) {
+        return res.status(409).json({ success: false, error: 'PAID_SALES_OFFER_LINKAGE_INVALID' });
+      }
+
+      const { data: activation, error: activationError } = await supabase
+        .from('pending_activations')
+        .select('id,email,token,expires_at,used,source,sales_offer_id,sales_lead_id,stripe_checkout_session_id')
+        .eq('source', 'sales_assisted_signup')
+        .eq('sales_offer_id', requestedOfferId)
+        .eq('sales_lead_id', leadId)
+        .eq('stripe_checkout_session_id', checkoutSessionId)
+        .limit(1)
+        .maybeSingle();
+      if (activationError) throw activationError;
+      if (!activation) {
+        return res.status(404).json({ success: false, error: 'SALES_ACTIVATION_NOT_FOUND' });
+      }
+      if (activation.used === true) {
+        return res.status(409).json({
+          success: false,
+          error: 'SALES_ACTIVATION_ALREADY_USED',
+          message: 'Este primeiro acesso já foi concluído. Use login ou recuperação de senha.',
+        });
+      }
+
+      const metadataOfferId = sanitizeString(
+        authResult.data.user.user_metadata?.sales_activation_offer_id,
+        120,
+      );
+      const activationEmail = sanitizeEmail(activation.email);
+      const ownershipVerified = isUuid(metadataOfferId)
+        ? metadataOfferId === requestedOfferId
+        : Boolean(activationEmail) && activationEmail === accessEmail;
+      if (!ownershipVerified) {
+        return res.status(403).json({
+          success: false,
+          error: 'ACCESS_LINK_OWNERSHIP_NOT_VERIFIED',
+          message: 'Não foi possível comprovar que esta ativação pertence a este usuário.',
+        });
+      }
+
+      const previousTokenHash = sanitizeString(activation.token, 180);
+      const previousEmail = activationEmail;
+      const previousExpiresAt = activation.expires_at || null;
+      const rawToken = deriveSalesActivationToken(checkoutSessionId);
+      const tokenHash = hashSalesOfferToken(rawToken);
+      const expiresAt = new Date(
+        Date.now() + SALES_ACTIVATION_TTL_DAYS * 24 * 60 * 60 * 1000,
+      ).toISOString();
+
+      let updateQuery = supabase
+        .from('pending_activations')
+        .update({
+          email: accessEmail,
+          token: tokenHash,
+          expires_at: expiresAt,
+          activation_email_error_code: null,
+        })
+        .eq('id', activation.id)
+        .eq('used', false);
+      if (previousTokenHash) updateQuery = updateQuery.eq('token', previousTokenHash);
+      const { data: updatedActivation, error: updateError } = await updateQuery
+        .select('id')
+        .maybeSingle();
+      if (updateError) throw updateError;
+      if (!updatedActivation?.id) {
+        return res.status(409).json({
+          success: false,
+          error: 'SALES_ACTIVATION_LINK_RACE',
+          message: 'A ativação mudou enquanto o link era gerado. Atualize a tela e tente novamente.',
+        });
+      }
+
+      const preflight = await loadPublicSalesActivation(rawToken);
+      const preflightValid =
+        !("error" in preflight) &&
+        preflight.offerId === requestedOfferId &&
+        preflight.leadId === leadId &&
+        preflight.checkoutSessionId === checkoutSessionId &&
+        preflight.email === accessEmail;
+      if (!preflightValid) {
+        const rollback = await supabase
+          .from('pending_activations')
+          .update({
+            email: previousEmail || accessEmail,
+            token: previousTokenHash || null,
+            expires_at: previousExpiresAt,
+          })
+          .eq('id', activation.id)
+          .eq('token', tokenHash)
+          .eq('used', false);
+        if (rollback.error) {
+          console.error('[Owner Access Link] CRITICAL rollback failed:', {
+            userId: targetUserId,
+            offerId: requestedOfferId,
+            code: sanitizeString(rollback.error.code, 80),
+          });
+        }
+        return res.status(503).json({
+          success: false,
+          error: 'SALES_ACTIVATION_LINK_PREFLIGHT_FAILED',
+          message: 'O link não passou na validação interna e não foi disponibilizado.',
+        });
+      }
+
+      if (!isUuid(metadataOfferId)) {
+        const metadataUpdate = await supabase.auth.admin.updateUserById(targetUserId, {
+          user_metadata: {
+            ...(authResult.data.user.user_metadata || {}),
+            sales_activation_offer_id: requestedOfferId,
+          },
+        });
+        if (metadataUpdate.error) throw metadataUpdate.error;
+      }
+
+      const activationUrl = `${getInvitationAppBaseUrl()}/ativacao-comercial/${encodeURIComponent(rawToken)}`;
+      await persistIdentityAuditLog({
+        title: 'Link de primeiro acesso gerado pelo Super Admin',
+        content: `Link de primeiro acesso gerado para ${maskEmail(accessEmail)} sem novo Checkout ou cobrança. Proposta ${requestedOfferId}.`,
+        identifier: accessEmail,
+        channel: 'owner_access_link_generation',
+        userId: sanitizeString(req.session?.user?.id, 120) || targetUserId,
+        request: req,
+        status: 'success',
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          userId: targetUserId,
+          offerId: requestedOfferId,
+          email: accessEmail,
+          activationUrl,
+          expiresAt,
+        },
+      });
+    } catch (error: any) {
+      console.error('[Owner Access Link] generation failed:', {
+        userId: targetUserId,
+        offerId: requestedOfferId,
+        message: sanitizeString(error?.message || String(error), 240),
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'ACCESS_LINK_GENERATION_FAILED',
+        message: 'Não foi possível gerar o link de primeiro acesso agora.',
+      });
     }
   });
 
@@ -79097,7 +79332,11 @@ async function startServer() {
     }
 
     let authChanged = false;
+    let profileChanged = false;
+    let activationEmailChanged = false;
     let previousAuthEmail = '';
+    let previousProfileEmail = '';
+    let activationOfferId = '';
     try {
       const { data: profile, error: profileError } = await supabase
         .from('users')
@@ -79109,7 +79348,7 @@ async function startServer() {
         return res.status(404).json({ success: false, error: 'Usuário não encontrado.' });
       }
 
-      const previousProfileEmail = sanitizeEmail(profile.email);
+      previousProfileEmail = sanitizeEmail(profile.email);
       if (previousProfileEmail === nextEmail) {
         return res.json({ success: true, data: { userId: targetUserId, email: nextEmail, changed: false } });
       }
@@ -79135,6 +79374,7 @@ async function startServer() {
 
       const authUser = authResult.data.user;
       previousAuthEmail = sanitizeEmail(authUser.email);
+      activationOfferId = sanitizeString(authUser.user_metadata?.sales_activation_offer_id, 120);
       const { error: authUpdateError } = await supabase.auth.admin.updateUserById(targetUserId, {
         email: nextEmail,
         email_confirm: true,
@@ -79150,6 +79390,35 @@ async function startServer() {
         .maybeSingle();
       if (profileUpdateError || !updatedProfile?.id) {
         throw profileUpdateError || new Error('ACCESS_EMAIL_PROFILE_UPDATE_FAILED');
+      }
+      profileChanged = true;
+
+      // Keep a still-pending paid activation aligned with the current login
+      // identity. The offer contract_email remains untouched as commercial
+      // history; only the access credential follows the user's audited request.
+      if (isUuid(activationOfferId)) {
+        const previousActivationEmails = Array.from(new Set(
+          [previousProfileEmail, previousAuthEmail].filter(Boolean),
+        ));
+        let activationSync = supabase
+          .from('pending_activations')
+          .update({ email: nextEmail })
+          .eq('source', 'sales_assisted_signup')
+          .eq('sales_offer_id', activationOfferId)
+          .eq('used', false);
+        if (previousActivationEmails.length === 1) {
+          activationSync = activationSync.eq('email', previousActivationEmails[0]);
+        } else if (previousActivationEmails.length > 1) {
+          activationSync = activationSync.in('email', previousActivationEmails);
+        }
+        const { data: syncedActivation, error: activationSyncError } = await activationSync
+          .select('id')
+          .limit(1)
+          .maybeSingle();
+        if (activationSyncError && !isMissingRelationError(activationSyncError)) {
+          throw activationSyncError;
+        }
+        activationEmailChanged = Boolean(syncedActivation?.id);
       }
 
       await persistIdentityAuditLog({
@@ -79173,12 +79442,30 @@ async function startServer() {
       });
     } catch (error: any) {
       let rollbackFailed = false;
+      if (activationEmailChanged && isUuid(activationOfferId) && previousProfileEmail) {
+        const activationRollback = await supabase
+          .from('pending_activations')
+          .update({ email: previousProfileEmail })
+          .eq('source', 'sales_assisted_signup')
+          .eq('sales_offer_id', activationOfferId)
+          .eq('used', false)
+          .eq('email', nextEmail);
+        rollbackFailed = rollbackFailed || Boolean(activationRollback.error);
+      }
+      if (profileChanged && previousProfileEmail) {
+        const profileRollback = await supabase
+          .from('users')
+          .update({ email: previousProfileEmail })
+          .eq('id', targetUserId)
+          .eq('email', nextEmail);
+        rollbackFailed = rollbackFailed || Boolean(profileRollback.error);
+      }
       if (authChanged && previousAuthEmail) {
         const rollback = await supabase.auth.admin.updateUserById(targetUserId, {
           email: previousAuthEmail,
           email_confirm: true,
         });
-        rollbackFailed = Boolean(rollback.error);
+        rollbackFailed = rollbackFailed || Boolean(rollback.error);
         if (rollback.error) {
           console.error('[Owner Access Email] CRITICAL rollback failed:', {
             userId: targetUserId,
@@ -85506,11 +85793,12 @@ async function startServer() {
           });
         }
         if (sanitizeString(offer.offer_type, 30) === "modular") {
-          const contractEmail = sanitizeEmail(offer.contract_email);
-          if (!contractEmail || contractEmail !== recipient) {
+          // The commercial contact is historical. The login e-mail may have been
+          // changed later through the audited Super Admin access-email flow.
+          if (!sanitizeEmail(offer.contract_email)) {
             return res.status(409).json({
               success: false,
-              error: "SALES_ACTIVATION_EMAIL_MISMATCH",
+              error: "SALES_ACTIVATION_CONTRACT_EMAIL_REQUIRED",
             });
           }
         }
