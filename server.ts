@@ -18936,6 +18936,40 @@ async function startServer() {
       String(status || "").toLowerCase(),
     );
 
+  const SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS = 30_000;
+
+  const claimSalesActivationEmailDelivery = async (checkoutSessionId: string) => {
+    const sessionId = sanitizeString(checkoutSessionId, 200);
+    if (!sessionId) throw new Error("SALES_CHECKOUT_SESSION_REQUIRED");
+
+    const claimAt = new Date().toISOString();
+    const staleBefore = new Date(
+      Date.now() - SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS,
+    ).toISOString();
+    const claimBase = () =>
+      supabase
+        .from("pending_activations")
+        .update({ activation_email_last_attempt_at: claimAt })
+        .eq("stripe_checkout_session_id", sessionId)
+        .eq("source", "sales_assisted_signup")
+        .eq("used", false)
+        .is("activation_email_sent_at", null);
+
+    const { data: freshClaim, error: freshClaimError } = await claimBase()
+      .is("activation_email_last_attempt_at", null)
+      .select("id,activation_email_attempts")
+      .maybeSingle();
+    if (freshClaimError) throw freshClaimError;
+    if (freshClaim) return freshClaim;
+
+    const { data: staleClaim, error: staleClaimError } = await claimBase()
+      .lt("activation_email_last_attempt_at", staleBefore)
+      .select("id,activation_email_attempts")
+      .maybeSingle();
+    if (staleClaimError) throw staleClaimError;
+    return staleClaim || null;
+  };
+
   const processSalesAssistedCheckoutCompleted = async (
     stripe: Stripe,
     session: Stripe.Checkout.Session,
@@ -19257,6 +19291,20 @@ async function startServer() {
       .eq("lead_id", leadId)
       .eq("status", "paid");
     if (activationPreparedStatusError) throw activationPreparedStatusError;
+
+    if (!activationEmailAlreadySent && activationToken) {
+      const activationEmailClaim = await claimSalesActivationEmailDelivery(
+        session.id,
+      );
+      if (!activationEmailClaim) {
+        activationToken = "";
+      } else {
+        activationEmailAttempts = Math.max(
+          activationEmailAttempts,
+          Number(activationEmailClaim.activation_email_attempts || 0),
+        );
+      }
+    }
 
     if (!activationEmailAlreadySent && activationToken) {
       try {
