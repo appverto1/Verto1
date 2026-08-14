@@ -20,7 +20,7 @@ assert.match(
 );
 assert.match(passwordActivation, /activationOfferId === loaded\.offerId/);
 assert.match(passwordActivation, /profileEmail === loaded\.email/);
-assert.match(passwordActivation, /profileRole === "coordinator"/);
+assert.match(passwordActivation, /\["director", "coordinator"\]\.includes\(profileRole\)/);
 assert.match(passwordActivation, /loaded\.activation\.used !== true/);
 assert.match(
   passwordActivation,

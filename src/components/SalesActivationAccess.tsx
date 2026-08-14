@@ -81,7 +81,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
     setError('');
     setMessage('');
     try {
-      localStorage.setItem('verto_intended_role', 'coordinator');
+      localStorage.setItem('verto_intended_role', 'director');
       localStorage.setItem('verto_activation_email', activation.email.toLowerCase());
       const supabase = await getSupabase();
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
@@ -131,7 +131,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
 
       const loginResult = await onLogin(
         data.session,
-        'coordinator',
+        'director',
         { email: activation.email, password },
         {
           provider: 'email',

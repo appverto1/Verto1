@@ -15504,16 +15504,16 @@ async function resolveOnboardingContextForUser(params: {
     memberships.find((item: any) => sanitizeString(item?.clinic_id, 120) === preferredClinicId) ||
     memberships[0] ||
     null;
-  const ownerFallbackClinicId = ['owner', 'coordinator'].includes(fallbackRole) ? userId : '';
+  const ownerFallbackClinicId = ['owner', 'director', 'coordinator'].includes(fallbackRole) ? userId : '';
   const clinicId = sanitizeString(membership?.clinic_id || preferredClinicId || ownerFallbackClinicId, 120);
   const role = ensureClinicRole(membership?.role) ? sanitizeString(membership.role, 40) : fallbackRole;
 
   if (!isUuid(clinicId)) {
     return {
-      onboardingMode: role === 'coordinator' || role === 'admin' ? 'clinic_owner' : 'standard',
+      onboardingMode: ['director', 'coordinator', 'admin'].includes(role) ? 'clinic_owner' : 'standard',
       requiresPayment: roleRequiresClinicBillingAccess(role),
       canAccessDashboard: false,
-      canEditClinic: role === 'coordinator' || role === 'admin',
+      canEditClinic: ['director', 'coordinator', 'admin'].includes(role),
       source: 'profile',
       errorCode: 'ONBOARDING_CLINIC_NOT_RESOLVED',
       clinic: null,
@@ -15525,7 +15525,7 @@ async function resolveOnboardingContextForUser(params: {
   if (clinicResult.error) throw clinicResult.error;
   const clinicRow = clinicResult.data as any;
   if (!clinicRow?.id) {
-    const canProvisionOwnerClinic = !membership && ['owner', 'coordinator'].includes(role);
+    const canProvisionOwnerClinic = !membership && ['owner', 'director', 'coordinator'].includes(role);
     if (canProvisionOwnerClinic) {
       return {
         onboardingMode: 'clinic_owner',
@@ -15603,7 +15603,7 @@ async function resolveOnboardingContextForUser(params: {
   const invitedBy = sanitizeString(membership?.invited_by || invitation?.invited_by, 120) || null;
   const isInvited = Boolean(invitedBy || invitation?.id);
   const ownerUserId = sanitizeString(clinicRow?.owner_user_id, 120);
-  const isOwner = ownerUserId === userId || role === 'owner' || (!isInvited && role === 'coordinator' && clinicId === userId);
+  const isOwner = ownerUserId === userId || role === 'owner' || (!isInvited && ['director', 'coordinator'].includes(role) && clinicId === userId);
   const onboardingMode: OnboardingContextMode = isInvited
     ? 'invited_professional'
     : isOwner
@@ -18015,7 +18015,10 @@ async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inact
   return status;
 }
 
-async function ensureClinicAndMembershipForCoordinator(userId: string) {
+async function ensureClinicAndMembershipForCoordinator(
+  userId: string,
+  ownerRole: 'director' | 'coordinator' = 'coordinator',
+) {
   const safeUserId = sanitizeString(userId, 120);
   if (!safeUserId) return;
   // This helper provisions only the technical owner workspace. A person's name
@@ -18082,7 +18085,7 @@ async function ensureClinicAndMembershipForCoordinator(userId: string) {
   let membershipPayload: Record<string, any> = cleanObject({
     user_id: safeUserId,
     clinic_id: safeUserId,
-    role: 'coordinator',
+    role: ownerRole,
     status: 'active',
     created_at: now
   });
@@ -23345,7 +23348,7 @@ async function startServer() {
             const recoverablePartialActivation =
               activationOfferId === loaded.offerId &&
               profileEmail === loaded.email &&
-              profileRole === "coordinator" &&
+              ["director", "coordinator"].includes(profileRole) &&
               (!profileClinicId || profileClinicId === authUser.id) &&
               loaded.activation.used !== true;
 
@@ -23418,10 +23421,123 @@ async function startServer() {
         }
 
         if (!authUser?.id) throw new Error("SALES_AUTH_USER_NOT_CREATED");
+
+        // The person who contracts a new clinic is its initial director. Finish
+        // the commercial provisioning here, while the activation token is still
+        // authoritative, instead of leaving half of the operation to /auth/login.
+        // This makes retries deterministic: Auth may already exist, but the same
+        // offer/token can safely resume until the workspace is fully provisioned.
+        const ownerName =
+          sanitizeString(loaded.lead.name, 180) || loaded.email.split("@")[0];
+        const ownerProfileResult = await fetchProfileWithSchemaFallback({
+          supabase,
+          userId: authUser.id,
+          logger: console,
+        });
+        if (ownerProfileResult.error) throw ownerProfileResult.error;
+
+        if (ownerProfileResult.data) {
+          const existingOwnerProfile = ownerProfileResult.data as any;
+          if (
+            sanitizeEmail(existingOwnerProfile.email) !== loaded.email ||
+            (sanitizeString(existingOwnerProfile.clinic_id, 120) &&
+              sanitizeString(existingOwnerProfile.clinic_id, 120) !== authUser.id)
+          ) {
+            const ownershipMismatch = new Error("SALES_ACTIVATION_PROFILE_SCOPE_MISMATCH");
+            (ownershipMismatch as any).code = "SALES_ACTIVATION_PROFILE_SCOPE_MISMATCH";
+            throw ownershipMismatch;
+          }
+
+          let ownerProfileUpdates: Record<string, any> = cleanObject({
+            email: loaded.email,
+            name: ownerName,
+            role: "director",
+            clinic_id: authUser.id,
+            subscription_status: "active",
+            first_login_completed: false,
+            updated_at: new Date().toISOString(),
+          });
+          while (Object.keys(ownerProfileUpdates).length > 0) {
+            const ownerProfileUpdate = await supabase
+              .from("users")
+              .update(ownerProfileUpdates)
+              .eq("id", authUser.id);
+            if (!ownerProfileUpdate.error) break;
+            const missingColumn = extractMissingColumnName(ownerProfileUpdate.error);
+            if (
+              missingColumn &&
+              missingColumn in ownerProfileUpdates &&
+              !["email", "name", "role", "clinic_id"].includes(missingColumn)
+            ) {
+              delete ownerProfileUpdates[missingColumn];
+              continue;
+            }
+            throw ownerProfileUpdate.error;
+          }
+        } else {
+          const ownerProfileInsert = await insertUserProfileWithSchemaFallback({
+            id: authUser.id,
+            email: loaded.email,
+            name: ownerName,
+            role: "director",
+            clinic_id: authUser.id,
+            subscription_status: "active",
+            first_login_completed: false,
+            created_at: new Date().toISOString(),
+          });
+          if (ownerProfileInsert.error) throw ownerProfileInsert.error;
+        }
+
+        await ensureClinicAndMembershipForCoordinator(authUser.id, "director");
+        const [ownedClinicCheck, directorMembershipCheck] = await Promise.all([
+          supabase.from("clinics").select("id").eq("id", authUser.id).maybeSingle(),
+          supabase
+            .from("clinic_memberships")
+            .select("user_id,clinic_id,role,status")
+            .eq("user_id", authUser.id)
+            .eq("clinic_id", authUser.id)
+            .eq("status", "active")
+            .maybeSingle(),
+        ]);
+        if (
+          ownedClinicCheck.error ||
+          !ownedClinicCheck.data ||
+          directorMembershipCheck.error ||
+          !directorMembershipCheck.data ||
+          sanitizeString((directorMembershipCheck.data as any).role, 40) !== "director"
+        ) {
+          const workspaceError = new Error("SALES_ACTIVATION_WORKSPACE_PROVISIONING_FAILED");
+          (workspaceError as any).code = "SALES_ACTIVATION_WORKSPACE_PROVISIONING_FAILED";
+          throw workspaceError;
+        }
+
+        await finalizeSalesActivationForUser({
+          email: loaded.email,
+          userId: authUser.id,
+          clinicId: authUser.id,
+          offerId: loaded.offerId,
+          leadId: loaded.leadId,
+          checkoutSessionId: loaded.checkoutSessionId,
+        });
+
+        const { error: ownerMetadataError } = await supabase.auth.admin.updateUserById(
+          authUser.id,
+          {
+            user_metadata: {
+              ...(authUser.user_metadata || {}),
+              full_name: ownerName,
+              sales_activation_offer_id: loaded.offerId,
+              first_login_completed: false,
+            },
+          },
+        );
+        if (ownerMetadataError) throw ownerMetadataError;
+
         return res.json({
           success: true,
           email: loaded.email,
-          message: "Senha definida. Conclua o login para criar sua clínica.",
+          role: "director",
+          message: "Senha definida. Sua clínica está pronta para o primeiro acesso.",
         });
       } catch (error: any) {
         console.error(
@@ -23430,10 +23546,19 @@ async function startServer() {
             message: sanitizeString(error?.message || String(error), 240),
           },
         );
-        return res.status(500).json({
+        const safeCode = sanitizeString(error?.code || error?.message, 120);
+        const provisioningFailure = [
+          "MODULE_ENTITLEMENT_PROVISIONING_FAILED",
+          "SALES_ACTIVATION_WORKSPACE_PROVISIONING_FAILED",
+          "SALES_SUBSCRIPTION_LINKAGE_MISSING",
+          "SALES_SUBSCRIPTION_NOT_ACTIVE",
+        ].includes(safeCode);
+        return res.status(provisioningFailure ? 503 : 500).json({
           success: false,
-          error: "SALES_ACTIVATION_SETUP_FAILED",
-          message: "Não foi possível concluir a ativação agora.",
+          error: provisioningFailure
+            ? "SALES_ACTIVATION_PROVISIONING_FAILED"
+            : "SALES_ACTIVATION_SETUP_FAILED",
+          message: "Não foi possível concluir a ativação agora. Tente novamente; nenhum acesso será duplicado.",
         });
       }
     },
@@ -23468,6 +23593,12 @@ async function startServer() {
       },
     );
     if (error) {
+      console.error("[Module Entitlement] Provisioning RPC failed:", {
+        offerId: sanitizeString(params.offerId, 120),
+        organizationId: sanitizeString(params.organizationId, 120),
+        code: sanitizeString((error as any)?.code, 80) || null,
+        message: sanitizeString((error as any)?.message || String(error), 240),
+      });
       const wrapped = new Error("MODULE_ENTITLEMENT_PROVISIONING_FAILED");
       (wrapped as any).code = "MODULE_ENTITLEMENT_PROVISIONING_FAILED";
       (wrapped as any).cause = error;
@@ -23475,14 +23606,14 @@ async function startServer() {
     }
   };
 
-  const finalizeSalesActivationForUser = async (params: {
+  async function finalizeSalesActivationForUser(params: {
     email: string;
     userId: string;
     clinicId: string;
     offerId: string;
     leadId: string;
     checkoutSessionId: string;
-  }) => {
+  }) {
     const normalizedEmail = sanitizeEmail(params.email);
     const offerId = sanitizeString(params.offerId, 120);
     const leadId = sanitizeString(params.leadId, 120);
@@ -23645,7 +23776,7 @@ async function startServer() {
       // can retry instead of exposing the clinic workspace with broad access.
       if (modularContract) throw error;
     }
-  };
+  }
 
   const mutationActionLabel = (method: string, path: string) => {
     const verb =
@@ -25482,7 +25613,7 @@ async function startServer() {
       }
       if (
         activationFlow &&
-        normalizeRequestedRole(intendedRole) === 'coordinator' &&
+        ['director', 'coordinator'].includes(normalizeRequestedRole(intendedRole)) &&
         (!activationEmail || !safeAuthEmail || activationEmail !== safeAuthEmail)
       ) {
         return res.status(403).json({
@@ -25619,6 +25750,52 @@ async function startServer() {
       }
 
       const profileExistedBeforeInvitationProvisioning = Boolean(profile);
+
+      // A commercial activation that was partially created by an older build may
+      // already have a self-owned coordinator profile. Promote only that exact,
+      // still-pending offer to director; never reinterpret ordinary coordinator
+      // accounts from client-supplied role hints.
+      if (
+        profile &&
+        activationFlow &&
+        normalizeRequestedRole(intendedRole) === 'director' &&
+        sanitizeString(profile.role, 40) === 'coordinator' &&
+        sanitizeString(profile.clinic_id, 120) === sanitizeString(user.id, 120) &&
+        safeAuthEmail
+      ) {
+        const activationOfferHint = sanitizeString(
+          (user as any)?.user_metadata?.sales_activation_offer_id,
+          120,
+        );
+        if (isUuid(activationOfferHint)) {
+          const { data: resumableDirectorActivation, error: resumableDirectorActivationError } =
+            await supabase
+              .from('pending_activations')
+              .select('sales_offer_id')
+              .eq('email', safeAuthEmail)
+              .eq('source', 'sales_assisted_signup')
+              .eq('used', false)
+              .eq('sales_offer_id', activationOfferHint)
+              .limit(1)
+              .maybeSingle();
+          if (
+            resumableDirectorActivationError &&
+            !isMissingRelationError(resumableDirectorActivationError)
+          ) {
+            throw resumableDirectorActivationError;
+          }
+          if (resumableDirectorActivation?.sales_offer_id === activationOfferHint) {
+            const directorProfileUpdate = await supabase
+              .from('users')
+              .update({ role: 'director', clinic_id: user.id })
+              .eq('id', user.id)
+              .eq('role', 'coordinator');
+            if (directorProfileUpdate.error) throw directorProfileUpdate.error;
+            await ensureClinicAndMembershipForCoordinator(user.id, 'director');
+            profile = { ...profile, role: 'director', clinic_id: user.id };
+          }
+        }
+      }
 
       // If profile still doesn't exist (first time Google login), create it
       let commercialPaidActivation: {
@@ -25772,7 +25949,7 @@ async function startServer() {
           } else {
             (user as any).user_metadata = activationMetadata;
           }
-          finalRole = "coordinator";
+          finalRole = "director";
           clinicId = user.id;
         }
 
@@ -25813,11 +25990,14 @@ async function startServer() {
         });
 
         if (
-          finalRole === "coordinator" &&
+          ['director', 'coordinator'].includes(finalRole) &&
           !invitationPendingAcceptance &&
           sanitizeString(clinicId, 120) === sanitizeString(user.id, 120)
         ) {
-          await ensureClinicAndMembershipForCoordinator(user.id);
+          await ensureClinicAndMembershipForCoordinator(
+            user.id,
+            finalRole === 'director' ? 'director' : 'coordinator',
+          );
           if (commercialPaidActivation) {
             await finalizeSalesActivationForUser({
               ...commercialPaidActivation,
@@ -25848,11 +26028,14 @@ async function startServer() {
       // owns the technical self-clinic. An invited coordinator must never receive
       // a new clinic just because the global profile role is coordinator.
       const shouldEnsureOwnedCoordinatorWorkspace =
-        profile.role === 'coordinator' &&
+        ['director', 'coordinator'].includes(profile.role) &&
         !requestedClinicInvitation &&
         sanitizeString(profile.clinic_id, 120) === sanitizeString(user.id, 120);
       if (shouldEnsureOwnedCoordinatorWorkspace) {
-        await ensureClinicAndMembershipForCoordinator(user.id);
+        await ensureClinicAndMembershipForCoordinator(
+          user.id,
+          profile.role === 'director' ? 'director' : 'coordinator',
+        );
       } else if (profile.clinic_id && ensureClinicRole(profile.role) && !invitationPendingAcceptance) {
         await supabase
           .from('clinic_memberships')
@@ -25868,11 +26051,11 @@ async function startServer() {
       // Retry an interrupted paid modular activation on a later login.
       // This is intentionally a single, tightly filtered lookup at login only;
       // page navigation never polls commercial activation state.
-      const ownedCoordinatorClinicId = sanitizeString(profile?.clinic_id, 120);
+      const ownedCommercialClinicId = sanitizeString(profile?.clinic_id, 120);
       if (
-        profile?.role === 'coordinator' &&
-        isUuid(ownedCoordinatorClinicId) &&
-        ownedCoordinatorClinicId === sanitizeString(user.id, 120) &&
+        ['director', 'coordinator'].includes(profile?.role) &&
+        isUuid(ownedCommercialClinicId) &&
+        ownedCommercialClinicId === sanitizeString(user.id, 120) &&
         safeAuthEmail
       ) {
         const activationOfferHint = activationFlow
@@ -25913,7 +26096,7 @@ async function startServer() {
           await finalizeSalesActivationForUser({
             email: safeAuthEmail,
             userId: user.id,
-            clinicId: ownedCoordinatorClinicId,
+            clinicId: ownedCommercialClinicId,
             offerId: retryOfferId,
             leadId: retryLeadId,
             checkoutSessionId: retryCheckoutSessionId,
