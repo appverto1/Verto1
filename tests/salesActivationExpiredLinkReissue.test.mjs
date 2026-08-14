@@ -10,7 +10,7 @@ const route = server.match(
 
 assert.ok(route, 'admin activation reissue route must exist');
 assert.match(route, /checkAuth,\s*checkPlatformAdmin,\s*resendActivationLimiter/);
-assert.match(route, /createSalesActivationReissueToken\(\)/);
+assert.match(route, /deriveSalesActivationToken\(checkoutSessionId\)/);
 assert.match(route, /token: reissueTokenHash/);
 assert.match(route, /expires_at: expiresAt/);
 assert.match(route, /\.eq\("used", false\)/);
@@ -27,7 +27,9 @@ assert.match(route, /bookkeepingWarning:\s*Boolean\(persistenceError\)/);
 assert.doesNotMatch(route, /processSalesAssistedCheckoutCompleted\(/, 'reissue must not replay checkout/payment');
 assert.doesNotMatch(route, /subscriptions\.update|checkout\.sessions\.create/, 'reissue must not mutate Stripe');
 
-assert.match(server, /function createSalesActivationReissueToken\(\): string \{\s*return crypto\.randomBytes\(32\)\.toString\("base64url"\);\s*\}/);
+assert.match(route, /const reissuePreflight = await loadPublicSalesActivation\(reissueToken\)/);
+assert.match(route, /SALES_ACTIVATION_REISSUE_PREFLIGHT_FAILED/);
+assert.match(route, /token:\s*previousTokenHash \|\| null[\s\S]*?preflight invalido/);
 assert.match(ui, /Este link de ativação não está disponível/);
 
 console.log('salesActivationExpiredLinkReissue.test.mjs: OK');

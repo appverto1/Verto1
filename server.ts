@@ -1880,10 +1880,6 @@ function deriveSalesActivationToken(checkoutSessionId: string): string {
     .digest("base64url");
 }
 
-function createSalesActivationReissueToken(): string {
-  return crypto.randomBytes(32).toString("base64url");
-}
-
 function deriveSalesOfferPublicToken(
   actorUserId: string,
   idempotencyKey: string,
@@ -85520,10 +85516,16 @@ async function startServer() {
         }
 
         // Reissue is deliberately different from replaying the Checkout webhook.
-        // Rotate the credential and expiry so an already-sent/expired link can be
-        // recovered without touching payment, subscription or clinic entitlements.
+        // Refresh the credential expiry without touching payment, subscription or
+        // clinic entitlements. The credential itself is deterministic per paid
+        // checkout so repeated legitimate re-sends cannot invalidate each other.
         const previousTokenHash = sanitizeString(activation.token, 180);
-        const reissueToken = createSalesActivationReissueToken();
+        // Recovery links must be idempotent. The checkout session is already a
+        // server-verified, immutable identifier for this paid offer, and the
+        // original activation credential is an HMAC derived from it. Reusing
+        // that deterministic credential prevents two legitimate re-sends from
+        // invalidating each other when the customer opens an older e-mail.
+        const reissueToken = deriveSalesActivationToken(checkoutSessionId);
         const reissueTokenHash = hashSalesOfferToken(reissueToken);
         const expiresAt = new Date(
           Date.now() + SALES_ACTIVATION_TTL_DAYS * 24 * 60 * 60 * 1000,
@@ -85554,6 +85556,44 @@ async function startServer() {
             success: false,
             error: "SALES_ACTIVATION_REISSUE_RACE",
             message: "A ativação foi alterada por outra solicitação. Atualize a tela antes de reenviar novamente.",
+          });
+        }
+
+        // Validate the exact credential that will be embedded in the e-mail
+        // against the same public loader used by the activation page. If this
+        // preflight fails, no e-mail is sent and the previous credential is
+        // restored. This makes a broken link impossible to report as sent.
+        const reissuePreflight = await loadPublicSalesActivation(reissueToken);
+        const preflightValid =
+          !("error" in reissuePreflight) &&
+          reissuePreflight.offerId === offerId &&
+          reissuePreflight.leadId === leadId &&
+          reissuePreflight.checkoutSessionId === checkoutSessionId &&
+          reissuePreflight.email === recipient;
+        if (!preflightValid) {
+          const rollbackPreflight = await supabase
+            .from("pending_activations")
+            .update({
+              token: previousTokenHash || null,
+              expires_at: activation.expires_at || null,
+              activation_email_last_attempt_at:
+                activation.activation_email_last_attempt_at || null,
+              activation_email_error_code:
+                activation.activation_email_error_code || null,
+            })
+            .eq("id", activation.id)
+            .eq("token", reissueTokenHash)
+            .eq("used", false);
+          if (rollbackPreflight.error) {
+            console.error("[Owner Sales] Falha ao restaurar ativacao apos preflight invalido.", {
+              offerId,
+              code: sanitizeString(rollbackPreflight.error.code, 80),
+            });
+          }
+          return res.status(503).json({
+            success: false,
+            error: "SALES_ACTIVATION_REISSUE_PREFLIGHT_FAILED",
+            message: "O novo link não passou na validação interna e não foi enviado. Tente novamente em instantes.",
           });
         }
 

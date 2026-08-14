@@ -50,3 +50,19 @@ assert.match(
   /bookkeepingWarning:\s*Boolean\(persistenceError\)/,
   'post-delivery bookkeeping failures must not turn a successfully delivered link into HTTP 5xx',
 );
+
+assert.match(
+  reissueRoute,
+  /deriveSalesActivationToken\(checkoutSessionId\)/,
+  'reissue must reuse the deterministic paid-checkout activation credential',
+);
+assert.match(
+  reissueRoute,
+  /const reissuePreflight = await loadPublicSalesActivation\(reissueToken\)/,
+  'the exact credential sent by e-mail must pass the public activation loader before delivery',
+);
+assert.match(
+  reissueRoute,
+  /SALES_ACTIVATION_REISSUE_PREFLIGHT_FAILED/,
+  'preflight failures must block delivery instead of sending a broken activation link',
+);
