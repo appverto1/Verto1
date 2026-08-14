@@ -85597,6 +85597,7 @@ async function startServer() {
           });
         }
 
+        let providerMessageId: string | null = null;
         try {
           const emailResult = await getResend().emails.send(
             {
@@ -85608,10 +85609,23 @@ async function startServer() {
               html: buildSalesPostPaymentActivationEmail(reissueToken),
             },
             {
-              idempotencyKey: `sales-activation-reissue:${activation.id}:${reissueTokenHash.slice(0, 16)}`,
+              // A manual resend is a NEW delivery, not a transport retry of the
+              // previous delivery. Resend suppresses requests that reuse the same
+              // idempotency key for 24 hours, so key each operator-requested
+              // delivery by the persisted attempt number. Concurrent double-clicks
+              // still share the same key and are deduplicated safely.
+              idempotencyKey: `sales-activation-reissue:${activation.id}:attempt-${attempts + 1}`,
             },
           );
           if (emailResult.error) throw emailResult.error;
+          providerMessageId = sanitizeString(emailResult.data?.id || '', 200) || null;
+          console.info('[Owner Sales] Reenvio de ativacao aceito pelo Resend.', {
+            offerId,
+            activationId: sanitizeString(activation.id, 120),
+            deliveryAttempt: attempts + 1,
+            providerMessageId,
+            recipient: maskEmail(recipient),
+          });
         } catch (emailError: any) {
           const errorCode = sanitizeString(
             emailError?.code || emailError?.name || "ACTIVATION_EMAIL_FAILED",
@@ -85700,8 +85714,10 @@ async function startServer() {
                   checkout_session_id: checkoutSessionId,
                   expires_at: expiresAt,
                   reissued: true,
+                  delivery_attempt: attempts + 1,
+                  provider_message_id: providerMessageId,
                 },
-                idempotency_key: `activation-reissued:${activation.id}:${reissueTokenHash.slice(0, 16)}`,
+                idempotency_key: `activation-reissued:${activation.id}:attempt-${attempts + 1}`,
               },
             ],
             { onConflict: "idempotency_key", ignoreDuplicates: true },
@@ -85727,6 +85743,8 @@ async function startServer() {
           paymentConfirmed: true,
           activationEmailSent: true,
           expiresAt,
+          deliveryAttempt: attempts + 1,
+          providerMessageId,
           bookkeepingWarning: Boolean(persistenceError),
           message: "Novo link de ativação enviado. O link anterior foi invalidado.",
         });
