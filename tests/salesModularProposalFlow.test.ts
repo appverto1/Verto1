@@ -19,6 +19,10 @@ assert.match(builder, /customBasePackageLimit/);
 assert.match(builder, /basePackageSelectionMode/);
 assert.match(builder, /modularCheckoutEnabled: true/);
 assert.match(builder, /trialDays: 7/);
+assert.match(builder, /selectedSimulationTrialDays/);
+assert.match(builder, /Período de teste alterado\. Salve e selecione um novo cenário/);
+assert.match(builder, /selectedSimulationTrialMismatch/);
+assert.match(builder, /Cenário selecionado:/);
 
 assert.match(server, /customBasePackageLimit/);
 assert.match(server, /basePackageSelectionMode/);

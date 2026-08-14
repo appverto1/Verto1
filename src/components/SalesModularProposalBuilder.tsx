@@ -53,6 +53,7 @@ import {
   type SalesProposalReviewClassification
 } from '../utils/salesModularEconomics';
 import type { SalesAssumptionSnapshot } from '../utils/salesProfitability';
+import { normalizeSalesTrialDays } from '../utils/salesTrialContract';
 import { buildSalesRecurringMoneyFlow } from '../utils/salesFinancialExplanation';
 import {
   ModularOfferDetails,
@@ -484,17 +485,24 @@ export const SalesModularProposalBuilder = ({
           publicNotes: ''
           ,offerStartsAt: new Date().toISOString()
         };
+        const frozenSimulation = simulationData.simulations?.find(
+          (simulation: SavedModularSimulation) =>
+            simulation.status === 'selected' ||
+            simulation.status === 'offered'
+        ) || null;
         setCatalog(activeCatalog);
         setAssumptions(assumptionData.assumptionSet || null);
         setSimulations(simulationData.simulations || []);
-        setSelectedSimulationId(
-          simulationData.simulations?.find(
-            (simulation: SavedModularSimulation) =>
-              simulation.status === 'selected' ||
-              simulation.status === 'offered'
-          )?.id || ''
-        );
-        setInput(initialInput);
+        setSelectedSimulationId(frozenSimulation?.id || '');
+        setInput({
+          ...initialInput,
+          trialDays: frozenSimulation
+            ? normalizeSalesTrialDays(
+                frozenSimulation.modular_input_snapshot?.trialDays,
+                0
+              )
+            : initialInput.trialDays
+        });
       } catch (loadError: any) {
         if (cancelled) return;
         if (
@@ -857,6 +865,16 @@ export const SalesModularProposalBuilder = ({
       ) || null,
     [selectedSimulationId, simulations]
   );
+  const selectedSimulationTrialDays = selectedSimulation
+    ? normalizeSalesTrialDays(
+        selectedSimulation.modular_input_snapshot?.trialDays,
+        0
+      )
+    : null;
+  const draftTrialDays = normalizeSalesTrialDays(input?.trialDays, 0);
+  const selectedSimulationTrialMismatch =
+    selectedSimulationTrialDays !== null &&
+    selectedSimulationTrialDays !== draftTrialDays;
   const selectedSimulationHasVersionedEconomics =
     validateSalesProfitabilityPolicy(
       selectedSimulation?.results_snapshot?.economics?.policy
@@ -1038,9 +1056,19 @@ export const SalesModularProposalBuilder = ({
   if (useLegacyFallback) return <>{legacyFallback}</>;
 
   const updateInput = (patch: Partial<SalesModularProposalInput>) => {
+    const changesFrozenTrial =
+      Object.prototype.hasOwnProperty.call(patch, 'trialDays') &&
+      selectedSimulationId.length > 0;
     setInput((current) => (current ? { ...current, ...patch } : current));
+    if (changesFrozenTrial) {
+      setSelectedSimulationId('');
+    }
     setPreparedOffer(null);
-    setNotice('');
+    setNotice(
+      changesFrozenTrial
+        ? 'Período de teste alterado. Salve e selecione um novo cenário para congelar essa condição antes de gerar a proposta.'
+        : ''
+    );
   };
 
   const changePatientQuantity = (patientQuantity: number) => {
@@ -1233,6 +1261,17 @@ export const SalesModularProposalBuilder = ({
         { method: 'POST', body: JSON.stringify({}) }
       );
       setSelectedSimulationId(simulation.id);
+      setInput((current) =>
+        current
+          ? {
+              ...current,
+              trialDays: normalizeSalesTrialDays(
+                simulation.modular_input_snapshot?.trialDays,
+                0
+              )
+            }
+          : current
+      );
       setSimulations((current) =>
         current.map((candidate) =>
           candidate.id === simulation.id
@@ -1324,6 +1363,7 @@ export const SalesModularProposalBuilder = ({
         : 'manual');
     setInput({
       ...snapshotInput,
+      trialDays: normalizeSalesTrialDays(snapshotInput.trialDays, 0),
       commercialPricingMode: 'manual_module_prices',
       // Duplicar um cenário histórico é a ação explícita que o moderniza para
       // a Fundação automática; o snapshot original permanece inalterado.
@@ -3290,6 +3330,13 @@ export const SalesModularProposalBuilder = ({
                       <option value={14}>14 dias</option>
                       <option value={30}>30 dias</option>
                     </select>
+                    {selectedSimulationTrialDays !== null ? (
+                      <span className="mt-1 block text-xs font-normal leading-5 text-slate-500">
+                        Cenário selecionado: {selectedSimulationTrialDays > 0
+                          ? `${selectedSimulationTrialDays} dias de teste`
+                          : 'sem período de teste'}.
+                      </span>
+                    ) : null}
                   </label>
                   <label className="text-sm font-medium text-slate-700">
                     Validade
@@ -5241,6 +5288,7 @@ export const SalesModularProposalBuilder = ({
                 disabled={
                   Boolean(busy) ||
                   !selectedSimulation ||
+                  selectedSimulationTrialMismatch ||
                   (!selectedSimulation.offer &&
                     selectedSimulationRequiresVersionedProfitabilityPolicy &&
                     !selectedSimulationHasVersionedEconomics) ||
@@ -5267,7 +5315,9 @@ export const SalesModularProposalBuilder = ({
               </button>
             </div>
             <p className="mt-2 text-right text-xs font-normal text-slate-500">
-              {selectedSimulation &&
+              {selectedSimulationTrialMismatch
+                  ? 'O período de teste do rascunho difere do cenário congelado. Salve e selecione um novo cenário antes de gerar a proposta.'
+                  : selectedSimulation &&
                     !selectedSimulation.offer &&
                     selectedSimulationRequiresVersionedProfitabilityPolicy &&
                     !selectedSimulationHasVersionedEconomics

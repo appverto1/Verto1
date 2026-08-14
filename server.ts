@@ -108,6 +108,10 @@ import {
   type SimulationValueSource
 } from './src/utils/salesProfitability';
 import {
+  normalizeSalesTrialDays,
+  resolveFrozenSalesOfferTrialDays,
+} from './src/utils/salesTrialContract';
+import {
   calculateSalesModularProposal,
   recommendSalesPackageTier,
   salesCapacityBlockPhasesMatch,
@@ -82402,6 +82406,27 @@ async function startServer() {
           offerCreatedBy,
           offerIdempotencyKey,
         );
+        const expectedTrialDays = normalizeSalesTrialDays(
+          simulation.modular_input_snapshot?.trialDays,
+          0,
+        );
+        const persistedTrialDays = normalizeSalesTrialDays(
+          existingOffer.trial_days,
+          0,
+        );
+        if (persistedTrialDays !== expectedTrialDays) {
+          console.error('[Sales Modular] Trial congelado diverge da proposta persistida.', {
+            offerId: existingOffer.id,
+            simulationId,
+            expectedTrialDays,
+            persistedTrialDays,
+          });
+          return res.status(409).json({
+            success: false,
+            code: 'PROPOSAL_TRIAL_SNAPSHOT_MISMATCH',
+            error: 'O período de teste congelado diverge da proposta persistida. Gere uma nova versão do cenário antes do Checkout.',
+          });
+        }
         let stripeReady = false;
         if (existingOffer.modular_checkout_enabled === true) {
           try {
@@ -82570,6 +82595,21 @@ async function startServer() {
       );
       if (error) throw error;
       const offer = data?.offer || data;
+      const expectedTrialDays = normalizeSalesTrialDays(input.trialDays, 0);
+      const persistedTrialDays = normalizeSalesTrialDays(offer?.trial_days, 0);
+      if (persistedTrialDays !== expectedTrialDays) {
+        console.error('[Sales Modular] Trial não foi congelado corretamente na proposta.', {
+          offerId: sanitizeString(offer?.id, 120),
+          simulationId,
+          expectedTrialDays,
+          persistedTrialDays,
+        });
+        return res.status(409).json({
+          success: false,
+          code: 'PROPOSAL_TRIAL_SNAPSHOT_MISMATCH',
+          error: 'O período de teste não foi congelado corretamente. Salve e selecione uma nova versão do cenário.',
+        });
+      }
       const publicToken = deriveSalesOfferPublicToken(
         sanitizeString(offer?.created_by, 120) || actorUserId,
         sanitizeString(offer?.idempotency_key, 240) || idempotencyKey,
@@ -83683,6 +83723,20 @@ async function startServer() {
             error: "A proposta está vencida ou revogada.",
           });
         }
+        let frozenTrialDays: 0 | 7 | 14 | 30;
+        try {
+          frozenTrialDays = resolveFrozenSalesOfferTrialDays(offer);
+        } catch (trialError: any) {
+          console.error('[Sales Modular] Reconciliação do trial bloqueou o Checkout.', {
+            offerId,
+            code: sanitizeString(trialError?.message || trialError?.code, 160),
+          });
+          return res.status(409).json({
+            success: false,
+            code: 'MODULAR_CHECKOUT_RECONCILIATION_FAILED',
+            error: 'O período de teste congelado diverge entre os snapshots da proposta. Gere uma nova proposta antes de continuar.',
+          });
+        }
         const snapshot =
           offer.modular_snapshot && typeof offer.modular_snapshot === "object"
             ? offer.modular_snapshot
@@ -83813,7 +83867,7 @@ async function startServer() {
           .update(JSON.stringify({
             offerId,
             environment: stripeEnvironment,
-            trialDays: Number(offer.trial_days || 0),
+            trialDays: frozenTrialDays,
             checkoutPlan: checkoutPlan.reconciliationHashInput,
           }))
           .digest("hex");
@@ -83977,13 +84031,13 @@ async function startServer() {
               : `${origin}/oferta/pagamento?payment=cancelled`,
             expires_at: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
             metadata: stripeMetadata,
-            ...(Number(offer.trial_days || 0) > 0
+            ...(frozenTrialDays > 0
               ? { payment_method_collection: "always" as const }
               : {}),
             subscription_data: {
               metadata: stripeMetadata,
-              ...(Number(offer.trial_days || 0) > 0
-                ? { trial_period_days: Number(offer.trial_days) }
+              ...(frozenTrialDays > 0
+                ? { trial_period_days: frozenTrialDays }
                 : {}),
             },
             line_items: checkoutPlan.initialLineItems.map((line) => ({
