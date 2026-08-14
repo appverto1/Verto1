@@ -23813,7 +23813,7 @@ async function startServer() {
           .maybeSingle(),
         supabase
           .from("sales_offers")
-          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type")
+          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,trial_days,accepted_at,payment_confirmed_at,provisioning_status")
           .eq("id", offerId)
           .eq("lead_id", leadId)
           .eq("status", "paid")
@@ -23883,26 +23883,92 @@ async function startServer() {
         if (!subscriptionId) {
           throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
         }
-        const subscription = await getStripe().subscriptions.retrieve(
-          subscriptionId,
-        );
-        const entitlementStatus = stripeSubscriptionToEntitlementStatus(
-          subscription.status,
-        );
+
+        // First access must not depend on a fresh outbound Stripe request.
+        // Payment/subscription lifecycle was already accepted through the signed
+        // webhook and persisted before this activation flow. Reuse that durable
+        // state so a temporary Stripe/network failure cannot strand a paid
+        // customer after the password has already been created.
+        const { data: lifecycleRows, error: lifecycleError } = await supabase
+          .from("sales_lead_events")
+          .select("metadata,created_at,idempotency_key")
+          .eq("lead_id", leadId)
+          .eq("event_type", "lead_updated")
+          .contains("metadata", { offer_id: offerId })
+          .order("created_at", { ascending: false })
+          .limit(10);
+        if (lifecycleError) throw lifecycleError;
+
+        const persistedLifecycle = (Array.isArray(lifecycleRows) ? lifecycleRows : [])
+          .find((row: any) =>
+            sanitizeString(row?.metadata?.subscription_status, 40),
+          );
+
+        let entitlementStatus: "active" | "trial" | "grace" | "suspended" | "cancelled";
+        let entitlementEventId = `activation-persisted:${checkoutSessionId}:${subscriptionId}`;
+        let entitlementEventCreatedAt = sanitizeString(
+          offerResult.data.payment_confirmed_at || offerResult.data.accepted_at,
+          80,
+        ) || now;
+
+        if (persistedLifecycle) {
+          const stripeEventType = sanitizeString(
+            persistedLifecycle?.metadata?.stripe_event_type,
+            120,
+          );
+          entitlementStatus = stripeEventType === "customer.subscription.deleted"
+            ? "cancelled"
+            : stripeSubscriptionToEntitlementStatus(
+                persistedLifecycle?.metadata?.subscription_status,
+              );
+          const persistedEventId = sanitizeString(
+            persistedLifecycle?.idempotency_key,
+            240,
+          ).replace(/^sales-stripe-lifecycle:/, "");
+          if (persistedEventId) {
+            entitlementEventId = `activation:${persistedEventId}`;
+          }
+          entitlementEventCreatedAt = sanitizeString(
+            persistedLifecycle?.created_at,
+            80,
+          ) || entitlementEventCreatedAt;
+        } else {
+          // Compatibility fallback for a paid Checkout that predates lifecycle
+          // event persistence. It is intentionally derived only from signed-
+          // webhook facts already stored on the frozen offer.
+          const paymentConfirmedAt = sanitizeString(
+            offerResult.data.payment_confirmed_at,
+            80,
+          );
+          const acceptedAt = sanitizeString(offerResult.data.accepted_at, 80);
+          const entitlementAnchor = paymentConfirmedAt || acceptedAt;
+          if (!entitlementAnchor) {
+            throw new Error("SALES_PAYMENT_CONFIRMATION_MISSING");
+          }
+          const trialDays = Math.max(0, Number(offerResult.data.trial_days || 0));
+          const trialEndsAt = new Date(entitlementAnchor).getTime()
+            + trialDays * 24 * 60 * 60 * 1000;
+          entitlementStatus = trialDays > 0 && trialEndsAt > Date.now()
+            ? "trial"
+            : "active";
+          entitlementEventCreatedAt = entitlementAnchor;
+        }
+
         if (!["active", "trial", "grace"].includes(entitlementStatus)) {
           throw new Error("SALES_SUBSCRIPTION_NOT_ACTIVE");
         }
+
         await applyModularEntitlementsForOrganization({
           offerId,
           organizationId: params.clinicId,
           stripeSubscriptionId: subscriptionId,
-          stripeEventId: `activation:${checkoutSessionId}:${subscriptionId}`,
-          stripeEventCreatedAt: new Date().toISOString(),
+          stripeEventId: entitlementEventId,
+          stripeEventCreatedAt: entitlementEventCreatedAt,
           status: entitlementStatus,
         });
       }
 
-      const [activationUpdate, eventUpdate] = await Promise.all([
+      const [activationUpdate, eventUpdate, offerProvisioningUpdate] = await Promise.all([
         supabase
           .from("pending_activations")
           .update({ used: true })
@@ -23926,9 +23992,20 @@ async function startServer() {
           ],
           { onConflict: "idempotency_key", ignoreDuplicates: true },
         ),
+        supabase
+          .from("sales_offers")
+          .update({
+            provisioning_status: "completed",
+            provisioning_error_code: null,
+            provisioning_updated_at: now,
+            updated_at: now,
+          })
+          .eq("id", offerId)
+          .eq("lead_id", leadId)
+          .eq("status", "paid"),
       ]);
-      if (activationUpdate.error || eventUpdate.error) {
-        throw activationUpdate.error || eventUpdate.error;
+      if (activationUpdate.error || eventUpdate.error || offerProvisioningUpdate.error) {
+        throw activationUpdate.error || eventUpdate.error || offerProvisioningUpdate.error;
       }
     } catch (error: any) {
       if (isMissingRelationError(error)) {
@@ -23938,11 +24015,31 @@ async function startServer() {
         if (modularContract) throw error;
         return;
       }
+      const provisioningErrorCode = sanitizeString(
+        error?.code || error?.message || "SALES_ACTIVATION_FINALIZATION_FAILED",
+        120,
+      ) || "SALES_ACTIVATION_FINALIZATION_FAILED";
+      try {
+        await supabase
+          .from("sales_offers")
+          .update({
+            provisioning_status: "failed",
+            provisioning_error_code: provisioningErrorCode,
+            provisioning_updated_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", offerId)
+          .eq("lead_id", leadId)
+          .eq("status", "paid");
+      } catch {
+        // Observability must never hide the original provisioning failure.
+      }
       console.error("[Sales Activation] Falha ao concluir vínculo comercial:", {
         email: maskEmail(normalizedEmail),
         userId: sanitizeString(params.userId, 120),
         offerId,
         leadId,
+        code: provisioningErrorCode,
         message: sanitizeString(error?.message || String(error), 240),
       });
       // New modular contracts must never fall back to legacy_full when their
