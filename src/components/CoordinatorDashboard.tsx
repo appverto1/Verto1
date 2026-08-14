@@ -715,41 +715,94 @@ export function CoordinatorDashboard({
   const [moduleAccessMode, setModuleAccessMode] = useState<OrganizationModuleAccessMode>("contract");
   const [entitlementVersion, setEntitlementVersion] = useState(1);
   const [authorizationHydrated, setAuthorizationHydrated] = useState(false);
+  const verifiedAuthorizationKeyRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
-    // Authorization is fail-closed while the canonical tenant context is loading.
-    // Never expose role-default capabilities or legacy-full modules before the server confirms them.
-    setEffectiveCapabilities(new Set());
-    setOrganizationModules(new Set());
-    setModuleAccessMode("contract");
-    setEntitlementVersion(1);
-    setAuthorizationHydrated(false);
+    const authorizationKey = [
+      normalizedRole,
+      String(user?.activeWorkspaceId || user?.clinicId || "").trim(),
+    ].join(":");
+    const hasVerifiedCurrentContext =
+      Boolean(authorizationKey) && verifiedAuthorizationKeyRef.current === authorizationKey;
+
+    // Fail closed only when the tenant actually changes. A transient 5xx must
+    // never erase an authorization context that this same workspace already
+    // received successfully from the server.
+    if (!hasVerifiedCurrentContext) {
+      setEffectiveCapabilities(new Set());
+      setOrganizationModules(new Set());
+      setModuleAccessMode("contract");
+      setEntitlementVersion(1);
+      setAuthorizationHydrated(false);
+    }
     if (!isClinicBaseRole(normalizedRole)) {
+      verifiedAuthorizationKeyRef.current = authorizationKey;
       setAuthorizationHydrated(true);
       return () => { cancelled = true; };
     }
-    void dataService.getClinicAuthorizationContext().then((result: any) => {
-      if (cancelled) return;
-      if (result?.success && Array.isArray(result?.data?.capabilities)) {
-        setEffectiveCapabilities(new Set(result.data.capabilities.map((value: any) => String(value || '').trim()).filter(Boolean)));
-        const nextMode = result?.data?.moduleAccessMode === "contract" ? "contract" : "legacy_full";
-        setModuleAccessMode(nextMode);
-        setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
-        setOrganizationModules(new Set(
-          Array.isArray(result?.data?.modules)
-            ? result.data.modules
-                .map((value: any) => String(value || '').trim())
-                .filter((value: string): value is OrganizationModuleKey =>
-                  ["clinical_core", "appointments_communication", "financial_management", "insurance_tiss", "school_management"].includes(value),
-                )
-            : [],
-        ));
+
+    const loadAuthorization = async () => {
+      const retryDelaysMs = [0, 350, 900];
+      let lastFailure: any = null;
+      for (let attempt = 0; attempt < retryDelaysMs.length; attempt += 1) {
+        if (retryDelaysMs[attempt] > 0) {
+          await new Promise((resolve) => window.setTimeout(resolve, retryDelaysMs[attempt]));
+        }
+        if (cancelled) return;
+        const result: any = await dataService.getClinicAuthorizationContext();
+        if (cancelled) return;
+        if (result?.success && Array.isArray(result?.data?.capabilities)) {
+          const nextMode: OrganizationModuleAccessMode =
+            result?.data?.moduleAccessMode === "contract" ? "contract" : "legacy_full";
+          const nextModules = new Set<OrganizationModuleKey>(
+            Array.isArray(result?.data?.modules)
+              ? result.data.modules
+                  .map((value: any) => String(value || '').trim())
+                  .filter((value: string): value is OrganizationModuleKey =>
+                    ["clinical_core", "appointments_communication", "financial_management", "insurance_tiss", "school_management"].includes(value),
+                  )
+              : [],
+          );
+
+          // A modular paid contract is required by the backend to contain at
+          // least one operational module. Treat contract+empty as an incomplete
+          // provisioning state, not as a legitimate plan that should wipe the UI.
+          if (nextMode === "contract" && nextModules.size === 0) {
+            lastFailure = { code: "CLINIC_MODULE_ENTITLEMENTS_EMPTY", status: 503 };
+            continue;
+          }
+
+          setEffectiveCapabilities(new Set(
+            result.data.capabilities
+              .map((value: any) => String(value || '').trim())
+              .filter(Boolean),
+          ));
+          setModuleAccessMode(nextMode);
+          setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
+          setOrganizationModules(nextModules);
+          verifiedAuthorizationKeyRef.current = authorizationKey;
+          setAuthorizationHydrated(true);
+          return;
+        }
+        lastFailure = result;
+        const status = Number(result?.status || 0);
+        if (status > 0 && status < 500 && status !== 429) break;
       }
-      setAuthorizationHydrated(true);
-    }).catch(() => {
-      if (!cancelled) setAuthorizationHydrated(true);
-    });
+
+      if (cancelled) return;
+      console.error('[Authorization] Não foi possível validar módulos/capabilities da clínica.', {
+        code: String(lastFailure?.code || lastFailure?.error || 'CLINIC_AUTHORIZATION_UNAVAILABLE'),
+        status: Number(lastFailure?.status || 0) || null,
+      });
+      // Preserve a last-known-good context for this exact workspace only. On a
+      // first load with no verified context, remain fail-closed until recovery.
+      setAuthorizationHydrated(
+        verifiedAuthorizationKeyRef.current === authorizationKey,
+      );
+    };
+
+    void loadAuthorization();
     return () => { cancelled = true; };
   }, [normalizedRole, user?.activeWorkspaceId, user?.clinicId]);
 
