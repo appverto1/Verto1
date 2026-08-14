@@ -90,6 +90,7 @@ type SavedModularSimulation = {
     id: string;
     status: string;
     expires_at: string;
+    contract_email?: string | null;
   } | null;
 };
 
@@ -111,6 +112,18 @@ const percent = (value: number | null | undefined) =>
 
 const requestKey = (prefix: string) =>
   `${prefix}:${crypto.randomUUID()}`;
+
+const normalizeContractEmail = (value: unknown) =>
+  String(value || '').trim().toLowerCase();
+
+const isValidContractEmail = (value: unknown) => {
+  const email = normalizeContractEmail(value);
+  return (
+    email.length >= 3 &&
+    email.length <= 254 &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  );
+};
 
 const ECONOMY_SIMULATOR_PATIENT_PRESETS = [150, 160, 170, 200] as const;
 
@@ -361,6 +374,7 @@ export const SalesModularProposalBuilder = ({
   const [preparedOffer, setPreparedOffer] = useState<any>(null);
   const [checkoutLink, setCheckoutLink] = useState<any>(null);
   const [offerAccepted, setOfferAccepted] = useState(false);
+  const [contractEmail, setContractEmail] = useState('');
 
   const authenticatedFetch = async (
     url: string,
@@ -494,6 +508,11 @@ export const SalesModularProposalBuilder = ({
         setAssumptions(assumptionData.assumptionSet || null);
         setSimulations(simulationData.simulations || []);
         setSelectedSimulationId(frozenSimulation?.id || '');
+        setContractEmail(
+          normalizeContractEmail(
+            frozenSimulation?.offer?.contract_email || ''
+          )
+        );
         setInput({
           ...initialInput,
           trialDays: frozenSimulation
@@ -1428,6 +1447,11 @@ export const SalesModularProposalBuilder = ({
 
   const prepareOffer = async () => {
     if (!selectedSimulation) return;
+    const frozenContractEmail = normalizeContractEmail(contractEmail);
+    if (!isValidContractEmail(frozenContractEmail)) {
+      setError('Informe um e-mail válido do responsável pela contratação antes de gerar a proposta pública.');
+      return;
+    }
     if (
       !selectedSimulation.offer &&
       selectedSimulationRequiresVersionedProfitabilityPolicy &&
@@ -1444,10 +1468,14 @@ export const SalesModularProposalBuilder = ({
         headers: { 'X-Idempotency-Key': requestKey('modular-offer') },
         body: JSON.stringify({
           leadId: lead.id,
-          simulationId: selectedSimulation.id
+          simulationId: selectedSimulation.id,
+          contractEmail: frozenContractEmail
         })
       });
       setPreparedOffer(data);
+      if (data?.offer?.contract_email) {
+        setContractEmail(normalizeContractEmail(data.offer.contract_email));
+      }
       setSimulations((current) =>
         current.map((simulation) =>
           simulation.id === selectedSimulation.id
@@ -1625,6 +1653,8 @@ export const SalesModularProposalBuilder = ({
   const commercialPricingMissing =
     preview?.commercialPricing.enabled === true &&
     preview.commercialPricing.missingPriceItemKeys.length > 0;
+  const normalizedContractEmail = normalizeContractEmail(contractEmail);
+  const contractEmailValid = isValidContractEmail(normalizedContractEmail);
   const currentCapacityBlockPhase =
     preview?.commercialPricing.capacityBlockPhases[0] || null;
   const postBenefitCapacityBlockPhase =
@@ -1705,6 +1735,53 @@ export const SalesModularProposalBuilder = ({
                   </div>
                 </section>
               ) : null}
+              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                <div>
+                  <p className="text-xs font-medium text-violet-700">Identidade contratual</p>
+                  <h2 className="mt-1 text-base font-semibold text-slate-900">
+                    Responsável pela contratação
+                  </h2>
+                  <p className="mt-1 text-sm font-normal leading-6 text-slate-500">
+                    Confirme o e-mail que receberá o Checkout e a ativação. Ele ficará congelado nesta proposta e não altera o histórico do lead.
+                  </p>
+                </div>
+                <label className="mt-4 block text-sm font-medium text-slate-700">
+                  E-mail do responsável
+                  <input
+                    type="email"
+                    value={contractEmail}
+                    maxLength={254}
+                    autoComplete="email"
+                    disabled={Boolean(activeOfferId)}
+                    onChange={(event) => {
+                      setContractEmail(event.target.value);
+                      setPreparedOffer(null);
+                      setError('');
+                    }}
+                    className={`mt-1.5 w-full rounded-xl border bg-white px-3 py-2.5 text-sm font-normal outline-none transition disabled:bg-slate-50 disabled:text-slate-500 ${
+                      contractEmail.length > 0 && !contractEmailValid
+                        ? 'border-rose-300 focus:border-rose-400 focus:ring-2 focus:ring-rose-100'
+                        : 'border-slate-200 focus:border-violet-400 focus:ring-2 focus:ring-violet-100'
+                    }`}
+                    placeholder="responsavel@clinica.com.br"
+                  />
+                </label>
+                {lead?.email && !activeOfferId ? (
+                  <p className="mt-2 text-xs font-normal text-amber-700">
+                    O lead possui {normalizeContractEmail(lead.email)} no histórico. Por segurança, ele não é usado automaticamente: confirme o e-mail da contratação acima.
+                  </p>
+                ) : null}
+                {!contractEmailValid ? (
+                  <p className="mt-2 text-xs font-normal text-rose-600">
+                    Informe um e-mail válido antes de gerar a proposta pública.
+                  </p>
+                ) : activeOfferId ? (
+                  <p className="mt-2 text-xs font-normal text-emerald-700">
+                    E-mail congelado nesta proposta: {normalizedContractEmail}
+                  </p>
+                ) : null}
+              </section>
+
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -5288,6 +5365,7 @@ export const SalesModularProposalBuilder = ({
                 disabled={
                   Boolean(busy) ||
                   !selectedSimulation ||
+                  !contractEmailValid ||
                   selectedSimulationTrialMismatch ||
                   (!selectedSimulation.offer &&
                     selectedSimulationRequiresVersionedProfitabilityPolicy &&
@@ -5315,7 +5393,9 @@ export const SalesModularProposalBuilder = ({
               </button>
             </div>
             <p className="mt-2 text-right text-xs font-normal text-slate-500">
-              {selectedSimulationTrialMismatch
+              {!contractEmailValid
+                  ? 'Confirme um e-mail válido do responsável pela contratação. Ele será congelado na proposta e usado no Checkout e na ativação.'
+                  : selectedSimulationTrialMismatch
                   ? 'O período de teste do rascunho difere do cenário congelado. Salve e selecione um novo cenário antes de gerar a proposta.'
                   : selectedSimulation &&
                     !selectedSimulation.offer &&

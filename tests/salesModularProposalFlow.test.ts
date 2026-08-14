@@ -42,7 +42,7 @@ assert.match(
   'a proposta pública deve reutilizar e sanitizar o pacote-base congelado'
 );
 assert.match(server, /modularCheckoutEnabled: offer\?\.modular_checkout_enabled === true/);
-assert.match(server, /create_sales_modular_offer_v2/);
+assert.match(server, /create_sales_modular_offer_v3/);
 assert.doesNotMatch(server, /PROPOSAL_MODULAR_CHECKOUT_NOT_ENABLED/);
 assert.match(
   server,

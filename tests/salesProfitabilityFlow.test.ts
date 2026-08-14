@@ -10,6 +10,6 @@ assert.doesNotMatch(legacyEngine, /basePackageSelectionMode/);
 assert.match(modularEngine, /customBasePackageLimit/);
 assert.match(server, /offer_type, 30\) === "modular"/);
 assert.doesNotMatch(server, /PROPOSAL_MODULAR_CHECKOUT_NOT_ENABLED/);
-assert.match(server, /create_sales_modular_offer_v2/);
+assert.match(server, /create_sales_modular_offer_v3/);
 
 console.log('salesProfitabilityFlow.test.ts: OK');

@@ -19010,7 +19010,7 @@ async function startServer() {
     ] = await Promise.all([
       supabase
         .from("sales_offers")
-        .select("id,lead_id,status,revoked_at,expires_at")
+        .select("id,lead_id,status,revoked_at,expires_at,offer_type,contract_email")
         .eq("id", offerId)
         .eq("lead_id", leadId)
         .maybeSingle(),
@@ -19039,6 +19039,16 @@ async function startServer() {
         (frozenModuleItems || []).map((item: any) => sanitizeString(item?.item_key, 80)),
       );
       if (sanitizeString(metadata.moduleSetHash, 64) !== expectedModuleSetHash) {
+        throw new Error("MODULAR_CHECKOUT_RECONCILIATION_FAILED");
+      }
+      const frozenContractEmail = sanitizeEmail((offer as any).contract_email);
+      const expectedContractEmailHash = frozenContractEmail
+        ? crypto.createHash("sha256").update(frozenContractEmail).digest("hex")
+        : "";
+      if (
+        !frozenContractEmail
+        || sanitizeString(metadata.contractEmailHash, 64) !== expectedContractEmailHash
+      ) {
         throw new Error("MODULAR_CHECKOUT_RECONCILIATION_FAILED");
       }
     }
@@ -81522,7 +81532,7 @@ async function startServer() {
               .order("sort_order", { ascending: true }),
             supabase
               .from("sales_offers")
-              .select("id,simulation_id,status,expires_at,created_at")
+              .select("id,simulation_id,status,expires_at,contract_email,created_at")
               .in("simulation_id", simulationIds),
           ]);
           const batchError = [itemsResult, offersResult].find(
@@ -82352,9 +82362,16 @@ async function startServer() {
       simulationId: string;
       actorUserId: string;
       idempotencyKey: string;
+      contractEmail: string;
     },
   ) => {
-    const { leadId, simulationId, actorUserId, idempotencyKey } = params;
+    const {
+      leadId,
+      simulationId,
+      actorUserId,
+      idempotencyKey,
+      contractEmail,
+    } = params;
     if (
       req.session?.user?.isPlatformAdmin !== true
       || !hasVerifiedMfaSession(req.session?.user)
@@ -82375,6 +82392,13 @@ async function startServer() {
         success: false,
         code: "PROPOSAL_SIMULATION_INVALID",
         error: "Selecione um cenário modular salvo.",
+      });
+    }
+    if (!contractEmail) {
+      return res.status(422).json({
+        success: false,
+        code: "PROPOSAL_CONTRACT_EMAIL_REQUIRED",
+        error: "Informe um e-mail válido do responsável pela contratação.",
       });
     }
     try {
@@ -82427,7 +82451,7 @@ async function startServer() {
           await supabase
             .from("sales_offers")
             .select(
-              "id,simulation_id,status,expires_at,created_by,idempotency_key,modular_checkout_enabled,trial_days,created_at",
+              "id,simulation_id,status,expires_at,created_by,idempotency_key,modular_checkout_enabled,trial_days,contract_email,created_at",
             )
             .eq("simulation_id", simulationId)
             .order("created_at", { ascending: false })
@@ -82473,6 +82497,21 @@ async function startServer() {
             success: false,
             code: 'PROPOSAL_TRIAL_SNAPSHOT_MISMATCH',
             error: 'O período de teste congelado diverge da proposta persistida. Gere uma nova versão do cenário antes do Checkout.',
+          });
+        }
+        const persistedContractEmail = sanitizeEmail(existingOffer.contract_email);
+        if (!persistedContractEmail) {
+          return res.status(409).json({
+            success: false,
+            code: 'PROPOSAL_CONTRACT_EMAIL_REQUIRED',
+            error: 'Esta proposta histórica não possui identidade contratual congelada. Duplique o cenário e gere uma nova proposta.',
+          });
+        }
+        if (persistedContractEmail !== contractEmail) {
+          return res.status(409).json({
+            success: false,
+            code: 'PROPOSAL_CONTRACT_EMAIL_MISMATCH',
+            error: 'O e-mail informado difere da identidade congelada nesta proposta. Use a proposta original ou gere uma nova versão.',
           });
         }
         let stripeReady = false;
@@ -82613,6 +82652,7 @@ async function startServer() {
           JSON.stringify({
             leadId,
             simulationId,
+            contractEmail,
             catalogVersionId: catalog.id,
             resultModelVersion: recalculated.modelVersion,
             commercialExceptionResultHash:
@@ -82630,7 +82670,7 @@ async function startServer() {
           + input.offerValidityDays * 24 * 60 * 60 * 1000,
       ).toISOString();
       const { data, error } = await supabase.rpc(
-        "create_sales_modular_offer_v2",
+        "create_sales_modular_offer_v3",
         {
           p_simulation_id: simulationId,
           p_lead_id: leadId,
@@ -82639,6 +82679,7 @@ async function startServer() {
           p_request_hash: requestHash,
           p_public_token_hash: hashSalesOfferToken(provisionalToken),
           p_expires_at: expiresAt,
+          p_contract_email: contractEmail,
         },
       );
       if (error) throw error;
@@ -82656,6 +82697,20 @@ async function startServer() {
           success: false,
           code: 'PROPOSAL_TRIAL_SNAPSHOT_MISMATCH',
           error: 'O período de teste não foi congelado corretamente. Salve e selecione uma nova versão do cenário.',
+        });
+      }
+      const persistedContractEmail = sanitizeEmail(offer?.contract_email);
+      if (!persistedContractEmail || persistedContractEmail !== contractEmail) {
+        console.error('[Sales Modular] Identidade contratual não foi congelada corretamente.', {
+          offerId: sanitizeString(offer?.id, 120),
+          simulationId,
+          expectedEmail: maskEmail(contractEmail),
+          persistedEmail: persistedContractEmail ? maskEmail(persistedContractEmail) : null,
+        });
+        return res.status(409).json({
+          success: false,
+          code: 'PROPOSAL_CONTRACT_EMAIL_MISMATCH',
+          error: 'O e-mail da contratação não foi congelado corretamente. Gere uma nova proposta antes de continuar.',
         });
       }
       const publicToken = deriveSalesOfferPublicToken(
@@ -83279,6 +83334,7 @@ async function startServer() {
       const leadId = sanitizeString(req.body?.leadId, 120);
       const simulationId = sanitizeString(req.body?.simulationId, 120);
       const actorUserId = sanitizeString(req.session?.user?.id, 120);
+      const contractEmail = sanitizeEmail(req.body?.contractEmail);
       const requestIdempotencyKey = sanitizeString(
         req.headers?.["x-idempotency-key"] || req.body?.idempotencyKey,
         180,
@@ -83322,6 +83378,7 @@ async function startServer() {
             simulationId,
             actorUserId,
             idempotencyKey: requestIdempotencyKey,
+            contractEmail,
           });
         }
         return prepareSalesOfferFromSimulation(req, res, {
@@ -83709,7 +83766,7 @@ async function startServer() {
           supabase
             .from("sales_offers")
             .select(
-              "id,lead_id,offer_type,status,accepted_at,accepted_terms_at,accepted_terms_snapshot,expires_at,revoked_at,currency,catalog_version_id,simulation_snapshot,modular_snapshot,internal_justification,modular_checkout_enabled,trial_days",
+              "id,lead_id,offer_type,status,accepted_at,accepted_terms_at,accepted_terms_snapshot,expires_at,revoked_at,currency,catalog_version_id,simulation_snapshot,modular_snapshot,internal_justification,modular_checkout_enabled,trial_days,contract_email",
             )
             .eq("id", offerId)
             .maybeSingle(),
@@ -83769,6 +83826,14 @@ async function startServer() {
             success: false,
             code: "MODULAR_OFFER_EXPIRED",
             error: "A proposta está vencida ou revogada.",
+          });
+        }
+        const contractEmail = sanitizeEmail(offer.contract_email);
+        if (!contractEmail) {
+          return res.status(409).json({
+            success: false,
+            code: "MODULAR_OFFER_CONTRACT_EMAIL_REQUIRED",
+            error: "A proposta não possui e-mail contratual congelado. Gere uma nova proposta antes do Checkout.",
           });
         }
         let frozenTrialDays: 0 | 7 | 14 | 30;
@@ -84040,13 +84105,6 @@ async function startServer() {
             ).catch(() => undefined);
           }
         }
-        const { data: lead, error: leadError } = await supabase
-          .from("sales_leads")
-          .select("id,email,normalized_email")
-          .eq("id", offer.lead_id)
-          .is("deleted_at", null)
-          .maybeSingle();
-        if (leadError || !lead) throw leadError || new Error("SALES_LEAD_NOT_FOUND");
         const origin = salesApplicationOrigin(req);
         const stripeMetadata: Record<string, string> = {
           flowType: "sales_modular_assisted",
@@ -84064,13 +84122,16 @@ async function startServer() {
           ),
           environment: stripeEnvironment,
           moduleSetHash,
+          contractEmailHash: crypto
+            .createHash("sha256")
+            .update(contractEmail)
+            .digest("hex"),
         };
         const session = await getStripe().checkout.sessions.create(
           {
             mode: "subscription",
             client_reference_id: offerId,
-            customer_email:
-              sanitizeEmail(lead.normalized_email || lead.email) || undefined,
+            customer_email: contractEmail,
             success_url: publicOfferToken
               ? `${buildSalesOfferPublicUrl(req, publicOfferToken)}?payment=success&session_id={CHECKOUT_SESSION_ID}`
               : `${origin}/oferta/pagamento?payment=success&session_id={CHECKOUT_SESSION_ID}`,
@@ -84343,15 +84404,15 @@ async function startServer() {
       if (linkError || !link?.checkout_url) {
         return res.status(404).json({ success: false, error: "ACTIVE_CHECKOUT_LINK_NOT_FOUND" });
       }
-      const { data: lead, error: leadError } = await supabase
-        .from("sales_leads")
-        .select("email,normalized_email")
-        .eq("id", link.lead_id)
-        .is("deleted_at", null)
+      const { data: offerIdentity, error: offerIdentityError } = await supabase
+        .from("sales_offers")
+        .select("contract_email")
+        .eq("id", offerId)
+        .eq("lead_id", link.lead_id)
         .maybeSingle();
-      const recipient = sanitizeEmail(lead?.normalized_email || lead?.email);
-      if (leadError || !recipient) {
-        return res.status(422).json({ success: false, error: "LEAD_EMAIL_REQUIRED" });
+      const recipient = sanitizeEmail(offerIdentity?.contract_email);
+      if (offerIdentityError || !recipient) {
+        return res.status(422).json({ success: false, error: "PROPOSAL_CONTRACT_EMAIL_REQUIRED" });
       }
       try {
         const publicCheckoutUrl = serializeSalesCheckoutLink(req, link).publicCheckoutUrl;
