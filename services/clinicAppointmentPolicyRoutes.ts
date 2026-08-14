@@ -7,6 +7,7 @@ type ClinicAppointmentPolicyRouteDeps = {
   checkAuth: any;
   requireClinicCapability: (capability: any) => any;
   requireAnyClinicCapability: (...capabilities: any[]) => any;
+  requireClinicModule: (moduleKey: any) => any;
   portalActionLimiter: any;
   sanitizeString: (value: any, max?: number) => string;
   currentClinicId: (user: any) => string | null;
@@ -36,6 +37,7 @@ export function registerClinicAppointmentPolicyRoutes(
     checkAuth,
     requireClinicCapability,
     requireAnyClinicCapability,
+    requireClinicModule,
     portalActionLimiter,
     sanitizeString,
     currentClinicId
@@ -45,6 +47,7 @@ export function registerClinicAppointmentPolicyRoutes(
     '/api/clinic/appointment-policy',
     noStoreDynamicResponse,
     checkAuth,
+    requireClinicModule('appointments_communication'),
     requireAnyClinicCapability('calendar.own.view', 'calendar.clinic.view', 'calendar.team.view', 'clinic.settings.view'),
     async (req: any, res: any) => {
       try {
@@ -98,6 +101,7 @@ export function registerClinicAppointmentPolicyRoutes(
     portalActionLimiter,
     noStoreDynamicResponse,
     checkAuth,
+    requireClinicModule('appointments_communication'),
     requireClinicCapability('clinic.settings.edit'),
     async (req: any, res: any) => {
       try {

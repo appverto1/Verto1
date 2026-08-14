@@ -9220,6 +9220,13 @@ function requireClinicCapability(capability: CapabilityKey) {
         clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
         userId: sanitizeString(req.session?.user?.id, 120)
       });
+      if (isClinicModuleAccessProfileError(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_MODULE_ACCESS_PROFILE_MISSING',
+          message: 'O vínculo de módulos desta clínica está sendo reconciliado.'
+        });
+      }
       if (isClinicModuleSchemaError(error)) {
         return res.status(503).json({
           success: false,
@@ -9267,6 +9274,13 @@ function requireAnyClinicCapability(...capabilities: CapabilityKey[]) {
         clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
         userId: sanitizeString(req.session?.user?.id, 120)
       });
+      if (isClinicModuleAccessProfileError(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_MODULE_ACCESS_PROFILE_MISSING',
+          message: 'O vínculo de módulos desta clínica está sendo reconciliado.'
+        });
+      }
       if (isClinicModuleSchemaError(error)) {
         return res.status(503).json({
           success: false,
@@ -9288,6 +9302,11 @@ function requireAnyClinicCapability(...capabilities: CapabilityKey[]) {
 function isClinicModuleSchemaError(error: any): boolean {
   const code = sanitizeString(error?.code || error?.message, 120);
   return code === 'CLINIC_MODULE_SCHEMA_UNAVAILABLE' || isMissingRelationError(error);
+}
+
+function isClinicModuleAccessProfileError(error: any): boolean {
+  const code = sanitizeString(error?.code || error?.message, 120);
+  return code === 'CLINIC_MODULE_ACCESS_PROFILE_MISSING';
 }
 
 function requireClinicModule(moduleKey: OrganizationModuleKey) {
@@ -9319,6 +9338,13 @@ function requireClinicModule(moduleKey: OrganizationModuleKey) {
         clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
         userId: sanitizeString(req.session?.user?.id, 120),
       });
+      if (isClinicModuleAccessProfileError(error)) {
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_MODULE_ACCESS_PROFILE_MISSING',
+          message: 'O vínculo de módulos desta clínica está sendo reconciliado.'
+        });
+      }
       if (isClinicModuleSchemaError(error)) {
         return res.status(503).json({
           success: false,
@@ -27079,6 +27105,28 @@ async function startServer() {
         }
       });
     } catch (error) {
+      if (isClinicModuleAccessProfileError(error)) {
+        logRouteDbError('/api/clinic/authorization/me [GET]', error, {
+          clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+          userId: sanitizeString(req.session?.user?.id, 120)
+        });
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_MODULE_ACCESS_PROFILE_MISSING',
+          message: 'O vínculo de módulos desta clínica está sendo reconciliado.'
+        });
+      }
+      if (isClinicModuleSchemaError(error)) {
+        logRouteDbError('/api/clinic/authorization/me [GET]', error, {
+          clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
+          userId: sanitizeString(req.session?.user?.id, 120)
+        });
+        return res.status(503).json({
+          success: false,
+          error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE',
+          message: 'A estrutura de módulos contratados ainda não foi aplicada.'
+        });
+      }
       return sendRouteDbError(res, '/api/clinic/authorization/me [GET]', error, {
         clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
         userId: sanitizeString(req.session?.user?.id, 120)
@@ -86328,6 +86376,7 @@ async function startServer() {
     checkAuth,
     requireClinicCapability,
     requireAnyClinicCapability,
+    requireClinicModule,
     portalActionLimiter,
     sanitizeString,
     currentClinicId

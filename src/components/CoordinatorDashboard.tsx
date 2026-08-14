@@ -97,7 +97,7 @@ import {
 } from "recharts";
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
 import { dataService } from "../services/dataService";
-import { getDefaultCapabilitiesForRole, isClinicBaseRole } from "../constants/authorizationModel";
+import { isClinicBaseRole } from "../constants/authorizationModel";
 import {
   getAgendaViewPreferenceKey,
   readAgendaViewPreference,
@@ -710,21 +710,19 @@ export function CoordinatorDashboard({
   // but patient scoping continues to come from SUPERVISED_CASES on the server.
   const isTherapist = isDirectTherapist || isSupervisor;
   const isReceptionist = normalizedRole === "receptionist";
-  const baseCapabilities = useMemo(() => {
-    if (!isClinicBaseRole(normalizedRole)) return new Set<string>();
-    return new Set<string>(getDefaultCapabilitiesForRole(normalizedRole));
-  }, [normalizedRole]);
-  const [effectiveCapabilities, setEffectiveCapabilities] = useState<Set<string>>(baseCapabilities);
+  const [effectiveCapabilities, setEffectiveCapabilities] = useState<Set<string>>(new Set());
   const [organizationModules, setOrganizationModules] = useState<Set<OrganizationModuleKey>>(new Set());
-  const [moduleAccessMode, setModuleAccessMode] = useState<OrganizationModuleAccessMode>("legacy_full");
+  const [moduleAccessMode, setModuleAccessMode] = useState<OrganizationModuleAccessMode>("contract");
   const [entitlementVersion, setEntitlementVersion] = useState(1);
   const [authorizationHydrated, setAuthorizationHydrated] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setEffectiveCapabilities(baseCapabilities);
+    // Authorization is fail-closed while the canonical tenant context is loading.
+    // Never expose role-default capabilities or legacy-full modules before the server confirms them.
+    setEffectiveCapabilities(new Set());
     setOrganizationModules(new Set());
-    setModuleAccessMode("legacy_full");
+    setModuleAccessMode("contract");
     setEntitlementVersion(1);
     setAuthorizationHydrated(false);
     if (!isClinicBaseRole(normalizedRole)) {
@@ -753,7 +751,7 @@ export function CoordinatorDashboard({
       if (!cancelled) setAuthorizationHydrated(true);
     });
     return () => { cancelled = true; };
-  }, [baseCapabilities, normalizedRole, user?.activeWorkspaceId, user?.clinicId]);
+  }, [normalizedRole, user?.activeWorkspaceId, user?.clinicId]);
 
   const hasCapability = useCallback(
     (capability: string) => effectiveCapabilities.has(capability),
@@ -1014,7 +1012,7 @@ export function CoordinatorDashboard({
     therapistMembersRequestSeqRef.current = requestSeq;
     therapistMembersWorkspaceRef.current = workspaceId;
     setTherapistMembersById({});
-    if (!workspaceId) return;
+    if (!workspaceId || !authorizationHydrated || !hasCapability("team.view")) return;
     const loadTherapistMembers = async () => {
       try {
         const result = await dataService.getClinicMembers();
@@ -1041,7 +1039,7 @@ export function CoordinatorDashboard({
       }
     };
     void loadTherapistMembers();
-  }, [user?.activeWorkspaceId, user?.clinicId]);
+  }, [authorizationHydrated, effectiveCapabilities, user?.activeWorkspaceId, user?.clinicId]);
 
   const therapistFilterOptions = useMemo(() => {
     const entries = Object.entries(therapistMembersById as Record<string, any>)
@@ -1164,6 +1162,18 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     if (activeTab !== "patients") return;
+    if (!authorizationHydrated || !hasModule("school_management")) {
+      patientSchoolOptionsLoadedForRef.current = "";
+      patientSchoolOptionsRequestForRef.current = "";
+      setPatientSchoolOptions([]);
+      setPatientSchoolOptionsWorkspaceId("");
+      setPatientSchoolOptionsLoading(false);
+      setPatientSchoolOptionsLoadError("");
+      setPatientSchoolFilter("");
+      setPatientSchoolUnitFilter("");
+      setSelectedSchoolPatientIds([]);
+      return;
+    }
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
     const requestSeq = patientSchoolOptionsRequestSeqRef.current + 1;
     patientSchoolOptionsRequestSeqRef.current = requestSeq;
@@ -1215,7 +1225,7 @@ export function CoordinatorDashboard({
         }
       });
     return () => controller.abort();
-  }, [activeTab, patientSchoolOptionsRevision, user?.activeWorkspaceId, user?.clinicId]);
+  }, [activeTab, authorizationHydrated, moduleAccessMode, organizationModules, patientSchoolOptionsRevision, user?.activeWorkspaceId, user?.clinicId]);
 
   const patientSchoolOptionsForCurrentWorkspace =
     patientSchoolOptionsWorkspaceId === String(user?.activeWorkspaceId || user?.clinicId || "").trim()
@@ -2227,16 +2237,18 @@ export function CoordinatorDashboard({
   }>({ services: [], codes: [], mappings: [], prices: [] });
 
   useEffect(() => {
-    if (isAnamnesisTemplateModalOpen) {
+    if (authorizationHydrated && hasCapability("clinical.anamnesis.view") && isAnamnesisTemplateModalOpen) {
       loadClinicAnamnesisTemplate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAnamnesisTemplateModalOpen]);
+  }, [authorizationHydrated, effectiveCapabilities, isAnamnesisTemplateModalOpen]);
 
   useEffect(() => {
-    loadClinicAnamnesisTemplate();
+    if (authorizationHydrated && hasCapability("clinical.anamnesis.view")) {
+      loadClinicAnamnesisTemplate();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authorizationHydrated, effectiveCapabilities, user?.activeWorkspaceId, user?.clinicId]);
 
   const normalizeLookupText = (value: any) =>
     normalizeUtf8Text(String(value || "")).trim().toLowerCase();
@@ -9396,6 +9408,7 @@ export function CoordinatorDashboard({
       currentUser={user}
       currentDate={calendarDate}
       view={agendaView}
+      schoolModuleEnabled={authorizationHydrated && hasModule("school_management")}
       onDateChange={setCalendarDate}
       onViewChange={handleAgendaViewChange}
       onCreateAppointment={openNewAppointmentAt}

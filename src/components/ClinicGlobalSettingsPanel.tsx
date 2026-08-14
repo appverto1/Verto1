@@ -7,7 +7,7 @@ import { SecureImage } from "./SecureMedia";
 import { dataService } from "../services/dataService";
 import { normalizeAbaPromptTypeConfig, type AbaPromptTypeConfig } from "../utils/abaPromptLevels";
 import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStorage } from "../utils/brMasks";
-import type { OrganizationModuleAccessMode, OrganizationModuleKey } from "../constants/organizationModules";
+import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from "../constants/organizationModules";
 
 type SettingsValues = Record<string, any>;
 
@@ -1289,6 +1289,11 @@ export function ClinicGlobalSettingsPanel({
   retryMediaIfBroken,
 }: ClinicGlobalSettingsPanelProps) {
   const isProfessionalView = mode === "professional";
+  const hasAppointmentsCommunicationModule = hasOrganizationModule(
+    moduleAccessMode,
+    organizationModules,
+    "appointments_communication",
+  );
   const scrollToClinicData = () => {
     document.getElementById("clinic-master-data")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -1628,7 +1633,9 @@ export function ClinicGlobalSettingsPanel({
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                   <label className={labelClass}>Início do expediente<input type="time" value={values.workStart} onChange={(event) => setters.setWorkStart(event.target.value)} className={inputClass} /></label>
                   <label className={labelClass}>Fim do expediente<input type="time" value={values.workEnd} onChange={(event) => setters.setWorkEnd(event.target.value)} className={inputClass} /></label>
-                  <div className="md:col-span-2"><PatientReschedulePolicySettings /></div>
+                  {hasAppointmentsCommunicationModule && (
+                    <div className="md:col-span-2"><PatientReschedulePolicySettings /></div>
+                  )}
                   <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar preferências</SaveButton></div>
                 </div>
               </SectionCard>
