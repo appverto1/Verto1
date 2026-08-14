@@ -23213,7 +23213,7 @@ async function startServer() {
     const [offerResult, leadResult] = await Promise.all([
       supabase
         .from("sales_offers")
-        .select("id,lead_id,status,stripe_checkout_session_id")
+        .select("id,lead_id,status,stripe_checkout_session_id,offer_type,contract_email")
         .eq("id", offerId)
         .eq("lead_id", leadId)
         .eq("status", "paid")
@@ -23233,6 +23233,12 @@ async function startServer() {
       !leadResult.data
     ) {
       return { error: "SALES_ACTIVATION_NOT_AUTHORIZED" as const };
+    }
+    if (sanitizeString((offerResult.data as any).offer_type, 30) === "modular") {
+      const contractEmail = sanitizeEmail((offerResult.data as any).contract_email);
+      if (!contractEmail || contractEmail !== email) {
+        return { error: "SALES_ACTIVATION_NOT_AUTHORIZED" as const };
+      }
     }
 
     return {
@@ -23328,12 +23334,38 @@ async function startServer() {
           });
           if (existingProfileResult.error) throw existingProfileResult.error;
           if (existingProfileResult.data) {
-            return res.status(409).json({
-              success: false,
-              error: "ACCOUNT_ALREADY_ACTIVE",
-              message:
-                "Esta conta já possui acesso à Verto. Entre normalmente ou recupere sua senha.",
-            });
+            const existingProfile = existingProfileResult.data as any;
+            const activationOfferId = sanitizeString(
+              authUser?.user_metadata?.sales_activation_offer_id,
+              120,
+            );
+            const profileEmail = sanitizeEmail(existingProfile?.email);
+            const profileRole = sanitizeString(existingProfile?.role, 40).toLowerCase();
+            const profileClinicId = sanitizeString(existingProfile?.clinic_id, 120);
+            const recoverablePartialActivation =
+              activationOfferId === loaded.offerId &&
+              profileEmail === loaded.email &&
+              profileRole === "coordinator" &&
+              (!profileClinicId || profileClinicId === authUser.id) &&
+              loaded.activation.used !== true;
+
+            if (!recoverablePartialActivation) {
+              return res.status(409).json({
+                success: false,
+                error: "ACCOUNT_ALREADY_ACTIVE",
+                message:
+                  "Esta conta já possui acesso à Verto. Entre normalmente ou recupere sua senha.",
+              });
+            }
+
+            console.warn(
+              "[Sales Activation] Retomando ativação parcial após provisionamento interrompido:",
+              {
+                email: maskEmail(loaded.email),
+                userId: sanitizeString(authUser.id, 120),
+                offerId: loaded.offerId,
+              },
+            );
           }
 
           const { data: updatedUser, error: updateError } =
@@ -25448,6 +25480,16 @@ async function startServer() {
           message: 'Entre com a mesma conta Google do e-mail cadastrado para este paciente.'
         });
       }
+      if (
+        activationFlow &&
+        normalizeRequestedRole(intendedRole) === 'coordinator' &&
+        (!activationEmail || !safeAuthEmail || activationEmail !== safeAuthEmail)
+      ) {
+        return res.status(403).json({
+          error: 'SALES_ACTIVATION_EMAIL_MISMATCH',
+          message: 'Entre com o mesmo e-mail confirmado na contratação da Verto.'
+        });
+      }
       const isEmailVerified = Boolean((user as any)?.email_confirmed_at || (user as any)?.confirmed_at);
       if (!isEmailVerified) {
         await persistIdentityAuditLog({
@@ -25716,6 +25758,20 @@ async function startServer() {
 
           // A clínica somente pode ser criada após uma ativação paga persistida pelo webhook assinado.
           commercialPaidActivation = validPaidActivation;
+          const activationMetadata = {
+            ...((user as any)?.user_metadata || {}),
+            sales_activation_offer_id: validPaidActivation.offerId,
+          };
+          const { data: activationUserUpdate, error: activationUserUpdateError } =
+            await supabase.auth.admin.updateUserById(user.id, {
+              user_metadata: activationMetadata,
+            });
+          if (activationUserUpdateError) throw activationUserUpdateError;
+          if (activationUserUpdate?.user) {
+            user = activationUserUpdate.user;
+          } else {
+            (user as any).user_metadata = activationMetadata;
+          }
           finalRole = "coordinator";
           clinicId = user.id;
         }
@@ -25819,12 +25875,22 @@ async function startServer() {
         ownedCoordinatorClinicId === sanitizeString(user.id, 120) &&
         safeAuthEmail
       ) {
-        const { data: pendingSalesActivation, error: pendingSalesActivationError } = await supabase
+        const activationOfferHint = activationFlow
+          ? sanitizeString((user as any)?.user_metadata?.sales_activation_offer_id, 120)
+          : '';
+        let pendingSalesActivationQuery = supabase
           .from('pending_activations')
           .select('email,source,sales_offer_id,sales_lead_id,stripe_checkout_session_id,expires_at')
           .eq('email', safeAuthEmail)
           .eq('used', false)
-          .eq('source', 'sales_assisted_signup')
+          .eq('source', 'sales_assisted_signup');
+        if (isUuid(activationOfferHint)) {
+          pendingSalesActivationQuery = pendingSalesActivationQuery.eq(
+            'sales_offer_id',
+            activationOfferHint,
+          );
+        }
+        const { data: pendingSalesActivation, error: pendingSalesActivationError } = await pendingSalesActivationQuery
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
