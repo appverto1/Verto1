@@ -122,28 +122,11 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
       activationEmail: activation.email,
     };
 
-    // Prefer the browser Supabase session, but do not make first access depend
-    // on it. The backend already supports credential verification and can
-    // restore the same canonical session when the client token is delayed.
-    try {
-      const supabase = await getSupabase();
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: activation.email,
-        password,
-      });
-      if (!signInError && data.session) {
-        const loginResult = await onLogin(
-          data.session,
-          'director',
-          { email: activation.email, password },
-          authContext,
-        );
-        if (loginResult?.success) return loginResult;
-      }
-    } catch {
-      // Server-side credential login below is the recovery path.
-    }
-
+    // Password activation must be provider-agnostic. A Hotmail address or a
+    // clinic-owned domain is a normal e-mail identity and must not depend on a
+    // Google/browser Auth session. The Verto backend verifies these credentials
+    // against the same Supabase project, provisions the paid clinic, and only
+    // then consumes the one-time commercial activation.
     const serverLoginResult = await onLogin(
       null,
       'director',

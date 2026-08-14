@@ -20,6 +20,8 @@ assert.match(ui, /payload\?\.passwordSaved === true/);
 assert.match(passwordRoute, /let passwordSaved = false/);
 assert.match(passwordRoute, /passwordSaved = true/);
 assert.match(passwordRoute, /passwordSaved: true/);
-assert.match(passwordRoute, /passwordSaved,\s*error: provisioningFailure/);
+assert.match(passwordRoute, /provisioningPending: true/);
+assert.doesNotMatch(passwordRoute, /finalizeSalesActivationForUser\(/);
+assert.match(passwordRoute, /error: \"SALES_ACTIVATION_PASSWORD_SETUP_FAILED\"/);
 
 console.log('salesActivationPasswordFirstAccess.test.mjs: OK');
