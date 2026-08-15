@@ -186,14 +186,19 @@ export const PatientProfessionalLinksPanel = ({
       await load();
     } catch (addError: any) {
       const code = String(addError?.message || '');
+      if (code.includes('DUPLICATE')) {
+        // The desired relationship already exists. Re-read the canonical server state
+        // instead of presenting an idempotent retry as a destructive error.
+        setShowForm(false);
+        await load();
+        return;
+      }
       setError(code.includes('LIMIT')
         ? 'Este paciente já possui cinco profissionais ativos. Encerre um vínculo antes de adicionar outro.'
-        : code.includes('DUPLICATE')
-          ? 'Este profissional já possui vínculo ativo com o paciente.'
-          : code.includes('SPECIALTY')
-            ? 'O cadastro do profissional precisa de uma especialidade antes de criar o vínculo.'
-            : code.includes('MEMBERSHIP')
-              ? 'Este profissional não possui vínculo ativo com a clínica.'
+        : code.includes('SPECIALTY')
+          ? 'O cadastro do profissional precisa de uma especialidade antes de criar o vínculo.'
+          : code.includes('MEMBERSHIP')
+            ? 'Este profissional não possui vínculo ativo com a clínica.'
           : 'Não foi possível adicionar o profissional.');
     } finally {
       setBusy('');

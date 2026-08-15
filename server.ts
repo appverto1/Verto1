@@ -6716,6 +6716,8 @@ const PATIENT_MUTATION_SELECT = [
   'updated_at'
 ].join(',');
 
+const PATIENT_ANAMNESIS_PATIENT_SELECT_COLUMNS = PATIENT_MUTATION_SELECT.split(',');
+
 const PATIENT_STATUS_PENDING_ANAMNESIS = 'PENDING_ANAMNESIS';
 const PATIENT_STATUS_PENDING_CONFIRMATION = 'PENDING_CONFIRMATION';
 const PATIENT_STATUS_ACTIVE = 'ACTIVE';
@@ -10679,6 +10681,53 @@ async function importSharedSnapshotIntoLongitudinalTimeline(params: {
       ? 'Histórico compartilhado já estava importado.'
       : 'Histórico compartilhado importado.'
   };
+}
+
+
+async function updatePatientPortalUserMirrorWithSchemaFallback(params: {
+  email: string;
+  clinicId: string | null;
+  status: string | null;
+}) {
+  const email = sanitizeEmail(params.email);
+  if (!email) return { success: true, error: null, removedColumns: [] as string[] };
+
+  let payload: Record<string, any> = cleanObject({
+    status: sanitizeString(params.status, 40) || null,
+    clinic_id: sanitizeString(params.clinicId, 120) || null,
+    updated_at: new Date().toISOString()
+  });
+  const optionalMirrorColumns = new Set(['status', 'updated_at']);
+  const removedColumns: string[] = [];
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const { error } = await supabase
+      .from('users')
+      .update(payload)
+      .eq('email', email)
+      .eq('role', 'patient');
+    if (!error) return { success: true, error: null, removedColumns };
+
+    lastError = error;
+    const missingColumn = extractMissingColumnName(error);
+    if (
+      missingColumn &&
+      optionalMirrorColumns.has(missingColumn) &&
+      Object.prototype.hasOwnProperty.call(payload, missingColumn)
+    ) {
+      delete payload[missingColumn];
+      removedColumns.push(missingColumn);
+      console.warn('[Patients] coluna opcional ausente no espelho de users; fonte canônica permanece patients:', {
+        missingColumn,
+        emailHash: pseudonymizeValue(email)
+      });
+      continue;
+    }
+    return { success: false, error, removedColumns };
+  }
+
+  return { success: false, error: lastError || new Error('Falha ao sincronizar usuário do paciente.'), removedColumns };
 }
 
 async function updatePatientOnboardingWithSchemaFallback(params: {
@@ -33397,7 +33446,7 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
       const linksSelect = 'id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,starts_at,ends_at,status,permissions,created_by,ended_by,created_at,updated_at';
-      const usersSelect = 'id,name,email,profile_picture,profile_picture_path';
+      const usersSelect = 'id,name,email,profile_picture';
       const profilesSelect = 'user_id,specialty,council,council_number,profile_photo_url,metadata';
       const membershipsSelect = 'user_id,clinic_id,role,status';
       let stage = 'links';
@@ -33435,7 +33484,7 @@ async function startServer() {
           professionals = (professionalsResult.data || []).map((professional: any) => ({
             ...professional,
             profile_picture: scopeProfessionalProfilePhotoUrlForClinic(
-              professional?.profile_picture_path || professional?.profile_picture,
+              professional?.profile_picture,
               clinicId,
               professional?.id,
             )
@@ -38035,27 +38084,22 @@ async function startServer() {
             ? 'waiting_treatment'
             : nextPatientStatus || 'active';
 
-        const safeUserPatch: Record<string, any> = cleanObject({
+        const userMirrorResult = await updatePatientPortalUserMirrorWithSchemaFallback({
+          email: patientEmail,
           status: mappedUserStatus,
-          clinic_id: hasClinicLink ? sanitizeString(updatedPatient?.clinic_id, 120) : null,
-          updated_at: new Date().toISOString()
+          clinicId: hasClinicLink ? sanitizeString(updatedPatient?.clinic_id, 120) : null
         });
-        const { error: userPatchError } = await supabase
-          .from('users')
-          .update(safeUserPatch)
-          .eq('email', patientEmail)
-          .eq('role', 'patient');
-        if (userPatchError) {
-          const missingColumn = extractMissingColumnName(userPatchError);
+        if (!userMirrorResult.success) {
+          const missingColumn = extractMissingColumnName(userMirrorResult.error);
           if (missingColumn) {
             return res.status(503).json({
               success: false,
               code: 'PATIENT_USER_PERSISTENCE_SCHEMA_MISMATCH',
               field: missingColumn,
-              error: `O schema de usuários não possui o campo ${missingColumn}. A alteração não foi reportada como concluída.`
+              error: `O schema de usuários não possui o campo obrigatório ${missingColumn}. A alteração canônica do paciente foi preservada.`
             });
           }
-          throw userPatchError;
+          throw userMirrorResult.error;
         }
       }
 
@@ -67877,7 +67921,7 @@ async function startServer() {
               .limit(200),
             supabase
               .from('users')
-              .select('id,name,email,profile_picture,profile_picture_path')
+              .select('id,name,email,profile_picture')
               .in('id', linkedProfessionalIds)
               .limit(200)
           ])

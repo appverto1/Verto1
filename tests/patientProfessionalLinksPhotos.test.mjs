@@ -7,8 +7,8 @@ const panel = fs.readFileSync('src/components/PatientProfessionalLinksPanel.tsx'
 
 assert.match(
   server,
-  /const usersSelect = 'id,name,email,profile_picture,profile_picture_path'/,
-  'a equipe do caso deve carregar a mesma foto persistida no cadastro global do usuário',
+  /const usersSelect = 'id,name,email,profile_picture'/,
+  'a equipe do caso deve carregar a foto persistida sem consultar coluna users.profile_picture_path removida',
 );
 assert.match(
   server,
