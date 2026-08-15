@@ -259,3 +259,61 @@ A transição anterior continua no log append-only.
 PR3 não cria summaries, não avalia maestria/FSM, não cria observation slices e não
 muda frontend. Todas as tabelas e RPCs novas continuam sem acesso de `anon` ou
 `authenticated`; somente `service_role` pode usá-las.
+
+## 16. PR4 — summaries canônicos e reconciliação server-side
+
+PR4 introduz `aba_session_target_summaries_v3` como projeção rebuildable por
+`session_id + target_id + target_phase_assignment_id`. A granularidade por fase é
+obrigatória: se um target muda de fase dentro da mesma sessão, cada segmento possui
+summary próprio e os gráficos futuros não precisam unir semanticamente essas séries.
+
+A autoridade continua sendo `aba_trials_v3 + aba_trial_steps_v3 + revisões append-only`.
+O browser não envia `accuracyPercent`, `independencePercent` ou qualquer percentual
+como verdade clínica.
+
+### Projeção efetiva e revisões
+
+A última revisão clínica não-`ANNOTATE` determina a efetividade do envelope:
+
+- sem revisão ou `RESTORE` -> trial efetivo;
+- `VOID`, `CORRECT` ou `SUPERSEDE` -> envelope original fora da projeção;
+- replacement trial é outro envelope imutável e possui ciclo de revisão próprio.
+
+Uma revisão recalcula apenas o target/fase envolvido, na mesma transação. Não existe
+job assíncrono deixando o gráfico temporariamente divergente após uma retificação.
+Para `CORRECT`/`SUPERSEDE`, `record_aba_trial_correction_v3(...)` grava o replacement
+e a revisão dentro da mesma transação, impedindo uma janela visível de dupla contagem.
+
+### Matemática de independência
+
+A unidade do denominador é o **trial**, não o step. Um complex trial com vários
+prompts/correções contribui no máximo 1 vez porque só pode existir um step
+`PRIMARY_INDEPENDENT` por envelope.
+
+`primary_independence_percent = primary_independent_correct_count /
+eligible_independent_opportunity_count * 100`.
+
+Quando `eligible_independent_opportunity_count = 0`, o percentual é `NULL` (`N/A`),
+nunca `0%`. Respostas concluídas após suporte são registradas separadamente e não
+inflam independência. Prompts são resumidos como `prompt_step_counts`: contagem
+objetiva de steps por `prompt_key`. PR4 não transforma complex trials em uma falsa
+distribuição percentual de prompts por trial.
+
+### Economia e concorrência
+
+O bulk do PR3 insere todos os steps de uma chamada em um único statement. Um trigger
+statement-level usa a transition table para descobrir os segmentos distintos tocados
+e recalcula cada `session + target + phase` uma única vez. Portanto o custo de
+reconciliação cresce com os targets/fases afetados, não com o número de trials.
+
+Cada segmento possui advisory transaction lock próprio; targets diferentes não
+competem pelo mesmo summary.
+
+### Verificação
+
+Cada summary persiste `source_projection_hash` e `summary_definition_version`.
+`verify_aba_session_target_summary_v3(...)` recalcula a projeção diretamente do raw
+efetivo e informa se o cache é idêntico sem modificar nenhum dado.
+
+PR4 continua dark/service-role only, não altera ABA Legacy V2 e não habilita novos
+bindings V3.
