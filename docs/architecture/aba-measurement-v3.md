@@ -198,3 +198,64 @@ advisory transaction lock. Targets diferentes não competem entre si.
 
 A constraint `UNIQUE(session_id, target_id)` continua sendo a proteção final. Em
 retry/race, o binding que já venceu é retornado; nunca é reescrito.
+
+## 15. PR3 — persistência raw V3 e sincronização offline
+
+PR3 cria a primeira superfície de persistência V3, ainda sem interface clínica e sem
+qualquer alteração de rota V2.
+
+### Envelope e cadeia intra-trial
+
+`aba_trials_v3` guarda somente identidade/contexto imutável. Resultado clínico não
+é duplicado no envelope. A sequência efetiva fica em `aba_trial_steps_v3`.
+
+Um complex trial é commitado numa única transação:
+
+`envelope + N steps + exposure`
+
+ou nada entra. `UNIQUE(trial_id, sequence_no)` impede repetição dos steps e um
+índice único parcial garante no máximo uma oportunidade `PRIMARY_INDEPENDENT` por
+trial.
+
+### Bulk e idempotência
+
+A operação canônica é `record_aba_trials_bulk_v3(...)`. A chave de retry do
+cliente é `(organization_id, client_event_id)`. Mesmo identificador + mesmo hash é
+no-op idempotente; mesmo identificador + payload diferente não sobrescreve o dado
+original e vai para quarentena.
+
+Bindings são resolvidos apenas uma vez por par distinto sessão + target dentro do
+lote. A operação nunca faz uma RPC por trial.
+
+### Offline histórico
+
+A versão informada pelo dispositivo precisa existir e ser exatamente a versão
+congelada no binding. Se ela foi descontinuada depois, continua válida e o trial
+recebe `protocol_version_deprecated_at_sync=true`.
+
+A fase é validada por `occurred_at`. Um assignment fechado no presente continua
+válido para um evento cujo timestamp pertence à antiga janela half-open.
+
+### Quarentena sem fabricação
+
+`aba_sync_quarantine_v3` preserva o payload original quando ele não pode ser
+interpretado com segurança. Não existe mapeamento manual para uma versão diferente.
+Uma versão ausente só fica pronta para retry quando o mesmo UUID original aparece
+no servidor. Caso não seja recuperável, o evento pode ser `DISCARDED` com motivo e
+auditoria, nunca transformado em dado clínico de outra versão.
+
+Erros de escopo cross-tenant são tratados separadamente e falham fechados, pois não
+são incerteza clínica legítima.
+
+### Exposure
+
+`NO_OPPORTUNITY` permanece um estado explícito sem trial falso. Quando o primeiro
+trial válido chega, o estado corrente é promovido a `COLLECTED`. O bulk faz isso
+uma única vez por sessão + target, mesmo quando dezenas de trials chegam juntos.
+A transição anterior continua no log append-only.
+
+### Limites deste PR
+
+PR3 não cria summaries, não avalia maestria/FSM, não cria observation slices e não
+muda frontend. Todas as tabelas e RPCs novas continuam sem acesso de `anon` ou
+`authenticated`; somente `service_role` pode usá-las.
