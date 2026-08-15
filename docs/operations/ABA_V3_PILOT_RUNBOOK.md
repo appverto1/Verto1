@@ -15,11 +15,30 @@ Ativar um único cohort de forma auditável, reversível e sem mudar o comportam
 
 ## Fase 1 — preflight dark
 
-1. Aplicar PR11 no banco e no app.
+1. Aplicar PR12 no banco e no app (PR12 pressupõe PR11 já aplicado).
 2. Habilitar apenas `FEATURE_ABA_V3_READ_API=true` e `FEATURE_ABA_V3_PREFLIGHT_API=true`.
 3. Manter coleta, UI e rollout-admin desligados.
-4. Rodar `npm run smoke:aba-v3-preproduction` com organização, paciente e target exatos.
-5. O smoke deve ser somente leitura, retornar readiness e `drained=true` e não alterar rollout.
+4. Escolher um paciente de staging sem sessão clínica ativa durante a janela do smoke.
+5. Rodar `npm run smoke:aba-v3-preproduction` com organização, paciente e target exatos.
+6. O script coleta `preflight-snapshot` antes e depois das leituras e exige o mesmo `scope_fingerprint`.
+7. O smoke deve retornar `darkPreflightProfile=true`, `rollout_dark=true`, readiness, `drained=true` e fingerprint idêntico antes/depois.
+8. Qualquer diferença de fingerprint é **falha de segurança**: não abrir rollout até identificar a mutação concorrente ou indevida.
+
+### Evidência obrigatória do PR12
+
+O endpoint `GET /api/aba/v3/admin/preflight-snapshot` é restrito a platform admin com MFA e à flag `FEATURE_ABA_V3_PREFLIGHT_API`. Ele executa somente a RPC `get_aba_v3_preflight_scope_snapshot`, que agrega contadores/versões/timestamps canônicos do paciente em uma leitura fixa, sem loop por target e sem writer.
+
+Para aprovar o preflight dark, registrar no ticket/deploy log:
+
+- fingerprint antes;
+- fingerprint depois;
+- `match=true`;
+- `rollout_dark=true`;
+- `darkPreflightProfile=true`;
+- `drained=true`;
+- blockers do readiness (devem estar vazios para o target que será candidato ao piloto).
+
+A assinatura é uma evidência operacional de não-mutação durante o smoke, não substitui backup, auditoria de banco ou controles transacionais dos writers V3.
 
 ## Fase 2 — preparar runtime sem cohort
 

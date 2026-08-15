@@ -70943,7 +70943,7 @@ async function startServer() {
 
   const handleAbaV3RolloutRpcError = (res: any, error: any) => {
     const message = sanitizeString(error?.message || '', 1400);
-    if (hasMissingFinancialSchema(error) || /get_aba_v3_pilot_readiness|get_aba_v3_rollout_drain_status|set_aba_measurement_rollout_state_v3|PGRST202|42883|42P01/i.test(message)) {
+    if (hasMissingFinancialSchema(error) || /get_aba_v3_pilot_readiness|get_aba_v3_preflight_scope_snapshot|get_aba_v3_rollout_drain_status|set_aba_measurement_rollout_state_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema operacional ABA V3 ainda não aplicado.' });
     }
     if (/ABA_V3_ROLLOUT_STATE_VERSION_CONFLICT/i.test(message)) {
@@ -71000,6 +71000,50 @@ async function startServer() {
               rolloutAdminEnabled: isAbaV3RolloutAdminEnabled(),
               uiBuildFlagEnabled: normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false)
             }
+          }
+        });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/admin/preflight-snapshot',
+    requireAbaV3PreflightFeature,
+    checkAuth,
+    checkPlatformAdmin,
+    async (req: any, res) => {
+      try {
+        const organizationId = sanitizeString(req.query?.organizationId || req.query?.organization_id, 120);
+        const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+        if (!isUuid(organizationId) || !isUuid(patientId)) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_PREFLIGHT_SNAPSHOT_SCOPE_INVALID', error: 'Escopo do snapshot ABA V3 inválido.' });
+        }
+        const { data, error } = await supabase.rpc('get_aba_v3_preflight_scope_snapshot', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId
+        });
+        if (error) return handleAbaV3RolloutRpcError(res, error);
+        const runtime = {
+          readApiEnabled: isAbaV3ReadApiEnabled(),
+          preflightApiEnabled: isAbaV3PreflightApiEnabled(),
+          collectionApiEnabled: isAbaV3CollectionApiEnabled(),
+          rolloutAdminEnabled: isAbaV3RolloutAdminEnabled(),
+          uiBuildFlagEnabled: normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false)
+        };
+        const darkPreflightProfile = runtime.readApiEnabled === true
+          && runtime.preflightApiEnabled === true
+          && runtime.collectionApiEnabled === false
+          && runtime.rolloutAdminEnabled === false
+          && runtime.uiBuildFlagEnabled === false;
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({
+          success: true,
+          data: {
+            ...(data || {}),
+            runtime,
+            darkPreflightProfile
           }
         });
       } catch (error: any) {

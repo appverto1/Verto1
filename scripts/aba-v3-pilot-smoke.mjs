@@ -41,7 +41,11 @@ if (programId) {
   drainQuery.set('targetId', targetId);
 }
 
+const snapshotQuery = new URLSearchParams({ organizationId, patientId });
+const beforeSnapshot = await request(`/api/aba/v3/admin/preflight-snapshot?${snapshotQuery.toString()}`, adminCookie);
+
 const checks = [];
+checks.push(['preflight-snapshot-before', beforeSnapshot]);
 checks.push(['chart-catalog', await request(`/api/aba/v3/patients/${encodeURIComponent(patientId)}/chart-catalog?days=30`, clinicCookie)]);
 checks.push(['chart-series', await request(`/api/aba/v3/patients/${encodeURIComponent(patientId)}/targets/${encodeURIComponent(targetId)}/chart-series?days=30&limit=30`, clinicCookie)]);
 checks.push(['pilot-readiness', await request(`/api/aba/v3/patients/${encodeURIComponent(patientId)}/pilot-readiness?${query.toString()}`, adminCookie)]);
@@ -52,11 +56,37 @@ if (sessionId) {
   })]);
 }
 
+const afterSnapshot = await request(`/api/aba/v3/admin/preflight-snapshot?${snapshotQuery.toString()}`, adminCookie);
+checks.push(['preflight-snapshot-after', afterSnapshot]);
+
 let failed = false;
 for (const [name, result] of checks) {
   const code = result?.body?.code ? ` code=${result.body.code}` : '';
   console.log(`[${result.ok ? 'ok' : 'fail'}] ${name}: HTTP ${result.status}${code}`);
   if (!result.ok || result?.body?.success === false) failed = true;
+}
+
+const beforeSnapshotData = beforeSnapshot?.body?.data;
+const afterSnapshotData = afterSnapshot?.body?.data;
+if (beforeSnapshotData && afterSnapshotData) {
+  const beforeFingerprint = String(beforeSnapshotData.scope_fingerprint || '');
+  const afterFingerprint = String(afterSnapshotData.scope_fingerprint || '');
+  const fingerprintsMatch = Boolean(beforeFingerprint) && beforeFingerprint === afterFingerprint;
+  console.log(`[info] preflight fingerprint before=${beforeFingerprint} after=${afterFingerprint} match=${fingerprintsMatch}`);
+  if (!fingerprintsMatch) {
+    console.error('[fail] O escopo ABA V3 mudou durante o preflight dark. Não avance para rollout.');
+    failed = true;
+  }
+  if (expectDark) {
+    if (beforeSnapshotData.rollout_dark !== true || afterSnapshotData.rollout_dark !== true) {
+      console.error('[fail] Há rollout V3 habilitado no escopo durante um smoke que deveria estar dark.');
+      failed = true;
+    }
+    if (beforeSnapshotData.darkPreflightProfile !== true || afterSnapshotData.darkPreflightProfile !== true) {
+      console.error('[fail] Runtime não está no perfil READ+PREFLIGHT dark esperado.');
+      failed = true;
+    }
+  }
 }
 
 const readiness = checks.find(([name]) => name === 'pilot-readiness')?.[1]?.body?.data;
@@ -90,4 +120,4 @@ if (plan) {
 }
 
 if (failed) process.exit(1);
-console.log('[ok] ABA V3 pre-production smoke passed. No rollout state was mutated.');
+console.log('[ok] ABA V3 pre-production smoke passed. Scope fingerprint remained unchanged and no rollout state was mutated.');
