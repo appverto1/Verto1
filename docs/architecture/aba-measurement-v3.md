@@ -357,3 +357,15 @@ A ingestão bulk de intervalos é idempotente e isola conflitos de uma célula e
 IOA fica em uma projeção separada. O summary oficial continua PRIMARY-only. Frequência usa total-count IOA, duração usa total-duration IOA e intervalos usam interval-by-interval IOA. Total count/duration exigem janelas de observação alinhadas; caso contrário a Verto retorna `N/A/requires_review`, sem fabricar concordância. Duração censurada também invalida o score automático.
 
 A antiga tela Legacy V2 de “Tipos de ajuda ABA” permanece sem mudança visual neste PR. A pontuação 0–100 será removida/descontinuada na interface V3 do PR9, quando prompts forem apresentados categoricamente e sem semântica falsa de independência.
+
+## PR8 — read models canônicos e fronteira Node
+
+PR8 cria a primeira superfície de leitura suportada da V3. O browser continua sem acesso direto às tabelas e views clínicas: três RPCs server-side entregam bundles já filtrados por `organization_id + patient_id + session/target`, e o Node aplica autenticação, capability e checagem de escopo antes da chamada.
+
+A leitura de sessão é consolidada em uma única RPC para evitar N+1 entre configuração, summaries DTT, Task Analysis, comportamento, intervalos, IOA e probes. O overview do paciente usa outra RPC pequena e o histórico de target é temporalmente limitado, com teto server-side de 180 registros por família e janela máxima de 366 dias.
+
+Somente projeções canônicas são expostas. Comportamento e intervalos vêm das views oficiais `PRIMARY`; IOA permanece em coleção separada e nunca é fundido ao resultado clínico do paciente. Raw events, revisões e payloads offline não fazem parte do read path padrão.
+
+Prompts continuam categóricos: os read models carregam `prompt_step_counts`/`prompt_counts`, jamais `independence_score` ou `response_score`. O histórico também preserva `phase_assignment_id`; a transformação em `series_segments` e o renderer que impede linhas atravessando mudança de fase pertencem ao PR10.
+
+O endpoint V3 fica atrás de `FEATURE_ABA_V3_READ_API=false` por padrão. PR8 não ativa rollout, não altera nenhuma tabela/rota V2 e não muda React. A tela Legacy V2 **Tipos de ajuda ABA** permanece intocada até o PR9, quando a interface V3 removerá a semântica visual de pontuação 0–100 dos prompts.

@@ -43387,6 +43387,18 @@ async function startServer() {
     return next();
   };
 
+  const isAbaV3ReadApiEnabled = () => normalizeServerFeatureFlag(
+    process.env.FEATURE_ABA_V3_READ_API,
+    false
+  );
+
+  const requireAbaV3ReadFeature = (_req: any, res: any, next: any) => {
+    if (!isAbaV3ReadApiEnabled()) {
+      return res.status(404).json({ success: false, code: 'feature_disabled', feature: 'aba_v3_read_api', error: 'ABA V3 ainda não habilitada.' });
+    }
+    return next();
+  };
+
   const ABA_SESSION_STATUSES = new Set(['active', 'in_progress', 'completed', 'canceled']);
   const ABA_COLLECTION_TYPES = new Set(['dtt', 'net', 'cold_probe', 'baseline_probe', 'maintenance_probe']);
   const ABA_BEHAVIOR_MEASUREMENT_TYPES = new Set([
@@ -69995,6 +70007,114 @@ async function startServer() {
     }
     return { ok: true, session: data, patientId, clinicId: sanitizeString(data.clinic_id || clinicId, 120) };
   };
+
+
+  const handleAbaV3ReadRpcError = (res: any, error: any) => {
+    const message = sanitizeString(error?.message || '', 500);
+    if (hasMissingFinancialSchema(error)) {
+      return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema ABA V3 ainda não aplicado.' });
+    }
+    if (message.includes('ABA_V3_READ_WINDOW_')) {
+      return res.status(400).json({ success: false, code: 'ABA_V3_READ_WINDOW_INVALID', error: 'Janela de consulta ABA V3 inválida.' });
+    }
+    if (message.includes('ABA_V3_READ_') && message.includes('_SCOPE_INVALID')) {
+      return res.status(403).json({ success: false, code: 'ABA_V3_READ_SCOPE_DENIED', error: 'Acesso negado ao escopo ABA V3.' });
+    }
+    throw error;
+  };
+
+  app.get(
+    '/api/aba/v3/patients/:patientId/overview',
+    requireAbaV3ReadFeature,
+    checkAuth,
+    requireClinicCapability('aba.analytics.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(organizationId)) {
+          return res.status(400).json({ success: false, error: 'Escopo ABA V3 inválido.' });
+        }
+
+        const { data, error } = await supabase.rpc('get_aba_patient_overview_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId
+        });
+        if (error) return handleAbaV3ReadRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: data || { targets: [], review_counts: { maintenance_probes: 0, ioa: 0 } } });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/sessions/:sessionId/read-model',
+    requireAbaV3ReadFeature,
+    checkAuth,
+    requireClinicCapability('aba.analytics.view'),
+    async (req: any, res) => {
+      try {
+        const scope = await resolveAbaSessionReadScope(req.params.sessionId, req.session.user);
+        if (!scope.ok) return res.status((scope as any).status || 400).json({ success: false, error: (scope as any).error });
+        const patientId = sanitizeString((scope as any).patientId, 120);
+        const organizationId = sanitizeString((scope as any).clinicId, 120);
+        const sessionId = sanitizeString(req.params.sessionId, 180);
+        if (!isUuid(patientId) || !isUuid(organizationId) || !sessionId) {
+          return res.status(400).json({ success: false, error: 'Escopo ABA V3 inválido.' });
+        }
+
+        const { data, error } = await supabase.rpc('get_aba_session_read_bundle_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId
+        });
+        if (error) return handleAbaV3ReadRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: data || null });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/patients/:patientId/targets/:targetId/history',
+    requireAbaV3ReadFeature,
+    checkAuth,
+    requireClinicCapability('aba.analytics.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const targetId = sanitizeString(req.params.targetId, 180);
+        if (!isUuid(patientId) || !isUuid(organizationId) || !targetId) {
+          return res.status(400).json({ success: false, error: 'Escopo ABA V3 inválido.' });
+        }
+
+        const chart = parseAbaChartParams(req.query || {});
+        if (new Date(chart.dateToIso).getTime() < new Date(chart.dateFromIso).getTime()) {
+          return res.status(400).json({ success: false, error: 'Período ABA V3 inválido.' });
+        }
+        const { data, error } = await supabase.rpc('get_aba_target_history_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_target_id: targetId,
+          p_from: chart.dateFromIso,
+          p_to: chart.dateToIso,
+          p_limit: chart.limit
+        });
+        if (error) return handleAbaV3ReadRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: data || { target_id: targetId, dtt: [], task_analysis: [], maintenance_probes: [] } });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
 
   app.get('/api/aba/session-live-summaries/:sessionId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), async (req: any, res) => {
     try {
