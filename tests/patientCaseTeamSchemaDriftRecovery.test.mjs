@@ -10,6 +10,17 @@ assert.match(
   'anamnese deve usar projeção de paciente definida e não uma constante ausente em runtime',
 );
 
+assert.match(
+  server,
+  /const PATIENT_ANAMNESIS_RECORD_SELECT_COLUMNS = \[[\s\S]*?'patient_id'[\s\S]*?'clinic_id'[\s\S]*?'payload_encrypted'[\s\S]*?'payload'[\s\S]*?'payload_preview'[\s\S]*?'updated_at'[\s\S]*?\];/,
+  'anamnese deve manter a projeção de patient_records definida antes de fetchPatientRegistrationPayloadForAnamnesis',
+);
+assert.match(
+  server,
+  /async function fetchPatientRegistrationPayloadForAnamnesis[\s\S]*?let columns = \[\.\.\.PATIENT_ANAMNESIS_RECORD_SELECT_COLUMNS\];/,
+  'leitura de cadastro para anamnese deve usar a projeção definida e não lançar ReferenceError',
+);
+
 const linksStart = server.indexOf("'/api/patients/:patientId/professional-links'");
 const linksPostStart = server.indexOf("'/api/patients/:patientId/professional-links'", linksStart + 1);
 const linksGet = server.slice(linksStart, linksPostStart);
