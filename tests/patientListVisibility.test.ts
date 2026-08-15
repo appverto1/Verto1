@@ -219,6 +219,11 @@ assert.match(
   /catch \(error\)[\s\S]*?setPatientListError\('Não foi possível concluir a hidratação da lista de pacientes\. Tente novamente\.'\)/,
   '17g. exceção real de hidratação não pode ser mascarada como lista vazia',
 );
+assert.match(
+  appSource,
+  /\[\s*user\?\.id,[\s\S]{0,500}user\?\.firstLoginCompleted,[\s\S]{0,220}user\?\.activationRequired,[\s\S]{0,260}user\?\.onboardingContext\?\.canAccessDashboard,[\s\S]{0,80}\]\);/,
+  '17h. mudança do estado de onboarding deve reexecutar a hidratação do workspace e carregar pacientes',
+);
 assert.doesNotMatch(
   workspaceHydrationSource,
   /\/api\/patient-records\/|getPatientRecord\(/,

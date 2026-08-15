@@ -3896,7 +3896,16 @@ export default function App() {
 
     void hydrateState(user);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, user?.role, user?.activeAccessContextId, user?.activeWorkspaceId, user?.clinicId]);
+  }, [
+    user?.id,
+    user?.role,
+    user?.activeAccessContextId,
+    user?.activeWorkspaceId,
+    user?.clinicId,
+    user?.firstLoginCompleted,
+    user?.activationRequired,
+    user?.onboardingContext?.canAccessDashboard,
+  ]);
 
   const resolvePatientIdentityForPortal = (candidate?: any) => {
     const candidateId = String(candidate?.patientId ?? candidate?.patient_id ?? candidate?.id ?? '').trim();
