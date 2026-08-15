@@ -32689,6 +32689,22 @@ async function startServer() {
         if (appointmentNote) {
           patchWithConfirmation.notes = appointmentNote;
         }
+
+        // Mantém a política de falta coerente com ações manuais da agenda.
+        // Em REVIEW, qualquer decisão explícita da equipe encerra a pendência;
+        // ao marcar falta manualmente, persistimos os mesmos metadados usados
+        // pela classificação automática para permitir reabertura auditável.
+        if (normalizedStatus === 'no_show') {
+          patchWithConfirmation.attendance_status = 'NO_SHOW';
+          patchWithConfirmation.no_show_previous_status = sanitizeString(foundAppointment?.status || 'scheduled', 40).toLowerCase() || 'scheduled';
+          patchWithConfirmation.no_show_classified_at = now;
+          patchWithConfirmation.no_show_review_required_at = null;
+          patchWithConfirmation.no_show_source = 'MANUAL_AGENDA';
+          patchWithConfirmation.actual_duration_minutes = 0;
+        } else if (['confirmed', 'reschedule', 'canceled'].includes(normalizedStatus)) {
+          patchWithConfirmation.no_show_review_required_at = null;
+          patchWithConfirmation.attendance_status = null;
+        }
         
         // If rescheduled, reset notification markers
         if (normalizedStatus === 'reschedule') {
@@ -87407,6 +87423,7 @@ async function startServer() {
     requireAnyClinicCapability,
     requireClinicModule,
     portalActionLimiter,
+    enforcePayloadLimit,
     sanitizeString,
     currentClinicId
   });

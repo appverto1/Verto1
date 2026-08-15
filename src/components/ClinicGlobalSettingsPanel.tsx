@@ -391,6 +391,7 @@ function PatientReschedulePolicySettings() {
     autoNoShowEnabled: true,
     noShowToleranceMinutes: 30,
     noShowMode: "AUTO" as "AUTO" | "REVIEW",
+    attendanceDirty: false,
     canManage: false,
     error: "",
     message: ""
@@ -426,6 +427,7 @@ function PatientReschedulePolicySettings() {
         autoNoShowEnabled: result?.data?.autoNoShowEnabled !== false,
         noShowToleranceMinutes: Math.max(5, Math.min(180, Number(result?.data?.noShowToleranceMinutes || 30))),
         noShowMode: result?.data?.noShowMode === "REVIEW" ? "REVIEW" : "AUTO",
+        attendanceDirty: false,
         canManage: result?.data?.canManage === true,
         error: "",
         message: ""
@@ -449,9 +451,6 @@ function PatientReschedulePolicySettings() {
     setState((current) => ({ ...current, savingReschedule: true, error: "", message: "" }));
     const result = await dataService.updateClinicAppointmentPolicy({
       allowPatientReschedule: nextValue,
-      autoNoShowEnabled: state.autoNoShowEnabled,
-      noShowToleranceMinutes: state.noShowToleranceMinutes,
-      noShowMode: state.noShowMode,
       reason: nextValue
         ? "Reativado nas configurações da agenda"
         : "Desativado nas configurações da agenda",
@@ -470,9 +469,6 @@ function PatientReschedulePolicySettings() {
       ...current,
       savingReschedule: false,
       allowPatientReschedule: result?.data?.allowPatientReschedule !== false,
-      autoNoShowEnabled: result?.data?.autoNoShowEnabled !== false,
-      noShowToleranceMinutes: Number(result?.data?.noShowToleranceMinutes || current.noShowToleranceMinutes),
-      noShowMode: result?.data?.noShowMode === "REVIEW" ? "REVIEW" : "AUTO",
       error: "",
       message: nextValue
         ? "Pacientes voltaram a poder solicitar reagendamento."
@@ -490,7 +486,6 @@ function PatientReschedulePolicySettings() {
     const operationKey = `attendance:${state.autoNoShowEnabled}:${tolerance}:${state.noShowMode}`;
     setState((current) => ({ ...current, savingAttendance: true, error: "", message: "" }));
     const result = await dataService.updateClinicAppointmentPolicy({
-      allowPatientReschedule: state.allowPatientReschedule,
       autoNoShowEnabled: state.autoNoShowEnabled,
       noShowToleranceMinutes: tolerance,
       noShowMode: state.noShowMode,
@@ -512,6 +507,7 @@ function PatientReschedulePolicySettings() {
       autoNoShowEnabled: result?.data?.autoNoShowEnabled !== false,
       noShowToleranceMinutes: Number(result?.data?.noShowToleranceMinutes || tolerance),
       noShowMode: result?.data?.noShowMode === "REVIEW" ? "REVIEW" : "AUTO",
+      attendanceDirty: false,
       error: "",
       message: result?.data?.autoNoShowEnabled === false
         ? "Classificação automática de falta desativada."
@@ -565,7 +561,7 @@ function PatientReschedulePolicySettings() {
             <div>
               <p className="text-sm font-semibold text-slate-900">Política de ausência e falta</p>
               <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
-                A regra é executada no servidor, mesmo com o navegador fechado. Uma sessão iniciada e a classificação de falta disputam a mesma operação atômica, evitando estados duplicados.
+                A regra é executada no servidor, mesmo com o navegador fechado. O início da sessão e a classificação de falta usam bloqueio no mesmo agendamento, evitando estados duplicados.
               </p>
             </div>
           </div>
@@ -574,7 +570,13 @@ function PatientReschedulePolicySettings() {
             role="switch"
             aria-checked={state.autoNoShowEnabled}
             disabled={state.loading || saving || !state.canManage}
-            onClick={() => setState((current) => ({ ...current, autoNoShowEnabled: !current.autoNoShowEnabled, message: "", error: "" }))}
+            onClick={() => setState((current) => ({
+              ...current,
+              autoNoShowEnabled: !current.autoNoShowEnabled,
+              attendanceDirty: true,
+              message: "",
+              error: ""
+            }))}
             className={`min-h-11 w-full shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition lg:w-36 ${
               state.autoNoShowEnabled
                 ? "bg-[#7a32fc] text-white"
@@ -599,6 +601,7 @@ function PatientReschedulePolicySettings() {
                 onChange={(event) => setState((current) => ({
                   ...current,
                   noShowToleranceMinutes: Number(event.target.value),
+                  attendanceDirty: true,
                   message: "",
                   error: ""
                 }))}
@@ -617,26 +620,34 @@ function PatientReschedulePolicySettings() {
               onChange={(event) => setState((current) => ({
                 ...current,
                 noShowMode: event.target.value === "REVIEW" ? "REVIEW" : "AUTO",
+                attendanceDirty: true,
                 message: "",
                 error: ""
               }))}
               className={inputClass}
             >
               <option value="AUTO">Classificar automaticamente como falta</option>
-              <option value="REVIEW">Sinalizar para revisão da equipe</option>
+              <option value="REVIEW">Aguardar revisão manual da equipe</option>
             </select>
             <span className="mt-1.5 block text-[11px] leading-relaxed text-slate-500">
-              Faltas não seguem para faturamento de convênio. Uma eventual taxa particular permanece em fluxo financeiro separado.
+              {state.noShowMode === "REVIEW"
+                ? "Nesse modo o agendamento não vira falta sozinho. A equipe deve revisar o atendimento atrasado na agenda e marcar a falta manualmente."
+                : "Ao atingir a tolerância sem início da sessão, a Verto registra a falta no servidor. Faltas não seguem para faturamento de convênio."}
             </span>
           </label>
         </div>
 
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
+          <div className="min-h-5 text-xs">
+            {state.attendanceDirty && (
+              <span className="font-medium text-amber-700">Alterações ainda não salvas.</span>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => void saveAttendancePolicy()}
-            disabled={state.loading || saving || !state.canManage}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-wait disabled:opacity-50"
+            disabled={state.loading || saving || !state.canManage || !state.attendanceDirty}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {state.savingAttendance ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
             {state.savingAttendance ? "Salvando..." : "Salvar política de falta"}
@@ -647,7 +658,7 @@ function PatientReschedulePolicySettings() {
       {state.error && <p role="alert" className="text-xs font-medium text-rose-700">{state.error}</p>}
       {state.message && <p role="status" className="text-xs font-medium text-emerald-700">{state.message}</p>}
       {!state.loading && !state.canManage && !state.error && (
-        <p className="text-xs text-slate-500">Somente owner, administração ou coordenação podem alterar estas políticas.</p>
+        <p className="text-xs text-slate-500">Somente direção, administração ou coordenação podem alterar estas políticas.</p>
       )}
     </div>
   );
@@ -1636,7 +1647,7 @@ export function ClinicGlobalSettingsPanel({
                   {hasAppointmentsCommunicationModule && (
                     <div className="md:col-span-2"><PatientReschedulePolicySettings /></div>
                   )}
-                  <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar preferências</SaveButton></div>
+                  <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar horário da clínica</SaveButton></div>
                 </div>
               </SectionCard>
 
