@@ -327,3 +327,19 @@ bindings V3.
 - frequência e rate são dimensões separadas; rate fica `NULL` sem tempo observado válido;
 - episódios de duração esquecidos no encerramento são censurados à direita e sinalizados para revisão;
 - nenhuma tabela V2 é alterada e nenhum rollout é ativado no PR5.
+
+## PR6 — probes, fechamento transacional e FSM clínica
+
+PR6 cria snapshots imutáveis de critérios em `aba_mastery_criterion_versions_v3`. Não há 80% implícito: sem mínimo de oportunidades, threshold e número de sessões explicitamente configurados, a avaliação automática de maestria permanece desligada.
+
+Probes de manutenção separam lifecycle de interpretação. `OPEN`, `COMPLETE`, `INCOMPLETE` e `CANCELLED` descrevem o bloco de coleta. Apenas `COMPLETE + ELIGIBLE` pode produzir `PASSED` ou `BELOW_CRITERION`; `INCOMPLETE` nunca é contado como falha. No encerramento da sessão, nenhuma probe `OPEN` sobrevive: se possui oportunidades elegíveis suficientes vira `COMPLETE`, caso contrário `INCOMPLETE`.
+
+A FSM V3 é versionada e auditável. As únicas transições automáticas são `ACQUISITION/REACQUISITION -> MASTERY_CRITERIA_MET` por critérios explícitos e `MAINTENANCE -> MAINTENANCE_ALERT` após o número congelado de probes completas/elegíveis consecutivas abaixo do critério. Maestria final e retorno para reaquisição permanecem decisões humanas.
+
+A inicialização do estado clínico V3 é explícita; a Verto não infere estado clínico atual a partir do Legacy V2.
+
+Uma retificação posterior de trial ligado a uma probe encerrada não recalcula silenciosamente a decisão histórica: a probe é marcada `STALE_REVIEW_REQUIRED`, fica fora de novos contadores de alerta e exige revisão clínica. Correções de trials enquanto a probe ainda está `OPEN` podem vincular atomicamente o replacement válido ao mesmo bloco.
+
+`finalize_aba_session_measurements_v3` fecha timers, resolve exposures pendentes, fecha probes, reconcilia summaries e avalia a FSM. `complete_aba_session_v3` compõe a completion V2 já existente com a finalização V3 dentro da mesma transação para suportar futuras sessões híbridas sem aceitar summary V3 vindo do browser.
+
+PR6 continua dark/service-role only, não altera frontend e não habilita `allow_new_v3_sessions`.
