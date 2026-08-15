@@ -317,3 +317,13 @@ efetivo e informa se o cache é idêntico sem modificar nenhum dado.
 
 PR4 continua dark/service-role only, não altera ABA Legacy V2 e não habilita novos
 bindings V3.
+
+## PR5 — motor de comportamentos, rate e duração
+
+- tempo de observação é líquido e fragmentável; duração total da sessão não substitui denominador ausente;
+- contexto é normalizado e faz parte do segmento de coleta;
+- collector binding congela `PRIMARY` ou `RELIABILITY`; apenas PRIMARY alimenta o summary oficial;
+- overlaps são protegidos por collector binding, permitindo comportamentos/observadores distintos simultaneamente;
+- frequência e rate são dimensões separadas; rate fica `NULL` sem tempo observado válido;
+- episódios de duração esquecidos no encerramento são censurados à direita e sinalizados para revisão;
+- nenhuma tabela V2 é alterada e nenhum rollout é ativado no PR5.
