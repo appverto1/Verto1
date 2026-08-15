@@ -435,3 +435,15 @@ O outbox `aba_v3` continua preservando eventos offline e processa mutações em 
 PR9B permanece dark. `FEATURE_ABA_V3_READ_API`, `FEATURE_ABA_V3_COLLECTION_API` e `VITE_FEATURE_ABA_V3_UI` continuam `false` por padrão e a migration não habilita `allow_new_v3_sessions`.
 
 Com o PR9B, a superfície principal de coleta V3 fica fechada para DTT/NET/probe, comportamento, intervalos e Task Analysis. A próxima etapa é **PR10**: gráficos V3 segmentados por fase/modelo, configuração operacional do piloto e gates/smoke tests de rollout antes de qualquer ativação em produção.
+
+## PR10 — gráficos segmentados e gates operacionais de piloto
+
+PR10 cria o read model de gráficos V3 por `series_segments`. Cada segmento é identificado por modelo + fase + métrica + série; o frontend usa uma `Line` distinta por segmento e não conecta fases diferentes. O painel Legacy V2 continua separado, então uma troca V2 -> V3 jamais vira uma linha contínua artificial.
+
+O gráfico V3 cobre DTT/NET/probe, Task Analysis, manutenção, frequência, taxa, duração e interval recording. IOA continua separado do resultado clínico oficial. A API lê apenas projeções server-side canônicas; raw events e revisões não são carregados no hot path.
+
+ABC permanece Legacy V2 no primeiro piloto. Novos vínculos V3 de comportamento ABC são recusados no banco e qualquer vínculo ABC V3 ativo aparece como blocker de readiness. Não existe backfill nem equivalência inventada.
+
+O rollout ganha duas superfícies operacionais service-role: `get_aba_v3_pilot_readiness(...)` e `set_aba_measurement_rollout_state_v3(...)`. O writer é restrito a `platform_admins`, usa optimistic locking, advisory lock, auditoria existente e preflight obrigatório para `PROGRAM/TARGET`. O Node acrescenta `FEATURE_ABA_V3_ROLLOUT_ADMIN=false` por padrão e recusa ativação se leitura, coleta ou UI V3 ainda não estiverem ligadas no runtime.
+
+Rollback é em duas fases: bloquear novas sessões V3 (`allow_new_v3_sessions=false`) mantendo sync ativo para drenar eventos existentes; somente depois desligar `accept_v3_sync`. Dados e bindings históricos nunca são reescritos.

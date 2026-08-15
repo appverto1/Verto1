@@ -11284,7 +11284,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} />
+          <ClinicalChartsWorkspace patientId={String(patient.id)} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} showAbaV3Details={isKidsProfile && abaV3UiEnabled} />
         ) : activeTab === 'session' && isKidsProfile ? (
           null
         ) : activeTab === 'school' ? (

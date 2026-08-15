@@ -50,6 +50,7 @@
     "test:aba-maintenance-engine": "tsx tests/abaMaintenanceEngine.test.ts",
     "test:maintenance-probe-scheduling-calendar": "tsx tests/maintenanceProbeSchedulingCalendar.test.ts",
     "test:aba-clinical-charts": "tsx tests/abaClinicalCharts.test.ts",
+    "smoke:aba-v3-pilot": "node scripts/aba-v3-pilot-smoke.mjs",
     "test:closure-readiness": "tsx tests/closureReadiness.test.ts",
     "test:appointment-confirmation-signature": "tsx tests/appointmentConfirmationSignature.test.ts",
     "test:appointment-professional-cancel": "tsx tests/appointmentProfessionalCancel.test.ts",

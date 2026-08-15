@@ -5864,6 +5864,47 @@ export const dataService = {
     return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/task-analysis-runs', 'POST');
   },
 
+  async getAbaV3ChartCatalog(patientId: string) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { targets: [] } };
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente ABA V3 não identificado.', data: { targets: [] } };
+    try {
+      const response = await fetchWithAuthRetry(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/chart-catalog?days=366`, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar o catálogo de gráficos ABA V3.', data: { targets: [] } };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar o catálogo de gráficos ABA V3.', data: { targets: [] } };
+    }
+  },
+
+  async getAbaV3TargetChartSeries(patientId: string, targetId: string, options: { days?: number; limit?: number } = {}) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { segments: [], available_metrics: [] } };
+    const safePatientId = String(patientId || '').trim();
+    const safeTargetId = String(targetId || '').trim();
+    if (!safePatientId || !safeTargetId) return { success: false, error: 'Alvo ABA V3 não identificado.', data: { segments: [], available_metrics: [] } };
+    const endpoint = endpointWithQuery(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/targets/${encodeURIComponent(safeTargetId)}/chart-series`, {
+      days: Math.max(1, Math.min(Number(options.days || 90), 366)),
+      limit: Math.max(1, Math.min(Number(options.limit || 90), 180))
+    });
+    try {
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar os gráficos ABA V3.', data: { segments: [], available_metrics: [] } };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar os gráficos ABA V3.', data: { segments: [], available_metrics: [] } };
+    }
+  },
+
   async saveAbaTrial(trial: any) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(trial || {});
     const id = String(trial?.id || trial?.trial_id || trial?.trialId || generateId());
