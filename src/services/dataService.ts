@@ -5864,6 +5864,29 @@ export const dataService = {
     return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/task-analysis-runs', 'POST');
   },
 
+  async getAbaV3SessionCollectionPlan(input: { patientId: string; sessionId: string; targetIds?: string[] }) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { targets: [], v3_behavior_ids: [], complete: false } };
+    const patientId = String(input?.patientId || '').trim();
+    const sessionId = String(input?.sessionId || '').trim();
+    const targetIds = Array.from(new Set((Array.isArray(input?.targetIds) ? input.targetIds : []).map((value) => String(value || '').trim()).filter(Boolean))).slice(0, 200);
+    if (!patientId || !sessionId) return { success: false, error: 'Escopo do plano de coleta ABA V3 incompleto.', data: { targets: [], v3_behavior_ids: [], complete: false } };
+    try {
+      const response = await fetchWithAuthRetry(`/api/aba/v3/sessions/${encodeURIComponent(sessionId)}/collection-plan`, {
+        method: 'POST',
+        headers: { ...(await getNoStoreAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ patient_id: patientId, target_ids: targetIds })
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar o plano de coleta ABA V3.', data: { targets: [], v3_behavior_ids: [], complete: false } };
+      }
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar o plano de coleta ABA V3.', data: { targets: [], v3_behavior_ids: [], complete: false } };
+    }
+  },
+
   async getAbaV3ChartCatalog(patientId: string) {
     if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { targets: [] } };
     const safePatientId = String(patientId || '').trim();

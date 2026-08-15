@@ -100,7 +100,8 @@ assert.match(settings, /nenhuma pontuação de prompt entra nos cálculos clíni
 assert.match(settings, /\{!v3PromptSemantics && <th[^\n]*Pontuação de independência/);
 assert.match(settings, /\{!v3PromptSemantics && <th[^\n]*Conta como resposta independente/);
 assert.match(settings, /disabled=\{v3PromptSemantics && legacyV2StillEnabled\}/);
-assert.match(sessionMode, /\.filter\(\(prompt\) => abaV3UiEnabled \|\| !prompt\.countsAsIndependent\)/);
+assert.match(sessionMode, /legacyPromptedPromptOptions[\s\S]*?\.filter\(\(prompt\) => !prompt\.countsAsIndependent\)/);
+assert.match(sessionMode, /promptedPromptOptionsForGoal[\s\S]*?isGoalPlannedForV3Ui/);
 
 // Pure Legacy summaries preserve weighted behavior, while any V3 trial avoids mixing 0-100 scores.
 assert.match(summary, /const isV3Trial =/);

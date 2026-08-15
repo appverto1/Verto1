@@ -1,18 +1,27 @@
 const baseUrl = String(process.env.ABA_V3_SMOKE_BASE_URL || '').replace(/\/$/, '');
 const clinicCookie = String(process.env.ABA_V3_SMOKE_CLINIC_COOKIE || process.env.ABA_V3_SMOKE_COOKIE || '').trim();
-const adminCookie = String(process.env.ABA_V3_SMOKE_ADMIN_COOKIE || clinicCookie).trim();
+const adminCookie = String(process.env.ABA_V3_SMOKE_ADMIN_COOKIE || '').trim();
 const organizationId = String(process.env.ABA_V3_SMOKE_ORGANIZATION_ID || '').trim();
 const patientId = String(process.env.ABA_V3_SMOKE_PATIENT_ID || '').trim();
+const programId = String(process.env.ABA_V3_SMOKE_PROGRAM_ID || '').trim();
 const targetId = String(process.env.ABA_V3_SMOKE_TARGET_ID || '').trim();
+const sessionId = String(process.env.ABA_V3_SMOKE_SESSION_ID || '').trim();
+const expectDark = !['0', 'false', 'no', 'off'].includes(String(process.env.ABA_V3_SMOKE_EXPECT_DARK ?? 'true').trim().toLowerCase());
 
-if (!/^https?:\/\//i.test(baseUrl) || !clinicCookie || !adminCookie || !organizationId || !patientId) {
-  console.error('Configure ABA_V3_SMOKE_BASE_URL, ABA_V3_SMOKE_CLINIC_COOKIE, ABA_V3_SMOKE_ADMIN_COOKIE, ABA_V3_SMOKE_ORGANIZATION_ID e ABA_V3_SMOKE_PATIENT_ID. ABA_V3_SMOKE_TARGET_ID é opcional.');
+if (!/^https?:\/\//i.test(baseUrl) || !clinicCookie || !adminCookie || !organizationId || !patientId || !targetId) {
+  console.error('Configure ABA_V3_SMOKE_BASE_URL, ABA_V3_SMOKE_CLINIC_COOKIE, ABA_V3_SMOKE_ADMIN_COOKIE, ABA_V3_SMOKE_ORGANIZATION_ID, ABA_V3_SMOKE_PATIENT_ID e ABA_V3_SMOKE_TARGET_ID. ABA_V3_SMOKE_PROGRAM_ID/SESSION_ID são opcionais.');
   process.exit(2);
 }
 
-const request = async (path, cookie) => {
+const request = async (path, cookie, options = {}) => {
   const response = await fetch(`${baseUrl}${path}`, {
-    headers: { Cookie: cookie, Accept: 'application/json' },
+    method: options.method || 'GET',
+    headers: {
+      Cookie: cookie,
+      Accept: 'application/json',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {})
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
     redirect: 'manual'
   });
   let body = null;
@@ -20,11 +29,27 @@ const request = async (path, cookie) => {
   return { status: response.status, ok: response.ok, body };
 };
 
+const query = new URLSearchParams({ organizationId, targetId });
+if (programId) query.set('programId', programId);
+const drainQuery = new URLSearchParams({
+  organizationId,
+  scopeType: programId ? 'TARGET' : 'PATIENT',
+  patientId
+});
+if (programId) {
+  drainQuery.set('programId', programId);
+  drainQuery.set('targetId', targetId);
+}
+
 const checks = [];
 checks.push(['chart-catalog', await request(`/api/aba/v3/patients/${encodeURIComponent(patientId)}/chart-catalog?days=30`, clinicCookie)]);
-checks.push(['pilot-readiness', await request(`/api/aba/v3/patients/${encodeURIComponent(patientId)}/pilot-readiness?organizationId=${encodeURIComponent(organizationId)}${targetId ? `&targetId=${encodeURIComponent(targetId)}` : ''}`, adminCookie)]);
-if (targetId) {
-  checks.push(['chart-series', await request(`/api/aba/v3/patients/${encodeURIComponent(patientId)}/targets/${encodeURIComponent(targetId)}/chart-series?days=30&limit=30`, clinicCookie)]);
+checks.push(['chart-series', await request(`/api/aba/v3/patients/${encodeURIComponent(patientId)}/targets/${encodeURIComponent(targetId)}/chart-series?days=30&limit=30`, clinicCookie)]);
+checks.push(['pilot-readiness', await request(`/api/aba/v3/patients/${encodeURIComponent(patientId)}/pilot-readiness?${query.toString()}`, adminCookie)]);
+checks.push(['drain-status', await request(`/api/aba/v3/admin/drain-status?${drainQuery.toString()}`, adminCookie)]);
+if (sessionId) {
+  checks.push(['session-collection-plan', await request(`/api/aba/v3/sessions/${encodeURIComponent(sessionId)}/collection-plan`, clinicCookie, {
+    method: 'POST', body: { patient_id: patientId, target_ids: [targetId] }
+  })]);
 }
 
 let failed = false;
@@ -38,7 +63,31 @@ const readiness = checks.find(([name]) => name === 'pilot-readiness')?.[1]?.body
 if (readiness) {
   console.log(`[info] readiness=${Boolean(readiness.ready)} blockers=${JSON.stringify(readiness.blockers || [])}`);
   console.log(`[info] runtime=${JSON.stringify(readiness.runtime || {})}`);
+  if (expectDark) {
+    const runtime = readiness.runtime || {};
+    const darkRuntime = runtime.readApiEnabled === true
+      && runtime.preflightApiEnabled === true
+      && runtime.collectionApiEnabled === false
+      && runtime.rolloutAdminEnabled === false
+      && runtime.uiBuildFlagEnabled === false;
+    if (!darkRuntime) {
+      console.error('[fail] runtime não está no perfil de preflight dark esperado.');
+      failed = true;
+    }
+  }
+}
+
+const drain = checks.find(([name]) => name === 'drain-status')?.[1]?.body?.data;
+if (drain) {
+  console.log(`[info] drained=${Boolean(drain.drained)} blockers=${JSON.stringify(drain.blockers || [])}`);
+  if (expectDark && !drain.drained) failed = true;
+}
+
+const plan = checks.find(([name]) => name === 'session-collection-plan')?.[1]?.body?.data;
+if (plan) {
+  console.log(`[info] session-plan complete=${Boolean(plan.complete)} targets=${JSON.stringify(plan.targets || [])}`);
+  if (plan.complete === false) failed = true;
 }
 
 if (failed) process.exit(1);
-console.log('[ok] ABA V3 pilot read-only smoke passed. No rollout state was mutated.');
+console.log('[ok] ABA V3 pre-production smoke passed. No rollout state was mutated.');

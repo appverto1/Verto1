@@ -56,8 +56,11 @@ export function resolveFeatureFlag(
   const overrideValue = readSourceValue(options.overrides, keys);
   if (overrideValue !== undefined) return normalizeFeatureFlagValue(overrideValue, defaultValue);
 
+  const storage = Object.prototype.hasOwnProperty.call(options, 'storage')
+    ? options.storage
+    : (typeof window !== 'undefined' ? window.localStorage : null);
   const storageValue = readStorageValue(
-    options.storage ?? (typeof window !== 'undefined' ? window.localStorage : null),
+    storage,
     [`verto.feature.${normalizedKey}`, `feature.${normalizedKey}`, normalizedKey]
   );
   if (storageValue !== undefined) return normalizeFeatureFlagValue(storageValue, defaultValue);
@@ -73,5 +76,7 @@ export const isAbaV2Enabled = (options: Parameters<typeof resolveFeatureFlag>[1]
 );
 
 export const isAbaV3UiEnabled = (options: Parameters<typeof resolveFeatureFlag>[1] = {}) => (
-  resolveFeatureFlag('aba_v3_ui', { defaultValue: false, ...options })
+  // Production rollout is controlled by the build/runtime environment and the
+  // server-side cohort resolver. Browser localStorage must never opt a user into V3.
+  resolveFeatureFlag('aba_v3_ui', { defaultValue: false, storage: null, ...options })
 );

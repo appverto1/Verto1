@@ -259,6 +259,22 @@ type AbaV3ErrorSelection = {
   binding: AbaV3BindingDecision;
 };
 
+type AbaV3SessionPlanTarget = {
+  target_id: string;
+  program_id?: string | null;
+  target_type?: string | null;
+  measurement_model_version: string;
+  binding_source?: 'BOUND' | 'PREVIEW' | string;
+  reason?: string | null;
+};
+
+type AbaV3SessionCollectionPlan = {
+  session_id?: string;
+  complete?: boolean;
+  targets: AbaV3SessionPlanTarget[];
+  v3_behavior_ids: string[];
+};
+
 type TrialAuditEvent = {
   id: string;
   action: 'convert_trial_collection_type';
@@ -296,6 +312,10 @@ const behaviorPresets = [
   { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-violet-50 text-violet-700 border-violet-100' },
   { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'whole_interval', 'momentary_time_sampling', 'duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
 ];
+
+const abaV3PlanTargetId = (goal: any) => String(
+  goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || ''
+).trim();
 
 const compactBehaviorLabel = (value: unknown) => {
   const label = String(value || '').trim();
@@ -450,6 +470,10 @@ const defaultPromptedPromptOptions = normalizeAbaPromptTypeConfig()
       ? 'Física total'
       : prompt.label
 }));
+const defaultV3PromptedPromptOptions = normalizeAbaPromptTypeConfig()
+  .filter((prompt) => prompt.active && prompt.showInSession)
+  .filter((prompt) => prompt.key !== 'independent' && prompt.key !== 'error')
+  .map((prompt) => ({ ...prompt, compactLabel: prompt.label }));
 const buildSessionPromptSnapshot = (prompt: any) => {
   const rawScore = prompt?.promptIndependenceScoreSnapshot ?? prompt?.independenceScore;
   const score = Number(rawScore);
@@ -970,6 +994,8 @@ export const SessionMode = ({
   const [abaV3ErrorSelection, setAbaV3ErrorSelection] = useState<AbaV3ErrorSelection | null>(null);
   const abaV3BindingCacheRef = useRef<Map<string, AbaV3BindingDecision>>(new Map());
   const abaV3BehaviorBindingCacheRef = useRef<Map<string, AbaV3BehaviorDecision>>(new Map());
+  const [abaV3SessionPlan, setAbaV3SessionPlan] = useState<AbaV3SessionCollectionPlan>({ targets: [], v3_behavior_ids: [], complete: false });
+  const [abaV3SessionPlanStatus, setAbaV3SessionPlanStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [abaV3TaskAnalysisModal, setAbaV3TaskAnalysisModal] = useState<AbaV3TaskAnalysisModalState | null>(null);
   const [abaV3TaskAnalysisResults, setAbaV3TaskAnalysisResults] = useState<Record<number, { performanceCode: string; promptKey?: string | null }>>({});
   const [abaV3TaskAnalysisSaving, setAbaV3TaskAnalysisSaving] = useState(false);
@@ -1001,19 +1027,31 @@ export const SessionMode = ({
   const [editingRecordTitle, setEditingRecordTitle] = useState('');
   const [editingRecordDetail, setEditingRecordDetail] = useState('');
   const [editingRecordCollectionType, setEditingRecordCollectionType] = useState('dtt');
-  const promptedPromptOptions = useMemo(() => {
-    const options = normalizeAbaPromptTypeConfig(clinicPromptTypes)
-      .filter((prompt) => prompt.active && prompt.showInSession)
-      .filter((prompt) => abaV3UiEnabled || !prompt.countsAsIndependent)
-      .filter((prompt) => prompt.key !== 'independent' && prompt.key !== 'error')
-      .map((prompt) => ({
-        ...prompt,
-        compactLabel: prompt.label
-      }));
+  const abaV3TargetPlanById = useMemo(() => new Map(
+    (abaV3SessionPlan.targets || []).map((target) => [String(target.target_id || '').trim(), target])
+  ), [abaV3SessionPlan.targets]);
+  const abaV3BehaviorIdSet = useMemo(() => new Set(
+    (abaV3SessionPlan.v3_behavior_ids || []).map((behaviorId) => String(behaviorId || '').trim()).filter(Boolean)
+  ), [abaV3SessionPlan.v3_behavior_ids]);
+  const abaV3PlannedModelForGoal = (goal: any) => abaV3TargetPlanById.get(abaV3PlanTargetId(goal))?.measurement_model_version || '';
+  const isGoalPlannedForV3Ui = (goal: any) => abaV3PlannedModelForGoal(goal) === 'V3';
+
+  const activePromptOptions = useMemo(() => normalizeAbaPromptTypeConfig(clinicPromptTypes)
+    .filter((prompt) => prompt.active && prompt.showInSession)
+    .filter((prompt) => prompt.key !== 'independent' && prompt.key !== 'error')
+    .map((prompt) => ({ ...prompt, compactLabel: prompt.label })), [clinicPromptTypes]);
+  const legacyPromptedPromptOptions = useMemo(() => {
+    const options = activePromptOptions.filter((prompt) => !prompt.countsAsIndependent);
     return options.length > 0 ? options : defaultPromptedPromptOptions;
-  }, [clinicPromptTypes, abaV3UiEnabled]);
-  const promptedPromptKeySet = useMemo(() => new Set(promptedPromptOptions.map((prompt) => prompt.key)), [promptedPromptOptions]);
-  const promptCategoryBuckets = useMemo(() => {
+  }, [activePromptOptions]);
+  const v3PromptedPromptOptions = useMemo(() => (
+    activePromptOptions.length > 0 ? activePromptOptions : defaultV3PromptedPromptOptions
+  ), [activePromptOptions]);
+  const promptedPromptOptionsForGoal = (goal: any) => isGoalPlannedForV3Ui(goal)
+    ? v3PromptedPromptOptions
+    : legacyPromptedPromptOptions;
+
+  const buildPromptCategoryBuckets = (options: typeof activePromptOptions) => {
     const normalizeCategory = (value: unknown) => String(value || '')
       .trim()
       .toLowerCase()
@@ -1026,9 +1064,9 @@ export const SessionMode = ({
       { key: 'gestural_model', label: 'Gestual/Mod.', matches: ['gestual', 'gestural', 'modelo', 'model', 'posicional', 'positional'] },
       { key: 'physical', label: 'Física', matches: ['fisica', 'physical', 'bloqueio', 'block'] }
     ];
-    const buckets = bucketDefinitions.map((bucket) => ({ ...bucket, prompts: [] as typeof promptedPromptOptions }));
-    const otherBucket = { key: 'other', label: 'Outras', matches: [] as string[], prompts: [] as typeof promptedPromptOptions };
-    promptedPromptOptions.forEach((prompt) => {
+    const buckets = bucketDefinitions.map((bucket) => ({ ...bucket, prompts: [] as typeof activePromptOptions }));
+    const otherBucket = { key: 'other', label: 'Outras', matches: [] as string[], prompts: [] as typeof activePromptOptions };
+    options.forEach((prompt) => {
       const token = [
         normalizeCategory(prompt.category),
         normalizeCategory(prompt.key),
@@ -1039,7 +1077,13 @@ export const SessionMode = ({
       bucket.prompts.push(prompt);
     });
     return [...buckets, otherBucket].filter((bucket) => bucket.prompts.length > 0);
-  }, [promptedPromptOptions]);
+  };
+  const legacyPromptCategoryBuckets = useMemo(() => buildPromptCategoryBuckets(legacyPromptedPromptOptions), [legacyPromptedPromptOptions]);
+  const v3PromptCategoryBuckets = useMemo(() => buildPromptCategoryBuckets(v3PromptedPromptOptions), [v3PromptedPromptOptions]);
+  const promptCategoryBucketsForGoal = (goal: any) => isGoalPlannedForV3Ui(goal)
+    ? v3PromptCategoryBuckets
+    : legacyPromptCategoryBuckets;
+
 
   useEffect(() => {
     let cancelled = false;
@@ -1101,25 +1145,33 @@ export const SessionMode = ({
   const intervalPausedControlsRef = useRef<HTMLDivElement | null>(null);
 
   const sessionBehaviorPresets = useMemo(() => {
-    if (!abaV3UiEnabled || canonicalBehaviorPresets.length === 0) return behaviorPresets;
-    return canonicalBehaviorPresets.map((behavior, index) => {
-      const legacyByName = behaviorPresets.find((item) => item.name.toLowerCase() === String(behavior.name || '').toLowerCase());
-      const measurementType = String(behavior.measurementType || 'frequency').toLowerCase();
-      return {
-        id: String(behavior.id),
-        name: String(behavior.name),
-        defaultMeasurement: measurementType,
-        allowedMeasurements: [measurementType],
-        abcRequirement: legacyByName?.abcRequirement || ('OPTIONAL' as AbcRequirement),
-        tone: legacyByName?.tone || behaviorPresets[index % behaviorPresets.length].tone,
-        intervalSeconds: behavior.intervalSeconds || null,
-        canonicalV3Definition: true
-      };
-    });
-  }, [abaV3UiEnabled, canonicalBehaviorPresets]);
+    if (!abaV3UiEnabled || abaV3BehaviorIdSet.size === 0 || canonicalBehaviorPresets.length === 0) return behaviorPresets;
+    const merged = [...behaviorPresets];
+    canonicalBehaviorPresets
+      .filter((behavior) => abaV3BehaviorIdSet.has(String(behavior.id || '').trim()))
+      .forEach((behavior, index) => {
+        const behaviorName = String(behavior.name || '').trim();
+        const legacyIndex = merged.findIndex((item) => item.name.toLowerCase() === behaviorName.toLowerCase());
+        const legacyByName = legacyIndex >= 0 ? merged[legacyIndex] : null;
+        const measurementType = String(behavior.measurementType || 'frequency').toLowerCase();
+        const canonical = {
+          id: String(behavior.id),
+          name: behaviorName,
+          defaultMeasurement: measurementType,
+          allowedMeasurements: [measurementType],
+          abcRequirement: legacyByName?.abcRequirement || ('OPTIONAL' as AbcRequirement),
+          tone: legacyByName?.tone || behaviorPresets[index % behaviorPresets.length].tone,
+          intervalSeconds: behavior.intervalSeconds || null,
+          canonicalV3Definition: true
+        };
+        if (legacyIndex >= 0) merged[legacyIndex] = canonical as any;
+        else merged.push(canonical as any);
+      });
+    return merged;
+  }, [abaV3UiEnabled, abaV3BehaviorIdSet, canonicalBehaviorPresets]);
 
   useEffect(() => {
-    if (!abaV3UiEnabled || !patientId) {
+    if (!abaV3UiEnabled || !patientId || abaV3BehaviorIdSet.size === 0) {
       setCanonicalBehaviorPresets([]);
       return;
     }
@@ -1133,7 +1185,7 @@ export const SessionMode = ({
         if (!cancelled) setCanonicalBehaviorPresets([]);
       });
     return () => { cancelled = true; };
-  }, [abaV3UiEnabled, patientId]);
+  }, [abaV3UiEnabled, patientId, abaV3BehaviorIdSet]);
 
   useEffect(() => {
     if (sessionBehaviorPresets.some((behavior) => behavior.id === selectedBehaviorId)) return;
@@ -2616,6 +2668,10 @@ export const SessionMode = ({
     if (!behaviorId || !sessionId || sessionId.startsWith('draft-')) {
       throw new Error('A coleta comportamental V3 exige sessão e comportamento persistidos.');
     }
+    if (abaV3SessionPlanStatus === 'ready' && !abaV3BehaviorIdSet.has(behaviorId)) return null;
+    if (abaV3SessionPlanStatus !== 'ready') {
+      throw new Error('O plano de coleta V3 desta sessão ainda não foi confirmado. Tente novamente antes de registrar comportamento.');
+    }
     const cacheKey = `${sessionId}:${behaviorId}`;
     const cached = abaV3BehaviorBindingCacheRef.current.get(cacheKey);
     if (cached) return cached;
@@ -3079,13 +3135,15 @@ export const SessionMode = ({
 
   const handleTrialClick = async (goal: any, score: number, outcome: 'independent' | 'prompted' | 'error', promptedPromptKey?: string) => {
     if (!ensureSessionCanRecord()) return;
+    const goalPromptedPromptOptions = promptedPromptOptionsForGoal(goal);
+    const goalPromptedPromptKeySet = new Set(goalPromptedPromptOptions.map((prompt) => prompt.key));
     const selectedPrompt = outcome === 'independent'
       ? { ...resolveTrialPromptInfo({ promptLevelKey: 'independent' }, clinicPromptTypes), compactLabel: 'Independente' }
       : outcome === 'error'
         ? { ...resolveTrialPromptInfo({ promptLevelKey: 'error' }, clinicPromptTypes), compactLabel: 'Erro' }
-        : promptedPromptOptions.find((prompt) => prompt.key === (promptedPromptKey || promptLevelKey)) ||
+        : goalPromptedPromptOptions.find((prompt) => prompt.key === (promptedPromptKey || promptLevelKey)) ||
           { ...resolveTrialPromptInfo({ promptLevelKey: promptedPromptKey || promptLevelKey }, clinicPromptTypes), compactLabel: 'Com ajuda' };
-    if (outcome === 'prompted' && !promptedPromptKeySet.has(selectedPrompt.key)) {
+    if (outcome === 'prompted' && !goalPromptedPromptKeySet.has(selectedPrompt.key)) {
       setPromptWarning('Selecione visual, gestual, verbal, modelo, física parcial ou física total antes de salvar.');
       setPromptSelectionGoal(goal);
       return;
@@ -3096,12 +3154,21 @@ export const SessionMode = ({
 
     let binding: AbaV3BindingDecision | null = null;
     if (abaV3UiEnabled) {
-      try {
-        binding = await resolveAbaV3BindingForGoal(goal);
-      } catch (error: any) {
-        setSessionWarning(error?.message || 'Não foi possível determinar o modelo de coleta deste target.');
-        showClinicalToast(buildClinicalSaveErrorToast(), 'error');
+      const plannedModel = abaV3PlannedModelForGoal(goal);
+      if (abaV3SessionPlanStatus === 'ready' && plannedModel === 'V3_BLOCKED') {
+        setSessionWarning('Este target está selecionado para V3, mas a configuração clínica não está completa. Nenhuma tentativa foi gravada.');
+        showClinicalToast({ variant: 'error', title: 'Coleta V3 bloqueada', subtitle: 'Revise definição, fase e passos antes de coletar.' }, 'error');
         return;
+      }
+      const mustResolveBinding = abaV3SessionPlanStatus !== 'ready' || plannedModel === 'V3' || plannedModel === 'EMERGENCY_LEGACY_BRIDGE';
+      if (mustResolveBinding) {
+        try {
+          binding = await resolveAbaV3BindingForGoal(goal);
+        } catch (error: any) {
+          setSessionWarning(error?.message || 'Não foi possível determinar o modelo de coleta deste target.');
+          showClinicalToast(buildClinicalSaveErrorToast(), 'error');
+          return;
+        }
       }
     }
 
@@ -4926,6 +4993,45 @@ export const SessionMode = ({
     }
     return sessionGoals;
   }, [sessionAvailableMaintenanceTargetIds, sessionGoals, sessionPlanFilter]);
+  const abaV3SessionPlanTargetIds = useMemo(() => Array.from(new Set(
+    sessionGoals.map((goal: any) => goalTargetId(goal)).filter(Boolean)
+  )).slice(0, 200), [sessionGoals]);
+  const abaV3SessionPlanTargetSignature = useMemo(() => abaV3SessionPlanTargetIds.slice().sort().join('|'), [abaV3SessionPlanTargetIds]);
+
+  useEffect(() => {
+    abaV3BindingCacheRef.current.clear();
+    abaV3BehaviorBindingCacheRef.current.clear();
+    if (!abaV3UiEnabled || !patientId || !sessionId || sessionId.startsWith('draft-')) {
+      setAbaV3SessionPlan({ targets: [], v3_behavior_ids: [], complete: false });
+      setAbaV3SessionPlanStatus(abaV3UiEnabled ? 'idle' : 'ready');
+      return;
+    }
+    let cancelled = false;
+    setAbaV3SessionPlanStatus('loading');
+    dataService.getAbaV3SessionCollectionPlan({ patientId, sessionId, targetIds: abaV3SessionPlanTargetIds })
+      .then((result: any) => {
+        if (cancelled) return;
+        if (!result?.success) {
+          setAbaV3SessionPlan({ targets: [], v3_behavior_ids: [], complete: false });
+          setAbaV3SessionPlanStatus('error');
+          return;
+        }
+        const data = result?.data || {};
+        setAbaV3SessionPlan({
+          session_id: String(data?.session_id || sessionId),
+          complete: data?.complete !== false,
+          targets: Array.isArray(data?.targets) ? data.targets : [],
+          v3_behavior_ids: Array.isArray(data?.v3_behavior_ids) ? data.v3_behavior_ids : []
+        });
+        setAbaV3SessionPlanStatus(data?.complete === false ? 'error' : 'ready');
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setAbaV3SessionPlan({ targets: [], v3_behavior_ids: [], complete: false });
+        setAbaV3SessionPlanStatus('error');
+      });
+    return () => { cancelled = true; };
+  }, [abaV3SessionPlanTargetSignature, abaV3UiEnabled, patientId, sessionId]);
   const planningTargetNameById = useMemo(() => {
     const names = new Map<string, string>();
     for (const goal of sessionGoals) {
@@ -8551,7 +8657,8 @@ export const SessionMode = ({
               const selected = mobileSelectedGoalKey === goalKey;
               const helpOpen = mobilePromptGridGoalKey === goalKey;
               const selectedPromptCategoryKey = helpOpen ? (mobilePromptCategoryByGoalKey[goalKey] || '') : '';
-              const selectedPromptCategory = promptCategoryBuckets.find((bucket) => bucket.key === selectedPromptCategoryKey) || null;
+              const goalPromptCategoryBuckets = promptCategoryBucketsForGoal(goal);
+              const selectedPromptCategory = goalPromptCategoryBuckets.find((bucket) => bucket.key === selectedPromptCategoryKey) || null;
               const criteriaOpen = mobileExpandedCriteriaKey === goalKey;
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
               const errorTrialLockKey = `trial:${goalKey}:error:error`;
@@ -8663,7 +8770,7 @@ export const SessionMode = ({
                       <div className="rounded-2xl border border-purple-100 bg-[#FBF7FF] p-2" data-aba-mobile-prompt-categories>
                         <p className="text-[11px] font-medium text-slate-500">Tipo de ajuda</p>
                         <div className="mt-2 grid grid-cols-2 gap-2">
-                          {promptCategoryBuckets.map((bucket) => {
+                          {goalPromptCategoryBuckets.map((bucket) => {
                             const active = selectedPromptCategoryKey === bucket.key;
                             return (
                               <button
@@ -8889,7 +8996,7 @@ export const SessionMode = ({
                         <span className="text-xs font-medium">Com ajuda</span>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        {promptedPromptOptions.map((prompt) => {
+                        {promptedPromptOptionsForGoal(goal).map((prompt) => {
                           const promptedTrialLockKey = `trial:${goalKey}:prompted:${prompt.key}`;
                           const promptedActive = microFeedback[promptedTrialLockKey] === 'check';
                           return (
@@ -9478,7 +9585,7 @@ export const SessionMode = ({
                             className="mt-1 w-full rounded-xl border border-purple-100 bg-white px-3 py-3 text-sm text-gray-700 outline-none"
                           >
                             <option value="">Selecione</option>
-                            {promptedPromptOptions.map((prompt) => <option key={prompt.key} value={prompt.key}>{prompt.label}</option>)}
+                            {v3PromptedPromptOptions.map((prompt) => <option key={prompt.key} value={prompt.key}>{prompt.label}</option>)}
                           </select>
                         </label>
                       )}
@@ -9555,7 +9662,7 @@ export const SessionMode = ({
               </div>
             )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {promptedPromptOptions.map((prompt) => (
+              {promptedPromptOptionsForGoal(promptSelectionGoal).map((prompt) => (
                 <button
                   key={prompt.key}
                   onClick={() => savePromptedTrial(prompt.key)}

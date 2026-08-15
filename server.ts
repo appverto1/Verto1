@@ -43416,6 +43416,18 @@ async function startServer() {
     return next();
   };
 
+  const isAbaV3PreflightApiEnabled = () => normalizeServerFeatureFlag(
+    process.env.FEATURE_ABA_V3_PREFLIGHT_API,
+    false
+  );
+
+  const requireAbaV3PreflightFeature = (_req: any, res: any, next: any) => {
+    if (!isAbaV3PreflightApiEnabled()) {
+      return res.status(404).json({ success: false, code: 'feature_disabled', feature: 'aba_v3_preflight_api', error: 'Preflight ABA V3 desabilitado.' });
+    }
+    return next();
+  };
+
   const isAbaV3RolloutAdminEnabled = () => normalizeServerFeatureFlag(
     process.env.FEATURE_ABA_V3_ROLLOUT_ADMIN,
     false
@@ -70711,17 +70723,60 @@ async function startServer() {
 
   const handleAbaV3ReadRpcError = (res: any, error: any) => {
     const message = sanitizeString(error?.message || '', 500);
-    if (hasMissingFinancialSchema(error) || /get_aba_patient_chart_catalog_v3|get_aba_target_chart_series_v3|get_aba_target_history_v3|get_aba_patient_overview_v3|get_aba_session_read_bundle_v3|PGRST202|42883|42P01/i.test(message)) {
+    if (hasMissingFinancialSchema(error) || /get_aba_v3_session_collection_plan|get_aba_patient_chart_catalog_v3|get_aba_target_chart_series_v3|get_aba_target_history_v3|get_aba_patient_overview_v3|get_aba_session_read_bundle_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema ABA V3 ainda não aplicado.' });
     }
     if (message.includes('ABA_V3_READ_WINDOW_')) {
       return res.status(400).json({ success: false, code: 'ABA_V3_READ_WINDOW_INVALID', error: 'Janela de consulta ABA V3 inválida.' });
+    }
+    if (/ABA_V3_SESSION_PLAN_TARGET_LIMIT/i.test(message)) {
+      return res.status(422).json({ success: false, code: 'ABA_V3_SESSION_PLAN_TARGET_LIMIT', error: 'O plano de coleta aceita no máximo 200 targets por sessão.' });
+    }
+    if (/ABA_V3_SESSION_PLAN_(SCOPE_REQUIRED|SESSION_SCOPE_INVALID)/i.test(message)) {
+      return res.status(403).json({ success: false, code: 'ABA_V3_SESSION_PLAN_SCOPE_DENIED', error: 'Acesso negado ao plano de coleta ABA V3.' });
     }
     if (message.includes('ABA_V3_READ_') && message.includes('_SCOPE_INVALID')) {
       return res.status(403).json({ success: false, code: 'ABA_V3_READ_SCOPE_DENIED', error: 'Acesso negado ao escopo ABA V3.' });
     }
     throw error;
   };
+
+  app.post(
+    '/api/aba/v3/sessions/:sessionId/collection-plan',
+    requireAbaV3ReadFeature,
+    checkAuth,
+    requireClinicCapability('aba.trial.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 24 * 1024, 'Plano de coleta ABA V3')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const sessionId = sanitizeString(req.params.sessionId, 180);
+        const rawTargetIds = Array.isArray(req.body?.target_ids ?? req.body?.targetIds) ? (req.body?.target_ids ?? req.body?.targetIds) : [];
+        const targetIds = Array.from(new Set(rawTargetIds.map((value: unknown) => sanitizeString(value, 180)).filter(Boolean))).slice(0, 200);
+        if (!isUuid(patientId) || !isUuid(organizationId) || !sessionId || rawTargetIds.length > 200) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_SESSION_PLAN_SCOPE_INVALID', error: 'Escopo do plano de coleta ABA V3 inválido.' });
+        }
+        const sessionScope = await resolveAbaSessionReadScope(sessionId, req.session.user);
+        if (!sessionScope.ok) return res.status((sessionScope as any).status || 400).json({ success: false, error: (sessionScope as any).error });
+        if (sanitizeString((sessionScope as any).patientId, 120) !== patientId || sanitizeString((sessionScope as any).clinicId, 120) !== organizationId) {
+          return res.status(403).json({ success: false, code: 'ABA_V3_SESSION_PLAN_SCOPE_DENIED', error: 'Sessão fora do escopo do paciente.' });
+        }
+        const { data, error } = await supabase.rpc('get_aba_v3_session_collection_plan', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_target_ids: targetIds
+        });
+        if (error) return handleAbaV3ReadRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: data || { session_id: sessionId, targets: [], v3_behavior_ids: [], complete: true } });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
 
   app.get(
     '/api/aba/v3/patients/:patientId/overview',
@@ -70888,11 +70943,17 @@ async function startServer() {
 
   const handleAbaV3RolloutRpcError = (res: any, error: any) => {
     const message = sanitizeString(error?.message || '', 1400);
-    if (hasMissingFinancialSchema(error) || /get_aba_v3_pilot_readiness|set_aba_measurement_rollout_state_v3|PGRST202|42883|42P01/i.test(message)) {
+    if (hasMissingFinancialSchema(error) || /get_aba_v3_pilot_readiness|get_aba_v3_rollout_drain_status|set_aba_measurement_rollout_state_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema operacional ABA V3 ainda não aplicado.' });
     }
     if (/ABA_V3_ROLLOUT_STATE_VERSION_CONFLICT/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_ROLLOUT_STATE_VERSION_CONFLICT', error: 'O rollout mudou desde a última leitura. Atualize antes de tentar novamente.' });
+    }
+    if (/ABA_V3_ROLLOUT_DRAIN_REQUIRED/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'ABA_V3_ROLLOUT_DRAIN_REQUIRED', error: 'Ainda existem dados V3 em trânsito. Interrompa novas sessões e conclua a drenagem antes de desligar o sync.' });
+    }
+    if (/ABA_V3_ROLLOUT_SYNC_REQUIRED/i.test(message)) {
+      return res.status(422).json({ success: false, code: 'ABA_V3_ROLLOUT_SYNC_REQUIRED', error: 'Novas sessões V3 exigem sync V3 habilitado no mesmo escopo.' });
     }
     if (/ABA_V3_ROLLOUT_PREFLIGHT_BLOCKED/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_ROLLOUT_PREFLIGHT_BLOCKED', error: 'O escopo ainda não atende aos critérios mínimos para piloto V3.' });
@@ -70908,7 +70969,7 @@ async function startServer() {
 
   app.get(
     '/api/aba/v3/patients/:patientId/pilot-readiness',
-    requireAbaV3RolloutAdminFeature,
+    requireAbaV3PreflightFeature,
     checkAuth,
     checkPlatformAdmin,
     async (req: any, res) => {
@@ -70934,12 +70995,47 @@ async function startServer() {
             ...(data || {}),
             runtime: {
               readApiEnabled: isAbaV3ReadApiEnabled(),
+              preflightApiEnabled: isAbaV3PreflightApiEnabled(),
               collectionApiEnabled: isAbaV3CollectionApiEnabled(),
               rolloutAdminEnabled: isAbaV3RolloutAdminEnabled(),
               uiBuildFlagEnabled: normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false)
             }
           }
         });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/admin/drain-status',
+    requireAbaV3PreflightFeature,
+    checkAuth,
+    checkPlatformAdmin,
+    async (req: any, res) => {
+      try {
+        const organizationId = sanitizeString(req.query?.organizationId || req.query?.organization_id, 120);
+        const scopeType = sanitizeString(req.query?.scopeType || req.query?.scope_type || 'TARGET', 20).toUpperCase();
+        const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120) || null;
+        const programId = sanitizeString(req.query?.programId || req.query?.program_id, 180) || null;
+        const targetId = sanitizeString(req.query?.targetId || req.query?.target_id, 180) || null;
+        if (!isUuid(organizationId) || !['CLINIC','PATIENT','PROGRAM','TARGET'].includes(scopeType)) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_DRAIN_SCOPE_INVALID', error: 'Escopo de drenagem ABA V3 inválido.' });
+        }
+        if (patientId && !isUuid(patientId)) {
+          return res.status(422).json({ success: false, code: 'ABA_V3_DRAIN_SCOPE_INVALID', error: 'Paciente da drenagem ABA V3 inválido.' });
+        }
+        const { data, error } = await supabase.rpc('get_aba_v3_rollout_drain_status', {
+          p_organization_id: organizationId,
+          p_scope_type: scopeType,
+          p_patient_id: patientId,
+          p_program_id: programId,
+          p_target_id: targetId
+        });
+        if (error) return handleAbaV3RolloutRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: data || null });
       } catch (error: any) {
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }
@@ -70971,10 +71067,16 @@ async function startServer() {
         if (typeof allowRaw !== 'boolean' || typeof syncRaw !== 'boolean' || reason.length < 5) {
           return res.status(422).json({ success: false, code: 'ABA_V3_ROLLOUT_PAYLOAD_INVALID', error: 'Informe os estados booleanos e uma justificativa válida.' });
         }
+        if (allowRaw && !syncRaw) {
+          return res.status(422).json({ success: false, code: 'ABA_V3_ROLLOUT_SYNC_REQUIRED', error: 'Novas sessões V3 exigem sync V3 habilitado no mesmo escopo.' });
+        }
         if (expectedStateVersion !== null && (!Number.isInteger(expectedStateVersion) || expectedStateVersion < 0)) {
           return res.status(422).json({ success: false, code: 'ABA_V3_ROLLOUT_VERSION_INVALID', error: 'Versão esperada do rollout inválida.' });
         }
-        if ((allowRaw || syncRaw) && (!isAbaV3ReadApiEnabled() || !isAbaV3CollectionApiEnabled() || !normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false))) {
+        // Runtime readiness is required to OPEN new V3 sessions. Sync-only is a
+        // recovery/drain state and must remain available even if UI/collection were
+        // already rolled back, otherwise queued offline facts could be stranded.
+        if (allowRaw && (!isAbaV3ReadApiEnabled() || !isAbaV3CollectionApiEnabled() || !normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false))) {
           return res.status(409).json({
             success: false,
             code: 'ABA_V3_RUNTIME_NOT_READY',

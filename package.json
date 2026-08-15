@@ -121,7 +121,8 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test:patient-create-user-idempotency": "tsx tests/patientCreateUserIdempotency.test.ts"
+    "test:patient-create-user-idempotency": "tsx tests/patientCreateUserIdempotency.test.ts",
+    "smoke:aba-v3-preproduction": "node scripts/aba-v3-pilot-smoke.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

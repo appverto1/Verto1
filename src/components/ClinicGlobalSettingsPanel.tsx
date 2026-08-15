@@ -800,8 +800,10 @@ function AbaPromptTypesSettings() {
 }
 
 function AbaPromptTypesClinicalSettings() {
-  const v3PromptSemantics = isAbaV3UiEnabled();
   const legacyV2StillEnabled = isAbaV2Enabled();
+  // During a cohort pilot V2 and V3 coexist. Keep clinic-global prompt settings
+  // compatible with V2; V3 session collection ignores legacy numeric scores.
+  const v3PromptSemantics = isAbaV3UiEnabled() && !legacyV2StillEnabled;
   const [promptTypes, setPromptTypes] = useState<AbaPromptTypeConfig[]>(() => normalizeAbaPromptTypeConfig());
   const [savingId, setSavingId] = useState('');
   const [savedId, setSavedId] = useState('');
