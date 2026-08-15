@@ -13,7 +13,7 @@ export interface OfflineRecord {
   id: string;
   entity_id?: string;
   data: any;
-  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
+  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'aba_v3' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
   sync_status: OfflineSyncStatus;
   last_updated: number;
   retry_count?: number;

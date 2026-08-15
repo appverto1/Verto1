@@ -33,7 +33,7 @@ import {
   type AbaPromptTypeConfig
 } from '../utils/abaPromptLevels';
 import { buildSessionReport, calculateSessionSummary, canCloseAbaSession, canRecordInAbaSession, type SessionSummary, type SessionSummaryPendingItem } from '../utils/abaSessionSummary';
-import { isAbaV2Enabled } from '../utils/featureFlags';
+import { isAbaV2Enabled, isAbaV3UiEnabled } from '../utils/featureFlags';
 import {
   mergeLegacyAndTherapeuticSessionGoals,
   normalizeTherapeuticPrograms,
@@ -86,6 +86,7 @@ import {
 import { formatMaintenanceScheduleDueLabel, resolveMaintenanceProbeAvailability } from '../utils/abaMaintenanceScheduling';
 import { mapMaintenancePanelResponse, resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { isPeiClinicalRowAfterProgressReset } from '../utils/peiSessionReset';
+import { abaV3ActionDisplayLabel, type AbaV3TrialActionKey } from '../utils/abaV3Collection';
 import {
   abaRecommendationPriorityLabel,
   abaRecommendationStatusLabel,
@@ -147,6 +148,8 @@ type SessionRecord = {
   durationSeconds?: number | null;
   countDelta?: number | null;
   trialOutcome?: 'independent' | 'prompted' | 'error';
+  measurementModelVersion?: 'LEGACY_V2' | 'V3' | 'EMERGENCY_LEGACY_BRIDGE' | string;
+  v3ActionKey?: AbaV3TrialActionKey;
   collectionType?: string;
   promptTypeId?: string | null;
   promptTypeNameSnapshot?: string | null;
@@ -208,6 +211,26 @@ type PendingMaintenanceProbeTrial = {
   outcome: 'independent' | 'prompted' | 'error';
   selectedPrompt: any;
   previousRecordId: string;
+  measurementModelVersion?: string;
+  v3ActionKey?: AbaV3TrialActionKey;
+  activeMaintenanceProbe?: ActiveMaintenanceProbeForTarget | null;
+};
+
+type AbaV3BindingDecision = {
+  bindingId: string;
+  measurementModelVersion: string;
+  collectionDefinitionVersionId?: string | null;
+  targetPhaseAssignmentId?: string | null;
+  bindingReason?: string | null;
+  boundAt?: string | null;
+};
+
+type AbaV3ErrorSelection = {
+  goal: any;
+  selectedPrompt: any;
+  activeCollectionType: string;
+  activeMaintenanceProbe?: ActiveMaintenanceProbeForTarget | null;
+  binding: AbaV3BindingDecision;
 };
 
 type TrialAuditEvent = {
@@ -750,7 +773,8 @@ export const SessionMode = ({
   therapistName,
   clinicId
 }: any) => {
-  if (!isAbaV2Enabled()) return null;
+  const abaV3UiEnabled = isAbaV3UiEnabled();
+  if (!isAbaV2Enabled() && !abaV3UiEnabled) return null;
 
   const legacySessionGoals = useMemo(() => (
     [...(patient.pei?.filter(isTeachingOperationalGoal) || [])]
@@ -916,6 +940,8 @@ export const SessionMode = ({
   const [durationBlockModalOpen, setDurationBlockModalOpen] = useState(false);
   const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
   const [promptWarning, setPromptWarning] = useState('');
+  const [abaV3ErrorSelection, setAbaV3ErrorSelection] = useState<AbaV3ErrorSelection | null>(null);
+  const abaV3BindingCacheRef = useRef<Map<string, AbaV3BindingDecision>>(new Map());
   const [clinicPromptTypes, setClinicPromptTypes] = useState<AbaPromptTypeConfig[]>(() => normalizeAbaPromptTypeConfig());
   const [mobileFocusMode, setMobileFocusMode] = useState(true);
   const [mobileSelectedGoalKey, setMobileSelectedGoalKey] = useState('');
@@ -946,14 +972,15 @@ export const SessionMode = ({
   const [editingRecordCollectionType, setEditingRecordCollectionType] = useState('dtt');
   const promptedPromptOptions = useMemo(() => {
     const options = normalizeAbaPromptTypeConfig(clinicPromptTypes)
-      .filter((prompt) => prompt.active && prompt.showInSession && !prompt.countsAsIndependent)
+      .filter((prompt) => prompt.active && prompt.showInSession)
+      .filter((prompt) => abaV3UiEnabled || !prompt.countsAsIndependent)
       .filter((prompt) => prompt.key !== 'independent' && prompt.key !== 'error')
       .map((prompt) => ({
         ...prompt,
         compactLabel: prompt.label
       }));
     return options.length > 0 ? options : defaultPromptedPromptOptions;
-  }, [clinicPromptTypes]);
+  }, [clinicPromptTypes, abaV3UiEnabled]);
   const promptedPromptKeySet = useMemo(() => new Set(promptedPromptOptions.map((prompt) => prompt.key)), [promptedPromptOptions]);
   const promptCategoryBuckets = useMemo(() => {
     const normalizeCategory = (value: unknown) => String(value || '')
@@ -2449,6 +2476,191 @@ export const SessionMode = ({
     setPendingMaintenanceProbeTrial(null);
   };
 
+  const resolveAbaV3BindingForGoal = async (goal: any): Promise<AbaV3BindingDecision | null> => {
+    if (!abaV3UiEnabled) return null;
+    const targetId = String(goalTargetId(goal) || '').trim();
+    if (!targetId || !sessionId || sessionId.startsWith('draft-')) {
+      throw new Error('A coleta V3 exige uma sessão e um target persistidos antes da primeira tentativa.');
+    }
+    const cacheKey = `${sessionId}:${targetId}`;
+    const cached = abaV3BindingCacheRef.current.get(cacheKey);
+    if (cached) return cached;
+    const result = await dataService.resolveAbaV3SessionTargetBinding({
+      patientId,
+      sessionId,
+      targetId
+    });
+    if (!result?.success || !result?.data?.measurementModelVersion) {
+      throw new Error(result?.error || 'Não foi possível determinar o modelo de coleta deste target.');
+    }
+    const binding = result.data as AbaV3BindingDecision;
+    abaV3BindingCacheRef.current.set(cacheKey, binding);
+    return binding;
+  };
+
+  const persistV3TrialRecord = async ({
+    goal,
+    actionKey,
+    selectedPrompt,
+    activeCollectionType,
+    activeMaintenanceProbe
+  }: {
+    goal: any;
+    actionKey: AbaV3TrialActionKey;
+    selectedPrompt: any;
+    activeCollectionType: string;
+    activeMaintenanceProbe?: ActiveMaintenanceProbeForTarget | null;
+  }) => {
+    const timestamp = new Date().toISOString();
+    const normalizedCollectionType = normalizeAbaCollectionType(activeCollectionType);
+    const isMaintenanceAttempt = isMaintenanceProbeCollection(normalizedCollectionType);
+    const resolvedMaintenanceProbe = isMaintenanceAttempt
+      ? activeMaintenanceProbe || getActiveMaintenanceProbeForTarget(goal)
+      : null;
+    const recordTargetId = String(resolvedMaintenanceProbe?.targetId || goalTargetId(goal)).trim();
+    const maintenanceScheduleId = String(resolvedMaintenanceProbe?.scheduleId || activeMaintenanceScheduleId || '').trim();
+    if (!recordTargetId || sessionId.startsWith('draft-')) {
+      throw new Error('A coleta V3 exige target e sessão persistidos.');
+    }
+    if (isMaintenanceAttempt && (!resolvedMaintenanceProbe || !maintenanceScheduleId)) {
+      throw new Error('Sondagem de manutenção V3 exige uma agenda ativa vinculada.');
+    }
+
+    const trialLockKey = `trial-v3:${recordTargetId}:${actionKey}:${selectedPrompt?.key || 'none'}`;
+    if (!lockAction(trialLockKey, 600)) return;
+    const clientEventId = crypto.randomUUID();
+    const localRecordId = `trial-v3-${clientEventId}`;
+    const actionLabel = abaV3ActionDisplayLabel(actionKey);
+    const collectionLabel = getAbaCollectionLabel(normalizedCollectionType);
+    const isIndependentCorrect = actionKey === 'INDEPENDENT_CORRECT';
+    const isPromptedCorrect = actionKey === 'PROMPTED_CORRECT';
+    const isCorrect = isIndependentCorrect || isPromptedCorrect;
+    const localOutcome: 'independent' | 'prompted' | 'error' = isIndependentCorrect
+      ? 'independent'
+      : isPromptedCorrect
+        ? 'prompted'
+        : 'error';
+
+    addRecord({
+      id: localRecordId,
+      kind: 'trial',
+      title: goal.name,
+      detail: `${collectionLabel} · ${actionLabel}${isPromptedCorrect && selectedPrompt?.label ? ` · ${selectedPrompt.label}` : ''}`,
+      timestamp,
+      targetId: recordTargetId,
+      targetName: goal?.name || null,
+      programId: goal?.programId || goal?.program_id || goal?.protocolId || null,
+      therapistId: resolvedTherapistId || null,
+      trialOutcome: localOutcome,
+      measurementModelVersion: 'V3',
+      v3ActionKey: actionKey,
+      collectionType: normalizedCollectionType,
+      promptTypeId: isPromptedCorrect ? selectedPrompt?.id || null : null,
+      promptTypeNameSnapshot: isPromptedCorrect ? selectedPrompt?.label || selectedPrompt?.name || null : null,
+      promptCategorySnapshot: isPromptedCorrect ? selectedPrompt?.category || null : null,
+      promptIntrusivenessOrderSnapshot: isPromptedCorrect ? selectedPrompt?.intrusivenessOrder ?? null : null,
+      promptLevelKey: isPromptedCorrect ? selectedPrompt?.key || '' : isIndependentCorrect ? 'independent' : 'error',
+      promptLevelName: isPromptedCorrect ? selectedPrompt?.label || '' : actionLabel,
+      score: null,
+      correct: isCorrect,
+      independent: isIndependentCorrect,
+      rawPayload: {
+        source: 'session_mode_v3',
+        measurementModelVersion: 'V3',
+        v3ActionKey: actionKey,
+        clientEventId,
+        maintenanceScheduleId: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+        activeMaintenanceProbe: isMaintenanceAttempt ? {
+          scheduleId: maintenanceScheduleId,
+          targetId: recordTargetId,
+          source: resolvedMaintenanceProbe?.source || 'available'
+        } : undefined
+      }
+    });
+    triggerMicroFeedback(trialLockKey, 'check');
+    setTimeout(() => updateRecordStatus(localRecordId, 'syncing'), 60);
+
+    try {
+      const result = await dataService.saveAbaV3TrialAction({
+        patientId,
+        sessionId,
+        targetId: recordTargetId,
+        clientEventId,
+        actionKey,
+        promptTypeId: isPromptedCorrect ? selectedPrompt?.id || null : null,
+        promptKey: isPromptedCorrect ? selectedPrompt?.key || null : null,
+        trialType: normalizedCollectionType,
+        occurredAt: timestamp,
+        maintenanceScheduleId: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+        clientMetadata: { source: 'session_mode_v3' }
+      });
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível persistir a tentativa V3.');
+      setTrialCount((prev) => prev + 1);
+      updateRecordStatus(localRecordId, result?.pending ? 'local' : 'synced');
+      showClinicalToast({
+        variant: result?.pending ? 'info' : 'success',
+        title: result?.pending ? 'Tentativa preservada para sincronização' : 'Tentativa V3 registrada',
+        subtitle: `${collectionLabel} · ${actionLabel}${isPromptedCorrect && selectedPrompt?.label ? ` · ${selectedPrompt.label}` : ''}`
+      });
+      if (isMaintenanceAttempt) {
+        if (recordTargetId) clearManualMaintenanceProbeTarget(recordTargetId);
+        setActiveMaintenanceProbeTargetId(null);
+        setActiveMaintenanceScheduleId(null);
+        setExpandedMaintenanceProbeTargetId(null);
+        setCollectionType(lastRegularTrialType || 'dtt');
+      }
+      onSessionRecordSaved?.();
+    } catch (error: any) {
+      updateRecordStatus(localRecordId, 'error');
+      setSessionWarning(error?.message || 'Não foi possível persistir a tentativa V3.');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
+      console.error('Falha ao persistir tentativa ABA V3:', error);
+    }
+  };
+
+  const continueResolvedTrial = async ({
+    goal,
+    score,
+    outcome,
+    selectedPrompt,
+    activeCollectionType,
+    activeMaintenanceProbe,
+    binding,
+    v3ActionKey
+  }: {
+    goal: any;
+    score: number;
+    outcome: 'independent' | 'prompted' | 'error';
+    selectedPrompt: any;
+    activeCollectionType: string;
+    activeMaintenanceProbe?: ActiveMaintenanceProbeForTarget | null;
+    binding: AbaV3BindingDecision | null;
+    v3ActionKey?: AbaV3TrialActionKey;
+  }) => {
+    if (isMaintenanceProbeCollection(activeCollectionType)) {
+      const previousTrial = findPreviousTrainingTrialForGoal(goal);
+      if (previousTrial) {
+        setPendingMaintenanceProbeTrial({
+          goal,
+          score,
+          outcome,
+          selectedPrompt,
+          previousRecordId: previousTrial.id,
+          measurementModelVersion: binding?.measurementModelVersion || 'LEGACY_V2',
+          v3ActionKey,
+          activeMaintenanceProbe
+        });
+        return;
+      }
+    }
+    if (binding?.measurementModelVersion === 'V3') {
+      if (!v3ActionKey) throw new Error('A ação clínica V3 não foi definida.');
+      await persistV3TrialRecord({ goal, actionKey: v3ActionKey, selectedPrompt, activeCollectionType, activeMaintenanceProbe });
+      return;
+    }
+    await persistTrialRecord({ goal, score, outcome, selectedPrompt, activeCollectionType, activeMaintenanceProbe });
+  };
+
   const persistTrialRecord = async ({
     goal,
     score,
@@ -2627,20 +2839,60 @@ export const SessionMode = ({
     setPromptWarning('');
     const trialContext = syncTrialTypeForGoal(goal);
     const activeCollectionType = normalizeAbaCollectionType(trialContext.collectionType);
-    if (isMaintenanceProbeCollection(activeCollectionType)) {
-      const previousTrial = findPreviousTrainingTrialForGoal(goal);
-      if (previousTrial) {
-        setPendingMaintenanceProbeTrial({
-          goal,
-          score,
-          outcome,
-          selectedPrompt,
-          previousRecordId: previousTrial.id
-        });
+
+    let binding: AbaV3BindingDecision | null = null;
+    if (abaV3UiEnabled) {
+      try {
+        binding = await resolveAbaV3BindingForGoal(goal);
+      } catch (error: any) {
+        setSessionWarning(error?.message || 'Não foi possível determinar o modelo de coleta deste target.');
+        showClinicalToast(buildClinicalSaveErrorToast(), 'error');
         return;
       }
     }
-    await persistTrialRecord({ goal, score, outcome, selectedPrompt, activeCollectionType, activeMaintenanceProbe: trialContext.activeProbe });
+
+    if (binding?.measurementModelVersion === 'V3' && outcome === 'error') {
+      setAbaV3ErrorSelection({
+        goal,
+        selectedPrompt,
+        activeCollectionType,
+        activeMaintenanceProbe: trialContext.activeProbe,
+        binding
+      });
+      return;
+    }
+
+    const v3ActionKey: AbaV3TrialActionKey | undefined = binding?.measurementModelVersion === 'V3'
+      ? outcome === 'independent'
+        ? 'INDEPENDENT_CORRECT'
+        : 'PROMPTED_CORRECT'
+      : undefined;
+    await continueResolvedTrial({
+      goal,
+      score,
+      outcome,
+      selectedPrompt,
+      activeCollectionType,
+      activeMaintenanceProbe: trialContext.activeProbe,
+      binding,
+      v3ActionKey
+    });
+  };
+
+  const saveAbaV3ErrorOutcome = async (actionKey: 'INDEPENDENT_INCORRECT' | 'NO_RESPONSE') => {
+    const selection = abaV3ErrorSelection;
+    if (!selection) return;
+    setAbaV3ErrorSelection(null);
+    await continueResolvedTrial({
+      goal: selection.goal,
+      score: 0,
+      outcome: 'error',
+      selectedPrompt: selection.selectedPrompt,
+      activeCollectionType: selection.activeCollectionType,
+      activeMaintenanceProbe: selection.activeMaintenanceProbe,
+      binding: selection.binding,
+      v3ActionKey: actionKey
+    });
   };
 
   const activateMaintenanceProbeMode = (goal?: any) => {
@@ -8499,33 +8751,45 @@ export const SessionMode = ({
                 </div>
               ) : null;
             })()}
-            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div className={`mt-5 grid grid-cols-1 gap-2 ${pendingMaintenanceProbeTrial.measurementModelVersion === 'V3' ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
               <button
                 type="button"
                 onClick={() => {
                   const pending = pendingMaintenanceProbeTrial;
                   setPendingMaintenanceProbeTrial(null);
                   if (!pending) return;
-                  void persistTrialRecord({
-                    goal: pending.goal,
-                    score: pending.score,
-                    outcome: pending.outcome,
-                    selectedPrompt: pending.selectedPrompt,
-                    activeCollectionType: 'maintenance_probe',
-                    activeMaintenanceProbe: getActiveMaintenanceProbeForTarget(pending.goal)
-                  });
+                  if (pending.measurementModelVersion === 'V3' && pending.v3ActionKey) {
+                    void persistV3TrialRecord({
+                      goal: pending.goal,
+                      actionKey: pending.v3ActionKey,
+                      selectedPrompt: pending.selectedPrompt,
+                      activeCollectionType: 'maintenance_probe',
+                      activeMaintenanceProbe: pending.activeMaintenanceProbe || getActiveMaintenanceProbeForTarget(pending.goal)
+                    });
+                  } else {
+                    void persistTrialRecord({
+                      goal: pending.goal,
+                      score: pending.score,
+                      outcome: pending.outcome,
+                      selectedPrompt: pending.selectedPrompt,
+                      activeCollectionType: 'maintenance_probe',
+                      activeMaintenanceProbe: getActiveMaintenanceProbeForTarget(pending.goal)
+                    });
+                  }
                 }}
                 className="min-h-[48px] rounded-2xl bg-emerald-500 px-4 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-emerald-500/20"
               >
                 Registrar nova tentativa
               </button>
-              <button
-                type="button"
-                onClick={() => convertPreviousTrialToMaintenanceProbe(pendingMaintenanceProbeTrial.previousRecordId)}
-                className="min-h-[48px] rounded-2xl bg-[#7a32fc] px-4 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-purple-500/20"
-              >
-                Converter tentativa anterior
-              </button>
+              {pendingMaintenanceProbeTrial.measurementModelVersion !== 'V3' && (
+                <button
+                  type="button"
+                  onClick={() => convertPreviousTrialToMaintenanceProbe(pendingMaintenanceProbeTrial.previousRecordId)}
+                  className="min-h-[48px] rounded-2xl bg-[#7a32fc] px-4 py-3 text-xs font-bold uppercase tracking-widest text-white shadow-lg shadow-purple-500/20"
+                >
+                  Converter tentativa anterior
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setPendingMaintenanceProbeTrial(null)}
@@ -8590,6 +8854,44 @@ export const SessionMode = ({
               <button onClick={() => setAbcModalOpen(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">Cancelar</button>
               <button onClick={saveAbcEvent} disabled={Boolean(actionLocks['abc:save'])} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20 transition-all active:scale-95 disabled:opacity-60">Salvar ABC</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {abaV3ErrorSelection && (
+        <div className="fixed inset-0 z-[142] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-lg w-full border border-red-100">
+            <div className="flex items-start justify-between gap-3 mb-5">
+              <div>
+                <p className="text-[10px] font-bold text-red-500 uppercase tracking-widest">Resultado da tentativa · ABA V3</p>
+                <h2 className="mt-1 text-xl font-semibold text-gray-800">O que aconteceu com {abaV3ErrorSelection.goal?.name || 'este target'}?</h2>
+                <p className="mt-2 text-sm font-semibold leading-relaxed text-gray-500">A V3 não mistura resposta incorreta com ausência de resposta. Escolha o fato observado.</p>
+              </div>
+              <button type="button" onClick={() => setAbaV3ErrorSelection(null)} className="p-2 rounded-full hover:bg-gray-100" aria-label="Fechar">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => void saveAbaV3ErrorOutcome('INDEPENDENT_INCORRECT')}
+                className="min-h-[72px] rounded-2xl border border-red-100 bg-red-50 px-4 py-4 text-left transition-all hover:border-red-300 hover:bg-red-100"
+              >
+                <span className="block text-sm font-semibold text-red-700">Resposta incorreta</span>
+                <span className="mt-1 block text-xs font-semibold text-red-600/80">Houve uma resposta independente, mas ela estava incorreta.</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveAbaV3ErrorOutcome('NO_RESPONSE')}
+                className="min-h-[72px] rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-left transition-all hover:border-slate-300 hover:bg-slate-100"
+              >
+                <span className="block text-sm font-semibold text-slate-700">Sem resposta</span>
+                <span className="mt-1 block text-xs font-semibold text-slate-500">A oportunidade ocorreu, mas não houve resposta observável.</span>
+              </button>
+            </div>
+            <button type="button" onClick={() => setAbaV3ErrorSelection(null)} className="mt-5 w-full py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold">
+              Cancelar
+            </button>
           </div>
         </div>
       )}

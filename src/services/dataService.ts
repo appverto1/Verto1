@@ -16,7 +16,7 @@ import {
   resolveAbaPromptLevel,
   resolveTrialPromptInfo
 } from '../utils/abaPromptLevels';
-import { isAbaV2Enabled } from '../utils/featureFlags';
+import { isAbaV2Enabled, isAbaV3UiEnabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
 import { normalizePatientProfileType } from '../utils/patientProfileType';
@@ -886,7 +886,7 @@ function normalizeNoteVisibility(value: any): 'private' | 'shared_patient' | 'sh
   return 'private';
 }
 
-type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
+type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'aba_v3' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
 
 async function buildConditionalHeaders(endpoint: string, type: OfflineType, includeBearer = false) {
   const headers = await getAuthHeaders(includeBearer);
@@ -5625,7 +5625,7 @@ export const dataService = {
   },
 
   async getAbaPromptTypes() {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse(normalizeAbaPromptTypeConfig());
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse(normalizeAbaPromptTypeConfig());
     const endpoint = '/api/aba/prompt-types';
     try {
       const response = await fetchClinical(endpoint, {
@@ -5646,7 +5646,7 @@ export const dataService = {
   },
 
   async saveAbaPromptType(promptType: any) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse(promptType || {});
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse(promptType || {});
     const id = String(promptType?.id || promptType?.prompt_type_id || promptType?.promptTypeId || generateId());
     const data = {
       ...(promptType || {}),
@@ -5667,6 +5667,50 @@ export const dataService = {
     const hasPersistedId = Boolean(promptType?.id || promptType?.prompt_type_id || promptType?.promptTypeId);
     const endpoint = hasPersistedId ? `/api/aba/prompt-types/${encodeURIComponent(id)}` : '/api/aba/prompt-types';
     return await saveOfflineFirst(id, data, 'aba', endpoint, hasPersistedId ? 'PATCH' : 'POST');
+  },
+
+  async resolveAbaV3SessionTargetBinding(input: { patientId: string; sessionId: string; targetId: string }) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const patientId = String(input?.patientId || '').trim();
+    const sessionId = String(input?.sessionId || '').trim();
+    const targetId = String(input?.targetId || '').trim();
+    if (!patientId || !sessionId || !targetId) return { success: false, error: 'Escopo ABA V3 incompleto.' };
+    const endpoint = `/api/aba/v3/sessions/${encodeURIComponent(sessionId)}/targets/${encodeURIComponent(targetId)}/resolve-binding`;
+    try {
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'POST',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ patient_id: patientId })
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível resolver a coleta ABA V3.' };
+      }
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível resolver a coleta ABA V3.' };
+    }
+  },
+
+  async saveAbaV3TrialAction(trial: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const clientEventId = String(trial?.client_event_id || trial?.clientEventId || trial?.id || generateId()).trim();
+    const data = {
+      patient_id: trial?.patient_id || trial?.patientId,
+      session_id: trial?.session_id || trial?.sessionId,
+      target_id: trial?.target_id || trial?.targetId,
+      client_event_id: clientEventId,
+      action_key: trial?.action_key || trial?.actionKey,
+      prompt_type_id: trial?.prompt_type_id || trial?.promptTypeId || undefined,
+      prompt_key: trial?.prompt_key || trial?.promptKey || undefined,
+      trial_type: trial?.trial_type || trial?.trialType || trial?.collection_type || trial?.collectionType,
+      occurred_at: trial?.occurred_at || trial?.occurredAt || trial?.timestamp || new Date().toISOString(),
+      source_device_id: trial?.source_device_id || trial?.sourceDeviceId || undefined,
+      maintenance_schedule_id: trial?.maintenance_schedule_id || trial?.maintenanceScheduleId || undefined,
+      client_metadata: trial?.client_metadata || trial?.clientMetadata || {}
+    };
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/trials', 'POST');
   },
 
   async saveAbaTrial(trial: any) {

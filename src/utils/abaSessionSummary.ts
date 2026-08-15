@@ -409,6 +409,27 @@ const trialOutcome = (trial: any) => {
   return { independent, prompted, error, correct };
 };
 
+const v3TrialActionKey = (trial: any) => {
+  const rawPayload = valueOf(trial, 'raw_payload', 'rawPayload') || {};
+  return String(
+    valueOf(trial, 'v3ActionKey', 'v3_action_key') ??
+    rawPayload.v3ActionKey ??
+    rawPayload.v3_action_key ??
+    ''
+  ).trim().toUpperCase();
+};
+
+const isV3Trial = (trial: any) => {
+  const rawPayload = valueOf(trial, 'raw_payload', 'rawPayload') || {};
+  const modelVersion = String(
+    valueOf(trial, 'measurementModelVersion', 'measurement_model_version') ??
+    rawPayload.measurementModelVersion ??
+    rawPayload.measurement_model_version ??
+    ''
+  ).trim().toUpperCase();
+  return modelVersion === 'V3' || Boolean(v3TrialActionKey(trial));
+};
+
 const trialPromptScoreSnapshot = (trial: any): number | null => {
   const rawPayload = valueOf(trial, 'raw_payload', 'rawPayload') || {};
   const raw = valueOf(trial, 'promptIndependenceScoreSnapshot', 'prompt_independence_score_snapshot') ??
@@ -426,6 +447,30 @@ export const calculateTrialAccuracy = (trials: any[]) => {
 };
 
 export const calculateTrialIndependence = (trials: any[]) => {
+  const hasV3Trial = trials.some(isV3Trial);
+  if (hasV3Trial) {
+    // V3 never reuses the Legacy 0-100 prompt score. A V3 independent-opportunity
+    // denominator contains only explicit independent correct/incorrect/no-response
+    // actions; prompted-correct trials are support steps and do not inflate it.
+    // In a rare mixed V2/V3 session, Legacy trials remain count-based here rather
+    // than blending incomparable V2 weighted scores with V3 categorical semantics.
+    let eligibleOpportunities = 0;
+    let independentCorrect = 0;
+    for (const trial of trials) {
+      if (isV3Trial(trial)) {
+        const actionKey = v3TrialActionKey(trial);
+        if (['INDEPENDENT_CORRECT', 'INDEPENDENT_INCORRECT', 'NO_RESPONSE'].includes(actionKey)) {
+          eligibleOpportunities += 1;
+          if (actionKey === 'INDEPENDENT_CORRECT') independentCorrect += 1;
+        }
+        continue;
+      }
+      eligibleOpportunities += 1;
+      if (trialOutcome(trial).independent) independentCorrect += 1;
+    }
+    return percent(independentCorrect, eligibleOpportunities);
+  }
+
   const snapshotScores = trials.map(trialPromptScoreSnapshot);
   if (snapshotScores.some((score) => score !== null)) {
     const normalizedScores = trials.map((trial, index) => {

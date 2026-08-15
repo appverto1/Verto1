@@ -71,3 +71,7 @@ export function resolveFeatureFlag(
 export const isAbaV2Enabled = (options: Parameters<typeof resolveFeatureFlag>[1] = {}) => (
   resolveFeatureFlag('aba_v2', { defaultValue: true, ...options })
 );
+
+export const isAbaV3UiEnabled = (options: Parameters<typeof resolveFeatureFlag>[1] = {}) => (
+  resolveFeatureFlag('aba_v3_ui', { defaultValue: false, ...options })
+);

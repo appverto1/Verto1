@@ -369,3 +369,21 @@ Somente projeções canônicas são expostas. Comportamento e intervalos vêm da
 Prompts continuam categóricos: os read models carregam `prompt_step_counts`/`prompt_counts`, jamais `independence_score` ou `response_score`. O histórico também preserva `phase_assignment_id`; a transformação em `series_segments` e o renderer que impede linhas atravessando mudança de fase pertencem ao PR10.
 
 O endpoint V3 fica atrás de `FEATURE_ABA_V3_READ_API=false` por padrão. PR8 não ativa rollout, não altera nenhuma tabela/rota V2 e não muda React. A tela Legacy V2 **Tipos de ajuda ABA** permanece intocada até o PR9, quando a interface V3 removerá a semântica visual de pontuação 0–100 dos prompts.
+
+## PR9A — UI categórica de tentativas e ponte transacional de escrita
+
+PR9A adiciona a primeira experiência React preparada para tentativas V3 sem substituir o Legacy V2. O binding `session + target` é resolvido pelo Node e cacheado na sessão; depois de criado, o snapshot imutável do PR2 decide qual fluxo persiste aquele target. Falha ao resolver um binding novo é fail-closed: a UI não adivinha V2.
+
+Na V3, a interface deixa de tratar tipos de ajuda como uma escala 0–100. Os comandos clínicos são `INDEPENDENT_CORRECT`, `INDEPENDENT_INCORRECT`, `NO_RESPONSE` e `PROMPTED_CORRECT`. Para tentativa com ajuda, o servidor relê o prompt persistido no tenant e transforma a intenção em steps categóricos; o browser não envia score, versão de protocolo, fase clínica nem steps como autoridade.
+
+A escrita passa por `/api/aba/v3/trials`, protegida por feature flag, autenticação, capability, escopo de paciente/sessão e limites de payload. O Node faz uma única RPC transacional por tentativa; a RPC resolve/revalida o binding no banco e injeta versão/fase imutáveis antes do motor PR3. A UI usa o outbox `aba_v3`, preservando a tentativa em caso de indisponibilidade de rede sem redirecioná-la para a tabela Legacy.
+
+Sondagens de manutenção usam `record_aba_trial_action_v3(...)`, que compõe trial + abertura/reuso da probe + vínculo na mesma transação. Replays após finalização reconhecem vínculo existente sem reabrir probe encerrada. O encerramento da sessão usa `complete_aba_session_v3(...)` somente quando `FEATURE_ABA_V3_COLLECTION_API` está ligado; com a flag desligada, o caminho V2 anterior permanece idêntico.
+
+Sessões puramente V2 preservam o cálculo Legacy local. Quando existe trial V3, o resumo local não mistura `independence_score` 0–100 com a semântica categórica: oportunidades independentes explícitas formam o denominador e `PROMPTED_CORRECT` não o infla. A projeção server-side continua sendo a autoridade clínica.
+
+`FEATURE_ABA_V3_COLLECTION_API` e `VITE_FEATURE_ABA_V3_UI` ficam `false` por padrão. PR9A não altera rollout, não habilita `allow_new_v3_sessions` e não converte dados históricos V2.
+
+O escopo de coleta desta etapa é deliberadamente restrito a targets `dtt`, `net` e `probe`. Targets `behavior` e `task_analysis` são recusados **antes** de criar um binding V3 pela rota Node e são revalidados dentro da RPC transacional. Isso evita que comportamento, intervalos ou task analysis caiam silenciosamente nos writers Legacy enquanto a UI V3 dessas famílias ainda não existe.
+
+A próxima etapa é **PR9B**: UI/ingestão canônica V3 para comportamento, intervalos e task analysis. Somente depois dessa fronteira estar completa a sequência avança para gráficos V3 segmentados por fase/modelo.

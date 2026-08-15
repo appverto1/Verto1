@@ -22,7 +22,7 @@ import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { abaMasteryCriterionSourceLabel, formatAbaMasteryCriterion, normalizeAbaMasteryCriterion } from '../utils/abaMasteryEngine';
-import { isAbaV2Enabled } from '../utils/featureFlags';
+import { isAbaV2Enabled, isAbaV3UiEnabled } from '../utils/featureFlags';
 import { filterHumanDisplayEntries, formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
 import { normalizePatientInsuranceEligibility } from '../utils/patientInsuranceEligibility';
 import {
@@ -370,6 +370,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12)
     ));
   const abaV2Enabled = isAbaV2Enabled();
+  const abaV3UiEnabled = isAbaV3UiEnabled();
   const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
   const readPersistedChartFilters = () => {
     if (typeof window === 'undefined') return {};
@@ -8635,7 +8636,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           />
         </div>
       </div>
-      {abaV2Enabled && isSessionModeOpen && (
+      {(abaV2Enabled || abaV3UiEnabled) && isSessionModeOpen && (
         <SessionMode 
           patient={{ ...sessionModePatient, history: history.filter((h: any) => h.patientId === patient.id) }} 
           onClose={() => setIsSessionModeOpen(false)} 

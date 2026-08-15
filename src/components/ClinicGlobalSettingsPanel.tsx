@@ -8,6 +8,7 @@ import { dataService } from "../services/dataService";
 import { normalizeAbaPromptTypeConfig, type AbaPromptTypeConfig } from "../utils/abaPromptLevels";
 import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStorage } from "../utils/brMasks";
 import type { OrganizationModuleAccessMode, OrganizationModuleKey } from "../constants/organizationModules";
+import { isAbaV2Enabled, isAbaV3UiEnabled } from "../utils/featureFlags";
 
 type SettingsValues = Record<string, any>;
 
@@ -799,6 +800,8 @@ function AbaPromptTypesSettings() {
 }
 
 function AbaPromptTypesClinicalSettings() {
+  const v3PromptSemantics = isAbaV3UiEnabled();
+  const legacyV2StillEnabled = isAbaV2Enabled();
   const [promptTypes, setPromptTypes] = useState<AbaPromptTypeConfig[]>(() => normalizeAbaPromptTypeConfig());
   const [savingId, setSavingId] = useState('');
   const [savedId, setSavedId] = useState('');
@@ -879,6 +882,10 @@ function AbaPromptTypesClinicalSettings() {
   };
 
   const openCreatePrompt = () => {
+    if (v3PromptSemantics && legacyV2StillEnabled) {
+      setModalError('Durante a coexistência V2/V3, novos tipos de ajuda ficam bloqueados para não inventar uma pontuação Legacy. Tipos existentes podem ser editados normalmente.');
+      return;
+    }
     setModalMode('create');
     setModalError('');
     setEditingPrompt({
@@ -902,11 +909,13 @@ function AbaPromptTypesClinicalSettings() {
   const validatePromptDraft = (prompt: Partial<AbaPromptTypeConfig>) => {
     if (!String(prompt.name || '').trim()) return 'Informe o nome do tipo de ajuda.';
     if (!String(prompt.category || '').trim()) return 'Informe a categoria da ajuda.';
-    if (prompt.independenceScore === undefined || prompt.independenceScore === null || Number.isNaN(Number(prompt.independenceScore))) {
-      return 'Informe a pontuação de independência.';
-    }
-    if (Number(prompt.independenceScore) < 0 || Number(prompt.independenceScore) > 100) {
-      return 'A pontuação de independência deve ficar entre 0 e 100.';
+    if (!v3PromptSemantics) {
+      if (prompt.independenceScore === undefined || prompt.independenceScore === null || Number.isNaN(Number(prompt.independenceScore))) {
+        return 'Informe a pontuação de independência.';
+      }
+      if (Number(prompt.independenceScore) < 0 || Number(prompt.independenceScore) > 100) {
+        return 'A pontuação de independência deve ficar entre 0 e 100.';
+      }
     }
     if (prompt.intrusivenessOrder === undefined || prompt.intrusivenessOrder === null || Number.isNaN(Number(prompt.intrusivenessOrder)) || Number(prompt.intrusivenessOrder) < 0) {
       return 'A ordem na sessão deve ser um número maior ou igual a zero.';
@@ -928,9 +937,11 @@ function AbaPromptTypesClinicalSettings() {
       label: name,
       key: editingPrompt.key || name,
       category: String(editingPrompt.category || '').trim(),
-      independenceScore: Number(editingPrompt.independenceScore),
+      independenceScore: v3PromptSemantics
+        ? Number(editingPrompt.independenceScore ?? 0)
+        : Number(editingPrompt.independenceScore),
       intrusivenessOrder: Math.max(0, Math.round(Number(editingPrompt.intrusivenessOrder))),
-      countsAsIndependent: Boolean(editingPrompt.countsAsIndependent),
+      countsAsIndependent: v3PromptSemantics ? Boolean(editingPrompt.countsAsIndependent ?? false) : Boolean(editingPrompt.countsAsIndependent),
       showInSession: editingPrompt.showInSession !== false,
       active: editingPrompt.active !== false
     });
@@ -968,40 +979,56 @@ function AbaPromptTypesClinicalSettings() {
   return (
     <SectionCard
       title="Tipos de ajuda ABA"
-      description="Configure os tipos de ajuda usados durante as tentativas. A pontuação indica o nível de independência usado em gráficos, relatórios e critérios clínicos."
+      description={v3PromptSemantics
+        ? 'Configure os tipos de ajuda usados durante as tentativas. Na V3, ajuda é categórica: nome, categoria e ordem; nenhuma pontuação de prompt entra nos cálculos clínicos.'
+        : 'Configure os tipos de ajuda usados durante as tentativas. A pontuação indica o nível de independência usado em gráficos, relatórios e critérios clínicos.'}
       complete={promptTypes.some((prompt) => prompt.active)}
       hasAnyData
     >
       <div className="space-y-5">
-        <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
-          <p className="text-sm font-black text-violet-950">Como funciona a pontuação</p>
-          <p className="mt-2 text-sm font-semibold leading-relaxed text-violet-900">
-            100 = resposta independente. 0 = resposta totalmente dependente ou erro.
-            Quanto menor a ajuda necessária, maior a pontuação de independência.
-          </p>
-          <p className="mt-2 text-xs font-semibold leading-relaxed text-violet-800">
-            Essas pontuações são sugestões iniciais e podem ser ajustadas pela supervisora clínica conforme o protocolo da clínica.
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-sm font-black text-slate-900">Escala sugerida</p>
-          <p className="text-xs font-semibold text-slate-500">Referência clínica para revisar a pontuação sem alterar dados automaticamente.</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-5">
-            {[
-              ['100', 'Independente'],
-              ['80-99', 'Ajuda mínima'],
-              ['50-79', 'Ajuda moderada'],
-              ['1-49', 'Ajuda intensa'],
-              ['0', 'Dependente / erro']
-            ].map(([score, label]) => (
-              <div key={score} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                <p className="text-lg font-black text-slate-900">{score}</p>
-                <p className="text-xs font-bold text-slate-600">{label}</p>
-              </div>
-            ))}
+        {v3PromptSemantics ? (
+          <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
+            <p className="text-sm font-semibold text-violet-950">Ajuda categórica na ABA V3</p>
+            <p className="mt-2 text-sm font-semibold leading-relaxed text-violet-900">
+              O terapeuta registra qual ajuda foi usada. Independência, erro e ausência de resposta são fatos da tentativa e não são inferidos por uma escala 0–100.
+            </p>
+            <p className="mt-2 text-xs font-semibold leading-relaxed text-violet-800">
+              A ordem abaixo controla apenas a organização dos chips na sessão. Pontuações Legacy permanecem preservadas no histórico V2, sem participar dos cálculos V3.
+            </p>
           </div>
-        </div>
+        ) : (
+          <>
+            <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
+              <p className="text-sm font-black text-violet-950">Como funciona a pontuação</p>
+              <p className="mt-2 text-sm font-semibold leading-relaxed text-violet-900">
+                100 = resposta independente. 0 = resposta totalmente dependente ou erro.
+                Quanto menor a ajuda necessária, maior a pontuação de independência.
+              </p>
+              <p className="mt-2 text-xs font-semibold leading-relaxed text-violet-800">
+                Essas pontuações são sugestões iniciais e podem ser ajustadas pela supervisora clínica conforme o protocolo da clínica.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-black text-slate-900">Escala sugerida</p>
+              <p className="text-xs font-semibold text-slate-500">Referência clínica para revisar a pontuação sem alterar dados automaticamente.</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-5">
+                {[
+                  ['100', 'Independente'],
+                  ['80-99', 'Ajuda mínima'],
+                  ['50-79', 'Ajuda moderada'],
+                  ['1-49', 'Ajuda intensa'],
+                  ['0', 'Dependente / erro']
+                ].map(([score, label]) => (
+                  <div key={score} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                    <p className="text-lg font-black text-slate-900">{score}</p>
+                    <p className="text-xs font-bold text-slate-600">{label}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
 
         <div className="rounded-xl border border-slate-200 bg-white p-4">
           <p className="text-sm font-black text-slate-900">Prévia na sessão</p>
@@ -1030,7 +1057,9 @@ function AbaPromptTypesClinicalSettings() {
             <button
               type="button"
               onClick={openCreatePrompt}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90"
+              disabled={v3PromptSemantics && legacyV2StillEnabled}
+              title={v3PromptSemantics && legacyV2StillEnabled ? 'Novos tipos ficam bloqueados durante a coexistência V2/V3 para não inventar pontuação Legacy.' : undefined}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
             >
               <Plus size={16} />
               Novo tipo de ajuda
@@ -1043,9 +1072,9 @@ function AbaPromptTypesClinicalSettings() {
                 <tr>
                   <th className="px-4 py-3">Tipo de ajuda</th>
                   <th className="px-4 py-3">Categoria da ajuda</th>
-                  <th className="px-4 py-3">Pontuação de independência</th>
+                  {!v3PromptSemantics && <th className="px-4 py-3">Pontuação de independência</th>}
                   <th className="px-4 py-3">Mostrar durante a sessão</th>
-                  <th className="px-4 py-3">Conta como resposta independente</th>
+                  {!v3PromptSemantics && <th className="px-4 py-3">Conta como resposta independente</th>}
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Ações</th>
                 </tr>
@@ -1055,17 +1084,19 @@ function AbaPromptTypesClinicalSettings() {
                   <tr key={prompt.id || prompt.key} className="align-middle">
                     <td className="px-4 py-3 font-black text-slate-900">{prompt.name}</td>
                     <td className="px-4 py-3 font-semibold text-slate-600">{prompt.category}</td>
-                    <td className="px-4 py-3 font-black text-slate-800">{prompt.independenceScore}</td>
+                    {!v3PromptSemantics && <td className="px-4 py-3 font-black text-slate-800">{prompt.independenceScore}</td>}
                     <td className="px-4 py-3">
                       <span className={`rounded-full px-2.5 py-1 text-xs font-black ${prompt.showInSession ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
                         {prompt.showInSession ? 'Sim' : 'Não'}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full px-2.5 py-1 text-xs font-black ${prompt.countsAsIndependent ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                        {prompt.countsAsIndependent ? 'Sim' : 'Não'}
-                      </span>
-                    </td>
+                    {!v3PromptSemantics && (
+                      <td className="px-4 py-3">
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-black ${prompt.countsAsIndependent ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {prompt.countsAsIndependent ? 'Sim' : 'Não'}
+                        </span>
+                      </td>
+                    )}
                     <td className="px-4 py-3"><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-700">Ativo</span></td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1086,7 +1117,7 @@ function AbaPromptTypesClinicalSettings() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="font-black text-slate-900">{prompt.name}</p>
-                    <p className="text-xs font-bold text-slate-500">{prompt.category} · {prompt.independenceScore} pontos</p>
+                    <p className="text-xs font-bold text-slate-500">{v3PromptSemantics ? prompt.category : `${prompt.category} · ${prompt.independenceScore} pontos`}</p>
                   </div>
                   <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-black text-emerald-700">Ativo</span>
                 </div>
@@ -1094,9 +1125,11 @@ function AbaPromptTypesClinicalSettings() {
                   <span className={prompt.showInSession ? 'rounded-full bg-violet-50 px-2.5 py-1 text-violet-700' : 'rounded-full bg-slate-100 px-2.5 py-1 text-slate-500'}>
                     {prompt.showInSession ? 'Aparece na sessão' : 'Oculto na sessão'}
                   </span>
-                  <span className={prompt.countsAsIndependent ? 'rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700' : 'rounded-full bg-slate-100 px-2.5 py-1 text-slate-500'}>
-                    {prompt.countsAsIndependent ? 'Conta como independente' : 'Com ajuda'}
-                  </span>
+                  {!v3PromptSemantics && (
+                    <span className={prompt.countsAsIndependent ? 'rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700' : 'rounded-full bg-slate-100 px-2.5 py-1 text-slate-500'}>
+                      {prompt.countsAsIndependent ? 'Conta como independente' : 'Com ajuda'}
+                    </span>
+                  )}
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" disabled={index === 0} onClick={() => void movePrompt(prompt, -1)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 disabled:opacity-35">Subir</button>
@@ -1159,13 +1192,15 @@ function AbaPromptTypesClinicalSettings() {
                   Categoria da ajuda
                   <input value={editingPrompt.category || ''} onChange={(event) => updateDraft({ category: event.target.value })} placeholder="Visual" className={inputClass} />
                 </label>
-                <label className={labelClass}>
-                  Pontuação de independência
-                  <input type="number" min={0} max={100} value={editingPrompt.independenceScore ?? ''} onChange={(event) => updateDraft({ independenceScore: event.target.value === '' ? undefined : Number(event.target.value) })} className={inputClass} />
-                  <span className="mt-1.5 block text-[11px] font-semibold leading-relaxed text-slate-500">
-                    Use 100 para independente e 0 para totalmente dependente ou erro. Uma ajuda visual parcial pode ficar próxima de 80.
-                  </span>
-                </label>
+                {!v3PromptSemantics && (
+                  <label className={labelClass}>
+                    Pontuação de independência
+                    <input type="number" min={0} max={100} value={editingPrompt.independenceScore ?? ''} onChange={(event) => updateDraft({ independenceScore: event.target.value === '' ? undefined : Number(event.target.value) })} className={inputClass} />
+                    <span className="mt-1.5 block text-[11px] font-semibold leading-relaxed text-slate-500">
+                      Use 100 para independente e 0 para totalmente dependente ou erro. Uma ajuda visual parcial pode ficar próxima de 80.
+                    </span>
+                  </label>
+                )}
                 <label className={labelClass}>
                   Ordem na sessão
                   <input type="number" min={0} value={editingPrompt.intrusivenessOrder ?? 0} onChange={(event) => updateDraft({ intrusivenessOrder: Number(event.target.value) })} className={inputClass} />
@@ -1173,23 +1208,25 @@ function AbaPromptTypesClinicalSettings() {
                 </label>
               </div>
 
-              {Number(editingPrompt.independenceScore) === 100 && !editingPrompt.countsAsIndependent && (
+              {!v3PromptSemantics && Number(editingPrompt.independenceScore) === 100 && !editingPrompt.countsAsIndependent && (
                 <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
                   Pontuação 100 normalmente representa resposta independente. Confirme se este tipo deve contar como independente.
                 </div>
               )}
 
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className={`grid gap-3 ${v3PromptSemantics ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
                 <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
                   <input type="checkbox" checked={editingPrompt.showInSession !== false} onChange={(event) => updateDraft({ showInSession: event.target.checked })} className="mr-2" />
                   Mostrar durante a sessão
                   <span className="mt-1 block text-[11px] font-semibold text-slate-500">Aparece como chip rápido para o terapeuta.</span>
                 </label>
-                <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
-                  <input type="checkbox" checked={Boolean(editingPrompt.countsAsIndependent)} onChange={(event) => updateDraft({ countsAsIndependent: event.target.checked })} className="mr-2" />
-                  Conta como resposta independente
-                  <span className="mt-1 block text-[11px] font-semibold text-slate-500">Use apenas para respostas consideradas independentes.</span>
-                </label>
+                {!v3PromptSemantics && (
+                  <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
+                    <input type="checkbox" checked={Boolean(editingPrompt.countsAsIndependent)} onChange={(event) => updateDraft({ countsAsIndependent: event.target.checked })} className="mr-2" />
+                    Conta como resposta independente
+                    <span className="mt-1 block text-[11px] font-semibold text-slate-500">Use apenas para respostas consideradas independentes.</span>
+                  </label>
+                )}
                 <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
                   <input type="checkbox" checked={editingPrompt.active !== false} onChange={(event) => updateDraft({ active: event.target.checked })} className="mr-2" />
                   Status ativo
