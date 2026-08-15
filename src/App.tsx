@@ -1,4 +1,4 @@
-import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS, LogoVerto } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, ShieldCheck, WifiOff, LayoutDashboard, RefreshCw } from 'lucide-react';
@@ -3634,6 +3634,7 @@ export default function App() {
   const [protocols, setProtocols] = useState<any[]>([]);
   const [allPatients, setAllPatients] = useState<any[]>([]);
   const [patientListError, setPatientListError] = useState('');
+  const patientListEnsureRequestRef = useRef<{ workspaceId: string; promise: Promise<void> } | null>(null);
   const workspaceHydrationSequenceRef = useRef(0);
   const hydratedPatientDetailIdsRef = useRef<Set<string>>(new Set());
   const patientDetailRequestsRef = useRef<Map<string, Promise<any>>>(new Map());
@@ -3795,6 +3796,64 @@ export default function App() {
       }
     }
   };
+
+  const ensurePatientListLoaded = useCallback(async () => {
+    const nextUser = user;
+    const normalizedRole = String(nextUser?.role || '').trim().toLowerCase();
+    if (!nextUser || !['director', 'coordinator', 'supervisor', 'therapist', 'receptionist'].includes(normalizedRole)) {
+      return;
+    }
+
+    const activeContext = getActiveAccessContext(nextUser);
+    const workspaceId = String(
+      activeContext?.kind === 'clinic_workspace'
+        ? activeContext.clinicId
+        : nextUser?.activeWorkspaceId || nextUser?.clinicId || '',
+    ).trim();
+    if (!workspaceId) return;
+
+    const inFlight = patientListEnsureRequestRef.current;
+    if (inFlight?.workspaceId === workspaceId) {
+      await inFlight.promise;
+      return;
+    }
+
+    const request = (async () => {
+      const result = await dataService.getPatients({ workspaceId, forceRemote: true });
+      if (!result?.success || !Array.isArray(result?.data)) {
+        setPatientListError(
+          String(result?.error || 'Não foi possível carregar a lista de pacientes. Tente novamente.'),
+        );
+        return;
+      }
+
+      const visiblePatients = canAccessClinicFinance(normalizedRole)
+        ? result.data
+        : result.data.map(stripPatientFinancialFields);
+      const scopedPatients = normalizedRole === 'therapist'
+        ? visiblePatients.filter((patient: any) =>
+            patientMatchesProfessionalFilter(patient, nextUser?.id),
+          )
+        : visiblePatients;
+      setAllPatients(scopedPatients);
+      setPatientListError('');
+    })();
+
+    patientListEnsureRequestRef.current = { workspaceId, promise: request };
+    try {
+      await request;
+    } finally {
+      if (patientListEnsureRequestRef.current?.promise === request) {
+        patientListEnsureRequestRef.current = null;
+      }
+    }
+  }, [
+    user?.id,
+    user?.role,
+    user?.activeAccessContextId,
+    user?.activeWorkspaceId,
+    user?.clinicId,
+  ]);
 
   const loadPatientDetailsOnOpen = async (patientId: any) => {
     const normalizedPatientId = String(patientId || '').trim();
@@ -8291,6 +8350,7 @@ export default function App() {
             onLogout={handleLogout}
             allPatients={allPatients} 
             patientListError={patientListError}
+            onEnsurePatientList={ensurePatientListLoaded}
             onOpenPatientDetails={loadPatientDetailsOnOpen}
             therapistAgenda={therapistAgenda} 
             onOpenOnboarding={() => setShowOnboarding(true)}

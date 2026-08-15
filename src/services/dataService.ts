@@ -1195,18 +1195,30 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'log', '/api/logs');
   },
 
-  async getPatients() {
+  async getPatients(options: { workspaceId?: string; forceRemote?: boolean } = {}) {
     const endpoint = endpointWithLimit('/api/patients', 200);
+    const workspaceId = String(options?.workspaceId || '').trim();
+    const forceRemote = options?.forceRemote === true;
     try {
+      const headers = forceRemote
+        ? await getNoStoreAuthHeaders(false)
+        : await buildConditionalHeaders(endpoint, 'patient');
+      if (workspaceId) headers['X-Workspace-Id'] = workspaceId;
       const response = await fetchClinical(endpoint, {
-        headers: await buildConditionalHeaders(endpoint, 'patient'),
-        credentials: 'include'
+        headers,
+        credentials: 'include',
+        ...(forceRemote ? { cache: 'no-store' as RequestCache } : {})
       }, { helperName: 'getPatients', operation: 'list', table: 'patients', hasExplicitColumns: true, requiresPatientOrSession: false });
       if (response.status === 304) {
         const local304 = await getRecordsByType('patient');
         return {
           success: true,
-          data: local304.map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+          data: local304
+            .map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+            .filter((patient: any) => {
+              const patientWorkspaceId = String(patient?.clinic_id || patient?.clinicId || '').trim();
+              return !workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId;
+            })
         };
       }
       if (response.ok) {
@@ -1222,27 +1234,51 @@ export const dataService = {
           mirrorPatientInsuranceEligibilityAliases(p || {}, { useResponsibleFallback: true })
         );
         let latest = 0;
-        for (const p of normalizedPatients) {
-          const updatedAtMs = p?.updated_at ? new Date(p.updated_at).getTime() : Date.now();
-          latest = Math.max(latest, Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now());
-          await saveEncryptedRecord({
-            id: p.id,
-            data: p,
-            type: 'patient',
-            sync_status: 'synced',
-            last_updated: latest,
-            method: 'POST',
-            endpoint
-          });
+        try {
+          for (const p of normalizedPatients) {
+            const patientId = String(p?.id || '').trim();
+            if (!patientId) continue;
+            const updatedAtMs = p?.updated_at ? new Date(p.updated_at).getTime() : Date.now();
+            latest = Math.max(latest, Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now());
+            await saveEncryptedRecord({
+              id: patientId,
+              data: p,
+              type: 'patient',
+              sync_status: 'synced',
+              last_updated: latest,
+              method: 'POST',
+              endpoint
+            });
+          }
+          await cacheResponseMetadata(endpoint, response, latest || null);
+        } catch (cacheError) {
+          console.warn('[PatientList] Cache local indisponível; mantendo snapshot remoto canônico.', cacheError);
         }
-        await cacheResponseMetadata(endpoint, response, latest || null);
-        // Always render the canonical cache overlaid with pending mutations. A
-        // successful GET must not make an unconfirmed local edit disappear after F5.
-        const effectivePatients = (await getRecordsByType('patient')).map((record) => {
-          const { recordPayload: _recordPayload, idempotencyKey: _idempotencyKey, ...patientData } = record?.data || {};
-          return mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
-        });
-        return { ...result, data: effectivePatients };
+
+        // A resposta autenticada do servidor é a autoridade da listagem. O cache só
+        // pode sobrepor um paciente remoto quando existe mutação local ainda pendente.
+        // Assim, IndexedDB vazio/corrompido nunca transforma uma lista remota válida em [].
+        const patientsById = new Map<string, any>();
+        for (const patient of normalizedPatients) {
+          const patientId = String(patient?.id || '').trim();
+          if (patientId) patientsById.set(patientId, patient);
+        }
+        try {
+          const localRecords = await getRecordsByType('patient');
+          for (const record of localRecords) {
+            if (record?.sync_status === 'synced') continue;
+            const { recordPayload: _recordPayload, idempotencyKey: _idempotencyKey, ...patientData } = record?.data || {};
+            const localPatient = mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
+            const patientId = String(localPatient?.id || '').trim();
+            const patientWorkspaceId = String(localPatient?.clinic_id || localPatient?.clinicId || '').trim();
+            if (!patientId || (workspaceId && patientWorkspaceId && patientWorkspaceId !== workspaceId)) continue;
+            const remotePatient = patientsById.get(patientId);
+            patientsById.set(patientId, remotePatient ? { ...remotePatient, ...localPatient } : localPatient);
+          }
+        } catch (cacheError) {
+          console.warn('[PatientList] Overlay offline indisponível; renderizando snapshot remoto.', cacheError);
+        }
+        return { ...result, success: true, data: Array.from(patientsById.values()) };
       }
       const errorPayload = await safeJson(response);
       return {
@@ -1270,7 +1306,12 @@ export const dataService = {
     const local = await getRecordsByType('patient');
     return {
       success: true,
-      data: local.map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+      data: local
+        .map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+        .filter((patient: any) => {
+          const patientWorkspaceId = String(patient?.clinic_id || patient?.clinicId || '').trim();
+          return !workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId;
+        })
     };
   },
 

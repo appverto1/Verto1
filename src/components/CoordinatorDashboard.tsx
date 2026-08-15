@@ -530,6 +530,7 @@ interface CoordinatorDashboardProps {
   onLogout: () => void;
   allPatients: any[];
   patientListError?: string;
+  onEnsurePatientList?: () => Promise<any> | any;
   onOpenPatientDetails?: (patientId: any) => Promise<any> | any;
   therapistAgenda: any[];
   onOpenOnboarding?: () => void;
@@ -663,6 +664,7 @@ export function CoordinatorDashboard({
   onLogout,
   allPatients,
   patientListError = "",
+  onEnsurePatientList,
   onOpenPatientDetails,
   therapistAgenda,
   onOpenOnboarding,
@@ -881,6 +883,7 @@ export function CoordinatorDashboard({
     | "flow"
     | "birthdays"
   >("dashboard");
+  const patientListEnsureAttemptedWorkspaceRef = useRef("");
   const [tabHistory, setTabHistory] = useState<string[]>(["dashboard"]);
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
@@ -942,6 +945,23 @@ export function CoordinatorDashboard({
   const [schoolBatchMeetingSaving, setSchoolBatchMeetingSaving] = useState(false);
   const [schoolBatchMeetingNotice, setSchoolBatchMeetingNotice] = useState("");
   const [schoolBatchMeetingForm, setSchoolBatchMeetingForm] = useState({ title: "Reunião escolar", scheduledStart: "", scheduledEnd: "", meetingType: "SCHOOL_MEETING", responsibleProfessionalId: "", agenda: "" });
+
+  useEffect(() => {
+    patientListEnsureAttemptedWorkspaceRef.current = "";
+  }, [workspaceScopeKey]);
+
+  useEffect(() => {
+    if (activeTab !== "patients" || allPatients.length > 0 || !onEnsurePatientList) return;
+    if (!workspaceScopeKey || patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) return;
+
+    // Pacientes são recurso transversal da clínica, não um módulo comercial. Se o
+    // bootstrap global não hidratou a lista, a própria tela faz uma única leitura
+    // canônica do tenant em vez de fingir que a clínica não possui pacientes.
+    patientListEnsureAttemptedWorkspaceRef.current = workspaceScopeKey;
+    void Promise.resolve(onEnsurePatientList()).catch(() => {
+      // O estado de erro é controlado no App para manter uma única fonte de verdade.
+    });
+  }, [activeTab, allPatients.length, onEnsurePatientList, workspaceScopeKey]);
 
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
     if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };

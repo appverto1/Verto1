@@ -218,6 +218,40 @@ assert.doesNotMatch(
   /\/api\/patient-records\/|getPatientRecord\(/,
   '17. a hidratação da listagem não pode abrir prontuários',
 );
+
+assert.match(
+  appSource,
+  /onEnsurePatientList=\{ensurePatientListLoaded\}/,
+  '17e. a tela de pacientes deve ter fallback canônico independente do bootstrap global',
+);
+assert.match(
+  coordinatorSource,
+  /activeTab !== "patients"[\s\S]*?onEnsurePatientList\(\)/,
+  '17f. abrir Pacientes com lista vazia deve disparar uma única leitura canônica do tenant',
+);
+const requiredModuleMapSource = coordinatorSource.slice(
+  coordinatorSource.indexOf('const requiredModuleByTab'),
+  coordinatorSource.indexOf('const requiredModule = requiredModuleByTab'),
+);
+assert.doesNotMatch(
+  requiredModuleMapSource,
+  /patients\s*:/,
+  '17g. Pacientes é recurso transversal e não pode depender de módulo comercial contratado',
+);
+const getPatientsSource = dataServiceSource.slice(
+  dataServiceSource.indexOf('async getPatients'),
+  dataServiceSource.indexOf('async savePatient'),
+);
+assert.match(
+  getPatientsSource,
+  /forceRemote[\s\S]*?getNoStoreAuthHeaders\(false\)/,
+  '17h. fallback da lista deve poder usar a sessão HTTP canônica sem depender do bearer Supabase',
+);
+assert.match(
+  getPatientsSource,
+  /record\?\.sync_status === 'synced'\) continue/,
+  '17i. cache sincronizado não pode apagar ou substituir snapshot remoto fresco',
+);
 assert.doesNotMatch(
   coordinatorSource,
   /getPatientRecord\(|\/api\/patient-records\//,
