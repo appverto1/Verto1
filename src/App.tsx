@@ -534,6 +534,13 @@ export default function App() {
         ...candidateUser,
         activeAccessContext: activeContext,
         activeAccessContextId: activeContext.id,
+        // Keep the legacy workspace alias aligned with the server-confirmed access context.
+        // Several workspace-scoped loaders still read activeWorkspaceId first; leaving an old
+        // value here can make the UI query another clinic while the auth session is on this one.
+        activeWorkspaceId:
+          activeContext.kind === 'clinic_workspace'
+            ? activeContext.clinicId
+            : candidateUser?.activeWorkspaceId,
         clinicId: activeContext.clinicId || candidateUser?.clinicId,
         patientId: activeContext.patientId || candidateUser?.patientId,
         role: activeContext.kind === 'patient_portal' ? 'patient' : activeContext.role || candidateUser?.role,
@@ -3669,7 +3676,12 @@ export default function App() {
       return;
     }
 
-    const workspaceId = String(nextUser?.activeWorkspaceId || nextUser?.clinicId || '').trim();
+    const activeContext = getActiveAccessContext(nextUser);
+    const workspaceId = String(
+      activeContext?.kind === 'clinic_workspace'
+        ? activeContext.clinicId
+        : nextUser?.activeWorkspaceId || nextUser?.clinicId || '',
+    ).trim();
     if (!workspaceId) {
       // Fail-safe: sem workspace não pode travar a interface em loading infinito.
       setClinicStateHydrated(true);

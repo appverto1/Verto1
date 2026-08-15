@@ -169,6 +169,20 @@ assert.match(
   /dataService\.hydrateWorkspaceState\(workspaceId\)/,
   '17. a listagem deve hidratar o workspace sem IDs de prontuário',
 );
+assert.match(
+  appSource,
+  /activeWorkspaceId:\s*[\s\S]{0,220}activeContext\.clinicId/,
+  '17a. contexto clínico ativo deve realinhar o alias legado activeWorkspaceId',
+);
+const hydrateStateSource = appSource.slice(
+  appSource.indexOf('const hydrateState = async'),
+  appSource.indexOf('const loadPatientDetailsOnOpen'),
+);
+assert.match(
+  hydrateStateSource,
+  /getActiveAccessContext\(nextUser\)[\s\S]{0,260}activeContext\?\.kind === 'clinic_workspace'[\s\S]{0,180}activeContext\.clinicId/,
+  '17b. hidratação deve preferir o tenant confirmado no activeAccessContext ao alias legado',
+);
 assert.doesNotMatch(
   workspaceHydrationSource,
   /\/api\/patient-records\/|getPatientRecord\(/,
