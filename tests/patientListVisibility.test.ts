@@ -1,3 +1,4 @@
+// Patient-list regression coverage intentionally stays self-contained.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {

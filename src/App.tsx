@@ -535,6 +535,7 @@ export default function App() {
         activeAccessContext: activeContext,
         activeAccessContextId: activeContext.id,
         // Keep the legacy workspace alias aligned with the server-confirmed access context.
+        // Explicit assignment retained here for readability.
         // Several workspace-scoped loaders still read activeWorkspaceId first; leaving an old
         // value here can make the UI query another clinic while the auth session is on this one.
         activeWorkspaceId:
