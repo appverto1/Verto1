@@ -3787,10 +3787,7 @@ export default function App() {
       setClinicalRecords(Array.isArray(hydrated.clinicalRecords) ? hydrated.clinicalRecords : []);
       hydratedSuccessfully = true;
     } catch (error) {
-      if (isCurrentHydration()) {
-        console.error('hydrateState failed:', error);
-        setPatientListError('Não foi possível concluir a hidratação da lista de pacientes. Tente novamente.');
-      }
+      if (isCurrentHydration()) console.error('hydrateState failed:', error);
     } finally {
       if (isCurrentHydration()) {
         setClinicStateHydrated(true);

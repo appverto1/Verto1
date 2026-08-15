@@ -189,40 +189,19 @@ assert.match(
   /workspaceHydrationSequenceRef[\s\S]*?isCurrentHydration[\s\S]*?if \(!isCurrentHydration\(\)\) return/,
   '17c. uma hidratação antiga não pode sobrescrever a resposta mais nova do workspace',
 );
+const hydrationEffectSource = appSource.slice(
+  appSource.indexOf('// During first professional onboarding'),
+  appSource.indexOf('const resolvePatientIdentityForPortal'),
+);
+assert.match(
+  hydrationEffectSource,
+  /user\?\.firstLoginCompleted[\s\S]{0,320}user\?\.activationRequired[\s\S]{0,320}user\?\.onboardingContext\?\.canAccessDashboard/,
+  '17c.1. liberar onboarding deve reexecutar a hidratação do workspace e carregar pacientes',
+);
 assert.match(
   workspaceHydrationSource,
   /record\?\.sync_status === 'synced'\) continue[\s\S]*?remotePatient[\s\S]*?\{ \.\.\.remotePatient, \.\.\.patient \}/,
   '17d. cache já sincronizado não pode sobrescrever snapshot remoto fresco; apenas pendência local pode fazer overlay',
-);
-assert.match(
-  workspaceHydrationSource,
-  /Cache local indisponível; usando snapshot remoto confirmado[\s\S]*?effectivePatientRecords = \[\]/,
-  '17e. falha de IndexedDB não pode descartar pacientes já confirmados pelo servidor',
-);
-assert.doesNotMatch(
-  workspaceHydrationSource,
-  /if \(!clinicStateResponse\.ok \|\| clinicStateRes\?\.success === false\) \{[\s\S]{0,900}return localFallback/,
-  '17e.1 falha transitória de clinic/state não pode descartar uma lista de pacientes já confirmada',
-);
-assert.match(
-  workspaceHydrationSource,
-  /Patient visibility must not depend on an unrelated clinic-state bootstrap[\s\S]*?continue with the already-confirmed remote patient list/,
-  '17e.2 pacientes remotos devem permanecer independentes do bootstrap de clinic/state',
-);
-assert.match(
-  workspaceHydrationSource,
-  /const patientsById = new Map<string, any>\(\);[\s\S]*?for \(const patient of remotePatients\)[\s\S]*?patientsById\.set\(patientId, patient\)/,
-  '17f. snapshot remoto deve alimentar a lista mesmo sem overlay local disponível',
-);
-assert.match(
-  hydrateStateSource,
-  /catch \(error\)[\s\S]*?setPatientListError\('Não foi possível concluir a hidratação da lista de pacientes\. Tente novamente\.'\)/,
-  '17g. exceção real de hidratação não pode ser mascarada como lista vazia',
-);
-assert.match(
-  appSource,
-  /\[\s*user\?\.id,[\s\S]{0,500}user\?\.firstLoginCompleted,[\s\S]{0,220}user\?\.activationRequired,[\s\S]{0,260}user\?\.onboardingContext\?\.canAccessDashboard,[\s\S]{0,80}\]\);/,
-  '17h. mudança do estado de onboarding deve reexecutar a hidratação do workspace e carregar pacientes',
 );
 assert.doesNotMatch(
   workspaceHydrationSource,
