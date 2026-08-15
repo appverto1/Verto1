@@ -8068,10 +8068,20 @@ export const dataService = {
     const workspaceKey = String(workspaceId || 'active').trim() || 'active';
     const clinicStateEntityId = `clinic-state:${workspaceKey}`;
     const buildLocalWorkspaceHydration = async (error?: unknown) => {
-      const [localPatientRecords, localClinicStateRecord] = await Promise.all([
-        getRecordsByType('patient'),
-        getRecordById(clinicStateEntityId),
-      ]);
+      let localPatientRecords: any[] = [];
+      let localClinicStateRecord: any = null;
+      try {
+        [localPatientRecords, localClinicStateRecord] = await Promise.all([
+          getRecordsByType('patient'),
+          getRecordById(clinicStateEntityId),
+        ]);
+      } catch (cacheError) {
+        console.warn('[workspace-hydration] Cache local indisponível durante fallback; mantendo falha explícita.', cacheError);
+        return {
+          success: false,
+          error: String(error || 'Não foi possível carregar o workspace nem acessar a cópia local persistida.'),
+        };
+      }
       const safeWorkspaceId = String(workspaceId || '').trim();
       const localPatients = localPatientRecords
         .map((record) => {
@@ -8152,17 +8162,6 @@ export const dataService = {
       const patientsRes = await safeJson(patientsResponse);
       const patientList = normalizePatientListResponse(patientsRes);
 
-      if (!clinicStateResponse.ok || clinicStateRes?.success === false) {
-        const localFallback = await buildLocalWorkspaceHydration(
-          clinicStateRes?.error || clinicStateRes?.warning || `Falha ao carregar estado da clínica (HTTP ${clinicStateResponse.status}).`,
-        );
-        if (localFallback.success) return localFallback;
-        return {
-          success: false,
-          error: clinicStateRes?.error || clinicStateRes?.warning || `Falha ao carregar estado da clínica (HTTP ${clinicStateResponse.status}).`
-        };
-      }
-
       if (!patientsResponse.ok || !patientList.success) {
         const failureMessage =
           patientsRes?.error ||
@@ -8179,7 +8178,7 @@ export const dataService = {
         };
       }
 
-      const clinicStateData = clinicStateRes?.data || {
+      const emptyClinicState = {
         clinicId: workspaceId || null,
         rooms: [],
         appointments: [],
@@ -8189,41 +8188,72 @@ export const dataService = {
         revision: 0,
         sectionVersions: {}
       };
-      await saveEncryptedRecord({
-        id: clinicStateEntityId,
-        entity_id: clinicStateEntityId,
-        data: { ...clinicStateData, workspace_id: workspaceId || undefined },
-        type: 'clinic_state',
-        sync_status: 'synced',
-        last_updated: clinicStateData?.updatedAt ? new Date(clinicStateData.updatedAt).getTime() || Date.now() : Date.now(),
-        method: 'POST',
-        endpoint: '/api/clinic/state'
-      });
+      let clinicStateData =
+        clinicStateResponse.ok && clinicStateRes?.success !== false
+          ? clinicStateRes?.data || emptyClinicState
+          : emptyClinicState;
+
+      // Patient visibility must not depend on an unrelated clinic-state bootstrap.
+      // If clinic/state is temporarily unavailable, preserve its last local snapshot
+      // when possible, but continue with the already-confirmed remote patient list.
+      if (!clinicStateResponse.ok || clinicStateRes?.success === false) {
+        try {
+          const localClinicStateRecord = await getRecordById(clinicStateEntityId);
+          if (localClinicStateRecord?.data && typeof localClinicStateRecord.data === 'object') {
+            clinicStateData = { ...emptyClinicState, ...localClinicStateRecord.data };
+          }
+        } catch (cacheError) {
+          console.warn('[workspace-hydration] Estado local da clínica indisponível; pacientes remotos permanecem válidos.', cacheError);
+        }
+      }
 
       const remotePatients = patientList.data.map((patient: any) =>
         mirrorPatientInsuranceEligibilityAliases(patient || {}, { useResponsibleFallback: true }),
       );
-      for (const patient of remotePatients) {
-        const patientId = String(patient?.id || '').trim();
-        if (!patientId) continue;
-        await saveEncryptedRecord({
-          id: patientId,
-          entity_id: patientId,
-          data: patient,
-          type: 'patient',
-          sync_status: 'synced',
-          last_updated: patient?.updated_at ? new Date(patient.updated_at).getTime() || Date.now() : Date.now(),
-          method: 'POST',
-          endpoint: '/api/patients'
-        });
-      }
 
-      // Re-read canonical caches through the outbox overlay. A reload/relogin must
-      // never hide a durable local mutation merely because a remote snapshot is stale.
-      const [effectiveClinicStateRecord, effectivePatientRecords] = await Promise.all([
-        getRecordById(clinicStateEntityId),
-        getRecordsByType('patient'),
-      ]);
+      // The server snapshot is already authenticated and canonical at this point.
+      // IndexedDB is durability/offline support only: a local cache failure must never
+      // turn a valid remote patient list into an empty React state.
+      let effectiveClinicStateRecord: any = null;
+      let effectivePatientRecords: any[] = [];
+      try {
+        await saveEncryptedRecord({
+          id: clinicStateEntityId,
+          entity_id: clinicStateEntityId,
+          data: { ...clinicStateData, workspace_id: workspaceId || undefined },
+          type: 'clinic_state',
+          sync_status: 'synced',
+          last_updated: clinicStateData?.updatedAt ? new Date(clinicStateData.updatedAt).getTime() || Date.now() : Date.now(),
+          method: 'POST',
+          endpoint: '/api/clinic/state'
+        });
+
+        for (const patient of remotePatients) {
+          const patientId = String(patient?.id || '').trim();
+          if (!patientId) continue;
+          await saveEncryptedRecord({
+            id: patientId,
+            entity_id: patientId,
+            data: patient,
+            type: 'patient',
+            sync_status: 'synced',
+            last_updated: patient?.updated_at ? new Date(patient.updated_at).getTime() || Date.now() : Date.now(),
+            method: 'POST',
+            endpoint: '/api/patients'
+          });
+        }
+
+        // Re-read canonical caches through the outbox overlay. A reload/relogin must
+        // never hide a durable local mutation merely because a remote snapshot is stale.
+        [effectiveClinicStateRecord, effectivePatientRecords] = await Promise.all([
+          getRecordById(clinicStateEntityId),
+          getRecordsByType('patient'),
+        ]);
+      } catch (cacheError) {
+        console.warn('[workspace-hydration] Cache local indisponível; usando snapshot remoto confirmado.', cacheError);
+        effectiveClinicStateRecord = null;
+        effectivePatientRecords = [];
+      }
       const localClinicState = effectiveClinicStateRecord?.data || clinicStateData;
       const remotePatientIds = new Set(remotePatients.map((patient: any) => String(patient?.id || '').trim()).filter(Boolean));
       const safeWorkspaceId = String(workspaceId || '').trim();
