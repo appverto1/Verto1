@@ -81,6 +81,16 @@ assert.equal(
   false,
   '8. is_active true não pode reabilitar status deleted',
 );
+assert.equal(
+  isPatientVisibleInMainList({ status: 'active', is_active: null, deleted_at: null }),
+  true,
+  '8a. is_active null não pode ocultar paciente operacionalmente ativo',
+);
+assert.equal(
+  isPatientVisibleInMainList({ status: 'PENDING_ANAMNESIS', is_active: null, deleted_at: null }),
+  true,
+  '8b. is_active null não pode ocultar paciente em onboarding',
+);
 
 const neutralList = patients.filter(isPatientVisibleInMainList);
 assert.equal(neutralList.length, 3, '9. Todos os pacientes deve aplicar somente remoção canônica');
@@ -242,15 +252,19 @@ const patientListRouteSource = serverSource.slice(
   serverSource.indexOf("app.get('/api/patients'"),
   serverSource.indexOf("app.post('/api/patients'"),
 );
+const patientListScopeHelperSource = serverSource.slice(
+  serverSource.indexOf('async function resolvePatientListScopedPatientIds'),
+  serverSource.indexOf('async function resolveLegacyClinicalEmailReadScope'),
+);
 assert.match(
-  patientListRouteSource,
-  /\.from\('patient_professional_links'\)[\s\S]*?\.eq\('professional_id', actorUserId\)[\s\S]*?\.eq\('status', 'active'\)/,
+  patientListScopeHelperSource,
+  /\.from\('patient_professional_links'\)[\s\S]*?\.eq\('organization_id', context\.clinicId\)[\s\S]*?\.eq\('professional_id', context\.userId\)[\s\S]*?\.eq\('status', 'active'\)/,
   'terapeuta deve carregar em lote os pacientes vinculados pela equipe do caso',
 );
 assert.match(
   patientListRouteSource,
-  /linkedPatientIds[\s\S]*?\.from\('patients'\)[\s\S]*?\.in\('id', linkedPatientIds\)/,
-  'pacientes do vínculo canônico devem ser buscados em uma consulta filtrada por IDs',
+  /resolvePatientListScopedPatientIds\(context\)[\s\S]*?fetchPatientsWithSchemaFallback\([\s\S]*?patientIds:\s*scopedPatientIds/,
+  'a rota deve repassar o escopo canônico ao fetch em lote de pacientes',
 );
 assert.doesNotMatch(
   patientListRouteSource,

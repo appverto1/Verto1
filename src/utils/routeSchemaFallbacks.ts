@@ -2226,10 +2226,16 @@ export async function fetchPatientsWithSchemaFallback(params: {
       .from('patients')
       .select(joinColumns(columns));
 
-    if (filterIsActive) query = query.eq('is_active', true);
+    // Historical rows may have a nullable activation flag. Only an explicit
+    // false removes a patient from the main list; null keeps the row visible.
+    if (filterIsActive) query = query.or('is_active.eq.true,is_active.is.null');
     if (filterDeletedAt) query = query.is('deleted_at', null);
     if (columns.includes('status')) {
-      query = query.neq('status', 'ARCHIVED').neq('status', 'archived');
+      // Keep onboarding and legacy rows whose status was never populated,
+      // while excluding removed statuses case-insensitively in PostgREST.
+      query = query.or(
+        'status.is.null,and(status.not.ilike.ARCHIVED,status.not.ilike.DELETED)',
+      );
     }
 
     const clinicId = cleanString(params.clinicId, 120);
