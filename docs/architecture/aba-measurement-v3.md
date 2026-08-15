@@ -138,3 +138,63 @@ Este pacote cria apenas:
 - constraints, índices e RLS fail-closed.
 
 Não cria trials V3, não altera APIs clínicas, não altera frontend, não mexe em summaries V2 e não ativa V3 para nenhuma clínica.
+
+## 14. PR2 — resolução imutável do binding
+
+PR2 adiciona o resolver server-side, ainda sem qualquer rota clínica V3.
+
+A decisão de um target dentro de uma sessão usa **`aba_sessions.started_at`** como
+`decision_at`. Ela nunca usa o horário do request/sync. Isso protege sessões que
+começaram antes de uma ativação e só chegaram ao servidor depois por operação
+offline.
+
+A resolução dos gates é histórica: lê a trilha append-only de
+`aba_measurement_rollout_events_v3` e seleciona o estado cuja `effective_from`
+já valia em `decision_at`.
+
+Para o primeiro piloto a política é deliberadamente fail-closed:
+
+1. gate `CLINIC` precisa estar habilitado;
+2. gate `PATIENT` precisa estar habilitado;
+3. `TARGET` prevalece sobre `PROGRAM`; um dos dois precisa estar habilitado;
+4. `allow_new_v3_sessions` **e** `accept_v3_sync` precisam estar verdadeiros em
+todos os gates aplicáveis antes de um novo binding V3 ser criado.
+
+Se `allow_new_v3_sessions` ainda não valia no início da sessão, o binding é
+`LEGACY_V2`. Se V3 estava autorizada mas o sync não estava preparado, o resolver
+falha fechado e não inicia coleta nova sob um estado operacional incoerente.
+
+O binding grava um snapshot de decisão (`rollout_snapshot`) e a razão utilizada.
+Depois de persistido, continua imutável.
+
+### Mudanças de gate
+
+A identidade de um rollout state é imutável. Quando os switches mudam, a alteração
+precisa de uma nova `effective_from` não retroativa. Isso impede que uma ativação
+de hoje altere a interpretação de uma sessão que começou ontem.
+
+### Pré-requisitos para V3
+
+Um binding V3 só é criado quando, no `session.started_at`, existem:
+
+- versão de coleta válida para o target/programa;
+- assignment de fase válido para o target;
+- rollout completo e consistente.
+
+Uma definição que foi descontinuada **depois** do início da sessão continua válida
+para aquela sessão offline/histórica.
+
+### Emergency Legacy Bridge
+
+PR2 cria somente a infraestrutura server-side e auditável do bridge. Não existe
+writer de navegador nem controle de UI neste estágio. Um bridge ativo representa
+um episódio de mensuração separado `EMERGENCY_LEGACY_BRIDGE`; ele não reescreve o
+estado histórico V3 e não une séries V2/V3 matematicamente.
+
+### Concorrência
+
+A resolução serializa somente `(organization_id, session_id, target_id)` via
+advisory transaction lock. Targets diferentes não competem entre si.
+
+A constraint `UNIQUE(session_id, target_id)` continua sendo a proteção final. Em
+retry/race, o binding que já venceu é retornado; nunca é reescrito.
