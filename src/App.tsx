@@ -3634,6 +3634,7 @@ export default function App() {
   const [protocols, setProtocols] = useState<any[]>([]);
   const [allPatients, setAllPatients] = useState<any[]>([]);
   const [patientListError, setPatientListError] = useState('');
+  const workspaceHydrationSequenceRef = useRef(0);
   const hydratedPatientDetailIdsRef = useRef<Set<string>>(new Set());
   const patientDetailRequestsRef = useRef<Map<string, Promise<any>>>(new Map());
 
@@ -3671,9 +3672,15 @@ export default function App() {
   const hydrateState = async (nextUser: any) => {
     if (!nextUser) return;
 
+    const hydrationSequence = workspaceHydrationSequenceRef.current + 1;
+    workspaceHydrationSequenceRef.current = hydrationSequence;
+    const isCurrentHydration = () => workspaceHydrationSequenceRef.current === hydrationSequence;
+
     if (!['director', 'coordinator', 'supervisor', 'therapist', 'receptionist'].includes(String(nextUser.role || '').toLowerCase())) {
-      setClinicStateHydrated(true);
-      setClinicStateSyncReady(false);
+      if (isCurrentHydration()) {
+        setClinicStateHydrated(true);
+        setClinicStateSyncReady(false);
+      }
       return;
     }
 
@@ -3703,6 +3710,10 @@ export default function App() {
           error: 'A lista de pacientes excedeu o tempo de carregamento. Tente novamente.',
         } as any,
       );
+
+      // Auth/session bootstrap can resolve the same workspace through more than one
+      // asynchronous path. A stale response must never clear or replace a newer tenant snapshot.
+      if (!isCurrentHydration()) return;
 
       if (!result?.success || !result?.data) {
         setPatientListError(
@@ -3737,6 +3748,7 @@ export default function App() {
       };
       const remoteAppointments = Array.isArray(hydrated.clinicState?.appointments) ? hydrated.clinicState.appointments : [];
       const offlineAppointmentResult = await dataService.getOfflineAppointmentDrafts?.();
+      if (!isCurrentHydration()) return;
       const offlineAppointments = Array.isArray(offlineAppointmentResult?.data) ? offlineAppointmentResult.data : [];
       const appointmentsById = new Map<string, any>();
       for (const appointment of remoteAppointments) {
@@ -3775,10 +3787,12 @@ export default function App() {
       setClinicalRecords(Array.isArray(hydrated.clinicalRecords) ? hydrated.clinicalRecords : []);
       hydratedSuccessfully = true;
     } catch (error) {
-      console.error('hydrateState failed:', error);
+      if (isCurrentHydration()) console.error('hydrateState failed:', error);
     } finally {
-      setClinicStateHydrated(true);
-      setClinicStateSyncReady(hydratedSuccessfully);
+      if (isCurrentHydration()) {
+        setClinicStateHydrated(true);
+        setClinicStateSyncReady(hydratedSuccessfully);
+      }
     }
   };
 

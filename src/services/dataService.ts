@@ -8227,12 +8227,15 @@ export const dataService = {
       const localClinicState = effectiveClinicStateRecord?.data || clinicStateData;
       const remotePatientIds = new Set(remotePatients.map((patient: any) => String(patient?.id || '').trim()).filter(Boolean));
       const safeWorkspaceId = String(workspaceId || '').trim();
-      const localPatients = effectivePatientRecords
+      const localPatientEntries = effectivePatientRecords
         .map((record) => {
           const { recordPayload: _recordPayload, idempotencyKey: _idempotencyKey, ...patientData } = record?.data || {};
-          return mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
+          return {
+            record,
+            patient: mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true }),
+          };
         })
-        .filter((patient: any) => {
+        .filter(({ patient }: any) => {
           const patientId = String(patient?.id || '').trim();
           const patientClinicId = String(patient?.clinic_id || patient?.clinicId || '').trim();
           return remotePatientIds.has(patientId) || !safeWorkspaceId || !patientClinicId || patientClinicId === safeWorkspaceId;
@@ -8242,9 +8245,22 @@ export const dataService = {
         const patientId = String(patient?.id || '').trim();
         if (patientId) patientsById.set(patientId, patient);
       }
-      for (const patient of localPatients) {
+      for (const { record, patient } of localPatientEntries) {
         const patientId = String(patient?.id || '').trim();
-        if (patientId) patientsById.set(patientId, patient);
+        if (!patientId) continue;
+        const remotePatient = patientsById.get(patientId);
+        // A fresh server snapshot is authoritative over an already-synced cache copy.
+        // Only a genuinely pending local mutation may overlay it, preserving offline edits.
+        if (remotePatient && record?.sync_status === 'synced') continue;
+        patientsById.set(
+          patientId,
+          remotePatient
+            ? mirrorPatientInsuranceEligibilityAliases(
+                { ...remotePatient, ...patient },
+                { useResponsibleFallback: true },
+              )
+            : patient,
+        );
       }
       const patients = Array.from(patientsById.values());
       const remoteProtocols = normalizeProtocolList(clinicStateData?.protocols);

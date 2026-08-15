@@ -184,6 +184,16 @@ assert.match(
   /getActiveAccessContext\(nextUser\)[\s\S]{0,260}activeContext\?\.kind === 'clinic_workspace'[\s\S]{0,180}activeContext\.clinicId/,
   '17b. hidratação deve preferir o tenant confirmado no activeAccessContext ao alias legado',
 );
+assert.match(
+  hydrateStateSource,
+  /workspaceHydrationSequenceRef[\s\S]*?isCurrentHydration[\s\S]*?if \(!isCurrentHydration\(\)\) return/,
+  '17c. uma hidratação antiga não pode sobrescrever a resposta mais nova do workspace',
+);
+assert.match(
+  workspaceHydrationSource,
+  /record\?\.sync_status === 'synced'\) continue[\s\S]*?remotePatient[\s\S]*?\{ \.\.\.remotePatient, \.\.\.patient \}/,
+  '17d. cache já sincronizado não pode sobrescrever snapshot remoto fresco; apenas pendência local pode fazer overlay',
+);
 assert.doesNotMatch(
   workspaceHydrationSource,
   /\/api\/patient-records\/|getPatientRecord\(/,
