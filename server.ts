@@ -70050,8 +70050,9 @@ async function startServer() {
   });
 
   const ABA_V3_PR9A_TRIAL_TARGET_TYPES = new Set(['dtt', 'net', 'probe']);
+  const ABA_V3_PR9B_BINDABLE_TARGET_TYPES = new Set([...ABA_V3_PR9A_TRIAL_TARGET_TYPES, 'task_analysis']);
 
-  const assertAbaV3Pr9aTrialTargetReady = async (organizationId: string, patientId: string, targetId: string) => {
+  const assertAbaV3TargetReadyForTypes = async (organizationId: string, patientId: string, targetId: string, allowedTypes: Set<string>) => {
     const { data, error } = await supabase
       .from('aba_targets')
       .select('id,target_type')
@@ -70065,7 +70066,7 @@ async function startServer() {
     }
     if (!data?.id) return { ok: false, status: 404, code: 'ABA_V3_TARGET_NOT_FOUND', error: 'Alvo ABA não encontrado.' };
     const targetType = sanitizeString(data.target_type, 40).toLowerCase();
-    if (!ABA_V3_PR9A_TRIAL_TARGET_TYPES.has(targetType)) {
+    if (!allowedTypes.has(targetType)) {
       return {
         ok: false,
         status: 409,
@@ -70076,9 +70077,17 @@ async function startServer() {
     return { ok: true, targetType };
   };
 
+  const assertAbaV3Pr9aTrialTargetReady = async (organizationId: string, patientId: string, targetId: string) => (
+    await assertAbaV3TargetReadyForTypes(organizationId, patientId, targetId, ABA_V3_PR9A_TRIAL_TARGET_TYPES)
+  );
+
+  const assertAbaV3Pr9bTargetReady = async (organizationId: string, patientId: string, targetId: string) => (
+    await assertAbaV3TargetReadyForTypes(organizationId, patientId, targetId, ABA_V3_PR9B_BINDABLE_TARGET_TYPES)
+  );
+
   const handleAbaV3CollectionRpcError = (res: any, error: any) => {
     const message = sanitizeString(error?.message || '', 700);
-    if (hasMissingFinancialSchema(error) || /record_aba_trial_action_v3|resolve_aba_session_target_measurement_binding_v1|PGRST202|42883|42P01/i.test(message)) {
+    if (hasMissingFinancialSchema(error) || /record_aba_trial_action_v3|resolve_aba_session_target_measurement_binding_v1|resolve_aba_behavior_collection_v3|record_aba_behavior_action_v3|start_aba_interval_run_action_v3|record_aba_interval_observation_action_v3|finalize_aba_interval_run_action_v3|get_aba_task_analysis_definition_for_session_v3|record_aba_task_analysis_action_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema de coleta ABA V3 ainda não aplicado.' });
     }
     if (/CROSS_TENANT|SCOPE_MISMATCH|_SCOPE_INVALID|ACCESS_DENIED/i.test(message)) {
@@ -70089,6 +70098,18 @@ async function startServer() {
     }
     if (/ABA_V3_TARGET_NOT_V3/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_TARGET_NOT_V3', error: 'Este alvo está vinculado ao modelo Legacy V2 nesta sessão.' });
+    }
+    if (/ABA_V3_BEHAVIOR_NOT_V3/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'ABA_V3_BEHAVIOR_NOT_V3', error: 'Este comportamento permanece no modelo Legacy V2 nesta sessão.' });
+    }
+    if (/BEHAVIOR_PRIMARY_COLLECTOR_ALREADY_ASSIGNED|INTERVAL_COLLECTOR_SCOPE_INVALID/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'ABA_V3_COLLECTOR_CONFLICT', error: 'A coleta V3 deste item já possui outro coletor primário ativo.' });
+    }
+    if (/BEHAVIOR_METHOD_MISMATCH|TASK_ANALYSIS_TARGET_INVALID|TASK_ANALYSIS_PROMPT_NOT_CONFIGURED/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'ABA_V3_CONFIGURATION_INCOMPLETE', error: 'A configuração clínica V3 deste item não é compatível com a coleta solicitada.' });
+    }
+    if (/DURATION_ALREADY_CLOSED|OBSERVATION_ALREADY_CLOSED|INTERVAL_RUN_CLOSED/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'ABA_V3_COLLECTION_ALREADY_CLOSED', error: 'Esta coleta V3 já foi encerrada.' });
     }
     if (/SYNC_NOT_READY|SYNC_CURRENTLY_DISABLED/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_SYNC_NOT_READY', error: 'A coleta V3 está temporariamente indisponível para este alvo.' });
@@ -70126,7 +70147,7 @@ async function startServer() {
         }
         const writeScope = await assertAbaSessionCanAcceptClinicalWrite(sessionId, organizationId, req.session.user);
         if (!writeScope.ok) return res.status(writeScope.status || 409).json({ success: false, error: writeScope.error });
-        const targetReadiness = await assertAbaV3Pr9aTrialTargetReady(organizationId, patientId, targetId);
+        const targetReadiness = await assertAbaV3Pr9bTargetReady(organizationId, patientId, targetId);
         if (!targetReadiness.ok) {
           return res.status(targetReadiness.status || 409).json({ success: false, code: targetReadiness.code, error: targetReadiness.error });
         }
@@ -70275,6 +70296,398 @@ async function startServer() {
             maintenanceProbeLinked: Boolean((data as any)?.maintenance_probe_linked)
           }
         });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+
+  app.get(
+    '/api/aba/v3/patients/:patientId/behavior-catalog',
+    requireAbaV3CollectionFeature,
+    checkAuth,
+    requireClinicCapability('aba.behavior.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(organizationId)) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_COLLECTION_SCOPE_INVALID', error: 'Escopo do catálogo comportamental inválido.' });
+        }
+        const { data, error } = await supabase
+          .from('aba_behavior_definitions')
+          .select('id,name,measurement_type,interval_seconds,status')
+          .eq('patient_id', patientId)
+          .eq('clinic_id', organizationId)
+          .eq('status', 'active')
+          .order('name', { ascending: true })
+          .limit(200);
+        if (error) {
+          if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema ABA ainda não aplicado.' });
+          throw error;
+        }
+        res.setHeader('Cache-Control', 'private, max-age=60');
+        return res.json({ success: true, data: (data || []).map((row: any) => ({
+          id: sanitizeString(row?.id, 180),
+          name: sanitizeString(row?.name, 240),
+          measurementType: sanitizeString(row?.measurement_type, 60).toLowerCase(),
+          intervalSeconds: Number(row?.interval_seconds || 0) || null,
+          status: sanitizeString(row?.status, 40).toLowerCase()
+        })).filter((row: any) => row.id && row.name && row.measurementType) });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/aba/v3/sessions/:sessionId/behaviors/:behaviorId/resolve-collection',
+    requireAbaV3CollectionFeature,
+    checkAuth,
+    requireClinicCapability('aba.behavior.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 16 * 1024, 'Resolução de comportamento ABA V3')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const sessionId = sanitizeString(req.params.sessionId, 180);
+        const behaviorId = sanitizeString(req.params.behaviorId, 180);
+        if (!isUuid(patientId) || !isUuid(organizationId) || !isUuid(actorId) || !sessionId || !behaviorId) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_COLLECTION_SCOPE_INVALID', error: 'Escopo do comportamento ABA V3 inválido.' });
+        }
+        const sessionScope = await resolveAbaSessionReadScope(sessionId, req.session.user);
+        if (!sessionScope.ok) return res.status((sessionScope as any).status || 400).json({ success: false, error: (sessionScope as any).error });
+        if (sanitizeString((sessionScope as any).patientId, 120) !== patientId || sanitizeString((sessionScope as any).clinicId, 120) !== organizationId) {
+          return res.status(403).json({ success: false, code: 'ABA_V3_COLLECTION_SCOPE_DENIED', error: 'Sessão fora do escopo do paciente.' });
+        }
+        const writeScope = await assertAbaSessionCanAcceptClinicalWrite(sessionId, organizationId, req.session.user);
+        if (!writeScope.ok) return res.status(writeScope.status || 409).json({ success: false, error: writeScope.error });
+        const { data, error } = await supabase.rpc('resolve_aba_behavior_collection_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_behavior_id: behaviorId,
+          p_actor_id: actorId
+        });
+        if (error) return handleAbaV3CollectionRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: {
+          measurementModelVersion: sanitizeString((data as any)?.measurement_model_version, 60) || 'LEGACY_V2',
+          behaviorId: sanitizeString((data as any)?.behavior_id, 180) || behaviorId,
+          targetId: sanitizeString((data as any)?.target_id, 180) || null,
+          bindingReason: sanitizeString((data as any)?.binding_reason, 180) || null
+        }});
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/aba/v3/behavior-actions',
+    requireAbaV3CollectionFeature,
+    checkAuth,
+    requireClinicCapability('aba.behavior.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 48 * 1024, 'Ação de comportamento ABA V3')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180);
+        const behaviorId = sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180);
+        const clientEventId = sanitizeString(req.body?.client_event_id || req.body?.clientEventId, 240);
+        const episodeEventId = sanitizeString(req.body?.episode_event_id || req.body?.episodeEventId, 240) || null;
+        const actionType = sanitizeString(req.body?.action_type || req.body?.actionType, 60).toUpperCase();
+        const allowedActions = new Set(['FREQUENCY','RATE_OCCURRENCE','DURATION_START','DURATION_STOP','OBSERVATION_START','OBSERVATION_STOP']);
+        const rawOccurredAt = sanitizeString(req.body?.occurred_at || req.body?.occurredAt || req.body?.timestamp, 80);
+        const occurredDate = new Date(rawOccurredAt);
+        if (!isUuid(patientId) || !isUuid(organizationId) || !isUuid(actorId) || !sessionId || !behaviorId || !clientEventId || !allowedActions.has(actionType) || !rawOccurredAt || Number.isNaN(occurredDate.getTime())) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_BEHAVIOR_ACTION_INVALID', error: 'Ação de comportamento ABA V3 inválida.' });
+        }
+        const sessionScope = await resolveAbaSessionReadScope(sessionId, req.session.user);
+        if (!sessionScope.ok) return res.status((sessionScope as any).status || 400).json({ success: false, error: (sessionScope as any).error });
+        if (sanitizeString((sessionScope as any).patientId, 120) !== patientId || sanitizeString((sessionScope as any).clinicId, 120) !== organizationId) {
+          return res.status(403).json({ success: false, code: 'ABA_V3_COLLECTION_SCOPE_DENIED', error: 'Sessão fora do escopo do paciente.' });
+        }
+        const writeScope = await assertAbaSessionCanAcceptClinicalWrite(sessionId, organizationId, req.session.user);
+        if (!writeScope.ok) return res.status(writeScope.status || 409).json({ success: false, error: writeScope.error });
+        const metadata = sanitizeClinicalPayload(req.body?.metadata || req.body?.client_metadata || req.body?.clientMetadata || {});
+        const countDelta = Math.max(1, Math.min(1000, Math.floor(asSafeNumber(req.body?.count_delta ?? req.body?.countDelta ?? 1, 1, 1000))));
+        const { data, error } = await supabase.rpc('record_aba_behavior_action_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_behavior_id: behaviorId,
+          p_action_type: actionType,
+          p_client_event_id: clientEventId,
+          p_occurred_at: occurredDate.toISOString(),
+          p_actor_id: actorId,
+          p_episode_event_id: episodeEventId,
+          p_count_delta: countDelta,
+          p_metadata: metadata
+        });
+        if (error) return handleAbaV3CollectionRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: data || {}, measurementModelVersion: 'V3' });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/aba/v3/interval-runs',
+    requireAbaV3CollectionFeature,
+    checkAuth,
+    requireClinicCapability('aba.behavior.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 32 * 1024, 'Início de intervalo ABA V3')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180);
+        const behaviorId = sanitizeString(req.body?.behavior_id || req.body?.behaviorId, 180);
+        const clientRunEventId = sanitizeString(req.body?.client_run_event_id || req.body?.clientRunEventId, 240);
+        const method = sanitizeString(req.body?.measurement_method || req.body?.measurementMethod, 80).toUpperCase();
+        const intervalSeconds = Math.floor(asSafeNumber(req.body?.interval_seconds ?? req.body?.intervalSeconds, 1, 3600));
+        const plannedIntervals = Math.floor(asSafeNumber(req.body?.planned_intervals ?? req.body?.plannedIntervals, 1, 200));
+        const rawStartedAt = sanitizeString(req.body?.started_at || req.body?.startedAt, 80);
+        const startedDate = new Date(rawStartedAt);
+        if (!isUuid(patientId) || !isUuid(organizationId) || !isUuid(actorId) || !sessionId || !behaviorId || !clientRunEventId || !['PARTIAL_INTERVAL','WHOLE_INTERVAL','MOMENTARY_TIME_SAMPLING'].includes(method) || Number.isNaN(startedDate.getTime())) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_INTERVAL_INVALID', error: 'Configuração do intervalo ABA V3 inválida.' });
+        }
+        const sessionScope = await resolveAbaSessionReadScope(sessionId, req.session.user);
+        if (!sessionScope.ok) return res.status((sessionScope as any).status || 400).json({ success: false, error: (sessionScope as any).error });
+        if (sanitizeString((sessionScope as any).patientId, 120) !== patientId || sanitizeString((sessionScope as any).clinicId, 120) !== organizationId) {
+          return res.status(403).json({ success: false, code: 'ABA_V3_COLLECTION_SCOPE_DENIED', error: 'Sessão fora do escopo do paciente.' });
+        }
+        const writeScope = await assertAbaSessionCanAcceptClinicalWrite(sessionId, organizationId, req.session.user);
+        if (!writeScope.ok) return res.status(writeScope.status || 409).json({ success: false, error: writeScope.error });
+        const { data, error } = await supabase.rpc('start_aba_interval_run_action_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_behavior_id: behaviorId,
+          p_client_run_event_id: clientRunEventId,
+          p_measurement_method: method,
+          p_interval_seconds: intervalSeconds,
+          p_planned_intervals: plannedIntervals,
+          p_started_at: startedDate.toISOString(),
+          p_actor_id: actorId,
+          p_metadata: sanitizeClinicalPayload(req.body?.metadata || req.body?.client_metadata || req.body?.clientMetadata || {})
+        });
+        if (error) return handleAbaV3CollectionRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: {
+          intervalRunId: sanitizeString((data as any)?.interval_run_id, 120),
+          collectorBindingId: sanitizeString((data as any)?.collector_binding_id, 120),
+          contextId: sanitizeString((data as any)?.context_id, 120),
+          targetId: sanitizeString((data as any)?.target_id, 180) || null,
+          inserted: Boolean((data as any)?.inserted),
+          lifecycleStatus: sanitizeString((data as any)?.lifecycle_status, 40) || 'OPEN',
+          measurementModelVersion: 'V3'
+        }});
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/aba/v3/interval-runs/:runId/observations',
+    requireAbaV3CollectionFeature,
+    checkAuth,
+    requireClinicCapability('aba.behavior.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 24 * 1024, 'Observação de intervalo ABA V3')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180);
+        const runId = sanitizeString(req.params.runId, 120);
+        const clientEventId = sanitizeString(req.body?.client_event_id || req.body?.clientEventId, 240);
+        const intervalIndex = Math.floor(asSafeNumber(req.body?.interval_index ?? req.body?.intervalIndex, 1, 200));
+        const observationCode = sanitizeString(req.body?.observation_code || req.body?.observationCode, 40).toUpperCase();
+        if (!isUuid(patientId) || !isUuid(organizationId) || !isUuid(actorId) || !isUuid(runId) || !sessionId || !clientEventId || !['OCCURRED','NOT_OCCURRED','NOT_OBSERVED'].includes(observationCode)) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_INTERVAL_OBSERVATION_INVALID', error: 'Observação de intervalo ABA V3 inválida.' });
+        }
+        const sessionScope = await resolveAbaSessionReadScope(sessionId, req.session.user);
+        if (!sessionScope.ok) return res.status((sessionScope as any).status || 400).json({ success: false, error: (sessionScope as any).error });
+        const writeScope = await assertAbaSessionCanAcceptClinicalWrite(sessionId, organizationId, req.session.user);
+        if (!writeScope.ok) return res.status(writeScope.status || 409).json({ success: false, error: writeScope.error });
+        const { data, error } = await supabase.rpc('record_aba_interval_observation_action_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_interval_run_id: runId,
+          p_interval_index: intervalIndex,
+          p_observation_code: observationCode,
+          p_client_event_id: clientEventId,
+          p_actor_id: actorId,
+          p_metadata: sanitizeClinicalPayload(req.body?.metadata || {})
+        });
+        if (error) return handleAbaV3CollectionRpcError(res, error);
+        if (Number((data as any)?.quarantined || 0) > 0) {
+          return res.status(422).json({ success: false, code: 'ABA_V3_INTERVAL_QUARANTINED', error: 'A observação foi preservada em quarentena e não entrou no resumo clínico.' });
+        }
+        return res.json({ success: true, data: data || {}, measurementModelVersion: 'V3' });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/aba/v3/interval-runs/:runId/finalize',
+    requireAbaV3CollectionFeature,
+    checkAuth,
+    requireClinicCapability('aba.behavior.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 16 * 1024, 'Finalização de intervalo ABA V3')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180);
+        const runId = sanitizeString(req.params.runId, 120);
+        const closeReason = sanitizeString(req.body?.close_reason || req.body?.closeReason || 'CLIENT_COMPLETE', 40).toUpperCase();
+        const rawEndedAt = sanitizeString(req.body?.ended_at || req.body?.endedAt || new Date().toISOString(), 80);
+        const endedDate = new Date(rawEndedAt);
+        if (!isUuid(patientId) || !isUuid(organizationId) || !isUuid(actorId) || !isUuid(runId) || !sessionId || !['CLIENT_COMPLETE','MANUAL_CANCEL'].includes(closeReason) || Number.isNaN(endedDate.getTime())) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_INTERVAL_FINALIZE_INVALID', error: 'Finalização de intervalo ABA V3 inválida.' });
+        }
+        const sessionScope = await resolveAbaSessionReadScope(sessionId, req.session.user);
+        if (!sessionScope.ok) return res.status((sessionScope as any).status || 400).json({ success: false, error: (sessionScope as any).error });
+        const writeScope = await assertAbaSessionCanAcceptClinicalWrite(sessionId, organizationId, req.session.user);
+        if (!writeScope.ok) return res.status(writeScope.status || 409).json({ success: false, error: writeScope.error });
+        const { data, error } = await supabase.rpc('finalize_aba_interval_run_action_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_interval_run_id: runId,
+          p_ended_at: endedDate.toISOString(),
+          p_close_reason: closeReason,
+          p_actor_id: actorId
+        });
+        if (error) return handleAbaV3CollectionRpcError(res, error);
+        return res.json({ success: true, data: {
+          intervalRunId: sanitizeString((data as any)?.id, 120),
+          lifecycleStatus: sanitizeString((data as any)?.lifecycle_status, 40),
+          endedAt: sanitizeString((data as any)?.ended_at, 80),
+          closeReason: sanitizeString((data as any)?.close_reason, 40),
+          measurementModelVersion: 'V3'
+        }});
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/patients/:patientId/sessions/:sessionId/targets/:targetId/task-analysis-definition',
+    requireAbaV3CollectionFeature,
+    checkAuth,
+    requireClinicCapability('aba.trial.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const sessionId = sanitizeString(req.params.sessionId, 180);
+        const targetId = sanitizeString(req.params.targetId, 180);
+        if (!isUuid(patientId) || !isUuid(organizationId) || !isUuid(actorId) || !sessionId || !targetId) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_COLLECTION_SCOPE_INVALID', error: 'Escopo da análise de tarefa ABA V3 inválido.' });
+        }
+        const sessionScope = await resolveAbaSessionReadScope(sessionId, req.session.user);
+        if (!sessionScope.ok) return res.status((sessionScope as any).status || 400).json({ success: false, error: (sessionScope as any).error });
+        const writeScope = await assertAbaSessionCanAcceptClinicalWrite(sessionId, organizationId, req.session.user);
+        if (!writeScope.ok) return res.status(writeScope.status || 409).json({ success: false, error: writeScope.error });
+        const { data, error } = await supabase.rpc('get_aba_task_analysis_definition_for_session_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_target_id: targetId,
+          p_actor_id: actorId
+        });
+        if (error) return handleAbaV3CollectionRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: {
+          measurementModelVersion: sanitizeString((data as any)?.measurement_model_version, 60),
+          targetId,
+          steps: Array.isArray((data as any)?.steps) ? (data as any).steps : []
+        }});
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/aba/v3/task-analysis-runs',
+    requireAbaV3CollectionFeature,
+    checkAuth,
+    requireClinicCapability('aba.trial.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 96 * 1024, 'Análise de tarefa ABA V3')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180);
+        const targetId = sanitizeString(req.body?.target_id || req.body?.targetId, 180);
+        const clientEventId = sanitizeString(req.body?.client_event_id || req.body?.clientEventId, 240);
+        const results = Array.isArray(req.body?.results) ? req.body.results.slice(0, 250).map((row: any) => ({
+          sequence_no: Math.floor(asSafeNumber(row?.sequence_no ?? row?.sequenceNo, 1, 250)),
+          performance_code: sanitizeString(row?.performance_code || row?.performanceCode, 40).toUpperCase(),
+          prompt_key: sanitizeString(row?.prompt_key || row?.promptKey, 160) || null,
+          occurred_at: sanitizeIsoDateTime(row?.occurred_at || row?.occurredAt || req.body?.occurred_at || req.body?.occurredAt),
+          metadata: sanitizeClinicalPayload(row?.metadata || {})
+        })) : [];
+        const allowedCodes = new Set(['INDEPENDENT','PROMPTED','INCORRECT','NO_RESPONSE','NOT_APPLICABLE','NOT_OBSERVED']);
+        const rawOccurredAt = sanitizeString(req.body?.occurred_at || req.body?.occurredAt, 80);
+        const rawCompletedAt = sanitizeString(req.body?.completed_at || req.body?.completedAt, 80);
+        const occurredDate = new Date(rawOccurredAt);
+        const completedDate = new Date(rawCompletedAt);
+        if (!isUuid(patientId) || !isUuid(organizationId) || !isUuid(actorId) || !sessionId || !targetId || !clientEventId || !results.length || results.some((row: any) => !allowedCodes.has(row.performance_code)) || Number.isNaN(occurredDate.getTime()) || Number.isNaN(completedDate.getTime())) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_TASK_ANALYSIS_INVALID', error: 'Análise de tarefa ABA V3 inválida.' });
+        }
+        const sessionScope = await resolveAbaSessionReadScope(sessionId, req.session.user);
+        if (!sessionScope.ok) return res.status((sessionScope as any).status || 400).json({ success: false, error: (sessionScope as any).error });
+        const writeScope = await assertAbaSessionCanAcceptClinicalWrite(sessionId, organizationId, req.session.user);
+        if (!writeScope.ok) return res.status(writeScope.status || 409).json({ success: false, error: writeScope.error });
+        const { data, error } = await supabase.rpc('record_aba_task_analysis_action_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_target_id: targetId,
+          p_client_event_id: clientEventId,
+          p_occurred_at: occurredDate.toISOString(),
+          p_completed_at: completedDate.toISOString(),
+          p_results: results,
+          p_actor_id: actorId,
+          p_lifecycle_status: sanitizeString(req.body?.lifecycle_status || req.body?.lifecycleStatus || 'COMPLETE', 40).toUpperCase(),
+          p_metadata: sanitizeClinicalPayload(req.body?.metadata || {})
+        });
+        if (error) return handleAbaV3CollectionRpcError(res, error);
+        return res.json({ success: true, data: {
+          runId: sanitizeString((data as any)?.id, 120),
+          lifecycleStatus: sanitizeString((data as any)?.lifecycle_status, 40),
+          targetId: sanitizeString((data as any)?.target_id, 180) || targetId,
+          measurementModelVersion: 'V3'
+        }});
       } catch (error: any) {
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }

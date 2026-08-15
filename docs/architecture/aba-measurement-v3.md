@@ -387,3 +387,51 @@ Sessões puramente V2 preservam o cálculo Legacy local. Quando existe trial V3,
 O escopo de coleta desta etapa é deliberadamente restrito a targets `dtt`, `net` e `probe`. Targets `behavior` e `task_analysis` são recusados **antes** de criar um binding V3 pela rota Node e são revalidados dentro da RPC transacional. Isso evita que comportamento, intervalos ou task analysis caiam silenciosamente nos writers Legacy enquanto a UI V3 dessas famílias ainda não existe.
 
 A próxima etapa é **PR9B**: UI/ingestão canônica V3 para comportamento, intervalos e task analysis. Somente depois dessa fronteira estar completa a sequência avança para gráficos V3 segmentados por fase/modelo.
+
+## PR9B — comportamento, intervalos e Task Analysis na coleta V3
+
+PR9B fecha as famílias clínicas que permaneceram deliberadamente bloqueadas no PR9A. O princípio continua sendo o mesmo: uma decisão V3 nunca pode cair silenciosamente em um writer Legacy V2.
+
+### Comportamento com identidade explícita
+
+`aba_behavior_definitions` continua sendo a identidade canônica do comportamento observado. A UI não traduz presets simbólicos por nome e não tenta encontrar um target “parecido”. A relação entre um comportamento e um target V3 é persistida explicitamente em `aba_behavior_target_bindings_v3`.
+
+O vínculo ativo é único por `organization + patient + behavior`. Uma correção não reescreve o vínculo antigo: ele transita para `ARCHIVED` com ator, timestamp e motivo obrigatório, e um novo vínculo pode ser criado para sessões futuras. A identidade do vínculo não pode ser atualizada nem removida.
+
+Na primeira resolução de um comportamento canônico dentro de uma sessão, `aba_session_behavior_collection_bindings_v3` congela a decisão `sessão + comportamento`. Isso inclui decisões Legacy por ausência de mapeamento. Arquivar/revincular a configuração depois não muda uma sessão em andamento e bindings `session + target` já materializados permanecem imutáveis.
+
+A resolução da coleta segue duas etapas canônicas: comportamento explícito -> target explícito -> `resolve_aba_session_target_measurement_binding_v1`. Comportamento sem vínculo explícito permanece Legacy V2; não há backfill ou inferência por label.
+
+### Frequência, taxa e duração
+
+A UI carrega um catálogo pequeno do paciente (`id`, `name`, `measurement_type`, `interval_seconds`, `status`) uma vez e o reaproveita no estado da sessão. Escritas V3 passam por `/api/aba/v3/behavior-actions` e por uma única RPC de ação.
+
+Frequência e ocorrências de rate são fatos append-only. Duração usa início/fim de episódio com `client_event_id` idempotente. Rate usa slices explícitos de observação; a duração da sessão inteira nunca é usada como denominador implícito. O collector PRIMARY é congelado por sessão + comportamento + contexto e um segundo PRIMARY concorrente é rejeitado.
+
+ABC ainda não possui modelo V3 próprio. Se um comportamento já estiver resolvido como V3, a UI bloqueia a gravação ABC em vez de persistir na tabela Legacy. Isso é um limite clínico explícito, não um fallback.
+
+### Interval recording
+
+A criação de um run de intervalo exige confirmação server-side e retorna o UUID canônico antes de iniciar a grade local. Cada célula é escrita na superfície PR7 e o encerramento chama a finalização canônica; lifecycle/summaries Legacy não são duplicados.
+
+Como PR7 representa uma grade temporal fixa, a pausa Legacy não é reinterpretada na V3. A UI bloqueia pausa durante um run V3 até existir uma semântica própria que preserve corretamente o denominador. `NOT_OBSERVED` continua distinto de ausência de comportamento.
+
+### Task Analysis
+
+Targets `task_analysis` passam a poder resolver binding V3. A definição dos passos vem do snapshot imutável da versão de coleta e a UI registra uma travessia completa com resultados categóricos por passo: `INDEPENDENT`, `PROMPTED`, `INCORRECT`, `NO_RESPONSE`, `NOT_OBSERVED` ou `NOT_APPLICABLE`.
+
+`PROMPTED` exige um prompt ativo e visível da clínica, validado novamente no servidor/banco. Nenhum `independence_score` ou `response_score` é aceito. O run é persistido atomicamente pelo motor PR7, não como uma sequência de trials DTT independentes.
+
+### Append-only e fronteira Node
+
+Registros V3 de comportamento não podem ser editados ou apagados pela interface Legacy. Correções futuras devem usar as superfícies de revisão V3 já previstas; a UI identifica esses registros como imutáveis.
+
+Toda a coleta segue `browser -> Node autenticado/autorizado -> RPC service_role`. O browser não possui acesso direto às novas tabelas/RPCs. Rotas aplicam feature flag, autenticação, capability, escopo do paciente/sessão e limites de payload. O catálogo lê apenas colunas essenciais e é reutilizado no estado da sessão, evitando uma consulta por clique.
+
+O outbox `aba_v3` continua preservando eventos offline e processa mutações em ordem causal. Operações estruturais que precisam de um ID server-side, como criar um interval run, aguardam confirmação canônica antes de abrir estado local dependente desse ID.
+
+### Rollout
+
+PR9B permanece dark. `FEATURE_ABA_V3_READ_API`, `FEATURE_ABA_V3_COLLECTION_API` e `VITE_FEATURE_ABA_V3_UI` continuam `false` por padrão e a migration não habilita `allow_new_v3_sessions`.
+
+Com o PR9B, a superfície principal de coleta V3 fica fechada para DTT/NET/probe, comportamento, intervalos e Task Analysis. A próxima etapa é **PR10**: gráficos V3 segmentados por fase/modelo, configuração operacional do piloto e gates/smoke tests de rollout antes de qualquer ativação em produção.

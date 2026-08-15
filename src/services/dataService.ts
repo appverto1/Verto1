@@ -997,11 +997,12 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
 }
 
 // Helper to handle offline-first saving
-async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST') {
+async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string } = {}) {
   const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
   // Every mutation gets its own durable outbox row. Reusing an id while a prior
   // request is in-flight can let the older response acknowledge/delete the newer edit.
   const queueId = `${type}:${id}:${crypto.randomUUID()}`;
+  const queueEntityId = String(options?.queueEntityId || id).trim() || id;
   const payloadWithIdempotency = {
     ...(data || {}),
     idempotencyKey
@@ -1012,7 +1013,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
   try {
     await saveEncryptedRecord({
       id: queueId,
-      entity_id: id,
+      entity_id: queueEntityId,
       data: payloadWithIdempotency,
       type,
       sync_status: 'pending',
@@ -5711,6 +5712,156 @@ export const dataService = {
       client_metadata: trial?.client_metadata || trial?.clientMetadata || {}
     };
     return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/trials', 'POST');
+  },
+
+  async getAbaV3BehaviorCatalog(patientId: string) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: [] };
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente não identificado.', data: [] };
+    try {
+      const response = await fetchWithAuthRetry(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/behavior-catalog`, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar os comportamentos ABA V3.', data: [] };
+      return { ...result, success: true, data: Array.isArray(result?.data) ? result.data : [] };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar os comportamentos ABA V3.', data: [] };
+    }
+  },
+
+  async resolveAbaV3BehaviorCollection(input: { patientId: string; sessionId: string; behaviorId: string }) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const patientId = String(input?.patientId || '').trim();
+    const sessionId = String(input?.sessionId || '').trim();
+    const behaviorId = String(input?.behaviorId || '').trim();
+    if (!patientId || !sessionId || !behaviorId) return { success: false, error: 'Escopo do comportamento ABA V3 incompleto.' };
+    const endpoint = `/api/aba/v3/sessions/${encodeURIComponent(sessionId)}/behaviors/${encodeURIComponent(behaviorId)}/resolve-collection`;
+    try {
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'POST',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ patient_id: patientId })
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível resolver o comportamento ABA V3.' };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível resolver o comportamento ABA V3.' };
+    }
+  },
+
+  async saveAbaV3BehaviorAction(action: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const clientEventId = String(action?.client_event_id || action?.clientEventId || generateId()).trim();
+    const data = {
+      patient_id: action?.patient_id || action?.patientId,
+      session_id: action?.session_id || action?.sessionId,
+      behavior_id: action?.behavior_id || action?.behaviorId,
+      action_type: action?.action_type || action?.actionType,
+      client_event_id: clientEventId,
+      episode_event_id: action?.episode_event_id || action?.episodeEventId || undefined,
+      count_delta: action?.count_delta ?? action?.countDelta ?? 1,
+      occurred_at: action?.occurred_at || action?.occurredAt || action?.timestamp || new Date().toISOString(),
+      metadata: action?.metadata || action?.client_metadata || action?.clientMetadata || {}
+    };
+    const queueEntityId = String(action?.causal_entity_id || action?.causalEntityId || action?.episode_event_id || action?.episodeEventId || clientEventId).trim() || clientEventId;
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/behavior-actions', 'POST', { queueEntityId });
+  },
+
+  async startAbaV3IntervalRun(input: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      behavior_id: input?.behavior_id || input?.behaviorId,
+      client_run_event_id: input?.client_run_event_id || input?.clientRunEventId || generateId(),
+      measurement_method: input?.measurement_method || input?.measurementMethod,
+      interval_seconds: input?.interval_seconds ?? input?.intervalSeconds,
+      planned_intervals: input?.planned_intervals ?? input?.plannedIntervals,
+      started_at: input?.started_at || input?.startedAt || new Date().toISOString(),
+      metadata: input?.metadata || {}
+    };
+    try {
+      const response = await fetchWithAuthRetry('/api/aba/v3/interval-runs', {
+        method: 'POST',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(data)
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível iniciar a coleta por intervalo V3.' };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'A coleta por intervalo V3 precisa de conexão para iniciar.' };
+    }
+  },
+
+  async saveAbaV3IntervalObservation(input: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const runId = String(input?.interval_run_id || input?.intervalRunId || '').trim();
+    const clientEventId = String(input?.client_event_id || input?.clientEventId || generateId()).trim();
+    if (!runId) return { success: false, error: 'Coleta por intervalo V3 não identificada.' };
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      interval_index: input?.interval_index ?? input?.intervalIndex,
+      observation_code: input?.observation_code || input?.observationCode,
+      client_event_id: clientEventId,
+      metadata: input?.metadata || {}
+    };
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/observations`, 'POST', { queueEntityId: runId });
+  },
+
+  async finalizeAbaV3IntervalRun(input: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const runId = String(input?.interval_run_id || input?.intervalRunId || '').trim();
+    const clientEventId = String(input?.client_event_id || input?.clientEventId || `interval-finalize-${runId}-${input?.close_reason || input?.closeReason || 'complete'}`).trim();
+    if (!runId) return { success: false, error: 'Coleta por intervalo V3 não identificada.' };
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      ended_at: input?.ended_at || input?.endedAt || new Date().toISOString(),
+      close_reason: input?.close_reason || input?.closeReason || 'CLIENT_COMPLETE',
+      client_event_id: clientEventId
+    };
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/finalize`, 'POST', { queueEntityId: runId });
+  },
+
+  async getAbaV3TaskAnalysisDefinition(input: { patientId: string; sessionId: string; targetId: string }) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const patientId = String(input?.patientId || '').trim();
+    const sessionId = String(input?.sessionId || '').trim();
+    const targetId = String(input?.targetId || '').trim();
+    if (!patientId || !sessionId || !targetId) return { success: false, error: 'Escopo da análise de tarefa ABA V3 incompleto.' };
+    const endpoint = `/api/aba/v3/patients/${encodeURIComponent(patientId)}/sessions/${encodeURIComponent(sessionId)}/targets/${encodeURIComponent(targetId)}/task-analysis-definition`;
+    try {
+      const response = await fetchWithAuthRetry(endpoint, { method: 'GET', headers: await getNoStoreAuthHeaders(), credentials: 'include' });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar a análise de tarefa V3.' };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar a análise de tarefa V3.' };
+    }
+  },
+
+  async saveAbaV3TaskAnalysisRun(input: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const clientEventId = String(input?.client_event_id || input?.clientEventId || generateId()).trim();
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      target_id: input?.target_id || input?.targetId,
+      client_event_id: clientEventId,
+      occurred_at: input?.occurred_at || input?.occurredAt || new Date().toISOString(),
+      completed_at: input?.completed_at || input?.completedAt || new Date().toISOString(),
+      lifecycle_status: input?.lifecycle_status || input?.lifecycleStatus || 'COMPLETE',
+      results: Array.isArray(input?.results) ? input.results : [],
+      metadata: input?.metadata || {}
+    };
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/task-analysis-runs', 'POST');
   },
 
   async saveAbaTrial(trial: any) {

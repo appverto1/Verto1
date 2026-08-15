@@ -200,9 +200,35 @@ type SessionRecord = {
 type OpenDurationEvent = {
   id: string;
   behaviorName: string;
+  behaviorId?: string | null;
   startedAt: string;
   location?: string;
   severity?: number | null;
+  measurementModelVersion?: string;
+  v3EpisodeEventId?: string | null;
+};
+
+type AbaV3BehaviorDecision = {
+  measurementModelVersion: string;
+  behaviorId: string;
+  targetId?: string | null;
+  bindingReason?: string | null;
+};
+
+type AbaV3TaskAnalysisStep = {
+  id: string;
+  sequence_no: number;
+  step_key: string;
+  label: string;
+  description?: string | null;
+  is_required?: boolean;
+};
+
+type AbaV3TaskAnalysisModalState = {
+  goal: any;
+  targetId: string;
+  steps: AbaV3TaskAnalysisStep[];
+  startedAt: string;
 };
 
 type PendingMaintenanceProbeTrial = {
@@ -896,6 +922,7 @@ export const SessionMode = ({
   const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
+  const [canonicalBehaviorPresets, setCanonicalBehaviorPresets] = useState<any[]>([]);
   const [selectedLocation, setSelectedLocation] = useState(locationOptions[0]);
   const [selectedSeverity, setSelectedSeverity] = useState(2);
   const [rateWindow, setRateWindow] = useState<any>(null);
@@ -942,6 +969,10 @@ export const SessionMode = ({
   const [promptWarning, setPromptWarning] = useState('');
   const [abaV3ErrorSelection, setAbaV3ErrorSelection] = useState<AbaV3ErrorSelection | null>(null);
   const abaV3BindingCacheRef = useRef<Map<string, AbaV3BindingDecision>>(new Map());
+  const abaV3BehaviorBindingCacheRef = useRef<Map<string, AbaV3BehaviorDecision>>(new Map());
+  const [abaV3TaskAnalysisModal, setAbaV3TaskAnalysisModal] = useState<AbaV3TaskAnalysisModalState | null>(null);
+  const [abaV3TaskAnalysisResults, setAbaV3TaskAnalysisResults] = useState<Record<number, { performanceCode: string; promptKey?: string | null }>>({});
+  const [abaV3TaskAnalysisSaving, setAbaV3TaskAnalysisSaving] = useState(false);
   const [clinicPromptTypes, setClinicPromptTypes] = useState<AbaPromptTypeConfig[]>(() => normalizeAbaPromptTypeConfig());
   const [mobileFocusMode, setMobileFocusMode] = useState(true);
   const [mobileSelectedGoalKey, setMobileSelectedGoalKey] = useState('');
@@ -1069,9 +1100,53 @@ export const SessionMode = ({
   const clinicalDockRef = useRef<HTMLDivElement | null>(null);
   const intervalPausedControlsRef = useRef<HTMLDivElement | null>(null);
 
+  const sessionBehaviorPresets = useMemo(() => {
+    if (!abaV3UiEnabled || canonicalBehaviorPresets.length === 0) return behaviorPresets;
+    return canonicalBehaviorPresets.map((behavior, index) => {
+      const legacyByName = behaviorPresets.find((item) => item.name.toLowerCase() === String(behavior.name || '').toLowerCase());
+      const measurementType = String(behavior.measurementType || 'frequency').toLowerCase();
+      return {
+        id: String(behavior.id),
+        name: String(behavior.name),
+        defaultMeasurement: measurementType,
+        allowedMeasurements: [measurementType],
+        abcRequirement: legacyByName?.abcRequirement || ('OPTIONAL' as AbcRequirement),
+        tone: legacyByName?.tone || behaviorPresets[index % behaviorPresets.length].tone,
+        intervalSeconds: behavior.intervalSeconds || null,
+        canonicalV3Definition: true
+      };
+    });
+  }, [abaV3UiEnabled, canonicalBehaviorPresets]);
+
+  useEffect(() => {
+    if (!abaV3UiEnabled || !patientId) {
+      setCanonicalBehaviorPresets([]);
+      return;
+    }
+    let cancelled = false;
+    dataService.getAbaV3BehaviorCatalog(patientId)
+      .then((result: any) => {
+        if (cancelled) return;
+        setCanonicalBehaviorPresets(result?.success && Array.isArray(result?.data) ? result.data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setCanonicalBehaviorPresets([]);
+      });
+    return () => { cancelled = true; };
+  }, [abaV3UiEnabled, patientId]);
+
+  useEffect(() => {
+    if (sessionBehaviorPresets.some((behavior) => behavior.id === selectedBehaviorId)) return;
+    const first = sessionBehaviorPresets[0];
+    if (!first) return;
+    setSelectedBehaviorId(first.id);
+    setBehaviorMeasurementType(first.defaultMeasurement);
+    setAbcBehaviorId(first.id);
+  }, [selectedBehaviorId, sessionBehaviorPresets]);
+
   const selectedBehavior = useMemo(
-    () => behaviorPresets.find((behavior) => behavior.id === selectedBehaviorId) || behaviorPresets[0],
-    [selectedBehaviorId]
+    () => sessionBehaviorPresets.find((behavior) => behavior.id === selectedBehaviorId) || sessionBehaviorPresets[0] || behaviorPresets[0],
+    [selectedBehaviorId, sessionBehaviorPresets]
   );
   const selectedBehaviorMeasurements = getBehaviorAllowedMeasurements(selectedBehavior);
   const selectedBehaviorAllowsMultipleMethods = selectedBehaviorMeasurements.length > 1;
@@ -1082,8 +1157,8 @@ export const SessionMode = ({
     patient?.abaSettings?.quickBehaviorShortcuts ||
     patient?.clinicSettings?.quickBehaviorShortcuts ||
     patient?.clinicSettings?.abaQuickBehaviorShortcuts,
-    behaviorPresets
-  ), [patient?.abaSettings?.quickBehaviorShortcuts, patient?.clinicSettings?.abaQuickBehaviorShortcuts, patient?.clinicSettings?.quickBehaviorShortcuts, patient?.quickBehaviorShortcuts, patient?.quick_behavior_shortcuts]);
+    sessionBehaviorPresets
+  ), [patient?.abaSettings?.quickBehaviorShortcuts, patient?.clinicSettings?.abaQuickBehaviorShortcuts, patient?.clinicSettings?.quickBehaviorShortcuts, patient?.quickBehaviorShortcuts, patient?.quick_behavior_shortcuts, sessionBehaviorPresets]);
   const dockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode, limit: 3 }), [crisisMode, quickBehaviorShortcuts]);
   const crisisShortcutIdSet = useMemo(() => new Set(getCrisisShortcutIds()), []);
   const dockLocationStorageKey = useMemo(() => `verto.aba_dock_locations:${resolvedClinicId || patientId || 'local'}`, [patientId, resolvedClinicId]);
@@ -1091,14 +1166,14 @@ export const SessionMode = ({
   const visibleDockLocationOptions = dockLocationsExpanded ? dockLocationOptions : dockLocationOptions.slice(0, 6);
   const recentBehaviorRecords = useMemo(() => records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)).slice(0, 5), [records]);
   const visibleDockBehaviorOptions = useMemo(() => {
-    const byId = new Map<string, typeof behaviorPresets[number]>();
-    const addBehavior = (behavior?: typeof behaviorPresets[number] | null) => {
+    const byId = new Map<string, any>();
+    const addBehavior = (behavior?: any | null) => {
       if (!behavior || byId.has(behavior.id)) return;
       byId.set(behavior.id, behavior);
     };
     addBehavior(selectedBehavior);
     recentBehaviorRecords.forEach((record: any) => {
-      const behavior = behaviorPresets.find((item) => (
+      const behavior = sessionBehaviorPresets.find((item) => (
         item.id === record.behaviorId ||
         item.id === record.behavior_id ||
         item.name === record.behaviorName ||
@@ -1108,15 +1183,15 @@ export const SessionMode = ({
       addBehavior(behavior);
     });
     quickBehaviorShortcuts.forEach((shortcut: any) => {
-      addBehavior(behaviorPresets.find((item) => item.id === shortcut.behaviorId || item.name === shortcut.behaviorName));
+      addBehavior(sessionBehaviorPresets.find((item) => item.id === shortcut.behaviorId || item.name === shortcut.behaviorName));
     });
-    behaviorPresets.forEach(addBehavior);
+    sessionBehaviorPresets.forEach(addBehavior);
     return Array.from(byId.values()).slice(0, 8);
-  }, [quickBehaviorShortcuts, recentBehaviorRecords, selectedBehavior]);
+  }, [quickBehaviorShortcuts, recentBehaviorRecords, selectedBehavior, sessionBehaviorPresets]);
   const extraDockBehaviorOptions = useMemo(() => {
     const visibleIds = new Set(visibleDockBehaviorOptions.map((behavior) => behavior.id));
-    return behaviorPresets.filter((behavior) => !visibleIds.has(behavior.id));
-  }, [visibleDockBehaviorOptions]);
+    return sessionBehaviorPresets.filter((behavior) => !visibleIds.has(behavior.id));
+  }, [visibleDockBehaviorOptions, sessionBehaviorPresets]);
   const intervalRunStatus = getIntervalRunStatus(intervalRun);
   const intervalRunPaused = intervalRunStatus === 'PAUSED';
   const intervalRunAwaitingResponse = intervalRunStatus === 'AWAITING_RESPONSE';
@@ -1697,6 +1772,7 @@ export const SessionMode = ({
 
   const goalTargetId = (goal: any) => String(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || '').trim();
   const goalTargetName = (goal: any) => String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
+  const goalTargetType = (goal: any) => String(goal?.target_type || goal?.targetType || '').trim().toLowerCase();
   const normalizeSessionGoalKey = (value: any) => String(value ?? '').trim();
   const uniqueSessionGoalKeys = (values: any[]) =>
     values
@@ -1824,24 +1900,44 @@ export const SessionMode = ({
     return { collectionType: regularType, activeProbe: sameManualOverride ? activeProbe : null };
   };
 
+  const resolveBehaviorDecisionForPayload = async (payload: any): Promise<AbaV3BehaviorDecision | null> => {
+    if (!abaV3UiEnabled) return null;
+    const behaviorId = String(payload?.behavior_id || payload?.behaviorId || '').trim();
+    if (!behaviorId) throw new Error('O comportamento precisa estar identificado antes da coleta V3.');
+    const behavior = sessionBehaviorPresets.find((item) => String(item.id) === behaviorId) || { id: behaviorId };
+    return await resolveAbaV3BehaviorForAction(behavior);
+  };
+
   const saveExistingBehaviorEvent = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
-    upsertRecord(record, 'local');
+    let behaviorDecision: AbaV3BehaviorDecision | null = null;
+    try {
+      behaviorDecision = await resolveBehaviorDecisionForPayload(payload);
+    } catch (error: any) {
+      setSessionWarning(error?.message || 'Não foi possível determinar o modelo deste comportamento.');
+      showClinicalToast({ variant: 'error', title: 'Coleta bloqueada', subtitle: error?.message || 'Não foi possível determinar o modelo de coleta.' }, 'error');
+      return { success: false, error };
+    }
+    const isV3 = behaviorDecision?.measurementModelVersion === 'V3';
+    const persistedRecord = isV3 ? { ...record, measurementModelVersion: 'V3' } : record;
+    upsertRecord(persistedRecord, 'local');
     setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
     try {
-      const result = await dataService.saveAbaBehaviorEvent({
-        ...payload,
-        patient_id: patientId,
-        patientId,
-        session_id: sessionId,
-        sessionId,
-        appointment_id: activeAppointmentId || undefined,
-        appointmentId: activeAppointmentId || undefined,
-        clinic_id: resolvedClinicId || undefined,
-        clinicId: resolvedClinicId || undefined,
-        therapist_id: resolvedTherapistId || undefined,
-        therapistId: resolvedTherapistId || undefined,
-        source: 'verto_web'
-      });
+      const result = isV3
+        ? await persistAbaV3BehaviorPayload(payload, behaviorDecision as AbaV3BehaviorDecision)
+        : await dataService.saveAbaBehaviorEvent({
+            ...payload,
+            patient_id: patientId,
+            patientId,
+            session_id: sessionId,
+            sessionId,
+            appointment_id: activeAppointmentId || undefined,
+            appointmentId: activeAppointmentId || undefined,
+            clinic_id: resolvedClinicId || undefined,
+            clinicId: resolvedClinicId || undefined,
+            therapist_id: resolvedTherapistId || undefined,
+            therapistId: resolvedTherapistId || undefined,
+            source: 'verto_web'
+          });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
       showPersistResultToast(result);
       onSessionRecordSaved?.();
@@ -1855,23 +1951,35 @@ export const SessionMode = ({
   };
 
   const saveBehaviorEvent = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
-    addRecord(record, 'local');
+    let behaviorDecision: AbaV3BehaviorDecision | null = null;
+    try {
+      behaviorDecision = await resolveBehaviorDecisionForPayload(payload);
+    } catch (error: any) {
+      setSessionWarning(error?.message || 'Não foi possível determinar o modelo deste comportamento.');
+      showClinicalToast({ variant: 'error', title: 'Coleta bloqueada', subtitle: error?.message || 'Não foi possível determinar o modelo de coleta.' }, 'error');
+      return { success: false, error };
+    }
+    const isV3 = behaviorDecision?.measurementModelVersion === 'V3';
+    const persistedRecord = isV3 ? { ...record, measurementModelVersion: 'V3' } : record;
+    addRecord(persistedRecord, 'local');
     setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
     try {
-      const result = await dataService.saveAbaBehaviorEvent({
-        ...payload,
-        patient_id: patientId,
-        patientId,
-        session_id: sessionId,
-        sessionId,
-        appointment_id: activeAppointmentId || undefined,
-        appointmentId: activeAppointmentId || undefined,
-        clinic_id: resolvedClinicId || undefined,
-        clinicId: resolvedClinicId || undefined,
-        therapist_id: resolvedTherapistId || undefined,
-        therapistId: resolvedTherapistId || undefined,
-        source: 'verto_web'
-      });
+      const result = isV3
+        ? await persistAbaV3BehaviorPayload(payload, behaviorDecision as AbaV3BehaviorDecision)
+        : await dataService.saveAbaBehaviorEvent({
+            ...payload,
+            patient_id: patientId,
+            patientId,
+            session_id: sessionId,
+            sessionId,
+            appointment_id: activeAppointmentId || undefined,
+            appointmentId: activeAppointmentId || undefined,
+            clinic_id: resolvedClinicId || undefined,
+            clinicId: resolvedClinicId || undefined,
+            therapist_id: resolvedTherapistId || undefined,
+            therapistId: resolvedTherapistId || undefined,
+            source: 'verto_web'
+          });
       updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
       showPersistResultToast(result);
       onSessionRecordSaved?.();
@@ -1976,6 +2084,10 @@ export const SessionMode = ({
   };
 
   const deleteBehaviorEvent = async (record: SessionRecord) => {
+    if (record.measurementModelVersion === 'V3') {
+      showClinicalToast({ variant: 'info', title: 'Registro V3 é imutável', subtitle: 'Retificações V3 exigem evento de revisão; exclusão Legacy foi bloqueada.' }, 'none');
+      return { success: false, code: 'aba_v3_append_only' };
+    }
     updateRecordStatus(record.id, 'syncing');
     try {
       const result = await dataService.deleteAbaBehaviorEvent(record.id, {
@@ -2498,6 +2610,148 @@ export const SessionMode = ({
     return binding;
   };
 
+  const resolveAbaV3BehaviorForAction = async (behavior: any): Promise<AbaV3BehaviorDecision | null> => {
+    if (!abaV3UiEnabled) return null;
+    const behaviorId = String(behavior?.id || behavior?.behaviorId || behavior?.behavior_id || '').trim();
+    if (!behaviorId || !sessionId || sessionId.startsWith('draft-')) {
+      throw new Error('A coleta comportamental V3 exige sessão e comportamento persistidos.');
+    }
+    const cacheKey = `${sessionId}:${behaviorId}`;
+    const cached = abaV3BehaviorBindingCacheRef.current.get(cacheKey);
+    if (cached) return cached;
+    const result = await dataService.resolveAbaV3BehaviorCollection({ patientId, sessionId, behaviorId });
+    if (!result?.success || !result?.data?.measurementModelVersion) {
+      throw new Error(result?.error || 'Não foi possível determinar o modelo de coleta deste comportamento.');
+    }
+    const decision = result.data as AbaV3BehaviorDecision;
+    abaV3BehaviorBindingCacheRef.current.set(cacheKey, decision);
+    return decision;
+  };
+
+  const persistAbaV3BehaviorPayload = async (payload: any, behaviorDecision: AbaV3BehaviorDecision) => {
+    if (behaviorDecision.measurementModelVersion !== 'V3') return null;
+    const behaviorId = String(payload?.behavior_id || payload?.behaviorId || behaviorDecision.behaviorId || '').trim();
+    const measurementType = String(payload?.measurement_type || payload?.measurementType || payload?.method || '').trim().toLowerCase();
+    const startedAt = String(payload?.started_at || payload?.startedAt || payload?.timestamp || new Date().toISOString());
+    const endedAt = String(payload?.ended_at || payload?.endedAt || '').trim();
+    if (measurementType === 'abc') {
+      throw new Error('ABC ainda não possui modelo V3 próprio. Esta coleta foi bloqueada para não cair no Legacy por engano.');
+    }
+    let actionType = '';
+    let clientEventId = String(payload?.id || crypto.randomUUID());
+    let episodeEventId: string | undefined;
+    let occurredAt = String(payload?.timestamp || payload?.occurred_at || payload?.occurredAt || new Date().toISOString());
+    if (measurementType === 'frequency') actionType = 'FREQUENCY';
+    else if (measurementType === 'rate') actionType = 'RATE_OCCURRENCE';
+    else if (measurementType === 'duration' && !endedAt) {
+      actionType = 'DURATION_START';
+      occurredAt = startedAt;
+    } else if (measurementType === 'duration' && endedAt) {
+      actionType = 'DURATION_STOP';
+      episodeEventId = String(payload?.id || '').trim();
+      clientEventId = crypto.randomUUID();
+      occurredAt = endedAt;
+    } else {
+      throw new Error('Este método comportamental ainda não possui escrita V3 por evento.');
+    }
+    return await dataService.saveAbaV3BehaviorAction({
+      patientId,
+      sessionId,
+      behaviorId,
+      actionType,
+      clientEventId,
+      episodeEventId,
+      causalEntityId: measurementType === 'rate'
+        ? String(payload?.raw_payload?.rateWindowId || payload?.rawPayload?.rateWindowId || episodeEventId || clientEventId)
+        : (episodeEventId || clientEventId),
+      occurredAt,
+      countDelta: payload?.count_delta ?? payload?.countDelta ?? 1,
+      metadata: {
+        source: 'session_mode_v3',
+        targetId: behaviorDecision.targetId || null,
+        location: payload?.location || undefined,
+        severity: payload?.severity ?? undefined,
+        contextSnapshot: payload?.contextSnapshot || payload?.raw_payload?.contextSnapshot || undefined
+      }
+    });
+  };
+
+  const openAbaV3TaskAnalysis = async (goal: any) => {
+    if (!abaV3UiEnabled || goalTargetType(goal) !== 'task_analysis') return false;
+    const binding = await resolveAbaV3BindingForGoal(goal);
+    if (binding?.measurementModelVersion !== 'V3') return false;
+    const targetId = goalTargetId(goal);
+    const result = await dataService.getAbaV3TaskAnalysisDefinition({ patientId, sessionId, targetId });
+    if (!result?.success || result?.data?.measurementModelVersion !== 'V3' || !Array.isArray(result?.data?.steps) || result.data.steps.length === 0) {
+      throw new Error(result?.error || 'A definição V3 da análise de tarefa ainda não está pronta.');
+    }
+    const steps = result.data.steps as AbaV3TaskAnalysisStep[];
+    setAbaV3TaskAnalysisResults(Object.fromEntries(steps.map((step) => [Number(step.sequence_no), { performanceCode: 'NOT_OBSERVED', promptKey: null }])));
+    setAbaV3TaskAnalysisModal({ goal, targetId, steps, startedAt: new Date().toISOString() });
+    return true;
+  };
+
+  const saveAbaV3TaskAnalysis = async () => {
+    const modal = abaV3TaskAnalysisModal;
+    if (!modal || abaV3TaskAnalysisSaving) return;
+    setAbaV3TaskAnalysisSaving(true);
+    const completedAt = new Date().toISOString();
+    const clientEventId = crypto.randomUUID();
+    try {
+      const results = modal.steps.map((step) => {
+        const value = abaV3TaskAnalysisResults[Number(step.sequence_no)] || { performanceCode: 'NOT_OBSERVED', promptKey: null };
+        return {
+          sequence_no: Number(step.sequence_no),
+          performance_code: value.performanceCode,
+          prompt_key: value.performanceCode === 'PROMPTED' ? value.promptKey || null : null,
+          occurred_at: completedAt,
+          metadata: {}
+        };
+      });
+      if (results.some((row) => row.performance_code === 'PROMPTED' && !row.prompt_key)) {
+        throw new Error('Selecione o tipo de ajuda em todos os passos marcados como Com ajuda.');
+      }
+      const result = await dataService.saveAbaV3TaskAnalysisRun({
+        patientId,
+        sessionId,
+        targetId: modal.targetId,
+        clientEventId,
+        occurredAt: modal.startedAt,
+        completedAt,
+        lifecycleStatus: 'COMPLETE',
+        results,
+        metadata: { source: 'session_mode_v3' }
+      });
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível salvar a análise de tarefa V3.');
+      const observed = results.filter((row) => !['NOT_OBSERVED','NOT_APPLICABLE'].includes(row.performance_code)).length;
+      addRecord({
+        id: `task-v3-${clientEventId}`,
+        kind: 'trial',
+        title: goalTargetName(modal.goal) || 'Análise de tarefa',
+        detail: `Análise de tarefa · ${observed}/${results.length} passo(s) observados`,
+        timestamp: completedAt,
+        targetId: modal.targetId,
+        targetName: goalTargetName(modal.goal) || null,
+        programId: modal.goal?.programId || modal.goal?.program_id || null,
+        therapistId: resolvedTherapistId || null,
+        measurementModelVersion: 'V3',
+        collectionType: 'task_analysis',
+        score: null,
+        rawPayload: { clientEventId, taskAnalysis: true, results }
+      }, result?.pending ? 'local' : 'synced');
+      setTrialCount((prev) => prev + 1);
+      setAbaV3TaskAnalysisModal(null);
+      setAbaV3TaskAnalysisResults({});
+      showClinicalToast({ variant: result?.pending ? 'info' : 'success', title: result?.pending ? 'Análise preservada para sincronização' : 'Análise de tarefa registrada', subtitle: `${observed}/${results.length} passo(s) observados` });
+      onSessionRecordSaved?.();
+    } catch (error: any) {
+      setSessionWarning(error?.message || 'Não foi possível salvar a análise de tarefa V3.');
+      showClinicalToast({ variant: 'error', title: 'Não foi possível salvar', subtitle: error?.message || 'Revise a análise de tarefa e tente novamente.' }, 'error');
+    } finally {
+      setAbaV3TaskAnalysisSaving(false);
+    }
+  };
+
   const persistV3TrialRecord = async ({
     goal,
     actionKey,
@@ -2851,6 +3105,16 @@ export const SessionMode = ({
       }
     }
 
+    if (binding?.measurementModelVersion === 'V3' && goalTargetType(goal) === 'task_analysis') {
+      try {
+        await openAbaV3TaskAnalysis(goal);
+      } catch (error: any) {
+        setSessionWarning(error?.message || 'Não foi possível abrir a análise de tarefa V3.');
+        showClinicalToast({ variant: 'error', title: 'Análise de tarefa indisponível', subtitle: error?.message || 'Revise a configuração do target.' }, 'error');
+      }
+      return;
+    }
+
     if (binding?.measurementModelVersion === 'V3' && outcome === 'error') {
       setAbaV3ErrorSelection({
         goal,
@@ -2988,10 +3252,10 @@ export const SessionMode = ({
 
   const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
     if (!ensureSessionCanRecord()) return;
-    const behavior = behaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
+    const behavior = sessionBehaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
     if (!behaviorAllowsMeasurement(behavior, 'frequency')) {
       if (behaviorAllowsMeasurement(behavior, 'duration')) {
-        startDuration(behavior.name);
+        void startDuration(behavior.name);
       } else {
         showClinicalToast({
           variant: 'info',
@@ -3003,7 +3267,7 @@ export const SessionMode = ({
     }
     const frequencyLockKey = `frequency:${behavior.id}:${behaviorName}`;
     if (!lockAction(frequencyLockKey, 300)) return;
-    const payload = buildBehaviorPayload(behaviorName, 'frequency', { count_delta: countDelta, countDelta });
+    const payload = buildBehaviorPayload(behaviorName, 'frequency', { behavior_id: behavior.id, behaviorId: behavior.id, count_delta: countDelta, countDelta });
     triggerMicroFeedback(`behavior:${behavior.id}`, 'plus');
     showClinicalToast(buildClinicalActionToast({
       action: 'frequency',
@@ -3039,7 +3303,7 @@ export const SessionMode = ({
     void handleTrialClick(goal, 0.5, 'prompted', promptKey);
   };
 
-  const startDuration = (behaviorName = selectedBehavior.name) => {
+  const startDuration = async (behaviorName = selectedBehavior.name) => {
     if (!ensureSessionCanRecord()) return;
     if (openDurations.some((event) => event.behaviorName === behaviorName)) {
       showClinicalToast({
@@ -3049,13 +3313,25 @@ export const SessionMode = ({
       }, 'none');
       return;
     }
-    const behavior = behaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
+    const behavior = sessionBehaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
     if (!lockAction(`duration:start:${behavior.id}`, 300)) return;
+    let behaviorDecision: AbaV3BehaviorDecision | null = null;
+    try {
+      behaviorDecision = await resolveAbaV3BehaviorForAction(behavior);
+    } catch (error: any) {
+      releaseActionLock(`duration:start:${behavior.id}`);
+      setSessionWarning(error?.message || 'Não foi possível determinar o modelo deste comportamento.');
+      showClinicalToast({ variant: 'error', title: 'Duração bloqueada', subtitle: error?.message || 'Não foi possível determinar o modelo de coleta.' }, 'error');
+      return;
+    }
     const startedAt = new Date().toISOString();
     const id = crypto.randomUUID();
     const openEvent: OpenDurationEvent = {
       id,
       behaviorName,
+      behaviorId: behavior.id,
+      measurementModelVersion: behaviorDecision?.measurementModelVersion || 'LEGACY_V2',
+      v3EpisodeEventId: behaviorDecision?.measurementModelVersion === 'V3' ? id : null,
       startedAt,
       location: selectedLocation,
       severity: selectedSeverity
@@ -3070,6 +3346,8 @@ export const SessionMode = ({
     }));
     const payload = buildBehaviorPayload(behaviorName, 'duration', {
       id,
+      behavior_id: behavior.id,
+      behaviorId: behavior.id,
       started_at: startedAt,
       startedAt,
       ended_at: null,
@@ -3095,6 +3373,7 @@ export const SessionMode = ({
       }),
       timestamp: startedAt,
       measurementType: 'duration',
+      behaviorId: behavior.id,
       startedAt,
       durationSeconds: null,
       contextSnapshot: payload.contextSnapshot,
@@ -3116,8 +3395,11 @@ export const SessionMode = ({
       behaviorName: event.behaviorName,
       durationSeconds
     }));
+    const behavior = sessionBehaviorPresets.find((item) => item.id === event.behaviorId) || sessionBehaviorPresets.find((item) => item.name === event.behaviorName) || selectedBehavior;
     const payload = buildBehaviorPayload(event.behaviorName, 'duration', {
       id: event.id,
+      behavior_id: behavior.id,
+      behaviorId: behavior.id,
       started_at: event.startedAt,
       startedAt: event.startedAt,
       ended_at: endedAt,
@@ -3148,6 +3430,7 @@ export const SessionMode = ({
       }),
       timestamp: event.startedAt,
       measurementType: 'duration',
+      behaviorId: behavior.id,
       startedAt: event.startedAt,
       endedAt,
       durationSeconds,
@@ -3158,6 +3441,15 @@ export const SessionMode = ({
   };
 
   const discardDuration = (eventId: string) => {
+    const openEvent = openDurations.find((item) => item.id === eventId);
+    if (openEvent?.measurementModelVersion === 'V3') {
+      showClinicalToast({
+        variant: 'info',
+        title: 'Duração V3 não pode ser descartada',
+        subtitle: 'Finalize o episódio para preservar o fato clínico. Correções V3 serão feitas por revisão, nunca por exclusão.'
+      }, 'none');
+      return;
+    }
     const record = records.find((item) => item.id === eventId && item.kind === 'behavior');
     setOpenDurations((prev) => prev.filter((item) => item.id !== eventId));
     if (record) {
@@ -3199,7 +3491,7 @@ export const SessionMode = ({
       return;
     }
     if (effectiveMeasurementType === 'duration') {
-      startDuration(selectedBehavior.name);
+      void startDuration(selectedBehavior.name);
       return;
     }
     if (effectiveMeasurementType === 'abc') {
@@ -3208,7 +3500,7 @@ export const SessionMode = ({
     }
     if (isIntervalMeasurementType(effectiveMeasurementType)) {
       const committedQuantity = commitIntervalQuantityInput();
-      startIntervalRun(selectedBehavior, effectiveMeasurementType, committedQuantity);
+      void startIntervalRun(selectedBehavior, effectiveMeasurementType, committedQuantity);
       return;
     }
     if (effectiveMeasurementType === 'rate') {
@@ -3218,14 +3510,68 @@ export const SessionMode = ({
     }
   };
 
-  const startRateWindow = () => {
+  const startRateWindow = async () => {
     if (!ensureSessionCanRecord()) return;
-    setRateWindow({
-      id: crypto.randomUUID(),
-      behaviorName: selectedBehavior.name,
-      startedAt: new Date().toISOString(),
-      count: 0
-    });
+    const startedAt = new Date().toISOString();
+    const windowId = crypto.randomUUID();
+    try {
+      const behaviorDecision = await resolveAbaV3BehaviorForAction(selectedBehavior);
+      if (behaviorDecision?.measurementModelVersion === 'V3') {
+        const result = await dataService.saveAbaV3BehaviorAction({
+          patientId,
+          sessionId,
+          behaviorId: selectedBehavior.id,
+          actionType: 'OBSERVATION_START',
+          clientEventId: windowId,
+          causalEntityId: windowId,
+          occurredAt: startedAt,
+          metadata: { source: 'session_mode_v3', targetId: behaviorDecision.targetId || null }
+        });
+        if (!result?.success) throw new Error(result?.error || 'Não foi possível iniciar a janela de taxa V3.');
+        setRateWindow({
+          id: windowId,
+          behaviorId: selectedBehavior.id,
+          behaviorName: selectedBehavior.name,
+          startedAt,
+          count: 0,
+          measurementModelVersion: 'V3',
+          v3ObservationEventId: windowId
+        });
+        return;
+      }
+      setRateWindow({ id: windowId, behaviorId: selectedBehavior.id, behaviorName: selectedBehavior.name, startedAt, count: 0 });
+    } catch (error: any) {
+      setSessionWarning(error?.message || 'Não foi possível iniciar a janela de taxa.');
+      showClinicalToast({ variant: 'error', title: 'Coleta bloqueada', subtitle: error?.message || 'Não foi possível iniciar a janela.' }, 'error');
+    }
+  };
+
+  const finishRateWindow = async () => {
+    if (!rateWindow) return;
+    if (rateWindow.measurementModelVersion !== 'V3') {
+      setRateWindow(null);
+      return;
+    }
+    const endedAt = new Date().toISOString();
+    try {
+      const result = await dataService.saveAbaV3BehaviorAction({
+        patientId,
+        sessionId,
+        behaviorId: rateWindow.behaviorId || selectedBehavior.id,
+        actionType: 'OBSERVATION_STOP',
+        clientEventId: crypto.randomUUID(),
+        episodeEventId: rateWindow.v3ObservationEventId || rateWindow.id,
+        causalEntityId: rateWindow.v3ObservationEventId || rateWindow.id,
+        occurredAt: endedAt,
+        metadata: { source: 'session_mode_v3' }
+      });
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível finalizar a janela de taxa V3.');
+      setRateWindow(null);
+      showClinicalToast({ variant: result?.pending ? 'info' : 'success', title: result?.pending ? 'Finalização preservada para sincronização' : 'Janela de taxa finalizada', subtitle: `${rateWindow.count || 0} ocorrência(s)` });
+    } catch (error: any) {
+      setSessionWarning(error?.message || 'Não foi possível finalizar a janela de taxa.');
+      showClinicalToast({ variant: 'error', title: 'Não foi possível finalizar', subtitle: error?.message || 'Tente novamente.' }, 'error');
+    }
   };
 
   const registerRateOccurrence = () => {
@@ -3234,6 +3580,8 @@ export const SessionMode = ({
     if (!lockAction(`rate:${rateWindow.id}`, 300)) return;
     setRateWindow({ ...rateWindow, count: Number(rateWindow.count || 0) + 1 });
     const payload = buildBehaviorPayload(rateWindow.behaviorName, 'rate', {
+      behavior_id: rateWindow.behaviorId || selectedBehavior.id,
+      behaviorId: rateWindow.behaviorId || selectedBehavior.id,
       count_delta: 1,
       countDelta: 1,
       raw_payload: { rateWindowId: rateWindow.id, rateWindowStartedAt: rateWindow.startedAt }
@@ -3252,6 +3600,7 @@ export const SessionMode = ({
       detail: `taxa +1 (${Number(rateWindow.count || 0) + 1})`,
       timestamp: payload.timestamp,
       measurementType: 'rate',
+      behaviorId: rateWindow.behaviorId || selectedBehavior.id,
       countDelta: 1,
       contextSnapshot: payload.contextSnapshot,
       location: selectedLocation,
@@ -3260,6 +3609,7 @@ export const SessionMode = ({
   };
 
   const persistIntervalLifecycleRecord = (run: any, status: AbaIntervalCollectionStatus, occurredAt = new Date().toISOString(), extra: any = {}) => {
+    if (run?.measurementModelVersion === 'V3') return;
     const behaviorId = run.behaviorId || selectedBehavior.id;
     const intervalNumber = Math.max(1, Number(run.intervalIndex || 1));
     const intervalStartedAt = run.intervalStartedAt || run.startedAt || occurredAt;
@@ -3337,53 +3687,83 @@ export const SessionMode = ({
     });
   };
 
-  const startIntervalRun = (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType, quantityOverride?: number) => {
+  const startIntervalRun = async (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType, quantityOverride?: number) => {
     if (!ensureSessionCanRecord()) return;
     if (intervalRun) {
       setSessionWarning(intervalRun.behaviorId === behaviorOverride.id
         ? 'Já existe uma coleta por intervalo em andamento para este comportamento.'
-        : 'Finalize, pause/cancele ou conclua a coleta por intervalo em andamento antes de iniciar outra.');
+        : 'Finalize ou conclua a coleta por intervalo em andamento antes de iniciar outra.');
       return;
     }
     const startedAt = new Date().toISOString();
+    const localRunId = crypto.randomUUID();
     const intervalEndsAt = new Date(new Date(startedAt).getTime() + intervalSeconds * 1000).toISOString();
     const plannedIntervalCount = Math.max(1, Math.floor(Number(quantityOverride ?? intervalTotalIntervals) || 1));
-    const nextRun = {
-      id: crypto.randomUUID(),
-      behaviorId: behaviorOverride.id,
-      behaviorName: behaviorOverride.name,
-      measurementType: measurementOverride,
-      method: measurementOverride,
-      location: selectedLocation,
-      severity: selectedSeverity,
-      startedAt,
-      intervalStartedAt: startedAt,
-      intervalEndsAt,
-      intervalSeconds,
-      intervalIndex: 1,
-      totalIntervals: plannedIntervalCount,
-      plannedIntervals: plannedIntervalCount,
-      alertType: intervalAlertType,
-      status: 'RUNNING',
-      collectionStatus: 'RUNNING',
-      awaitingResponse: false,
-      paused: false,
-      pauseRemainingMs: null,
-      completedCount: 0,
-      answeredIntervals: 0,
-      occurredCount: 0,
-      yesCount: 0,
-      noCount: 0
-    };
-    setIntervalRun(nextRun);
-    persistIntervalLifecycleRecord(nextRun, 'RUNNING', startedAt, { lifecycleAction: 'start' });
-    setIntervalOptionsOpen(false);
-    setIntervalCancelConfirmOpen(false);
-    setIntervalZeroFinishConfirmOpen(false);
-    setIntervalEndReason('');
-    setIntervalCancelReason('');
-    setIntervalSummary(null);
-    setSessionWarning('');
+    let behaviorDecision: AbaV3BehaviorDecision | null = null;
+    try {
+      behaviorDecision = await resolveAbaV3BehaviorForAction(behaviorOverride);
+      let v3IntervalRunId: string | null = null;
+      if (behaviorDecision?.measurementModelVersion === 'V3') {
+        const startResult = await dataService.startAbaV3IntervalRun({
+          patientId,
+          sessionId,
+          behaviorId: behaviorOverride.id,
+          clientRunEventId: localRunId,
+          measurementMethod: String(measurementOverride || '').toUpperCase(),
+          intervalSeconds,
+          plannedIntervals: plannedIntervalCount,
+          startedAt,
+          metadata: { source: 'session_mode_v3', targetId: behaviorDecision.targetId || null }
+        });
+        if (!startResult?.success || !startResult?.data?.intervalRunId) {
+          throw new Error(startResult?.error || 'Não foi possível iniciar a coleta por intervalo V3.');
+        }
+        v3IntervalRunId = String(startResult.data.intervalRunId);
+      }
+      const nextRun = {
+        id: localRunId,
+        behaviorId: behaviorOverride.id,
+        behaviorName: behaviorOverride.name,
+        measurementType: measurementOverride,
+        method: measurementOverride,
+        measurementModelVersion: behaviorDecision?.measurementModelVersion === 'V3' ? 'V3' : 'LEGACY_V2',
+        v3IntervalRunId,
+        location: selectedLocation,
+        severity: selectedSeverity,
+        startedAt,
+        intervalStartedAt: startedAt,
+        intervalEndsAt,
+        intervalSeconds,
+        intervalIndex: 1,
+        totalIntervals: plannedIntervalCount,
+        plannedIntervals: plannedIntervalCount,
+        alertType: intervalAlertType,
+        status: 'RUNNING',
+        collectionStatus: 'RUNNING',
+        awaitingResponse: false,
+        paused: false,
+        pauseRemainingMs: null,
+        completedCount: 0,
+        answeredIntervals: 0,
+        occurredCount: 0,
+        yesCount: 0,
+        noCount: 0
+      };
+      setIntervalRun(nextRun);
+      if (nextRun.measurementModelVersion !== 'V3') {
+        persistIntervalLifecycleRecord(nextRun, 'RUNNING', startedAt, { lifecycleAction: 'start' });
+      }
+      setIntervalOptionsOpen(false);
+      setIntervalCancelConfirmOpen(false);
+      setIntervalZeroFinishConfirmOpen(false);
+      setIntervalEndReason('');
+      setIntervalCancelReason('');
+      setIntervalSummary(null);
+      setSessionWarning('');
+    } catch (error: any) {
+      setSessionWarning(error?.message || 'Não foi possível iniciar a coleta por intervalo.');
+      showClinicalToast({ variant: 'error', title: 'Coleta bloqueada', subtitle: error?.message || 'Não foi possível iniciar a coleta.' }, 'error');
+    }
   };
 
   const saveIntervalAggregate = (run: any, completedTotal: number, occurredTotal: number, endedAt: string, reason = 'completed') => {
@@ -3604,6 +3984,11 @@ export const SessionMode = ({
 
   const pauseIntervalRun = () => {
     if (!intervalRun) return;
+    if (intervalRun.measurementModelVersion === 'V3') {
+      setIntervalOptionsOpen(false);
+      showClinicalToast({ variant: 'info', title: 'Pausa indisponível nesta coleta V3', subtitle: 'A grade de intervalos V3 é fixa. Finalize ou cancele a coleta para preservar o denominador.' }, 'none');
+      return;
+    }
     const pausedAt = new Date(nowMs).toISOString();
     const pausedRun = pauseIntervalRunState(intervalRun, { nowMs, pausedAt });
     setIntervalRun(pausedRun);
@@ -3624,6 +4009,7 @@ export const SessionMode = ({
 
   const resumeIntervalRun = () => {
     if (!intervalRun) return;
+    if (intervalRun.measurementModelVersion === 'V3') return;
     const resumedAt = new Date().toISOString();
     const resumedRun = resumeIntervalRunState(intervalRun, { resumedAt });
     setIntervalRun(resumedRun);
@@ -3649,8 +4035,69 @@ export const SessionMode = ({
     setIntervalCancelConfirmOpen(true);
   };
 
+  const finalizeAbaV3IntervalCollection = async (run: any, closeReason: 'CLIENT_COMPLETE' | 'MANUAL_CANCEL', endedAt: string) => {
+    const runId = String(run?.v3IntervalRunId || '').trim();
+    if (!runId) throw new Error('A coleta por intervalo V3 não possui identificador canônico.');
+    const result = await dataService.finalizeAbaV3IntervalRun({
+      patientId,
+      sessionId,
+      intervalRunId: runId,
+      endedAt,
+      closeReason,
+      clientEventId: `interval-finalize-${run.id}-${closeReason}`
+    });
+    if (!result?.success) throw new Error(result?.error || 'Não foi possível finalizar a coleta por intervalo V3.');
+    return result;
+  };
+
+  const completeAbaV3IntervalLocally = (run: any, endedAt: string, reason: string) => {
+    const answered = Math.max(0, Number(run?.completedCount || 0));
+    const occurred = Math.min(answered, Math.max(0, Number(run?.occurredCount || 0)));
+    const notOccurred = Math.max(0, answered - occurred);
+    const percent = answered > 0 ? Math.round((occurred / answered) * 100) : 0;
+    setIntervalSummary({
+      behaviorName: run.behaviorName,
+      measurementType: run.measurementType,
+      totalIntervals: answered,
+      plannedTotalIntervals: Math.max(1, Number(run.totalIntervals || 1)),
+      occurredCount: occurred,
+      notOccurredCount: notOccurred,
+      percent,
+      endedAt,
+      reason,
+      measurementModelVersion: 'V3'
+    });
+    return { answeredIntervals: answered, plannedIntervals: Math.max(1, Number(run.totalIntervals || 1)), occurrencePercent: percent };
+  };
+
+  const cancelAbaV3IntervalRun = async (run: any) => {
+    const cancelledAt = new Date().toISOString();
+    try {
+      await finalizeAbaV3IntervalCollection(run, 'MANUAL_CANCEL', cancelledAt);
+      setRecords((prev) => prev.map((record) => {
+        const rawPayload = record.rawPayload || {};
+        const belongsToRun = rawPayload.intervalRunId === run.id || record.id.startsWith(`${run.id}-interval-`);
+        return belongsToRun ? { ...record, intervalCancelled: true, collectionStatus: 'CANCELLED', status: 'CANCELLED', cancelledAt, cancelReason: intervalCancelReason } : record;
+      }));
+      setIntervalRun(null);
+      setIntervalSummary(null);
+      setIntervalCancelConfirmOpen(false);
+      setIntervalZeroFinishConfirmOpen(false);
+      setIntervalCancelReason('');
+      setSessionWarning('');
+      showClinicalToast({ variant: 'warning', title: 'Coleta V3 cancelada', subtitle: 'Não entrou no resumo clínico oficial.' }, 'none');
+    } catch (error: any) {
+      setSessionWarning(error?.message || 'Não foi possível cancelar a coleta por intervalo V3.');
+      showClinicalToast({ variant: 'error', title: 'Cancelamento não confirmado', subtitle: error?.message || 'Tente novamente.' }, 'error');
+    }
+  };
+
   const confirmCancelIntervalRun = () => {
     if (!intervalRun) return;
+    if (intervalRun.measurementModelVersion === 'V3') {
+      void cancelAbaV3IntervalRun(intervalRun);
+      return;
+    }
     const audit = buildIntervalCancelAudit(intervalRun, {
       cancelledAt: new Date().toISOString(),
       cancelledBy: resolvedTherapistId || null,
@@ -3784,6 +4231,27 @@ export const SessionMode = ({
   const finishIntervalRunNow = () => {
     if (!intervalRun) return;
     const completedTotal = Number(intervalRun.completedCount || 0);
+    if (intervalRun.measurementModelVersion === 'V3' && completedTotal > 0) {
+      const run = intervalRun;
+      const endedAt = new Date().toISOString();
+      void (async () => {
+        try {
+          const result = await finalizeAbaV3IntervalCollection(run, 'CLIENT_COMPLETE', endedAt);
+          const aggregate = completeAbaV3IntervalLocally(run, endedAt, completedTotal >= Number(run.totalIntervals || 1) ? 'COMPLETED' : 'PARTIALLY_COMPLETED');
+          setIntervalRun(null);
+          setIntervalOptionsOpen(false);
+          setIntervalCancelConfirmOpen(false);
+          setIntervalZeroFinishConfirmOpen(false);
+          setIntervalEndReason('');
+          setSessionWarning('');
+          showClinicalToast({ variant: result?.pending ? 'info' : 'success', title: result?.pending ? 'Finalização V3 preservada para sincronização' : '✓ Coleta V3 finalizada', subtitle: `${aggregate.answeredIntervals}/${aggregate.plannedIntervals} intervalos • ${aggregate.occurrencePercent}% ocorrência` });
+        } catch (error: any) {
+          setSessionWarning(error?.message || 'Não foi possível finalizar a coleta por intervalo V3.');
+          showClinicalToast({ variant: 'error', title: 'Finalização não confirmada', subtitle: error?.message || 'Tente novamente.' }, 'error');
+        }
+      })();
+      return;
+    }
     const occurredTotal = Number(intervalRun.occurredCount || 0);
     if (completedTotal <= 0) {
       setIntervalOptionsOpen(false);
@@ -3807,10 +4275,89 @@ export const SessionMode = ({
     });
   };
 
+  const registerAbaV3Interval = async (run: any, occurred: boolean) => {
+    const intervalNumber = Number(run.intervalIndex || 1);
+    const intervalLockKey = `interval:${run.id}:${intervalNumber}`;
+    if (!lockAction(intervalLockKey, 0)) return;
+    const intervalEndedAt = run.intervalEndsAt || new Date().toISOString();
+    const recordId = `${run.id}-interval-${intervalNumber}`;
+    try {
+      const result = await dataService.saveAbaV3IntervalObservation({
+        patientId,
+        sessionId,
+        intervalRunId: run.v3IntervalRunId,
+        intervalIndex: intervalNumber,
+        observationCode: occurred ? 'OCCURRED' : 'NOT_OCCURRED',
+        clientEventId: recordId,
+        metadata: { source: 'session_mode_v3' }
+      });
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível registrar este intervalo V3.');
+      const nextCompletedCount = Number(run.completedCount || 0) + 1;
+      const nextOccurredCount = Number(run.occurredCount || 0) + (occurred ? 1 : 0);
+      addRecord({
+        id: recordId,
+        kind: 'behavior',
+        title: run.behaviorName,
+        detail: `intervalo ${intervalNumber}: ${occurred ? 'SIM' : 'NÃO'}`,
+        timestamp: intervalEndedAt,
+        measurementType: run.measurementType,
+        measurementModelVersion: 'V3',
+        behaviorId: run.behaviorId,
+        intervalNumber,
+        intervalIndex: intervalNumber,
+        intervalOccurred: occurred,
+        intervalStartedAt: run.intervalStartedAt || run.startedAt,
+        intervalEndedAt,
+        collectionStatus: 'COMPLETED',
+        status: 'COMPLETED',
+        rawPayload: { intervalRunId: run.id, v3IntervalRunId: run.v3IntervalRunId, intervalAggregate: false, collectionStatus: 'COMPLETED' },
+        location: run.location || selectedLocation,
+        severity: run.severity ?? selectedSeverity
+      }, result?.pending ? 'local' : 'synced');
+      showClinicalToast(buildClinicalActionToast({ action: 'interval', behaviorName: run.behaviorName, intervalNumber, occurred }));
+      if (intervalNumber >= Number(run.totalIntervals || 1)) {
+        const finalResult = await finalizeAbaV3IntervalCollection({ ...run, completedCount: nextCompletedCount, occurredCount: nextOccurredCount }, 'CLIENT_COMPLETE', intervalEndedAt);
+        completeAbaV3IntervalLocally({ ...run, completedCount: nextCompletedCount, occurredCount: nextOccurredCount }, intervalEndedAt, 'COMPLETED');
+        setIntervalRun(null);
+        setIntervalOptionsOpen(false);
+        showPersistResultToast(finalResult);
+        onSessionRecordSaved?.();
+        return;
+      }
+      const nextStartedAt = new Date().toISOString();
+      const nextEndsAt = new Date(new Date(nextStartedAt).getTime() + Number(run.intervalSeconds || intervalSeconds) * 1000).toISOString();
+      setIntervalRun({
+        ...run,
+        intervalIndex: intervalNumber + 1,
+        intervalStartedAt: nextStartedAt,
+        intervalEndsAt: nextEndsAt,
+        status: 'RUNNING',
+        collectionStatus: 'RUNNING',
+        awaitingResponse: false,
+        alertFiredAt: null,
+        completedCount: nextCompletedCount,
+        answeredIntervals: nextCompletedCount,
+        occurredCount: nextOccurredCount,
+        yesCount: nextOccurredCount,
+        noCount: Math.max(0, nextCompletedCount - nextOccurredCount)
+      });
+      onSessionRecordSaved?.();
+    } catch (error: any) {
+      setSessionWarning(error?.message || 'Não foi possível registrar o intervalo V3.');
+      showClinicalToast({ variant: 'error', title: 'Intervalo não confirmado', subtitle: error?.message || 'Tente novamente.' }, 'error');
+    } finally {
+      releaseActionLock(intervalLockKey);
+    }
+  };
+
   const registerInterval = (occurred: boolean) => {
     if (!ensureSessionCanRecord()) return;
     if (!intervalRun) return;
     if (getIntervalRunStatus(intervalRun) !== 'AWAITING_RESPONSE') return;
+    if (intervalRun.measurementModelVersion === 'V3') {
+      void registerAbaV3Interval(intervalRun, occurred);
+      return;
+    }
     const intervalNumber = Number(intervalRun.intervalIndex || 1);
     const intervalLockKey = `interval:${intervalRun.id}:${intervalNumber}`;
     if (!lockAction(intervalLockKey, 0)) return;
@@ -3926,18 +4473,18 @@ export const SessionMode = ({
   };
 
   const openAbcModal = (behaviorId = selectedBehaviorId) => {
-    const behavior = behaviorPresets.find((item) => item.id === behaviorId) || selectedBehavior;
+    const behavior = sessionBehaviorPresets.find((item) => item.id === behaviorId) || selectedBehavior;
     setAbcBehaviorId(behavior.id);
     setAbcModalOpen(true);
   };
 
   const openAbcModalForBehaviorName = (behaviorName: string) => {
-    const behavior = behaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
+    const behavior = sessionBehaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
     openAbcModal(behavior.id);
   };
 
   const resolveShortcutBehavior = (shortcut: any) => (
-    behaviorPresets.find((behavior) => behavior.id === shortcut?.behaviorId) || selectedBehavior
+    sessionBehaviorPresets.find((behavior) => behavior.id === shortcut?.behaviorId) || selectedBehavior
   );
 
   const findOpenDurationForBehavior = (behaviorName: string) => (
@@ -3958,18 +4505,32 @@ export const SessionMode = ({
     if (method === 'duration') {
       const openEvent = findOpenDurationForBehavior(behavior.name);
       if (openEvent) endDuration(openEvent.id);
-      else startDuration(behavior.name);
+      else void startDuration(behavior.name);
       return;
     }
     if (isIntervalMeasurementType(method)) {
-      startIntervalRun(behavior, method);
+      void startIntervalRun(behavior, method);
     }
   };
 
-  const saveAbcEvent = () => {
+  const saveAbcEvent = async () => {
     if (!ensureSessionCanRecord()) return;
     if (!lockAction('abc:save', 600)) return;
-    const behavior = behaviorPresets.find((item) => item.id === abcBehaviorId) || selectedBehavior;
+    const behavior = sessionBehaviorPresets.find((item) => item.id === abcBehaviorId) || selectedBehavior;
+    try {
+      const behaviorDecision = await resolveAbaV3BehaviorForAction(behavior);
+      if (behaviorDecision?.measurementModelVersion === 'V3') {
+        setSessionWarning('ABC ainda não possui modelo V3 próprio. A gravação Legacy foi bloqueada para preservar a separação clínica.');
+        showClinicalToast({ variant: 'info', title: 'ABC V3 ainda não liberado', subtitle: 'Use um comportamento Legacy ou aguarde a superfície ABC V3 dedicada.' }, 'none');
+        releaseActionLock('abc:save');
+        return;
+      }
+    } catch (error: any) {
+      setSessionWarning(error?.message || 'Não foi possível determinar o modelo deste comportamento.');
+      showClinicalToast({ variant: 'error', title: 'ABC bloqueado', subtitle: error?.message || 'Não foi possível determinar o modelo de coleta.' }, 'error');
+      releaseActionLock('abc:save');
+      return;
+    }
     const payload = buildBehaviorPayload(behavior.name, 'abc', {
       behavior_id: behavior.id,
       behaviorId: behavior.id,
@@ -4035,7 +4596,7 @@ export const SessionMode = ({
   };
 
   const getRecordAbcRequirement = (record: SessionRecord): AbcRequirement => {
-    const behavior = behaviorPresets.find((item) => item.id === record.behaviorId || item.name === record.title);
+    const behavior = sessionBehaviorPresets.find((item) => item.id === record.behaviorId || item.name === record.title);
     const configuredRequirements =
       patient?.abaBehaviorSettings ||
       patient?.clinicSettings?.abaBehaviorSettings ||
@@ -5356,6 +5917,11 @@ export const SessionMode = ({
   const saveRecordEdit = () => {
     if (!editingRecordId) return;
     const original = records.find((record) => record.id === editingRecordId);
+    if (original?.measurementModelVersion === 'V3') {
+      showClinicalToast({ variant: 'info', title: 'Registro V3 é imutável', subtitle: 'A edição direta foi bloqueada para preservar o histórico clínico append-only.' }, 'none');
+      cancelEditingRecord();
+      return;
+    }
     if (!original) {
       cancelEditingRecord();
       return;
@@ -6938,12 +7504,12 @@ export const SessionMode = ({
               <select
                 value={selectedBehaviorId}
                 onChange={(event) => {
-                  const behavior = behaviorPresets.find((item) => item.id === event.target.value);
+                  const behavior = sessionBehaviorPresets.find((item) => item.id === event.target.value);
                   if (behavior) selectBehavior(behavior);
                 }}
                 className="mt-1 w-full rounded-2xl border border-blue-100 bg-[#F4F7FE] px-3 py-3 text-xs font-bold text-slate-700 outline-none"
               >
-                {behaviorPresets.map((behavior) => (
+                {sessionBehaviorPresets.map((behavior) => (
                   <option key={behavior.id} value={behavior.id}>{behavior.name}</option>
                 ))}
               </select>
@@ -7517,7 +8083,7 @@ export const SessionMode = ({
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5">
-              {behaviorPresets.map((behavior) => {
+              {sessionBehaviorPresets.map((behavior) => {
                 const isOpen = openDurations.some((event) => event.behaviorName === behavior.name);
                 const defaultMeasurement = getBehaviorDefaultMeasurement(behavior);
                 return (
@@ -7556,12 +8122,12 @@ export const SessionMode = ({
                   <select
                     value={selectedBehaviorId}
                     onChange={(event) => {
-                      const behavior = behaviorPresets.find((item) => item.id === event.target.value);
+                      const behavior = sessionBehaviorPresets.find((item) => item.id === event.target.value);
                       if (behavior) selectBehavior(behavior);
                     }}
                     className="mt-1 w-full bg-white border border-blue-100 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 outline-none"
                   >
-                    {behaviorPresets.map((behavior) => (
+                    {sessionBehaviorPresets.map((behavior) => (
                       <option key={behavior.id} value={behavior.id}>{behavior.name}</option>
                     ))}
                   </select>
@@ -7638,7 +8204,7 @@ export const SessionMode = ({
               {behaviorMeasurementType === 'rate' && (
                 <div className="grid grid-cols-1 gap-3 sm:flex sm:flex-wrap sm:items-center">
                   {!rateWindow ? (
-                    <button onClick={startRateWindow} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
+                    <button onClick={() => void startRateWindow()} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-[#7a32fc] text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                       <Play size={16} /> Iniciar janela
                     </button>
                   ) : (
@@ -7647,7 +8213,7 @@ export const SessionMode = ({
                       <button onClick={registerRateOccurrence} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-emerald-500 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                         <Plus size={16} /> Ocorrência
                       </button>
-                      <button onClick={() => setRateWindow(null)} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
+                      <button onClick={() => void finishRateWindow()} className="min-h-[52px] w-full sm:w-auto px-5 py-3 rounded-2xl bg-slate-700 text-white text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2">
                         <Square size={16} /> Finalizar janela
                       </button>
                     </>
@@ -8530,9 +9096,13 @@ export const SessionMode = ({
                     </div>
                     <div className="shrink-0 flex flex-col items-end gap-2">
                       {renderSyncBadge(normalizeSyncStatus(record.syncStatus))}
-                      <button onClick={() => startEditingRecord(record)} className="inline-flex min-h-[36px] items-center gap-1 rounded-full bg-white border border-gray-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:text-[#7a32fc]">
-                        <Pencil size={11} /> Editar
-                      </button>
+                      {record.measurementModelVersion === 'V3' ? (
+                        <span className="inline-flex min-h-[36px] items-center rounded-full border border-purple-100 bg-purple-50 px-3 py-1 text-[10px] uppercase tracking-widest text-purple-600">V3 · imutável</span>
+                      ) : (
+                        <button onClick={() => startEditingRecord(record)} className="inline-flex min-h-[36px] items-center gap-1 rounded-full bg-white border border-gray-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:text-[#7a32fc]">
+                          <Pencil size={11} /> Editar
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -8818,7 +9388,7 @@ export const SessionMode = ({
               <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
                 Comportamento
                 <select value={abcBehaviorId} onChange={(event) => setAbcBehaviorId(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {behaviorPresets.map((behavior) => <option key={behavior.id} value={behavior.id}>{behavior.name}</option>)}
+                  {sessionBehaviorPresets.map((behavior) => <option key={behavior.id} value={behavior.id}>{behavior.name}</option>)}
                 </select>
               </label>
               <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
@@ -8852,7 +9422,78 @@ export const SessionMode = ({
             </div>
             <div className="flex gap-3 mt-5">
               <button onClick={() => setAbcModalOpen(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">Cancelar</button>
-              <button onClick={saveAbcEvent} disabled={Boolean(actionLocks['abc:save'])} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20 transition-all active:scale-95 disabled:opacity-60">Salvar ABC</button>
+              <button onClick={() => void saveAbcEvent()} disabled={Boolean(actionLocks['abc:save'])} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20 transition-all active:scale-95 disabled:opacity-60">Salvar ABC</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {abaV3TaskAnalysisModal && (
+        <div className="fixed inset-0 z-[143] flex items-end justify-center bg-black/30 p-3 backdrop-blur-sm sm:items-center sm:p-4">
+          <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-[28px] border border-purple-100 bg-white p-4 shadow-2xl sm:rounded-[32px] sm:p-6 custom-scrollbar">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-purple-500">Análise de tarefa · ABA V3</p>
+                <h2 className="mt-1 text-xl font-semibold text-gray-800">{goalTargetName(abaV3TaskAnalysisModal.goal) || 'Análise de tarefa'}</h2>
+                <p className="mt-2 text-sm leading-relaxed text-gray-500">Registre cada passo como fato observado. Passos não avaliados permanecem como “Não observado”.</p>
+              </div>
+              <button type="button" onClick={() => { setAbaV3TaskAnalysisModal(null); setAbaV3TaskAnalysisResults({}); }} className="rounded-full p-2 text-gray-500 hover:bg-gray-100" aria-label="Fechar análise de tarefa">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="mt-5 space-y-3">
+              {abaV3TaskAnalysisModal.steps.map((step) => {
+                const value = abaV3TaskAnalysisResults[Number(step.sequence_no)] || { performanceCode: 'NOT_OBSERVED', promptKey: null };
+                return (
+                  <div key={step.id || step.sequence_no} className="rounded-2xl border border-gray-100 bg-[#F8FAFF] p-4">
+                    <div className="flex items-start gap-3">
+                      <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700">{step.sequence_no}</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm text-gray-800">{step.label}</p>
+                        {step.description && <p className="mt-1 text-xs leading-relaxed text-gray-500">{step.description}</p>}
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <label className="text-xs text-gray-500">
+                        Resultado
+                        <select
+                          value={value.performanceCode}
+                          onChange={(event) => setAbaV3TaskAnalysisResults((prev) => ({ ...prev, [Number(step.sequence_no)]: { performanceCode: event.target.value, promptKey: event.target.value === 'PROMPTED' ? prev[Number(step.sequence_no)]?.promptKey || null : null } }))}
+                          className="mt-1 w-full rounded-xl border border-blue-100 bg-white px-3 py-3 text-sm text-gray-700 outline-none"
+                        >
+                          <option value="NOT_OBSERVED">Não observado</option>
+                          <option value="INDEPENDENT">Independente</option>
+                          <option value="PROMPTED">Com ajuda</option>
+                          <option value="INCORRECT">Resposta incorreta</option>
+                          <option value="NO_RESPONSE">Sem resposta</option>
+                          <option value="NOT_APPLICABLE">Não aplicável</option>
+                        </select>
+                      </label>
+                      {value.performanceCode === 'PROMPTED' && (
+                        <label className="text-xs text-gray-500">
+                          Tipo de ajuda
+                          <select
+                            value={value.promptKey || ''}
+                            onChange={(event) => setAbaV3TaskAnalysisResults((prev) => ({ ...prev, [Number(step.sequence_no)]: { performanceCode: 'PROMPTED', promptKey: event.target.value || null } }))}
+                            className="mt-1 w-full rounded-xl border border-purple-100 bg-white px-3 py-3 text-sm text-gray-700 outline-none"
+                          >
+                            <option value="">Selecione</option>
+                            {promptedPromptOptions.map((prompt) => <option key={prompt.key} value={prompt.key}>{prompt.label}</option>)}
+                          </select>
+                        </label>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button type="button" onClick={() => void saveAbaV3TaskAnalysis()} disabled={abaV3TaskAnalysisSaving} className="min-h-[48px] rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-semibold text-white disabled:opacity-60">
+                {abaV3TaskAnalysisSaving ? 'Salvando…' : 'Salvar análise de tarefa'}
+              </button>
+              <button type="button" onClick={() => { setAbaV3TaskAnalysisModal(null); setAbaV3TaskAnalysisResults({}); }} disabled={abaV3TaskAnalysisSaving} className="min-h-[48px] rounded-2xl border border-gray-100 bg-white px-4 py-3 text-sm text-gray-600 disabled:opacity-60">
+                Cancelar
+              </button>
             </div>
           </div>
         </div>

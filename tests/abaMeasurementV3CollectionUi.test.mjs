@@ -55,7 +55,7 @@ assert.match(server, /supabase\.rpc\('resolve_aba_session_target_measurement_bin
 assert.match(server, /supabase\.rpc\('record_aba_trial_action_v3'/);
 assert.match(server, /ABA_V3_PR9A_TRIAL_TARGET_TYPES = new Set\(\['dtt', 'net', 'probe'\]\)/);
 assert.match(server, /\.select\('id,target_type'\)[\s\S]*?ABA_V3_UI_MEASUREMENT_NOT_READY/);
-assert.match(server, /assertAbaV3Pr9aTrialTargetReady\(organizationId, patientId, targetId\)[\s\S]*?resolve_aba_session_target_measurement_binding_v1/);
+assert.match(server, /assertAbaV3Pr9bTargetReady\(organizationId, patientId, targetId\)[\s\S]*?resolve_aba_session_target_measurement_binding_v1/);
 
 const trialRouteStart = server.indexOf("'/api/aba/v3/trials'");
 const trialRouteEnd = server.indexOf('const handleAbaV3ReadRpcError', trialRouteStart);
@@ -113,7 +113,7 @@ assert.match(envExample, /^FEATURE_ABA_V3_READ_API=false$/m);
 assert.match(envExample, /^FEATURE_ABA_V3_COLLECTION_API=false$/m);
 assert.match(envExample, /^VITE_FEATURE_ABA_V3_UI=false$/m);
 assert.match(architecture, /PR9A — UI categórica de tentativas e ponte transacional de escrita/i);
-assert.match(architecture, /próxima etapa é \*\*PR9B\*\*/i);
+assert.match(architecture, /PR9B — comportamento, intervalos e Task Analysis/i);
 assert.match(architecture, /behavior.*task_analysis[\s\S]*?antes.*binding V3/i);
 assert.match(adr, /somente.*`dtt`, `net` e `probe`/i);
 assert.match(adr, /Não existe fallback silencioso dessas famílias para V2/i);
