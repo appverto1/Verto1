@@ -343,3 +343,17 @@ Uma retificação posterior de trial ligado a uma probe encerrada não recalcula
 `finalize_aba_session_measurements_v3` fecha timers, resolve exposures pendentes, fecha probes, reconcilia summaries e avalia a FSM. `complete_aba_session_v3` compõe a completion V2 já existente com a finalização V3 dentro da mesma transação para suportar futuras sessões híbridas sem aceitar summary V3 vindo do browser.
 
 PR6 continua dark/service-role only, não altera frontend e não habilita `allow_new_v3_sessions`.
+
+## PR7 — Task Analysis, intervalos e IOA
+
+PR7 adiciona motores V3 próprios para medidas que não devem ser convertidas em trials DTT genéricos.
+
+Task Analysis usa definições relacionais e imutáveis por versão de coleta. Cada run representa uma travessia da cadeia e cada step mantém um resultado categórico. Não há score ponderado de prompt. O summary de chaining é independente do summary DTT e usa somente passos elegíveis realmente observados no denominador. Correções ocorrem por revisões append-only.
+
+Interval recording possui um `aba_interval_runs_v3` compartilhado como grid temporal. O primary collector fica congelado no run; observadores `RELIABILITY` registram no mesmo grid sem alimentar o resultado oficial do paciente. `PARTIAL_INTERVAL`, `WHOLE_INTERVAL` e `MOMENTARY_TIME_SAMPLING` preservam suas identidades metodológicas, e `NOT_OBSERVED` nunca é convertido em ausência do comportamento. Para MTS, o instante de amostragem é derivado do grid no servidor.
+
+A ingestão bulk de intervalos é idempotente e isola conflitos de uma célula em quarentena sem abortar o restante do lote. Correções são append-only e summaries são projeções server-side. No fechamento da sessão, interval runs abertos viram `COMPLETE` ou `PARTIAL`; nunca permanecem eternamente `OPEN`.
+
+IOA fica em uma projeção separada. O summary oficial continua PRIMARY-only. Frequência usa total-count IOA, duração usa total-duration IOA e intervalos usam interval-by-interval IOA. Total count/duration exigem janelas de observação alinhadas; caso contrário a Verto retorna `N/A/requires_review`, sem fabricar concordância. Duração censurada também invalida o score automático.
+
+A antiga tela Legacy V2 de “Tipos de ajuda ABA” permanece sem mudança visual neste PR. A pontuação 0–100 será removida/descontinuada na interface V3 do PR9, quando prompts forem apresentados categoricamente e sem semântica falsa de independência.
