@@ -4,7 +4,6 @@ import { getSupabase } from '../lib/supabase';
 import {
   PATIENT_PROFESSIONAL_CASE_ROLE_OPTIONS,
   isEligiblePatientProfessionalLinkCandidate,
-  patientProfessionalCaseRoleLabel,
   resolveProfessionalProfileSpecialty
 } from '../utils/patientProfessionalLinks';
 import { formatDateInAppointmentTimezone } from '../utils/scheduling';
@@ -358,7 +357,7 @@ export const PatientProfessionalLinksPanel = ({
                 <div className="min-w-0">
                 <p className="truncate text-xs font-medium">{link.professional?.name || professionalById.get(String(link.professional_id || '').trim())?.name || link.professional?.email || 'Profissional'}</p>
                 <p className={`mt-1 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  {link.specialty || 'Especialidade não informada'} · {patientProfessionalCaseRoleLabel(link.case_role)}
+                  {link.specialty || 'Especialidade não informada'}
                 </p>
                 </div>
               </div>
@@ -391,7 +390,7 @@ export const PatientProfessionalLinksPanel = ({
             {history.map((link) => (
               <div key={link.id} className={`rounded-lg border px-3 py-2 text-xs ${dark ? 'border-slate-700 text-slate-400' : 'border-slate-200 bg-white text-slate-600'}`}>
                 <p className="font-medium">{link.professional?.name || link.professional?.email || 'Profissional'}</p>
-                <p className="mt-0.5">{link.specialty || 'Especialidade não informada'} · {patientProfessionalCaseRoleLabel(link.case_role)}</p>
+                <p className="mt-0.5">{link.specialty || 'Especialidade não informada'}</p>
                 <p className="mt-0.5">Encerrado em {link.ends_at ? new Date(`${link.ends_at}T12:00:00`).toLocaleDateString('pt-BR') : 'data não informada'}</p>
               </div>
             ))}

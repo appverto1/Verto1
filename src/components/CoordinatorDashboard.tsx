@@ -1676,6 +1676,7 @@ export function CoordinatorDashboard({
   >("history");
   const [openAnamnesisOnPatientOpen, setOpenAnamnesisOnPatientOpen] =
     useState(false);
+  const [patientSessionReportId, setPatientSessionReportId] = useState('');
   const [isPatientProfileModalOpen, setIsPatientProfileModalOpen] =
     useState(false);
   const [selectedPatientProfile, setSelectedPatientProfile] = useState<any>(null);
@@ -1735,6 +1736,7 @@ export function CoordinatorDashboard({
       const nextView = String(state?.view || "home");
       const nextPatientId = String(state?.selectedPatientId || "").trim();
       const nextPatientTab = String(state?.patientOpenTab || "history");
+      const nextSessionReportId = String(state?.patientSessionReportId || "").trim();
 
       if (canAccessTab(nextTab)) {
         const persistedHistory = Array.isArray(state?.tabHistory)
@@ -1763,6 +1765,7 @@ export function CoordinatorDashboard({
         ) {
           setPatientOpenTab(nextPatientTab);
         }
+        setPatientSessionReportId(nextSessionReportId);
         setView("patient");
       } else {
         setView("home");
@@ -1783,12 +1786,13 @@ export function CoordinatorDashboard({
           view,
           selectedPatientId: selectedPatientId ? String(selectedPatientId) : null,
           patientOpenTab,
+          patientSessionReportId: patientSessionReportId || null,
         }),
       );
     } catch (error) {
       console.warn("Falha ao persistir contexto do painel:", error);
     }
-  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab]);
+  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId]);
 
   useEffect(() => {
     if (view !== "patient" || !selectedPatientId || !onOpenPatientDetails) {
@@ -7034,6 +7038,7 @@ export function CoordinatorDashboard({
     options?: {
       tab?: "history" | "notes" | "report" | "plan" | "session" | "school" | "files";
       openAnamnesis?: boolean;
+      sessionReportId?: string | null;
     },
     fallbackPatientName?: string,
   ) => {
@@ -7090,6 +7095,7 @@ export function CoordinatorDashboard({
     void onOpenPatientDetails?.(resolvedPatient.id);
     setPatientOpenTab(nextOptions.tab || "history");
     setOpenAnamnesisOnPatientOpen(Boolean(nextOptions.openAnamnesis));
+    setPatientSessionReportId(String((nextOptions as any).sessionReportId || '').trim());
     setView("patient");
   };
 
@@ -10708,6 +10714,8 @@ export function CoordinatorDashboard({
                   : ""
               }
               initialTab={patientOpenTab}
+              sessionReportId={patientSessionReportId}
+              onSessionReportConsumed={() => setPatientSessionReportId('')}
               openAnamnesisOnLoad={openAnamnesisOnPatientOpen}
               onAnamnesisOpenConsumed={() => setOpenAnamnesisOnPatientOpen(false)}
               history={patientsHistory.filter((h) => {

@@ -519,10 +519,68 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
   if (!event?.id || (!isTrial && !isBehavior)) return null;
 
   if (isTrial) {
+    const measurementModelVersion = String(event.measurement_model_version || event.measurementModelVersion || '').trim().toUpperCase();
+    const collectionType = event.collection_type || event.collectionType || event.trial_type || event.trialType || 'dtt';
+    if (measurementModelVersion === 'V3' || tableName === 'aba_trials_v3') {
+      const clientMetadata = event.client_metadata && typeof event.client_metadata === 'object' && !Array.isArray(event.client_metadata)
+        ? event.client_metadata
+        : {};
+      const steps = Array.isArray(event.steps) ? event.steps : [];
+      const primaryStep = steps.find((step: any) => String(step?.opportunity_role || '').toUpperCase() === 'PRIMARY_INDEPENDENT');
+      const supportStep = steps.find((step: any) => String(step?.opportunity_role || '').toUpperCase() === 'SUPPORT');
+      const inferredActionKey = supportStep?.prompt_key && String(supportStep?.outcome || '').toUpperCase() === 'CORRECT'
+        ? 'PROMPTED_CORRECT'
+        : String(primaryStep?.outcome || '').toUpperCase() === 'CORRECT'
+          ? 'INDEPENDENT_CORRECT'
+          : String(primaryStep?.outcome || '').toUpperCase() === 'NO_RESPONSE'
+            ? 'NO_RESPONSE'
+            : 'INDEPENDENT_INCORRECT';
+      const v3ActionKey = (normalizeAbaV3TrialActionKey(clientMetadata.ui_action || clientMetadata.action_key || inferredActionKey) || inferredActionKey) as AbaV3TrialActionKey;
+      const promptKey = String(clientMetadata.prompt_key || supportStep?.prompt_key || '').trim();
+      const promptName = String(clientMetadata.prompt_name || promptKey || '').trim();
+      const isIndependentCorrect = v3ActionKey === 'INDEPENDENT_CORRECT';
+      const isPromptedCorrect = v3ActionKey === 'PROMPTED_CORRECT';
+      const outcome: SessionRecord['trialOutcome'] = isIndependentCorrect ? 'independent' : isPromptedCorrect ? 'prompted' : 'error';
+      const normalizedCollectionType = normalizeAbaCollectionType(collectionType);
+      return {
+        id: String(event.id),
+        kind: 'trial',
+        title: String(event.target_name || event.targetName || 'Tentativa'),
+        detail: `${getAbaCollectionLabel(normalizedCollectionType)} · ${abaV3ActionDisplayLabel(v3ActionKey)}${promptName ? ` · ${promptName}` : ''}`,
+        timestamp: String(event.occurred_at || event.occurredAt || event.created_at || event.createdAt || new Date().toISOString()),
+        syncStatus: normalizeSyncStatus(event.sync_status || event.syncStatus || 'synced'),
+        targetId: event.target_id || event.targetId || null,
+        targetName: event.target_name || event.targetName || null,
+        programId: event.program_id || event.programId || null,
+        therapistId: event.therapist_id || event.therapistId || null,
+        trialOutcome: outcome,
+        measurementModelVersion: 'V3',
+        v3ActionKey,
+        v3TrialId: event.trial_id || event.trialId || event.id || null,
+        collectionType: normalizedCollectionType,
+        promptTypeId: clientMetadata.prompt_type_id || null,
+        promptTypeNameSnapshot: promptName || null,
+        promptCategorySnapshot: clientMetadata.prompt_category || null,
+        promptIntrusivenessOrderSnapshot: clientMetadata.prompt_intrusiveness_order ?? null,
+        promptLevelKey: isPromptedCorrect ? promptKey : isIndependentCorrect ? 'independent' : 'error',
+        promptLevelName: isPromptedCorrect ? promptName : abaV3ActionDisplayLabel(v3ActionKey),
+        score: null,
+        correct: isIndependentCorrect || isPromptedCorrect,
+        independent: isIndependentCorrect,
+        rawPayload: {
+          ...clientMetadata,
+          measurementModelVersion: 'V3',
+          v3ActionKey,
+          clientEventId: event.client_event_id || event.clientEventId || null,
+          serverTrialId: event.trial_id || event.trialId || event.id || null,
+          steps
+        }
+      };
+    }
+
     const correct = Boolean(event.correct ?? event.isCorrect);
     const independent = Boolean(event.independent ?? event.isIndependent);
     const outcome: SessionRecord['trialOutcome'] = !correct ? 'error' : independent ? 'independent' : 'prompted';
-    const collectionType = event.collection_type || event.collectionType || event.trial_type || event.trialType || 'dtt';
     const score = event.response_score ?? event.responseScore ?? event.score ?? null;
     const promptLevelKey = event.prompt_level_key || event.promptLevelKey;
     const promptLevelName = event.prompt_level_name || event.promptLevelName;
@@ -846,7 +904,9 @@ export const SessionMode = ({
   onSessionRecordSaved,
   therapistId,
   therapistName,
-  clinicId
+  clinicId,
+  reviewSessionId = '',
+  openCompletedReport = false
 }: any) => {
   const abaV3UiEnabled = isAbaV3UiEnabled();
   if (!isAbaV2Enabled() && !abaV3UiEnabled) return null;
@@ -856,7 +916,9 @@ export const SessionMode = ({
       .sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0))
   ), [patient.pei]);
 
-  const sessionId = String(activeSession?.id || `draft-${patient?.id || 'patient'}`);
+  const requestedReviewSessionId = String(reviewSessionId || '').trim();
+  const isCompletedSessionReview = Boolean(requestedReviewSessionId);
+  const sessionId = String(requestedReviewSessionId || activeSession?.id || `draft-${patient?.id || 'patient'}`);
   const patientId = String(patient?.id || '');
   const resolvedTherapistId = String(therapistId || activeSession?.therapistId || activeSession?.therapist_id || '').trim();
   const resolvedClinicId = String(clinicId || activeSession?.clinicId || activeSession?.clinic_id || patient?.clinicId || patient?.clinic_id || patient?.organizationId || patient?.organization_id || '').trim();
@@ -1006,9 +1068,12 @@ export const SessionMode = ({
   const [endingSession, setEndingSession] = useState(false);
   const [sessionEndError, setSessionEndError] = useState('');
   const completionIdempotencyKeyRef = useRef('');
-  const [sessionCompleted, setSessionCompleted] = useState(false);
+  const [sessionCompleted, setSessionCompleted] = useState(Boolean(isCompletedSessionReview));
   const [postClosureSummary, setPostClosureSummary] = useState<SessionSummary | null>(null);
-  const [showPostClosureReport, setShowPostClosureReport] = useState(false);
+  const [showPostClosureReport, setShowPostClosureReport] = useState(Boolean(isCompletedSessionReview && openCompletedReport));
+  const [completedReviewLoading, setCompletedReviewLoading] = useState(Boolean(isCompletedSessionReview));
+  const [completedReviewError, setCompletedReviewError] = useState('');
+  const [completedReviewReloadKey, setCompletedReviewReloadKey] = useState(0);
   const [operationalClosure, setOperationalClosure] = useState<any>(null);
   const [operationalClosureLoading, setOperationalClosureLoading] = useState(false);
   const [operationalClosureError, setOperationalClosureError] = useState('');
@@ -1442,7 +1507,7 @@ export const SessionMode = ({
       setIntervalRun(persisted.intervalRun || null);
       setIntervalSummary(persisted.intervalSummary || null);
       setSessionNote(String(persisted.sessionNote || ''));
-      setSessionCompleted(Boolean(persisted.sessionCompleted || String(activeSession?.status || '').toLowerCase() === 'completed'));
+      setSessionCompleted(Boolean(isCompletedSessionReview || persisted.sessionCompleted || String(activeSession?.status || '').toLowerCase() === 'completed'));
       setPostClosureSummary(persisted.postClosureSummary || null);
       setTrialCount(Number(persisted.trialCount || 0));
       const restoredRegularTrialType = normalizeRegularAbaTrialType(persisted.lastRegularTrialType, 'dtt');
@@ -1461,7 +1526,7 @@ export const SessionMode = ({
       setIntervalRun(null);
       setIntervalSummary(null);
       setSessionNote('');
-      setSessionCompleted(String(activeSession?.status || '').toLowerCase() === 'completed');
+      setSessionCompleted(Boolean(isCompletedSessionReview || String(activeSession?.status || '').toLowerCase() === 'completed'));
       setPostClosureSummary(null);
       setTrialCount(0);
       setLastRegularTrialType('dtt');
@@ -1474,7 +1539,7 @@ export const SessionMode = ({
     } finally {
       setHydratedSessionStateKey(sessionStateKey);
     }
-  }, [sessionStateKey]);
+  }, [isCompletedSessionReview, sessionStateKey]);
 
   useEffect(() => {
     if (hydratedSessionStateKey !== sessionStateKey) return;
@@ -6668,6 +6733,61 @@ export const SessionMode = ({
     }
   };
 
+  useEffect(() => {
+    if (!isCompletedSessionReview) {
+      setCompletedReviewLoading(false);
+      setCompletedReviewError('');
+      return;
+    }
+    let cancelled = false;
+    const loadCompletedSessionReview = async () => {
+      setCompletedReviewLoading(true);
+      setCompletedReviewError('');
+      try {
+        const [summaryResult, recordsResult] = await Promise.all([
+          dataService.getSessionReport(sessionId),
+          dataService.getSessionReportRecords(sessionId, 160)
+        ]);
+        if (cancelled) return;
+        const persistedSummary = summaryResult?.success ? normalizePersistedSessionSummary(summaryResult.data) : null;
+        if (!persistedSummary) {
+          throw new Error(summaryResult?.error || 'Relatório desta sessão não foi encontrado.');
+        }
+        const serverRecords = Array.isArray(recordsResult?.data)
+          ? recordsResult.data.map(mapRecentAbaEventToSessionRecord).filter(Boolean) as SessionRecord[]
+          : [];
+        setPostClosureSummary(persistedSummary);
+        setSessionNote(String(persistedSummary.sessionNote || ''));
+        setSessionCompleted(true);
+        setShowSessionSummary(false);
+        setShowPostClosureReport(true);
+        setShowComplementEditor(false);
+        setRecords((previous) => {
+          const pendingLocal = previous.filter((record) => record.syncStatus !== 'synced');
+          const pendingIds = new Set(pendingLocal.map((record) => record.id));
+          return [
+            ...pendingLocal,
+            ...serverRecords.filter((record) => !pendingIds.has(record.id))
+          ]
+            .sort((left, right) => new Date(right.timestamp || 0).getTime() - new Date(left.timestamp || 0).getTime())
+            .slice(0, 180);
+        });
+        setTrialCount(serverRecords.filter((record) => record.kind === 'trial').length);
+        if (recordsResult?.success === false) {
+          setSessionWarning(recordsResult?.error || 'O relatório abriu, mas alguns registros clínicos não puderam ser carregados.');
+        }
+      } catch (error: any) {
+        if (!cancelled) setCompletedReviewError(error?.message || 'Não foi possível carregar o relatório desta sessão.');
+      } finally {
+        if (!cancelled) setCompletedReviewLoading(false);
+      }
+    };
+    void loadCompletedSessionReview();
+    return () => {
+      cancelled = true;
+    };
+  }, [completedReviewReloadKey, isCompletedSessionReview, sessionId]);
+
   const revalidateOperationalClosure = async () => {
     if (!activeAppointmentId) return;
     setOperationalClosureLoading(true);
@@ -6716,6 +6836,10 @@ export const SessionMode = ({
       ? 'top-[calc(4.75rem+env(safe-area-inset-top))] bottom-auto'
     : 'bottom-[calc(6.75rem+env(safe-area-inset-bottom))]';
   const closeCompletedSession = () => {
+    if (isCompletedSessionReview) {
+      onClose?.();
+      return;
+    }
     if (typeof onConfirmEndSession === 'function') {
       onConfirmEndSession({ alreadyPersisted: true, summary: postClosureSummary });
       return;
@@ -6731,7 +6855,37 @@ export const SessionMode = ({
       )
     : null;
 
-  if (therapeuticPlanLoading && sessionGoals.length === 0 && upcomingMaintenanceProbeItems.length === 0) {
+  if (isCompletedSessionReview && completedReviewLoading && !postClosureSummary) {
+    const loadingContent = (
+      <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#F4F7FE] p-6">
+        <Loader2 size={34} className="mb-4 animate-spin text-violet-500" />
+        <p className="text-sm font-semibold text-slate-700">Carregando relatório da sessão...</p>
+        <p className="mt-1 text-xs text-slate-500">Buscando o fechamento e os registros clínicos persistidos.</p>
+      </div>
+    );
+    if (typeof document === 'undefined') return loadingContent;
+    return createPortal(loadingContent, document.body);
+  }
+
+  if (isCompletedSessionReview && completedReviewError && !postClosureSummary) {
+    const errorContent = (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#F4F7FE] p-6">
+        <div className="w-full max-w-lg rounded-[28px] border border-red-100 bg-white p-6 text-center shadow-xl">
+          <AlertCircle size={34} className="mx-auto mb-3 text-red-500" />
+          <h2 className="text-xl font-semibold text-slate-900">Relatório da sessão indisponível</h2>
+          <p className="mt-2 text-sm text-slate-600">{completedReviewError}</p>
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+            <button type="button" onClick={() => setCompletedReviewReloadKey((value) => value + 1)} className="flex-1 rounded-2xl bg-[#7a32fc] px-4 py-3 text-sm font-semibold text-white">Tentar novamente</button>
+            <button type="button" onClick={() => onClose?.()} className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700">Voltar ao prontuário</button>
+          </div>
+        </div>
+      </div>
+    );
+    if (typeof document === 'undefined') return errorContent;
+    return createPortal(errorContent, document.body);
+  }
+
+  if (!isCompletedSessionReview && therapeuticPlanLoading && sessionGoals.length === 0 && upcomingMaintenanceProbeItems.length === 0) {
     const loadingContent = (
       <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-white p-6">
         <Loader2 size={34} className="mb-4 animate-spin text-violet-500" />
@@ -7461,7 +7615,7 @@ export const SessionMode = ({
                 </button>
               )}
               <button onClick={closeCompletedSession} className="flex-1 rounded-2xl bg-white border border-blue-100 px-5 py-3 font-semibold text-gray-700">
-                Voltar ao paciente
+                {isCompletedSessionReview ? 'Voltar ao prontuário' : 'Voltar ao paciente'}
               </button>
             </div>
           </div>

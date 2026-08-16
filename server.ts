@@ -71414,7 +71414,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/session-reports/:sessionId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), async (req: any, res) => {
+  app.get('/api/aba/session-reports/:sessionId', requireAbaCollectionFeature, checkAuth, requireClinicCapability('aba.analytics.view'), async (req: any, res) => {
     try {
       const scope = await resolveAbaSessionReadScope(req.params.sessionId, req.session.user);
       if (!scope.ok) return res.status((scope as any).status || 400).json({ success: false, error: (scope as any).error });
@@ -71432,6 +71432,149 @@ async function startServer() {
         throw error;
       }
       return res.json({ success: true, data: data || null });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/session-reports/:sessionId/records', requireAbaCollectionFeature, checkAuth, requireClinicCapability('aba.analytics.view'), async (req: any, res) => {
+    try {
+      const requestedSessionId = sanitizeString(req.params.sessionId, 180);
+      if (!requestedSessionId || requestedSessionId.startsWith('draft-')) {
+        return res.json({ success: true, data: [] });
+      }
+      const scope = await resolveAbaSessionReadScope(requestedSessionId, req.session.user);
+      if (!scope.ok) return res.status((scope as any).status || 400).json({ success: false, error: (scope as any).error });
+      const patientId = sanitizeString((scope as any).patientId, 120);
+      const clinicId = sanitizeString((scope as any).clinicId, 120);
+      const limit = Math.min(200, Math.max(1, Number.parseInt(String(req.query?.limit || '120'), 10) || 120));
+      const applyLegacyClinic = (query: any) => (!hasGlobalClinicAccess(req.session.user) && clinicId ? query.eq('clinic_id', clinicId) : query);
+      const applyV3Clinic = (query: any) => (!hasGlobalClinicAccess(req.session.user) && clinicId ? query.eq('organization_id', clinicId) : query);
+
+      const [legacyTrialsResult, behaviorResult, v3TrialsResult] = await Promise.all([
+        applyLegacyClinic(
+          supabase
+            .from('aba_trials')
+            .select(ABA_TRIAL_LIST_SELECT)
+            .eq('session_id', requestedSessionId)
+            .eq('patient_id', patientId)
+            .order('occurred_at', { ascending: false })
+            .limit(limit)
+        ),
+        applyLegacyClinic(
+          supabase
+            .from('aba_behavior_events')
+            .select(ABA_BEHAVIOR_EVENT_LIST_SELECT)
+            .eq('session_id', requestedSessionId)
+            .eq('patient_id', patientId)
+            .order('occurred_at', { ascending: false })
+            .limit(limit)
+        ),
+        applyV3Clinic(
+          supabase
+            .from('aba_effective_trials_v3')
+            .select('id,organization_id,patient_id,session_id,program_id,target_id,client_event_id,trial_type,occurred_at,collector_user_id,client_metadata,created_at')
+            .eq('session_id', requestedSessionId)
+            .eq('patient_id', patientId)
+            .order('occurred_at', { ascending: false })
+            .limit(limit)
+        )
+      ]);
+
+      const legacyErrors = [legacyTrialsResult, behaviorResult].map((result: any) => result.error).filter(Boolean);
+      const firstLegacyError = legacyErrors[0];
+      if (firstLegacyError && !hasMissingFinancialSchema(firstLegacyError)) throw firstLegacyError;
+
+      const v3Unavailable = Boolean((v3TrialsResult as any).error && (hasMissingFinancialSchema((v3TrialsResult as any).error) || isMissingRelationError((v3TrialsResult as any).error)));
+      if ((v3TrialsResult as any).error && !v3Unavailable) throw (v3TrialsResult as any).error;
+      const v3Trials = v3Unavailable ? [] : ((v3TrialsResult as any).data || []);
+      const v3TrialIds = v3Trials.map((row: any) => sanitizeString(row?.id, 120)).filter((id: string) => isUuid(id));
+      const targetIds = Array.from(new Set(v3Trials.map((row: any) => sanitizeString(row?.target_id, 180)).filter(Boolean)));
+
+      let v3Steps: any[] = [];
+      let targetRows: any[] = [];
+      if (v3TrialIds.length > 0) {
+        const [stepsResult, targetsResult] = await Promise.all([
+          supabase
+            .from('aba_trial_steps_v3')
+            .select('trial_id,sequence_no,step_type,opportunity_role,outcome,prompt_key,latency_ms,occurred_at')
+            .in('trial_id', v3TrialIds)
+            .order('sequence_no', { ascending: true }),
+          targetIds.length > 0
+            ? supabase.from('aba_targets').select('id,name,program_id').in('id', targetIds)
+            : Promise.resolve({ data: [], error: null } as any)
+        ]);
+        if (stepsResult.error && !hasMissingFinancialSchema(stepsResult.error) && !isMissingRelationError(stepsResult.error)) throw stepsResult.error;
+        if (targetsResult.error && !hasMissingFinancialSchema(targetsResult.error) && !isMissingRelationError(targetsResult.error)) throw targetsResult.error;
+        v3Steps = stepsResult.error ? [] : (stepsResult.data || []);
+        targetRows = targetsResult.error ? [] : (targetsResult.data || []);
+      }
+
+      const stepsByTrial = new Map<string, any[]>();
+      v3Steps.forEach((step: any) => {
+        const trialId = sanitizeString(step?.trial_id, 120);
+        if (!trialId) return;
+        const list = stepsByTrial.get(trialId) || [];
+        list.push(step);
+        stepsByTrial.set(trialId, list);
+      });
+      const targetsById = new Map(targetRows.map((row: any) => [sanitizeString(row?.id, 180), row]));
+      const v3TrialTypeToCollectionType: Record<string, string> = {
+        TEACHING: 'dtt',
+        PROBE: 'probe',
+        BASELINE_PROBE: 'baseline',
+        MAINTENANCE_PROBE: 'maintenance_probe',
+        GENERALIZATION: 'generalization',
+        TASK_ANALYSIS: 'task_analysis',
+        OTHER: 'other'
+      };
+
+      const rows = [
+        ...(((legacyTrialsResult as any).error ? [] : (legacyTrialsResult as any).data || []).map((row: any) => ({
+          kind: 'trial',
+          tableName: 'aba_trials',
+          measurement_model_version: 'LEGACY_V2',
+          occurredAt: row.occurred_at || row.created_at,
+          ...row
+        }))),
+        ...(((behaviorResult as any).error ? [] : (behaviorResult as any).data || []).map((row: any) => ({
+          kind: 'behavior',
+          tableName: 'aba_behavior_events',
+          occurredAt: row.occurred_at || row.created_at,
+          ...row
+        }))),
+        ...(v3Trials.map((row: any) => {
+          const target = targetsById.get(sanitizeString(row?.target_id, 180)) || {};
+          const metadata = parseStoredJsonObject(row?.client_metadata);
+          return {
+            kind: 'trial',
+            tableName: 'aba_trials_v3',
+            measurement_model_version: 'V3',
+            id: row.id,
+            trial_id: row.id,
+            client_event_id: row.client_event_id,
+            patient_id: row.patient_id,
+            session_id: row.session_id,
+            program_id: row.program_id || target?.program_id || null,
+            target_id: row.target_id,
+            target_name: target?.name || null,
+            therapist_id: row.collector_user_id || null,
+            trial_type: row.trial_type,
+            collection_type: v3TrialTypeToCollectionType[sanitizeString(row?.trial_type, 60).toUpperCase()] || 'dtt',
+            occurred_at: row.occurred_at,
+            created_at: row.created_at,
+            client_metadata: metadata,
+            steps: stepsByTrial.get(sanitizeString(row?.id, 120)) || [],
+            sync_status: 'synced',
+            occurredAt: row.occurred_at || row.created_at
+          };
+        }))
+      ]
+        .sort((a: any, b: any) => new Date(b.occurredAt || 0).getTime() - new Date(a.occurredAt || 0).getTime())
+        .slice(0, limit);
+
+      res.setHeader('Cache-Control', 'private, no-store');
+      return res.json({ success: true, data: rows });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
@@ -77209,7 +77352,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/aba/sessions/:patientId', requireAbaV2Feature, checkAuth, requireClinicCapability('session.history.view'), checkPatientAccess, async (req: any, res) => {
+  app.get('/api/aba/sessions/:patientId', requireAbaCollectionFeature, checkAuth, requireClinicCapability('session.history.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);

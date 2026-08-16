@@ -149,7 +149,7 @@ const patientInitials = (value: unknown) => String(value || 'P')
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const hasCapability = (capability: string) => {
@@ -474,6 +474,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const peiMaintenancePanelPatientIdRef = React.useRef(String(patient?.id || ''));
   const peiConfirmationTimerRef = React.useRef<number | null>(null);
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
+  const [localSessionReportId, setLocalSessionReportId] = useState('');
+  const [completedSessionReports, setCompletedSessionReports] = useState<any[]>([]);
+  const [completedSessionReportsLoading, setCompletedSessionReportsLoading] = useState(false);
+  const [completedSessionReportsError, setCompletedSessionReportsError] = useState('');
+  const completedSessionReportsLoadedForRef = React.useRef('');
   const [sessionPatientOverride, setSessionPatientOverride] = useState<any>(null);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
   const [approvedVertoProtocolStatuses, setApprovedVertoProtocolStatuses] = useState<any[]>([]);
@@ -1391,6 +1396,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     peiMaintenancePanelRequestSeqRef.current += 1;
     setGeneratedReviewNotes([]);
     setSessionPatientOverride(null);
+    setLocalSessionReportId('');
+    setCompletedSessionReports([]);
+    setCompletedSessionReportsError('');
+    setCompletedSessionReportsLoading(false);
+    completedSessionReportsLoadedForRef.current = '';
     setRestoreSessionData(false);
     setClearMaintenanceOnSessionRestore(false);
     setActivePeiPlanSubtab('teaching');
@@ -1419,6 +1429,61 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
     return patient;
   }, [patient, sessionPatientOverride]);
+
+  const requestedSessionReportId = String(sessionReportId || localSessionReportId || '').trim();
+
+  useEffect(() => {
+    const externalReportId = String(sessionReportId || '').trim();
+    if (!externalReportId) return;
+    setLocalSessionReportId('');
+    setIsSessionModeOpen(true);
+  }, [patient?.id, sessionReportId]);
+
+  useEffect(() => {
+    const patientId = String(patient?.id || '').trim();
+    if (!patientId || !isKidsProfile || !(abaV2Enabled || abaV3UiEnabled) || activeTab !== 'history') return;
+    if (completedSessionReportsLoadedForRef.current === patientId) return;
+    let cancelled = false;
+    setCompletedSessionReportsLoading(true);
+    setCompletedSessionReportsError('');
+    dataService.getAbaSessions(patientId, { page: 1, pageSize: 10 })
+      .then((result: any) => {
+        if (cancelled) return;
+        if (result?.success === false || !Array.isArray(result?.data)) {
+          setCompletedSessionReportsError(result?.error || 'Não foi possível carregar as sessões finalizadas.');
+          return;
+        }
+        const completed = result.data
+          .filter((session: any) => ['completed', 'concluida', 'concluída'].includes(String(session?.status || '').trim().toLowerCase()))
+          .sort((left: any, right: any) => new Date(right?.ended_at || right?.actual_end_at || right?.updated_at || 0).getTime() - new Date(left?.ended_at || left?.actual_end_at || left?.updated_at || 0).getTime());
+        setCompletedSessionReports(completed);
+        completedSessionReportsLoadedForRef.current = patientId;
+      })
+      .catch(() => {
+        if (!cancelled) setCompletedSessionReportsError('Não foi possível carregar as sessões finalizadas.');
+      })
+      .finally(() => {
+        if (!cancelled) setCompletedSessionReportsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, abaV2Enabled, abaV3UiEnabled, isKidsProfile, patient?.id]);
+
+  const openCompletedSessionReport = (sessionId: any) => {
+    const nextSessionId = String(sessionId || '').trim();
+    if (!nextSessionId) return;
+    setLocalSessionReportId(nextSessionId);
+    setIsSessionModeOpen(true);
+  };
+
+  const closeSessionMode = () => {
+    setIsSessionModeOpen(false);
+    if (requestedSessionReportId) {
+      setLocalSessionReportId('');
+      onSessionReportConsumed?.();
+    }
+  };
 
   useEffect(() => {
     const patientId = String(patient?.id || '');
@@ -8639,12 +8704,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       {(abaV2Enabled || abaV3UiEnabled) && isSessionModeOpen && (
         <SessionMode 
           patient={{ ...sessionModePatient, history: history.filter((h: any) => h.patientId === patient.id) }} 
-          onClose={() => setIsSessionModeOpen(false)} 
+          onClose={closeSessionMode} 
           onRecordTrial={onRecordTrial} 
           onDeleteHistoryItem={onDeleteHistoryItem}
           onUpdateHistoryItem={onEvaluateHistoryItem}
-          activeSession={activeSession}
-          remainingSeconds={remainingSessionSeconds}
+          activeSession={requestedSessionReportId
+            ? {
+                id: requestedSessionReportId,
+                status: 'completed',
+                patientId: patient?.id || null,
+                patient_id: patient?.id || null,
+                clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null,
+                clinic_id: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null
+              }
+            : activeSession}
+          reviewSessionId={requestedSessionReportId}
+          openCompletedReport={Boolean(requestedSessionReportId)}
+          remainingSeconds={requestedSessionReportId ? 0 : remainingSessionSeconds}
           formatCountdown={formatSessionCountdown}
           onConfirmEndSession={handleConfirmSessionEnd}
           onSessionSummaryPersisted={applySessionMasterySummaryToPei}
@@ -9934,6 +10010,44 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         dark={isPanelDark}
                       />
                     </div>
+                  )}
+                </section>
+                <section className={`space-y-3 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-white'}`} aria-labelledby="patient-session-reports-heading">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h2 id="patient-session-reports-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Relatórios de sessão</h2>
+                      <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Abra sessões finalizadas para revisar tentativas, retificações e complementos clínicos.</p>
+                    </div>
+                    {completedSessionReports.length > 0 && (
+                      <span className={`text-xs font-medium ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Últimas {completedSessionReports.length}</span>
+                    )}
+                  </div>
+                  {completedSessionReportsLoading ? (
+                    <div className={`rounded-xl border px-4 py-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-600'}`}>Carregando sessões finalizadas...</div>
+                  ) : completedSessionReportsError ? (
+                    <div className={`rounded-xl border px-4 py-3 text-sm ${isPanelDark ? 'border-amber-400/30 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>{completedSessionReportsError}</div>
+                  ) : completedSessionReports.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+                      {completedSessionReports.slice(0, 6).map((session: any) => {
+                        const endedAt = session?.ended_at || session?.actual_end_at || session?.updated_at || session?.started_at || session?.created_at;
+                        const endedDate = endedAt ? new Date(endedAt) : null;
+                        const dateLabel = endedDate && !Number.isNaN(endedDate.getTime())
+                          ? endedDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                          : 'Data não informada';
+                        const duration = Number(session?.duration_minutes ?? session?.actual_duration_minutes ?? (Number(session?.duration_seconds || 0) / 60));
+                        return (
+                          <div key={`session-report-${session.id}`} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${isPanelDark ? 'border-slate-700 bg-slate-900/70' : 'border-slate-100 bg-slate-50/70'}`}>
+                            <div className="min-w-0">
+                              <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{dateLabel}</p>
+                              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)} min` : 'Sessão finalizada'}{session?.room_name ? ` · ${session.room_name}` : ''}</p>
+                            </div>
+                            <button type="button" onClick={() => openCompletedSessionReport(session.id)} className="min-h-10 shrink-0 rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white hover:opacity-90">Abrir relatório</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className={`rounded-xl border border-dashed px-4 py-4 text-sm ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma sessão finalizada encontrada para este paciente.</div>
                   )}
                 </section>
                 <section className="space-y-4" aria-labelledby="patient-timeline-heading">

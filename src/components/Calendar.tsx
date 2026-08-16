@@ -4910,9 +4910,19 @@ export const ClinicalAgendaBoard = ({
                 <Zap size={16} />
                 Ver plano sugerido
               </button>
-              <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'report' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
+              <button
+                type="button"
+                onClick={() => onOpenPatient?.(
+                  detailEvent.patientId,
+                  detailLinkedAbaSessionId
+                    ? { tab: 'history', sessionReportId: detailLinkedAbaSessionId }
+                    : { tab: 'report' },
+                  detailEvent.patientName
+                )}
+                className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}
+              >
                 <FileText size={16} />
-                Ver relatório
+                {detailLinkedAbaSessionId ? 'Relatório da sessão' : 'Ver relatório'}
               </button>
               <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'history' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
                 <BarChart3 size={16} />

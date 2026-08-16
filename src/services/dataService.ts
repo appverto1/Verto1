@@ -5631,7 +5631,7 @@ export const dataService = {
   },
 
   async getSessionReport(sessionId: string) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/session-reports/${encodeURIComponent(String(sessionId))}`;
     try {
       const response = await fetchClinical(endpoint, {
@@ -5639,10 +5639,29 @@ export const dataService = {
         credentials: 'include'
       }, { helperName: 'getSessionReport', operation: 'detail', table: 'aba_session_summaries', hasExplicitColumns: true });
       if (response.ok) return await response.json();
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar o relatório desta sessão.');
     } catch (error) {
       console.log('Fetching ABA session report from local state only...');
     }
-    return { success: true, data: null };
+    return { success: false, error: 'Não foi possível carregar o relatório desta sessão.', data: null };
+  },
+
+  async getSessionReportRecords(sessionId: string, limit = 120) {
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse([]);
+    if (!String(sessionId || '').trim() || String(sessionId).startsWith('draft-')) return { success: true, data: [] };
+    const safeLimit = normalizeListLimit(limit, 120, 200);
+    const endpoint = endpointWithLimit(`/api/aba/session-reports/${encodeURIComponent(String(sessionId))}/records`, safeLimit);
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getSessionReportRecords', operation: 'list', table: 'aba_trials,aba_behavior_events,aba_effective_trials_v3,aba_trial_steps_v3', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar os registros desta sessão.');
+    } catch (error) {
+      console.log('Fetching ABA session report records from local state only...');
+    }
+    return { success: false, error: 'Não foi possível carregar os registros desta sessão.', data: [] };
   },
 
   async getPaginatedBehaviorEvents(patientId: string, page = 1, pageSize = 20) {
@@ -5650,7 +5669,7 @@ export const dataService = {
   },
 
   async getAbaSessions(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse([]);
     const limit = normalizeListLimit(options.pageSize ?? options.limit, 20, 50);
     const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
     const localStart = (page - 1) * limit;
