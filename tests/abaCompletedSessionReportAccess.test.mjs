@@ -8,6 +8,7 @@ const calendar = readFileSync('src/components/Calendar.tsx', 'utf8');
 const patientDetail = readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 const dashboard = readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 const caseTeam = readFileSync('src/components/PatientProfessionalLinksPanel.tsx', 'utf8');
+const authorizationModel = readFileSync('src/constants/authorizationModel.ts', 'utf8');
 
 // A completed session is a persisted clinical resource, not a transient browser state.
 // The backend resolves the exact session scope, then reads effective V3 trials + steps
@@ -42,6 +43,14 @@ assert.match(sessionMode, /openV3Revision\(record, 'VOID'\)/);
 // The exact session can be reached both from Agenda and from the patient chart.
 assert.match(calendar, /sessionReportId: detailLinkedAbaSessionId/);
 assert.match(calendar, /Relatório da sessão/);
+assert.match(calendar, /canViewAbaSessionReport = capabilities instanceof Set/);
+assert.match(calendar, /!detailLinkedAbaSessionId \|\| canViewAbaSessionReport/);
+assert.match(dashboard, /capabilities=\{effectiveCapabilities\}/);
+const receptionistDefaultsStart = authorizationModel.indexOf('receptionist: internal(');
+const receptionistDefaultsEnd = authorizationModel.indexOf('biller: internal(', receptionistDefaultsStart);
+assert.ok(receptionistDefaultsStart >= 0 && receptionistDefaultsEnd > receptionistDefaultsStart, 'receptionist defaults must exist');
+assert.doesNotMatch(authorizationModel.slice(receptionistDefaultsStart, receptionistDefaultsEnd), /aba\.analytics\.view/, 'receptionists must be denied session-report analytics by default');
+assert.match(authorizationModel, /key: 'aba\.analytics\.view'[\s\S]{0,180}?delegable: true/, 'a superior may explicitly delegate the sensitive report capability');
 assert.match(patientDetail, /Relatórios de sessão/);
 assert.match(patientDetail, /Abrir relatório/);
 assert.match(patientDetail, /reviewSessionId=\{requestedSessionReportId\}/);

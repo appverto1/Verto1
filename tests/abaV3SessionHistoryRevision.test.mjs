@@ -65,6 +65,12 @@ assert.match(sessionMode, /record\.kind === 'trial' && record\.measurementModelV
 assert.match(sessionMode, /openV3Revision\(record, 'CORRECT'\)/);
 assert.match(sessionMode, /openV3Revision\(record, 'VOID'\)/);
 assert.match(sessionMode, /data-aba-v3-revision-modal/);
+const completedSessionBranchStart = sessionMode.indexOf('if (sessionCompleted && postClosureSummary && !showSessionSummary)');
+const completedSessionBranchEnd = sessionMode.indexOf('const openDurationsPanel', completedSessionBranchStart);
+assert.ok(completedSessionBranchStart >= 0 && completedSessionBranchEnd > completedSessionBranchStart, 'completed-session render branch must exist');
+const completedSessionBranch = sessionMode.slice(completedSessionBranchStart, completedSessionBranchEnd);
+assert.match(completedSessionBranch, /\{abaV3RevisionModal\}/, 'completed-session Edit/Delete must render the shared revision modal');
+assert.match(completedSessionBranch, /\{abcModal\}/, 'completed-session Add ABC must render the shared ABC modal');
 assert.match(sessionMode, /A Verto não altera a tentativa original/);
 assert.match(sessionMode, /O evento original não será destruído/);
 assert.match(sessionMode, /dataService\.saveAbaV3TrialRevision/);

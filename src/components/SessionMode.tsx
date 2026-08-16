@@ -6987,6 +6987,145 @@ export const SessionMode = ({
     return createPortal(emptyStateContent, document.body);
   }
 
+  const abaV3RevisionModal = abaV3RevisionRecord ? (
+        <div className="fixed inset-0 z-[146] flex items-end justify-center bg-black/35 p-3 backdrop-blur-sm sm:items-center sm:p-4" data-aba-v3-revision-modal>
+          <div className="w-full max-w-lg rounded-[28px] border border-purple-100 bg-white p-5 shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-purple-500">Revisão auditável · ABA V3</p>
+                <h2 className="mt-1 text-xl font-semibold text-gray-900">{abaV3RevisionMode === 'VOID' ? 'Apagar registro' : 'Editar registro'}</h2>
+                <p className="mt-1 text-sm text-gray-500">{abaV3RevisionRecord.title} · {new Date(abaV3RevisionRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+              </div>
+              <button type="button" disabled={abaV3RevisionSaving} onClick={closeV3Revision} className="rounded-full bg-gray-100 p-2 text-gray-500 disabled:opacity-40" aria-label="Fechar revisão">
+                <X size={18} />
+              </button>
+            </div>
+
+            {abaV3RevisionMode === 'CORRECT' ? (
+              <div className="mt-5 space-y-4">
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                  Resultado correto da tentativa
+                  <select
+                    value={abaV3RevisionActionKey}
+                    onChange={(event) => {
+                      const nextAction = event.target.value as AbaV3TrialActionKey;
+                      setAbaV3RevisionActionKey(nextAction);
+                      if (nextAction !== 'PROMPTED_CORRECT') setAbaV3RevisionPromptKey('');
+                    }}
+                    className="mt-2 w-full rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm font-semibold text-gray-800 outline-none focus:border-purple-300"
+                  >
+                    <option value="INDEPENDENT_CORRECT">Independente · correta</option>
+                    <option value="PROMPTED_CORRECT">Com ajuda · correta</option>
+                    <option value="INDEPENDENT_INCORRECT">Resposta incorreta</option>
+                    <option value="NO_RESPONSE">Sem resposta</option>
+                  </select>
+                </label>
+                {abaV3RevisionActionKey === 'PROMPTED_CORRECT' && (
+                  <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Tipo de ajuda
+                    <select
+                      value={abaV3RevisionPromptKey}
+                      onChange={(event) => setAbaV3RevisionPromptKey(event.target.value)}
+                      className="mt-2 w-full rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm font-semibold text-gray-800 outline-none focus:border-purple-300"
+                    >
+                      <option value="">Selecione</option>
+                      {v3PromptedPromptOptions.map((prompt) => (
+                        <option key={prompt.id || prompt.key} value={prompt.key}>{prompt.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <div className="rounded-2xl border border-purple-100 bg-purple-50 p-3 text-xs leading-relaxed text-purple-700">
+                  A Verto não altera a tentativa original. A correção cria uma nova tentativa V3 e vincula ambas por um evento de revisão atômico e auditável.
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm leading-relaxed text-red-700">
+                O registro deixará de contar nos resultados clínicos. O evento original não será destruído: ficará preservado na auditoria como <strong>VOID</strong>.
+              </div>
+            )}
+
+            <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+              Motivo da {abaV3RevisionMode === 'VOID' ? 'remoção' : 'correção'}
+              <textarea
+                value={abaV3RevisionReason}
+                onChange={(event) => setAbaV3RevisionReason(event.target.value.slice(0, 1000))}
+                placeholder="Ex.: registro selecionado por engano"
+                className="mt-2 min-h-[88px] w-full resize-none rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm text-gray-700 outline-none focus:border-purple-300"
+              />
+            </label>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button type="button" disabled={abaV3RevisionSaving} onClick={closeV3Revision} className="rounded-2xl bg-gray-100 px-4 py-3 text-sm font-semibold text-gray-600 disabled:opacity-50">Cancelar</button>
+              <button
+                type="button"
+                disabled={abaV3RevisionSaving}
+                onClick={() => void saveV3Revision()}
+                className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-50 ${abaV3RevisionMode === 'VOID' ? 'bg-red-500' : 'bg-[#7a32fc]'}`}
+              >
+                {abaV3RevisionSaving ? <Loader2 size={16} className="animate-spin" /> : abaV3RevisionMode === 'VOID' ? <X size={16} /> : <Save size={16} />}
+                {abaV3RevisionMode === 'VOID' ? 'Apagar' : 'Salvar correção'}
+              </button>
+            </div>
+          </div>
+        </div>
+  ) : null;
+
+  const abcModal = abcModalOpen ? (
+        <div className="fixed inset-0 z-[140] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/30 backdrop-blur-sm">
+          <div className="bg-white rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-purple-100">
+            <div className="flex items-center justify-between gap-3 mb-5">
+              <div>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ABC rápido</p>
+                <h2 className="text-xl font-bold text-gray-800">Evento comportamental</h2>
+              </div>
+              <button onClick={() => setAbcModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Comportamento
+                <select value={abcBehaviorId} onChange={(event) => setAbcBehaviorId(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {sessionBehaviorPresets.map((behavior) => <option key={behavior.id} value={behavior.id}>{behavior.name}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Antecedente
+                <select value={abcAntecedent} onChange={(event) => setAbcAntecedent(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {antecedentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Consequencia
+                <select value={abcConsequence} onChange={(event) => setAbcConsequence(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {consequenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Local
+                <select value={abcLocation} onChange={(event) => setAbcLocation(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {locationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                Severidade
+                <select value={abcSeverity} onChange={(event) => setAbcSeverity(Number(event.target.value))} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                  {severityOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              </label>
+              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest sm:col-span-2">
+                Observação opcional
+                <textarea value={abcNote} onChange={(event) => setAbcNote(event.target.value)} maxLength={600} className="mt-1 w-full min-h-[84px] bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-sm text-gray-700 outline-none resize-none" />
+              </label>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setAbcModalOpen(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">Cancelar</button>
+              <button onClick={() => void saveAbcEvent()} disabled={Boolean(actionLocks['abc:save'])} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20 transition-all active:scale-95 disabled:opacity-60">Salvar ABC</button>
+            </div>
+          </div>
+        </div>
+  ) : null;
+
   if (sessionCompleted && postClosureSummary && !showSessionSummary) {
     const completedAttendanceStatus = String((postClosureSummary as any).attendanceStatus || 'ATTENDED').toUpperCase();
     const completedBillingStatus = String((postClosureSummary as any).billingStatus || 'PENDING_REVIEW').toUpperCase();
@@ -7741,6 +7880,8 @@ export const SessionMode = ({
             </div>
           </div>
         )}
+        {abaV3RevisionModal}
+        {abcModal}
         {actionToastPortal}
       </div>
     );
@@ -10049,144 +10190,9 @@ export const SessionMode = ({
         </div>
       )}
 
-      {abaV3RevisionRecord && (
-        <div className="fixed inset-0 z-[146] flex items-end justify-center bg-black/35 p-3 backdrop-blur-sm sm:items-center sm:p-4" data-aba-v3-revision-modal>
-          <div className="w-full max-w-lg rounded-[28px] border border-purple-100 bg-white p-5 shadow-2xl sm:p-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-purple-500">Revisão auditável · ABA V3</p>
-                <h2 className="mt-1 text-xl font-semibold text-gray-900">{abaV3RevisionMode === 'VOID' ? 'Apagar registro' : 'Editar registro'}</h2>
-                <p className="mt-1 text-sm text-gray-500">{abaV3RevisionRecord.title} · {new Date(abaV3RevisionRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-              </div>
-              <button type="button" disabled={abaV3RevisionSaving} onClick={closeV3Revision} className="rounded-full bg-gray-100 p-2 text-gray-500 disabled:opacity-40" aria-label="Fechar revisão">
-                <X size={18} />
-              </button>
-            </div>
+      {abaV3RevisionModal}
 
-            {abaV3RevisionMode === 'CORRECT' ? (
-              <div className="mt-5 space-y-4">
-                <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400">
-                  Resultado correto da tentativa
-                  <select
-                    value={abaV3RevisionActionKey}
-                    onChange={(event) => {
-                      const nextAction = event.target.value as AbaV3TrialActionKey;
-                      setAbaV3RevisionActionKey(nextAction);
-                      if (nextAction !== 'PROMPTED_CORRECT') setAbaV3RevisionPromptKey('');
-                    }}
-                    className="mt-2 w-full rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm font-semibold text-gray-800 outline-none focus:border-purple-300"
-                  >
-                    <option value="INDEPENDENT_CORRECT">Independente · correta</option>
-                    <option value="PROMPTED_CORRECT">Com ajuda · correta</option>
-                    <option value="INDEPENDENT_INCORRECT">Resposta incorreta</option>
-                    <option value="NO_RESPONSE">Sem resposta</option>
-                  </select>
-                </label>
-                {abaV3RevisionActionKey === 'PROMPTED_CORRECT' && (
-                  <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400">
-                    Tipo de ajuda
-                    <select
-                      value={abaV3RevisionPromptKey}
-                      onChange={(event) => setAbaV3RevisionPromptKey(event.target.value)}
-                      className="mt-2 w-full rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm font-semibold text-gray-800 outline-none focus:border-purple-300"
-                    >
-                      <option value="">Selecione</option>
-                      {v3PromptedPromptOptions.map((prompt) => (
-                        <option key={prompt.id || prompt.key} value={prompt.key}>{prompt.label}</option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                <div className="rounded-2xl border border-purple-100 bg-purple-50 p-3 text-xs leading-relaxed text-purple-700">
-                  A Verto não altera a tentativa original. A correção cria uma nova tentativa V3 e vincula ambas por um evento de revisão atômico e auditável.
-                </div>
-              </div>
-            ) : (
-              <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm leading-relaxed text-red-700">
-                O registro deixará de contar nos resultados clínicos. O evento original não será destruído: ficará preservado na auditoria como <strong>VOID</strong>.
-              </div>
-            )}
-
-            <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-gray-400">
-              Motivo da {abaV3RevisionMode === 'VOID' ? 'remoção' : 'correção'}
-              <textarea
-                value={abaV3RevisionReason}
-                onChange={(event) => setAbaV3RevisionReason(event.target.value.slice(0, 1000))}
-                placeholder="Ex.: registro selecionado por engano"
-                className="mt-2 min-h-[88px] w-full resize-none rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm text-gray-700 outline-none focus:border-purple-300"
-              />
-            </label>
-            <div className="mt-5 grid grid-cols-2 gap-3">
-              <button type="button" disabled={abaV3RevisionSaving} onClick={closeV3Revision} className="rounded-2xl bg-gray-100 px-4 py-3 text-sm font-semibold text-gray-600 disabled:opacity-50">Cancelar</button>
-              <button
-                type="button"
-                disabled={abaV3RevisionSaving}
-                onClick={() => void saveV3Revision()}
-                className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-50 ${abaV3RevisionMode === 'VOID' ? 'bg-red-500' : 'bg-[#7a32fc]'}`}
-              >
-                {abaV3RevisionSaving ? <Loader2 size={16} className="animate-spin" /> : abaV3RevisionMode === 'VOID' ? <X size={16} /> : <Save size={16} />}
-                {abaV3RevisionMode === 'VOID' ? 'Apagar' : 'Salvar correção'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {abcModalOpen && (
-        <div className="fixed inset-0 z-[140] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-purple-100">
-            <div className="flex items-center justify-between gap-3 mb-5">
-              <div>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ABC rápido</p>
-                <h2 className="text-xl font-bold text-gray-800">Evento comportamental</h2>
-              </div>
-              <button onClick={() => setAbcModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Comportamento
-                <select value={abcBehaviorId} onChange={(event) => setAbcBehaviorId(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {sessionBehaviorPresets.map((behavior) => <option key={behavior.id} value={behavior.id}>{behavior.name}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Antecedente
-                <select value={abcAntecedent} onChange={(event) => setAbcAntecedent(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {antecedentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Consequencia
-                <select value={abcConsequence} onChange={(event) => setAbcConsequence(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {consequenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Local
-                <select value={abcLocation} onChange={(event) => setAbcLocation(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {locationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Severidade
-                <select value={abcSeverity} onChange={(event) => setAbcSeverity(Number(event.target.value))} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {severityOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest sm:col-span-2">
-                Observação opcional
-                <textarea value={abcNote} onChange={(event) => setAbcNote(event.target.value)} maxLength={600} className="mt-1 w-full min-h-[84px] bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-sm text-gray-700 outline-none resize-none" />
-              </label>
-            </div>
-            <div className="flex gap-3 mt-5">
-              <button onClick={() => setAbcModalOpen(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">Cancelar</button>
-              <button onClick={() => void saveAbcEvent()} disabled={Boolean(actionLocks['abc:save'])} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20 transition-all active:scale-95 disabled:opacity-60">Salvar ABC</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {abcModal}
 
       {abaV3TaskAnalysisModal && (
         <div className="fixed inset-0 z-[143] flex items-end justify-center bg-black/30 p-3 backdrop-blur-sm sm:items-center sm:p-4">

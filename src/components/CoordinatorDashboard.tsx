@@ -9450,6 +9450,7 @@ export function CoordinatorDashboard({
       rooms={rooms}
       teamMembers={therapistFilterOptions}
       currentUser={user}
+      capabilities={effectiveCapabilities}
       currentDate={calendarDate}
       view={agendaView}
       onDateChange={setCalendarDate}
