@@ -6746,6 +6746,9 @@ const PATIENT_ANAMNESIS_REQUEST_SELECT_COLUMNS = [
   'organization_id',
   'patient_id',
   'template_id',
+  'template_snapshot',
+  'template_revision',
+  'template_scope_snapshot',
   'requested_by',
   'assigned_to_user_id',
   'status',
@@ -6766,6 +6769,9 @@ const PATIENT_ANAMNESIS_RESPONSE_SELECT_COLUMNS = [
   'patient_id',
   'request_id',
   'template_id',
+  'template_snapshot',
+  'template_revision',
+  'template_scope_snapshot',
   'respondent_user_id',
   'respondent_role',
   'answers',
@@ -6792,6 +6798,7 @@ const ANAMNESIS_TEMPLATE_SELECT = [
   'age_max_months',
   'patient_profile_type',
   'questions',
+  'revision',
   'is_default',
   'is_active',
   'created_by',
@@ -16820,7 +16827,9 @@ function normalizeAgeBasedAnamnesisTemplate(row: any, patient: any, compatibleRo
     description: sanitizeString(item?.description, 240) || null,
     ageMinMonths: Number.isFinite(Number(item?.age_min_months)) ? Number(item.age_min_months) : null,
     ageMaxMonths: Number.isFinite(Number(item?.age_max_months)) ? Number(item.age_max_months) : null,
-    patientProfileType: sanitizeString(item?.patient_profile_type, 80) || null
+    patientProfileType: sanitizeString(item?.patient_profile_type, 80) || null,
+    templateScope: sanitizeString(item?.scope, 20) || (item?.owner_user_id ? 'personal' : item?.organization_id ? 'clinic' : 'global'),
+    templateRevision: Math.max(1, Number(item?.revision || 1))
   });
   return {
     ...template,
@@ -16830,8 +16839,10 @@ function normalizeAgeBasedAnamnesisTemplate(row: any, patient: any, compatibleRo
     ageMinMonths: Number.isFinite(Number(row?.age_min_months)) ? Number(row.age_min_months) : null,
     ageMaxMonths: Number.isFinite(Number(row?.age_max_months)) ? Number(row.age_max_months) : null,
     patientProfileType: sanitizeString(row?.patient_profile_type, 80) || null,
-    compatibleTemplates: compatibleRows.slice(0, 12).map(mapTemplateSummary).filter((item: any) => item.id && item.name),
-    availableTemplates: availableRows.slice(0, 20).map(mapTemplateSummary).filter((item: any) => item.id && item.name)
+    templateScope: sanitizeString(row?.scope, 20) || (row?.owner_user_id ? 'personal' : row?.organization_id ? 'clinic' : 'global'),
+    templateRevision: Math.max(1, Number(row?.revision || 1)),
+    compatibleTemplates: compatibleRows.slice(0, 40).map(mapTemplateSummary).filter((item: any) => item.id && item.name),
+    availableTemplates: availableRows.slice(0, 40).map(mapTemplateSummary).filter((item: any) => item.id && item.name)
   };
 }
 
@@ -16844,6 +16855,9 @@ function buildPublicAnamnesisTemplate(template: any) {
     ageMinMonths: Number.isFinite(Number(template?.ageMinMonths)) ? Number(template.ageMinMonths) : null,
     ageMaxMonths: Number.isFinite(Number(template?.ageMaxMonths)) ? Number(template.ageMaxMonths) : null,
     patientProfileType: sanitizeString(template?.patientProfileType, 80) || null,
+    selectedTemplateId: sanitizeString(template?.selectedTemplateId || template?.id, 120) || null,
+    templateScope: sanitizeString(template?.templateScope || template?.scope, 20) || null,
+    templateRevision: Math.max(1, Number(template?.templateRevision || template?.revision || sanitized?.version || 1)),
     compatibleTemplates: Array.isArray(template?.compatibleTemplates)
       ? template.compatibleTemplates.map((item: any) => ({
           id: sanitizeString(item?.id, 120),
@@ -16851,7 +16865,9 @@ function buildPublicAnamnesisTemplate(template: any) {
           description: sanitizeString(item?.description, 240) || null,
           ageMinMonths: Number.isFinite(Number(item?.ageMinMonths)) ? Number(item.ageMinMonths) : null,
           ageMaxMonths: Number.isFinite(Number(item?.ageMaxMonths)) ? Number(item.ageMaxMonths) : null,
-          patientProfileType: sanitizeString(item?.patientProfileType, 80) || null
+          patientProfileType: sanitizeString(item?.patientProfileType, 80) || null,
+          templateScope: sanitizeString(item?.templateScope || item?.scope, 20) || null,
+          templateRevision: Math.max(1, Number(item?.templateRevision || item?.revision || 1))
         })).filter((item: any) => item.name)
       : [],
     availableTemplates: Array.isArray(template?.availableTemplates)
@@ -16861,9 +16877,25 @@ function buildPublicAnamnesisTemplate(template: any) {
           description: sanitizeString(item?.description, 240) || null,
           ageMinMonths: Number.isFinite(Number(item?.ageMinMonths)) ? Number(item.ageMinMonths) : null,
           ageMaxMonths: Number.isFinite(Number(item?.ageMaxMonths)) ? Number(item.ageMaxMonths) : null,
-          patientProfileType: sanitizeString(item?.patientProfileType, 80) || null
+          patientProfileType: sanitizeString(item?.patientProfileType, 80) || null,
+          templateScope: sanitizeString(item?.templateScope || item?.scope, 20) || null,
+          templateRevision: Math.max(1, Number(item?.templateRevision || item?.revision || 1))
         })).filter((item: any) => item.name)
       : []
+  };
+}
+
+
+function buildAnamnesisTemplateSnapshot(template: any) {
+  const publicTemplate = buildPublicAnamnesisTemplate(template || getDefaultAnamnesisTemplate());
+  const { compatibleTemplates: _compatibleTemplates, availableTemplates: _availableTemplates, ...snapshot } = publicTemplate as any;
+  return {
+    ...snapshot,
+    selectedTemplateId: sanitizeString(template?.selectedTemplateId || template?.id, 120) || null,
+    templateName: sanitizeString(template?.templateName || template?.name, 180) || 'Ficha de anamnese',
+    templateDescription: sanitizeString(template?.templateDescription || template?.description, 500) || null,
+    templateScope: sanitizeString(template?.templateScope || template?.scope, 20) || null,
+    templateRevision: Math.max(1, Number(template?.templateRevision || template?.revision || snapshot?.version || 1))
   };
 }
 
@@ -16885,6 +16917,8 @@ function mapAnamnesisTemplateRowForEditor(row: any) {
     visibility: sanitizeString(row?.visibility, 20) || (row?.owner_user_id ? 'private' : 'clinic'),
     isDefault: Boolean(row?.is_default),
     isActive: row?.is_active !== false,
+    templateRevision: Math.max(1, Number(row?.revision || 1)),
+    revision: Math.max(1, Number(row?.revision || 1)),
     updatedAt: sanitizeString(row?.updated_at, 80) || null,
     createdAt: sanitizeString(row?.created_at, 80) || null,
     ...template
@@ -16947,7 +16981,7 @@ async function fetchAnamnesisTemplateForPatient(
           .eq('owner_user_id', safeActorId)
           .eq('is_active', true)
           .order('updated_at', { ascending: false })
-          .limit(20)
+          .limit(15)
       : Promise.resolve({ data: [], error: null });
     const persistedTemplateQuery = allowPersistedPersonalTemplate && isUuid(requestedId)
       ? supabase
@@ -17536,7 +17570,7 @@ async function createRelationshipConfirmationRequest(params: {
   return { success: true, error: null, sent, token, confirmationId: id };
 }
 
-async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
+async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string, actorId?: string | null) {
   const patient = await fetchPatientForAnamnesis(patientId, clinicId);
   if (!patient?.id) return { patient: null, request: null, response: null, template: getDefaultAnamnesisTemplate() };
   const registrationPayload = await fetchPatientRegistrationPayloadForAnamnesis(patientId, clinicId);
@@ -17556,13 +17590,45 @@ async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
     responseResult = await fetchLatestPatientAnamnesisResponseWithSchemaFallback(patientId, clinicId);
   }
   if (responseResult.error && !isMissingRelationError(responseResult.error)) throw responseResult.error;
-  const template = await fetchAnamnesisTemplateForPatient(
+  const resolvedTemplateId = sanitizeString(requestResult.data?.template_id || responseResult.data?.template_id, 120);
+  const liveTemplate = await fetchAnamnesisTemplateForPatient(
     patientContext,
     clinicId,
-    sanitizeString(requestResult.data?.template_id || responseResult.data?.template_id, 120),
-    null,
+    resolvedTemplateId,
+    actorId,
     true
   );
+  const frozenSnapshot = (
+    responseResult.data?.template_snapshot && typeof responseResult.data.template_snapshot === 'object'
+      ? responseResult.data.template_snapshot
+      : requestResult.data?.template_snapshot && typeof requestResult.data.template_snapshot === 'object'
+        ? requestResult.data.template_snapshot
+        : null
+  );
+  const template = frozenSnapshot
+    ? {
+        ...buildPublicAnamnesisTemplate(frozenSnapshot),
+        selectedTemplateId: resolvedTemplateId || sanitizeString((frozenSnapshot as any)?.selectedTemplateId, 120) || null,
+        templateRevision: Math.max(
+          1,
+          Number(
+            responseResult.data?.template_revision ||
+            requestResult.data?.template_revision ||
+            (frozenSnapshot as any)?.templateRevision ||
+            (frozenSnapshot as any)?.version ||
+            1
+          )
+        ),
+        templateScope: sanitizeString(
+          responseResult.data?.template_scope_snapshot ||
+          requestResult.data?.template_scope_snapshot ||
+          (frozenSnapshot as any)?.templateScope,
+          20
+        ) || null,
+        compatibleTemplates: Array.isArray(liveTemplate?.compatibleTemplates) ? liveTemplate.compatibleTemplates : [],
+        availableTemplates: Array.isArray(liveTemplate?.availableTemplates) ? liveTemplate.availableTemplates : []
+      }
+    : liveTemplate;
   const prefillAnswers = buildPatientRegistrationAnamnesisPrefill(patient, registrationPayload);
 
   return {
@@ -17578,11 +17644,46 @@ async function fetchPatientAnamnesisFlow(patientId: string, clinicId: string) {
   };
 }
 
+
+async function fetchPersistableAnamnesisTemplateSnapshot(params: {
+  templateId: string;
+  clinicId: string;
+  actorId?: string | null;
+}) {
+  if (!isUuid(params.templateId) || !isUuid(params.clinicId)) return null;
+  const { data, error } = await supabase
+    .from('anamnesis_templates')
+    .select(ANAMNESIS_TEMPLATE_SELECT)
+    .eq('id', params.templateId)
+    .eq('is_active', true)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data?.id) return null;
+
+  const scope = sanitizeString(data?.scope, 20) || (data?.owner_user_id ? 'personal' : data?.organization_id ? 'clinic' : 'global');
+  const actorId = sanitizeString(params.actorId, 120);
+  const allowed = scope === 'global'
+    || (scope === 'clinic' && sanitizeString(data?.organization_id, 120) === params.clinicId)
+    || (scope === 'personal' && isUuid(actorId) && sanitizeString(data?.owner_user_id, 120) === actorId);
+  if (!allowed) return null;
+
+  const editorTemplate = mapAnamnesisTemplateRowForEditor(data);
+  return {
+    snapshot: buildAnamnesisTemplateSnapshot(editorTemplate),
+    revision: Math.max(1, Number(data?.revision || editorTemplate?.templateRevision || 1)),
+    scope
+  };
+}
+
 async function upsertAnamnesisResponse(params: {
   patientId: string;
   clinicId: string;
   requestId?: string | null;
   templateId?: string | null;
+  templateSnapshot?: any;
+  templateRevision?: number | null;
+  templateScopeSnapshot?: string | null;
   respondentUserId?: string | null;
   respondentRole: string;
   answers: any;
@@ -17619,11 +17720,36 @@ async function upsertAnamnesisResponse(params: {
     }
   }
 
+  const responseOwnsTemplateSnapshot = !isUuid(requestId);
+  let resolvedTemplateSnapshot = responseOwnsTemplateSnapshot && params.templateSnapshot && typeof params.templateSnapshot === 'object'
+    ? {
+        snapshot: params.templateSnapshot,
+        revision: Number(params.templateRevision || (params.templateSnapshot as any)?.templateRevision || 1),
+        scope: sanitizeString(params.templateScopeSnapshot || (params.templateSnapshot as any)?.templateScope, 20) || null
+      }
+    : null;
+  if (responseOwnsTemplateSnapshot && !resolvedTemplateSnapshot && isUuid(templateId)) {
+    resolvedTemplateSnapshot = await fetchPersistableAnamnesisTemplateSnapshot({
+      templateId,
+      clinicId: params.clinicId,
+      actorId: params.respondentUserId
+    });
+  }
+
   const payload = cleanObject({
     organization_id: params.clinicId,
     patient_id: params.patientId,
     request_id: isUuid(requestId) ? requestId : null,
     template_id: isUuid(templateId) ? templateId : null,
+    template_snapshot: resolvedTemplateSnapshot?.snapshot
+      ? buildAnamnesisTemplateSnapshot(resolvedTemplateSnapshot.snapshot)
+      : undefined,
+    template_revision: Number.isFinite(Number(resolvedTemplateSnapshot?.revision)) && Number(resolvedTemplateSnapshot?.revision) > 0
+      ? Math.floor(Number(resolvedTemplateSnapshot?.revision))
+      : undefined,
+    template_scope_snapshot: ['global', 'clinic', 'personal'].includes(sanitizeString(resolvedTemplateSnapshot?.scope, 20))
+      ? sanitizeString(resolvedTemplateSnapshot?.scope, 20)
+      : undefined,
     respondent_user_id: isUuid(params.respondentUserId || '') ? params.respondentUserId : null,
     respondent_role: sanitizeString(params.respondentRole, 60) || 'family',
     answers,
@@ -29061,7 +29187,7 @@ async function startServer() {
           .eq('organization_id', clinicId)
           .eq('is_active', true)
           .order('updated_at', { ascending: false })
-          .limit(5),
+          .limit(10),
         supabase
           .from('anamnesis_templates')
           .select(ANAMNESIS_TEMPLATE_SELECT)
@@ -29069,7 +29195,7 @@ async function startServer() {
           .eq('owner_user_id', actorId)
           .eq('is_active', true)
           .order('updated_at', { ascending: false })
-          .limit(20)
+          .limit(15)
       ]);
 
       const firstError = globalResult.error || clinicResult.error || personalResult.error;
@@ -29098,6 +29224,8 @@ async function startServer() {
           personalCount: (personalResult.data || []).length,
           clinicCount: (clinicResult.data || []).length,
           globalCount: (globalResult.data || []).length,
+          personalLimit: 15,
+          clinicLimit: 10,
           portablePersonalTemplates: true
         }
       });
@@ -29129,12 +29257,36 @@ async function startServer() {
       const organizationId = templateScope === 'personal' ? actorId : clinicId;
       const ownerUserId = templateScope === 'personal' ? actorId : null;
       const visibility = templateScope === 'personal' ? 'private' : 'clinic';
-      const maxActiveTemplates = templateScope === 'personal' ? 20 : 5;
+      const maxActiveTemplates = templateScope === 'personal' ? 15 : 10;
 
       const templateId = sanitizeString(incomingTemplate?.selectedTemplateId || incomingTemplate?.id || req.body?.templateId, 120);
       const name = sanitizeString(incomingTemplate?.templateName || incomingTemplate?.name, 180);
       if (!name) {
         return res.status(400).json({ success: false, error: 'Informe um nome para a ficha.' });
+      }
+
+      let existingTemplate: any = null;
+      if (isUuid(templateId)) {
+        let existingTemplateQuery = supabase
+          .from('anamnesis_templates')
+          .select('id,scope,owner_user_id,organization_id,is_active,revision,questions')
+          .eq('id', templateId)
+          .eq('scope', templateScope);
+        existingTemplateQuery = templateScope === 'personal'
+          ? existingTemplateQuery.eq('owner_user_id', actorId)
+          : existingTemplateQuery.eq('organization_id', clinicId);
+        const existingTemplateResult = await existingTemplateQuery.maybeSingle();
+        if (existingTemplateResult.error) {
+          if (isMissingRelationError(existingTemplateResult.error) || extractMissingColumnName(existingTemplateResult.error)) {
+            return res.status(503).json({
+              success: false,
+              error: 'PROFESSIONAL_PORTABLE_TEMPLATES_MIGRATION_REQUIRED',
+              message: 'A estrutura de fichas profissionais portáteis precisa ser aplicada.'
+            });
+          }
+          throw existingTemplateResult.error;
+        }
+        existingTemplate = existingTemplateResult.data || null;
       }
 
       let activeCountQuery = supabase
@@ -29159,17 +29311,22 @@ async function startServer() {
       }
 
       const activeRows = Array.isArray(activeCountResult.data) ? activeCountResult.data : [];
-      const isUpdatingExisting = isUuid(templateId) && activeRows.some((row: any) => sanitizeString(row?.id, 120) === templateId);
-      if (!isUpdatingExisting && activeRows.length >= maxActiveTemplates) {
+      const isUpdatingExisting = Boolean(existingTemplate?.id);
+      const consumesNewActiveSlot = !isUpdatingExisting || existingTemplate?.is_active === false;
+      if (consumesNewActiveSlot && activeRows.length >= maxActiveTemplates) {
         return res.status(409).json({
           success: false,
+          code: templateScope === 'personal' ? 'ANAMNESIS_PERSONAL_TEMPLATE_LIMIT' : 'ANAMNESIS_CLINIC_TEMPLATE_LIMIT',
           error: templateScope === 'personal'
-            ? 'Limite de 20 fichas profissionais salvas atingido.'
-            : 'Limite de 5 fichas da clínica atingido.'
+            ? 'Limite de 15 fichas profissionais salvas atingido.'
+            : 'Limite de 10 fichas da clínica atingido.'
         });
       }
 
       const nextTemplate = sanitizeAnamnesisTemplate(incomingTemplate);
+      nextTemplate.version = isUpdatingExisting
+        ? Math.max(1, Number(existingTemplate?.revision || existingTemplate?.questions?.version || 1)) + 1
+        : 1;
       const commonPayload = cleanObject({
         organization_id: organizationId,
         scope: templateScope,
@@ -29237,6 +29394,21 @@ async function startServer() {
 
       return res.json({ success: true, data: mapAnamnesisTemplateRowForEditor(savedRow) });
     } catch (error: any) {
+      const templateLimitError = sanitizeString(error?.message || error?.details || error?.hint, 240);
+      if (templateLimitError.includes('ANAMNESIS_PERSONAL_TEMPLATE_LIMIT')) {
+        return res.status(409).json({
+          success: false,
+          code: 'ANAMNESIS_PERSONAL_TEMPLATE_LIMIT',
+          error: 'Limite de 15 fichas profissionais salvas atingido.'
+        });
+      }
+      if (templateLimitError.includes('ANAMNESIS_CLINIC_TEMPLATE_LIMIT')) {
+        return res.status(409).json({
+          success: false,
+          code: 'ANAMNESIS_CLINIC_TEMPLATE_LIMIT',
+          error: 'Limite de 10 fichas da clínica atingido.'
+        });
+      }
       if (isMissingRelationError(error) || extractMissingColumnName(error)) {
         return res.status(503).json({
           success: false,
@@ -33946,10 +34118,21 @@ async function startServer() {
 
       const nowIso = new Date().toISOString();
       const requestedTemplateId = sanitizeString(req.body?.templateId || req.body?.template_id, 120);
+      const existing = await fetchPatientAnamnesisRequestWithSchemaFallback({
+        patientId,
+        clinicId,
+        statuses: ['SENT', 'IN_PROGRESS']
+      });
+      if (existing.error && !isMissingRelationError(existing.error)) throw existing.error;
+
+      const templateLookupId = sanitizeString(
+        (isUuid(requestedTemplateId) ? requestedTemplateId : existing.data?.template_id) || '',
+        120
+      );
       const selectedTemplate = await fetchAnamnesisTemplateForPatient(
         patientContext,
         clinicId,
-        requestedTemplateId,
+        templateLookupId,
         actorId,
         false
       );
@@ -33960,24 +34143,38 @@ async function startServer() {
           error: 'Cadastre um responsável com e-mail antes de enviar a ficha.'
         });
       }
-      const existing = await fetchPatientAnamnesisRequestWithSchemaFallback({
-        patientId,
-        clinicId,
-        statuses: ['SENT', 'IN_PROGRESS']
-      });
-      if (existing.error && !isMissingRelationError(existing.error)) throw existing.error;
-
       const requestId = sanitizeString(existing.data?.id, 120) || crypto.randomUUID();
       const resolvedTemplateId = sanitizeString(
         (isUuid(requestedTemplateId) ? selectedTemplate?.selectedTemplateId : existing.data?.template_id) ||
           selectedTemplate?.selectedTemplateId,
         120
       );
+      const preserveExistingSnapshot = Boolean(
+        existing.data?.id &&
+        !isUuid(requestedTemplateId) &&
+        existing.data?.template_snapshot &&
+        typeof existing.data.template_snapshot === 'object'
+      );
+      const templateSnapshot = preserveExistingSnapshot
+        ? existing.data.template_snapshot
+        : buildAnamnesisTemplateSnapshot(selectedTemplate);
+      const templateRevision = preserveExistingSnapshot
+        ? Math.max(1, Number(existing.data?.template_revision || (templateSnapshot as any)?.templateRevision || 1))
+        : Math.max(1, Number(selectedTemplate?.templateRevision || (templateSnapshot as any)?.templateRevision || 1));
+      const templateScopeSnapshot = sanitizeString(
+        preserveExistingSnapshot
+          ? existing.data?.template_scope_snapshot || (templateSnapshot as any)?.templateScope
+          : selectedTemplate?.templateScope || (templateSnapshot as any)?.templateScope,
+        20
+      ) || null;
       const requestPayload = cleanObject({
         id: requestId,
         organization_id: clinicId,
         patient_id: patientId,
         template_id: isUuid(resolvedTemplateId) ? resolvedTemplateId : undefined,
+        template_snapshot: templateSnapshot,
+        template_revision: templateRevision,
+        template_scope_snapshot: templateScopeSnapshot,
         requested_by: isUuid(actorId) ? actorId : null,
         assigned_to_user_id: isUuid(sanitizeString(patient?.responsible_user_id, 120)) ? sanitizeString(patient.responsible_user_id, 120) : null,
         status: existing.data?.id ? sanitizeString(existing.data.status, 40) || 'SENT' : 'SENT',
@@ -34051,7 +34248,9 @@ async function startServer() {
             ? selectedTemplate.compatibleTemplates.map((template: any) => ({
                 id: sanitizeString(template?.id, 120),
                 name: sanitizeString(template?.name, 180),
-                description: sanitizeString(template?.description, 240) || null
+                description: sanitizeString(template?.description, 240) || null,
+                templateScope: sanitizeString(template?.templateScope || template?.scope, 20) || null,
+                templateRevision: Math.max(1, Number(template?.templateRevision || template?.revision || 1))
               })).filter((template: any) => template.id && template.name)
             : []
         }
@@ -34069,7 +34268,11 @@ async function startServer() {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
-      const flow = await fetchPatientAnamnesisFlow(patientId, clinicId);
+      const flow = await fetchPatientAnamnesisFlow(
+        patientId,
+        clinicId,
+        sanitizeString(req.session.user?.id, 120)
+      );
       if (!flow.patient?.id) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
       return res.json({
         success: true,
@@ -34094,6 +34297,8 @@ async function startServer() {
                 ageMinMonths: Number.isFinite(Number(template?.ageMinMonths)) ? Number(template.ageMinMonths) : null,
                 ageMaxMonths: Number.isFinite(Number(template?.ageMaxMonths)) ? Number(template.ageMaxMonths) : null,
                 patientProfileType: sanitizeString(template?.patientProfileType, 80) || null,
+                templateScope: sanitizeString(template?.templateScope || template?.scope, 20) || null,
+                templateRevision: Math.max(1, Number(template?.templateRevision || template?.revision || 1)),
                 recommended:
                   sanitizeString(template?.id, 120) ===
                   sanitizeString(flow.template?.selectedTemplateId || flow.request?.template_id || flow.response?.template_id, 120)
@@ -34270,7 +34475,11 @@ async function startServer() {
       const billingSync = await queueActivePatientSync(clinicId, 'anamnesis_review', {
         previousActivePatientCount: activePatientCountBeforeMutation
       });
-      const reviewedFlow = await fetchPatientAnamnesisFlow(patientId, clinicId);
+      const reviewedFlow = await fetchPatientAnamnesisFlow(
+        patientId,
+        clinicId,
+        sanitizeString(req.session.user?.id, 120)
+      );
       void persistAnamnesisFinalFileFallback({
         patientId,
         clinicId,

@@ -1508,7 +1508,7 @@ export function ClinicGlobalSettingsPanel({
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-violet-600 shadow-sm"><ClipboardList size={21} /></span>
           <span>
             <span className="block text-base font-semibold text-slate-900">Minhas fichas de anamnese</span>
-            <span className="mt-1 block text-sm font-normal leading-relaxed text-slate-500">Crie, edite e reutilize fichas próprias sem misturar os dados de uma clínica com outra.</span>
+            <span className="mt-1 block text-sm font-normal leading-relaxed text-slate-500">Crie, edite e reutilize até 15 fichas próprias em qualquer clínica onde você tenha vínculo ativo.</span>
             <span className="mt-3 block text-sm font-medium text-violet-700">{loadingAnamnesisTemplate ? 'Carregando...' : 'Gerenciar fichas'}</span>
           </span>
         </button>
@@ -1554,7 +1554,7 @@ export function ClinicGlobalSettingsPanel({
                 disabled={loadingAnamnesisTemplate}
                 className="rounded-xl border border-[#7a32fc]/25 bg-white px-4 py-2.5 text-sm font-medium text-[#7a32fc] transition-all hover:bg-[#f6f0ff] disabled:opacity-60"
               >
-                {loadingAnamnesisTemplate ? "Carregando ficha..." : isProfessionalView ? "Minhas fichas" : "Editar ficha de anamnese"}
+                {loadingAnamnesisTemplate ? "Carregando ficha..." : isProfessionalView ? "Minhas fichas" : "Fichas da clínica"}
               </button>
             )}
             <SaveButton onSave={onSave}>{isProfessionalView ? "Salvar meu perfil" : "Salvar configurações da clínica"}</SaveButton>

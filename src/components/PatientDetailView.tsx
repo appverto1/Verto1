@@ -787,6 +787,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ageMinMonths: template?.ageMinMonths ?? template?.age_min_months ?? null,
       ageMaxMonths: template?.ageMaxMonths ?? template?.age_max_months ?? null,
       patientProfileType: template?.patientProfileType || template?.patient_profile_type || "",
+      templateScope: String(template?.templateScope || template?.scope || "").trim().toLowerCase(),
+      templateRevision: Math.max(1, Number(template?.templateRevision || template?.revision || 1)),
       recommended: Boolean(template?.recommended) || Boolean(id && selectedId && id === selectedId)
     };
   };
@@ -9377,6 +9379,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         <span className="min-w-0 flex-1">
                           <span className="flex flex-wrap items-center gap-2">
                             <span className="break-words text-sm font-semibold">{template.name}</span>
+                            {template.templateScope === 'personal' && (
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'bg-violet-500/10 text-violet-200' : 'bg-violet-50 text-violet-700'}`}>
+                                Minha ficha
+                              </span>
+                            )}
+                            {template.templateScope === 'clinic' && (
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'bg-sky-500/10 text-sky-200' : 'bg-sky-50 text-sky-700'}`}>
+                                Clínica
+                              </span>
+                            )}
                             {template.recommended && (
                               <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'bg-emerald-500/10 text-emerald-200' : 'bg-emerald-50 text-emerald-700'}`}>
                                 Recomendada

@@ -8670,7 +8670,7 @@ export function CoordinatorDashboard({
     setAnamnesisTemplates((prev) => {
       const templateId = String((normalizedSavedTemplate as any)?.selectedTemplateId || (normalizedSavedTemplate as any)?.id || "");
       const withoutCurrent = prev.filter((item: any) => String(item?.selectedTemplateId || item?.id || "") !== templateId);
-      return [normalizedSavedTemplate, ...withoutCurrent].slice(0, isTherapist ? 20 : 5);
+      return [normalizedSavedTemplate, ...withoutCurrent].slice(0, isTherapist ? 15 : 10);
     });
     onAddActivityLog(
       isTherapist ? "Ficha profissional atualizada" : "Template de anamnese atualizado",
@@ -14498,7 +14498,7 @@ export function CoordinatorDashboard({
         canEditTemplate={canEditAnamnesisTemplate}
         loadLatestTemplate={false}
         templateManagerLabel={isTherapist ? "Ficha profissional" : "Ficha da clínica"}
-        maxSavedTemplates={isTherapist ? 20 : 5}
+        maxSavedTemplates={isTherapist ? 15 : 10}
         onTemplateSave={handleSaveClinicAnamnesisTemplate}
         onTemplateSelect={handleSelectClinicAnamnesisTemplate}
         onTemplateDelete={handleDeleteClinicAnamnesisTemplate}
