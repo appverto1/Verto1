@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Pencil, RotateCcw, Plus, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import {
@@ -272,6 +272,11 @@ export const AnamnesisModal = ({
   const [templateAgeMinYears, setTemplateAgeMinYears] = useState('');
   const [templateAgeMaxYears, setTemplateAgeMaxYears] = useState('');
   const [templatePatientProfileType, setTemplatePatientProfileType] = useState('');
+  const [templateEditorIdentity, setTemplateEditorIdentity] = useState(() =>
+    String((template as any)?.selectedTemplateId || (template as any)?.id || 'new')
+  );
+  const templateDirtyRef = useRef(false);
+  const wasOpenRef = useRef(false);
 
   const [scheduleImmediate, setScheduleImmediate] = useState(false);
   const [registerDate, setRegisterDate] = useState('');
@@ -280,18 +285,45 @@ export const AnamnesisModal = ({
   const [consultationRoom, setConsultationRoom] = useState('');
   const [consultationProfessional, setConsultationProfessional] = useState('');
   const templateScopeKey = String((template as any)?.templateScope || (template as any)?.scope || 'clinic').toLowerCase();
-  const templateDraftStorageKey = `verto_anamnesis_template_draft_${templateScopeKey}_${profileType}`;
+  const templateDraftStorageKey = `verto_anamnesis_template_draft_${templateScopeKey}_${templateEditorIdentity}`;
+
+  const markTemplateDirty = (dirty: boolean) => {
+    templateDirtyRef.current = dirty;
+    setTemplateDirty(dirty);
+  };
+
+  const applyTemplateToEditor = (source: any, markClean = true) => {
+    const normalized = normalizeAnamnesisTemplate(source || getDefaultAnamnesisTemplate());
+    const selectedTemplateId = String(source?.selectedTemplateId || source?.id || '').trim() || null;
+    setTemplateState({
+      ...normalized,
+      selectedTemplateId,
+      templateScope: source?.templateScope || source?.scope || templateScopeKey,
+      scope: source?.templateScope || source?.scope || templateScopeKey
+    } as any);
+    setTemplateName(String(source?.templateName || source?.name || 'Ficha personalizada').slice(0, 80));
+    setTemplateDescription(String(source?.templateDescription || source?.description || '').slice(0, 240));
+    setTemplateAgeMinYears(monthsToYearsInput(source?.ageMinMonths ?? source?.age_min_months));
+    setTemplateAgeMaxYears(monthsToYearsInput(source?.ageMaxMonths ?? source?.age_max_months));
+    setTemplatePatientProfileType(String(source?.patientProfileType || source?.patient_profile_type || '').toUpperCase());
+    setTemplateEditorIdentity(selectedTemplateId || 'new');
+    if (markClean) markTemplateDirty(false);
+  };
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      wasOpenRef.current = false;
+      return;
+    }
 
-    const sourceTemplate = normalizeAnamnesisTemplate(template || getDefaultAnamnesisTemplate());
-    setTemplateState(sourceTemplate);
-    setTemplateName(String((template as any)?.templateName || (template as any)?.name || 'Ficha personalizada').slice(0, 80));
-    setTemplateDescription(String((template as any)?.templateDescription || (template as any)?.description || '').slice(0, 240));
-    setTemplateAgeMinYears(monthsToYearsInput((template as any)?.ageMinMonths ?? (template as any)?.age_min_months));
-    setTemplateAgeMaxYears(monthsToYearsInput((template as any)?.ageMaxMonths ?? (template as any)?.age_max_months));
-    setTemplatePatientProfileType(String((template as any)?.patientProfileType || (template as any)?.patient_profile_type || '').toUpperCase());
+    const firstOpen = !wasOpenRef.current;
+    // A refresh/refetch do pai não pode arrancar uma ficha que o profissional está
+    // editando. Troca de ficha ocorre apenas por ação explícita dentro do modal.
+    if (!firstOpen && templateDirtyRef.current) return;
+    wasOpenRef.current = true;
+
+    const sourceTemplate = template || getDefaultAnamnesisTemplate();
+    applyTemplateToEditor(sourceTemplate, true);
 
     const inferredProfile: AnamnesisProfileType =
       initialData?.formType === 'child' || (typeof initialData?.idade === 'number' && initialData.idade <= 12) ? 'child' : 'adult';
@@ -300,7 +332,8 @@ export const AnamnesisModal = ({
     const nextView: ModalView = canEditTemplate && (initialData?.manageTemplate === true || initialData?.nome === 'Template da Clínica' || initialData?.nome === 'Template Profissional') ? 'template' : 'fill';
     setView(nextView);
 
-    const profileTemplate = getProfileTemplate(sourceTemplate, inferredProfile);
+    const normalizedSource = normalizeAnamnesisTemplate(sourceTemplate);
+    const profileTemplate = getProfileTemplate(normalizedSource, inferredProfile);
     const initialValues: Record<string, any> = { ...(initialData || {}) };
     profileTemplate.questions.forEach((question) => {
       initialValues[question.id] = getFieldValue(initialValues[question.id], question.type);
@@ -322,55 +355,68 @@ export const AnamnesisModal = ({
     setConsultationApproach(initialData?.approach || '');
     setConsultationRoom(initialData?.room || '');
     setConsultationProfessional(initialData?.professional || '');
-    setTemplateDirty(false);
-  }, [isOpen, initialData, template, canEditTemplate]);
+  }, [isOpen, template, canEditTemplate]);
 
   useEffect(() => {
-    if (!isOpen || !canEditTemplate || view !== 'template') return;
+    if (!isOpen || !canEditTemplate || view !== 'template' || templateDirtyRef.current) return;
     try {
       const raw = localStorage.getItem(templateDraftStorageKey);
       if (!raw) return;
       const parsed = JSON.parse(raw);
       const draftTemplate = parsed?.template;
       if (!draftTemplate || typeof draftTemplate !== 'object') return;
-      const shouldRestore = confirm('Existe um rascunho não salvo da ficha de anamnese. Deseja restaurar?');
+      const shouldRestore = confirm('Existe um rascunho não salvo desta ficha de anamnese. Deseja restaurar?');
       if (shouldRestore) {
-        setTemplateState(normalizeAnamnesisTemplate(draftTemplate));
-        setTemplateDirty(true);
+        setTemplateState(draftTemplate as AnamnesisTemplate);
+        setTemplateName(String(parsed?.templateName || 'Ficha personalizada').slice(0, 80));
+        setTemplateDescription(String(parsed?.templateDescription || '').slice(0, 240));
+        setTemplateAgeMinYears(String(parsed?.templateAgeMinYears || ''));
+        setTemplateAgeMaxYears(String(parsed?.templateAgeMaxYears || ''));
+        setTemplatePatientProfileType(String(parsed?.templatePatientProfileType || ''));
+        markTemplateDirty(true);
       } else {
         localStorage.removeItem(templateDraftStorageKey);
       }
     } catch {
       // noop
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, canEditTemplate, view, profileType]);
+  }, [isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
-    if (!isOpen || !canEditTemplate || view !== 'template') return;
+    if (!isOpen || !canEditTemplate || view !== 'template' || !templateDirty) return;
     try {
       localStorage.setItem(
         templateDraftStorageKey,
         JSON.stringify({
           updatedAt: new Date().toISOString(),
-          profileType,
-          template: templateState
+          template: templateState,
+          templateName,
+          templateDescription,
+          templateAgeMinYears,
+          templateAgeMaxYears,
+          templatePatientProfileType,
+          selectedTemplateId: (templateState as any)?.selectedTemplateId || null
         })
       );
     } catch {
       // noop
     }
-  }, [templateState, profileType, isOpen, canEditTemplate, view, templateDraftStorageKey]);
+  }, [templateState, templateName, templateDescription, templateAgeMinYears, templateAgeMaxYears, templatePatientProfileType, templateDirty, isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
-    if (!isOpen || !loadLatestTemplate) return;
+    if (!isOpen || !loadLatestTemplate || templateDirtyRef.current) return;
     let isActive = true;
     const loadLatest = async () => {
       try {
         const result = await dataService.getClinicAnamnesisTemplate();
-        if (!isActive || !result?.success || !result?.data) return;
+        if (!isActive || !result?.success || !result?.data || templateDirtyRef.current) return;
         const latest = normalizeAnamnesisTemplate(result.data);
-        setTemplateState(latest);
+        setTemplateState((prev) => ({
+          ...latest,
+          selectedTemplateId: (prev as any)?.selectedTemplateId || null,
+          templateScope: (prev as any)?.templateScope || templateScopeKey,
+          scope: (prev as any)?.scope || templateScopeKey
+        } as any));
       } catch {
         // usa template atual como fallback silencioso
       }
@@ -379,7 +425,7 @@ export const AnamnesisModal = ({
     return () => {
       isActive = false;
     };
-  }, [isOpen, loadLatestTemplate]);
+  }, [isOpen, loadLatestTemplate, templateScopeKey]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -481,9 +527,11 @@ export const AnamnesisModal = ({
   };
 
   const updateTemplateProfile = (updater: (profile: typeof profileTemplate) => typeof profileTemplate) => {
-    setTemplateDirty(true);
+    markTemplateDirty(true);
     setTemplateState((prev) => {
-      const copy = normalizeAnamnesisTemplate(prev);
+      // Não normalizar a cada tecla: normalização substitui string vazia por fallback
+      // e tornava impossível apagar completamente o título de uma seção.
+      const copy = JSON.parse(JSON.stringify(prev)) as AnamnesisTemplate;
       copy.profiles[profileType] = updater(copy.profiles[profileType]);
       return copy;
     });
@@ -493,7 +541,7 @@ export const AnamnesisModal = ({
     updateTemplateProfile((profile) => ({
       ...profile,
       sections: profile.sections.map((section) =>
-        section.id === sectionId ? { ...section, title: title.trim() || section.title } : section
+        section.id === sectionId ? { ...section, title } : section
       )
     }));
   };
@@ -622,7 +670,15 @@ export const AnamnesisModal = ({
       showFeedback('error', 'Dê um nome para a ficha antes de salvar.');
       return;
     }
+    const hasUntitledSection = (['adult', 'child'] as AnamnesisProfileType[]).some((profile) =>
+      templateState.profiles[profile].sections.some((section) => !String(section.title || '').trim())
+    );
+    if (hasUntitledSection) {
+      showFeedback('error', 'Dê um nome para todas as seções antes de salvar.');
+      return;
+    }
     setIsSavingTemplate(true);
+    const draftKeyToClear = templateDraftStorageKey;
     try {
       const normalized = {
         ...normalizeAnamnesisTemplate(templateState),
@@ -631,22 +687,21 @@ export const AnamnesisModal = ({
         ageMinMonths: yearsInputToMonths(templateAgeMinYears),
         ageMaxMonths: yearsInputToMonths(templateAgeMaxYears, true),
         patientProfileType: templatePatientProfileType || null,
-        selectedTemplateId: (templateState as any)?.selectedTemplateId || (template as any)?.selectedTemplateId || null
+        selectedTemplateId: (templateState as any)?.selectedTemplateId || null
       };
       const savedTemplate = await onTemplateSave(normalized);
       const nextTemplate = savedTemplate || normalized;
-      setTemplateState({
-        ...normalizeAnamnesisTemplate(nextTemplate),
+      applyTemplateToEditor({
+        ...nextTemplate,
         selectedTemplateId: (nextTemplate as any)?.selectedTemplateId || (normalized as any).selectedTemplateId || null,
         templateName: (nextTemplate as any)?.templateName || cleanName,
         templateDescription: (nextTemplate as any)?.templateDescription || templateDescription.trim(),
         ageMinMonths: (nextTemplate as any)?.ageMinMonths ?? (normalized as any).ageMinMonths,
         ageMaxMonths: (nextTemplate as any)?.ageMaxMonths ?? (normalized as any).ageMaxMonths,
         patientProfileType: (nextTemplate as any)?.patientProfileType || templatePatientProfileType || null
-      } as any);
-      setTemplateDirty(false);
+      }, true);
       try {
-        localStorage.removeItem(templateDraftStorageKey);
+        localStorage.removeItem(draftKeyToClear);
       } catch {
         // noop
       }
@@ -663,13 +718,26 @@ export const AnamnesisModal = ({
       showFeedback('error', `Limite de ${maxSavedTemplates} fichas salvas atingido. Remova uma ficha para criar outra.`);
       return;
     }
-    setTemplateState(createBlankAnamnesisTemplate());
+    if (templateDirtyRef.current && !confirm('Há alterações não salvas na ficha atual. Deseja descartá-las e criar uma nova ficha?')) return;
+    try {
+      localStorage.removeItem(templateDraftStorageKey);
+    } catch {
+      // noop
+    }
+    const blank = {
+      ...createBlankAnamnesisTemplate(),
+      selectedTemplateId: null,
+      templateScope: templateScopeKey,
+      scope: templateScopeKey
+    } as any;
+    setTemplateState(blank);
+    setTemplateEditorIdentity('new');
     setTemplateName(`${templateManagerLabel} ${Math.min(savedTemplates.length + 1, maxSavedTemplates)}`);
     setTemplateDescription('');
     setTemplateAgeMinYears('');
     setTemplateAgeMaxYears('');
     setTemplatePatientProfileType('');
-    setTemplateDirty(true);
+    markTemplateDirty(true);
     setView('template');
     setExpandedSections({ personalizadas: true });
     showFeedback('info', 'Ficha em branco criada. Adicione seções/perguntas e salve para persistir.');
@@ -683,16 +751,40 @@ export const AnamnesisModal = ({
       if (!result?.success || !result?.data) {
         throw new Error(result?.error || 'Falha ao buscar o template padrão.');
       }
-      setTemplateState(normalizeAnamnesisTemplate(result.data));
-      setTemplateDirty(false);
-      try {
-        localStorage.removeItem(templateDraftStorageKey);
-      } catch {
-        // noop
-      }
+      const selectedTemplateId = (templateState as any)?.selectedTemplateId || null;
+      setTemplateState({
+        ...normalizeAnamnesisTemplate(result.data),
+        selectedTemplateId,
+        templateScope: templateScopeKey,
+        scope: templateScopeKey
+      } as any);
+      markTemplateDirty(true);
+      showFeedback('info', 'Ficha original restaurada no editor. Clique em Salvar mudanças para persistir.');
     } catch (error: any) {
       showFeedback('error', error?.message || 'Não foi possível restaurar o template padrão.');
     }
+  };
+
+  const handleSavedTemplateSelect = (item: any) => {
+    const nextId = String(item?.id || item?.selectedTemplateId || '').trim();
+    const currentId = String((templateState as any)?.selectedTemplateId || '').trim();
+    if (nextId && nextId === currentId) return;
+    if (templateDirtyRef.current && !confirm('Há alterações não salvas na ficha atual. Deseja descartá-las e abrir outra ficha?')) return;
+    try {
+      localStorage.removeItem(templateDraftStorageKey);
+    } catch {
+      // noop
+    }
+    applyTemplateToEditor(item, true);
+    const nextProfile = getProfileTemplate(normalizeAnamnesisTemplate(item), profileType);
+    setExpandedSections(nextProfile.sections.reduce((acc, section) => {
+      acc[section.id] = true;
+      return acc;
+    }, {} as Record<string, boolean>));
+    setEditingQuestionId(null);
+    setDraftQuestion(null);
+    setEditorSectionId(null);
+    onTemplateSelect?.(item);
   };
 
   const handleCloseModal = () => {
@@ -752,13 +844,13 @@ export const AnamnesisModal = ({
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {savedTemplates.map((item) => {
                     const itemId = String(item?.id || item?.selectedTemplateId || '');
-                    const currentId = String((templateState as any)?.selectedTemplateId || (template as any)?.selectedTemplateId || '');
+                    const currentId = String((templateState as any)?.selectedTemplateId || '');
                     const isActive = itemId && itemId === currentId;
                     return (
                       <button
                         type="button"
                         key={itemId || item?.name}
-                        onClick={() => onTemplateSelect?.(item)}
+                        onClick={() => handleSavedTemplateSelect(item)}
                         className={`min-w-[210px] rounded-xl border px-3 py-2 text-left text-sm transition-all ${
                           isActive ? 'border-[#7a32fc] bg-white text-[#7a32fc] shadow-sm' : 'border-slate-200 bg-white text-slate-700 hover:border-[#7a32fc]/40'
                         }`}
@@ -782,7 +874,7 @@ export const AnamnesisModal = ({
                     value={templateName}
                     onChange={(event) => {
                       setTemplateName(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     maxLength={80}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
@@ -797,7 +889,7 @@ export const AnamnesisModal = ({
                     value={templateAgeMinYears}
                     onChange={(event) => {
                       setTemplateAgeMinYears(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
                     placeholder="0"
@@ -811,7 +903,7 @@ export const AnamnesisModal = ({
                     value={templateAgeMaxYears}
                     onChange={(event) => {
                       setTemplateAgeMaxYears(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
                     placeholder="Sem limite"
@@ -823,7 +915,7 @@ export const AnamnesisModal = ({
                     value={templatePatientProfileType}
                     onChange={(event) => {
                       setTemplatePatientProfileType(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
                   >
@@ -840,7 +932,7 @@ export const AnamnesisModal = ({
                     value={templateDescription}
                     onChange={(event) => {
                       setTemplateDescription(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     maxLength={240}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"

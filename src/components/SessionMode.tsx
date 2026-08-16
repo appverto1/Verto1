@@ -538,6 +538,9 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
       const v3ActionKey = (normalizeAbaV3TrialActionKey(clientMetadata.ui_action || clientMetadata.action_key || inferredActionKey) || inferredActionKey) as AbaV3TrialActionKey;
       const promptKey = String(clientMetadata.prompt_key || supportStep?.prompt_key || '').trim();
       const promptName = String(clientMetadata.prompt_name || promptKey || '').trim();
+      const lastRevisionReason = String(event.last_revision_reason || event.lastRevisionReason || '').trim();
+      const lastRevisionEventType = String(event.last_revision_event_type || event.lastRevisionEventType || '').trim().toUpperCase();
+      const lastRevisionAt = String(event.last_revision_at || event.lastRevisionAt || '').trim();
       const isIndependentCorrect = v3ActionKey === 'INDEPENDENT_CORRECT';
       const isPromptedCorrect = v3ActionKey === 'PROMPTED_CORRECT';
       const outcome: SessionRecord['trialOutcome'] = isIndependentCorrect ? 'independent' : isPromptedCorrect ? 'prompted' : 'error';
@@ -573,6 +576,9 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
           v3ActionKey,
           clientEventId: event.client_event_id || event.clientEventId || null,
           serverTrialId: event.trial_id || event.trialId || event.id || null,
+          lastRevisionReason: lastRevisionReason || null,
+          lastRevisionEventType: lastRevisionEventType || null,
+          lastRevisionAt: lastRevisionAt || null,
           steps
         }
       };
@@ -3207,6 +3213,9 @@ export const SessionMode = ({
         serverTrialId: result?.data?.replacementTrialId || record.rawPayload?.serverTrialId || null,
         correctedFromTrialId: result?.data?.originalTrialId || record.v3TrialId || null,
         lastRevisionId: result?.data?.revisionId || null,
+        lastRevisionReason: revision.reason || null,
+        lastRevisionEventType: revision.eventType || null,
+        lastRevisionAt: result?.data?.occurredAt || new Date().toISOString(),
         pendingV3Revision: undefined
       }
     });
@@ -7045,6 +7054,13 @@ export const SessionMode = ({
               </div>
             )}
 
+            {String(abaV3RevisionRecord.rawPayload?.lastRevisionReason || '').trim() && (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Última revisão auditável</p>
+                <p className="mt-1 text-sm text-slate-700">{String(abaV3RevisionRecord.rawPayload?.lastRevisionReason || '').trim()}</p>
+              </div>
+            )}
+
             <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-gray-400">
               Motivo da {abaV3RevisionMode === 'VOID' ? 'remoção' : 'correção'}
               <textarea
@@ -7706,6 +7722,9 @@ export const SessionMode = ({
                               <div className="min-w-0">
                                 <p className="truncate text-sm font-semibold text-white">{record.title}</p>
                                 <p className="mt-1 text-xs text-slate-300">{record.detail} · {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                                {String(record.rawPayload?.lastRevisionReason || '').trim() && (
+                                  <p className="mt-1 text-[11px] text-violet-200">Última revisão: {String(record.rawPayload?.lastRevisionReason || '').trim()}</p>
+                                )}
                               </div>
                               <div className="flex shrink-0 flex-wrap gap-2">
                                 {record.syncStatus === 'error' ? (

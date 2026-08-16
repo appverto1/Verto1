@@ -71702,8 +71702,10 @@ async function startServer() {
 
       let v3Steps: any[] = [];
       let targetRows: any[] = [];
+      let v3Revisions: any[] = [];
       if (v3TrialIds.length > 0) {
-        const [stepsResult, targetsResult] = await Promise.all([
+        const revisionLookup = v3TrialIds.join(',');
+        const [stepsResult, targetsResult, revisionsResult] = await Promise.all([
           supabase
             .from('aba_trial_steps_v3')
             .select('trial_id,sequence_no,step_type,opportunity_role,outcome,prompt_key,latency_ms,occurred_at')
@@ -71711,12 +71713,20 @@ async function startServer() {
             .order('sequence_no', { ascending: true }),
           targetIds.length > 0
             ? supabase.from('aba_targets').select('id,name,program_id').in('id', targetIds)
-            : Promise.resolve({ data: [], error: null } as any)
+            : Promise.resolve({ data: [], error: null } as any),
+          supabase
+            .from('aba_trial_revisions_v3')
+            .select('trial_id,replacement_trial_id,event_type,reason,actor_id,occurred_at')
+            .or(`trial_id.in.(${revisionLookup}),replacement_trial_id.in.(${revisionLookup})`)
+            .order('occurred_at', { ascending: false })
+            .limit(Math.min(400, Math.max(40, v3TrialIds.length * 3)))
         ]);
         if (stepsResult.error && !hasMissingFinancialSchema(stepsResult.error) && !isMissingRelationError(stepsResult.error)) throw stepsResult.error;
         if (targetsResult.error && !hasMissingFinancialSchema(targetsResult.error) && !isMissingRelationError(targetsResult.error)) throw targetsResult.error;
+        if (revisionsResult.error && !hasMissingFinancialSchema(revisionsResult.error) && !isMissingRelationError(revisionsResult.error)) throw revisionsResult.error;
         v3Steps = stepsResult.error ? [] : (stepsResult.data || []);
         targetRows = targetsResult.error ? [] : (targetsResult.data || []);
+        v3Revisions = revisionsResult.error ? [] : (revisionsResult.data || []);
       }
 
       const stepsByTrial = new Map<string, any[]>();
@@ -71728,6 +71738,15 @@ async function startServer() {
         stepsByTrial.set(trialId, list);
       });
       const targetsById = new Map(targetRows.map((row: any) => [sanitizeString(row?.id, 180), row]));
+      const latestRevisionByEffectiveTrial = new Map<string, any>();
+      v3Revisions.forEach((revision: any) => {
+        const eventType = sanitizeString(revision?.event_type, 40).toUpperCase();
+        const effectiveTrialId = ['CORRECT', 'SUPERSEDE'].includes(eventType)
+          ? sanitizeString(revision?.replacement_trial_id, 120)
+          : sanitizeString(revision?.trial_id, 120);
+        if (!effectiveTrialId || latestRevisionByEffectiveTrial.has(effectiveTrialId)) return;
+        latestRevisionByEffectiveTrial.set(effectiveTrialId, revision);
+      });
       const v3TrialTypeToCollectionType: Record<string, string> = {
         TEACHING: 'dtt',
         PROBE: 'probe',
@@ -71755,6 +71774,7 @@ async function startServer() {
         ...(v3Trials.map((row: any) => {
           const target = targetsById.get(sanitizeString(row?.target_id, 180)) || {};
           const metadata = parseStoredJsonObject(row?.client_metadata);
+          const latestRevision = latestRevisionByEffectiveTrial.get(sanitizeString(row?.id, 120)) || null;
           return {
             kind: 'trial',
             tableName: 'aba_trials_v3',
@@ -71773,6 +71793,9 @@ async function startServer() {
             occurred_at: row.occurred_at,
             created_at: row.created_at,
             client_metadata: metadata,
+            last_revision_reason: latestRevision ? sanitizeTextField(latestRevision?.reason, 1000) || null : null,
+            last_revision_event_type: latestRevision ? sanitizeString(latestRevision?.event_type, 40).toUpperCase() || null : null,
+            last_revision_at: latestRevision?.occurred_at || null,
             steps: stepsByTrial.get(sanitizeString(row?.id, 120)) || [],
             sync_status: 'synced',
             occurredAt: row.occurred_at || row.created_at

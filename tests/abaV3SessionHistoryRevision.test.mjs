@@ -84,4 +84,15 @@ assert.match(sessionMode, /clinical_complement: sessionCompleted \|\| undefined/
 assert.match(sessionMode, /authorizedComplement: sessionCompleted \|\| undefined/);
 assert.match(server, /\/api\/aba\/abc-events[\s\S]*?allowCompletedComplement: isAuthorizedComplement/);
 
+
+// Audit reasons are not merely written: the finalized-session read model returns
+// the latest revision reason in one batched query and the UI preserves/displays it.
+assert.match(server, /\.from\('aba_trial_revisions_v3'\)[\s\S]*?\.select\('trial_id,replacement_trial_id,event_type,reason,actor_id,occurred_at'\)[\s\S]*?\.or\(`/);
+assert.match(server, /latestRevisionByEffectiveTrial/);
+assert.match(server, /last_revision_reason:/);
+assert.match(sessionMode, /lastRevisionReason: revision\.reason \|\| null/);
+assert.match(sessionMode, /event\.last_revision_reason \|\| event\.lastRevisionReason/);
+assert.match(sessionMode, /Última revisão auditável/);
+assert.match(sessionMode, /Última revisão:/);
+
 console.log('ABA V3 session history recovery/revision contracts: OK');
