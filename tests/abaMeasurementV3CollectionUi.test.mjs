@@ -110,6 +110,14 @@ assert.match(sessionMode, /if \(!patientId \|\| !sessionId \|\| sessionId\.start
 assert.doesNotMatch(sessionMode, /if \(!abaV3UiEnabled \|\| !patientId \|\| !sessionId \|\| sessionId\.startsWith\('draft-'\)\)/);
 assert.match(sessionMode, /const plannedModel = abaV3PlannedModelForGoal\(goal\);[\s\S]*?plannedModel === 'V3'[\s\S]*?persistV3TrialRecord/);
 assert.match(sessionMode, /abaV3SessionPlanStatus === 'idle' \|\| abaV3SessionPlanStatus === 'loading'/);
+const uiBindingResolverStart = sessionMode.indexOf('const resolveAbaV3BindingForGoal');
+const uiBindingResolverEnd = sessionMode.indexOf('const resolveAbaV3BehaviorForAction', uiBindingResolverStart);
+assert.ok(uiBindingResolverStart >= 0 && uiBindingResolverEnd > uiBindingResolverStart);
+assert.doesNotMatch(
+  sessionMode.slice(uiBindingResolverStart, uiBindingResolverEnd),
+  /if \(!abaV3UiEnabled\) return null/,
+  'Authoritative V3 target binding must not be short-circuited by the presentation flag',
+);
 
 // Binding is cached once per session+target and unresolved state fails closed.
 assert.match(sessionMode, /abaV3BindingCacheRef\.current\.get\(cacheKey\)/);

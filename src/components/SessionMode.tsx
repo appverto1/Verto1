@@ -2641,7 +2641,6 @@ export const SessionMode = ({
   };
 
   const resolveAbaV3BindingForGoal = async (goal: any): Promise<AbaV3BindingDecision | null> => {
-    if (!abaV3UiEnabled) return null;
     const targetId = String(goalTargetId(goal) || '').trim();
     if (!targetId || !sessionId || sessionId.startsWith('draft-')) {
       throw new Error('A coleta V3 exige uma sessão e um target persistidos antes da primeira tentativa.');
