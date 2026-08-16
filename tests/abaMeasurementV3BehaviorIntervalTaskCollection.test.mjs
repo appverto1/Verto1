@@ -111,7 +111,7 @@ assert.match(sessionMode, /persistAbaV3BehaviorPayload/);
 assert.match(sessionMode, /measurementModelVersion: 'V3'/);
 assert.match(sessionMode, /ABC ainda não possui modelo V3|ABC V3/i);
 assert.match(sessionMode, /Pausa indisponível nesta coleta V3/i);
-assert.match(sessionMode, /V3 · imutável/);
+assert.match(sessionMode, /V3 · auditável/);
 assert.match(sessionMode, /openAbaV3TaskAnalysis/);
 assert.match(sessionMode, /saveAbaV3TaskAnalysis/);
 for (const code of ['NOT_OBSERVED','INDEPENDENT','PROMPTED','INCORRECT','NO_RESPONSE','NOT_APPLICABLE']) {

@@ -86,7 +86,7 @@ import {
 import { formatMaintenanceScheduleDueLabel, resolveMaintenanceProbeAvailability } from '../utils/abaMaintenanceScheduling';
 import { mapMaintenancePanelResponse, resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { isPeiClinicalRowAfterProgressReset } from '../utils/peiSessionReset';
-import { abaV3ActionDisplayLabel, type AbaV3TrialActionKey } from '../utils/abaV3Collection';
+import { abaV3ActionDisplayLabel, normalizeAbaV3TrialActionKey, type AbaV3TrialActionKey } from '../utils/abaV3Collection';
 import {
   abaRecommendationPriorityLabel,
   abaRecommendationStatusLabel,
@@ -150,6 +150,9 @@ type SessionRecord = {
   trialOutcome?: 'independent' | 'prompted' | 'error';
   measurementModelVersion?: 'LEGACY_V2' | 'V3' | 'EMERGENCY_LEGACY_BRIDGE' | string;
   v3ActionKey?: AbaV3TrialActionKey;
+  v3TrialId?: string | null;
+  syncErrorCode?: string | null;
+  syncErrorMessage?: string | null;
   collectionType?: string;
   promptTypeId?: string | null;
   promptTypeNameSnapshot?: string | null;
@@ -607,11 +610,37 @@ const normalizePersistedSessionRecord = (record: any): SessionRecord => {
     const isCorrect = typeof normalizedRecord.correct === 'boolean' ? normalizedRecord.correct : Number.isFinite(scoreNumber) && scoreNumber > 0;
     const isIndependent = typeof normalizedRecord.independent === 'boolean' ? normalizedRecord.independent : Number.isFinite(scoreNumber) && scoreNumber >= 1;
     const outcome = normalizedRecord.trialOutcome || (!isCorrect ? 'error' : isIndependent ? 'independent' : 'prompted');
+    const measurementModelVersion = String(normalizedRecord.measurementModelVersion || rawPayload.measurementModelVersion || '').trim().toUpperCase();
+    const promptTypeNameSnapshot = normalizedRecord.promptTypeNameSnapshot || record?.prompt_type_name_snapshot || record?.promptTypeNameSnapshot || rawPayload.promptTypeNameSnapshot || rawPayload.prompt_type_name_snapshot || null;
+    if (measurementModelVersion === 'V3') {
+      const v3ActionKey = normalizeAbaV3TrialActionKey(normalizedRecord.v3ActionKey || rawPayload.v3ActionKey)
+        || (outcome === 'independent' ? 'INDEPENDENT_CORRECT' : outcome === 'prompted' ? 'PROMPTED_CORRECT' : 'INDEPENDENT_INCORRECT');
+      const promptLabel = v3ActionKey === 'PROMPTED_CORRECT'
+        ? String(promptTypeNameSnapshot || promptLevelName || '').trim()
+        : '';
+      return {
+        ...normalizedRecord,
+        collectionType,
+        measurementModelVersion: 'V3',
+        v3ActionKey,
+        promptTypeId: normalizedRecord.promptTypeId || record?.prompt_type_id || record?.promptTypeId || rawPayload.promptTypeId || rawPayload.prompt_type_id || null,
+        promptTypeNameSnapshot,
+        promptCategorySnapshot: normalizedRecord.promptCategorySnapshot || record?.prompt_category_snapshot || record?.promptCategorySnapshot || rawPayload.promptCategorySnapshot || rawPayload.prompt_category_snapshot || null,
+        promptIndependenceScoreSnapshot: normalizedRecord.promptIndependenceScoreSnapshot ?? record?.prompt_independence_score_snapshot ?? record?.promptIndependenceScoreSnapshot ?? rawPayload.promptIndependenceScoreSnapshot ?? rawPayload.prompt_independence_score_snapshot ?? null,
+        promptIntrusivenessOrderSnapshot: normalizedRecord.promptIntrusivenessOrderSnapshot ?? record?.prompt_intrusiveness_order_snapshot ?? record?.promptIntrusivenessOrderSnapshot ?? rawPayload.promptIntrusivenessOrderSnapshot ?? rawPayload.prompt_intrusiveness_order_snapshot ?? null,
+        promptLevelKey,
+        promptLevelName,
+        rawPayload,
+        score: null,
+        trialOutcome: outcome,
+        detail: `${getAbaCollectionLabel(collectionType)} · ${abaV3ActionDisplayLabel(v3ActionKey)}${promptLabel ? ` · ${promptLabel}` : ''}`
+      };
+    }
     return {
       ...normalizedRecord,
       collectionType,
       promptTypeId: normalizedRecord.promptTypeId || record?.prompt_type_id || record?.promptTypeId || rawPayload.promptTypeId || rawPayload.prompt_type_id || null,
-      promptTypeNameSnapshot: normalizedRecord.promptTypeNameSnapshot || record?.prompt_type_name_snapshot || record?.promptTypeNameSnapshot || rawPayload.promptTypeNameSnapshot || rawPayload.prompt_type_name_snapshot || null,
+      promptTypeNameSnapshot,
       promptCategorySnapshot: normalizedRecord.promptCategorySnapshot || record?.prompt_category_snapshot || record?.promptCategorySnapshot || rawPayload.promptCategorySnapshot || rawPayload.prompt_category_snapshot || null,
       promptIndependenceScoreSnapshot: normalizedRecord.promptIndependenceScoreSnapshot ?? record?.prompt_independence_score_snapshot ?? record?.promptIndependenceScoreSnapshot ?? rawPayload.promptIndependenceScoreSnapshot ?? rawPayload.prompt_independence_score_snapshot ?? null,
       promptIntrusivenessOrderSnapshot: normalizedRecord.promptIntrusivenessOrderSnapshot ?? record?.prompt_intrusiveness_order_snapshot ?? record?.promptIntrusivenessOrderSnapshot ?? rawPayload.promptIntrusivenessOrderSnapshot ?? rawPayload.prompt_intrusiveness_order_snapshot ?? null,
@@ -1023,6 +1052,12 @@ export const SessionMode = ({
   const [editingRecordTitle, setEditingRecordTitle] = useState('');
   const [editingRecordDetail, setEditingRecordDetail] = useState('');
   const [editingRecordCollectionType, setEditingRecordCollectionType] = useState('dtt');
+  const [abaV3RevisionRecord, setAbaV3RevisionRecord] = useState<SessionRecord | null>(null);
+  const [abaV3RevisionMode, setAbaV3RevisionMode] = useState<'CORRECT' | 'VOID'>('CORRECT');
+  const [abaV3RevisionActionKey, setAbaV3RevisionActionKey] = useState<AbaV3TrialActionKey>('INDEPENDENT_CORRECT');
+  const [abaV3RevisionPromptKey, setAbaV3RevisionPromptKey] = useState('');
+  const [abaV3RevisionReason, setAbaV3RevisionReason] = useState('');
+  const [abaV3RevisionSaving, setAbaV3RevisionSaving] = useState(false);
   const abaV3TargetPlanById = useMemo(() => new Map(
     (abaV3SessionPlan.targets || []).map((target) => [String(target.target_id || '').trim(), target])
   ), [abaV3SessionPlan.targets]);
@@ -2119,7 +2154,16 @@ export const SessionMode = ({
         therapistId: resolvedTherapistId || undefined,
         source: 'verto_web'
       });
-      updateRecordStatus(record.id, result?.success && !result?.pending && !result?.offline ? 'synced' : 'local');
+      if (!result?.success) {
+        updateRecord(record.id, {
+          syncStatus: 'error',
+          syncErrorCode: result?.code || null,
+          syncErrorMessage: result?.error || 'Não foi possível persistir o ABC.'
+        });
+        showClinicalToast({ variant: 'error', title: 'ABC não gravado', subtitle: result?.error || 'Revise o registro e tente novamente.' }, 'error');
+        return result;
+      }
+      updateRecordStatus(record.id, !result?.pending && !result?.offline ? 'synced' : 'local');
       showPersistResultToast(result);
       onSessionRecordSaved?.();
       return result;
@@ -2899,9 +2943,46 @@ export const SessionMode = ({
         maintenanceScheduleId: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
         clientMetadata: { source: 'session_mode_v3' }
       });
-      if (!result?.success) throw new Error(result?.error || 'Não foi possível persistir a tentativa V3.');
+      if (!result?.success) {
+        updateRecord(localRecordId, {
+          syncStatus: 'error',
+          syncErrorCode: result?.code || null,
+          syncErrorMessage: result?.error || 'Não foi possível persistir a tentativa V3.',
+          rawPayload: {
+            source: 'session_mode_v3',
+            measurementModelVersion: 'V3',
+            v3ActionKey: actionKey,
+            clientEventId,
+            maintenanceScheduleId: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+            serverRejected: !result?.pending,
+            syncErrorCode: result?.code || null,
+            syncErrorStatus: result?.status || null
+          }
+        });
+        setSessionWarning(result?.error || 'Não foi possível persistir a tentativa V3.');
+        showClinicalToast({ variant: 'error', title: 'Tentativa não gravada', subtitle: result?.error || 'Revise o registro e tente novamente.' }, 'error');
+        return;
+      }
       setTrialCount((prev) => prev + 1);
-      updateRecordStatus(localRecordId, result?.pending ? 'local' : 'synced');
+      updateRecord(localRecordId, {
+        syncStatus: result?.pending ? 'local' : 'synced',
+        v3TrialId: result?.data?.trialId || null,
+        syncErrorCode: null,
+        syncErrorMessage: null,
+        rawPayload: {
+          source: 'session_mode_v3',
+          measurementModelVersion: 'V3',
+          v3ActionKey: actionKey,
+          clientEventId,
+          serverTrialId: result?.data?.trialId || null,
+          maintenanceScheduleId: isMaintenanceAttempt ? maintenanceScheduleId : undefined,
+          activeMaintenanceProbe: isMaintenanceAttempt ? {
+            scheduleId: maintenanceScheduleId,
+            targetId: recordTargetId,
+            source: resolvedMaintenanceProbe?.source || 'available'
+          } : undefined
+        }
+      });
       showClinicalToast({
         variant: result?.pending ? 'info' : 'success',
         title: result?.pending ? 'Tentativa preservada para sincronização' : 'Tentativa V3 registrada',
@@ -2920,6 +3001,237 @@ export const SessionMode = ({
       setSessionWarning(error?.message || 'Não foi possível persistir a tentativa V3.');
       showClinicalToast(buildClinicalSaveErrorToast(), 'error');
       console.error('Falha ao persistir tentativa ABA V3:', error);
+    }
+  };
+
+  const retryFailedV3Trial = async (record: SessionRecord) => {
+    if (record.measurementModelVersion !== 'V3' || record.syncStatus !== 'error') return;
+    const clientEventId = String(record.rawPayload?.clientEventId || '').trim();
+    const actionKey = record.v3ActionKey || record.rawPayload?.v3ActionKey;
+    if (!clientEventId || !actionKey || !record.targetId) {
+      showClinicalToast({ variant: 'error', title: 'Tentativa não pode ser reenviada', subtitle: 'O registro local não possui identidade clínica suficiente para um retry seguro.' }, 'error');
+      return;
+    }
+    const retryLockKey = `retry-v3:${clientEventId}`;
+    if (!lockAction(retryLockKey, 0)) return;
+    updateRecordStatus(record.id, 'syncing');
+    try {
+      const result = await dataService.saveAbaV3TrialAction({
+        patientId,
+        sessionId,
+        targetId: record.targetId,
+        clientEventId,
+        actionKey,
+        promptTypeId: actionKey === 'PROMPTED_CORRECT' ? record.promptTypeId || null : null,
+        promptKey: actionKey === 'PROMPTED_CORRECT' ? record.promptLevelKey || null : null,
+        trialType: normalizeAbaCollectionType(record.collectionType),
+        occurredAt: record.timestamp,
+        maintenanceScheduleId: record.rawPayload?.maintenanceScheduleId || undefined,
+        clientMetadata: { source: 'session_mode_v3_retry' }
+      });
+      if (!result?.success) {
+        updateRecord(record.id, {
+          syncStatus: 'error',
+          syncErrorCode: result?.code || null,
+          syncErrorMessage: result?.error || 'Não foi possível reenviar a tentativa V3.'
+        });
+        showClinicalToast({ variant: 'error', title: 'Tentativa continua não gravada', subtitle: result?.error || 'Revise a configuração e tente novamente.' }, 'error');
+        return;
+      }
+      await dataService.discardAbaV3FailedTrial(clientEventId);
+      updateRecord(record.id, {
+        syncStatus: result?.pending ? 'local' : 'synced',
+        v3TrialId: result?.data?.trialId || record.v3TrialId || null,
+        syncErrorCode: null,
+        syncErrorMessage: null,
+        rawPayload: {
+          ...(record.rawPayload || {}),
+          serverRejected: false,
+          serverTrialId: result?.data?.trialId || record.rawPayload?.serverTrialId || null,
+          syncErrorCode: null,
+          syncErrorStatus: null
+        }
+      });
+      setTrialCount((prev) => prev + 1);
+      showClinicalToast({
+        variant: result?.pending ? 'info' : 'success',
+        title: result?.pending ? 'Tentativa preservada para sincronização' : 'Tentativa recuperada',
+        subtitle: result?.pending ? 'O registro continuará pendente até a conexão confirmar a gravação.' : 'A tentativa foi gravada no ABA V3 e não bloqueia mais o encerramento.'
+      });
+      onSessionRecordSaved?.();
+    } catch (error: any) {
+      updateRecord(record.id, { syncStatus: 'error', syncErrorMessage: error?.message || 'Falha ao reenviar a tentativa V3.' });
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
+    } finally {
+      releaseActionLock(retryLockKey);
+    }
+  };
+
+  const discardFailedV3Trial = async (record: SessionRecord) => {
+    if (record.measurementModelVersion !== 'V3' || record.syncStatus !== 'error') return;
+    const clientEventId = String(record.rawPayload?.clientEventId || '').trim();
+    const confirmed = window.confirm('Descartar esta tentativa que NÃO foi gravada no servidor? Nenhum dado clínico persistido será apagado.');
+    if (!confirmed) return;
+    try {
+      if (clientEventId) await dataService.discardAbaV3FailedTrial(clientEventId);
+      setRecords((prev) => prev.filter((item) => item.id !== record.id));
+      showClinicalToast({ variant: 'info', title: 'Tentativa não gravada descartada', subtitle: 'Somente o erro local foi removido; nenhum evento clínico persistido foi apagado.' }, 'none');
+    } catch (error: any) {
+      showClinicalToast({ variant: 'error', title: 'Não foi possível descartar', subtitle: error?.message || 'Tente novamente.' }, 'error');
+    }
+  };
+
+  const inferV3ActionKeyFromRecord = (record: SessionRecord): AbaV3TrialActionKey => {
+    if (record.v3ActionKey) return record.v3ActionKey;
+    if (record.trialOutcome === 'prompted') return 'PROMPTED_CORRECT';
+    if (record.independent && record.correct) return 'INDEPENDENT_CORRECT';
+    if (record.correct === false) return 'INDEPENDENT_INCORRECT';
+    return 'NO_RESPONSE';
+  };
+
+  const openV3Revision = (record: SessionRecord, mode: 'CORRECT' | 'VOID') => {
+    if (record.measurementModelVersion !== 'V3' || record.syncStatus !== 'synced') {
+      showClinicalToast({ variant: 'info', title: 'Resolva a sincronização primeiro', subtitle: 'Registros ainda não confirmados pelo servidor não podem receber uma revisão clínica.' }, 'none');
+      return;
+    }
+    const actionKey = inferV3ActionKeyFromRecord(record);
+    setAbaV3RevisionRecord(record);
+    setAbaV3RevisionMode(mode);
+    setAbaV3RevisionActionKey(actionKey);
+    setAbaV3RevisionPromptKey(actionKey === 'PROMPTED_CORRECT' ? String(record.promptLevelKey || '') : '');
+    setAbaV3RevisionReason('');
+  };
+
+  const closeV3Revision = () => {
+    setAbaV3RevisionRecord(null);
+    setAbaV3RevisionReason('');
+    setAbaV3RevisionPromptKey('');
+  };
+
+  const finalizeSuccessfulV3Revision = (record: SessionRecord, revision: any, result: any) => {
+    if (revision.eventType === 'VOID') {
+      setRecords((prev) => prev.filter((item) => item.id !== record.id));
+      setTrialCount((prev) => Math.max(0, prev - 1));
+      return;
+    }
+    const selectedPrompt = revision.actionKey === 'PROMPTED_CORRECT'
+      ? v3PromptedPromptOptions.find((prompt) => prompt.key === revision.promptKey)
+      : null;
+    const actionLabel = abaV3ActionDisplayLabel(revision.actionKey);
+    const collectionLabel = getAbaCollectionLabel(normalizeAbaCollectionType(record.collectionType));
+    const isIndependentCorrect = revision.actionKey === 'INDEPENDENT_CORRECT';
+    const isPromptedCorrect = revision.actionKey === 'PROMPTED_CORRECT';
+    updateRecord(record.id, {
+      detail: `${collectionLabel} · ${actionLabel}${selectedPrompt?.label ? ` · ${selectedPrompt.label}` : ''}`,
+      trialOutcome: isIndependentCorrect ? 'independent' : isPromptedCorrect ? 'prompted' : 'error',
+      v3ActionKey: revision.actionKey,
+      v3TrialId: result?.data?.replacementTrialId || record.v3TrialId || null,
+      promptTypeId: isPromptedCorrect ? selectedPrompt?.id || null : null,
+      promptTypeNameSnapshot: isPromptedCorrect ? selectedPrompt?.label || selectedPrompt?.name || null : null,
+      promptCategorySnapshot: isPromptedCorrect ? selectedPrompt?.category || null : null,
+      promptIntrusivenessOrderSnapshot: isPromptedCorrect ? selectedPrompt?.intrusivenessOrder ?? null : null,
+      promptLevelKey: isPromptedCorrect ? selectedPrompt?.key || '' : isIndependentCorrect ? 'independent' : 'error',
+      promptLevelName: isPromptedCorrect ? selectedPrompt?.label || '' : actionLabel,
+      correct: isIndependentCorrect || isPromptedCorrect,
+      independent: isIndependentCorrect,
+      syncStatus: 'synced',
+      editedAt: new Date().toISOString(),
+      rawPayload: {
+        ...(record.rawPayload || {}),
+        clientEventId: result?.data?.replacementClientEventId || revision.replacementClientEventId || record.rawPayload?.clientEventId,
+        serverTrialId: result?.data?.replacementTrialId || record.rawPayload?.serverTrialId || null,
+        correctedFromTrialId: result?.data?.originalTrialId || record.v3TrialId || null,
+        lastRevisionId: result?.data?.revisionId || null,
+        pendingV3Revision: undefined
+      }
+    });
+  };
+
+  const submitV3Revision = async (record: SessionRecord, revision: any) => {
+    updateRecordStatus(record.id, 'syncing');
+    const selectedPrompt = revision.actionKey === 'PROMPTED_CORRECT'
+      ? v3PromptedPromptOptions.find((prompt) => prompt.key === revision.promptKey)
+      : null;
+    const result = await dataService.saveAbaV3TrialRevision({
+      patientId,
+      sessionId,
+      originalTrialId: record.v3TrialId || record.rawPayload?.serverTrialId || undefined,
+      originalClientEventId: record.rawPayload?.clientEventId || undefined,
+      eventType: revision.eventType,
+      clientRevisionEventId: revision.clientRevisionEventId,
+      replacementClientEventId: revision.replacementClientEventId,
+      reason: revision.reason,
+      actionKey: revision.eventType === 'CORRECT' ? revision.actionKey : undefined,
+      promptTypeId: revision.eventType === 'CORRECT' && revision.actionKey === 'PROMPTED_CORRECT' ? selectedPrompt?.id || undefined : undefined,
+      promptKey: revision.eventType === 'CORRECT' && revision.actionKey === 'PROMPTED_CORRECT' ? selectedPrompt?.key || undefined : undefined,
+      clientMetadata: { source: 'session_mode_v3_revision' }
+    });
+    if (!result?.success) {
+      updateRecord(record.id, { syncStatus: 'synced' });
+      showClinicalToast({ variant: 'error', title: 'Revisão não aplicada', subtitle: result?.error || 'O registro original permanece intacto.' }, 'error');
+      return result;
+    }
+    if (result?.pending) {
+      updateRecord(record.id, {
+        syncStatus: 'local',
+        rawPayload: { ...(record.rawPayload || {}), pendingV3Revision: revision }
+      });
+      showClinicalToast({ variant: 'info', title: 'Revisão preservada para sincronização', subtitle: 'O registro original continuará visível até o servidor confirmar a revisão.' });
+      return result;
+    }
+    finalizeSuccessfulV3Revision(record, revision, result);
+    showClinicalToast({
+      variant: 'success',
+      title: revision.eventType === 'VOID' ? 'Registro apagado da visão clínica' : 'Registro corrigido',
+      subtitle: revision.eventType === 'VOID'
+        ? 'O evento original foi preservado no histórico de auditoria e marcado como anulado.'
+        : 'A correção foi gravada como uma nova versão auditável, sem reescrever o evento original.'
+    });
+    onSessionRecordSaved?.();
+    return result;
+  };
+
+  const retryPendingV3Revision = async (record: SessionRecord) => {
+    const revision = record.rawPayload?.pendingV3Revision;
+    if (!revision) return;
+    const retryLockKey = `revision-v3:${revision.clientRevisionEventId || record.id}`;
+    if (!lockAction(retryLockKey, 0)) return;
+    try {
+      await submitV3Revision(record, revision);
+    } finally {
+      releaseActionLock(retryLockKey);
+    }
+  };
+
+  const saveV3Revision = async () => {
+    const record = abaV3RevisionRecord;
+    if (!record || abaV3RevisionSaving) return;
+    const reason = abaV3RevisionReason.trim();
+    if (reason.length < 3) {
+      showClinicalToast({ variant: 'info', title: 'Informe o motivo', subtitle: 'A revisão clínica precisa de um motivo com pelo menos 3 caracteres.' }, 'none');
+      return;
+    }
+    if (abaV3RevisionMode === 'CORRECT' && abaV3RevisionActionKey === 'PROMPTED_CORRECT' && !abaV3RevisionPromptKey) {
+      showClinicalToast({ variant: 'info', title: 'Selecione o tipo de ajuda', subtitle: 'A correção com ajuda precisa apontar para um tipo persistido no catálogo V3.' }, 'none');
+      return;
+    }
+    setAbaV3RevisionSaving(true);
+    const revision = {
+      eventType: abaV3RevisionMode,
+      actionKey: abaV3RevisionActionKey,
+      promptKey: abaV3RevisionPromptKey,
+      reason,
+      clientRevisionEventId: crypto.randomUUID(),
+      replacementClientEventId: abaV3RevisionMode === 'CORRECT' ? crypto.randomUUID() : undefined
+    };
+    try {
+      const result = await submitV3Revision(record, revision);
+      if (result?.success) closeV3Revision();
+    } catch (error: any) {
+      updateRecord(record.id, { syncStatus: 'synced' });
+      showClinicalToast({ variant: 'error', title: 'Não foi possível revisar o registro', subtitle: error?.message || 'O registro original permanece intacto.' }, 'error');
+    } finally {
+      setAbaV3RevisionSaving(false);
     }
   };
 
@@ -4595,22 +4907,31 @@ export const SessionMode = ({
   };
 
   const saveAbcEvent = async () => {
-    if (!ensureSessionCanRecord()) return;
+    if (!sessionCompleted && !ensureSessionCanRecord()) return;
     if (!lockAction('abc:save', 600)) return;
     const behavior = sessionBehaviorPresets.find((item) => item.id === abcBehaviorId) || selectedBehavior;
-    try {
-      const behaviorDecision = await resolveAbaV3BehaviorForAction(behavior);
-      if (behaviorDecision?.measurementModelVersion === 'V3') {
-        setSessionWarning('ABC ainda não possui modelo V3 próprio. A gravação Legacy foi bloqueada para preservar a separação clínica.');
-        showClinicalToast({ variant: 'info', title: 'ABC V3 ainda não liberado', subtitle: 'Use um comportamento Legacy ou aguarde a superfície ABC V3 dedicada.' }, 'none');
+    if (sessionCompleted) {
+      if (abaV3BehaviorIdSet.has(String(behavior?.id || '').trim())) {
+        setSessionWarning('ABC permanece no modelo Legacy durante o piloto e não pode sobrescrever um comportamento já vinculado ao coletor V3.');
+        showClinicalToast({ variant: 'info', title: 'ABC V3 ainda não liberado', subtitle: 'O complemento foi bloqueado para não misturar semânticas de coleta.' }, 'none');
         releaseActionLock('abc:save');
         return;
       }
-    } catch (error: any) {
-      setSessionWarning(error?.message || 'Não foi possível determinar o modelo deste comportamento.');
-      showClinicalToast({ variant: 'error', title: 'ABC bloqueado', subtitle: error?.message || 'Não foi possível determinar o modelo de coleta.' }, 'error');
-      releaseActionLock('abc:save');
-      return;
+    } else {
+      try {
+        const behaviorDecision = await resolveAbaV3BehaviorForAction(behavior);
+        if (behaviorDecision?.measurementModelVersion === 'V3') {
+          setSessionWarning('ABC ainda não possui modelo V3 próprio. A gravação Legacy foi bloqueada para preservar a separação clínica.');
+          showClinicalToast({ variant: 'info', title: 'ABC V3 ainda não liberado', subtitle: 'Use um comportamento Legacy ou aguarde a superfície ABC V3 dedicada.' }, 'none');
+          releaseActionLock('abc:save');
+          return;
+        }
+      } catch (error: any) {
+        setSessionWarning(error?.message || 'Não foi possível determinar o modelo deste comportamento.');
+        showClinicalToast({ variant: 'error', title: 'ABC bloqueado', subtitle: error?.message || 'Não foi possível determinar o modelo de coleta.' }, 'error');
+        releaseActionLock('abc:save');
+        return;
+      }
     }
     const payload = buildBehaviorPayload(behavior.name, 'abc', {
       behavior_id: behavior.id,
@@ -4622,9 +4943,14 @@ export const SessionMode = ({
       notes: abcNote,
       response: abcNote,
       response_by_therapist: abcNote,
-      responseByTherapist: abcNote
+      responseByTherapist: abcNote,
+      clinical_complement: sessionCompleted || undefined,
+      clinicalComplement: sessionCompleted || undefined,
+      authorizedComplement: sessionCompleted || undefined,
+      complement_type: sessionCompleted ? 'abc' : undefined,
+      complementType: sessionCompleted ? 'abc' : undefined
     });
-    void saveAbcClinicalEvent(payload, {
+    const result = await saveAbcClinicalEvent(payload, {
       id: String(payload.id),
       kind: 'behavior',
       title: behavior.name,
@@ -4643,9 +4969,11 @@ export const SessionMode = ({
       consequence: abcConsequence,
       notes: abcNote
     });
-    showClinicalToast(buildClinicalActionToast({ action: 'abc' }));
-    setAbcModalOpen(false);
-    setAbcNote('');
+    if (result?.success) {
+      showClinicalToast(buildClinicalActionToast({ action: 'abc' }));
+      setAbcModalOpen(false);
+      setAbcNote('');
+    }
   };
 
   const requestEndSession = () => {
@@ -4720,13 +5048,24 @@ export const SessionMode = ({
     const warnings: SessionSummaryPendingItem[] = [];
     const isNonAttendance = NON_ATTENDANCE_STATUSES.has(attendanceStatus);
 
-    if (notSyncedWithServer.length > 0) {
+    const failedV3Trials = notSyncedWithServer.filter((record) => record.kind === 'trial' && record.measurementModelVersion === 'V3' && record.syncStatus === 'error');
+    const otherUnsynced = notSyncedWithServer.length - failedV3Trials.length;
+    if (failedV3Trials.length > 0) {
       blockers.push({
-        key: 'server_sync_required',
-        label: `${notSyncedWithServer.length} dado(s) precisam ser sincronizado(s) antes do encerramento`,
+        key: 'v3_failed_trials_require_resolution',
+        label: `${failedV3Trials.length} tentativa(s) V3 não foram gravadas. Tente novamente ou descarte o erro local antes de encerrar`,
         category: 'blocker',
         blocking: true,
-        count: notSyncedWithServer.length
+        count: failedV3Trials.length
+      });
+    }
+    if (otherUnsynced > 0) {
+      blockers.push({
+        key: 'server_sync_required',
+        label: `${otherUnsynced} dado(s) precisam ser sincronizado(s) antes do encerramento`,
+        category: 'blocker',
+        blocking: true,
+        count: otherUnsynced
       });
     }
     if (isNonAttendance && records.filter((record) => !isCancelledIntervalClinicalRecord(record)).length > 0) {
@@ -7034,6 +7373,9 @@ export const SessionMode = ({
                           Completar próximo ABC
                         </button>
                       )}
+                      <button type="button" onClick={() => openAbcModal(sessionBehaviorPresets[0]?.id || selectedBehavior.id)} className="rounded-2xl bg-violet-400 px-4 py-2 text-xs font-bold uppercase tracking-widest text-slate-950">
+                        + Adicionar ABC
+                      </button>
                     </div>
                     {editingRecordId && (
                       <div className="mt-4 rounded-2xl border border-white/10 bg-white/10 p-4">
@@ -7058,6 +7400,37 @@ export const SessionMode = ({
                         <div className="mt-3 flex gap-2">
                           <button onClick={cancelEditingRecord} className="flex-1 rounded-xl bg-white/10 px-3 py-2 text-xs font-bold uppercase tracking-widest text-white">Cancelar</button>
                           <button onClick={saveRecordEdit} className="flex-1 rounded-xl bg-emerald-400 px-3 py-2 text-xs font-bold uppercase tracking-widest text-slate-900">Salvar ABC</button>
+                        </div>
+                      </div>
+                    )}
+                    {clinicalHistoryRecords.some((record) => record.kind === 'trial' && record.measurementModelVersion === 'V3') && (
+                      <div className="mt-5 border-t border-white/10 pt-4">
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-violet-200">Retificações ABA V3</p>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-300">Editar cria uma correção auditável. Apagar anula a versão efetiva sem excluir o evento original.</p>
+                        <div className="mt-3 space-y-2">
+                          {clinicalHistoryRecords.filter((record) => record.kind === 'trial' && record.measurementModelVersion === 'V3').slice(0, 20).map((record) => (
+                            <div key={`post-v3-${record.id}`} className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-white/10 p-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-white">{record.title}</p>
+                                <p className="mt-1 text-xs text-slate-300">{record.detail} · {new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                              </div>
+                              <div className="flex shrink-0 flex-wrap gap-2">
+                                {record.syncStatus === 'error' ? (
+                                  <>
+                                    <button type="button" onClick={() => void retryFailedV3Trial(record)} className="rounded-xl bg-amber-400 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-950">Reenviar</button>
+                                    <button type="button" onClick={() => void discardFailedV3Trial(record)} className="rounded-xl bg-red-400/90 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Descartar erro</button>
+                                  </>
+                                ) : record.syncStatus === 'local' && record.rawPayload?.pendingV3Revision ? (
+                                  <button type="button" onClick={() => void retryPendingV3Revision(record)} className="rounded-xl bg-amber-400 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-950">Sincronizar revisão</button>
+                                ) : record.syncStatus === 'synced' ? (
+                                  <>
+                                    <button type="button" onClick={() => openV3Revision(record, 'CORRECT')} className="rounded-xl bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-900">Editar</button>
+                                    <button type="button" onClick={() => openV3Revision(record, 'VOID')} className="rounded-xl bg-red-500 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white">Apagar</button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
@@ -9220,7 +9593,34 @@ export const SessionMode = ({
                     <div className="shrink-0 flex flex-col items-end gap-2">
                       {renderSyncBadge(normalizeSyncStatus(record.syncStatus))}
                       {record.measurementModelVersion === 'V3' ? (
-                        <span className="inline-flex min-h-[36px] items-center rounded-full border border-purple-100 bg-purple-50 px-3 py-1 text-[10px] uppercase tracking-widest text-purple-600">V3 · imutável</span>
+                        <div className="flex max-w-[190px] flex-wrap justify-end gap-1.5">
+                          <span className="inline-flex min-h-[32px] items-center rounded-full border border-purple-100 bg-purple-50 px-3 py-1 text-[10px] uppercase tracking-widest text-purple-600">V3 · auditável</span>
+                          {record.kind === 'trial' && record.syncStatus === 'error' && (
+                            <>
+                              <button type="button" onClick={() => void retryFailedV3Trial(record)} className="inline-flex min-h-[34px] items-center gap-1 rounded-full border border-amber-100 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">
+                                <RotateCcw size={11} /> Tentar novamente
+                              </button>
+                              <button type="button" onClick={() => void discardFailedV3Trial(record)} className="inline-flex min-h-[34px] items-center gap-1 rounded-full border border-red-100 bg-red-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-red-600">
+                                <X size={11} /> Descartar erro
+                              </button>
+                            </>
+                          )}
+                          {record.kind === 'trial' && record.syncStatus === 'local' && record.rawPayload?.pendingV3Revision && (
+                            <button type="button" onClick={() => void retryPendingV3Revision(record)} className="inline-flex min-h-[34px] items-center gap-1 rounded-full border border-amber-100 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">
+                              <RotateCcw size={11} /> Sincronizar revisão
+                            </button>
+                          )}
+                          {record.kind === 'trial' && record.syncStatus === 'synced' && (
+                            <>
+                              <button type="button" onClick={() => openV3Revision(record, 'CORRECT')} className="inline-flex min-h-[34px] items-center gap-1 rounded-full border border-gray-100 bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-600 hover:text-[#7a32fc]">
+                                <Pencil size={11} /> Editar
+                              </button>
+                              <button type="button" onClick={() => openV3Revision(record, 'VOID')} className="inline-flex min-h-[34px] items-center gap-1 rounded-full border border-red-100 bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-red-500">
+                                <X size={11} /> Apagar
+                              </button>
+                            </>
+                          )}
+                        </div>
                       ) : (
                         <button onClick={() => startEditingRecord(record)} className="inline-flex min-h-[36px] items-center gap-1 rounded-full bg-white border border-gray-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:text-[#7a32fc]">
                           <Pencil size={11} /> Editar
@@ -9489,6 +9889,89 @@ export const SessionMode = ({
                 className="min-h-[48px] rounded-2xl border border-gray-100 bg-white px-4 py-3 text-xs font-bold uppercase tracking-widest text-gray-500"
               >
                 Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {abaV3RevisionRecord && (
+        <div className="fixed inset-0 z-[146] flex items-end justify-center bg-black/35 p-3 backdrop-blur-sm sm:items-center sm:p-4" data-aba-v3-revision-modal>
+          <div className="w-full max-w-lg rounded-[28px] border border-purple-100 bg-white p-5 shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-purple-500">Revisão auditável · ABA V3</p>
+                <h2 className="mt-1 text-xl font-semibold text-gray-900">{abaV3RevisionMode === 'VOID' ? 'Apagar registro' : 'Editar registro'}</h2>
+                <p className="mt-1 text-sm text-gray-500">{abaV3RevisionRecord.title} · {new Date(abaV3RevisionRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+              </div>
+              <button type="button" disabled={abaV3RevisionSaving} onClick={closeV3Revision} className="rounded-full bg-gray-100 p-2 text-gray-500 disabled:opacity-40" aria-label="Fechar revisão">
+                <X size={18} />
+              </button>
+            </div>
+
+            {abaV3RevisionMode === 'CORRECT' ? (
+              <div className="mt-5 space-y-4">
+                <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                  Resultado correto da tentativa
+                  <select
+                    value={abaV3RevisionActionKey}
+                    onChange={(event) => {
+                      const nextAction = event.target.value as AbaV3TrialActionKey;
+                      setAbaV3RevisionActionKey(nextAction);
+                      if (nextAction !== 'PROMPTED_CORRECT') setAbaV3RevisionPromptKey('');
+                    }}
+                    className="mt-2 w-full rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm font-semibold text-gray-800 outline-none focus:border-purple-300"
+                  >
+                    <option value="INDEPENDENT_CORRECT">Independente · correta</option>
+                    <option value="PROMPTED_CORRECT">Com ajuda · correta</option>
+                    <option value="INDEPENDENT_INCORRECT">Resposta incorreta</option>
+                    <option value="NO_RESPONSE">Sem resposta</option>
+                  </select>
+                </label>
+                {abaV3RevisionActionKey === 'PROMPTED_CORRECT' && (
+                  <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    Tipo de ajuda
+                    <select
+                      value={abaV3RevisionPromptKey}
+                      onChange={(event) => setAbaV3RevisionPromptKey(event.target.value)}
+                      className="mt-2 w-full rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm font-semibold text-gray-800 outline-none focus:border-purple-300"
+                    >
+                      <option value="">Selecione</option>
+                      {v3PromptedPromptOptions.map((prompt) => (
+                        <option key={prompt.id || prompt.key} value={prompt.key}>{prompt.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <div className="rounded-2xl border border-purple-100 bg-purple-50 p-3 text-xs leading-relaxed text-purple-700">
+                  A Verto não altera a tentativa original. A correção cria uma nova tentativa V3 e vincula ambas por um evento de revisão atômico e auditável.
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm leading-relaxed text-red-700">
+                O registro deixará de contar nos resultados clínicos. O evento original não será destruído: ficará preservado na auditoria como <strong>VOID</strong>.
+              </div>
+            )}
+
+            <label className="mt-4 block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+              Motivo da {abaV3RevisionMode === 'VOID' ? 'remoção' : 'correção'}
+              <textarea
+                value={abaV3RevisionReason}
+                onChange={(event) => setAbaV3RevisionReason(event.target.value.slice(0, 1000))}
+                placeholder="Ex.: registro selecionado por engano"
+                className="mt-2 min-h-[88px] w-full resize-none rounded-2xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm text-gray-700 outline-none focus:border-purple-300"
+              />
+            </label>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <button type="button" disabled={abaV3RevisionSaving} onClick={closeV3Revision} className="rounded-2xl bg-gray-100 px-4 py-3 text-sm font-semibold text-gray-600 disabled:opacity-50">Cancelar</button>
+              <button
+                type="button"
+                disabled={abaV3RevisionSaving}
+                onClick={() => void saveV3Revision()}
+                className={`inline-flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold text-white disabled:opacity-50 ${abaV3RevisionMode === 'VOID' ? 'bg-red-500' : 'bg-[#7a32fc]'}`}
+              >
+                {abaV3RevisionSaving ? <Loader2 size={16} className="animate-spin" /> : abaV3RevisionMode === 'VOID' ? <X size={16} /> : <Save size={16} />}
+                {abaV3RevisionMode === 'VOID' ? 'Apagar' : 'Salvar correção'}
               </button>
             </div>
           </div>

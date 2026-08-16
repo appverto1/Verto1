@@ -5,6 +5,7 @@ import {
   getLatestTypeUpdate,
   getRecordById,
   getRecordsByType,
+  discardFailedOfflineEntityMutations,
   markRecordSyncStatus,
   markRecordSyncFailure,
   saveEncryptedRecord,
@@ -5767,6 +5768,44 @@ export const dataService = {
       client_metadata: trial?.client_metadata || trial?.clientMetadata || {}
     };
     return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/trials', 'POST');
+  },
+
+  async saveAbaV3TrialRevision(input: any) {
+    const originalTrialId = String(input?.original_trial_id || input?.originalTrialId || '').trim();
+    const originalClientEventId = String(input?.original_client_event_id || input?.originalClientEventId || '').trim();
+    const clientRevisionEventId = String(input?.client_revision_event_id || input?.clientRevisionEventId || generateId()).trim();
+    const replacementClientEventId = String(input?.replacement_client_event_id || input?.replacementClientEventId || generateId()).trim();
+    const eventType = String(input?.event_type || input?.eventType || '').trim().toUpperCase();
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      original_trial_id: originalTrialId || undefined,
+      original_client_event_id: originalClientEventId || undefined,
+      event_type: eventType,
+      client_revision_event_id: clientRevisionEventId,
+      replacement_client_event_id: eventType === 'CORRECT' ? replacementClientEventId : undefined,
+      reason: input?.reason,
+      action_key: input?.action_key || input?.actionKey || undefined,
+      prompt_type_id: input?.prompt_type_id || input?.promptTypeId || undefined,
+      prompt_key: input?.prompt_key || input?.promptKey || undefined,
+      client_metadata: input?.client_metadata || input?.clientMetadata || {}
+    };
+    const queueEntityId = originalTrialId || originalClientEventId || clientRevisionEventId;
+    return await saveOfflineFirst(
+      clientRevisionEventId,
+      data,
+      'aba_v3',
+      '/api/aba/v3/trial-revisions',
+      'POST',
+      { queueEntityId }
+    );
+  },
+
+  async discardAbaV3FailedTrial(clientEventId: string) {
+    const safeClientEventId = String(clientEventId || '').trim();
+    if (!safeClientEventId) return { success: false, error: 'Tentativa local não identificada.' };
+    const discarded = await discardFailedOfflineEntityMutations('aba_v3', safeClientEventId);
+    return { success: true, discarded };
   },
 
   async getAbaV3BehaviorCatalog(patientId: string) {

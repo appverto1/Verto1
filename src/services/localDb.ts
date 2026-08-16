@@ -516,6 +516,22 @@ export async function getRecordById(id: string): Promise<OfflineRecord | null> {
   return base;
 }
 
+export async function discardFailedOfflineEntityMutations(type: OfflineRecord['type'], entityId: string): Promise<number> {
+  const currentUserId = await getCurrentUserIdOrNull();
+  const safeEntityId = String(entityId || '').trim();
+  if (!currentUserId || !safeEntityId) return 0;
+
+  const rows = (await db.records.where('entity_id').equals(safeEntityId).toArray())
+    .filter((row) =>
+      row.user_id === currentUserId &&
+      row.type === type &&
+      (row.sync_status === 'failed' || row.sync_status === 'conflict')
+    );
+  if (rows.length === 0) return 0;
+  await db.records.bulkDelete(rows.map((row) => row.id));
+  return rows.length;
+}
+
 export async function getRecordsByType(type: OfflineRecord['type']): Promise<OfflineRecord[]> {
   const currentUserId = await getCurrentUserIdOrNull();
   if (!currentUserId) return [];

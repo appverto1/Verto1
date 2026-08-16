@@ -69,7 +69,7 @@ assert.match(legacyTrialRoute, /plannedModel === 'V3' \|\| plannedModel === 'V3_
 assert.ok(legacyTrialRoute.indexOf('ABA_V3_LEGACY_WRITE_BLOCKED') < legacyTrialRoute.indexOf("writeAbaRowWithSchemaFallback('aba_trials'"), 'V3 guard must run before Legacy persistence');
 
 const trialRouteStart = server.indexOf("'/api/aba/v3/trials'");
-const trialRouteEnd = server.indexOf('const handleAbaV3ReadRpcError', trialRouteStart);
+const trialRouteEnd = server.indexOf("'/api/aba/v3/trial-revisions'", trialRouteStart);
 assert.ok(trialRouteStart >= 0 && trialRouteEnd > trialRouteStart, 'V3 trial route block must exist');
 const trialRoute = server.slice(trialRouteStart, trialRouteEnd);
 assert.doesNotMatch(trialRoute, /req\.body\?\.steps|req\.body\.steps/);
