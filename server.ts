@@ -70826,6 +70826,15 @@ async function startServer() {
         res.setHeader('Cache-Control', 'private, no-store');
         return res.json({ success: true, data: data || { session_id: sessionId, targets: [], v3_behavior_ids: [], complete: true } });
       } catch (error: any) {
+        console.error('[ABA V3 collection-plan] request failed', {
+          requestId: requestIdForLogs(req),
+          sessionId: sanitizeString(req.params?.sessionId, 180) || null,
+          patientId: sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120) || null,
+          code: sanitizeString(error?.code, 80) || null,
+          message: sanitizeString(error?.message || String(error), 500) || null,
+          details: sanitizeString(error?.details, 500) || null,
+          hint: sanitizeString(error?.hint, 500) || null
+        });
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }
     }
