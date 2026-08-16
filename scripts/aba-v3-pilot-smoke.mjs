@@ -13,12 +13,17 @@ if (!/^https?:\/\//i.test(baseUrl) || !clinicCookie || !adminCookie || !organiza
   process.exit(2);
 }
 
+const requestOrigin = new URL(baseUrl).origin;
+
 const request = async (path, cookie, options = {}) => {
+  const method = String(options.method || 'GET').toUpperCase();
+  const requiresCsrfProof = !['GET', 'HEAD', 'OPTIONS'].includes(method);
   const response = await fetch(`${baseUrl}${path}`, {
-    method: options.method || 'GET',
+    method,
     headers: {
       Cookie: cookie,
       Accept: 'application/json',
+      ...(requiresCsrfProof ? { Origin: requestOrigin, Referer: `${requestOrigin}/` } : {}),
       ...(options.body ? { 'Content-Type': 'application/json' } : {})
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
