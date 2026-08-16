@@ -373,6 +373,11 @@ export const AnamnesisModal = ({
         setTemplateAgeMinYears(String(parsed?.templateAgeMinYears || ''));
         setTemplateAgeMaxYears(String(parsed?.templateAgeMaxYears || ''));
         setTemplatePatientProfileType(String(parsed?.templatePatientProfileType || ''));
+        if (parsed?.draftQuestion && typeof parsed.draftQuestion === 'object') {
+          setDraftQuestion(parsed.draftQuestion as QuestionDraft);
+          setEditingQuestionId(String(parsed?.editingQuestionId || parsed.draftQuestion.id || 'new'));
+          setEditorSectionId(String(parsed?.editorSectionId || '').trim() || null);
+        }
         markTemplateDirty(true);
       } else {
         localStorage.removeItem(templateDraftStorageKey);
@@ -383,7 +388,7 @@ export const AnamnesisModal = ({
   }, [isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
-    if (!isOpen || !canEditTemplate || view !== 'template' || !templateDirty) return;
+    if (!isOpen || !canEditTemplate || view !== 'template' || (!templateDirty && !draftQuestion)) return;
     try {
       localStorage.setItem(
         templateDraftStorageKey,
@@ -395,13 +400,16 @@ export const AnamnesisModal = ({
           templateAgeMinYears,
           templateAgeMaxYears,
           templatePatientProfileType,
-          selectedTemplateId: (templateState as any)?.selectedTemplateId || null
+          selectedTemplateId: (templateState as any)?.selectedTemplateId || null,
+          editingQuestionId,
+          editorSectionId,
+          draftQuestion
         })
       );
     } catch {
       // noop
     }
-  }, [templateState, templateName, templateDescription, templateAgeMinYears, templateAgeMaxYears, templatePatientProfileType, templateDirty, isOpen, canEditTemplate, view, templateDraftStorageKey]);
+  }, [templateState, templateName, templateDescription, templateAgeMinYears, templateAgeMaxYears, templatePatientProfileType, templateDirty, draftQuestion, editingQuestionId, editorSectionId, isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
     if (!isOpen || !loadLatestTemplate || templateDirtyRef.current) return;
@@ -583,7 +591,13 @@ export const AnamnesisModal = ({
   };
 
   const startQuestionEdit = (question: AnamnesisQuestion) => {
+    if (draftQuestion && editingQuestionId && editingQuestionId !== question.id) {
+      showFeedback('info', 'Confirme ou cancele a pergunta que já está em edição antes de abrir outra.');
+      if (editorSectionId) setExpandedSections((prev) => ({ ...prev, [editorSectionId]: true }));
+      return;
+    }
     setEditingQuestionId(question.id);
+    setEditorSectionId(question.sectionId);
     setDraftQuestion({
       id: question.id,
       label: question.label,
@@ -595,6 +609,7 @@ export const AnamnesisModal = ({
 
   const saveQuestionEdit = (sectionId?: string) => {
     if (!draftQuestion) return;
+    const targetSectionId = String(editorSectionId || sectionId || '').trim();
     const isChoiceType = draftQuestion.type === 'multipla_escolha' || draftQuestion.type === 'multipla_selecao';
     const options = isChoiceType ? normalizeOptions(draftQuestion.optionsText) : [];
 
@@ -609,6 +624,9 @@ export const AnamnesisModal = ({
 
     updateTemplateProfile((profile) => {
       const exists = profile.questions.some((question) => question.id === draftQuestion.id);
+      if (!exists && !profile.sections.some((section) => section.id === targetSectionId)) {
+        return profile;
+      }
       if (exists) {
         return {
           ...profile,
@@ -626,14 +644,16 @@ export const AnamnesisModal = ({
         };
       }
 
-      const nextOrder = Math.max(0, ...profile.questions.filter((question) => question.sectionId === sectionId).map((question) => question.order)) + 1;
+      const nextOrder = Math.max(0, ...profile.questions.filter((question) => question.sectionId === targetSectionId).map((question) => question.order)) + 1;
       return {
         ...profile,
+        // Adição é estritamente aditiva: nenhuma pergunta de outra seção é filtrada,
+        // substituída ou reconstruída quando uma nova pergunta é confirmada.
         questions: [
           ...profile.questions,
           {
             id: draftQuestion.id,
-            sectionId: sectionId || 'personalizadas',
+            sectionId: targetSectionId,
             label: draftQuestion.label.trim(),
             type: draftQuestion.type,
             options: options.length ? options : undefined,
@@ -651,6 +671,14 @@ export const AnamnesisModal = ({
   };
 
   const startAddQuestion = (sectionId: string) => {
+    // Há um único editor rápido por vez. Antes, abrir um novo editor sobrescrevia
+    // silenciosamente a pergunta ainda não confirmada de outra seção, dando a
+    // impressão de que perguntas anteriores tinham "sumido".
+    if (draftQuestion && editingQuestionId) {
+      showFeedback('info', 'Confirme ou cancele a pergunta que já está em edição antes de adicionar outra.');
+      if (editorSectionId) setExpandedSections((prev) => ({ ...prev, [editorSectionId]: true }));
+      return;
+    }
     setEditingQuestionId('new');
     setDraftQuestion({
       id: generateQuestionId(),
@@ -788,7 +816,7 @@ export const AnamnesisModal = ({
   };
 
   const handleCloseModal = () => {
-    if (canEditTemplate && view === 'template' && templateDirty) {
+    if (canEditTemplate && view === 'template' && (templateDirty || Boolean(draftQuestion))) {
       const shouldLeave = confirm('Existem mudanças não salvas na ficha de anamnese. Deseja sair sem salvar?');
       if (!shouldLeave) return;
     }
@@ -1008,6 +1036,7 @@ export const AnamnesisModal = ({
                 </button>
               </div>
               {profileTemplate.sections
+                .slice()
                 .sort((a, b) => a.order - b.order)
                 .map((section) => {
                   const sectionQuestions = profileTemplate.questions

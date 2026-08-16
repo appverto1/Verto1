@@ -22,7 +22,7 @@ assert.match(anamnesis, /hasUntitledSection[\s\S]*?DÃª um nome para todas as seÃ
 
 // Unsaved draft includes metadata as well as questions/sections; clean opens do
 // not continuously overwrite localStorage with a fake "draft".
-assert.match(anamnesis, /!templateDirty\) return;/);
+assert.match(anamnesis, /!templateDirty && !draftQuestion/);
 assert.match(anamnesis, /templateName,[\s\S]*?templateDescription,[\s\S]*?templateAgeMinYears,[\s\S]*?templateAgeMaxYears,[\s\S]*?templatePatientProfileType/);
 assert.match(anamnesis, /setTemplateName\(String\(parsed\?\.templateName/);
 assert.match(anamnesis, /setTemplateDescription\(String\(parsed\?\.templateDescription/);
