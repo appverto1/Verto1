@@ -94,6 +94,23 @@ assert.doesNotMatch(collectionUtils, /independence_score|response_score/);
 assert.match(dataService, /saveOfflineFirst\(clientEventId, data, 'aba_v3', '\/api\/aba\/v3\/trials', 'POST'\)/);
 assert.match(localDb, /'aba_v3'/);
 
+// Clinical routing is server-authoritative even if a browser bundle carries an
+// outdated/disabled V3 presentation flag. The VITE flag may hide presentation,
+// but it cannot force an authoritative V3 session back through the Legacy writer.
+const bindingResolverStart = dataService.indexOf('async resolveAbaV3SessionTargetBinding');
+const bindingResolverEnd = dataService.indexOf('async saveAbaV3TrialAction', bindingResolverStart);
+const v3TrialWriterEnd = dataService.indexOf('async getAbaV3BehaviorCatalog', bindingResolverEnd);
+const sessionPlanStart = dataService.indexOf('async getAbaV3SessionCollectionPlan');
+const sessionPlanEnd = dataService.indexOf('async getAbaV3ChartCatalog', sessionPlanStart);
+assert.ok(bindingResolverStart >= 0 && bindingResolverEnd > bindingResolverStart && v3TrialWriterEnd > bindingResolverEnd);
+assert.doesNotMatch(dataService.slice(bindingResolverStart, v3TrialWriterEnd), /if \(!isAbaV3UiEnabled\(\)\)/);
+assert.ok(sessionPlanStart >= 0 && sessionPlanEnd > sessionPlanStart);
+assert.doesNotMatch(dataService.slice(sessionPlanStart, sessionPlanEnd), /if \(!isAbaV3UiEnabled\(\)\)/);
+assert.match(sessionMode, /if \(!patientId \|\| !sessionId \|\| sessionId\.startsWith\('draft-'\)\)/);
+assert.doesNotMatch(sessionMode, /if \(!abaV3UiEnabled \|\| !patientId \|\| !sessionId \|\| sessionId\.startsWith\('draft-'\)\)/);
+assert.match(sessionMode, /const plannedModel = abaV3PlannedModelForGoal\(goal\);[\s\S]*?plannedModel === 'V3'[\s\S]*?persistV3TrialRecord/);
+assert.match(sessionMode, /abaV3SessionPlanStatus === 'idle' \|\| abaV3SessionPlanStatus === 'loading'/);
+
 // Binding is cached once per session+target and unresolved state fails closed.
 assert.match(sessionMode, /abaV3BindingCacheRef\.current\.get\(cacheKey\)/);
 assert.match(sessionMode, /abaV3BindingCacheRef\.current\.set\(cacheKey, binding\)/);

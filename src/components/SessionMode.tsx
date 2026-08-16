@@ -2947,7 +2947,7 @@ export const SessionMode = ({
     binding: AbaV3BindingDecision | null;
     v3ActionKey?: AbaV3TrialActionKey;
   }) => {
-    const plannedModel = abaV3UiEnabled ? abaV3PlannedModelForGoal(goal) : '';
+    const plannedModel = abaV3PlannedModelForGoal(goal);
     if (plannedModel === 'V3_BLOCKED') {
       throw new Error('A coleta V3 deste target está bloqueada por configuração incompleta. Nenhuma tentativa Legacy foi gravada.');
     }
@@ -2993,7 +2993,7 @@ export const SessionMode = ({
     activeCollectionType: string;
     activeMaintenanceProbe?: ActiveMaintenanceProbeForTarget | null;
   }) => {
-    if (abaV3UiEnabled && isGoalPlannedForV3Ui(goal)) {
+    if (isGoalPlannedForV3Ui(goal)) {
       throw new Error('Proteção ABA V3: persistência Legacy bloqueada para target planejado como V3.');
     }
     const maxScore = Number(goal?.maxScore || 1);
@@ -3145,6 +3145,15 @@ export const SessionMode = ({
 
   const handleTrialClick = async (goal: any, score: number, outcome: 'independent' | 'prompted' | 'error', promptedPromptKey?: string) => {
     if (!ensureSessionCanRecord()) return;
+    if (!sessionId.startsWith('draft-') && (abaV3SessionPlanStatus === 'idle' || abaV3SessionPlanStatus === 'loading')) {
+      setSessionWarning('Validando o modelo de coleta desta sessão. Tente novamente em instantes.');
+      showClinicalToast({
+        variant: 'info',
+        title: 'Validando coleta clínica',
+        subtitle: 'A Verto está confirmando se este alvo usa ABA V2 ou V3 antes de gravar.'
+      });
+      return;
+    }
     const goalPromptedPromptOptions = promptedPromptOptionsForGoal(goal);
     const goalPromptedPromptKeySet = new Set(goalPromptedPromptOptions.map((prompt) => prompt.key));
     const selectedPrompt = outcome === 'independent'
@@ -3163,8 +3172,8 @@ export const SessionMode = ({
     const activeCollectionType = normalizeAbaCollectionType(trialContext.collectionType);
 
     let binding: AbaV3BindingDecision | null = null;
-    if (abaV3UiEnabled) {
-      const plannedModel = abaV3PlannedModelForGoal(goal);
+    const plannedModel = abaV3PlannedModelForGoal(goal);
+    if (abaV3UiEnabled || Boolean(plannedModel)) {
       if (abaV3SessionPlanStatus === 'ready' && plannedModel === 'V3_BLOCKED') {
         setSessionWarning('Este target está selecionado para V3, mas a configuração clínica não está completa. Nenhuma tentativa foi gravada.');
         showClinicalToast({ variant: 'error', title: 'Coleta V3 bloqueada', subtitle: 'Revise definição, fase e passos antes de coletar.' }, 'error');
@@ -5011,9 +5020,9 @@ export const SessionMode = ({
   useEffect(() => {
     abaV3BindingCacheRef.current.clear();
     abaV3BehaviorBindingCacheRef.current.clear();
-    if (!abaV3UiEnabled || !patientId || !sessionId || sessionId.startsWith('draft-')) {
+    if (!patientId || !sessionId || sessionId.startsWith('draft-')) {
       setAbaV3SessionPlan({ targets: [], v3_behavior_ids: [], complete: false });
-      setAbaV3SessionPlanStatus(abaV3UiEnabled ? 'idle' : 'ready');
+      setAbaV3SessionPlanStatus('idle');
       return;
     }
     let cancelled = false;
@@ -5023,7 +5032,9 @@ export const SessionMode = ({
         if (cancelled) return;
         if (!result?.success) {
           setAbaV3SessionPlan({ targets: [], v3_behavior_ids: [], complete: false });
-          setAbaV3SessionPlanStatus('error');
+          // A disabled server-side V3 read API means this is a pure Legacy
+          // environment. Other failures remain visible/fail-safe.
+          setAbaV3SessionPlanStatus(result?.code === 'feature_disabled' ? 'ready' : 'error');
           return;
         }
         const data = result?.data || {};

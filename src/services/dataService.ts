@@ -5712,7 +5712,8 @@ export const dataService = {
   },
 
   async resolveAbaV3SessionTargetBinding(input: { patientId: string; sessionId: string; targetId: string }) {
-    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    // Clinical routing is server-authoritative. Do not gate this resolver by the
+    // browser build flag: a stale bundle must still honor a V3 session plan.
     const patientId = String(input?.patientId || '').trim();
     const sessionId = String(input?.sessionId || '').trim();
     const targetId = String(input?.targetId || '').trim();
@@ -5736,7 +5737,8 @@ export const dataService = {
   },
 
   async saveAbaV3TrialAction(trial: any) {
-    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    // The server collection feature + session binding authorize this write. The
+    // VITE UI flag must never force an authoritative V3 trial back through V2.
     const clientEventId = String(trial?.client_event_id || trial?.clientEventId || trial?.id || generateId()).trim();
     const data = {
       patient_id: trial?.patient_id || trial?.patientId,
@@ -5906,7 +5908,9 @@ export const dataService = {
   },
 
   async getAbaV3SessionCollectionPlan(input: { patientId: string; sessionId: string; targetIds?: string[] }) {
-    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { targets: [], v3_behavior_ids: [], complete: false } };
+    // Probe the authoritative server plan even when the current browser bundle
+    // has the optional V3 presentation flag disabled. This is one read per
+    // active session and prevents stale clients from attempting Legacy writes.
     const patientId = String(input?.patientId || '').trim();
     const sessionId = String(input?.sessionId || '').trim();
     const targetIds = Array.from(new Set((Array.isArray(input?.targetIds) ? input.targetIds : []).map((value) => String(value || '').trim()).filter(Boolean))).slice(0, 200);
