@@ -1020,7 +1020,10 @@ export function CoordinatorDashboard({
 
   const goBackTab = () => {
     setTabHistory((prev) => {
-      if (prev.length <= 1) return prev;
+      if (prev.length <= 1) {
+        if (activeTab !== "dashboard") setActiveTab("dashboard");
+        return ["dashboard"];
+      }
       const next = prev.slice(0, -1);
       const previousTab = next[next.length - 1] as typeof activeTab;
       setActiveTab(previousTab);
@@ -1666,6 +1669,8 @@ export function CoordinatorDashboard({
   const [appointmentEditScope, setAppointmentEditScope] = useState<"single" | "future">("single");
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
   const [view, setView] = useState<"home" | "patient">("home");
+  const [patientRestorePending, setPatientRestorePending] = useState(false);
+  const patientRestoreAttemptRef = useRef("");
   const [patientOpenTab, setPatientOpenTab] = useState<
     "history" | "notes" | "report" | "plan" | "session" | "school" | "files"
   >("history");
@@ -1732,8 +1737,15 @@ export function CoordinatorDashboard({
       const nextPatientTab = String(state?.patientOpenTab || "history");
 
       if (canAccessTab(nextTab)) {
+        const persistedHistory = Array.isArray(state?.tabHistory)
+          ? state.tabHistory
+              .map((tab: any) => String(tab || "").trim())
+              .filter((tab: any) => tab && canAccessTab(tab as DashboardTab))
+          : [];
+        const restoredHistory = persistedHistory.slice(-20);
+        if (restoredHistory[restoredHistory.length - 1] !== nextTab) restoredHistory.push(nextTab);
         setActiveTab(nextTab);
-        setTabHistory([nextTab]);
+        setTabHistory(restoredHistory.length > 0 ? restoredHistory : [nextTab]);
       } else {
         setActiveTab("dashboard");
         setTabHistory(["dashboard"]);
@@ -1767,6 +1779,7 @@ export function CoordinatorDashboard({
         dashboardResumeKey,
         JSON.stringify({
           activeTab,
+          tabHistory: tabHistory.slice(-20),
           view,
           selectedPatientId: selectedPatientId ? String(selectedPatientId) : null,
           patientOpenTab,
@@ -1775,12 +1788,29 @@ export function CoordinatorDashboard({
     } catch (error) {
       console.warn("Falha ao persistir contexto do painel:", error);
     }
-  }, [dashboardResumeKey, activeTab, view, selectedPatientId, patientOpenTab]);
+  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab]);
 
   useEffect(() => {
-    if (view !== "patient" || !selectedPatientId) return;
-    void onOpenPatientDetails?.(selectedPatientId);
-  }, [onOpenPatientDetails, selectedPatientId, view]);
+    if (view !== "patient" || !selectedPatientId || !onOpenPatientDetails) {
+      setPatientRestorePending(false);
+      return;
+    }
+    const patientId = String(selectedPatientId).trim();
+    const patientExists = allPatients.some((patient: any) => String(patient?.id || "").trim() === patientId);
+    const restoreKey = `${workspaceScopeKey}:${patientId}`;
+    if (!patientExists && patientRestoreAttemptRef.current === restoreKey) return;
+    if (!patientExists) {
+      patientRestoreAttemptRef.current = restoreKey;
+      setPatientRestorePending(true);
+    }
+    let cancelled = false;
+    void Promise.resolve(onOpenPatientDetails(patientId)).finally(() => {
+      if (!cancelled) setPatientRestorePending(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [allPatients, onOpenPatientDetails, selectedPatientId, view, workspaceScopeKey]);
 
   const [payments, setPayments] = useState<any[]>([]);
   const [professionalPayments, setProfessionalPayments] = useState<any[]>([]);
@@ -10439,6 +10469,16 @@ export function CoordinatorDashboard({
     const patient = allPatients.find(
       (p) => String(p.id) === String(selectedPatientId),
     );
+    if (!patient && patientRestorePending) {
+      return (
+        <div className="min-h-screen bg-[#F4F7FE] flex items-center justify-center p-6">
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 max-w-lg w-full text-center">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#7a32fc] mx-auto" />
+            <p className="mt-4 text-sm font-semibold text-slate-600">Restaurando prontuário...</p>
+          </div>
+        </div>
+      );
+    }
     if (!patient) {
       return (
         <div className="min-h-screen bg-[#F4F7FE] flex items-center justify-center p-6">
@@ -10785,12 +10825,10 @@ export function CoordinatorDashboard({
           <div className="flex items-center gap-4">
             {activeTab !== "dashboard" && (
               <button
-                onClick={() => {
-                  setActiveTab("dashboard");
-                  setTabHistory(["dashboard"]);
-                  setIsEditingRooms(true);
-                }}
+                onClick={goBackTab}
                 className="p-2 bg-white rounded-xl text-slate-400 hover:text-[#7a32fc] shadow-sm border border-slate-100 transition-all"
+                aria-label="Voltar à página anterior"
+                title="Voltar"
               >
                 <ChevronRight size={20} className="rotate-180" />
               </button>

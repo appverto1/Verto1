@@ -1195,9 +1195,13 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'log', '/api/logs');
   },
 
-  async getPatients(options: { workspaceId?: string; forceRemote?: boolean } = {}) {
-    const endpoint = endpointWithLimit('/api/patients', 200);
+  async getPatients(options: { workspaceId?: string; forceRemote?: boolean; patientId?: string } = {}) {
     const workspaceId = String(options?.workspaceId || '').trim();
+    const requestedPatientId = String(options?.patientId || '').trim();
+    const endpoint = endpointWithQuery('/api/patients', {
+      limit: requestedPatientId ? 1 : 200,
+      patientId: requestedPatientId || undefined
+    });
     const forceRemote = options?.forceRemote === true;
     try {
       const headers = forceRemote
@@ -1217,7 +1221,9 @@ export const dataService = {
             .map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
             .filter((patient: any) => {
               const patientWorkspaceId = String(patient?.clinic_id || patient?.clinicId || '').trim();
-              return !workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId;
+              const patientId = String(patient?.id || '').trim();
+              return (!workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId) &&
+                (!requestedPatientId || patientId === requestedPatientId);
             })
         };
       }
@@ -1271,7 +1277,11 @@ export const dataService = {
             const localPatient = mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
             const patientId = String(localPatient?.id || '').trim();
             const patientWorkspaceId = String(localPatient?.clinic_id || localPatient?.clinicId || '').trim();
-            if (!patientId || (workspaceId && patientWorkspaceId && patientWorkspaceId !== workspaceId)) continue;
+            if (
+              !patientId ||
+              (workspaceId && patientWorkspaceId && patientWorkspaceId !== workspaceId) ||
+              (requestedPatientId && patientId !== requestedPatientId)
+            ) continue;
             const remotePatient = patientsById.get(patientId);
             patientsById.set(patientId, remotePatient ? { ...remotePatient, ...localPatient } : localPatient);
           }
@@ -1310,7 +1320,9 @@ export const dataService = {
         .map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
         .filter((patient: any) => {
           const patientWorkspaceId = String(patient?.clinic_id || patient?.clinicId || '').trim();
-          return !workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId;
+          const patientId = String(patient?.id || '').trim();
+          return (!workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId) &&
+            (!requestedPatientId || patientId === requestedPatientId);
         })
     };
   },

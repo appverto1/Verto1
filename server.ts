@@ -36615,7 +36615,11 @@ async function startServer() {
   // Patients
   app.get('/api/patients', checkAuth, requireClinicCapability('patient.list'), async (req: any, res) => {
     try {
-      const limit = parseBoundedListLimit(req.query?.limit, 200, 500);
+      const requestedPatientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+      if (requestedPatientId && !isUuid(requestedPatientId)) {
+        return res.status(400).json({ success: false, error: 'Paciente inválido.' });
+      }
+      const limit = requestedPatientId ? 1 : parseBoundedListLimit(req.query?.limit, 200, 500);
       const context = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
       if (!context) {
         return res.status(403).json({
@@ -36624,7 +36628,14 @@ async function startServer() {
         });
       }
 
-      const scopedPatientIds = await resolvePatientListScopedPatientIds(context);
+      const resolvedScopedPatientIds = await resolvePatientListScopedPatientIds(context);
+      const scopedPatientIds = requestedPatientId
+        ? resolvedScopedPatientIds === null
+          ? [requestedPatientId]
+          : resolvedScopedPatientIds.includes(requestedPatientId)
+            ? [requestedPatientId]
+            : []
+        : resolvedScopedPatientIds;
       const result = await fetchPatientsWithSchemaFallback({
         supabase,
         role: context.role,
@@ -36641,20 +36652,20 @@ async function startServer() {
         ? (result.data || []).filter((patient: any) => patient?.is_demo === true)
         : result.data || [];
 
-      const patientIds = patients
+      const returnedPatientIds = patients
         .map((patient: any) => sanitizeString(patient?.id, 120))
         .filter(Boolean);
       let activeProfessionalLinksByPatient: Map<string, any[]> | null = null;
       if (
         context.capabilities.has('team.view') &&
-        patientIds.length > 0
+        returnedPatientIds.length > 0
       ) {
         const professionalLinkResult = await supabase
           .from('patient_professional_links')
           .select('patient_id,professional_id,relationship_type,status')
           .eq('organization_id', context.clinicId)
           .eq('status', 'active')
-          .in('patient_id', patientIds);
+          .in('patient_id', returnedPatientIds);
         if (professionalLinkResult.error) {
           if (!isMissingRelationError(professionalLinkResult.error)) {
             throw professionalLinkResult.error;
@@ -70292,6 +70303,7 @@ async function startServer() {
             .select('id,key,name,category,intrusiveness_order,active,show_in_session')
             .eq('organization_id', organizationId)
             .eq('active', true)
+            .eq('show_in_session', true)
             .limit(1);
           if (isUuid(promptTypeId)) promptQuery = promptQuery.eq('id', promptTypeId);
           else if (requestedPromptKey) promptQuery = promptQuery.eq('key', requestedPromptKey);

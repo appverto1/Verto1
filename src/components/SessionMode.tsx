@@ -470,10 +470,6 @@ const defaultPromptedPromptOptions = normalizeAbaPromptTypeConfig()
       ? 'Física total'
       : prompt.label
 }));
-const defaultV3PromptedPromptOptions = normalizeAbaPromptTypeConfig()
-  .filter((prompt) => prompt.active && prompt.showInSession)
-  .filter((prompt) => prompt.key !== 'independent' && prompt.key !== 'error')
-  .map((prompt) => ({ ...prompt, compactLabel: prompt.label }));
 const buildSessionPromptSnapshot = (prompt: any) => {
   const rawScore = prompt?.promptIndependenceScoreSnapshot ?? prompt?.independenceScore;
   const score = Number(rawScore);
@@ -1045,7 +1041,7 @@ export const SessionMode = ({
     return options.length > 0 ? options : defaultPromptedPromptOptions;
   }, [activePromptOptions]);
   const v3PromptedPromptOptions = useMemo(() => (
-    activePromptOptions.length > 0 ? activePromptOptions : defaultV3PromptedPromptOptions
+    activePromptOptions.filter((prompt) => Boolean(prompt.id))
   ), [activePromptOptions]);
   const promptedPromptOptionsForGoal = (goal: any) => isGoalPlannedForV3Ui(goal)
     ? v3PromptedPromptOptions

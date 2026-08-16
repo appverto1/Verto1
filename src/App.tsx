@@ -3862,10 +3862,30 @@ export default function App() {
       return;
     }
 
-    const patient = allPatients.find(
+    let patient = allPatients.find(
       (candidate: any) => String(candidate?.id || '').trim() === normalizedPatientId,
     );
-    if (!patient) return;
+    if (!patient) {
+      const activeContext = getActiveAccessContext(user);
+      const workspaceId = String(
+        activeContext?.kind === 'clinic_workspace'
+          ? activeContext.clinicId
+          : user?.activeWorkspaceId || user?.clinicId || '',
+      ).trim();
+      const patientResult = await dataService.getPatients({
+        workspaceId,
+        patientId: normalizedPatientId,
+        forceRemote: true,
+      });
+      const recoveredPatient = Array.isArray(patientResult?.data)
+        ? patientResult.data.find(
+            (candidate: any) => String(candidate?.id || '').trim() === normalizedPatientId,
+          )
+        : null;
+      if (!recoveredPatient) return;
+      patient = recoveredPatient;
+      setAllPatients((current) => mergePatients(current, [recoveredPatient]));
+    }
 
     const request = Promise.all([
       dataService.getPatientDetailSnapshot(patient),
