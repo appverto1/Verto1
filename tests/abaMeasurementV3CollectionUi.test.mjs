@@ -16,6 +16,7 @@ const summary = readFileSync('src/utils/abaSessionSummary.ts', 'utf8');
 const architecture = readFileSync('docs/architecture/aba-measurement-v3.md', 'utf8');
 const adr = readFileSync('docs/architecture/ADR-ABA-V3-009-collection-ui-node-boundary.md', 'utf8');
 const envExample = readFileSync('.env.example', 'utf8');
+const dockerfile = readFileSync('Dockerfile', 'utf8');
 const lowerMigration = migration.toLowerCase();
 
 // PR9 is additive and dark: no Legacy table shape or rollout state is mutated.
@@ -125,6 +126,10 @@ assert.match(summary, /const snapshotScores = trials\.map\(trialPromptScoreSnaps
 assert.match(envExample, /^FEATURE_ABA_V3_READ_API=false$/m);
 assert.match(envExample, /^FEATURE_ABA_V3_COLLECTION_API=false$/m);
 assert.match(envExample, /^VITE_FEATURE_ABA_V3_UI=false$/m);
+// Railway Dockerfile builds do not inherit service variables unless they are declared
+// as build ARGs. Without this, the server can report V3 UI enabled at runtime while
+// Vite compiled the browser bundle with the flag disabled.
+assert.match(dockerfile, /FROM node:20-bookworm-slim AS build[\s\S]*?ARG VITE_FEATURE_ABA_V3_UI=false[\s\S]*?ENV VITE_FEATURE_ABA_V3_UI=\$\{VITE_FEATURE_ABA_V3_UI\}[\s\S]*?RUN npm run build/);
 assert.match(architecture, /PR9A — UI categórica de tentativas e ponte transacional de escrita/i);
 assert.match(architecture, /PR9B — comportamento, intervalos e Task Analysis/i);
 assert.match(architecture, /behavior.*task_analysis[\s\S]*?antes.*binding V3/i);

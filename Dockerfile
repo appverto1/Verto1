@@ -10,6 +10,12 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Vite reads VITE_* variables at build time. Railway Dockerfile builds only expose
+# service variables that are explicitly declared as ARGs. Keep this public feature
+# flag scoped to the build stage so the browser bundle matches the server rollout.
+ARG VITE_FEATURE_ABA_V3_UI=false
+ENV VITE_FEATURE_ABA_V3_UI=${VITE_FEATURE_ABA_V3_UI}
+
 RUN npm run build
 RUN npm prune --omit=dev
 
