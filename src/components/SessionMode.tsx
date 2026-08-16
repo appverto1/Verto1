@@ -2947,6 +2947,13 @@ export const SessionMode = ({
     binding: AbaV3BindingDecision | null;
     v3ActionKey?: AbaV3TrialActionKey;
   }) => {
+    const plannedModel = abaV3UiEnabled ? abaV3PlannedModelForGoal(goal) : '';
+    if (plannedModel === 'V3_BLOCKED') {
+      throw new Error('A coleta V3 deste target está bloqueada por configuração incompleta. Nenhuma tentativa Legacy foi gravada.');
+    }
+    if (plannedModel === 'V3' && binding?.measurementModelVersion !== 'V3') {
+      throw new Error('Proteção ABA V3: o target foi planejado como V3, mas o binding V3 não foi confirmado. Nenhuma tentativa Legacy foi gravada.');
+    }
     if (isMaintenanceProbeCollection(activeCollectionType)) {
       const previousTrial = findPreviousTrainingTrialForGoal(goal);
       if (previousTrial) {
@@ -2986,6 +2993,9 @@ export const SessionMode = ({
     activeCollectionType: string;
     activeMaintenanceProbe?: ActiveMaintenanceProbeForTarget | null;
   }) => {
+    if (abaV3UiEnabled && isGoalPlannedForV3Ui(goal)) {
+      throw new Error('Proteção ABA V3: persistência Legacy bloqueada para target planejado como V3.');
+    }
     const maxScore = Number(goal?.maxScore || 1);
     const timestamp = new Date().toISOString();
     const normalizedCollectionType = normalizeAbaCollectionType(activeCollectionType);

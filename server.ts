@@ -70826,15 +70826,6 @@ async function startServer() {
         res.setHeader('Cache-Control', 'private, no-store');
         return res.json({ success: true, data: data || { session_id: sessionId, targets: [], v3_behavior_ids: [], complete: true } });
       } catch (error: any) {
-        console.error('[ABA V3 collection-plan] request failed', {
-          requestId: requestIdForLogs(req),
-          sessionId: sanitizeString(req.params?.sessionId, 180) || null,
-          patientId: sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120) || null,
-          code: sanitizeString(error?.code, 80) || null,
-          message: sanitizeString(error?.message || String(error), 500) || null,
-          details: sanitizeString(error?.details, 500) || null,
-          hint: sanitizeString(error?.hint, 500) || null
-        });
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }
     }
@@ -77318,6 +77309,40 @@ async function startServer() {
       const maintenanceScheduleId = sanitizeString(req.body?.maintenance_schedule_id || req.body?.maintenanceScheduleId || req.body?.schedule_id || req.body?.scheduleId, 180) || null;
       const sessionWrite = await assertAbaSessionCanAcceptClinicalWrite(sessionId, clinicId, req.session.user);
       if (!sessionWrite.ok) return res.status((sessionWrite as any).status || 409).json({ success: false, error: (sessionWrite as any).error });
+
+      // Defense-in-depth during V2 -> V3 rollout: an outdated/stale frontend must
+      // never be able to persist a Legacy trial for a session+target whose server-side
+      // collection plan is V3. The read RPC is authoritative and non-mutating.
+      if (isAbaV3ReadApiEnabled() && sessionId && targetId) {
+        const { data: v3PlanData, error: v3PlanError } = await supabase.rpc('get_aba_v3_session_collection_plan', {
+          p_organization_id: clinicId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_target_ids: [targetId]
+        });
+        if (v3PlanError) {
+          const v3PlanMessage = sanitizeString(v3PlanError?.message || '', 700);
+          if (hasMissingFinancialSchema(v3PlanError) || /get_aba_v3_session_collection_plan|PGRST202|42883|42P01/i.test(v3PlanMessage)) {
+            return res.status(503).json({
+              success: false,
+              code: 'ABA_V3_LEGACY_GUARD_UNAVAILABLE',
+              error: 'Não foi possível validar com segurança o modelo de coleta desta tentativa.'
+            });
+          }
+          throw v3PlanError;
+        }
+        const v3PlanTargets = Array.isArray((v3PlanData as any)?.targets) ? (v3PlanData as any).targets : [];
+        const v3TargetPlan = v3PlanTargets.find((item: any) => sanitizeString(item?.target_id, 180) === targetId);
+        const plannedModel = sanitizeString(v3TargetPlan?.measurement_model_version, 60).toUpperCase();
+        if (plannedModel === 'V3' || plannedModel === 'V3_BLOCKED') {
+          return res.status(409).json({
+            success: false,
+            code: 'ABA_V3_LEGACY_WRITE_BLOCKED',
+            measurementModelVersion: plannedModel,
+            error: 'Esta tentativa pertence ao modelo ABA V3 e não pode ser gravada pela rota Legacy V2.'
+          });
+        }
+      }
       const requestedAppointmentId = await resolveAbaAppointmentIdForClinicalWrite({
         requestedAppointmentId: req.body?.appointment_id || req.body?.appointmentId,
         sessionId,

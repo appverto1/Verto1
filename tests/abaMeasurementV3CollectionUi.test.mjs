@@ -57,6 +57,16 @@ assert.match(server, /ABA_V3_PR9A_TRIAL_TARGET_TYPES = new Set\(\['dtt', 'net', 
 assert.match(server, /\.select\('id,target_type'\)[\s\S]*?ABA_V3_UI_MEASUREMENT_NOT_READY/);
 assert.match(server, /assertAbaV3Pr9bTargetReady\(organizationId, patientId, targetId\)[\s\S]*?resolve_aba_session_target_measurement_binding_v1/);
 
+// A stale/old UI cannot silently write V2 when the authoritative session plan is V3.
+const legacyTrialRouteStart = server.indexOf("app.post('/api/aba/trials'");
+const legacyTrialRouteEnd = server.indexOf("app.get('/api/aba/trials/:patientId'", legacyTrialRouteStart);
+assert.ok(legacyTrialRouteStart >= 0 && legacyTrialRouteEnd > legacyTrialRouteStart, 'Legacy trial route block must exist');
+const legacyTrialRoute = server.slice(legacyTrialRouteStart, legacyTrialRouteEnd);
+assert.match(legacyTrialRoute, /get_aba_v3_session_collection_plan/);
+assert.match(legacyTrialRoute, /ABA_V3_LEGACY_WRITE_BLOCKED/);
+assert.match(legacyTrialRoute, /plannedModel === 'V3' \|\| plannedModel === 'V3_BLOCKED'/);
+assert.ok(legacyTrialRoute.indexOf('ABA_V3_LEGACY_WRITE_BLOCKED') < legacyTrialRoute.indexOf("writeAbaRowWithSchemaFallback('aba_trials'"), 'V3 guard must run before Legacy persistence');
+
 const trialRouteStart = server.indexOf("'/api/aba/v3/trials'");
 const trialRouteEnd = server.indexOf('const handleAbaV3ReadRpcError', trialRouteStart);
 assert.ok(trialRouteStart >= 0 && trialRouteEnd > trialRouteStart, 'V3 trial route block must exist');
@@ -92,6 +102,8 @@ assert.match(sessionMode, /INDEPENDENT_INCORRECT/);
 assert.match(sessionMode, /NO_RESPONSE/);
 assert.match(sessionMode, /measurementModelVersion: 'V3'/);
 assert.match(sessionMode, /score: null/);
+assert.match(sessionMode, /Proteção ABA V3: o target foi planejado como V3, mas o binding V3 não foi confirmado/);
+assert.match(sessionMode, /Proteção ABA V3: persistência Legacy bloqueada para target planejado como V3/);
 
 // In V3, Legacy prompt score/independence toggles disappear instead of being reinterpreted.
 assert.match(featureFlags, /resolveFeatureFlag\('aba_v3_ui', \{ defaultValue: false/);
