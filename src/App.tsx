@@ -2669,10 +2669,7 @@ export default function App() {
   });
   const profileMediaFetchRef = useRef<{ userId: string; fetchedAt: number; inFlight: boolean } | null>(null);
   const activityLogsFetchRef = useRef<{ key: string; fetchedAt: number; inFlight: boolean } | null>(null);
-  const inactivityTimerRef = useRef<any>(null);
-  const autoLogoutInProgressRef = useRef(false);
   const manualLogoutInProgressRef = useRef(false);
-  const AUTO_LOGOUT_IDLE_MS = 15 * 60 * 1000;
   const PROFILE_MEDIA_REFRESH_TTL_MS = 5 * 60 * 1000;
   const ACTIVITY_LOGS_REFRESH_TTL_MS = 5 * 60 * 1000;
 
@@ -7692,48 +7689,6 @@ export default function App() {
       manualLogoutInProgressRef.current = false;
     }, 1200);
   };
-
-  useEffect(() => {
-    if (!user) {
-      if (inactivityTimerRef.current) {
-        clearTimeout(inactivityTimerRef.current);
-        inactivityTimerRef.current = null;
-      }
-      autoLogoutInProgressRef.current = false;
-      return;
-    }
-
-    const resetInactivityTimer = () => {
-      if (autoLogoutInProgressRef.current) return;
-      if (inactivityTimerRef.current) {
-        clearTimeout(inactivityTimerRef.current);
-      }
-      inactivityTimerRef.current = setTimeout(async () => {
-        if (autoLogoutInProgressRef.current) return;
-        autoLogoutInProgressRef.current = true;
-        await handleLogout();
-        setShowWorkspacePicker(false);
-      }, AUTO_LOGOUT_IDLE_MS);
-    };
-
-    const interactionEvents: Array<keyof WindowEventMap> = ['mousemove', 'keydown', 'click'];
-    interactionEvents.forEach((eventName) => {
-      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
-    });
-
-    resetInactivityTimer();
-
-    return () => {
-      interactionEvents.forEach((eventName) => {
-        window.removeEventListener(eventName, resetInactivityTimer);
-      });
-      if (inactivityTimerRef.current) {
-        clearTimeout(inactivityTimerRef.current);
-        inactivityTimerRef.current = null;
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
 
   const handleAccessContextSelect = async (context: AccessContextOption) => {
     if (!context?.id || selectingAccessContextId) return;
