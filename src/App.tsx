@@ -1908,6 +1908,14 @@ export default function App() {
       } catch {
         // Storage is optional; backend authorization does not depend on it.
       }
+      try {
+        const authAction = String(new URLSearchParams(window.location.search).get('auth_action') || '').toLowerCase();
+        if (['activate', 'recovery', 'accept_invitation'].includes(authAction)) {
+          window.history.replaceState({}, document.title, '/');
+        }
+      } catch {
+        // URL cleanup is UX-only; the accepted membership remains server-authoritative.
+      }
     };
     try {
       if (!supabaseSession) {
