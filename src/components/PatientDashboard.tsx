@@ -12,6 +12,7 @@ import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
 import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
+import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from '../constants/organizationModules';
 import {
   resolveAppointmentPatientDisplayStatus,
 } from '../utils/appointmentConfirmationState';
@@ -135,17 +136,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalSelectedRescheduleSlots, setPortalSelectedRescheduleSlots] = useState<any[]>([]);
   const [portalActionSaving, setPortalActionSaving] = useState(false);
   const [portalSection, setPortalSection] = useState<PortalSection>('home');
-  const portalModuleMode = user?.portalContext?.moduleAccessMode === 'contract' ? 'contract' : 'legacy_full';
+  const portalModuleMode: OrganizationModuleAccessMode = user?.portalContext?.moduleAccessMode === 'legacy_full' ? 'legacy_full' : 'contract';
   const portalModules = useMemo(
-    () => new Set(
+    () => new Set<OrganizationModuleKey>(
       Array.isArray(user?.portalContext?.modules)
-        ? user.portalContext.modules.map((value: any) => String(value || '').trim())
+        ? user.portalContext.modules
+            .map((value: any) => String(value || '').trim())
+            .filter((value: string): value is OrganizationModuleKey =>
+              ['clinical_core', 'appointments_communication', 'financial_management', 'insurance_tiss', 'school_management'].includes(value),
+            )
         : []
     ),
     [user?.portalContext?.entitlementVersion, user?.portalContext?.modules],
   );
-  const portalHasModule = (moduleKey: string) =>
-    portalModuleMode === 'legacy_full' || portalModules.has(moduleKey);
+  const portalHasModule = (moduleKey: OrganizationModuleKey) =>
+    hasOrganizationModule(portalModuleMode, portalModules, moduleKey);
   const clinicalPortalEnabled = portalHasModule('clinical_core');
   const appointmentsPortalEnabled = portalHasModule('appointments_communication');
   const [portalAnamnesis, setPortalAnamnesis] = useState<any>(null);

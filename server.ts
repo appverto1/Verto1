@@ -5461,7 +5461,7 @@ function redactPatientRecordPayloadForCapabilities(
   if (!capabilities) return redactPatientFinancialPayload(input, user);
 
   let redacted = input;
-  if (!capabilities.has('finance.payments.view')) {
+  if (!capabilities.has('patient.demographics.edit')) {
     redacted = redactPatientPayloadKeys(redacted, PATIENT_FINANCIAL_PAYLOAD_KEYS);
   }
   if (!capabilities.has('patient.insurance.view')) {
@@ -9234,15 +9234,21 @@ async function resolveOrganizationModuleAccess(clinicId: string): Promise<Resolv
       || code === 'PGRST202'
       || code === '42883'
       || message.includes('get_organization_module_access_v1')
+      || message.includes('CLINIC_MODULE_ACCESS_PROFILE_MISSING')
     ) {
-      const schemaError = new Error('CLINIC_MODULE_SCHEMA_UNAVAILABLE');
-      (schemaError as any).code = 'CLINIC_MODULE_SCHEMA_UNAVAILABLE';
-      throw schemaError;
-    }
-    if (message.includes('CLINIC_MODULE_ACCESS_PROFILE_MISSING')) {
-      const profileError = new Error('CLINIC_MODULE_ACCESS_PROFILE_MISSING');
-      (profileError as any).code = 'CLINIC_MODULE_ACCESS_PROFILE_MISSING';
-      throw profileError;
+      // Commercial entitlement infrastructure is never allowed to take the
+      // mandatory clinical baseline down. When its profile/function is absent
+      // or temporarily unavailable, expose core only and fail closed for every
+      // optional module.
+      console.warn('[OrganizationModules] entitlement profile unavailable; using core-only access', {
+        clinicId,
+        code: code || null,
+      });
+      return {
+        mode: 'contract',
+        version: 1,
+        modules: new Set<OrganizationModuleKey>(['clinical_core']),
+      };
     }
     throw error;
   }
@@ -9250,12 +9256,17 @@ async function resolveOrganizationModuleAccess(clinicId: string): Promise<Resolv
   const row: any = data || {};
   const mode = sanitizeString(row?.mode, 30) as OrganizationModuleAccessMode;
   if (mode !== 'legacy_full' && mode !== 'contract') {
-    const profileError = new Error('CLINIC_MODULE_ACCESS_PROFILE_MISSING');
-    (profileError as any).code = 'CLINIC_MODULE_ACCESS_PROFILE_MISSING';
-    throw profileError;
+    // Corrupt/stale commercial state must not disable patient care. Keep the
+    // clinical baseline and deny every optional module until entitlement data
+    // is healthy again.
+    return {
+      mode: 'contract',
+      version: 1,
+      modules: new Set<OrganizationModuleKey>(['clinical_core']),
+    };
   }
 
-  const modules = new Set<OrganizationModuleKey>();
+  const modules = new Set<OrganizationModuleKey>(['clinical_core']);
   for (const rawModuleKey of Array.isArray(row?.modules) ? row.modules : []) {
     const moduleKey = sanitizeString(rawModuleKey, 80);
     if (isOrganizationModuleKey(moduleKey)) modules.add(moduleKey);
@@ -9484,7 +9495,7 @@ function requireClinicModule(moduleKey: OrganizationModuleKey) {
 
 async function requirePatientPortalCapabilityModule(req: any, res: any, capability: CapabilityKey): Promise<boolean> {
   const moduleKey = requiredModuleForCapability(capability);
-  if (!moduleKey) return true;
+  if (!moduleKey || moduleKey === 'clinical_core') return true;
   const clinicId = sanitizeString(
     req.session?.user?.activeAccessContext?.clinicId ||
     req.session?.user?.activeAccessContext?.clinic_id ||
@@ -9541,7 +9552,7 @@ function requireAnyClinicCapabilityOrPatientPortal(...capabilities: CapabilityKe
       try {
         for (const capability of capabilities) {
           const moduleKey = requiredModuleForCapability(capability);
-          if (!moduleKey) return next();
+          if (!moduleKey || moduleKey === 'clinical_core') return next();
           const clinicId = sanitizeString(req.session?.user?.activeAccessContext?.clinicId || currentClinicId(req.session?.user), 120);
           if (!isUuid(clinicId)) continue;
           const moduleAccess = await resolveOrganizationModuleAccess(clinicId);
@@ -9564,6 +9575,10 @@ function requireAnyClinicCapabilityOrPatientPortal(...capabilities: CapabilityKe
         const clinicId = sanitizeString(context?.clinicId, 120);
         if (!isUuid(clinicId)) {
           return res.status(403).json({ success: false, error: 'CLINIC_MODULE_NOT_ENTITLED', module: moduleKey });
+        }
+        if (moduleKey === 'clinical_core') {
+          req.portalContext = context;
+          return next();
         }
         const moduleAccess = await resolveOrganizationModuleAccess(clinicId);
         if (!hasOrganizationModule(moduleAccess.mode, moduleAccess.modules, moduleKey)) {
@@ -17969,6 +17984,73 @@ function normalizePatientInsuranceTypeForPersistence(value: any) {
   if (normalized === 'convenio' || normalized === 'insurance') return 'convenio';
   if (normalized === 'particular' || normalized === 'private') return 'particular';
   return normalized || 'particular';
+}
+
+const PATIENT_INSURANCE_TYPE_PAYLOAD_KEYS = new Set([
+  'insuranceType', 'insurance_type', 'convenioTipo',
+]);
+
+function patientPayloadRequestsInsuranceCreateCapability(body: any): boolean {
+  const source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const sources = [
+    source,
+    source?.anamnesisData,
+    source?.anamnesis_data,
+    source?.anamnese,
+  ].filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+
+  for (const candidate of sources) {
+    const requestedTypeRaw =
+      candidate?.insuranceType ?? candidate?.insurance_type ?? candidate?.convenioTipo;
+    const requestedTypeProvided =
+      requestedTypeRaw !== undefined &&
+      requestedTypeRaw !== null &&
+      String(requestedTypeRaw).trim() !== '';
+    if (
+      requestedTypeProvided &&
+      normalizePatientInsuranceTypeForPersistence(requestedTypeRaw) !== 'particular'
+    ) {
+      return true;
+    }
+
+    for (const key of PATIENT_INSURANCE_PAYLOAD_KEYS) {
+      if (PATIENT_INSURANCE_TYPE_PAYLOAD_KEYS.has(key)) continue;
+      const value = candidate?.[key];
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        return true;
+      }
+    }
+  }
+
+  const financialPlanLists = [
+    source?.financialPlans,
+    source?.financial_plans,
+    source?.recordPayload?.financialPlans,
+    source?.recordPayload?.financial_plans,
+  ].filter(Array.isArray);
+  for (const list of financialPlanLists) {
+    for (const rawPlan of list) {
+      const plan = rawPlan && typeof rawPlan === 'object' && !Array.isArray(rawPlan) ? rawPlan : {};
+      const normalizedMode = sanitizeString(plan?.billingMode || plan?.billing_mode, 40).trim().toUpperCase();
+      const normalizedPayerType = sanitizeString(plan?.payerType || plan?.payer_type, 40)
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase();
+      if (normalizedMode === 'INSURANCE' || normalizedPayerType === 'convenio' || normalizedPayerType === 'insurance') {
+        return true;
+      }
+      for (const key of [
+        'payerId','payer_id','payerNameSnapshot','payer_name_snapshot',
+        'insuranceName','insurance_name','insurancePlanName','insurance_plan_name',
+        'insuranceCardNumber','insurance_card_number','authorizationCode','authorization_code',
+      ]) {
+        const value = plan?.[key];
+        if (value !== undefined && value !== null && String(value).trim() !== '') return true;
+      }
+    }
+  }
+  return false;
 }
 
 function readPatientInsurancePayerId(body: any): { provided: boolean; value: string | null; invalid: boolean } {
@@ -36131,7 +36213,7 @@ async function startServer() {
   });
 
   // Create Patient User Account (called by therapist when adding a patient)
-  app.post('/api/patients/create-user', patientCreateLimiter, checkAuth, async (req: any, res) => {
+  app.post('/api/patients/create-user', patientCreateLimiter, checkAuth, requireClinicCapability('patient.create'), async (req: any, res) => {
     const { email, name, type, cpf } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
 
@@ -36157,6 +36239,16 @@ async function startServer() {
         patient_profile_type: canonicalProfileType,
         type: normalizedPortalType
       });
+      const context = req.authorizationContext as ResolvedClinicCapabilityContext;
+      if (
+        patientPayloadRequestsInsuranceCreateCapability(req.body) &&
+        !context.capabilities.has('patient.insurance.create')
+      ) {
+        return res.status(403).json({
+          success: false,
+          error: 'PATIENT_INSURANCE_CREATE_CAPABILITY_REQUIRED'
+        });
+      }
       if (!normalizedEmail) {
         return res.status(400).json({ success: false, error: 'Email inválido.' });
       }
@@ -37680,46 +37772,7 @@ async function startServer() {
           error: 'CLINICAL_RECORD_CAPABILITY_REQUIRED'
         });
       }
-      const requestedInsuranceTypeRaw =
-        req.body?.insuranceType ?? req.body?.insurance_type ?? req.body?.convenioTipo;
-      const requestedInsuranceType = normalizePatientInsuranceTypeForPersistence(requestedInsuranceTypeRaw);
-      const explicitlyRequestsInsuranceMode =
-        requestedInsuranceTypeRaw !== undefined &&
-        requestedInsuranceTypeRaw !== null &&
-        String(requestedInsuranceTypeRaw).trim() !== '' &&
-        requestedInsuranceType !== 'particular';
-      const hasInsuranceCreatePayload = explicitlyRequestsInsuranceMode || [
-        req.body?.insurancePayerId,
-        req.body?.insurance_payer_id,
-        req.body?.convenioPayerId,
-        req.body?.convenio_payer_id,
-        req.body?.insuranceName,
-        req.body?.insurance_name,
-        req.body?.convenioNome,
-        req.body?.insuranceCardNumber,
-        req.body?.insurance_card_number,
-        req.body?.cardNumber,
-        req.body?.convenioCarteirinha,
-        req.body?.insuranceCardValidUntil,
-        req.body?.insurance_card_valid_until,
-        req.body?.convenioCarteirinhaValidade,
-        req.body?.insurancePlanCategory,
-        req.body?.insurance_plan_category,
-        req.body?.convenioPlanoCategoria,
-        req.body?.insuranceHolderName,
-        req.body?.insurance_holder_name,
-        req.body?.convenioTitularNome,
-        req.body?.insuranceHolderCpf,
-        req.body?.insurance_holder_cpf,
-        req.body?.convenioTitularCpf,
-        req.body?.insuranceHolderRelationship,
-        req.body?.insurance_holder_relationship,
-        req.body?.convenioTitularRelacao,
-        req.body?.insuranceEligibilityNotes,
-        req.body?.eligibilityNotes,
-        req.body?.eligibility_notes,
-        req.body?.convenioElegibilidadeObs,
-      ].some((value) => value !== undefined && value !== null && String(value).trim() !== '');
+      const hasInsuranceCreatePayload = patientPayloadRequestsInsuranceCreateCapability(req.body);
       if (hasInsuranceCreatePayload && !context.capabilities.has('patient.insurance.create')) {
         return res.status(403).json({
           success: false,
@@ -37951,7 +38004,7 @@ async function startServer() {
         recordPersisted = true;
 
         if (
-          context.capabilities.has('finance.entries.manage') &&
+          context.capabilities.has('patient.demographics.edit') &&
           Object.prototype.hasOwnProperty.call(aggregateRecordPayloadRaw, 'financialPlans')
         ) {
           const financialPlanSync = await persistPatientFinancialPlans({
@@ -39071,7 +39124,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/financial-plans', checkAuth, requireClinicCapability('finance.payments.view'), async (req: any, res) => {
+  app.get('/api/patients/:patientId/financial-plans', checkAuth, requireClinicCapability('patient.demographics.edit'), async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -39104,7 +39157,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/patients/:patientId/financial-plans', portalActionLimiter, checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+  app.put('/api/patients/:patientId/financial-plans', portalActionLimiter, checkAuth, requireClinicCapability('patient.demographics.edit'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Payload do plano financeiro')) return;
       const patientId = sanitizeString(req.params.patientId, 120);
@@ -39121,6 +39174,15 @@ async function startServer() {
         : Array.isArray(req.body?.plans)
           ? req.body.plans
           : [];
+      if (
+        patientPayloadRequestsInsuranceCreateCapability({ financialPlans }) &&
+        req.authorizationContext?.capabilities?.has('patient.insurance.edit') !== true
+      ) {
+        return res.status(403).json({
+          success: false,
+          error: 'PATIENT_INSURANCE_EDIT_CAPABILITY_REQUIRED',
+        });
+      }
       const result = await persistPatientFinancialPlans({
         patientId,
         clinicId,
@@ -39169,6 +39231,16 @@ async function startServer() {
 
       const payloadRawBase = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
       const capabilityContext = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
+      if (
+        Object.prototype.hasOwnProperty.call(payloadRawBase, 'financialPlans') &&
+        patientPayloadRequestsInsuranceCreateCapability({ financialPlans: payloadRawBase.financialPlans }) &&
+        capabilityContext?.capabilities?.has('patient.insurance.edit') !== true
+      ) {
+        return res.status(403).json({
+          success: false,
+          error: 'PATIENT_INSURANCE_EDIT_CAPABILITY_REQUIRED',
+        });
+      }
       const payloadRaw = redactPatientRecordPayloadForCapabilities(
         payloadRawBase,
         req.session.user,
@@ -39264,7 +39336,7 @@ async function startServer() {
 
       let financialPlanSyncWarning: string | null = null;
       if (
-        req.authorizationContext?.capabilities?.has('finance.entries.manage') === true &&
+        req.authorizationContext?.capabilities?.has('patient.demographics.edit') === true &&
         Object.prototype.hasOwnProperty.call(payloadRawBase, 'financialPlans')
       ) {
         const financialPlanSync = await persistPatientFinancialPlans({
@@ -85392,6 +85464,13 @@ async function startServer() {
             error: "Revise os campos da proposta modular.",
           });
         }
+        if (!input.lines.some((line) => line.itemKey === 'clinical_core')) {
+          return res.status(422).json({
+            success: false,
+            code: 'PROPOSAL_CLINICAL_CORE_REQUIRED',
+            error: 'O núcleo clínico Verto é obrigatório em toda proposta. Selecione apenas os adicionais opcionais além dele.',
+          });
+        }
         const [leadResult, assumptionResult, catalog] = await Promise.all([
           supabase
             .from("sales_leads")
@@ -89514,7 +89593,9 @@ async function startServer() {
     checkAuth,
     requireClinicCapability,
     requireAnyClinicCapability,
+    requireClinicModule,
     portalActionLimiter,
+    enforcePayloadLimit,
     sanitizeString,
     currentClinicId
   });

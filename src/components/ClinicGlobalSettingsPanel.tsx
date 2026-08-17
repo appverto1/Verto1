@@ -7,7 +7,7 @@ import { SecureImage } from "./SecureMedia";
 import { dataService } from "../services/dataService";
 import { normalizeAbaPromptTypeConfig, type AbaPromptTypeConfig } from "../utils/abaPromptLevels";
 import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStorage } from "../utils/brMasks";
-import type { OrganizationModuleAccessMode, OrganizationModuleKey } from "../constants/organizationModules";
+import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from "../constants/organizationModules";
 import { isAbaV2Enabled, isAbaV3UiEnabled } from "../utils/featureFlags";
 
 type SettingsValues = Record<string, any>;
@@ -392,6 +392,7 @@ function PatientReschedulePolicySettings() {
     autoNoShowEnabled: true,
     noShowToleranceMinutes: 30,
     noShowMode: "AUTO" as "AUTO" | "REVIEW",
+    attendanceDirty: false,
     canManage: false,
     error: "",
     message: ""
@@ -427,6 +428,7 @@ function PatientReschedulePolicySettings() {
         autoNoShowEnabled: result?.data?.autoNoShowEnabled !== false,
         noShowToleranceMinutes: Math.max(5, Math.min(180, Number(result?.data?.noShowToleranceMinutes || 30))),
         noShowMode: result?.data?.noShowMode === "REVIEW" ? "REVIEW" : "AUTO",
+        attendanceDirty: false,
         canManage: result?.data?.canManage === true,
         error: "",
         message: ""
@@ -450,9 +452,6 @@ function PatientReschedulePolicySettings() {
     setState((current) => ({ ...current, savingReschedule: true, error: "", message: "" }));
     const result = await dataService.updateClinicAppointmentPolicy({
       allowPatientReschedule: nextValue,
-      autoNoShowEnabled: state.autoNoShowEnabled,
-      noShowToleranceMinutes: state.noShowToleranceMinutes,
-      noShowMode: state.noShowMode,
       reason: nextValue
         ? "Reativado nas configurações da agenda"
         : "Desativado nas configurações da agenda",
@@ -471,9 +470,6 @@ function PatientReschedulePolicySettings() {
       ...current,
       savingReschedule: false,
       allowPatientReschedule: result?.data?.allowPatientReschedule !== false,
-      autoNoShowEnabled: result?.data?.autoNoShowEnabled !== false,
-      noShowToleranceMinutes: Number(result?.data?.noShowToleranceMinutes || current.noShowToleranceMinutes),
-      noShowMode: result?.data?.noShowMode === "REVIEW" ? "REVIEW" : "AUTO",
       error: "",
       message: nextValue
         ? "Pacientes voltaram a poder solicitar reagendamento."
@@ -491,7 +487,6 @@ function PatientReschedulePolicySettings() {
     const operationKey = `attendance:${state.autoNoShowEnabled}:${tolerance}:${state.noShowMode}`;
     setState((current) => ({ ...current, savingAttendance: true, error: "", message: "" }));
     const result = await dataService.updateClinicAppointmentPolicy({
-      allowPatientReschedule: state.allowPatientReschedule,
       autoNoShowEnabled: state.autoNoShowEnabled,
       noShowToleranceMinutes: tolerance,
       noShowMode: state.noShowMode,
@@ -513,6 +508,7 @@ function PatientReschedulePolicySettings() {
       autoNoShowEnabled: result?.data?.autoNoShowEnabled !== false,
       noShowToleranceMinutes: Number(result?.data?.noShowToleranceMinutes || tolerance),
       noShowMode: result?.data?.noShowMode === "REVIEW" ? "REVIEW" : "AUTO",
+      attendanceDirty: false,
       error: "",
       message: result?.data?.autoNoShowEnabled === false
         ? "Classificação automática de falta desativada."
@@ -566,7 +562,7 @@ function PatientReschedulePolicySettings() {
             <div>
               <p className="text-sm font-semibold text-slate-900">Política de ausência e falta</p>
               <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
-                A regra é executada no servidor, mesmo com o navegador fechado. Uma sessão iniciada e a classificação de falta disputam a mesma operação atômica, evitando estados duplicados.
+                A regra é executada no servidor, mesmo com o navegador fechado. O início da sessão e a classificação de falta usam bloqueio no mesmo agendamento, evitando estados duplicados.
               </p>
             </div>
           </div>
@@ -575,7 +571,13 @@ function PatientReschedulePolicySettings() {
             role="switch"
             aria-checked={state.autoNoShowEnabled}
             disabled={state.loading || saving || !state.canManage}
-            onClick={() => setState((current) => ({ ...current, autoNoShowEnabled: !current.autoNoShowEnabled, message: "", error: "" }))}
+            onClick={() => setState((current) => ({
+              ...current,
+              autoNoShowEnabled: !current.autoNoShowEnabled,
+              attendanceDirty: true,
+              message: "",
+              error: ""
+            }))}
             className={`min-h-11 w-full shrink-0 rounded-xl px-4 py-2 text-sm font-semibold transition lg:w-36 ${
               state.autoNoShowEnabled
                 ? "bg-[#7a32fc] text-white"
@@ -600,6 +602,7 @@ function PatientReschedulePolicySettings() {
                 onChange={(event) => setState((current) => ({
                   ...current,
                   noShowToleranceMinutes: Number(event.target.value),
+                  attendanceDirty: true,
                   message: "",
                   error: ""
                 }))}
@@ -618,26 +621,34 @@ function PatientReschedulePolicySettings() {
               onChange={(event) => setState((current) => ({
                 ...current,
                 noShowMode: event.target.value === "REVIEW" ? "REVIEW" : "AUTO",
+                attendanceDirty: true,
                 message: "",
                 error: ""
               }))}
               className={inputClass}
             >
               <option value="AUTO">Classificar automaticamente como falta</option>
-              <option value="REVIEW">Sinalizar para revisão da equipe</option>
+              <option value="REVIEW">Aguardar revisão manual da equipe</option>
             </select>
             <span className="mt-1.5 block text-[11px] leading-relaxed text-slate-500">
-              Faltas não seguem para faturamento de convênio. Uma eventual taxa particular permanece em fluxo financeiro separado.
+              {state.noShowMode === "REVIEW"
+                ? "Nesse modo o agendamento não vira falta sozinho. A equipe deve revisar o atendimento atrasado na agenda e marcar a falta manualmente."
+                : "Ao atingir a tolerância sem início da sessão, a Verto registra a falta no servidor. Faltas não seguem para faturamento de convênio."}
             </span>
           </label>
         </div>
 
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
+          <div className="min-h-5 text-xs">
+            {state.attendanceDirty && (
+              <span className="font-medium text-amber-700">Alterações ainda não salvas.</span>
+            )}
+          </div>
           <button
             type="button"
             onClick={() => void saveAttendancePolicy()}
-            disabled={state.loading || saving || !state.canManage}
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-wait disabled:opacity-50"
+            disabled={state.loading || saving || !state.canManage || !state.attendanceDirty}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {state.savingAttendance ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
             {state.savingAttendance ? "Salvando..." : "Salvar política de falta"}
@@ -648,7 +659,7 @@ function PatientReschedulePolicySettings() {
       {state.error && <p role="alert" className="text-xs font-medium text-rose-700">{state.error}</p>}
       {state.message && <p role="status" className="text-xs font-medium text-emerald-700">{state.message}</p>}
       {!state.loading && !state.canManage && !state.error && (
-        <p className="text-xs text-slate-500">Somente owner, administração ou coordenação podem alterar estas políticas.</p>
+        <p className="text-xs text-slate-500">Somente direção, administração ou coordenação podem alterar estas políticas.</p>
       )}
     </div>
   );
@@ -800,11 +811,6 @@ function AbaPromptTypesSettings() {
 }
 
 function AbaPromptTypesClinicalSettings() {
-  const legacyV2StillEnabled = isAbaV2Enabled();
-  // V3 prompt semantics must be visual whenever the V3 UI is enabled, even while
-  // Legacy V2 remains available for historical compatibility. Numeric Legacy
-  // scores stay persisted for old events but are never exposed as V3 semantics.
-  const v3PromptSemantics = isAbaV3UiEnabled();
   const [promptTypes, setPromptTypes] = useState<AbaPromptTypeConfig[]>(() => normalizeAbaPromptTypeConfig());
   const [savingId, setSavingId] = useState('');
   const [savedId, setSavedId] = useState('');
@@ -885,10 +891,6 @@ function AbaPromptTypesClinicalSettings() {
   };
 
   const openCreatePrompt = () => {
-    if (v3PromptSemantics && legacyV2StillEnabled) {
-      setModalError('Durante a coexistência V2/V3, novos tipos de ajuda ficam bloqueados para não inventar uma pontuação Legacy. Tipos existentes podem ser editados normalmente.');
-      return;
-    }
     setModalMode('create');
     setModalError('');
     setEditingPrompt({
@@ -912,13 +914,11 @@ function AbaPromptTypesClinicalSettings() {
   const validatePromptDraft = (prompt: Partial<AbaPromptTypeConfig>) => {
     if (!String(prompt.name || '').trim()) return 'Informe o nome do tipo de ajuda.';
     if (!String(prompt.category || '').trim()) return 'Informe a categoria da ajuda.';
-    if (!v3PromptSemantics) {
-      if (prompt.independenceScore === undefined || prompt.independenceScore === null || Number.isNaN(Number(prompt.independenceScore))) {
-        return 'Informe a pontuação de independência.';
-      }
-      if (Number(prompt.independenceScore) < 0 || Number(prompt.independenceScore) > 100) {
-        return 'A pontuação de independência deve ficar entre 0 e 100.';
-      }
+    if (prompt.independenceScore === undefined || prompt.independenceScore === null || Number.isNaN(Number(prompt.independenceScore))) {
+      return 'Informe a pontuação de independência.';
+    }
+    if (Number(prompt.independenceScore) < 0 || Number(prompt.independenceScore) > 100) {
+      return 'A pontuação de independência deve ficar entre 0 e 100.';
     }
     if (prompt.intrusivenessOrder === undefined || prompt.intrusivenessOrder === null || Number.isNaN(Number(prompt.intrusivenessOrder)) || Number(prompt.intrusivenessOrder) < 0) {
       return 'A ordem na sessão deve ser um número maior ou igual a zero.';
@@ -940,11 +940,9 @@ function AbaPromptTypesClinicalSettings() {
       label: name,
       key: editingPrompt.key || name,
       category: String(editingPrompt.category || '').trim(),
-      independenceScore: v3PromptSemantics
-        ? Number(editingPrompt.independenceScore ?? 0)
-        : Number(editingPrompt.independenceScore),
+      independenceScore: Number(editingPrompt.independenceScore),
       intrusivenessOrder: Math.max(0, Math.round(Number(editingPrompt.intrusivenessOrder))),
-      countsAsIndependent: v3PromptSemantics ? Boolean(editingPrompt.countsAsIndependent ?? false) : Boolean(editingPrompt.countsAsIndependent),
+      countsAsIndependent: Boolean(editingPrompt.countsAsIndependent),
       showInSession: editingPrompt.showInSession !== false,
       active: editingPrompt.active !== false
     });
@@ -982,69 +980,40 @@ function AbaPromptTypesClinicalSettings() {
   return (
     <SectionCard
       title="Tipos de ajuda ABA"
-      description={v3PromptSemantics
-        ? `${activePromptTypes.length} tipos ativos. Na V3, os prompts são categóricos e não usam pontuação 0–100.`
-        : 'Configure os tipos de ajuda usados durante as tentativas. A pontuação indica o nível de independência usado em gráficos, relatórios e critérios clínicos.'}
+      description="Configure os tipos de ajuda usados durante as tentativas. A pontuação indica o nível de independência usado em gráficos, relatórios e critérios clínicos."
       complete={promptTypes.some((prompt) => prompt.active)}
       hasAnyData
     >
-      <details className="group rounded-xl border border-slate-200 bg-slate-50/60">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-slate-800">Configurar tipos de ajuda</p>
-            <p className="mt-0.5 text-xs font-normal text-slate-500">
-              {activePromptTypes.length} ativos · clique para {v3PromptSemantics ? 'revisar a hierarquia categórica' : 'revisar a configuração'}
-            </p>
-          </div>
-          <span className="shrink-0 text-xs font-semibold text-[#7a32fc]">
-            <span className="group-open:hidden">Abrir</span>
-            <span className="hidden group-open:inline">Fechar</span>
-          </span>
-        </summary>
-        <div className="space-y-5 border-t border-slate-200 bg-white p-4">
-        {v3PromptSemantics ? (
-          <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
-            <p className="text-sm font-semibold text-violet-950">Ajuda categórica na ABA V3</p>
-            <p className="mt-2 text-sm font-semibold leading-relaxed text-violet-900">
-              O terapeuta registra qual ajuda foi usada. Independência, erro e ausência de resposta são fatos da tentativa e não são inferidos por uma escala 0–100.
-            </p>
-            <p className="mt-2 text-xs font-semibold leading-relaxed text-violet-800">
-              A ordem abaixo controla apenas a organização dos chips na sessão. Pontuações Legacy permanecem preservadas no histórico V2, sem participar dos cálculos V3.
-            </p>
-          </div>
-        ) : (
-          <>
-            <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
-              <p className="text-sm font-black text-violet-950">Como funciona a pontuação</p>
-              <p className="mt-2 text-sm font-semibold leading-relaxed text-violet-900">
-                100 = resposta independente. 0 = resposta totalmente dependente ou erro.
-                Quanto menor a ajuda necessária, maior a pontuação de independência.
-              </p>
-              <p className="mt-2 text-xs font-semibold leading-relaxed text-violet-800">
-                Essas pontuações são sugestões iniciais e podem ser ajustadas pela supervisora clínica conforme o protocolo da clínica.
-              </p>
-            </div>
+      <div className="space-y-5">
+        <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
+          <p className="text-sm font-black text-violet-950">Como funciona a pontuação</p>
+          <p className="mt-2 text-sm font-semibold leading-relaxed text-violet-900">
+            100 = resposta independente. 0 = resposta totalmente dependente ou erro.
+            Quanto menor a ajuda necessária, maior a pontuação de independência.
+          </p>
+          <p className="mt-2 text-xs font-semibold leading-relaxed text-violet-800">
+            Essas pontuações são sugestões iniciais e podem ser ajustadas pela supervisora clínica conforme o protocolo da clínica.
+          </p>
+        </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-sm font-black text-slate-900">Escala sugerida</p>
-              <p className="text-xs font-semibold text-slate-500">Referência clínica para revisar a pontuação sem alterar dados automaticamente.</p>
-              <div className="mt-3 grid gap-2 sm:grid-cols-5">
-                {[
-                  ['100', 'Independente'],
-                  ['80-99', 'Ajuda mínima'],
-                  ['50-79', 'Ajuda moderada'],
-                  ['1-49', 'Ajuda intensa'],
-                  ['0', 'Dependente / erro']
-                ].map(([score, label]) => (
-                  <div key={score} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-                    <p className="text-lg font-black text-slate-900">{score}</p>
-                    <p className="text-xs font-bold text-slate-600">{label}</p>
-                  </div>
-                ))}
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-sm font-black text-slate-900">Escala sugerida</p>
+          <p className="text-xs font-semibold text-slate-500">Referência clínica para revisar a pontuação sem alterar dados automaticamente.</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-5">
+            {[
+              ['100', 'Independente'],
+              ['80-99', 'Ajuda mínima'],
+              ['50-79', 'Ajuda moderada'],
+              ['1-49', 'Ajuda intensa'],
+              ['0', 'Dependente / erro']
+            ].map(([score, label]) => (
+              <div key={score} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+                <p className="text-lg font-black text-slate-900">{score}</p>
+                <p className="text-xs font-bold text-slate-600">{label}</p>
               </div>
-            </div>
-          </>
-        )}
+            ))}
+          </div>
+        </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4">
           <p className="text-sm font-black text-slate-900">Prévia na sessão</p>
@@ -1073,9 +1042,7 @@ function AbaPromptTypesClinicalSettings() {
             <button
               type="button"
               onClick={openCreatePrompt}
-              disabled={v3PromptSemantics && legacyV2StillEnabled}
-              title={v3PromptSemantics && legacyV2StillEnabled ? 'Novos tipos ficam bloqueados durante a coexistência V2/V3 para não inventar pontuação Legacy.' : undefined}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90"
             >
               <Plus size={16} />
               Novo tipo de ajuda
@@ -1088,9 +1055,9 @@ function AbaPromptTypesClinicalSettings() {
                 <tr>
                   <th className="px-4 py-3">Tipo de ajuda</th>
                   <th className="px-4 py-3">Categoria da ajuda</th>
-                  {!v3PromptSemantics && <th className="px-4 py-3">Pontuação de independência</th>}
+                  <th className="px-4 py-3">Pontuação de independência</th>
                   <th className="px-4 py-3">Mostrar durante a sessão</th>
-                  {!v3PromptSemantics && <th className="px-4 py-3">Conta como resposta independente</th>}
+                  <th className="px-4 py-3">Conta como resposta independente</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Ações</th>
                 </tr>
@@ -1100,19 +1067,17 @@ function AbaPromptTypesClinicalSettings() {
                   <tr key={prompt.id || prompt.key} className="align-middle">
                     <td className="px-4 py-3 font-black text-slate-900">{prompt.name}</td>
                     <td className="px-4 py-3 font-semibold text-slate-600">{prompt.category}</td>
-                    {!v3PromptSemantics && <td className="px-4 py-3 font-black text-slate-800">{prompt.independenceScore}</td>}
+                    <td className="px-4 py-3 font-black text-slate-800">{prompt.independenceScore}</td>
                     <td className="px-4 py-3">
                       <span className={`rounded-full px-2.5 py-1 text-xs font-black ${prompt.showInSession ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
                         {prompt.showInSession ? 'Sim' : 'Não'}
                       </span>
                     </td>
-                    {!v3PromptSemantics && (
-                      <td className="px-4 py-3">
-                        <span className={`rounded-full px-2.5 py-1 text-xs font-black ${prompt.countsAsIndependent ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                          {prompt.countsAsIndependent ? 'Sim' : 'Não'}
-                        </span>
-                      </td>
-                    )}
+                    <td className="px-4 py-3">
+                      <span className={`rounded-full px-2.5 py-1 text-xs font-black ${prompt.countsAsIndependent ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                        {prompt.countsAsIndependent ? 'Sim' : 'Não'}
+                      </span>
+                    </td>
                     <td className="px-4 py-3"><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-700">Ativo</span></td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1133,7 +1098,7 @@ function AbaPromptTypesClinicalSettings() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="font-black text-slate-900">{prompt.name}</p>
-                    <p className="text-xs font-bold text-slate-500">{v3PromptSemantics ? prompt.category : `${prompt.category} · ${prompt.independenceScore} pontos`}</p>
+                    <p className="text-xs font-bold text-slate-500">{prompt.category} · {prompt.independenceScore} pontos</p>
                   </div>
                   <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-black text-emerald-700">Ativo</span>
                 </div>
@@ -1141,11 +1106,9 @@ function AbaPromptTypesClinicalSettings() {
                   <span className={prompt.showInSession ? 'rounded-full bg-violet-50 px-2.5 py-1 text-violet-700' : 'rounded-full bg-slate-100 px-2.5 py-1 text-slate-500'}>
                     {prompt.showInSession ? 'Aparece na sessão' : 'Oculto na sessão'}
                   </span>
-                  {!v3PromptSemantics && (
-                    <span className={prompt.countsAsIndependent ? 'rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700' : 'rounded-full bg-slate-100 px-2.5 py-1 text-slate-500'}>
-                      {prompt.countsAsIndependent ? 'Conta como independente' : 'Com ajuda'}
-                    </span>
-                  )}
+                  <span className={prompt.countsAsIndependent ? 'rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700' : 'rounded-full bg-slate-100 px-2.5 py-1 text-slate-500'}>
+                    {prompt.countsAsIndependent ? 'Conta como independente' : 'Com ajuda'}
+                  </span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" disabled={index === 0} onClick={() => void movePrompt(prompt, -1)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 disabled:opacity-35">Subir</button>
@@ -1172,8 +1135,7 @@ function AbaPromptTypesClinicalSettings() {
             </div>
           </details>
         )}
-        </div>
-      </details>
+      </div>
 
       {editingPrompt && (
         <div
@@ -1209,15 +1171,13 @@ function AbaPromptTypesClinicalSettings() {
                   Categoria da ajuda
                   <input value={editingPrompt.category || ''} onChange={(event) => updateDraft({ category: event.target.value })} placeholder="Visual" className={inputClass} />
                 </label>
-                {!v3PromptSemantics && (
-                  <label className={labelClass}>
-                    Pontuação de independência
-                    <input type="number" min={0} max={100} value={editingPrompt.independenceScore ?? ''} onChange={(event) => updateDraft({ independenceScore: event.target.value === '' ? undefined : Number(event.target.value) })} className={inputClass} />
-                    <span className="mt-1.5 block text-[11px] font-semibold leading-relaxed text-slate-500">
-                      Use 100 para independente e 0 para totalmente dependente ou erro. Uma ajuda visual parcial pode ficar próxima de 80.
-                    </span>
-                  </label>
-                )}
+                <label className={labelClass}>
+                  Pontuação de independência
+                  <input type="number" min={0} max={100} value={editingPrompt.independenceScore ?? ''} onChange={(event) => updateDraft({ independenceScore: event.target.value === '' ? undefined : Number(event.target.value) })} className={inputClass} />
+                  <span className="mt-1.5 block text-[11px] font-semibold leading-relaxed text-slate-500">
+                    Use 100 para independente e 0 para totalmente dependente ou erro. Uma ajuda visual parcial pode ficar próxima de 80.
+                  </span>
+                </label>
                 <label className={labelClass}>
                   Ordem na sessão
                   <input type="number" min={0} value={editingPrompt.intrusivenessOrder ?? 0} onChange={(event) => updateDraft({ intrusivenessOrder: Number(event.target.value) })} className={inputClass} />
@@ -1225,25 +1185,23 @@ function AbaPromptTypesClinicalSettings() {
                 </label>
               </div>
 
-              {!v3PromptSemantics && Number(editingPrompt.independenceScore) === 100 && !editingPrompt.countsAsIndependent && (
+              {Number(editingPrompt.independenceScore) === 100 && !editingPrompt.countsAsIndependent && (
                 <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
                   Pontuação 100 normalmente representa resposta independente. Confirme se este tipo deve contar como independente.
                 </div>
               )}
 
-              <div className={`grid gap-3 ${v3PromptSemantics ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
+              <div className="grid gap-3 md:grid-cols-3">
                 <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
                   <input type="checkbox" checked={editingPrompt.showInSession !== false} onChange={(event) => updateDraft({ showInSession: event.target.checked })} className="mr-2" />
                   Mostrar durante a sessão
                   <span className="mt-1 block text-[11px] font-semibold text-slate-500">Aparece como chip rápido para o terapeuta.</span>
                 </label>
-                {!v3PromptSemantics && (
-                  <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
-                    <input type="checkbox" checked={Boolean(editingPrompt.countsAsIndependent)} onChange={(event) => updateDraft({ countsAsIndependent: event.target.checked })} className="mr-2" />
-                    Conta como resposta independente
-                    <span className="mt-1 block text-[11px] font-semibold text-slate-500">Use apenas para respostas consideradas independentes.</span>
-                  </label>
-                )}
+                <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
+                  <input type="checkbox" checked={Boolean(editingPrompt.countsAsIndependent)} onChange={(event) => updateDraft({ countsAsIndependent: event.target.checked })} className="mr-2" />
+                  Conta como resposta independente
+                  <span className="mt-1 block text-[11px] font-semibold text-slate-500">Use apenas para respostas consideradas independentes.</span>
+                </label>
                 <label className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-bold text-slate-700">
                   <input type="checkbox" checked={editingPrompt.active !== false} onChange={(event) => updateDraft({ active: event.target.checked })} className="mr-2" />
                   Status ativo
@@ -1343,6 +1301,11 @@ export function ClinicGlobalSettingsPanel({
   retryMediaIfBroken,
 }: ClinicGlobalSettingsPanelProps) {
   const isProfessionalView = mode === "professional";
+  const hasAppointmentsCommunicationModule = hasOrganizationModule(
+    moduleAccessMode,
+    organizationModules,
+    "appointments_communication",
+  );
   const scrollToClinicData = () => {
     document.getElementById("clinic-master-data")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -1523,7 +1486,7 @@ export function ClinicGlobalSettingsPanel({
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-violet-600 shadow-sm"><ClipboardList size={21} /></span>
           <span>
             <span className="block text-base font-semibold text-slate-900">Minhas fichas de anamnese</span>
-            <span className="mt-1 block text-sm font-normal leading-relaxed text-slate-500">Crie, edite e reutilize até 15 fichas próprias em qualquer clínica onde você tenha vínculo ativo.</span>
+            <span className="mt-1 block text-sm font-normal leading-relaxed text-slate-500">Crie, edite e reutilize fichas próprias sem misturar os dados de uma clínica com outra.</span>
             <span className="mt-3 block text-sm font-medium text-violet-700">{loadingAnamnesisTemplate ? 'Carregando...' : 'Gerenciar fichas'}</span>
           </span>
         </button>
@@ -1569,7 +1532,7 @@ export function ClinicGlobalSettingsPanel({
                 disabled={loadingAnamnesisTemplate}
                 className="rounded-xl border border-[#7a32fc]/25 bg-white px-4 py-2.5 text-sm font-medium text-[#7a32fc] transition-all hover:bg-[#f6f0ff] disabled:opacity-60"
               >
-                {loadingAnamnesisTemplate ? "Carregando ficha..." : isProfessionalView ? "Minhas fichas" : "Fichas da clínica"}
+                {loadingAnamnesisTemplate ? "Carregando ficha..." : isProfessionalView ? "Minhas fichas" : "Editar ficha de anamnese"}
               </button>
             )}
             <SaveButton onSave={onSave}>{isProfessionalView ? "Salvar meu perfil" : "Salvar configurações da clínica"}</SaveButton>
@@ -1682,8 +1645,10 @@ export function ClinicGlobalSettingsPanel({
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                   <label className={labelClass}>Início do expediente<input type="time" value={values.workStart} onChange={(event) => setters.setWorkStart(event.target.value)} className={inputClass} /></label>
                   <label className={labelClass}>Fim do expediente<input type="time" value={values.workEnd} onChange={(event) => setters.setWorkEnd(event.target.value)} className={inputClass} /></label>
-                  <div className="md:col-span-2"><PatientReschedulePolicySettings /></div>
-                  <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar preferências</SaveButton></div>
+                  {hasAppointmentsCommunicationModule && (
+                    <div className="md:col-span-2"><PatientReschedulePolicySettings /></div>
+                  )}
+                  <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar horário da clínica</SaveButton></div>
                 </div>
               </SectionCard>
 

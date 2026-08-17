@@ -1,6 +1,6 @@
 import React from 'react';
 
-type Role = 'coordinator' | 'receptionist' | 'therapist' | 'patient' | 'admin' | 'owner';
+type Role = 'director' | 'coordinator' | 'supervisor' | 'therapist' | 'receptionist' | 'biller' | 'patient' | 'admin' | 'owner';
 
 interface WithAuthOptions {
   allowedRoles?: Role[];

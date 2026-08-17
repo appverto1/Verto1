@@ -44,8 +44,8 @@ assert.match(inviteRoute, /templateKind: 'clinic_invitation'/);
 assert.match(inviteRoute, /templateData: invitationEmail\.variables/);
 assert.match(inviteRoute, /preferHtml: true/);
 assert.doesNotMatch(inviteRoute, /email\.split\('@'\)\[0\]/);
-assert.match(inviteRoute, /const invitedProfileExists = Boolean\(invitedProfileResult\.data\?\.id\)/);
-assert.match(inviteRoute, /authUserHadVerifiedEmail && invitedProfileExists/);
+assert.match(inviteRoute, /const reusedExistingAuthAccess = Boolean\(authUserHadVerifiedEmail\)/);
+assert.match(inviteRoute, /invitedProfileResult\.data\?\.name/);
 
 const personalized = buildClinicInvitationEmailTemplate({
   clinic_name: 'Espaço Guiar',
@@ -86,8 +86,8 @@ assert.match(inviteRoute, /code: 'CLINIC_INVITATION_EMAIL_SEND_FAILED'/);
 assert.match(inviteRoute, /invitationPersisted: true/);
 assert.match(inviteRoute, /invitationEmailSent: false/);
 assert.match(inviteRoute, /message: 'Convite enviado com sucesso\.'/);
-assert.match(teamManagement, /result\.success && result\.invitationEmailSent !== false/);
-assert.match(invitationModal, /result\.success && result\.invitationEmailSent !== false/);
+assert.match(teamManagement, /result\.success && \(result\.inAppInvitation === true \|\| result\.invitationEmailSent !== false\)/);
+assert.match(invitationModal, /result\.success && \(result\.inAppInvitation === true \|\| result\.invitationEmailSent !== false\)/);
 
 // Contrato explícito para template publicado, sem reutilizar o template de boas-vindas.
 assert.match(envExample, /RESEND_TEMPLATE_CLINIC_INVITATION_ID=/);

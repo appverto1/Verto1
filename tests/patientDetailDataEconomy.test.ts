@@ -34,7 +34,8 @@ assert.doesNotMatch(
   /createObjectUrlFromDataUrl/,
   'a listagem nao deve materializar Blob de todos os PDFs antes do preview',
 );
-assert.match(source, /onClick=\{\(\) => openPatientFilePreview\(file\)\}/);
+assert.match(source, /onClick=\{\(\) => void openPatientFilePreview\(file\)\}/);
+assert.match(source, /dataService\.accessPatientFile\(patientId, fileId, 'view'\)/);
 
 const assignedTasksLoad = between(
   'if (!patientId || patientAgeYears === null || patientAgeYears <= 12) {',
@@ -82,7 +83,7 @@ assert.match(source, /<ClinicalChartsWorkspace patientId=/);
 assert.match(source, /role="alert"[\s\S]*Tentar novamente/,
   'erro ABA precisa permanecer visivel e oferecer retry controlado');
 assert.match(source, /activeTab !== 'history'[\s\S]*requestPatientHistoryPage/);
-assert.match(source, /abaV2Enabled && isSessionModeOpen[\s\S]*<SessionMode/);
+assert.match(source, /\(abaV2Enabled \|\| abaV3UiEnabled\) && isSessionModeOpen[\s\S]*<SessionMode/);
 
 assert.equal(
   (source.match(/dataService\.getAbaLinkableTargetsForMaintenance\(/g) || []).length,

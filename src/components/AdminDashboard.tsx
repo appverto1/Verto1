@@ -186,8 +186,12 @@ export const AdminDashboard = ({ onLogout }: any) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, amount })
       });
-      const data = await res.json();
-      if (data.success) alert(data.message);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        alert(data?.error || 'Reembolso manual não está disponível neste momento.');
+        return;
+      }
+      alert(data.message);
     } catch (err) {
       alert('Erro ao processar reembolso');
     }
@@ -200,8 +204,12 @@ export const AdminDashboard = ({ onLogout }: any) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId })
       });
-      const data = await res.json();
-      if (data.success) alert(data.message);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.success) {
+        alert(data?.error || 'Cobrança manual não está disponível neste momento.');
+        return;
+      }
+      alert(data.message);
     } catch (err) {
       alert('Erro ao processar cobranÃ§a');
     }

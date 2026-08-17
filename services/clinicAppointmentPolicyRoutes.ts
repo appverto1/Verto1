@@ -7,7 +7,9 @@ type ClinicAppointmentPolicyRouteDeps = {
   checkAuth: any;
   requireClinicCapability: (capability: any) => any;
   requireAnyClinicCapability: (...capabilities: any[]) => any;
+  requireClinicModule: (moduleKey: any) => any;
   portalActionLimiter: any;
+  enforcePayloadLimit: (req: any, res: any, maxBytes: number, label?: string) => boolean;
   sanitizeString: (value: any, max?: number) => string;
   currentClinicId: (user: any) => string | null;
 };
@@ -36,7 +38,9 @@ export function registerClinicAppointmentPolicyRoutes(
     checkAuth,
     requireClinicCapability,
     requireAnyClinicCapability,
+    requireClinicModule,
     portalActionLimiter,
+    enforcePayloadLimit,
     sanitizeString,
     currentClinicId
   } = deps;
@@ -45,6 +49,7 @@ export function registerClinicAppointmentPolicyRoutes(
     '/api/clinic/appointment-policy',
     noStoreDynamicResponse,
     checkAuth,
+    requireClinicModule('appointments_communication'),
     requireAnyClinicCapability('calendar.own.view', 'calendar.clinic.view', 'calendar.team.view', 'clinic.settings.view'),
     async (req: any, res: any) => {
       try {
@@ -98,9 +103,11 @@ export function registerClinicAppointmentPolicyRoutes(
     portalActionLimiter,
     noStoreDynamicResponse,
     checkAuth,
+    requireClinicModule('appointments_communication'),
     requireClinicCapability('clinic.settings.edit'),
     async (req: any, res: any) => {
       try {
+        if (!enforcePayloadLimit(req, res, 16 * 1024, 'Política operacional da agenda')) return;
         const clinicId = sanitizeString(currentClinicId(req.session?.user), 120);
         const actorId = sanitizeString(req.session?.user?.id, 120);
         const idempotencyKey = sanitizeString(req.body?.idempotencyKey, 180);

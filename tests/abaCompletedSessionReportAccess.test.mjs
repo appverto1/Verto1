@@ -63,9 +63,10 @@ assert.match(dashboard, /const nextSessionReportId = String\(state\?\.patientSes
 assert.match(dashboard, /setPatientSessionReportId\(nextSessionReportId\)/);
 assert.match(dashboard, /sessionReportId=\{patientSessionReportId\}/);
 
-// Case-team cards show the real specialty only; the generic case-role label remains
-// a relationship concept but is not duplicated next to every specialty in the UI.
-assert.doesNotMatch(caseTeam, /patientProfessionalCaseRoleLabel/);
+// Case-team cards expose both the contextual function in the case and the real specialty.
+// This is required so supervision is explicit without replacing the professional specialty.
+assert.match(caseTeam, /patientProfessionalCaseRoleLabel/);
+assert.match(caseTeam, /Função no caso/);
 assert.match(caseTeam, /link\.specialty/);
 
 console.log('ABA completed-session report access contracts: OK');

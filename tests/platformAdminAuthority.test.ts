@@ -90,7 +90,7 @@ assert.match(
   'auth/me precisa restaurar autoridade de plataforma e continuar exigindo MFA privilegiado',
 );
 const platformPanelIndex = app.indexOf("user?.isPlatformAdmin === true ? (");
-const workspacePickerIndex = app.indexOf('showWorkspacePicker && accessContextOptions.length > 0 ? (');
+const workspacePickerIndex = app.indexOf('showWorkspacePicker && (accessContextOptions.length > 0 || pendingClinicInvitations.length > 0) ? (');
 assert.ok(platformPanelIndex >= 0, 'frontend precisa rotear platform admin pelo flag canônico');
 assert.ok(workspacePickerIndex > platformPanelIndex, 'painel da plataforma deve ter prioridade sobre workspaces clínicos');
 assert.match(

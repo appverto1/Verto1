@@ -94,7 +94,7 @@ export function moduleAllowsCapability(
 ): boolean {
   if (mode === 'legacy_full') return true;
   const required = requiredModuleForCapability(capability);
-  return !required || modules.has(required);
+  return !required || hasOrganizationModule(mode, modules, required);
 }
 
 export function filterCapabilitiesByOrganizationModules(
@@ -111,5 +111,9 @@ export function hasOrganizationModule(
   modules: ReadonlySet<OrganizationModuleKey>,
   moduleKey: OrganizationModuleKey,
 ): boolean {
+  // Verto Clínica is the mandatory platform baseline: patient registration,
+  // clinical record/patient dashboard and the clinical patient portal must never
+  // disappear because an optional commercial entitlement is absent or stale.
+  if (moduleKey === 'clinical_core') return true;
   return mode === 'legacy_full' || modules.has(moduleKey);
 }

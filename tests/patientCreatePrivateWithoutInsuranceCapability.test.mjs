@@ -4,27 +4,27 @@ import fs from 'node:fs';
 const server = fs.readFileSync('server.ts', 'utf8');
 const coordinator = fs.readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 
-// Private-pay patient creation deliberately submits insuranceType="particular"
-// even when the clinic has no insurance/TISS module. This is identity/billing
+// Private-pay patient creation deliberately keeps insuranceType="particular"
+// even when the clinic has no insurance/TISS module. This is a core patient
 // classification, not an insurance-management operation.
 assert.match(
   coordinator,
-  /insuranceType:\s*newPatientForm\.convenioTipo\s*\|\|\s*["']particular["']/,
-  'patient form keeps the canonical private-pay classification',
+  /: \{ insuranceType: "particular" \};/,
+  'new patient without TISS must remain explicitly classified as private-pay',
 );
 
 assert.match(
   server,
-  /const requestedInsuranceType = normalizePatientInsuranceTypeForPersistence\(requestedInsuranceTypeRaw\)/,
+  /function patientPayloadRequestsInsuranceCreateCapability\(body: any\): boolean/,
 );
 assert.match(
   server,
-  /requestedInsuranceType !== 'particular'/,
+  /normalizePatientInsuranceTypeForPersistence\(requestedTypeRaw\) !== 'particular'/,
   'particular/private classification alone must not require patient.insurance.create',
 );
 assert.match(
   server,
-  /hasInsuranceCreatePayload = explicitlyRequestsInsuranceMode \|\| \[/,
+  /hasInsuranceCreatePayload = patientPayloadRequestsInsuranceCreateCapability\(req\.body\)/,
 );
 assert.match(
   server,
@@ -43,7 +43,7 @@ for (const protectedAlias of [
 ]) {
   assert.match(
     server,
-    new RegExp(`req\\.body\\?\\.${protectedAlias}`),
+    new RegExp(`['\"]${protectedAlias}['\"]`),
     `${protectedAlias} must remain capability-protected`,
   );
 }
