@@ -42,6 +42,11 @@ interface QuestionDraft {
   required: boolean;
 }
 
+interface QuestionEditorDraft {
+  editingQuestionId: string;
+  draftQuestion: QuestionDraft;
+}
+
 const QUESTION_TYPE_LABEL: Record<AnamnesisQuestionType, string> = {
   dissertativa: 'Dissertativa',
   multipla_escolha: 'Multipla escolha',
@@ -262,9 +267,7 @@ export const AnamnesisModal = ({
   const [formData, setFormData] = useState<Record<string, any>>({});
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
-  const [editorSectionId, setEditorSectionId] = useState<string | null>(null);
-  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
-  const [draftQuestion, setDraftQuestion] = useState<QuestionDraft | null>(null);
+  const [questionEditors, setQuestionEditors] = useState<Record<string, QuestionEditorDraft>>({});
   const [templateDirty, setTemplateDirty] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [templateName, setTemplateName] = useState('Ficha personalizada');
@@ -276,6 +279,7 @@ export const AnamnesisModal = ({
     String((template as any)?.selectedTemplateId || (template as any)?.id || 'new')
   );
   const templateDirtyRef = useRef(false);
+  const questionEditorsRef = useRef<Record<string, QuestionEditorDraft>>({});
   const wasOpenRef = useRef(false);
 
   const [scheduleImmediate, setScheduleImmediate] = useState(false);
@@ -319,7 +323,7 @@ export const AnamnesisModal = ({
     const firstOpen = !wasOpenRef.current;
     // A refresh/refetch do pai não pode arrancar uma ficha que o profissional está
     // editando. Troca de ficha ocorre apenas por ação explícita dentro do modal.
-    if (!firstOpen && templateDirtyRef.current) return;
+    if (!firstOpen && (templateDirtyRef.current || Object.keys(questionEditorsRef.current).length > 0)) return;
     wasOpenRef.current = true;
 
     const sourceTemplate = template || getDefaultAnamnesisTemplate();
@@ -346,9 +350,7 @@ export const AnamnesisModal = ({
         return acc;
       }, {} as Record<string, boolean>)
     );
-    setEditingQuestionId(null);
-    setDraftQuestion(null);
-    setEditorSectionId(null);
+    setQuestionEditors({});
     setScheduleImmediate(Boolean(initialData?.scheduleImmediate));
     setRegisterDate(initialData?.date || '');
     setRegisterTime(initialData?.time || '');
@@ -356,6 +358,10 @@ export const AnamnesisModal = ({
     setConsultationRoom(initialData?.room || '');
     setConsultationProfessional(initialData?.professional || '');
   }, [isOpen, template, canEditTemplate]);
+
+  useEffect(() => {
+    questionEditorsRef.current = questionEditors;
+  }, [questionEditors]);
 
   useEffect(() => {
     if (!isOpen || !canEditTemplate || view !== 'template' || templateDirtyRef.current) return;
@@ -373,10 +379,19 @@ export const AnamnesisModal = ({
         setTemplateAgeMinYears(String(parsed?.templateAgeMinYears || ''));
         setTemplateAgeMaxYears(String(parsed?.templateAgeMaxYears || ''));
         setTemplatePatientProfileType(String(parsed?.templatePatientProfileType || ''));
-        if (parsed?.draftQuestion && typeof parsed.draftQuestion === 'object') {
-          setDraftQuestion(parsed.draftQuestion as QuestionDraft);
-          setEditingQuestionId(String(parsed?.editingQuestionId || parsed.draftQuestion.id || 'new'));
-          setEditorSectionId(String(parsed?.editorSectionId || '').trim() || null);
+        if (parsed?.questionEditors && typeof parsed.questionEditors === 'object') {
+          setQuestionEditors(parsed.questionEditors as Record<string, QuestionEditorDraft>);
+        } else if (parsed?.draftQuestion && typeof parsed.draftQuestion === 'object') {
+          // Compatibilidade com rascunhos criados antes do editor por seção.
+          const legacySectionId = String(parsed?.editorSectionId || '').trim();
+          if (legacySectionId) {
+            setQuestionEditors({
+              [legacySectionId]: {
+                editingQuestionId: String(parsed?.editingQuestionId || parsed.draftQuestion.id || 'new'),
+                draftQuestion: parsed.draftQuestion as QuestionDraft
+              }
+            });
+          }
         }
         markTemplateDirty(true);
       } else {
@@ -388,7 +403,7 @@ export const AnamnesisModal = ({
   }, [isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
-    if (!isOpen || !canEditTemplate || view !== 'template' || (!templateDirty && !draftQuestion)) return;
+    if (!isOpen || !canEditTemplate || view !== 'template' || (!templateDirty && Object.keys(questionEditors).length === 0)) return;
     try {
       localStorage.setItem(
         templateDraftStorageKey,
@@ -401,23 +416,21 @@ export const AnamnesisModal = ({
           templateAgeMaxYears,
           templatePatientProfileType,
           selectedTemplateId: (templateState as any)?.selectedTemplateId || null,
-          editingQuestionId,
-          editorSectionId,
-          draftQuestion
+          questionEditors
         })
       );
     } catch {
       // noop
     }
-  }, [templateState, templateName, templateDescription, templateAgeMinYears, templateAgeMaxYears, templatePatientProfileType, templateDirty, draftQuestion, editingQuestionId, editorSectionId, isOpen, canEditTemplate, view, templateDraftStorageKey]);
+  }, [templateState, templateName, templateDescription, templateAgeMinYears, templateAgeMaxYears, templatePatientProfileType, templateDirty, questionEditors, isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
-    if (!isOpen || !loadLatestTemplate || templateDirtyRef.current) return;
+    if (!isOpen || !loadLatestTemplate || templateDirtyRef.current || Object.keys(questionEditorsRef.current).length > 0) return;
     let isActive = true;
     const loadLatest = async () => {
       try {
         const result = await dataService.getClinicAnamnesisTemplate();
-        if (!isActive || !result?.success || !result?.data || templateDirtyRef.current) return;
+        if (!isActive || !result?.success || !result?.data || templateDirtyRef.current || Object.keys(questionEditorsRef.current).length > 0) return;
         const latest = normalizeAnamnesisTemplate(result.data);
         setTemplateState((prev) => ({
           ...latest,
@@ -590,26 +603,72 @@ export const AnamnesisModal = ({
     }));
   };
 
-  const startQuestionEdit = (question: AnamnesisQuestion) => {
-    if (draftQuestion && editingQuestionId && editingQuestionId !== question.id) {
-      showFeedback('info', 'Confirme ou cancele a pergunta que já está em edição antes de abrir outra.');
-      if (editorSectionId) setExpandedSections((prev) => ({ ...prev, [editorSectionId]: true }));
-      return;
-    }
-    setEditingQuestionId(question.id);
-    setEditorSectionId(question.sectionId);
-    setDraftQuestion({
-      id: question.id,
-      label: question.label,
-      type: question.type,
-      optionsText: (question.options || []).join(', '),
-      required: question.required
+  const focusQuestionEditor = (sectionId: string) => {
+    if (typeof document === 'undefined') return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.getElementById(`anamnesis-question-editor-${sectionId}`)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest'
+        });
+      });
     });
   };
 
-  const saveQuestionEdit = (sectionId?: string) => {
-    if (!draftQuestion) return;
-    const targetSectionId = String(editorSectionId || sectionId || '').trim();
+  const startQuestionEdit = (question: AnamnesisQuestion) => {
+    const existingEditor = questionEditors[question.sectionId];
+    if (existingEditor && existingEditor.editingQuestionId !== question.id) {
+      showFeedback('info', 'Confirme ou cancele a pergunta que já está em edição nesta seção antes de abrir outra.');
+      setExpandedSections((prev) => ({ ...prev, [question.sectionId]: true }));
+      focusQuestionEditor(question.sectionId);
+      return;
+    }
+
+    setQuestionEditors((prev) => ({
+      ...prev,
+      [question.sectionId]: {
+        editingQuestionId: question.id,
+        draftQuestion: {
+          id: question.id,
+          label: question.label,
+          type: question.type,
+          optionsText: (question.options || []).join(', '),
+          required: question.required
+        }
+      }
+    }));
+    setExpandedSections((prev) => ({ ...prev, [question.sectionId]: true }));
+    focusQuestionEditor(question.sectionId);
+  };
+
+  const updateQuestionDraft = (sectionId: string, updater: (draft: QuestionDraft) => QuestionDraft) => {
+    setQuestionEditors((prev) => {
+      const editor = prev[sectionId];
+      if (!editor) return prev;
+      return {
+        ...prev,
+        [sectionId]: {
+          ...editor,
+          draftQuestion: updater(editor.draftQuestion)
+        }
+      };
+    });
+  };
+
+  const cancelQuestionEdit = (sectionId: string) => {
+    setQuestionEditors((prev) => {
+      if (!prev[sectionId]) return prev;
+      const next = { ...prev };
+      delete next[sectionId];
+      return next;
+    });
+  };
+
+  const saveQuestionEdit = (sectionId: string) => {
+    const editor = questionEditors[sectionId];
+    if (!editor) return;
+    const { draftQuestion } = editor;
+    const targetSectionId = String(sectionId || '').trim();
     const isChoiceType = draftQuestion.type === 'multipla_escolha' || draftQuestion.type === 'multipla_selecao';
     const options = isChoiceType ? normalizeOptions(draftQuestion.optionsText) : [];
 
@@ -665,34 +724,41 @@ export const AnamnesisModal = ({
       };
     });
 
-    setEditingQuestionId(null);
-    setDraftQuestion(null);
-    setEditorSectionId(null);
+    cancelQuestionEdit(sectionId);
   };
 
   const startAddQuestion = (sectionId: string) => {
-    // Há um único editor rápido por vez. Antes, abrir um novo editor sobrescrevia
-    // silenciosamente a pergunta ainda não confirmada de outra seção, dando a
-    // impressão de que perguntas anteriores tinham "sumido".
-    if (draftQuestion && editingQuestionId) {
-      showFeedback('info', 'Confirme ou cancele a pergunta que já está em edição antes de adicionar outra.');
-      if (editorSectionId) setExpandedSections((prev) => ({ ...prev, [editorSectionId]: true }));
+    const existingEditor = questionEditors[sectionId];
+    if (existingEditor) {
+      showFeedback('info', 'Já existe uma pergunta em edição nesta seção. Confirme ou cancele antes de adicionar outra.');
+      setExpandedSections((prev) => ({ ...prev, [sectionId]: true }));
+      focusQuestionEditor(sectionId);
       return;
     }
-    setEditingQuestionId('new');
-    setDraftQuestion({
-      id: generateQuestionId(),
-      label: '',
-      type: 'dissertativa',
-      optionsText: '',
-      required: false
-    });
-    setEditorSectionId(sectionId);
+
+    setQuestionEditors((prev) => ({
+      ...prev,
+      [sectionId]: {
+        editingQuestionId: 'new',
+        draftQuestion: {
+          id: generateQuestionId(),
+          label: '',
+          type: 'dissertativa',
+          optionsText: '',
+          required: false
+        }
+      }
+    }));
     setExpandedSections((prev) => ({ ...prev, [sectionId]: true }));
+    focusQuestionEditor(sectionId);
   };
 
   const saveTemplate = async () => {
     if (!canEditTemplate || !onTemplateSave) return;
+    if (Object.keys(questionEditors).length > 0) {
+      showFeedback('info', 'Confirme ou cancele as perguntas em edição antes de salvar a ficha.');
+      return;
+    }
     const cleanName = templateName.trim();
     if (!cleanName) {
       showFeedback('error', 'Dê um nome para a ficha antes de salvar.');
@@ -809,14 +875,12 @@ export const AnamnesisModal = ({
       acc[section.id] = true;
       return acc;
     }, {} as Record<string, boolean>));
-    setEditingQuestionId(null);
-    setDraftQuestion(null);
-    setEditorSectionId(null);
+    setQuestionEditors({});
     onTemplateSelect?.(item);
   };
 
   const handleCloseModal = () => {
-    if (canEditTemplate && view === 'template' && (templateDirty || Boolean(draftQuestion))) {
+    if (canEditTemplate && view === 'template' && (templateDirty || Object.keys(questionEditors).length > 0)) {
       const shouldLeave = confirm('Existem mudanças não salvas na ficha de anamnese. Deseja sair sem salvar?');
       if (!shouldLeave) return;
     }
@@ -1043,6 +1107,8 @@ export const AnamnesisModal = ({
                     .filter((question) => question.sectionId === section.id)
                     .sort((a, b) => a.order - b.order);
                   const expanded = expandedSections[section.id] ?? true;
+                  const questionEditor = questionEditors[section.id];
+                  const draftQuestion = questionEditor?.draftQuestion || null;
                   return (
                     <div key={section.id} className="rounded-2xl border border-slate-200">
                       <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-50 rounded-t-2xl">
@@ -1107,28 +1173,24 @@ export const AnamnesisModal = ({
                             </div>
                           ))}
 
-                          {editingQuestionId && draftQuestion && (editorSectionId === section.id || sectionQuestions.some((q) => q.id === editingQuestionId)) && (
-                            <div className="rounded-xl border border-[#7a32fc]/30 bg-[#7a32fc]/5 p-3 space-y-2">
-                              <h4 className="font-semibold text-slate-800">Editar pergunta</h4>
+                          {questionEditor && draftQuestion && (
+                            <div id={`anamnesis-question-editor-${section.id}`} className="rounded-xl border border-[#7a32fc]/30 bg-[#7a32fc]/5 p-3 space-y-2">
+                              <h4 className="font-semibold text-slate-800">{questionEditor.editingQuestionId === 'new' ? 'Nova pergunta' : 'Editar pergunta'}</h4>
                               <input
                                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
                                 placeholder="Texto da pergunta"
                                 value={draftQuestion.label}
-                                onChange={(event) => setDraftQuestion((prev) => (prev ? { ...prev, label: event.target.value } : prev))}
+                                onChange={(event) => updateQuestionDraft(section.id, (prev) => ({ ...prev, label: event.target.value }))}
                               />
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <select
                                   className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
                                   value={draftQuestion.type}
                                   onChange={(event) =>
-                                    setDraftQuestion((prev) =>
-                                      prev
-                                        ? {
-                                            ...prev,
-                                            type: event.target.value as AnamnesisQuestionType
-                                          }
-                                        : prev
-                                    )
+                                    updateQuestionDraft(section.id, (prev) => ({
+                                      ...prev,
+                                      type: event.target.value as AnamnesisQuestionType
+                                    }))
                                   }
                                 >
                                   {Object.keys(QUESTION_TYPE_LABEL).map((questionType) => (
@@ -1141,7 +1203,7 @@ export const AnamnesisModal = ({
                                   <input
                                     type="checkbox"
                                     checked={draftQuestion.required}
-                                    onChange={(event) => setDraftQuestion((prev) => (prev ? { ...prev, required: event.target.checked } : prev))}
+                                    onChange={(event) => updateQuestionDraft(section.id, (prev) => ({ ...prev, required: event.target.checked }))}
                                   />
                                   Obrigatória
                                 </label>
@@ -1152,7 +1214,7 @@ export const AnamnesisModal = ({
                                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-none bg-white text-slate-900"
                                   placeholder="Opções separadas por vírgula"
                                   value={draftQuestion.optionsText}
-                                  onChange={(event) => setDraftQuestion((prev) => (prev ? { ...prev, optionsText: event.target.value } : prev))}
+                                  onChange={(event) => updateQuestionDraft(section.id, (prev) => ({ ...prev, optionsText: event.target.value }))}
                                 />
                               )}
                               <div className="flex items-center gap-2">
@@ -1165,9 +1227,7 @@ export const AnamnesisModal = ({
                                 <button
                                   className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600"
                                   onClick={() => {
-                                    setEditingQuestionId(null);
-                                    setDraftQuestion(null);
-                                    setEditorSectionId(null);
+                                    cancelQuestionEdit(section.id);
                                   }}
                                 >
                                   Cancelar
