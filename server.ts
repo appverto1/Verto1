@@ -1372,6 +1372,14 @@ async function loadBillingPlansFromSnapshots(params: { allowSync?: boolean; forc
 const ACTIVE_PATIENT_BILLING_MODEL = 'active_patients';
 const CLINIC_ACCESS_ACTIVE_STATUSES = new Set(['active', 'trial_active', 'trialing', 'demo', 'demo_sandbox']);
 const CLINIC_MEMBER_BILLING_READY_SYNC_STATUSES = new Set(['synced', 'within_current_limit']);
+const CLINIC_MEMBER_HARD_BLOCK_STATUSES = new Set([
+  'blocked',
+  'canceled',
+  'cancelled',
+  'incomplete_expired',
+  'checkout_abandoned'
+]);
+const CLINIC_MEMBER_GRACE_STATUSES = new Set(['past_due', 'unpaid', 'delinquent']);
 const CLINIC_ACCESS_BLOCKED_STATUSES = new Set([
   '',
   'pending',
@@ -1397,6 +1405,110 @@ function roleRequiresClinicBillingAccess(role: any): boolean {
   return ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller', 'admin'].includes(
     sanitizeString(role, 40).toLowerCase()
   );
+}
+
+async function resolveClinicManagedMemberDashboardAccess(clinicIdValue: unknown, clinicRow: any): Promise<boolean> {
+  const clinicId = sanitizeString(clinicIdValue, 120);
+  if (!isUuid(clinicId)) return false;
+
+  const subscriptionStatus = normalizeClinicAccessStatus(clinicRow?.subscription_status);
+  const billingModel = sanitizeString(clinicRow?.billing_model, 60).toLowerCase();
+  const billingSyncStatus = sanitizeString(clinicRow?.billing_sync_status, 80).toLowerCase();
+
+  // Explicit terminal states always win. A stale sync marker or entitlement
+  // snapshot must never reopen a cancelled/blocked clinic for an invited member.
+  if (CLINIC_MEMBER_HARD_BLOCK_STATUSES.has(subscriptionStatus)) return false;
+
+  // Stripe payment failures intentionally grant a short grace period. The old
+  // onboarding gate ignored stripe_access_block_at and blocked invited staff
+  // immediately, before the clinic itself was actually blocked.
+  if (CLINIC_MEMBER_GRACE_STATUSES.has(subscriptionStatus)) {
+    const accessBlockAtRaw = sanitizeString(clinicRow?.stripe_access_block_at, 80);
+    const accessBlockAt = accessBlockAtRaw ? new Date(accessBlockAtRaw).getTime() : Number.NaN;
+    if (Number.isFinite(accessBlockAt)) return accessBlockAt > Date.now();
+  }
+
+  // A collaborator never owns the clinic checkout. Once the membership is active,
+  // access follows the clinic's commercial state instead of the collaborator's
+  // individual profile. Healthy states stay on the fast path with no extra read.
+  if (
+    !subscriptionStatus ||
+    CLINIC_ACCESS_ACTIVE_STATUSES.has(subscriptionStatus) ||
+    billingModel === 'demo' ||
+    billingModel === 'demo_sandbox'
+  ) {
+    return true;
+  }
+
+  // Some older clinics persisted the paid state on the owner profile before the
+  // clinic mirror was fully reconciled. Only ambiguous states pay this one extra
+  // read, and only the three commercial columns required for the decision are read.
+  const ownerUserId = sanitizeString(clinicRow?.owner_user_id || clinicRow?.created_by, 120);
+  if (isUuid(ownerUserId)) {
+    let ownerAccessColumns = ['subscription_status', 'billing_model', 'stripe_access_block_at'];
+    let ownerResult: any = { data: null, error: null };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      ownerResult = await supabase
+        .from('users')
+        .select(ownerAccessColumns.join(','))
+        .eq('id', ownerUserId)
+        .maybeSingle();
+      if (!ownerResult.error) break;
+      const missingColumn = extractMissingColumnName(ownerResult.error);
+      if (!missingColumn || !ownerAccessColumns.includes(missingColumn) || ownerAccessColumns.length <= 1) break;
+      ownerAccessColumns = ownerAccessColumns.filter((column) => column !== missingColumn);
+    }
+
+    if (!ownerResult.error && ownerResult.data) {
+      const ownerStatus = normalizeClinicAccessStatus(ownerResult.data?.subscription_status);
+      const ownerBillingModel = sanitizeString(ownerResult.data?.billing_model, 60).toLowerCase();
+      if (CLINIC_MEMBER_HARD_BLOCK_STATUSES.has(ownerStatus)) return false;
+      if (CLINIC_MEMBER_GRACE_STATUSES.has(ownerStatus)) {
+        const ownerBlockAtRaw = sanitizeString(ownerResult.data?.stripe_access_block_at, 80);
+        const ownerBlockAt = ownerBlockAtRaw ? new Date(ownerBlockAtRaw).getTime() : Number.NaN;
+        if (Number.isFinite(ownerBlockAt)) return ownerBlockAt > Date.now();
+      }
+      if (
+        CLINIC_ACCESS_ACTIVE_STATUSES.has(ownerStatus) ||
+        ownerBillingModel === 'demo' ||
+        ownerBillingModel === 'demo_sandbox'
+      ) {
+        return true;
+      }
+    }
+  }
+
+  // Backward-compatible active-patient billing marker. It is never allowed to
+  // override cancellation or an expired payment grace period evaluated above.
+  if (
+    CLINIC_MEMBER_BILLING_READY_SYNC_STATUSES.has(billingSyncStatus) &&
+    !CLINIC_MEMBER_GRACE_STATUSES.has(subscriptionStatus)
+  ) {
+    return true;
+  }
+
+  // Contract entitlements are a valid positive signal for modular paid/trial/grace
+  // organizations. legacy_full is intentionally not used as billing evidence: it
+  // exists to preserve module visibility for old clinics, not to prove payment.
+  if (CLINIC_ACCESS_BLOCKED_STATUSES.has(subscriptionStatus)) {
+    try {
+      const { data, error } = await supabase.rpc('get_organization_module_access_v1', {
+        p_organization_id: clinicId,
+      });
+      if (error) return false;
+      const mode = sanitizeString((data as any)?.mode, 30).toLowerCase();
+      const modules = Array.isArray((data as any)?.modules) ? (data as any).modules : [];
+      if (mode === 'contract' && modules.some((item: any) => isOrganizationModuleKey(sanitizeString(item, 80)))) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  // Unknown commercial states fail closed. A future Stripe/status value must be
+  // added deliberately instead of silently granting access to the whole clinic.
+  return false;
 }
 
 function hasActiveClinicBillingAccess(user: any): boolean {
@@ -15581,6 +15693,7 @@ async function fetchClinicOnboardingSnapshot(clinicId: string) {
     'subscription_status',
     'billing_model',
     'billing_sync_status',
+    'stripe_access_block_at',
     'address',
     'clinic_address',
     'city',
@@ -15849,16 +15962,12 @@ async function resolveOnboardingContextForUser(params: {
         : 'standard';
   const clinicSubscriptionStatus = normalizeClinicAccessStatus(clinicRow?.subscription_status);
   const billingModel = sanitizeString(clinicRow?.billing_model, 60).toLowerCase();
-  const billingSyncStatus = sanitizeString(clinicRow?.billing_sync_status, 80).toLowerCase();
-  const clinicBillingAccessReady =
-    !clinicSubscriptionStatus ||
-    CLINIC_ACCESS_ACTIVE_STATUSES.has(clinicSubscriptionStatus) ||
-    billingModel === 'demo' ||
-    billingModel === 'demo_sandbox' ||
-    CLINIC_MEMBER_BILLING_READY_SYNC_STATUSES.has(billingSyncStatus);
+  const clinicManagedMemberAccessReady = onboardingMode === 'clinic_owner'
+    ? false
+    : Boolean(membership) && await resolveClinicManagedMemberDashboardAccess(clinicId, clinicRow);
   const canAccessDashboard = onboardingMode === 'clinic_owner'
     ? CLINIC_ACCESS_ACTIVE_STATUSES.has(clinicSubscriptionStatus) || billingModel === 'demo' || billingModel === 'demo_sandbox'
-    : Boolean(membership) && clinicBillingAccessReady;
+    : clinicManagedMemberAccessReady;
 
   return {
     onboardingMode,
