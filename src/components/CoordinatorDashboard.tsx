@@ -13779,13 +13779,49 @@ export function CoordinatorDashboard({
                               </p>
                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                                 {(() => {
-                                  if (log.time) return log.time;
                                   const rawTs = log.timestamp || log.created_at || log.date;
                                   if (!rawTs) return "Agora";
                                   const parsed = new Date(rawTs);
-                                  return Number.isNaN(parsed.getTime())
-                                    ? "Agora"
-                                    : parsed.toLocaleString("pt-BR");
+                                  if (Number.isNaN(parsed.getTime())) return "Agora";
+                                  const browserTimeZone = (() => {
+                                    try {
+                                      return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+                                    } catch {
+                                      return "America/Sao_Paulo";
+                                    }
+                                  })();
+                                  const timeZone = String(
+                                    log.timezone_snapshot ||
+                                      log.timezoneSnapshot ||
+                                      user?.clinicTimeZone ||
+                                      user?.clinic_timezone ||
+                                      user?.timeZone ||
+                                      user?.timezone ||
+                                      browserTimeZone
+                                  ).trim() || browserTimeZone;
+                                  try {
+                                    return new Intl.DateTimeFormat("pt-BR", {
+                                      day: "2-digit",
+                                      month: "2-digit",
+                                      year: "numeric",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                      second: "2-digit",
+                                      hour12: false,
+                                      timeZone
+                                    }).format(parsed);
+                                  } catch {
+                                    return new Intl.DateTimeFormat("pt-BR", {
+                                      day: "2-digit",
+                                      month: "2-digit",
+                                      year: "numeric",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                      second: "2-digit",
+                                      hour12: false,
+                                      timeZone: browserTimeZone
+                                    }).format(parsed);
+                                  }
                                 })()}
                               </span>
                             </div>

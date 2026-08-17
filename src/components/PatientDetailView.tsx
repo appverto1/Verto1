@@ -1196,9 +1196,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const patientFilesRequestInFlightRef = React.useRef('');
   const [previewFile, setPreviewFile] = useState<any>(null);
 
-  const openPatientFilePreview = (file: any) => {
-    const objectUrl = resolveFileViewUrl(file);
-    setPreviewFile(objectUrl ? { ...file, objectUrl } : file);
+  const openPatientFilePreview = async (file: any) => {
+    const patientId = String(patient?.id || '').trim();
+    const fileId = String(file?.id || '').trim();
+    let resolvedFile = file;
+    if (patientId && fileId) {
+      const accessResult = await dataService.accessPatientFile(patientId, fileId, 'view');
+      if (!accessResult?.success || !accessResult?.data) {
+        alert(accessResult?.error || 'Não foi possível abrir este arquivo com auditoria.');
+        return;
+      }
+      resolvedFile = normalizeFileRecord(accessResult.data);
+    }
+    const objectUrl = resolveFileViewUrl(resolvedFile);
+    setPreviewFile(objectUrl ? { ...resolvedFile, objectUrl } : resolvedFile);
   };
 
   useEffect(() => () => {
@@ -5726,13 +5737,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     void persist();
   };
 
-  const handleDownloadPatientFile = (file: any) => {
-    const content = typeof file?.content === 'string' ? file.content : '';
+  const handleDownloadPatientFile = async (file: any) => {
+    const patientId = String(patient?.id || '').trim();
+    const fileId = String(file?.id || '').trim();
+    let resolvedFile = file;
+    if (patientId && fileId) {
+      const accessResult = await dataService.accessPatientFile(patientId, fileId, 'download');
+      if (!accessResult?.success || !accessResult?.data) {
+        alert(accessResult?.error || 'Não foi possível baixar este arquivo com auditoria.');
+        return;
+      }
+      resolvedFile = normalizeFileRecord(accessResult.data);
+    }
+
+    const content = typeof resolvedFile?.content === 'string' ? resolvedFile.content : '';
     if (content.startsWith('data:application/pdf')) {
       const href = createObjectUrlFromDataUrl(content, 'application/pdf');
       const a = document.createElement("a");
       a.href = href;
-      a.download = file.name || "arquivo.pdf";
+      a.download = resolvedFile.name || "arquivo.pdf";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -5744,16 +5767,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
 
-    if (file?.source === "anamnesis" && file?.content) {
-      openPrintWindowForPdf(file.content);
+    if (resolvedFile?.source === "anamnesis" && resolvedFile?.content) {
+      openPrintWindowForPdf(resolvedFile.content);
       return;
     }
 
-    const href = file.objectUrl || file.url;
+    const href = resolvedFile.objectUrl || resolvedFile.url;
     if (href) {
       const a = document.createElement("a");
       a.href = href;
-      a.download = file.name || "arquivo";
+      a.download = resolvedFile.name || "arquivo";
       a.target = "_blank";
       a.rel = "noopener noreferrer";
       document.body.appendChild(a);
@@ -5763,11 +5786,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
 
     if (content) {
-      const blob = new Blob([content], { type: file.type || "application/json" });
+      const blob = new Blob([content], { type: resolvedFile.type || "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = file.name || "arquivo.json";
+      a.download = resolvedFile.name || "arquivo.json";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -11489,14 +11512,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   <div className="flex items-center gap-2">
                     <button
                       title="Visualizar"
-                      onClick={() => openPatientFilePreview(file)}
+                      onClick={() => void openPatientFilePreview(file)}
                       className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-violet-200 hover:bg-slate-800' : 'text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50'}`}
                     >
                       <Eye size={18} />
                     </button>
                     <button
                       title="Download"
-                      onClick={() => handleDownloadPatientFile(file)}
+                      onClick={() => void handleDownloadPatientFile(file)}
                       className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-violet-200 hover:bg-slate-800' : 'text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50'}`}
                     >
                       <Download size={18} />

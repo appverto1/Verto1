@@ -1955,10 +1955,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const visiblePortalDocuments = useMemo(() => {
     const persisted = portalPatientFiles.map((file: any) => ({
       key: firstPortalText(file?.id, file?.path, file?.fileName),
+      patientFileId: firstPortalText(file?.id),
+      auditedAccess: true,
       name: firstPortalText(file?.fileName, file?.file_name, file?.name) || 'Documento',
       category: firstPortalText(file?.source, file?.mimeType, file?.mime_type) || 'Documento',
       createdAt: firstPortalText(file?.createdAt, file?.created_at),
-      href: firstPortalText(file?.signedUrl, file?.url),
+      href: '',
       mimeType: firstPortalText(file?.mimeType, file?.mime_type)
     }));
     const seen = new Set<string>();
@@ -2820,6 +2822,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setFamilyAnnotationState({ saving: false, message: 'Anotação enviada para a equipe.', error: '' });
   };
 
+  const openPortalPatientFile = async (document: any) => {
+    const fileId = firstPortalText(document?.patientFileId, document?.key);
+    if (!portalPatientId || !fileId) return;
+    const result = await dataService.accessPatientFile(portalPatientId, fileId, 'view');
+    const url = result?.success ? firstPortalText(result?.data?.signedUrl, result?.data?.url, result?.data?.content) : '';
+    if (!url) {
+      setPortalFileState((current) => ({ ...current, error: result?.error || 'Não foi possível abrir o documento com auditoria.' }));
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   const loadPortalPatientFiles = async () => {
     if (!portalPatientId) {
       setPortalPatientFilesLoaded(true);
@@ -2964,7 +2978,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     {document.category}{document.createdAt ? ` · ${formatPortalDate(document.createdAt)}` : ''}
                   </p>
                 </div>
-                {document.href ? (
+                {document.auditedAccess && document.patientFileId ? (
+                  <button type="button" onClick={() => void openPortalPatientFile(document)} className="shrink-0 rounded-full bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#7a32fc]">
+                    Abrir
+                  </button>
+                ) : document.href ? (
                   <a href={document.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#7a32fc]">
                     Abrir
                   </a>

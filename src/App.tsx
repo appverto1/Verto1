@@ -814,6 +814,50 @@ export default function App() {
     return Array.from(merged.values());
   };
 
+  const formatActivityLogDateTime = (value: unknown, requestedTimeZone?: unknown) => {
+    const parsed = value ? new Date(String(value)) : null;
+    if (!parsed || Number.isNaN(parsed.getTime())) return 'Agora';
+    const browserTimeZone = (() => {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo';
+      } catch {
+        return 'America/Sao_Paulo';
+      }
+    })();
+    const timeZone = String(
+      requestedTimeZone ||
+      user?.clinicTimeZone ||
+      user?.clinic_timezone ||
+      user?.timeZone ||
+      user?.timezone ||
+      browserTimeZone ||
+      'America/Sao_Paulo'
+    ).trim() || 'America/Sao_Paulo';
+    try {
+      return new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone
+      }).format(parsed);
+    } catch {
+      return new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: browserTimeZone
+      }).format(parsed);
+    }
+  };
+
   const normalizeActivityLog = (raw: any) => {
     const title = raw?.title || raw?.action || 'Atividade registrada';
     const content =
@@ -826,6 +870,15 @@ export default function App() {
     const isoDate = raw?.timestamp || raw?.created_at || raw?.date || null;
     const parsedDate = isoDate ? new Date(isoDate) : null;
     const hasValidDate = !!(parsedDate && !Number.isNaN(parsedDate.getTime()));
+    const canonicalTimestamp = hasValidDate ? parsedDate.toISOString() : new Date().toISOString();
+    const timezoneSnapshot =
+      raw?.timezone_snapshot ||
+      raw?.timezoneSnapshot ||
+      user?.clinicTimeZone ||
+      user?.clinic_timezone ||
+      user?.timeZone ||
+      user?.timezone ||
+      null;
 
     return {
       ...raw,
@@ -838,8 +891,11 @@ export default function App() {
         raw?.user_name ||
         user?.name ||
         'Profissional',
-      timestamp: hasValidDate ? parsedDate.toISOString() : new Date().toISOString(),
-      time: raw?.time || (hasValidDate ? parsedDate.toLocaleString('pt-BR') : 'Agora')
+      timestamp: canonicalTimestamp,
+      timezone_snapshot: timezoneSnapshot,
+      // Never trust a preformatted server/browser string: one canonical instant +
+      // the timezone snapshot avoids displaying the same event in two timezones.
+      time: formatActivityLogDateTime(canonicalTimestamp, timezoneSnapshot)
     };
   };
 

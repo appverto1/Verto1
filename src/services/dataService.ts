@@ -1659,6 +1659,25 @@ export const dataService = {
     }
   },
 
+  async accessPatientFile(patientId: string, fileId: string, action: 'view' | 'download') {
+    try {
+      const clientEventId = crypto.randomUUID();
+      const response = await fetch(`/api/patient-files/${encodeURIComponent(String(patientId))}/${encodeURIComponent(String(fileId))}/access`, {
+        method: 'POST',
+        headers: {
+          ...(await getAuthHeaders()),
+          'X-Audit-Event-Id': clientEventId
+        },
+        credentials: 'include',
+        body: JSON.stringify({ action: action.toUpperCase(), client_event_id: clientEventId })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error accessing patient file:', error);
+      return { success: false, error: String(error), data: null };
+    }
+  },
+
   async uploadPatientFile(patientId: string, payload: any) {
     try {
       if (payload?.fileBlob instanceof Blob) {
@@ -5634,9 +5653,14 @@ export const dataService = {
     if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/session-reports/${encodeURIComponent(String(sessionId))}`;
     try {
+      const auditEventId = crypto.randomUUID();
       const response = await fetchClinical(endpoint, {
-        headers: await buildConditionalHeaders(endpoint, 'aba'),
-        credentials: 'include'
+        headers: {
+          ...(await getNoStoreAuthHeaders(false)),
+          'X-Audit-Event-Id': auditEventId
+        },
+        credentials: 'include',
+        cache: 'no-store'
       }, { helperName: 'getSessionReport', operation: 'detail', table: 'aba_session_summaries', hasExplicitColumns: true });
       if (response.ok) return await response.json();
       return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar o relatório desta sessão.');

@@ -8026,6 +8026,12 @@ const ACTIVITY_LOG_SELECT = [
   'action',
   'action_type',
   'payload_details',
+  'resource_type',
+  'resource_id',
+  'patient_id',
+  'session_id',
+  'timezone_snapshot',
+  'immutable_audit',
   'source',
   'request_path',
   'request_method',
@@ -21621,9 +21627,17 @@ async function startServer() {
     return mentionsAppointment && mentionsAllowedStatus;
   };
 
+  const patientAuditVisibilityActions = new Set([
+    'patient_file_viewed',
+    'patient_file_downloaded',
+    'patient_file_uploaded',
+    'patient_file_deleted',
+    'patient_anamnesis_updated'
+  ]);
+
   const isPatientNonAgendaActivityLogEntry = (entry: any, currentUser?: any) => {
     const action = resolveActivityEntryAction(entry);
-    if (isAppointmentAgendaInteractionLogEntry(entry)) return false;
+    if (isAppointmentAgendaInteractionLogEntry(entry) || patientAuditVisibilityActions.has(action)) return false;
 
     const payload = parseActivityPayloadDetails(entry);
     const actorRole = sanitizeString(
@@ -21669,7 +21683,14 @@ async function startServer() {
     actionType,
     payloadDetails,
     details,
-    payload
+    payload,
+    resourceType,
+    resourceId,
+    patientId,
+    sessionId,
+    timezone,
+    immutableAudit = false,
+    idempotencyKey
   }: {
     userId: string;
     clinicId?: string | null;
@@ -21682,7 +21703,14 @@ async function startServer() {
     payloadDetails?: string | null;
     details?: string | null;
     payload?: unknown;
-  }) => {
+    resourceType?: string | null;
+    resourceId?: string | null;
+    patientId?: string | null;
+    sessionId?: string | null;
+    timezone?: string | null;
+    immutableAudit?: boolean;
+    idempotencyKey?: string | null;
+  }): Promise<boolean> => {
     try {
       const safeUserId = sanitizeString(userId, 120);
       const safeClinicId = sanitizeString(clinicId, 120);
@@ -21708,8 +21736,10 @@ async function startServer() {
           type
         })
       ) {
-        return;
+        return false;
       }
+      const timestamp = new Date().toISOString();
+      const safeIdempotencyKey = sanitizeString(idempotencyKey, 240) || null;
       const basePayload: any = {
         id: crypto.randomUUID(),
         user_id: isUuid(safeUserId) ? safeUserId : null,
@@ -21717,7 +21747,7 @@ async function startServer() {
         title: safeTitle,
         content: safeContent,
         type: sanitizeString(type, 40) || 'management',
-        timestamp: new Date().toISOString()
+        timestamp
       };
 
       const extendedPayload = {
@@ -21726,18 +21756,29 @@ async function startServer() {
         actor_name: sanitizeString(actorName, 180) || null,
         action_type: sanitizeString(actionType || resolvedAction, 180) || resolvedAction,
         payload_details: resolvedPayloadDetails,
+        idempotency_key: safeIdempotencyKey,
+        resource_type: sanitizeString(resourceType, 80) || null,
+        resource_id: sanitizeString(resourceId, 240) || null,
+        patient_id: isUuid(sanitizeString(patientId, 120)) ? sanitizeString(patientId, 120) : null,
+        session_id: sanitizeString(sessionId, 180) || null,
+        timezone_snapshot: sanitizeString(timezone, 80) || sanitizeString(process.env.DEFAULT_CLINIC_TIMEZONE, 80) || 'America/Sao_Paulo',
+        immutable_audit: immutableAudit === true,
         source: 'server',
         status: 'active',
         is_active: true,
-        created_at: basePayload.timestamp,
-        updated_at: basePayload.timestamp
+        created_at: timestamp,
+        updated_at: timestamp
       };
 
       const insert = await writeActivityLogWithFallback(extendedPayload);
-      if (!insert.error) return;
+      if (!insert.error) return true;
+      const duplicateAudit = sanitizeString(insert.error?.code, 40) === '23505' && Boolean(safeIdempotencyKey);
+      if (duplicateAudit) return true;
       logRouteDbError('persistActivityLog', insert.error, { title: safeTitle, action: resolvedAction, userId, clinicId });
+      return false;
     } catch (error) {
       console.warn('[ActivityLog] Failed to persist audit event:', String(error));
+      return false;
     }
   };
 
@@ -21961,6 +22002,12 @@ async function startServer() {
           'action_type',
           'payload_details',
           'idempotency_key',
+          'resource_type',
+          'resource_id',
+          'patient_id',
+          'session_id',
+          'timezone_snapshot',
+          'immutable_audit',
           'source',
           'request_path',
           'request_method',
@@ -22050,6 +22097,8 @@ async function startServer() {
         sanitizeString(body?.payload_details || body?.payloadDetails || body?.details || content, 4000) || content,
       timestamp: sanitizeString(body?.timestamp, 40) || nowIso,
       idempotency_key: idempotencyKey || null,
+      timezone_snapshot: currentClinicTimeZone(currentUser),
+      immutable_audit: false,
       source: sanitizeString(body?.source, 40) || 'app',
       request_path: sanitizeString(req?.path, 240) || null,
       request_method: sanitizeString(req?.method, 20) || null,
@@ -24137,7 +24186,8 @@ async function startServer() {
         clinicId,
         actorName,
         title: `${action.toUpperCase()} registrada em ${pathSafe}`,
-        content: `${actorName} realizou ${action} no endpoint ${pathSafe} em ${new Date().toLocaleString('pt-BR')} (${durationMs} ms).`,
+        content: `${actorName} realizou ${action} no endpoint ${pathSafe} (${durationMs} ms).`,
+        timezone: currentClinicTimeZone(actor),
         type: 'audit'
       });
     });
@@ -29269,7 +29319,7 @@ async function startServer() {
       if (isUuid(templateId)) {
         let existingTemplateQuery = supabase
           .from('anamnesis_templates')
-          .select('id,scope,owner_user_id,organization_id,is_active,revision,questions')
+          .select(ANAMNESIS_TEMPLATE_SELECT)
           .eq('id', templateId)
           .eq('scope', templateScope);
         existingTemplateQuery = templateScope === 'personal'
@@ -29381,15 +29431,52 @@ async function startServer() {
         return res.status(500).json({ success: false, error: 'A ficha não foi associada à clínica correta.' });
       }
 
-      void persistActivityLog({
+      const savedEditorTemplate = mapAnamnesisTemplateRowForEditor(savedRow);
+      const previousEditorTemplate = existingTemplate ? mapAnamnesisTemplateRowForEditor(existingTemplate) : null;
+      const templateChanges: string[] = [];
+      if (!previousEditorTemplate) {
+        const profile = savedEditorTemplate?.profiles?.[savedEditorTemplate?.profileType === 'child' ? 'child' : 'adult'];
+        templateChanges.push(`Ficha criada com ${(profile?.sections || []).length} seção(ões) e ${(profile?.questions || []).length} pergunta(s).`);
+      } else {
+        if (previousEditorTemplate.templateName !== savedEditorTemplate.templateName) {
+          templateChanges.push(`Nome: "${previousEditorTemplate.templateName}" -> "${savedEditorTemplate.templateName}"`);
+        }
+        if ((previousEditorTemplate.templateDescription || '') !== (savedEditorTemplate.templateDescription || '')) {
+          templateChanges.push('Descrição interna alterada.');
+        }
+        if (previousEditorTemplate.ageMinMonths !== savedEditorTemplate.ageMinMonths || previousEditorTemplate.ageMaxMonths !== savedEditorTemplate.ageMaxMonths) {
+          templateChanges.push(`Faixa etária alterada para ${savedEditorTemplate.ageMinMonths ?? 'sem mínimo'}–${savedEditorTemplate.ageMaxMonths ?? 'sem máximo'} meses.`);
+        }
+        if ((previousEditorTemplate.patientProfileType || '') !== (savedEditorTemplate.patientProfileType || '')) {
+          templateChanges.push(`Perfil alterado para ${savedEditorTemplate.patientProfileType || 'todos'}.`);
+        }
+        templateChanges.push(...listAnamnesisTemplateChanges(previousEditorTemplate, savedEditorTemplate));
+      }
+      const uniqueChanges = Array.from(new Set(templateChanges)).slice(0, 40);
+      const visibleChanges = uniqueChanges.slice(0, 6);
+      const extraChanges = Math.max(0, uniqueChanges.length - visibleChanges.length);
+      const auditAction = previousEditorTemplate ? 'anamnesis_template_updated' : 'anamnesis_template_created';
+      await persistActivityLog({
         userId: actorId,
         clinicId,
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: templateScope === 'personal' ? 'Ficha profissional atualizada' : 'Template de anamnese da clínica atualizado',
-        content: templateScope === 'personal'
-          ? `Ficha profissional "${name}" salva para reutilização em outros vínculos.`
-          : `Ficha "${name}" salva para uso da clínica.`,
-        type: 'audit'
+        title: previousEditorTemplate
+          ? (templateScope === 'personal' ? 'Ficha profissional editada' : 'Ficha da clínica editada')
+          : (templateScope === 'personal' ? 'Ficha profissional criada' : 'Ficha da clínica criada'),
+        content: `${name}: ${visibleChanges.join(' · ')}${extraChanges > 0 ? ` · +${extraChanges} alteração(ões)` : ''}`,
+        type: 'audit',
+        action: auditAction,
+        actionType: auditAction,
+        payloadDetails: JSON.stringify({
+          templateId: sanitizeString(savedRow?.id, 120),
+          scope: templateScope,
+          revision: Number(savedRow?.revision || savedEditorTemplate?.templateRevision || 1),
+          changes: uniqueChanges
+        }),
+        resourceType: 'anamnesis_template',
+        resourceId: sanitizeString(savedRow?.id, 120),
+        timezone: currentClinicTimeZone(req.session.user),
+        immutableAudit: true
       });
 
       return res.json({ success: true, data: mapAnamnesisTemplateRowForEditor(savedRow) });
@@ -29458,13 +29545,19 @@ async function startServer() {
       if (error) throw error;
       if (!data?.id) return res.status(404).json({ success: false, error: 'Ficha não encontrada.' });
 
-      void persistActivityLog({
+      await persistActivityLog({
         userId: actorId,
         clinicId,
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
         title: scope === 'personal' ? 'Ficha profissional arquivada' : 'Ficha de anamnese da clínica arquivada',
         content: `A ficha "${sanitizeString(existing.name, 180) || 'sem nome'}" foi removida da lista ativa.`,
-        type: 'audit'
+        type: 'audit',
+        action: 'anamnesis_template_archived',
+        actionType: 'anamnesis_template_archived',
+        resourceType: 'anamnesis_template',
+        resourceId: templateId,
+        timezone: currentClinicTimeZone(req.session.user),
+        immutableAudit: true
       });
 
       return res.json({ success: true });
@@ -29522,13 +29615,19 @@ async function startServer() {
 
       if (actorId) {
         for (const item of templateChanges.length > 0 ? templateChanges : ['Template de anamnese publicado sem alterações detectadas.']) {
-          void persistActivityLog({
+          await persistActivityLog({
             userId: actorId,
             clinicId,
             actorName,
             title: 'Template de anamnese atualizado',
             content: item,
-            type: 'audit'
+            type: 'audit',
+            action: 'anamnesis_template_updated',
+            actionType: 'anamnesis_template_updated',
+            resourceType: 'clinic_anamnesis_template',
+            resourceId: sanitizeString(clinicId, 120),
+            timezone: currentClinicTimeZone(req.session.user),
+            immutableAudit: true
           });
         }
       }
@@ -38579,23 +38678,37 @@ async function startServer() {
             },
             context: 'patient-records-anamnesis-payload'
           });
-          void persistActivityLog({
+          await persistActivityLog({
             userId: actorId,
             clinicId: clinicAuditId,
             actorName,
             title: 'Ficha de anamnese registrada',
-            content: `${actorName} registrou/atualizou a ficha de anamnese do paciente ${patientId} em ${new Date().toLocaleString('pt-BR')}.`,
-            type: 'clinical'
+            content: `${actorName} registrou/atualizou a ficha de anamnese do paciente.`,
+            type: 'clinical',
+            action: 'patient_anamnesis_updated',
+            actionType: 'patient_anamnesis_updated',
+            resourceType: 'patient_anamnesis',
+            resourceId: patientId,
+            patientId,
+            timezone: currentClinicTimeZone(req.session.user),
+            immutableAudit: true
           });
         }
         if (hasFilesPayload) {
-          void persistActivityLog({
+          await persistActivityLog({
             userId: actorId,
             clinicId: clinicAuditId,
             actorName,
             title: 'Arquivos do prontuário atualizados',
-            content: `${actorName} atualizou os arquivos do paciente ${patientId}. Total de arquivos armazenados: ${filesCount}.`,
-            type: 'clinical'
+            content: `${actorName} atualizou a lista de arquivos do prontuário. Total de arquivos armazenados: ${filesCount}.`,
+            type: 'clinical',
+            action: 'patient_files_updated',
+            actionType: 'patient_files_updated',
+            resourceType: 'patient_files',
+            resourceId: patientId,
+            patientId,
+            timezone: currentClinicTimeZone(req.session.user),
+            immutableAudit: true
           });
         }
       }
@@ -38952,63 +39065,87 @@ async function startServer() {
     return writeResult;
   };
 
-  const buildPatientFilesFromPayload = async (patientId: string, payloadFiles: any[]) => {
+  const buildPatientFilesFromPayload = async (
+    patientId: string,
+    payloadFiles: any[],
+    options: { includeAccessContent?: boolean } = {}
+  ) => {
     const rawFiles = Array.isArray(payloadFiles) ? payloadFiles : [];
+    const includeAccessContent = options.includeAccessContent === true;
     const signedUrlByBucketAndPath = new Map<string, string>();
     const pathsByBucket = new Map<string, Set<string>>();
-    for (const rawFile of rawFiles) {
-      const path = sanitizeString(rawFile?.path, 500);
-      const bucket = sanitizeString(rawFile?.bucket, 120) || 'patient-files-private';
-      if (path) {
-        const bucketPaths = pathsByBucket.get(bucket) || new Set<string>();
-        bucketPaths.add(path);
-        pathsByBucket.set(bucket, bucketPaths);
-      }
-    }
 
-    await Promise.all(Array.from(pathsByBucket.entries()).map(async ([bucket, pathSet]) => {
-      const paths = Array.from(pathSet);
-      const { data: signedRows, error: signedError } = await supabase.storage
-        .from(bucket)
-        .createSignedUrls(paths, 60 * 10);
-      if (signedError) {
-        console.warn('[PatientFiles] Falha ao assinar lote de URLs legadas.', {
-          bucket,
-          fileCount: paths.length,
-          message: signedError.message
-        });
-        return;
+    if (includeAccessContent) {
+      for (const rawFile of rawFiles) {
+        const path = sanitizeString(rawFile?.path, 500);
+        const bucket = sanitizeString(rawFile?.bucket, 120) || 'patient-files-private';
+        if (path) {
+          const bucketPaths = pathsByBucket.get(bucket) || new Set<string>();
+          bucketPaths.add(path);
+          pathsByBucket.set(bucket, bucketPaths);
+        }
       }
-      for (const signed of signedRows || []) {
-        const path = sanitizeString((signed as any)?.path, 500);
-        const signedUrl = sanitizeUrl((signed as any)?.signedUrl);
-        if (path && signedUrl) signedUrlByBucketAndPath.set(`${bucket}:${path}`, signedUrl);
-      }
-    }));
+
+      await Promise.all(Array.from(pathsByBucket.entries()).map(async ([bucket, pathSet]) => {
+        const paths = Array.from(pathSet);
+        const { data: signedRows, error: signedError } = await supabase.storage
+          .from(bucket)
+          .createSignedUrls(paths, 60 * 5);
+        if (signedError) {
+          console.warn('[PatientFiles] Falha ao assinar lote de URLs legadas.', {
+            bucket,
+            fileCount: paths.length,
+            message: signedError.message
+          });
+          return;
+        }
+        for (const signed of signedRows || []) {
+          const path = sanitizeString((signed as any)?.path, 500);
+          const signedUrl = sanitizeUrl((signed as any)?.signedUrl);
+          if (path && signedUrl) signedUrlByBucketAndPath.set(`${bucket}:${path}`, signedUrl);
+        }
+      }));
+    }
 
     const mapped: any[] = [];
     for (const rawFile of rawFiles) {
       const path = sanitizeString(rawFile?.path, 500);
       const bucket = sanitizeString(rawFile?.bucket, 120) || 'patient-files-private';
-      const signedUrl = (path ? signedUrlByBucketAndPath.get(`${bucket}:${path}`) : null) ||
-        sanitizeUrl(rawFile?.signedUrl || rawFile?.url) || null;
+      const signedUrl = includeAccessContent
+        ? ((path ? signedUrlByBucketAndPath.get(`${bucket}:${path}`) : null) || sanitizeUrl(rawFile?.signedUrl || rawFile?.url) || null)
+        : null;
 
       mapped.push({
         id: sanitizeString(rawFile?.id, 120) || crypto.randomUUID(),
         patientId,
         fileName: sanitizeString(rawFile?.fileName || rawFile?.name, 220) || `arquivo_${Date.now()}`,
         path: path || null,
+        bucket,
         mimeType: sanitizeString(rawFile?.mimeType || rawFile?.type, 120) || 'application/octet-stream',
         sizeBytes: Number(rawFile?.sizeBytes || rawFile?.size || 0) || 0,
         source: sanitizeString(rawFile?.source, 40) || 'upload',
         createdAt: sanitizeString(rawFile?.createdAt || rawFile?.date, 80) || new Date().toISOString(),
         metadata: rawFile?.metadata && typeof rawFile.metadata === 'object' ? rawFile.metadata : {},
+        requiresAuditedAccess: true,
         signedUrl,
-        url: signedUrl || sanitizeUrl(rawFile?.url) || null,
-        content: sanitizeString(rawFile?.content || rawFile?.dataUrl, 20_000_000) || null
+        url: includeAccessContent ? (signedUrl || sanitizeUrl(rawFile?.url) || null) : null,
+        content: includeAccessContent ? (sanitizeString(rawFile?.content || rawFile?.dataUrl, 20_000_000) || null) : null
       });
     }
     return mapped;
+  };
+
+  const isPatientFileVisibleToPortal = (row: any) => {
+    const source = sanitizeString(row?.source, 60).toLowerCase();
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    return (
+      source === 'family_portal_document' ||
+      metadata?.releasedToPatient === true ||
+      metadata?.released_to_patient === true ||
+      metadata?.visibleToPatient === true ||
+      metadata?.visible_to_patient === true ||
+      ['patient', 'family', 'shared_patient'].includes(sanitizeString(metadata?.visibility, 40).toLowerCase())
+    );
   };
 
   const persistPatientFileFallback = async (params: {
@@ -39235,18 +39372,7 @@ async function startServer() {
       });
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
       const isPatientPortal = isResponsiblePortalRole(role);
-      const isFileVisibleToPatient = (row: any) => {
-        const source = sanitizeString(row?.source, 60).toLowerCase();
-        const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-        return (
-          source === 'family_portal_document' ||
-          metadata?.releasedToPatient === true ||
-          metadata?.released_to_patient === true ||
-          metadata?.visibleToPatient === true ||
-          metadata?.visible_to_patient === true ||
-          ['patient', 'family', 'shared_patient'].includes(sanitizeString(metadata?.visibility, 40).toLowerCase())
-        );
-      };
+      const isFileVisibleToPatient = isPatientFileVisibleToPortal;
       const rawCanonicalRows = Array.isArray(fileResult.data) ? fileResult.data : [];
       const data = isPatientPortal
         ? rawCanonicalRows.filter(isFileVisibleToPatient)
@@ -39275,46 +39401,20 @@ async function startServer() {
       }
 
       const canonicalRows = Array.isArray(data) ? data : [];
-      const canonicalPaths = Array.from(new Set(
-        canonicalRows
-          .map((row: any) => sanitizeString(row?.storage_path, 800))
-          .filter(Boolean)
-      ));
-      const signedUrlByPath = new Map<string, string>();
-      if (canonicalPaths.length > 0) {
-        const { data: signedRows, error: signedError } = await supabase.storage
-          .from('patient-files-private')
-          .createSignedUrls(canonicalPaths, 60 * 10);
-        if (signedError) {
-          console.warn('[PatientFiles] Falha ao assinar lote de URLs.', {
-            fileCount: canonicalPaths.length,
-            message: signedError.message
-          });
-        } else {
-          for (const signed of signedRows || []) {
-            const path = sanitizeString((signed as any)?.path, 800);
-            const signedUrl = sanitizeUrl((signed as any)?.signedUrl);
-            if (path && signedUrl) signedUrlByPath.set(path, signedUrl);
-          }
-        }
-      }
-
-      const withUrls: any[] = [];
-      for (const row of canonicalRows) {
-        const storagePath = sanitizeString(row?.storage_path, 800);
-        withUrls.push({
-          id: row.id,
-          patientId: row.patient_id,
-          fileName: row.file_name,
-          path: row.storage_path,
-          mimeType: row.mime_type,
-          sizeBytes: row.file_size_bytes,
-          source: row.source || 'upload',
-          createdAt: row.created_at,
-          metadata: row.metadata || {},
-          signedUrl: signedUrlByPath.get(storagePath) || null
-        });
-      }
+      const withUrls: any[] = canonicalRows.map((row: any) => ({
+        id: row.id,
+        patientId: row.patient_id,
+        fileName: row.file_name,
+        path: row.storage_path,
+        mimeType: row.mime_type,
+        sizeBytes: row.file_size_bytes,
+        source: row.source || 'upload',
+        createdAt: row.created_at,
+        metadata: row.metadata || {},
+        requiresAuditedAccess: true,
+        signedUrl: null,
+        url: null
+      }));
 
       // Links escolares e institucionais apontam para um arquivo canônico.
       // Uma busca por ID não precisa ler e descriptografar todo o prontuário
@@ -39351,6 +39451,166 @@ async function startServer() {
       });
     }
   });
+
+
+  app.post('/api/patient-files/:patientId/:fileId/access', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.documents.view'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Acesso auditado a arquivo do paciente')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const fileId = sanitizeString(req.params.fileId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+      const actorRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const action = sanitizeString(req.body?.action, 20).toUpperCase();
+      const clientEventId = sanitizeString(req.body?.client_event_id || req.body?.clientEventId || req.headers?.['x-audit-event-id'], 180);
+      if (!isUuid(patientId) || !fileId || !isUuid(actorId) || !['VIEW', 'DOWNLOAD'].includes(action)) {
+        return res.status(400).json({ success: false, error: 'Acesso de arquivo inválido.' });
+      }
+
+      const isPatientPortal = isResponsiblePortalRole(actorRole);
+      let file: any = null;
+      let canonicalUnavailable = false;
+      const canonicalResult = await supabase
+        .from('patient_files')
+        .select('id,patient_id,clinic_id,storage_bucket,storage_path,file_name,mime_type,file_size_bytes,source,metadata,created_at')
+        .eq('id', fileId)
+        .eq('patient_id', patientId)
+        .limit(1)
+        .maybeSingle();
+      if (canonicalResult.error) {
+        canonicalUnavailable = isMissingRelationError(canonicalResult.error) || String(canonicalResult.error?.message || '').toLowerCase().includes('patient_files');
+        if (!canonicalUnavailable) throw canonicalResult.error;
+      } else if (canonicalResult.data?.id) {
+        const row = canonicalResult.data as any;
+        if (!hasGlobalClinicAccess(req.session.user) && clinicId && sanitizeString(row?.clinic_id, 120) !== clinicId) {
+          return res.status(403).json({ success: false, error: 'Arquivo fora do escopo da clínica.' });
+        }
+        if (isPatientPortal && !isPatientFileVisibleToPortal(row)) {
+          return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
+        }
+        const storagePath = sanitizeString(row?.storage_path, 800);
+        const bucket = sanitizeString(row?.storage_bucket, 120) || 'patient-files-private';
+        if (!storagePath) return res.status(409).json({ success: false, error: 'Arquivo sem caminho de armazenamento.' });
+        const { data: signedData, error: signedError } = await supabase.storage
+          .from(bucket)
+          .createSignedUrl(storagePath, 60 * 5);
+        if (signedError || !signedData?.signedUrl) {
+          return res.status(503).json({ success: false, error: 'Não foi possível liberar o arquivo com segurança.' });
+        }
+        file = {
+          id: row.id,
+          patientId: row.patient_id,
+          fileName: row.file_name,
+          mimeType: row.mime_type,
+          sizeBytes: row.file_size_bytes,
+          source: row.source || 'upload',
+          createdAt: row.created_at,
+          metadata: row.metadata || {},
+          signedUrl: sanitizeUrl(signedData.signedUrl),
+          url: sanitizeUrl(signedData.signedUrl)
+        };
+      }
+
+      if (!file && canonicalUnavailable) {
+        const fallbackPayload = await readPatientRecordPayloadForFiles(patientId, clinicId, req.session.user);
+        const rawFiles = Array.isArray(fallbackPayload?.payload?.files) ? fallbackPayload.payload.files : [];
+        const rawFile = rawFiles.find((row: any) => sanitizeString(row?.id, 120) === fileId);
+        if (!rawFile) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
+        if (isPatientPortal && !isPatientFileVisibleToPortal(rawFile)) {
+          return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
+        }
+        const mapped = await buildPatientFilesFromPayload(patientId, [rawFile], { includeAccessContent: true });
+        file = mapped[0] || null;
+      }
+
+      if (!file) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
+
+      const auditAction = action === 'DOWNLOAD' ? 'patient_file_downloaded' : 'patient_file_viewed';
+      const auditTitle = action === 'DOWNLOAD' ? 'Arquivo baixado' : 'Arquivo visualizado';
+      const fileName = sanitizeString(file?.fileName || file?.name, 220) || 'arquivo';
+      const auditOk = await persistActivityLog({
+        userId: actorId,
+        clinicId,
+        actorName,
+        title: auditTitle,
+        content: `${actorName} ${action === 'DOWNLOAD' ? 'baixou' : 'visualizou'} o arquivo "${fileName}" do prontuário.`,
+        type: 'clinical',
+        action: auditAction,
+        actionType: auditAction,
+        payloadDetails: JSON.stringify({
+          fileId,
+          fileName,
+          mimeType: sanitizeString(file?.mimeType, 120) || null,
+          source: sanitizeString(file?.source, 60) || null,
+          actorRole: actorRole || null
+        }),
+        resourceType: 'patient_file',
+        resourceId: fileId,
+        patientId,
+        timezone: currentClinicTimeZone(req.session.user),
+        immutableAudit: true,
+        idempotencyKey: clientEventId ? `patient-file:${action.toLowerCase()}:${actorId}:${fileId}:${clientEventId}` : null
+      });
+      if (!auditOk) {
+        return res.status(503).json({
+          success: false,
+          code: 'AUDIT_LOG_UNAVAILABLE',
+          error: 'Não foi possível registrar a auditoria deste acesso. O arquivo não foi liberado.'
+        });
+      }
+
+      return res.json({ success: true, data: file });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient-files/:patientId/:fileId/access [POST]', error, {
+        patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120),
+        fileId: sanitizeString(req.params.fileId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  const persistPatientFileMutationAudit = async (params: {
+    req: any;
+    clinicId: string;
+    patientId: string;
+    fileId: string;
+    fileName: string;
+    mimeType?: string | null;
+    sizeBytes?: number | null;
+    source?: string | null;
+    action: 'UPLOAD' | 'DELETE';
+  }) => {
+    const actorId = sanitizeString(params.req.session.user?.id, 120);
+    const actorName = sanitizeString(params.req.session.user?.name || params.req.session.user?.email || 'Usuário', 180);
+    const action = params.action === 'DELETE' ? 'patient_file_deleted' : 'patient_file_uploaded';
+    const title = params.action === 'DELETE' ? 'Arquivo removido do prontuário' : 'Arquivo salvo no prontuário';
+    const verb = params.action === 'DELETE' ? 'removeu' : 'salvou';
+    return persistActivityLog({
+      userId: actorId,
+      clinicId: params.clinicId,
+      actorName,
+      title,
+      content: `${actorName} ${verb} o arquivo "${sanitizeString(params.fileName, 220) || 'arquivo'}" no prontuário.`,
+      type: 'clinical',
+      action,
+      actionType: action,
+      payloadDetails: JSON.stringify({
+        fileId: params.fileId,
+        fileName: sanitizeString(params.fileName, 220) || null,
+        mimeType: sanitizeString(params.mimeType, 120) || null,
+        sizeBytes: Number.isFinite(Number(params.sizeBytes)) ? Number(params.sizeBytes) : null,
+        source: sanitizeString(params.source, 60) || null,
+        actorRole: sanitizeString(params.req.session.user?.role, 40) || null
+      }),
+      resourceType: 'patient_file',
+      resourceId: params.fileId,
+      patientId: params.patientId,
+      timezone: currentClinicTimeZone(params.req.session.user),
+      immutableAudit: true,
+      idempotencyKey: `patient-file:${params.action.toLowerCase()}:${params.clinicId}:${params.patientId}:${params.fileId}`
+    });
+  };
 
   app.post('/api/patient-files/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.documents.upload'), checkPatientAccess, uploadLimiter, async (req: any, res) => {
     try {
@@ -39529,10 +39789,22 @@ async function startServer() {
         } catch (fallbackError: any) {
           console.warn('[PatientFiles] Falha ao persistir fallback em patient_records:', fallbackError?.message || String(fallbackError));
         }
+        const auditPersisted = await persistPatientFileMutationAudit({
+          req,
+          clinicId,
+          patientId,
+          fileId: fallbackId,
+          fileName: safeName,
+          mimeType: resolvedMime,
+          sizeBytes: fileBuffer.length,
+          source,
+          action: 'UPLOAD'
+        });
 
         return res.status(200).json({
           success: true,
-          warning: reason,
+          warning: auditPersisted ? reason : `${reason} Auditoria pendente de reconciliação.`,
+          auditPersisted,
           data: {
             id: fallbackId,
             patientId,
@@ -39633,10 +39905,22 @@ async function startServer() {
         } catch (fallbackError: any) {
           console.warn('[PatientFiles] Falha ao persistir fallback após erro de tabela:', fallbackError?.message || String(fallbackError));
         }
+        const auditPersisted = await persistPatientFileMutationAudit({
+          req,
+          clinicId,
+          patientId,
+          fileId: fallbackId,
+          fileName: safeName,
+          mimeType: resolvedMime,
+          sizeBytes: fileBuffer.length,
+          source,
+          action: 'UPLOAD'
+        });
 
         return res.status(200).json({
           success: true,
-          warning: `Falha em patient_files. Arquivo salvo via fallback no prontuário: ${insertError.message || 'erro desconhecido'}`,
+          warning: `Falha em patient_files. Arquivo salvo via fallback no prontuário: ${insertError.message || 'erro desconhecido'}${auditPersisted ? '' : ' Auditoria pendente de reconciliação.'}`,
+          auditPersisted,
           data: {
             id: fallbackId,
             patientId,
@@ -39659,21 +39943,22 @@ async function startServer() {
         console.warn('[PatientFiles] Falha ao assinar URL após upload:', signedError.message);
       }
 
-      try {
-        void persistActivityLog({
-          userId: uploadedBy,
-          clinicId,
-          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-          title: 'Arquivo salvo no prontuário',
-          content: `${safeName} foi salvo na pasta segura do paciente ${patientId}.`,
-          type: 'clinical'
-        });
-      } catch (logError: any) {
-        console.warn('[PatientFiles] Falha ao registrar log de auditoria (não bloqueante):', logError?.message || String(logError));
-      }
+      const auditPersisted = await persistPatientFileMutationAudit({
+        req,
+        clinicId,
+        patientId,
+        fileId: sanitizeString(inserted.id, 120),
+        fileName: inserted.file_name || safeName,
+        mimeType: inserted.mime_type || resolvedMime,
+        sizeBytes: inserted.file_size_bytes || fileBuffer.length,
+        source: inserted.source || source,
+        action: 'UPLOAD'
+      });
 
       return res.json({
         success: true,
+        auditPersisted,
+        ...(auditPersisted ? {} : { warning: 'Arquivo salvo; auditoria pendente de reconciliação.' }),
         data: {
           id: inserted.id,
           patientId: inserted.patient_id,
@@ -39704,7 +39989,7 @@ async function startServer() {
 
       const { data: existing, error: existingError } = await supabase
         .from('patient_files')
-        .select('id, storage_path, file_name')
+        .select('id, storage_path, file_name, mime_type, file_size_bytes, source')
         .eq('id', fileId)
         .eq('patient_id', patientId)
         .eq('clinic_id', clinicId)
@@ -39735,7 +40020,22 @@ async function startServer() {
           payload: fallbackPayload?.payload || {},
           files: nextFiles
         });
-        return res.json({ success: true });
+        const auditPersisted = await persistPatientFileMutationAudit({
+          req,
+          clinicId,
+          patientId,
+          fileId,
+          fileName: sanitizeString(existingFallback?.fileName || existingFallback?.name, 220) || 'arquivo',
+          mimeType: sanitizeString(existingFallback?.mimeType || existingFallback?.type, 120) || null,
+          sizeBytes: Number(existingFallback?.sizeBytes || existingFallback?.size || 0) || null,
+          source: sanitizeString(existingFallback?.source, 60) || null,
+          action: 'DELETE'
+        });
+        return res.json({
+          success: true,
+          auditPersisted,
+          ...(auditPersisted ? {} : { warning: 'Arquivo removido; auditoria pendente de reconciliação.' })
+        });
       }
       if (!existing) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
 
@@ -39754,16 +40054,23 @@ async function startServer() {
         .eq('clinic_id', clinicId);
       if (deleteRowError) throw deleteRowError;
 
-      void persistActivityLog({
-        userId: sanitizeString(req.session.user?.id, 120),
+      const auditPersisted = await persistPatientFileMutationAudit({
+        req,
         clinicId,
-        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180),
-        title: 'Arquivo removido do prontuário',
-        content: `${existing.file_name} foi removido da pasta segura do paciente ${patientId}.`,
-        type: 'clinical'
+        patientId,
+        fileId,
+        fileName: sanitizeString(existing.file_name, 220) || 'arquivo',
+        mimeType: sanitizeString(existing.mime_type, 120) || null,
+        sizeBytes: Number(existing.file_size_bytes || 0) || null,
+        source: sanitizeString(existing.source, 60) || null,
+        action: 'DELETE'
       });
 
-      return res.json({ success: true });
+      return res.json({
+        success: true,
+        auditPersisted,
+        ...(auditPersisted ? {} : { warning: 'Arquivo removido; auditoria pendente de reconciliação.' })
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error.message || String(error) });
     }
@@ -41285,6 +41592,9 @@ async function startServer() {
         .maybeSingle();
       if (findError) throw findError;
       if (!existing) return res.status(404).json({ success: false, error: 'Log não encontrado.' });
+      if (existing?.immutable_audit === true) {
+        return res.status(409).json({ success: false, code: 'IMMUTABLE_AUDIT_LOG', error: 'Este evento de auditoria clínica é imutável.' });
+      }
 
       const user = req.session.user;
       const isManager = user.role === 'coordinator' || user.role === 'admin' || user.role === 'owner';
@@ -41371,6 +41681,9 @@ async function startServer() {
         .maybeSingle();
       if (findError) throw findError;
       if (!existing) return res.status(404).json({ success: false, error: 'Log não encontrado.' });
+      if (existing?.immutable_audit === true) {
+        return res.status(409).json({ success: false, code: 'IMMUTABLE_AUDIT_LOG', error: 'Este evento de auditoria clínica é imutável.' });
+      }
 
       const user = req.session.user;
       const isManager = user.role === 'coordinator' || user.role === 'admin' || user.role === 'owner';
@@ -70681,8 +70994,32 @@ async function startServer() {
             p_metadata: { source: 'session_mode_v3_revision', requested_action: 'DELETE' }
           });
           if (error) return handleAbaV3CollectionRpcError(res, error);
+          const revisionId = sanitizeString((data as any)?.id, 120);
+          const auditPersisted = await persistActivityLog({
+            userId: actorId,
+            clinicId: organizationId,
+            actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Profissional', 180),
+            title: 'Tentativa ABA V3 anulada',
+            content: 'Uma tentativa da sessão foi anulada por revisão auditável; o evento clínico original foi preservado.',
+            type: 'clinical',
+            action: 'aba_trial_voided',
+            actionType: 'aba_trial_voided',
+            payloadDetails: JSON.stringify({ originalTrialId: original.id, revisionId, reason }),
+            resourceType: 'aba_trial_v3',
+            resourceId: sanitizeString(original.id, 120),
+            patientId,
+            sessionId,
+            timezone: currentClinicTimeZone(req.session.user),
+            immutableAudit: true,
+            idempotencyKey: `aba-trial-void:${organizationId}:${clientRevisionEventId}`
+          });
           res.setHeader('Cache-Control', 'private, no-store');
-          return res.json({ success: true, data: { revisionId: sanitizeString((data as any)?.id, 120), originalTrialId: sanitizeString(original.id, 120), eventType: 'VOID', measurementModelVersion: 'V3' } });
+          return res.json({
+            success: true,
+            auditPersisted,
+            ...(auditPersisted ? {} : { warning: 'Revisão salva; auditoria pendente de reconciliação.' }),
+            data: { revisionId, originalTrialId: sanitizeString(original.id, 120), eventType: 'VOID', measurementModelVersion: 'V3' }
+          });
         }
 
         const actionKey = normalizeAbaV3TrialActionKey(req.body?.action_key || req.body?.actionKey);
@@ -70762,12 +71099,41 @@ async function startServer() {
           p_metadata: { source: 'session_mode_v3_revision', requested_action: 'EDIT' }
         });
         if (error) return handleAbaV3CollectionRpcError(res, error);
+        const revisionId = sanitizeString((data as any)?.revision_id, 120);
+        const replacementTrialId = sanitizeString((data as any)?.replacement_trial_id, 120);
+        const auditPersisted = await persistActivityLog({
+          userId: actorId,
+          clinicId: organizationId,
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Profissional', 180),
+          title: 'Tentativa ABA V3 corrigida',
+          content: 'Uma tentativa da sessão foi corrigida por revisão auditável; a tentativa original permanece preservada.',
+          type: 'clinical',
+          action: 'aba_trial_corrected',
+          actionType: 'aba_trial_corrected',
+          payloadDetails: JSON.stringify({
+            originalTrialId: original.id,
+            replacementTrialId,
+            revisionId,
+            actionKey,
+            promptKey: promptKey || null,
+            reason
+          }),
+          resourceType: 'aba_trial_v3',
+          resourceId: sanitizeString(original.id, 120),
+          patientId,
+          sessionId,
+          timezone: currentClinicTimeZone(req.session.user),
+          immutableAudit: true,
+          idempotencyKey: `aba-trial-correct:${organizationId}:${clientRevisionEventId}`
+        });
         res.setHeader('Cache-Control', 'private, no-store');
         return res.json({
           success: true,
+          auditPersisted,
+          ...(auditPersisted ? {} : { warning: 'Correção salva; auditoria pendente de reconciliação.' }),
           data: {
-            revisionId: sanitizeString((data as any)?.revision_id, 120),
-            replacementTrialId: sanitizeString((data as any)?.replacement_trial_id, 120),
+            revisionId,
+            replacementTrialId,
             originalTrialId: sanitizeString(original.id, 120),
             replacementClientEventId,
             eventType: 'CORRECT',
@@ -71639,6 +72005,32 @@ async function startServer() {
       if (error) {
         if (hasMissingFinancialSchema(error)) return res.json({ success: true, data: null });
         throw error;
+      }
+      if (data) {
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+        const auditEventId = sanitizeString(req.headers?.['x-audit-event-id'], 180);
+        const auditOk = await persistActivityLog({
+          userId: actorId,
+          clinicId: sanitizeString((scope as any).clinicId || currentClinicId(req.session.user), 120),
+          actorName,
+          title: 'Relatório de sessão visualizado',
+          content: `${actorName} visualizou o relatório clínico da sessão.`,
+          type: 'clinical',
+          action: 'aba_session_report_viewed',
+          actionType: 'aba_session_report_viewed',
+          payloadDetails: JSON.stringify({ sessionId: sanitizeString(req.params.sessionId, 180), actorRole: sanitizeString(req.session.user?.role, 40) || null }),
+          resourceType: 'aba_session_report',
+          resourceId: sanitizeString(req.params.sessionId, 180),
+          patientId: sanitizeString((scope as any).patientId, 120),
+          sessionId: sanitizeString(req.params.sessionId, 180),
+          timezone: currentClinicTimeZone(req.session.user),
+          immutableAudit: true,
+          idempotencyKey: auditEventId ? `session-report-view:${actorId}:${sanitizeString(req.params.sessionId, 180)}:${auditEventId}` : null
+        });
+        if (!auditOk) {
+          return res.status(503).json({ success: false, code: 'AUDIT_LOG_UNAVAILABLE', error: 'Não foi possível registrar a auditoria desta visualização.' });
+        }
       }
       return res.json({ success: true, data: data || null });
     } catch (error: any) {
@@ -77470,8 +77862,37 @@ async function startServer() {
         }
       }
 
+      const auditPersisted = await persistActivityLog({
+        userId: actorId,
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Profissional', 180),
+        title: 'Sessão ABA finalizada',
+        content: 'A sessão clínica foi finalizada e o relatório permaneceu disponível no prontuário conforme as permissões de acesso.',
+        type: 'clinical',
+        action: 'aba_session_completed',
+        actionType: 'aba_session_completed',
+        payloadDetails: JSON.stringify({
+          sessionId,
+          patientId,
+          appointmentId: completedAppointmentId || null,
+          summaryId: summaryId || completionData?.summaryId || null,
+          attendanceStatus,
+          billingStatus,
+          endedAt
+        }),
+        resourceType: 'aba_session',
+        resourceId: sessionId,
+        patientId,
+        sessionId,
+        timezone: currentClinicTimeZone(req.session.user),
+        immutableAudit: true,
+        idempotencyKey: `aba-session-complete:${clinicId}:${sessionId}:${idempotencyKey}`
+      });
+
       return res.json({
         success: true,
+        auditPersisted,
+        ...(auditPersisted ? {} : { warning: 'Sessão finalizada; auditoria pendente de reconciliação.' }),
         idempotentReplay: Boolean(rpcResponse?.idempotentReplay),
         data: {
           ...completionData,
@@ -77621,6 +78042,19 @@ async function startServer() {
 
       const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180);
       if (!sessionId) return res.status(400).json({ success: false, error: 'Sessão inválida.' });
+      const previousSummaryResult = await supabase
+        .from('aba_session_summaries')
+        .select('id,session_note,updated_at')
+        .eq('session_id', sessionId)
+        .eq('patient_id', patientId)
+        .eq('clinic_id', clinicId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const previousSummary = previousSummaryResult.error ? null : previousSummaryResult.data;
+      if (previousSummaryResult.error && !hasMissingFinancialSchema(previousSummaryResult.error) && !extractMissingColumnName(previousSummaryResult.error)) {
+        throw previousSummaryResult.error;
+      }
       const endedAt = sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt);
       const startedAt = sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt, endedAt);
       const durationSeconds = req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
@@ -77794,7 +78228,51 @@ async function startServer() {
           logger: console
         });
       }
-      return res.json({ success: true, data: { ...payload, id: (result.data as any)?.id || payload.id } });
+      const persistedSummaryId = sanitizeString((result.data as any)?.id || payload.id, 180);
+      const previousSessionNote = sanitizeTextField(previousSummary?.session_note, 4000);
+      const nextSessionNote = sanitizeTextField(payload.session_note, 4000);
+      const noteChanged = previousSessionNote !== nextSessionNote;
+      const summaryAuditAction = previousSummary?.id ? 'aba_session_document_updated' : 'aba_session_document_created';
+      const auditPersisted = await persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Profissional', 180),
+        title: previousSummary?.id ? 'Documento da sessão atualizado' : 'Documento da sessão registrado',
+        content: noteChanged
+          ? 'O documento clínico da sessão foi atualizado, incluindo a observação da sessão.'
+          : `${previousSummary?.id ? 'O documento clínico da sessão foi atualizado.' : 'O documento clínico da sessão foi registrado.'}`,
+        type: 'clinical',
+        action: summaryAuditAction,
+        actionType: summaryAuditAction,
+        payloadDetails: JSON.stringify({
+          summaryId: persistedSummaryId,
+          sessionId,
+          patientId,
+          appointmentId: appointmentIdForClosure || null,
+          noteChanged,
+          source: requestSource
+        }),
+        resourceType: 'aba_session_report',
+        resourceId: persistedSummaryId || sessionId,
+        patientId,
+        sessionId,
+        timezone: currentClinicTimeZone(req.session.user),
+        immutableAudit: true,
+        idempotencyKey: `aba-session-document:${clinicId}:${sessionId}:${stableHashPayload({
+          summaryId: persistedSummaryId || null,
+          sessionNote: nextSessionNote,
+          endedAt,
+          totalTrials: payload.total_trials,
+          totalBehaviorEvents: payload.total_behavior_events,
+          source: requestSource
+        })}`
+      });
+      return res.json({
+        success: true,
+        auditPersisted,
+        ...(auditPersisted ? {} : { warning: 'Documento da sessão salvo; auditoria pendente de reconciliação.' }),
+        data: { ...payload, id: persistedSummaryId || payload.id }
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
@@ -78576,7 +79054,38 @@ async function startServer() {
         if (hasMissingFinancialSchema(result.error)) return res.status(503).json({ success: false, error: 'Schema ABA de ABC ainda não aplicado.' });
         throw result.error;
       }
-      return res.json({ success: true, data: result.data || payload });
+      const persistedAbc = (result.data as any) || payload;
+      const abcId = sanitizeString(persistedAbc?.id || payload.id, 180);
+      const auditPersisted = await persistActivityLog({
+        userId: sanitizeString(req.session.user?.id, 120),
+        clinicId,
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Profissional', 180),
+        title: isAuthorizedComplement ? 'ABC acrescentado após a sessão' : 'Registro ABC salvo',
+        content: `Registro ABC do comportamento "${behaviorName}" foi salvo${isAuthorizedComplement ? ' como complemento clínico autorizado' : ''}.`,
+        type: 'clinical',
+        action: isAuthorizedComplement ? 'aba_abc_complement_added' : 'aba_abc_recorded',
+        actionType: isAuthorizedComplement ? 'aba_abc_complement_added' : 'aba_abc_recorded',
+        payloadDetails: JSON.stringify({
+          abcId,
+          behaviorName,
+          sessionId,
+          appointmentId: appointmentId || null,
+          clinicalComplement: isAuthorizedComplement
+        }),
+        resourceType: 'aba_abc_event',
+        resourceId: abcId,
+        patientId,
+        sessionId,
+        timezone: currentClinicTimeZone(req.session.user),
+        immutableAudit: true,
+        idempotencyKey: `aba-abc:${clinicId}:${abcId}`
+      });
+      return res.json({
+        success: true,
+        auditPersisted,
+        ...(auditPersisted ? {} : { warning: 'ABC salvo; auditoria pendente de reconciliação.' }),
+        data: persistedAbc
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
     }
