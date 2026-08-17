@@ -42,6 +42,7 @@ export interface OfflineCacheMeta {
   etag?: string | null;
   last_modified?: string | null;
   last_seen_updated?: number | null;
+  snapshot_count?: number | null;
   updated_at: number;
 }
 
@@ -633,6 +634,7 @@ export async function setEndpointCacheMeta(meta: Omit<OfflineCacheMeta, 'updated
     etag: meta.etag || null,
     last_modified: meta.last_modified || null,
     last_seen_updated: meta.last_seen_updated || null,
+    snapshot_count: Number.isFinite(meta.snapshot_count) ? Number(meta.snapshot_count) : null,
     updated_at: Date.now()
   });
 }

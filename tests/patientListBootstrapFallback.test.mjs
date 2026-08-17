@@ -19,8 +19,8 @@ assert.match(
 
 assert.match(
   dashboard,
-  /activeTab !== "patients" \|\| allPatients\.length > 0 \|\| !onEnsurePatientList[\s\S]*?onEnsurePatientList\(\)/,
-  'Abrir Pacientes com lista vazia deve recuperar a lista uma única vez por workspace.',
+  /needsCanonicalPatientList = allPatients\.length === 0 \|\| Boolean\(patientListError\)[\s\S]*?onEnsurePatientList\(\)/,
+  'Abrir Pacientes com lista vazia ou snapshot local não canônico deve recuperar a lista uma única vez por workspace.',
 );
 
 const moduleMap = dashboard.slice(
@@ -46,6 +46,11 @@ assert.match(
   getPatients,
   /const patientsById = new Map[\s\S]*?record\?\.sync_status === 'synced'\) continue/,
   'Cache sincronizado não pode substituir a lista remota; somente pendência offline pode fazer overlay.',
+);
+assert.match(
+  getPatients,
+  /response\.status === 304[\s\S]*?snapshot_count[\s\S]*?cacheLooksComplete[\s\S]*?forceRemote: true/,
+  '304 com cache local parcial deve refazer a leitura canônica em vez de esconder pacientes.',
 );
 
 console.log('patientListBootstrapFallback.test.mjs: OK');

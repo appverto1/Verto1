@@ -951,17 +951,20 @@ export function CoordinatorDashboard({
   }, [workspaceScopeKey]);
 
   useEffect(() => {
-    if (activeTab !== "patients" || allPatients.length > 0 || !onEnsurePatientList) return;
+    if (activeTab !== "patients" || !onEnsurePatientList) return;
+    const needsCanonicalPatientList = allPatients.length === 0 || Boolean(patientListError);
+    if (!needsCanonicalPatientList) return;
     if (!workspaceScopeKey || patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) return;
 
     // Pacientes são recurso transversal da clínica, não um módulo comercial. Se o
-    // bootstrap global não hidratou a lista, a própria tela faz uma única leitura
-    // canônica do tenant em vez de fingir que a clínica não possui pacientes.
+    // bootstrap global não hidratou a lista, ou precisou usar um snapshot local
+    // incompleto, a própria tela faz uma única leitura canônica do tenant. Uma lista
+    // local não vazia nunca pode mascarar pacientes que existem no servidor.
     patientListEnsureAttemptedWorkspaceRef.current = workspaceScopeKey;
     void Promise.resolve(onEnsurePatientList()).catch(() => {
       // O estado de erro é controlado no App para manter uma única fonte de verdade.
     });
-  }, [activeTab, allPatients.length, onEnsurePatientList, workspaceScopeKey]);
+  }, [activeTab, allPatients.length, onEnsurePatientList, patientListError, workspaceScopeKey]);
 
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
     if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };

@@ -921,12 +921,18 @@ async function buildConditionalHeaders(endpoint: string, type: OfflineType, incl
   return headers;
 }
 
-async function cacheResponseMetadata(endpoint: string, response: Response, lastUpdated?: number | null) {
+async function cacheResponseMetadata(
+  endpoint: string,
+  response: Response,
+  lastUpdated?: number | null,
+  snapshotCount?: number | null,
+) {
   await setEndpointCacheMeta({
     endpoint,
     etag: response.headers.get('etag'),
     last_modified: response.headers.get('last-modified'),
-    last_seen_updated: lastUpdated || null
+    last_seen_updated: lastUpdated || null,
+    snapshot_count: Number.isFinite(snapshotCount) ? Number(snapshotCount) : null,
   });
 }
 
@@ -1235,18 +1241,42 @@ export const dataService = {
         ...(forceRemote ? { cache: 'no-store' as RequestCache } : {})
       }, { helperName: 'getPatients', operation: 'list', table: 'patients', hasExplicitColumns: true, requiresPatientOrSession: false });
       if (response.status === 304) {
-        const local304 = await getRecordsByType('patient');
-        return {
-          success: true,
-          data: local304
-            .map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
-            .filter((patient: any) => {
-              const patientWorkspaceId = String(patient?.clinic_id || patient?.clinicId || '').trim();
-              const patientId = String(patient?.id || '').trim();
-              return (!workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId) &&
-                (!requestedPatientId || patientId === requestedPatientId);
-            })
-        };
+        const [local304, cacheMeta] = await Promise.all([
+          getRecordsByType('patient'),
+          getEndpointCacheMeta(endpoint),
+        ]);
+        const cachedPatients = local304
+          .map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+          .filter((patient: any) => {
+            const patientWorkspaceId = String(patient?.clinic_id || patient?.clinicId || '').trim();
+            const patientId = String(patient?.id || '').trim();
+            return (!workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId) &&
+              (!requestedPatientId || patientId === requestedPatientId);
+          });
+        const rawSnapshotCount = cacheMeta?.snapshot_count;
+        const expectedSnapshotCount = typeof rawSnapshotCount === 'number' ? rawSnapshotCount : Number.NaN;
+        const hasKnownSnapshotCount = Number.isFinite(expectedSnapshotCount) && expectedSnapshotCount >= 0;
+        const cacheLooksComplete = hasKnownSnapshotCount && cachedPatients.length === expectedSnapshotCount;
+
+        // A 304 only proves that the remote representation did not change; it does not
+        // prove that IndexedDB still contains the complete representation that produced
+        // that ETag. A partial/cleared local cache previously made 3 patients render as 1.
+        // Revalidate once without conditional headers instead of treating a partial cache
+        // as authoritative. Healthy complete caches still keep the zero-egress 304 path.
+        if (!cacheLooksComplete && !forceRemote) {
+          console.warn('[PatientList] Snapshot local incompleto após 304; refazendo leitura canônica sem cache.', {
+            cachedCount: cachedPatients.length,
+            expectedSnapshotCount: hasKnownSnapshotCount ? expectedSnapshotCount : null,
+          });
+          return await dataService.getPatients({ ...options, forceRemote: true });
+        }
+        if (!cacheLooksComplete) {
+          return {
+            success: false,
+            error: 'A cópia local da lista de pacientes está incompleta e a leitura canônica não pôde ser confirmada.',
+          };
+        }
+        return { success: true, data: cachedPatients };
       }
       if (response.ok) {
         const result = await response.json();
@@ -1277,7 +1307,7 @@ export const dataService = {
               endpoint
             });
           }
-          await cacheResponseMetadata(endpoint, response, latest || null);
+          await cacheResponseMetadata(endpoint, response, latest || null, normalizedPatients.length);
         } catch (cacheError) {
           console.warn('[PatientList] Cache local indisponível; mantendo snapshot remoto canônico.', cacheError);
         }
@@ -8413,6 +8443,7 @@ export const dataService = {
       return {
         success: true,
         offline: true,
+        patientListCanonical: false,
         pending: Boolean(localClinicStateRecord && localClinicStateRecord.sync_status !== 'synced'),
         data: {
           clinicState: {
@@ -8620,6 +8651,7 @@ export const dataService = {
 
       return {
         success: true,
+        patientListCanonical: true,
         data: {
           clinicState: clinicStateWithProtocolFallback,
           clinicAnamnesisTemplate: clinicTemplateRes?.data || {},

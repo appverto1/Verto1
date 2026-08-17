@@ -3833,6 +3833,42 @@ export default function App() {
         : visiblePatients;
       setAllPatients(scopedPatients);
       setPatientListError('');
+
+      // hydrateWorkspaceState may intentionally fall back to IndexedDB when the
+      // canonical /api/patients request has a transient failure. That fallback is
+      // useful offline, but it may be only a partial snapshot (for example, one
+      // patient opened recently out of three in the clinic). Never let a non-empty
+      // partial cache suppress reconciliation: retry exactly once against the
+      // canonical tenant list and replace only the patient collection on success.
+      if (result?.patientListCanonical === false || result?.offline === true) {
+        void dataService.getPatients({ workspaceId, forceRemote: true })
+          .then((canonicalResult: any) => {
+            if (!isCurrentHydration()) return;
+            if (!canonicalResult?.success || !Array.isArray(canonicalResult?.data)) {
+              setPatientListError(
+                String(canonicalResult?.error || 'A lista de pacientes está usando uma cópia local e ainda não foi reconciliada com o servidor.'),
+              );
+              return;
+            }
+            const canonicalVisiblePatients = canAccessClinicFinance(nextUser?.role)
+              ? canonicalResult.data
+              : canonicalResult.data.map(stripPatientFinancialFields);
+            const canonicalScopedPatients = nextUser?.role === 'therapist'
+              ? canonicalVisiblePatients.filter((patient: any) =>
+                  patientMatchesProfessionalFilter(patient, nextUser?.id),
+                )
+              : canonicalVisiblePatients;
+            setAllPatients(canonicalScopedPatients);
+            setPatientListError('');
+          })
+          .catch((canonicalError: any) => {
+            if (!isCurrentHydration()) return;
+            setPatientListError(
+              String(canonicalError?.message || 'A lista de pacientes está usando uma cópia local e ainda não foi reconciliada com o servidor.'),
+            );
+          });
+      }
+
       setTherapistNotes(normalizeAndDecorateNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []));
       const hydratedHistory = Array.isArray(hydrated.history) ? hydrated.history : [];
       historyRef.current = hydratedHistory;
