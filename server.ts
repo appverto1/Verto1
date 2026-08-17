@@ -37680,18 +37680,45 @@ async function startServer() {
           error: 'CLINICAL_RECORD_CAPABILITY_REQUIRED'
         });
       }
-      const hasInsuranceCreatePayload = [
-        req.body?.insuranceType,
-        req.body?.insurance_type,
-        req.body?.convenioTipo,
+      const requestedInsuranceTypeRaw =
+        req.body?.insuranceType ?? req.body?.insurance_type ?? req.body?.convenioTipo;
+      const requestedInsuranceType = normalizePatientInsuranceTypeForPersistence(requestedInsuranceTypeRaw);
+      const explicitlyRequestsInsuranceMode =
+        requestedInsuranceTypeRaw !== undefined &&
+        requestedInsuranceTypeRaw !== null &&
+        String(requestedInsuranceTypeRaw).trim() !== '' &&
+        requestedInsuranceType !== 'particular';
+      const hasInsuranceCreatePayload = explicitlyRequestsInsuranceMode || [
         req.body?.insurancePayerId,
         req.body?.insurance_payer_id,
         req.body?.convenioPayerId,
         req.body?.convenio_payer_id,
         req.body?.insuranceName,
         req.body?.insurance_name,
+        req.body?.convenioNome,
         req.body?.insuranceCardNumber,
         req.body?.insurance_card_number,
+        req.body?.cardNumber,
+        req.body?.convenioCarteirinha,
+        req.body?.insuranceCardValidUntil,
+        req.body?.insurance_card_valid_until,
+        req.body?.convenioCarteirinhaValidade,
+        req.body?.insurancePlanCategory,
+        req.body?.insurance_plan_category,
+        req.body?.convenioPlanoCategoria,
+        req.body?.insuranceHolderName,
+        req.body?.insurance_holder_name,
+        req.body?.convenioTitularNome,
+        req.body?.insuranceHolderCpf,
+        req.body?.insurance_holder_cpf,
+        req.body?.convenioTitularCpf,
+        req.body?.insuranceHolderRelationship,
+        req.body?.insurance_holder_relationship,
+        req.body?.convenioTitularRelacao,
+        req.body?.insuranceEligibilityNotes,
+        req.body?.eligibilityNotes,
+        req.body?.eligibility_notes,
+        req.body?.convenioElegibilidadeObs,
       ].some((value) => value !== undefined && value !== null && String(value).trim() !== '');
       if (hasInsuranceCreatePayload && !context.capabilities.has('patient.insurance.create')) {
         return res.status(403).json({
