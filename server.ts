@@ -89593,7 +89593,9 @@ async function startServer() {
     checkAuth,
     requireClinicCapability,
     requireAnyClinicCapability,
+    requireClinicModule,
     portalActionLimiter,
+    enforcePayloadLimit,
     sanitizeString,
     currentClinicId
   });
