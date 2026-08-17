@@ -7838,6 +7838,32 @@ export const dataService = {
     }
   },
 
+  async updateMemberSupervisionEligibility(memberId: string, canSupervise: boolean) {
+    try {
+      const response = await fetch(
+        `/api/clinic/members/${encodeURIComponent(String(memberId))}/supervision-eligibility`,
+        {
+          method: 'PATCH',
+          headers: await getAuthHeaders(),
+          credentials: 'include',
+          body: JSON.stringify({ canSupervise: canSupervise === true }),
+        },
+      );
+      const result = await safeJson(response);
+      if (!response.ok) {
+        return {
+          ...result,
+          success: false,
+          error: result?.message || result?.error || 'Não foi possível atualizar a supervisão.',
+        };
+      }
+      return result;
+    } catch (error) {
+      console.error('Error updating member supervision eligibility:', error);
+      return { success: false, error: 'Não foi possível atualizar a supervisão.' };
+    }
+  },
+
   async updateMemberSpecialty(memberId: string, specialty: string) {
     try {
       const response = await fetch(

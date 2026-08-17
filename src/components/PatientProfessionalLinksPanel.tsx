@@ -159,11 +159,19 @@ export const PatientProfessionalLinksPanel = ({
       selectedProfessional,
       activeProfessionalIds
     );
+  const selectedProfessionalCanSupervise = Boolean(
+    selectedProfessional?.canSupervise === true
+    || selectedProfessional?.can_supervise === true,
+  );
   const currentClinicalDate = () =>
     formatDateInAppointmentTimezone(new Date());
 
   const add = async () => {
     if (!draft.professionalId || !selectedSpecialty || !selectedProfessionalIsEligible) return;
+    if (draft.caseRole === 'supervisor' && !selectedProfessionalCanSupervise) {
+      setError('Habilite este profissional para supervisão antes de atribuir a função no caso.');
+      return;
+    }
     setBusy('add');
     setError('');
     try {
@@ -194,7 +202,9 @@ export const PatientProfessionalLinksPanel = ({
       }
       setError(code.includes('LIMIT')
         ? 'Este paciente já possui cinco profissionais ativos. Encerre um vínculo antes de adicionar outro.'
-        : code.includes('SPECIALTY')
+          : code.includes('SUPERVISION')
+            ? 'Este profissional não está habilitado para supervisão.'
+          : code.includes('SPECIALTY')
           ? 'O cadastro do profissional precisa de uma especialidade antes de criar o vínculo.'
           : code.includes('MEMBERSHIP')
             ? 'Este profissional não possui vínculo ativo com a clínica.'
@@ -258,7 +268,21 @@ export const PatientProfessionalLinksPanel = ({
             Profissional
             <select
               value={draft.professionalId}
-              onChange={(event) => setDraft((current) => ({ ...current, professionalId: event.target.value }))}
+              onChange={(event) => {
+                const professionalId = event.target.value;
+                const nextProfessional = available.find(
+                  (professional) => String(professional?.id || '') === professionalId,
+                );
+                const nextCanSupervise = nextProfessional?.canSupervise === true
+                  || nextProfessional?.can_supervise === true;
+                setDraft((current) => ({
+                  ...current,
+                  professionalId,
+                  caseRole: current.caseRole === 'supervisor' && !nextCanSupervise
+                    ? 'therapist'
+                    : current.caseRole,
+                }));
+              }}
               className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal text-slate-800"
             >
               <option value="">Selecione</option>
@@ -302,7 +326,16 @@ export const PatientProfessionalLinksPanel = ({
               className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal text-slate-800"
             >
               {PATIENT_PROFESSIONAL_CASE_ROLE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
+                <option
+                  key={option.value}
+                  value={option.value}
+                  disabled={option.value === 'supervisor' && !selectedProfessionalCanSupervise}
+                >
+                  {option.label}
+                  {option.value === 'supervisor' && !selectedProfessionalCanSupervise
+                    ? ' — requer habilitação'
+                    : ''}
+                </option>
               ))}
             </select>
           </label>

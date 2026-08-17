@@ -89,15 +89,13 @@ export function canAssignClinicRole(
     return false;
   }
 
-  // Directors may manage every clinic-scoped role, including another director,
-  // but only after the active-clinic membership check performed by the server.
-  if (actorRole === 'director') return true;
+  // Supervisor is no longer an assignable base role. Existing supervisor
+  // memberships remain readable for backwards compatibility while new
+  // supervision is granted to a professional through can_supervise.
+  if (targetRole === 'supervisor') return false;
 
-  // Coordinators manage operational roles inside their own clinic, but cannot
-  // create or promote a director.
-  if (actorRole === 'coordinator') {
-    return targetRole !== 'director';
-  }
+  // Account/role provisioning is Director-only and remains membership-scoped.
+  if (actorRole === 'director') return true;
 
   return false;
 }

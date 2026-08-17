@@ -52,7 +52,7 @@ const DOMAIN_LABELS: Record<string, string> = {
 const ROLE_LABELS: Record<string, string> = {
   director: 'Diretor',
   coordinator: 'Coordenador',
-  supervisor: 'Supervisor',
+  supervisor: 'Profissional · Supervisor',
   therapist: 'Profissional de atendimento',
   receptionist: 'Recepcionista/Assistente',
   biller: 'Faturista',

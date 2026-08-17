@@ -18,7 +18,7 @@ interface InvitationModalProps {
   onClose: () => void;
 }
 
-type InviteRole = 'director' | 'coordinator' | 'supervisor' | 'therapist' | 'receptionist' | 'biller';
+type InviteRole = 'director' | 'coordinator' | 'therapist' | 'receptionist' | 'biller';
 
 const formatInviteRoleLabel = (
   role: string,
@@ -26,7 +26,6 @@ const formatInviteRoleLabel = (
 ) => {
   if (role === 'director') return 'Diretor';
   if (role === 'coordinator') return 'Coordenador';
-  if (role === 'supervisor') return 'Supervisor';
   if (role === 'therapist') {
     return `Profissional de atendimento · ${specialty || 'Especialidade pendente'}`;
   }
@@ -47,10 +46,15 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const explicitTeamLimit = Number(user?.teamMemberLimit || user?.team_member_limit || 0);
   const maxMembers = Number.isFinite(explicitTeamLimit) && explicitTeamLimit > 0 ? explicitTeamLimit : null;
   const actorRole = String(user?.role || '').trim().toLowerCase();
-  const canGrantDirector = actorRole === 'director' || actorRole === 'admin' || actorRole === 'owner';
+  const canGrantDirector = actorRole === 'director';
+  const canCreateAccounts = actorRole === 'director';
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canCreateAccounts) {
+      setError('A criação de contas da clínica é exclusiva do Diretor.');
+      return;
+    }
     if (maxMembers && invitations.length + 1 >= maxMembers) {
       setError(`Sua configuracao permite no maximo ${maxMembers} profissionais.`);
       return;
@@ -172,7 +176,6 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
                 >
                   {canGrantDirector && <option value="director">Diretor</option>}
                   <option value="coordinator">Coordenador</option>
-                  <option value="supervisor">Supervisor</option>
                   <option value="therapist">Profissional de atendimento</option>
                   <option value="receptionist">Recepcionista/Assistente</option>
                   <option value="biller">Faturista</option>

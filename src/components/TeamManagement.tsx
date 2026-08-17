@@ -29,9 +29,9 @@ import {
   readClinicalSpecialtyFromSource,
 } from '../utils/clinicalSpecialties';
 
-type ClinicMemberRole = 'director' | 'coordinator' | 'supervisor' | 'therapist' | 'receptionist' | 'biller';
+type ClinicMemberRole = 'director' | 'coordinator' | 'therapist' | 'receptionist' | 'biller';
 
-type MemberRole = ClinicMemberRole | 'patient' | 'admin' | 'owner';
+type MemberRole = ClinicMemberRole | 'supervisor' | 'patient' | 'admin' | 'owner';
 
 interface Member {
   id: string;
@@ -41,6 +41,8 @@ interface Member {
   profileRole?: string | null;
   professionalTitle?: string | null;
   specialty?: string | null;
+  canSupervise?: boolean;
+  can_supervise?: boolean;
   clinic_id: string;
   created_at: string;
   workSchedule?: any;
@@ -109,15 +111,18 @@ const formatAccessRoleLabel = (role: unknown, source?: any) => {
   const normalizedRole = String(role || '').trim().toLowerCase();
   if (normalizedRole === 'director') return 'Diretor';
   if (normalizedRole === 'coordinator') return 'Coordenador';
-  if (normalizedRole === 'supervisor') return 'Supervisor';
+  if (normalizedRole === 'supervisor') return 'Profissional · Supervisor';
   if (normalizedRole === 'receptionist') return 'Recepcionista/Assistente';
   if (normalizedRole === 'biller') return 'Faturista';
   if (normalizedRole === 'admin' || normalizedRole === 'owner') return 'Administrador';
   if (normalizedRole === 'therapist') {
-    return (
+    const baseLabel = (
       readClinicalSpecialtyFromSource(source) ||
       'Especialidade clínica pendente'
     );
+    return source?.canSupervise === true || source?.can_supervise === true
+      ? `${baseLabel} · Supervisor`
+      : baseLabel;
   }
   if (normalizedRole === 'patient') return 'Paciente';
   return 'Profissional';
@@ -265,6 +270,7 @@ export function TeamManagement({
   const [newMemberRole, setNewMemberRole] = useState<ClinicMemberRole>('therapist');
   const [newMemberSpecialty, setNewMemberSpecialty] = useState('');
   const [specialtySavingId, setSpecialtySavingId] = useState<string | null>(null);
+  const [supervisionSavingId, setSupervisionSavingId] = useState<string | null>(null);
   const [roleSpecialtyDrafts, setRoleSpecialtyDrafts] = useState<Record<string, string>>({});
   const [editingScheduleMember, setEditingScheduleMember] = useState<Member | null>(null);
   const [workScheduleDraft, setWorkScheduleDraft] = useState<any>(null);
@@ -289,7 +295,10 @@ export function TeamManagement({
   const canInvite = totalUsed < inviteLimit;
   const actorRole = String(user?.role || '').trim().toLowerCase();
   const canManageTeamAccess = capabilities?.has('team.permissions.manage') === true;
+  const canManageSupervision = capabilities?.has('team.supervision.manage') === true;
   const canGrantDirector = actorRole === 'director';
+  const canCreateAccounts = actorRole === 'director' && capabilities?.has('team.invite') === true;
+  const canChangeMemberRole = actorRole === 'director' && canManageTeamAccess;
   const canManageMemberAccess = (member: Member) =>
     canManageTeamAccess &&
     member.id !== user.id &&
@@ -341,6 +350,12 @@ export function TeamManagement({
     setSuccess(null);
     setInviteSent(false);
 
+    if (!canCreateAccounts) {
+      setError('A criação de contas da clínica é exclusiva do Diretor.');
+      setIsAssigning(false);
+      return;
+    }
+
     if (!canInvite) {
       setError(`Limite saudável atingido: ${inviteLimit} acessos de equipe para ${normalizedActivePatientCount} paciente(s) ativo(s).`);
       setIsAssigning(false);
@@ -379,6 +394,30 @@ export function TeamManagement({
       setError('Erro ao enviar convite');
     } finally {
       setIsAssigning(false);
+    }
+  };
+
+  const handleUpdateSupervisionEligibility = async (member: Member, canSupervise: boolean) => {
+    if (!canManageSupervision || member.role !== 'therapist') return;
+    setError(null);
+    setSuccess(null);
+    setSupervisionSavingId(member.id);
+    try {
+      const result = await dataService.updateMemberSupervisionEligibility(member.id, canSupervise);
+      if (!result?.success) {
+        setError(result?.message || result?.error || 'Não foi possível atualizar a supervisão.');
+        return;
+      }
+      setMembers((current) => current.map((item) => item.id === member.id
+        ? { ...item, canSupervise, can_supervise: canSupervise }
+        : item));
+      setSuccess(result.message || (canSupervise
+        ? 'Profissional habilitado para supervisão.'
+        : 'Supervisão removida com segurança.'));
+    } catch {
+      setError('Não foi possível atualizar a supervisão.');
+    } finally {
+      setSupervisionSavingId(null);
     }
   };
 
@@ -921,26 +960,40 @@ export function TeamManagement({
                                 <Building2 size={14} /> Diretor
                               </button>
                             )}
-                            <button 
-                              onClick={() => { handleUpdateRole(member.id, 'coordinator'); setOpenMenuId(null); }}
-                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'coordinator' ? 'text-purple-600 bg-purple-50' : 'text-slate-600 hover:bg-slate-50'}`}
-                              disabled={member.id === user.id}
-                            >
-                              <Shield size={14} /> Coordenador
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => { handleUpdateRole(member.id, 'supervisor'); setOpenMenuId(null); }}
-                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'supervisor' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600 hover:bg-slate-50'}`}
-                              disabled={member.id === user.id}
-                            >
-                              <UserCheck size={14} /> Supervisor
-                            </button>
+                            {canChangeMemberRole && (
+                              <button
+                                onClick={() => { handleUpdateRole(member.id, 'coordinator'); setOpenMenuId(null); }}
+                                className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'coordinator' ? 'text-purple-600 bg-purple-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                                disabled={member.id === user.id}
+                              >
+                                <Shield size={14} /> Coordenador
+                              </button>
+                            )}
                             {member.role === 'therapist' ? (
-                              <div className="flex w-full items-center gap-3 bg-blue-50 px-4 py-2.5 text-xs font-medium text-blue-600">
-                                <Stethoscope size={14} /> Profissional de atendimento
+                              <div className="border-y border-slate-50">
+                                <div className="flex w-full items-center gap-3 bg-blue-50 px-4 py-2.5 text-xs font-medium text-blue-600">
+                                  <Stethoscope size={14} /> Profissional
+                                </div>
+                                {canManageSupervision && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleUpdateSupervisionEligibility(
+                                      member,
+                                      !(member.canSupervise === true || member.can_supervise === true),
+                                    )}
+                                    disabled={supervisionSavingId === member.id}
+                                    className={`flex w-full items-center gap-3 px-4 py-2.5 text-xs font-medium transition ${member.canSupervise === true || member.can_supervise === true ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100' : 'text-slate-600 hover:bg-slate-50'}`}
+                                  >
+                                    <UserCheck size={14} />
+                                    {supervisionSavingId === member.id
+                                      ? 'Salvando supervisão...'
+                                      : member.canSupervise === true || member.can_supervise === true
+                                        ? 'Remover função de supervisor'
+                                        : 'Habilitar como supervisor'}
+                                  </button>
+                                )}
                               </div>
-                            ) : (
+                            ) : canChangeMemberRole ? (
                               <div className="border-y border-slate-50 px-3 py-3">
                                 <label
                                   htmlFor={`member-role-specialty-${member.id}`}
@@ -1003,22 +1056,26 @@ export function TeamManagement({
                                   <Stethoscope size={14} /> Aplicar acesso profissional
                                 </button>
                               </div>
+                            ) : null}
+                            {canChangeMemberRole && (
+                              <>
+                                <button
+                                  onClick={() => { handleUpdateRole(member.id, 'receptionist'); setOpenMenuId(null); }}
+                                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'receptionist' ? 'text-green-600 bg-green-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                                  disabled={member.id === user.id}
+                                >
+                                  <Calendar size={14} /> Recepcionista/Assistente
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => { handleUpdateRole(member.id, 'biller'); setOpenMenuId(null); }}
+                                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'biller' ? 'text-amber-700 bg-amber-50' : 'text-slate-600 hover:bg-slate-50'}`}
+                                  disabled={member.id === user.id}
+                                >
+                                  <ReceiptText size={14} /> Faturista
+                                </button>
+                              </>
                             )}
-                            <button 
-                              onClick={() => { handleUpdateRole(member.id, 'receptionist'); setOpenMenuId(null); }}
-                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'receptionist' ? 'text-green-600 bg-green-50' : 'text-slate-600 hover:bg-slate-50'}`}
-                              disabled={member.id === user.id}
-                            >
-                              <Calendar size={14} /> Recepcionista/Assistente
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => { handleUpdateRole(member.id, 'biller'); setOpenMenuId(null); }}
-                              className={`w-full flex items-center gap-3 px-4 py-2.5 text-xs font-medium transition-all ${member.role === 'biller' ? 'text-amber-700 bg-amber-50' : 'text-slate-600 hover:bg-slate-50'}`}
-                              disabled={member.id === user.id}
-                            >
-                              <ReceiptText size={14} /> Faturista
-                            </button>
                             {member.role === 'therapist' && (
                               <div className="border-t border-slate-50 pt-2 mt-1">
                                 <label
@@ -1467,6 +1524,11 @@ export function TeamManagement({
               </div>
             </div>
 
+            {!canCreateAccounts ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
+                A criação de contas é exclusiva do Diretor. Coordenadores continuam podendo gerir a equipe e os vínculos de supervisão da própria unidade.
+              </div>
+            ) : (
             <form onSubmit={handleInvite} className="space-y-5">
               <div>
                 <label className="mb-2 block text-xs font-medium text-slate-600">E-mail do colaborador</label>
@@ -1507,20 +1569,6 @@ export function TeamManagement({
                   )}
                   <button
                     type="button"
-                    aria-pressed={newMemberRole === 'supervisor'}
-                    onClick={() => setNewMemberRole('supervisor')}
-                    className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${newMemberRole === 'supervisor' ? 'border-indigo-300 bg-indigo-50/70 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
-                  >
-                    <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${newMemberRole === 'supervisor' ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      <UserCheck size={19} />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-slate-800">Supervisor</p>
-                      <p className="mt-0.5 text-xs text-slate-500">Supervisão clínica dos casos vinculados</p>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
                     aria-pressed={newMemberRole === 'therapist'}
                     onClick={() => setNewMemberRole('therapist')}
                     className={`flex items-center gap-3 rounded-xl border p-3.5 text-left transition ${newMemberRole === 'therapist' ? 'border-blue-300 bg-blue-50/70 shadow-sm' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}
@@ -1529,7 +1577,7 @@ export function TeamManagement({
                       <Stethoscope size={19} />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-slate-800">Profissional de atendimento</p>
+                      <p className="text-sm font-medium text-slate-800">Profissional</p>
                       <p className="mt-0.5 text-xs text-slate-500">Agenda, prontuários e pacientes atribuídos</p>
                     </div>
                   </button>
@@ -1576,7 +1624,7 @@ export function TeamManagement({
                     </div>
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-slate-800">Coordenador</p>
-                      <p className="mt-0.5 text-xs text-slate-500">Acesso completo à gestão da clínica</p>
+                      <p className="mt-0.5 text-xs text-slate-500">Gestão completa da própria unidade</p>
                     </div>
                   </button>
 
@@ -1591,7 +1639,7 @@ export function TeamManagement({
                     </div>
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-slate-800">Recepcionista/Assistente</p>
-                      <p className="mt-0.5 text-xs text-slate-500">Agenda, pagamentos, cobranças e convênios</p>
+                      <p className="mt-0.5 text-xs text-slate-500">Agenda, pagamentos e cobranças</p>
                     </div>
                   </button>
                   <button
@@ -1645,6 +1693,7 @@ export function TeamManagement({
                       : 'Enviar convite'}
               </button>
             </form>
+            )}
           </div>
         </aside>
       </div>

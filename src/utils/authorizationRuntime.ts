@@ -1,4 +1,5 @@
 import {
+  SUPERVISION_CAPABILITY_OVERLAY,
   getDefaultCapabilitiesForRole,
   isCapabilityKey,
   isClinicBaseRole,
@@ -41,12 +42,16 @@ const normalizeEffect = (value: unknown): CapabilityOverrideEffect | null => {
 export function resolveEffectiveClinicCapabilities(
   roleInput: unknown,
   overrides: readonly CapabilityOverrideLike[] = [],
+  options: { canSupervise?: boolean } = {},
 ): EffectiveClinicCapabilities | null {
   const normalizedRole = String(roleInput ?? '').trim().toLowerCase();
   if (!isClinicBaseRole(normalizedRole)) return null;
 
   const role = normalizedRole as ClinicBaseRole;
   const capabilities = new Set<CapabilityKey>(getDefaultCapabilitiesForRole(role));
+  if (role === 'therapist' && options.canSupervise === true) {
+    SUPERVISION_CAPABILITY_OVERLAY.forEach((capability) => capabilities.add(capability));
+  }
   const appliedOverrides: Array<{
     permissionKey: CapabilityKey;
     effect: CapabilityOverrideEffect;
@@ -59,9 +64,24 @@ export function resolveEffectiveClinicCapabilities(
     const effect = normalizeEffect(rawOverride?.effect);
     if (!isCapabilityKey(permissionKey) || !effect) continue;
 
-    if (effect === 'allow') capabilities.add(permissionKey);
+    if (
+      effect === 'allow'
+      && (
+        roleHasDefaultCapability(role, permissionKey)
+        || isAdditionalCapabilityCompatibleWithRoleScope(role, permissionKey)
+      )
+    ) {
+      capabilities.add(permissionKey);
+    }
     if (effect === 'deny') capabilities.delete(permissionKey);
     appliedOverrides.push({ permissionKey, effect });
+  }
+
+  // Account provisioning is a structural Director-only responsibility. It
+  // cannot be reintroduced through an old or manually-written override.
+  if (role !== 'director') {
+    capabilities.delete('team.invite');
+    capabilities.delete('workspace.multiclinic.analytics');
   }
 
   return {
@@ -103,9 +123,30 @@ export function isAdditionalCapabilityCompatibleWithRoleScope(
 
   if (roleHasDefaultCapability(role, capability)) return true;
 
-  // ACTIVE_CLINIC roles can receive additional clinic-scoped capabilities.
-  if (role === 'director' || role === 'coordinator' || role === 'receptionist') {
+  // Clinic managers can receive additional clinic-scoped capabilities.
+  if (role === 'director' || role === 'coordinator') {
     return true;
+  }
+
+  // Reception remains operational/administrative. Explicit grants may extend
+  // administrative workflows, but never into clinical records or payer/TISS
+  // data merely because the actor has ACTIVE_CLINIC scope.
+  if (role === 'receptionist') {
+    return (
+      [
+        'patient.list',
+        'patient.create',
+        'patient.demographics.view',
+        'patient.demographics.edit',
+        'patient.contacts.view',
+        'patient.birthdays.view',
+        'patient.documents.registration.view',
+      ].includes(capability)
+      || capability.startsWith('calendar.')
+      || capability.startsWith('finance.')
+      || capability.startsWith('communication.')
+      || capability === 'documents.patient_share'
+    );
   }
 
   // Case-scoped roles may only receive capabilities whose resources are

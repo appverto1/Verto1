@@ -9,6 +9,10 @@ const migration = fs.readFileSync(
   'supabase/migrations/20260811183000_clinic_invitation_roles_v2.sql',
   'utf8',
 );
+const supervisionMigration = fs.readFileSync(
+  'supabase/migrations/20260817030000_professional_supervision_capability_v1.sql',
+  'utf8',
+);
 
 assert.match(
   server,
@@ -56,9 +60,15 @@ assert.match(
   'Faturista deve entrar no workspace dedicado de faturamento, sem cair no dashboard clínico legado',
 );
 assert.match(team, /const canGrantDirector = actorRole === 'director'/);
-assert.match(team, />Supervisor</);
+assert.doesNotMatch(team, /setNewMemberRole\('supervisor'\)/);
+assert.match(team, /Habilitar como supervisor/);
 assert.match(team, />Faturista</);
-assert.match(invitationModal, /<option value="supervisor">Supervisor<\/option>/);
+assert.doesNotMatch(invitationModal, /<option value="supervisor">/);
 assert.match(invitationModal, /<option value="biller">Faturista<\/option>/);
+assert.match(supervisionMigration, /add column if not exists can_supervise boolean not null default false/);
+assert.match(supervisionMigration, /set_clinic_member_supervision_eligibility_v1/);
+assert.match(supervisionMigration, /for update/);
+assert.match(supervisionMigration, /authorization_audit_events/);
+assert.match(supervisionMigration, /SUPERVISION_CROSS_CLINIC_PATIENT_DENIED/);
 
 console.log('newClinicRolesIntegration.test.ts: ok');

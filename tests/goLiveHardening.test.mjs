@@ -118,13 +118,16 @@ assert.match(envValidation, /SUPABASE_EXPECTED_PROJECT_REF/);
 assert.match(envValidation, /deve utilizar HTTPS em deploy/);
 assert.match(envValidation, /nao corresponde ao SUPABASE_URL configurado/);
 
-// Canonical role/access matrix exposed to users.
-for (const role of ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller']) {
+// Canonical role/access matrix exposed to users. Supervisor is contextual;
+// the legacy role remains in authorization defaults only for backwards compatibility.
+for (const role of ['director', 'coordinator', 'therapist', 'receptionist', 'biller']) {
   assert.match(authorization, new RegExp(`\\b${role}:`));
 }
-for (const label of ['Diretor', 'Coordenador', 'Supervisor', 'Terapeuta', 'Recepção', 'Faturista']) {
+assert.match(authorization, /supervisor:/, 'papel supervisor legado deve continuar reconhecido durante a migração');
+for (const label of ['Diretor', 'Coordenador', 'Profissional', 'Recepção', 'Faturista']) {
   assert.ok(roleMatrix.includes(label), `matriz deve exibir ${label}`);
 }
+assert.ok(!roleMatrix.includes("supervisor: 'Supervisor'"), 'matriz não deve expor Supervisor como papel base');
 
 
 // Platform-admin session identity must survive MFA/session hydration and own the initial frontend route.

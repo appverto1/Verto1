@@ -1,14 +1,17 @@
 import type { CapabilityKey, ClinicBaseRole } from '../constants/authorizationModel';
 
-export type PatientListScopeMode = 'active_clinic' | 'assigned_patients' | 'supervised_cases' | 'none';
+export type PatientListScopeMode = 'active_clinic' | 'assigned_patients' | 'supervised_cases' | 'assigned_and_supervised' | 'none';
 
-export function resolvePatientListScopeMode(roleInput: unknown): PatientListScopeMode {
+export function resolvePatientListScopeMode(
+  roleInput: unknown,
+  options: { canSupervise?: boolean } = {},
+): PatientListScopeMode {
   const role = String(roleInput ?? '').trim().toLowerCase() as ClinicBaseRole;
   if (role === 'director' || role === 'coordinator' || role === 'receptionist' || role === 'biller') {
     return 'active_clinic';
   }
-  if (role === 'therapist') return 'assigned_patients';
-  if (role === 'supervisor') return 'supervised_cases';
+  if (role === 'therapist') return options.canSupervise === true ? 'assigned_and_supervised' : 'assigned_patients';
+  if (role === 'supervisor') return 'assigned_and_supervised';
   return 'none';
 }
 

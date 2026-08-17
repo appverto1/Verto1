@@ -12,7 +12,11 @@ assert.equal(resolvePatientListScopeMode('coordinator'), 'active_clinic');
 assert.equal(resolvePatientListScopeMode('receptionist'), 'active_clinic');
 assert.equal(resolvePatientListScopeMode('biller'), 'active_clinic');
 assert.equal(resolvePatientListScopeMode('therapist'), 'assigned_patients');
-assert.equal(resolvePatientListScopeMode('supervisor'), 'supervised_cases');
+assert.equal(resolvePatientListScopeMode('supervisor'), 'assigned_and_supervised');
+assert.equal(
+  resolvePatientListScopeMode('therapist', { canSupervise: true }),
+  'assigned_and_supervised',
+);
 assert.equal(resolvePatientListScopeMode('owner'), 'none');
 
 assert.equal(requiredPatientLinkPermissionForMethod('GET'), 'read');
@@ -32,7 +36,7 @@ assert.equal(billerColumns.has('anamnesis_submitted_at'), false);
 const receptionistCapabilities = getDefaultCapabilitiesForRole('receptionist');
 const receptionistColumns = new Set(patientListColumnsForCapabilities(receptionistCapabilities));
 assert.equal(receptionistColumns.has('email'), true);
-assert.equal(receptionistColumns.has('insurance_name'), true);
+assert.equal(receptionistColumns.has('insurance_name'), false);
 assert.equal(receptionistColumns.has('diagnosis'), false);
 assert.equal(receptionistColumns.has('metadata'), false);
 
@@ -66,6 +70,8 @@ assert.equal('metadata' in billerRow, false);
 
 const receptionistRow = redactPatientListRowForCapabilities(sample, receptionistCapabilities);
 assert.equal(receptionistRow.email, 'patient@example.com');
+assert.equal('insurance_name' in receptionistRow, false);
+assert.equal('insurance_card_number' in receptionistRow, false);
 assert.equal('diagnosis' in receptionistRow, false);
 assert.equal('metadata' in receptionistRow, false);
 assert.equal('professional_links' in receptionistRow, false);

@@ -46,7 +46,7 @@ export const ClinicInvitationAcceptance = ({
     : acceptedRole === 'coordinator'
       ? 'Coordenação'
       : acceptedRole === 'supervisor'
-        ? 'Supervisão clínica'
+        ? 'Profissional · Supervisor'
         : acceptedRole === 'therapist'
           ? 'Profissional de atendimento'
           : acceptedRole === 'receptionist'

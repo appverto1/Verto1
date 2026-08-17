@@ -412,8 +412,8 @@ import {
 } from './src/utils/authorizationRuntime';
 import {
   CAPABILITY_CATALOG,
-  ROLE_DEFAULT_SCOPES,
   getDefaultCapabilitiesForRole,
+  getDefaultScopesForRole,
   isCapabilityKey,
   isClinicBaseRole,
   isDelegableCapability,
@@ -9153,6 +9153,7 @@ type ResolvedClinicCapabilityContext = {
   clinicId: string;
   userId: string;
   role: ClinicBaseRole;
+  canSupervise: boolean;
   overrides: CapabilityOverrideLike[];
   capabilities: ReadonlySet<CapabilityKey>;
   modules: ReadonlySet<OrganizationModuleKey>;
@@ -9221,7 +9222,7 @@ async function resolveClinicCapabilityContext(user: any): Promise<ResolvedClinic
 
   const { data: membership, error: membershipError } = await supabase
     .from('clinic_memberships')
-    .select('id,user_id,clinic_id,role,status')
+    .select('id,user_id,clinic_id,role,status,can_supervise')
     .eq('user_id', userId)
     .eq('clinic_id', clinicId)
     .eq('status', 'active')
@@ -9230,6 +9231,7 @@ async function resolveClinicCapabilityContext(user: any): Promise<ResolvedClinic
   if (membershipError) throw membershipError;
   const membershipId = sanitizeString(membership?.id, 120);
   const membershipRole = sanitizeString(membership?.role, 40).toLowerCase();
+  const canSupervise = membershipRole === 'supervisor' || membership?.can_supervise === true;
   if (!isUuid(membershipId) || !isClinicBaseRole(membershipRole)) return null;
   if (membershipRole === 'biller') {
     const externalBillingAccess = await resolveExternalBillingAccessForUser(userId);
@@ -9254,7 +9256,11 @@ async function resolveClinicCapabilityContext(user: any): Promise<ResolvedClinic
     overrides = Array.isArray(overrideResult.data) ? overrideResult.data : [];
   }
 
-  const resolvedCapabilities = resolveEffectiveClinicCapabilities(membershipRole, overrides);
+  const resolvedCapabilities = resolveEffectiveClinicCapabilities(
+    membershipRole,
+    overrides,
+    { canSupervise },
+  );
   if (!resolvedCapabilities) return null;
   const effectiveCapabilities = filterCapabilitiesByOrganizationModules(
     resolvedCapabilities.capabilities,
@@ -9267,6 +9273,7 @@ async function resolveClinicCapabilityContext(user: any): Promise<ResolvedClinic
     clinicId,
     userId,
     role: membershipRole,
+    canSupervise,
     overrides,
     capabilities: effectiveCapabilities,
     modules: moduleAccess.modules,
@@ -9530,11 +9537,15 @@ function requireAnyClinicCapabilityOrPatientPortal(...capabilities: CapabilityKe
 async function resolvePatientListScopedPatientIds(
   context: ResolvedClinicCapabilityContext,
 ): Promise<string[] | null> {
-  const mode = resolvePatientListScopeMode(context.role);
+  const mode = resolvePatientListScopeMode(
+    context.role,
+    { canSupervise: context.canSupervise },
+  );
   if (mode === 'active_clinic') return null;
   if (mode === 'none') return [];
 
-  if (mode === 'assigned_patients') {
+  let assignedPatientIds: string[] = [];
+  if (mode === 'assigned_patients' || mode === 'assigned_and_supervised') {
     const linksResult = await supabase
       .from('patient_professional_links')
       .select('patient_id')
@@ -9543,11 +9554,12 @@ async function resolvePatientListScopedPatientIds(
       .eq('status', 'active')
       .limit(2000);
     if (linksResult.error) throw linksResult.error;
-    return Array.from(new Set(
-      (linksResult.data || [])
-        .map((row: any) => sanitizeString(row?.patient_id, 120))
-        .filter(isUuid)
-    ));
+    assignedPatientIds = (linksResult.data || [])
+      .map((row: any) => sanitizeString(row?.patient_id, 120))
+      .filter(isUuid);
+    if (mode === 'assigned_patients') {
+      return Array.from(new Set(assignedPatientIds));
+    }
   }
 
   const supervisionResult = await supabase
@@ -9567,7 +9579,9 @@ async function resolvePatientListScopedPatientIds(
       .map((row: any) => sanitizeString(row?.supervised_user_id, 120))
       .filter(isUuid),
   ));
-  if (supervisedUserIds.length === 0) return Array.from(new Set(directPatientIds));
+  if (supervisedUserIds.length === 0) {
+    return Array.from(new Set([...assignedPatientIds, ...directPatientIds]));
+  }
 
   const caseLinksResult = await supabase
     .from('patient_professional_links')
@@ -9579,6 +9593,7 @@ async function resolvePatientListScopedPatientIds(
   if (caseLinksResult.error) throw caseLinksResult.error;
 
   return Array.from(new Set([
+    ...assignedPatientIds,
     ...directPatientIds,
     ...(caseLinksResult.data || []).map((row: any) => sanitizeString(row?.patient_id, 120)),
   ].filter(isUuid)));
@@ -16499,100 +16514,95 @@ async function loadPatientProfessionalAccessEvidence(params: {
   actorRole?: string | null;
 }) {
   const actorRole = sanitizeString(params.actorRole, 40).toLowerCase();
-  const shouldResolveSupervision = actorRole === 'supervisor';
 
-  const [professionalLinkResult, membershipResult, profileResult, patientCaseLinksResult] =
-    await Promise.all([
-      supabase
-        .from('patient_professional_links')
-        .select('id,organization_id,clinic_id,patient_id,professional_id,status,permissions')
-        .eq('organization_id', params.clinicId)
-        .eq('patient_id', params.patientId)
-        .eq('professional_id', params.actorId)
-        .eq('status', 'active')
-        .limit(1)
-        .maybeSingle(),
-      supabase
-        .from('clinic_memberships')
-        .select('user_id,clinic_id,role,status')
-        .eq('user_id', params.actorId)
-        .eq('clinic_id', params.clinicId)
-        .limit(1)
-        .maybeSingle(),
-      supabase
-        .from('professional_profiles')
-        .select('user_id,specialty')
-        .eq('user_id', params.actorId)
-        .limit(1)
-        .maybeSingle(),
-      shouldResolveSupervision
-        ? supabase
-            .from('patient_professional_links')
-            .select('professional_id')
-            .eq('organization_id', params.clinicId)
-            .eq('patient_id', params.patientId)
-            .eq('status', 'active')
-            .limit(50)
-        : Promise.resolve({ data: [], error: null })
-    ]);
+  const [professionalLinkResult, membershipResult, profileResult] = await Promise.all([
+    supabase
+      .from('patient_professional_links')
+      .select('id,organization_id,clinic_id,patient_id,professional_id,status,permissions')
+      .eq('organization_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .eq('professional_id', params.actorId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('clinic_memberships')
+      .select('user_id,clinic_id,role,status,can_supervise')
+      .eq('user_id', params.actorId)
+      .eq('clinic_id', params.clinicId)
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from('professional_profiles')
+      .select('user_id,specialty')
+      .eq('user_id', params.actorId)
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
   const legacyMembershipSchemaUnavailable =
     isMissingRelationError(professionalLinkResult.error) ||
     isMissingRelationError(membershipResult.error);
-  for (const result of [
-    professionalLinkResult,
-    membershipResult,
-    profileResult,
-    patientCaseLinksResult
-  ]) {
+  for (const result of [professionalLinkResult, membershipResult, profileResult]) {
     if (result.error && !isMissingRelationError(result.error)) {
       throw result.error;
     }
   }
-  if (
-    profileResult.error &&
-    !legacyMembershipSchemaUnavailable
-  ) {
+  if (profileResult.error && !legacyMembershipSchemaUnavailable) {
     throw profileResult.error;
   }
 
+  const membershipRole = sanitizeString(membershipResult.data?.role || actorRole, 40).toLowerCase();
+  const canSupervise =
+    membershipRole === 'supervisor'
+    || membershipResult.data?.can_supervise === true;
   let activeSupervisionLink: any = null;
-  if (
-    shouldResolveSupervision &&
-    !legacyMembershipSchemaUnavailable &&
-    !isMissingRelationError(patientCaseLinksResult.error)
-  ) {
-    const professionalIds = Array.from(new Set(
-      (patientCaseLinksResult.data || [])
-        .map((item: any) => sanitizeString(item?.professional_id, 120))
-        .filter((id: string) => isUuid(id))
-    ));
-    const [directSupervisionResult, professionalSupervisionResult] = await Promise.all([
-      supabase
-        .from('clinical_supervision_links')
-        .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status')
-        .eq('clinic_id', params.clinicId)
-        .eq('supervisor_user_id', params.actorId)
-        .eq('patient_id', params.patientId)
-        .eq('status', 'active')
-        .limit(1)
-        .maybeSingle(),
-      professionalIds.length > 0
-        ? supabase
-            .from('clinical_supervision_links')
-            .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status')
-            .eq('clinic_id', params.clinicId)
-            .eq('supervisor_user_id', params.actorId)
-            .in('supervised_user_id', professionalIds)
-            .eq('status', 'active')
-            .limit(1)
-            .maybeSingle()
-        : Promise.resolve({ data: null, error: null })
-    ]);
-    for (const result of [directSupervisionResult, professionalSupervisionResult]) {
-      if (result.error && !isMissingRelationError(result.error)) throw result.error;
+
+  if (canSupervise && !legacyMembershipSchemaUnavailable) {
+    const patientCaseLinksResult = await supabase
+      .from('patient_professional_links')
+      .select('professional_id')
+      .eq('organization_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .eq('status', 'active')
+      .limit(50);
+    if (patientCaseLinksResult.error && !isMissingRelationError(patientCaseLinksResult.error)) {
+      throw patientCaseLinksResult.error;
     }
-    activeSupervisionLink = directSupervisionResult.data || professionalSupervisionResult.data || null;
+
+    if (!isMissingRelationError(patientCaseLinksResult.error)) {
+      const professionalIds = Array.from(new Set(
+        (patientCaseLinksResult.data || [])
+          .map((item: any) => sanitizeString(item?.professional_id, 120))
+          .filter((id: string) => isUuid(id)),
+      ));
+      const [directSupervisionResult, professionalSupervisionResult] = await Promise.all([
+        supabase
+          .from('clinical_supervision_links')
+          .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status')
+          .eq('clinic_id', params.clinicId)
+          .eq('supervisor_user_id', params.actorId)
+          .eq('patient_id', params.patientId)
+          .eq('status', 'active')
+          .limit(1)
+          .maybeSingle(),
+        professionalIds.length > 0
+          ? supabase
+              .from('clinical_supervision_links')
+              .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status')
+              .eq('clinic_id', params.clinicId)
+              .eq('supervisor_user_id', params.actorId)
+              .in('supervised_user_id', professionalIds)
+              .eq('status', 'active')
+              .limit(1)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+      ]);
+      for (const result of [directSupervisionResult, professionalSupervisionResult]) {
+        if (result.error && !isMissingRelationError(result.error)) throw result.error;
+      }
+      activeSupervisionLink = directSupervisionResult.data || professionalSupervisionResult.data || null;
+    }
   }
 
   return {
@@ -16609,7 +16619,8 @@ async function loadPatientProfessionalAccessEvidence(params: {
       ? null
       : membershipResult.data,
     activeSupervisionLink,
-    legacyMembershipSchemaUnavailable
+    canSupervise,
+    legacyMembershipSchemaUnavailable,
   };
 }
 
@@ -27143,14 +27154,17 @@ async function startServer() {
     const normalizedRole = sanitizeString(role, 40).toLowerCase();
     if (normalizedRole === 'director') return 'Diretor';
     if (normalizedRole === 'coordinator') return 'Coordenador';
-    if (normalizedRole === 'supervisor') return 'Supervisor';
+    if (normalizedRole === 'supervisor') return 'Profissional · Supervisor';
     if (normalizedRole === 'receptionist') return 'Recepcionista/Assistente';
     if (normalizedRole === 'biller') return 'Faturista';
     if (normalizedRole === 'therapist') {
       const specialty = readProfessionalTitleFromSource(source);
-      return specialty
+      const baseLabel = specialty
         ? `Profissional de atendimento · ${specialty}`
         : 'Profissional de atendimento · Especialidade pendente';
+      return source?.canSupervise === true || source?.can_supervise === true
+        ? `${baseLabel} · Supervisor`
+        : baseLabel;
     }
     return 'Profissional';
   };
@@ -27363,11 +27377,12 @@ async function startServer() {
           membershipId: context.membershipId,
           clinicId: context.clinicId,
           role: context.role,
+          canSupervise: context.canSupervise,
           capabilities: Array.from(context.capabilities).sort(),
           modules: Array.from(context.modules).sort(),
           moduleAccessMode: context.moduleAccessMode,
           entitlementVersion: context.entitlementVersion,
-          scopes: ROLE_DEFAULT_SCOPES[context.role] || [],
+          scopes: getDefaultScopesForRole(context.role, { canSupervise: context.canSupervise }),
           overrides: context.overrides.map((item: any) => ({
             permissionKey: sanitizeString(item?.permission_key || item?.permissionKey, 160),
             effect: sanitizeString(item?.effect, 20).toLowerCase()
@@ -27399,7 +27414,7 @@ async function startServer() {
 
       const { data: memberships, error: membershipError } = await supabase
         .from('clinic_memberships')
-        .select('id,user_id,clinic_id,role,status,users:user_id(id,name,email)')
+        .select('id,user_id,clinic_id,role,status,can_supervise,users:user_id(id,name,email)')
         .eq('clinic_id', actorContext.clinicId)
         .eq('status', 'active')
         .limit(500);
@@ -27436,11 +27451,14 @@ async function startServer() {
         const role = sanitizeString(membership?.role, 40).toLowerCase() as ClinicBaseRole;
         const linkedUser = Array.isArray(membership?.users) ? membership.users[0] : membership?.users;
         const overrideEffect = overrideByMembershipId.get(membershipId) || null;
+        const canSupervise = role === 'supervisor' || membership?.can_supervise === true;
+        const baseline = resolveEffectiveClinicCapabilities(role, [], { canSupervise });
         const defaultEnabled = moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, permissionKey)
-          && roleHasDefaultCapability(role, permissionKey);
+          && baseline?.capabilities.has(permissionKey) === true;
         const effective = resolveEffectiveClinicCapabilities(
           role,
           overrideEffect ? [{ permission_key: permissionKey, effect: overrideEffect }] : [],
+          { canSupervise },
         );
         const effectiveEnabled = moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, permissionKey)
           && effective?.capabilities.has(permissionKey) === true;
@@ -27468,6 +27486,7 @@ async function startServer() {
           name: sanitizeString(linkedUser?.name, 180) || null,
           email: sanitizeEmail(linkedUser?.email) || null,
           role,
+          canSupervise,
           defaultEnabled,
           effectiveEnabled,
           overrideEffect,
@@ -27644,7 +27663,7 @@ async function startServer() {
 
       const { data: membership, error: membershipError } = await supabase
         .from('clinic_memberships')
-        .select('id,user_id,clinic_id,role,status')
+        .select('id,user_id,clinic_id,role,status,can_supervise')
         .eq('user_id', memberId)
         .eq('clinic_id', actorContext.clinicId)
         .eq('status', 'active')
@@ -27675,7 +27694,12 @@ async function startServer() {
       if (overrideError) throw overrideError;
 
       const overrides = Array.isArray(overrideRows) ? overrideRows : [];
-      const effective = resolveEffectiveClinicCapabilities(membershipRole, overrides);
+      const canSupervise = membershipRole === 'supervisor' || membership?.can_supervise === true;
+      const effective = resolveEffectiveClinicCapabilities(
+        membershipRole,
+        overrides,
+        { canSupervise },
+      );
       if (!effective) {
         return res.status(409).json({ success: false, error: 'CLINIC_MEMBER_AUTHORIZATION_INVALID' });
       }
@@ -27695,7 +27719,8 @@ async function startServer() {
           membershipId: sanitizeString(membership.id, 120),
           memberId,
           role: membershipRole,
-          scopes: ROLE_DEFAULT_SCOPES[membershipRole] || [],
+          canSupervise,
+          scopes: getDefaultScopesForRole(membershipRole, { canSupervise }),
           catalog: CAPABILITY_CATALOG
             .filter((definition) => definition.delegable && moduleAllowsCapability(actorContext.moduleAccessMode, actorContext.modules, definition.key))
             .map((definition) => {
@@ -27780,7 +27805,7 @@ async function startServer() {
 
       const { data: membership, error: membershipError } = await supabase
         .from('clinic_memberships')
-        .select('id,user_id,clinic_id,role,status')
+        .select('id,user_id,clinic_id,role,status,can_supervise')
         .eq('user_id', memberId)
         .eq('clinic_id', actorContext.clinicId)
         .eq('status', 'active')
@@ -27826,7 +27851,16 @@ async function startServer() {
         .eq('membership_id', membershipId)
         .limit(500);
       if (refreshedError) throw refreshedError;
-      const effective = resolveEffectiveClinicCapabilities(membershipRole, refreshedRows || []);
+      const effective = resolveEffectiveClinicCapabilities(
+        membershipRole,
+        refreshedRows || [],
+        { canSupervise: membershipRole === 'supervisor' || membership?.can_supervise === true },
+      );
+      const baseline = resolveEffectiveClinicCapabilities(
+        membershipRole,
+        [],
+        { canSupervise: membershipRole === 'supervisor' || membership?.can_supervise === true },
+      );
       return res.json({
         success: true,
         data: {
@@ -27834,7 +27868,7 @@ async function startServer() {
           membershipId,
           permissionKey,
           effect,
-          defaultEnabled: roleHasDefaultCapability(membershipRole, permissionKey),
+          defaultEnabled: baseline?.capabilities.has(permissionKey) === true,
           effectiveEnabled: effective?.capabilities.has(permissionKey) === true,
         }
       });
@@ -27866,6 +27900,7 @@ async function startServer() {
           status,
           created_at,
           specialty,
+          can_supervise,
           work_schedule,
           availability_timezone,
           work_schedule_configured_at,
@@ -27923,9 +27958,10 @@ async function startServer() {
         ) || 50;
         const legacySchedule = readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration);
         const specialty = normalizeClinicalSpecialty(m?.specialty) || resolveProfessionalProfileSpecialty(profile) || null;
-        const professionalTitle = m.role === 'therapist'
+        const professionalTitle = m.role === 'therapist' || m.role === 'supervisor'
           ? specialty || readProfessionalTitleFromSource({ metadata }) || null
           : null;
+        const canSupervise = m.role === 'supervisor' || m?.can_supervise === true;
         return {
           id: m.users?.id || m.user_id,
           name:
@@ -27938,11 +27974,13 @@ async function startServer() {
             'Profissional',
           email: m.users?.email || '',
           role: m.role,
+          canSupervise,
+          can_supervise: canSupervise,
           status: m.status,
           specialty,
           professionalTitle,
           profileRole: professionalTitle,
-          roleLabel: formatClinicAccessRoleLabel(m.role, { professionalTitle }),
+          roleLabel: formatClinicAccessRoleLabel(m.role, { professionalTitle, canSupervise }),
           profilePicture: profilePicture || null,
           profile_picture: profilePicture || null,
           profilePhotoUrl: profilePicture || null,
@@ -27964,6 +28002,81 @@ async function startServer() {
     }
   });
 
+  app.patch('/api/clinic/members/:memberId/supervision-eligibility', portalActionLimiter, checkAuth, requireClinicCapability('team.supervision.manage'), async (req: any, res) => {
+    if (!enforcePayloadLimit(req, res, 2 * 1024, 'Elegibilidade de supervisão')) return;
+    const actor = req.session.user;
+    const memberId = sanitizeString(req.params?.memberId, 120);
+    const clinicId = sanitizeString(currentClinicId(actor), 120);
+    const actorId = sanitizeString(actor?.id, 120);
+    if (!isUuid(memberId) || !isUuid(clinicId) || !isUuid(actorId) || typeof req.body?.canSupervise !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        error: 'SUPERVISION_ELIGIBILITY_INVALID',
+        message: 'Informe um profissional válido e o estado de supervisão.'
+      });
+    }
+
+    try {
+      const { data, error } = await supabase.rpc('set_clinic_member_supervision_eligibility_v1', {
+        p_clinic_id: clinicId,
+        p_member_id: memberId,
+        p_actor_id: actorId,
+        p_can_supervise: req.body.canSupervise,
+      });
+      if (error) {
+        const message = sanitizeString(error?.message || String(error), 300);
+        if (message.includes('SUPERVISION_ELIGIBILITY_MEMBER_NOT_FOUND')) {
+          return res.status(404).json({ success: false, error: 'SUPERVISION_ELIGIBILITY_MEMBER_NOT_FOUND' });
+        }
+        if (message.includes('SUPERVISION_ELIGIBILITY_PROFESSIONAL_REQUIRED')) {
+          return res.status(422).json({
+            success: false,
+            error: 'SUPERVISION_ELIGIBILITY_PROFESSIONAL_REQUIRED',
+            message: 'Somente um Profissional pode ser habilitado para supervisão.'
+          });
+        }
+        if (message.includes('SUPERVISION_ELIGIBILITY_SPECIALTY_REQUIRED')) {
+          return res.status(422).json({
+            success: false,
+            error: 'SUPERVISION_ELIGIBILITY_SPECIALTY_REQUIRED',
+            message: 'Cadastre a especialidade clínica antes de habilitar supervisão.'
+          });
+        }
+        if (
+          message.includes('set_clinic_member_supervision_eligibility_v1')
+          || sanitizeString((error as any)?.code, 40) === 'PGRST202'
+          || sanitizeString((error as any)?.code, 40) === '42883'
+        ) {
+          return res.status(503).json({
+            success: false,
+            error: 'SUPERVISION_CAPABILITY_MIGRATION_REQUIRED',
+            message: 'A migração de supervisão profissional ainda não foi aplicada no banco.'
+          });
+        }
+        throw error;
+      }
+
+      const row = Array.isArray(data) ? data[0] : data;
+      return res.json({
+        success: true,
+        data: {
+          memberId,
+          canSupervise: req.body.canSupervise,
+          endedSupervisionAssignments: Math.max(0, Number(row?.ended_supervision_assignments) || 0),
+        },
+        message: req.body.canSupervise
+          ? 'Profissional habilitado para receber vínculos de supervisão.'
+          : 'Supervisão removida. Vínculos ativos de supervisão foram encerrados com segurança.'
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/clinic/members/:memberId/supervision-eligibility [PATCH]', error, {
+        memberId,
+        clinicId,
+        actorId,
+      });
+    }
+  });
+
   app.get('/api/clinic/members/:memberId/work-schedule', checkAuth, requireAnyClinicCapability('calendar.team.view', 'calendar.own.view'), async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
@@ -27971,7 +28084,13 @@ async function startServer() {
       const requesterId = sanitizeString(req.session.user?.id, 120);
       const authorizationContext = req.authorizationContext as ResolvedClinicCapabilityContext;
       let canView = requesterId === memberId || authorizationContext.capabilities.has('calendar.team.view');
-      if (canView && requesterId !== memberId && authorizationContext.role === 'supervisor') {
+      if (
+        canView
+        && requesterId !== memberId
+        && authorizationContext.canSupervise
+        && authorizationContext.role !== 'director'
+        && authorizationContext.role !== 'coordinator'
+      ) {
         const { data: supervisionLink, error: supervisionError } = await supabase
           .from('clinical_supervision_links')
           .select('id')
@@ -28241,6 +28360,20 @@ async function startServer() {
         return res.status(400).json({ error: 'Email e papel validos sao obrigatorios' });
       }
       const actorRole = sanitizeString(req.effectiveClinicRole || user?.role, 40).toLowerCase();
+      if (actorRole !== 'director') {
+        return res.status(403).json({
+          success: false,
+          error: 'DIRECTOR_ACCOUNT_PROVISIONING_REQUIRED',
+          message: 'A criação de contas da clínica é exclusiva do Diretor.'
+        });
+      }
+      if (role === 'supervisor') {
+        return res.status(400).json({
+          success: false,
+          error: 'SUPERVISOR_IS_PROFESSIONAL_CAPABILITY',
+          message: 'Cadastre como Profissional e habilite a supervisão no vínculo do colaborador.'
+        });
+      }
       if (!canAssignClinicRole(actorRole, role)) {
         return res.status(403).json({
           success: false,
@@ -28721,10 +28854,10 @@ async function startServer() {
           const userId = sanitizeString(m?.user_id, 120);
           const profile = historyProfilesByUserId.get(userId) || {};
           const metadata = profile?.metadata && typeof profile.metadata === 'object' ? profile.metadata : {};
-          const specialty = m?.role === 'therapist'
+          const specialty = m?.role === 'therapist' || m?.role === 'supervisor'
             ? resolveProfessionalProfileSpecialty(profile) || null
             : null;
-          const professionalTitle = m?.role === 'therapist'
+          const professionalTitle = m?.role === 'therapist' || m?.role === 'supervisor'
             ? specialty || readProfessionalTitleFromSource({ metadata }) || null
             : null;
           return {
@@ -28917,6 +29050,13 @@ async function startServer() {
     const roleRaw = sanitizeString(req.body?.role, 30);
     const role = ensureClinicRole(roleRaw) ? roleRaw : null;
     if (!email || !role) return res.status(400).json({ error: 'Email e papel sao obrigatorios' });
+    if (role === 'supervisor') {
+      return res.status(400).json({
+        success: false,
+        error: 'SUPERVISOR_IS_PROFESSIONAL_CAPABILITY',
+        message: 'Supervisor não é mais um papel de acesso. Use Profissional e habilite supervisão.'
+      });
+    }
     const actorRole = sanitizeString(req.effectiveClinicRole || adminUser?.role, 40).toLowerCase();
     if (!canAssignClinicRole(actorRole, role)) {
       return res.status(403).json({
@@ -29080,6 +29220,13 @@ async function startServer() {
     const professionalTitle = specialty;
 
     if (!isUuid(memberId) || !role) return res.status(400).json({ error: 'Papel e membro válidos são obrigatórios' });
+    if (role === 'supervisor') {
+      return res.status(400).json({
+        success: false,
+        error: 'SUPERVISOR_IS_PROFESSIONAL_CAPABILITY',
+        message: 'Supervisor não é mais um papel de acesso. Mantenha o colaborador como Profissional e habilite supervisão.'
+      });
+    }
     if (memberId === sanitizeString(adminUser?.id, 120)) {
       return res.status(400).json({
         success: false,
@@ -33785,7 +33932,7 @@ async function startServer() {
       const linksSelect = 'id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,starts_at,ends_at,status,permissions,created_by,ended_by,created_at,updated_at';
       const usersSelect = 'id,name,email,profile_picture';
       const profilesSelect = 'user_id,specialty,council,council_number,profile_photo_url,metadata';
-      const membershipsSelect = 'user_id,clinic_id,role,status';
+      const membershipsSelect = 'user_id,clinic_id,role,status,can_supervise';
       let stage = 'links';
       let table = 'patient_professional_links';
       let select = linksSelect;
@@ -33948,7 +34095,7 @@ async function startServer() {
 
         stage = 'membership';
         table = 'clinic_memberships';
-        select = 'user_id,clinic_id,role,status';
+        select = 'user_id,clinic_id,role,status,can_supervise';
         const membershipResult = await supabase
           .from('clinic_memberships')
           .select(select)
@@ -33986,6 +34133,13 @@ async function startServer() {
           return res.status(status).json({
             success: false,
             error: candidate.error
+          });
+        }
+        if (caseRole === 'supervisor' && membershipResult.data?.can_supervise !== true) {
+          return res.status(422).json({
+            success: false,
+            error: 'PATIENT_SUPERVISION_NOT_ELIGIBLE',
+            message: 'Este profissional não está habilitado para supervisão.'
           });
         }
         const specialty = candidate.specialty;

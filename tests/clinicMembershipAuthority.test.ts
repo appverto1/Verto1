@@ -163,8 +163,9 @@ assert.equal(canAssignClinicRole('owner', 'director'), false);
 assert.equal(canAssignClinicRole('admin', 'director'), false);
 assert.equal(canAssignClinicRole('director', 'director'), true);
 assert.equal(canAssignClinicRole('director', 'biller'), true);
-assert.equal(canAssignClinicRole('coordinator', 'supervisor'), true);
-assert.equal(canAssignClinicRole('coordinator', 'biller'), true);
+assert.equal(canAssignClinicRole('director', 'supervisor'), false);
+assert.equal(canAssignClinicRole('coordinator', 'supervisor'), false);
+assert.equal(canAssignClinicRole('coordinator', 'biller'), false);
 assert.equal(canAssignClinicRole('coordinator', 'director'), false);
 assert.equal(canAssignClinicRole('supervisor', 'therapist'), false);
 assert.equal(canAssignClinicRole('biller', 'biller'), false);
@@ -187,6 +188,16 @@ assert.match(
   server,
   /CLINIC_ROLE_DELEGATION_DENIED/,
   'delegação de papel precisa de validação server-side',
+);
+assert.match(
+  server,
+  /DIRECTOR_ACCOUNT_PROVISIONING_REQUIRED/,
+  'criação de contas precisa falhar server-side fora do papel Diretor',
+);
+assert.match(
+  server,
+  /SUPERVISOR_IS_PROFESSIONAL_CAPABILITY/,
+  'Supervisor não pode voltar a ser atribuído como novo papel base',
 );
 assert.match(
   server,

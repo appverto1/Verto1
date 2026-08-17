@@ -25,7 +25,7 @@ assert.equal(isTherapeuticPlanManager('supervisor'), true);
 assert.equal(isTherapeuticPlanManager('therapist'), false);
 
 assert.match(server, /app\.get\('\/api\/clinic\/authorization\/me', checkAuth,/);
-assert.match(server, /ROLE_DEFAULT_SCOPES\[context\.role\]/);
+assert.match(server, /getDefaultScopesForRole\(context\.role, \{ canSupervise: context\.canSupervise \}\)/);
 assert.match(dataService, /async getClinicAuthorizationContext\(\)/);
 
 assert.match(
