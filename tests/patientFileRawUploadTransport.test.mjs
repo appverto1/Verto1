@@ -11,7 +11,10 @@ assert.ok(server.includes("readBoundedRawUpload(req, 10 * 1024 * 1024)"), 'serve
 assert.ok(server.includes("error?.code === 'UPLOAD_TOO_LARGE'"), 'oversize raw uploads must return controlled 413');
 assert.ok(dataService.includes("'Content-Type': 'application/octet-stream'"), 'client must use binary transport instead of multipart');
 assert.ok(dataService.includes("'X-Verto-Upload-Mode': 'raw-v1'"), 'client must opt into raw-v1 transport');
-assert.ok(dataService.includes('body: uploadBlob'), 'client must send file bytes directly');
+assert.ok(dataService.includes('xhr.send(uploadBlob)'), 'client must send file bytes directly via XHR');
+assert.ok(dataService.includes('xhr.upload.onprogress'), 'client must expose real binary upload progress');
+const uploadPatientFileBlock = dataService.slice(dataService.indexOf('async uploadPatientFile'), dataService.indexOf('async deletePatientFile'));
+assert.ok(!uploadPatientFileBlock.includes('sha256Hex(uploadBlob)'), 'client upload path must not hash the file before transport');
 assert.ok(!/new FormData\(\)[\s\S]{0,5000}\/api\/patient-files\//.test(dataService), 'patient file upload must not depend on multipart FormData transport');
 
 console.log('patientFileRawUploadTransport.test.mjs: PASS');

@@ -1743,12 +1743,14 @@ export const dataService = {
           requiredExtension && !requestedFileName.toLowerCase().endsWith(requiredExtension)
             ? `${requestedFileName}${requiredExtension}`
             : requestedFileName;
-        const fileHash = await sha256Hex(uploadBlob);
-        const metadataWithHash = {
-          ...(payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}),
-          ...(fileHash ? { fileSha256: fileHash } : {})
-        };
-        const encodedMetadata = encodeURIComponent(JSON.stringify(metadataWithHash));
+        const metadataPayload =
+          payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {};
+        let encodedMetadata = '';
+        try {
+          encodedMetadata = encodeURIComponent(JSON.stringify(metadataPayload));
+        } catch {
+          encodedMetadata = '';
+        }
 
         const authHeaders = await getAuthHeaders();
         const { ['Content-Type']: _, ['content-type']: __, ...headersWithoutContentType } = authHeaders as any;
@@ -1760,19 +1762,62 @@ export const dataService = {
           'X-Verto-Declared-Type': safeMime,
           'X-Verto-Source': String(payload?.source || 'upload').slice(0, 40)
         };
-        // Headers are intentionally bounded. The server recomputes SHA-256 and
-        // remains the authority for the real MIME/magic bytes.
+        // The backend recomputes SHA-256 and validates MIME/magic bytes. Do not
+        // hash the file in the browser before transport: a local crypto failure
+        // must never prevent a valid upload from reaching the authoritative API.
         if (encodedMetadata.length > 0 && encodedMetadata.length <= 3000) {
           uploadHeaders['X-Verto-Upload-Metadata'] = encodedMetadata;
         }
 
-        const response = await fetch(`/api/patient-files/${encodeURIComponent(String(patientId))}`, {
-          method: 'POST',
-          headers: uploadHeaders,
-          credentials: 'include',
-          body: uploadBlob
+        return await new Promise<any>((resolve) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', `/api/patient-files/${encodeURIComponent(String(patientId))}`, true);
+          xhr.withCredentials = true;
+          Object.entries(uploadHeaders).forEach(([key, value]) => {
+            if (typeof value === 'string' && value) xhr.setRequestHeader(key, value);
+          });
+          xhr.upload.onprogress = (event) => {
+            if (!event.lengthComputable || typeof payload?.onProgress !== 'function') return;
+            const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+            payload.onProgress(percent);
+          };
+          xhr.onload = () => {
+            let parsed: any = {};
+            try {
+              parsed = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+            } catch {
+              parsed = {
+                success: xhr.status >= 200 && xhr.status < 300,
+                error: xhr.responseText || `Falha HTTP ${xhr.status}`
+              };
+            }
+            if (!parsed || typeof parsed !== 'object') parsed = {};
+            if (typeof parsed.success !== 'boolean') {
+              parsed.success = xhr.status >= 200 && xhr.status < 300;
+            }
+            if (!parsed.success && !parsed.error) {
+              parsed.error = `Falha HTTP ${xhr.status}`;
+            }
+            resolve({ ...parsed, status: xhr.status });
+          };
+          xhr.onerror = () => resolve({
+            success: false,
+            status: 0,
+            error: 'Falha de rede durante o envio do arquivo.'
+          });
+          xhr.onabort = () => resolve({
+            success: false,
+            status: 0,
+            error: 'Envio do arquivo cancelado.'
+          });
+          xhr.ontimeout = () => resolve({
+            success: false,
+            status: 0,
+            error: 'Tempo limite excedido durante o envio do arquivo.'
+          });
+          xhr.timeout = 120000;
+          xhr.send(uploadBlob);
         });
-        return await safeJson(response);
       }
 
       const response = await fetch(`/api/patient-files/${patientId}`, {

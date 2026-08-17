@@ -5505,9 +5505,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const normalizedName = hasExtension
         ? String(file.name)
         : `${String(file.name || `arquivo_${Date.now()}`).replace(/\.+$/g, '')}${fallbackExtension}`;
-      const fileBuffer = await file.arrayBuffer();
-      const fileBlob = new Blob([fileBuffer], { type: mimeType });
-      setUploadProgress(80);
+      const fileBlob: Blob = file;
 
       const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
         fileName: normalizedName,
@@ -5516,6 +5514,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         source: 'upload',
         metadata: {
           patientName: patient?.name || null
+        },
+        onProgress: (percent: number) => {
+          setUploadProgress(Math.max(25, Math.min(95, percent)));
         }
       });
       if (!uploadResult?.success || !uploadResult?.data) {
