@@ -3,35 +3,30 @@ import fs from 'node:fs';
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const app = fs.readFileSync('src/App.tsx', 'utf8');
-const team = fs.readFileSync('src/components/TeamManagement.tsx', 'utf8');
-const invitationModal = fs.readFileSync('src/components/InvitationModal.tsx', 'utf8');
-const landing = fs.readFileSync('src/components/LandingPage.tsx', 'utf8');
+const activation = fs.readFileSync('src/components/ActivationAccess.tsx', 'utf8');
+const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
 
-assert.match(server, /function isValidBrazilCpf\(/);
-assert.match(server, /function isValidBrazilCnpj\(/);
-assert.match(server, /readValidProfessionalIdentityDocument/);
-assert.match(server, /hasPortableProfessionalIdentity/);
-assert.match(server, /existingProfessionalInAppEligible/);
-assert.match(server, /invitationDeliveryMode:\s*'in_app'/);
-assert.match(server, /inAppInvitation:\s*true/);
-assert.match(server, /invitationEmailSent:\s*false/);
-assert.match(server, /fetchPendingClinicInvitationsForUser/);
-assert.match(server, /\.eq\('email', email\)[\s\S]*?\.eq\('status', 'pending'\)/);
-assert.match(server, /pendingClinicInvitations/);
-assert.match(server, /CLINIC_MEMBER_ALREADY_ACTIVE/);
+// A confirmed Auth identity is reused. The clinic invitation creates a new relationship,
+// not a second account and not a password reset for an existing professional.
+assert.match(server, /findAuthUserByEmail\(email\)/);
+assert.match(server, /const authUserHadVerifiedEmail = Boolean\(/);
+assert.match(server, /const reusedExistingAuthAccess = Boolean\(authUserHadVerifiedEmail\)/);
+assert.match(server, /if \(!authUser\?\.id\) \{[\s\S]*?supabase\.auth\.admin\.createUser/);
+assert.match(server, /const activationLink = reusedExistingAuthAccess[\s\S]*?getClinicInvitationAcceptanceUrl\(data\?\.id\)[\s\S]*?: getClinicInvitationActivationUrl/);
+assert.match(server, /reusedExistingAuthAccess/);
 
-const inAppBranch = server.indexOf('if (existingProfessionalInAppEligible)');
-const emailActivation = server.indexOf('const activationEntryUrl = reusedExistingAuthAccess', inAppBranch);
-assert.ok(inAppBranch >= 0 && emailActivation > inAppBranch, 'in-app branch must run before e-mail activation');
-
-assert.match(app, /Novos convites/);
-assert.match(app, /Seu cadastro profissional será reutilizado/);
+// Acceptance is an explicit authenticated flow and is completed atomically server-side.
+assert.match(server, /app\.post\('\/api\/clinic\/accept-invite', checkAuth/);
+assert.match(server, /acceptClinicInvitationAtomically/);
+assert.match(dataService, /\/api\/clinic\/accept-invite/);
+assert.match(activation, /accept_invitation/);
 assert.match(app, /auth_action:\s*'accept_invitation'/);
 assert.match(app, /pendingClinicInvitations\.length > 0/);
-assert.match(app, /showWorkspacePicker && \(accessContextOptions\.length > 0 \|\| pendingClinicInvitations\.length > 0\)/);
 
-assert.match(team, /result\.inAppInvitation === true \|\| result\.invitationEmailSent !== false/);
-assert.match(invitationModal, /result\.inAppInvitation === true \|\| result\.invitationEmailSent !== false/);
-assert.match(landing, /!response\.ok && data\?\.success !== true/);
+// The normal clinic invitation remains an e-mail delivery; existing accounts receive the
+// acceptance URL while new identities receive the activation URL.
+assert.match(server, /buildClinicInvitationEmailTemplate/);
+assert.match(server, /invitationEmailSent:\s*true/);
+assert.match(server, /message:\s*'Convite enviado com sucesso\.'/);
 
 console.log('existingProfessionalInAppInvitation.test.mjs: ok');

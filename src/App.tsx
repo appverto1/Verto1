@@ -57,6 +57,7 @@ import { SALES_CONTACT_REQUIRED_ERROR } from './constants/salesCommercial';
 import { decodeClinicalTextEntities } from './utils/clinicalText';
 import { patientMatchesProfessionalFilter } from './utils/patientList';
 import { resolvePatientNoteAudience, toStoredPatientNoteVisibility } from './utils/patientNoteVisibility';
+import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from './constants/organizationModules';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -4135,12 +4136,18 @@ export default function App() {
         const portalContextResult = await dataService.getPortalContext();
         if (!mounted || requestId !== requestGeneration) return;
         const portalContext = portalContextResult?.success && portalContextResult?.data ? portalContextResult.data : null;
-        const portalModuleMode = portalContext?.moduleAccessMode === 'contract' ? 'contract' : 'legacy_full';
-        const portalModules = new Set(
-          Array.isArray(portalContext?.modules) ? portalContext.modules.map((value: any) => String(value || '').trim()) : []
+        const portalModuleMode: OrganizationModuleAccessMode = portalContext?.moduleAccessMode === 'legacy_full' ? 'legacy_full' : 'contract';
+        const portalModules = new Set<OrganizationModuleKey>(
+          Array.isArray(portalContext?.modules)
+            ? portalContext.modules
+                .map((value: any) => String(value || '').trim())
+                .filter((value: string): value is OrganizationModuleKey =>
+                  ['clinical_core', 'appointments_communication', 'financial_management', 'insurance_tiss', 'school_management'].includes(value),
+                )
+            : []
         );
-        const portalHasModule = (moduleKey: string) =>
-          portalModuleMode === 'legacy_full' || portalModules.has(moduleKey);
+        const portalHasModule = (moduleKey: OrganizationModuleKey) =>
+          hasOrganizationModule(portalModuleMode, portalModules, moduleKey);
         const resolvedContextPatientId = String(portalContext?.resolvedPatientId || '').trim();
         if (!resolvedContextPatientId) {
           console.warn('[PatientPortal] skipped patient-scoped fetch: missing resolvedPatientId');

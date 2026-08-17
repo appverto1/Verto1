@@ -138,9 +138,10 @@ const activationBootstrap = section(
 assert.match(activationBootstrap, /sendTransactionalEmailSafe\(\{/);
 assert.match(activationBootstrap, /templateData: activationEmail\.variables/);
 assert.match(activationBootstrap, /return res\.json\(genericResponse\)/);
-assert.match(activationBootstrap, /profile\?\.role \|\| \(authUser as any\)\?\.user_metadata\?\.role/);
+assert.match(activationBootstrap, /profile\?\.role \|\| authMetadata\?\.invited_role \|\| authMetadata\?\.role/);
 assert.doesNotMatch(activationBootstrap, /req\.body\?\.role/);
-assert.doesNotMatch(activationBootstrap, /updateUserById/);
+assert.match(activationBootstrap, /updateUserById[\s\S]*?invitation_activation_nonce/);
+assert.doesNotMatch(activationBootstrap, /updateUserById[\s\S]{0,300}?password\s*:/);
 assert.doesNotMatch(
   activationBootstrap,
   /(?:res\.json|\.json)\s*\(\s*\{[^}]*activationLink/s,

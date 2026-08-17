@@ -77,6 +77,7 @@ import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
 import { VERTO_BRAND_ASSETS } from "../constants/vertoBranding";
 import {
+  filterCapabilitiesByOrganizationModules,
   hasOrganizationModule,
   type OrganizationModuleAccessMode,
   type OrganizationModuleKey,
@@ -716,17 +717,17 @@ export function CoordinatorDashboard({
     if (!isClinicBaseRole(normalizedRole)) return new Set<string>();
     return new Set<string>(getDefaultCapabilitiesForRole(normalizedRole));
   }, [normalizedRole]);
-  const [effectiveCapabilities, setEffectiveCapabilities] = useState<Set<string>>(baseCapabilities);
+  const [effectiveCapabilities, setEffectiveCapabilities] = useState<Set<string>>(new Set());
   const [organizationModules, setOrganizationModules] = useState<Set<OrganizationModuleKey>>(new Set());
-  const [moduleAccessMode, setModuleAccessMode] = useState<OrganizationModuleAccessMode>("legacy_full");
+  const [moduleAccessMode, setModuleAccessMode] = useState<OrganizationModuleAccessMode>("contract");
   const [entitlementVersion, setEntitlementVersion] = useState(1);
   const [authorizationHydrated, setAuthorizationHydrated] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    setEffectiveCapabilities(baseCapabilities);
+    setEffectiveCapabilities(new Set());
     setOrganizationModules(new Set());
-    setModuleAccessMode("legacy_full");
+    setModuleAccessMode("contract");
     setEntitlementVersion(1);
     setAuthorizationHydrated(false);
     if (!isClinicBaseRole(normalizedRole)) {
@@ -737,7 +738,7 @@ export function CoordinatorDashboard({
       if (cancelled) return;
       if (result?.success && Array.isArray(result?.data?.capabilities)) {
         setEffectiveCapabilities(new Set(result.data.capabilities.map((value: any) => String(value || '').trim()).filter(Boolean)));
-        const nextMode = result?.data?.moduleAccessMode === "contract" ? "contract" : "legacy_full";
+        const nextMode = result?.data?.moduleAccessMode === "legacy_full" ? "legacy_full" : "contract";
         setModuleAccessMode(nextMode);
         setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
         setOrganizationModules(new Set(
@@ -752,7 +753,16 @@ export function CoordinatorDashboard({
       }
       setAuthorizationHydrated(true);
     }).catch(() => {
-      if (!cancelled) setAuthorizationHydrated(true);
+      if (!cancelled) {
+        // Authorization hydration failures must fail closed for optional modules
+        // while preserving the mandatory clinical baseline.
+        setEffectiveCapabilities(
+          new Set(filterCapabilitiesByOrganizationModules(baseCapabilities, 'contract', new Set<OrganizationModuleKey>())),
+        );
+        setModuleAccessMode('contract');
+        setOrganizationModules(new Set());
+        setAuthorizationHydrated(true);
+      }
     });
     return () => { cancelled = true; };
   }, [baseCapabilities, normalizedRole, user?.activeWorkspaceId, user?.clinicId]);
@@ -772,8 +782,15 @@ export function CoordinatorDashboard({
   const canCancelRecurringAppointments = hasCapability("calendar.appointment.cancel");
   const canDeleteRecurringAppointments = canCancelRecurringAppointments;
   const canAccessClinicFinance = hasCapability("finance.payments.view");
+  // Patient treatment pricing is part of the mandatory patient core.
+  // Full finance (payments, ledger, DRE, transfers) remains an optional module.
+  const canManagePatientFinancialPlan = hasCapability("patient.demographics.edit");
+  const canViewPatientInsurance = hasCapability("patient.insurance.view");
+  const canViewPatientTissAuthorizations = hasCapability("patient.insurance.authorization.view");
   const canCreatePatients = hasCapability("patient.create");
   const canManageRooms = hasCapability("clinic.rooms.manage");
+  const canUseSchoolPatientFilters =
+    authorizationHydrated && hasModule("school_management") && hasCapability("school.view");
   const workspaceScopeKey = useMemo(
     () => String(user?.activeWorkspaceId || user?.clinicId || "").trim(),
     [user?.activeWorkspaceId, user?.clinicId],
@@ -810,6 +827,7 @@ export function CoordinatorDashboard({
   };
 
   const hasAppointmentsCommunicationModule = authorizationHydrated && hasModule("appointments_communication");
+  const hasInsuranceTissModule = authorizationHydrated && hasModule("insurance_tiss");
 
   const tabCapabilityMap: Record<string, string | null> = {
     dashboard: "engagement-widgets",
@@ -1190,6 +1208,19 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     if (activeTab !== "patients") return;
+    if (!authorizationHydrated) return;
+    if (!canUseSchoolPatientFilters) {
+      patientSchoolOptionsLoadedForRef.current = "";
+      patientSchoolOptionsRequestForRef.current = "";
+      setPatientSchoolOptions([]);
+      setPatientSchoolOptionsWorkspaceId("");
+      setPatientSchoolOptionsLoading(false);
+      setPatientSchoolOptionsLoadError("");
+      setPatientSchoolFilter("");
+      setPatientSchoolUnitFilter("");
+      setSelectedSchoolPatientIds([]);
+      return;
+    }
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
     const requestSeq = patientSchoolOptionsRequestSeqRef.current + 1;
     patientSchoolOptionsRequestSeqRef.current = requestSeq;
@@ -1241,7 +1272,7 @@ export function CoordinatorDashboard({
         }
       });
     return () => controller.abort();
-  }, [activeTab, patientSchoolOptionsRevision, user?.activeWorkspaceId, user?.clinicId]);
+  }, [activeTab, authorizationHydrated, canUseSchoolPatientFilters, patientSchoolOptionsRevision, user?.activeWorkspaceId, user?.clinicId]);
 
   const patientSchoolOptionsForCurrentWorkspace =
     patientSchoolOptionsWorkspaceId === String(user?.activeWorkspaceId || user?.clinicId || "").trim()
@@ -1546,6 +1577,11 @@ export function CoordinatorDashboard({
     useState(false);
   const [activePatientRegistrationTab, setActivePatientRegistrationTab] =
     useState<PatientRegistrationTab>("personal");
+  useEffect(() => {
+    if (!hasInsuranceTissModule && (activePatientRegistrationTab === "insurance" || activePatientRegistrationTab === "tiss")) {
+      setActivePatientRegistrationTab("personal");
+    }
+  }, [activePatientRegistrationTab, hasInsuranceTissModule]);
   const [agendaSearchMode, setAgendaSearchMode] = useState<
     "patient" | "professional"
   >("patient");
@@ -2763,6 +2799,7 @@ export function CoordinatorDashboard({
   };
 
   const scrollToPatientTissAuthorizations = () => {
+    if (!hasInsuranceTissModule || !canViewPatientTissAuthorizations) return;
     setActivePatientRegistrationTab("tiss");
     window.setTimeout(() => {
       document.getElementById("patient-tiss-authorizations-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2770,6 +2807,7 @@ export function CoordinatorDashboard({
   };
 
   const goToNewPatientTissAuthorization = () => {
+    if (!hasInsuranceTissModule || !canViewPatientTissAuthorizations) return;
     setActivePatientRegistrationTab("tiss");
     window.setTimeout(() => {
       openNewPatientTissAuthorizationForm();
@@ -2797,7 +2835,7 @@ export function CoordinatorDashboard({
   }, [activeTab, canAccessClinicFinance, isReceptionist]);
 
   useEffect(() => {
-    if (!isPatientRegistrationModalOpen || !canCreatePatients) return;
+    if (!isPatientRegistrationModalOpen || !canCreatePatients || !hasInsuranceTissModule || !canViewPatientInsurance) return;
     let cancelled = false;
     setClinicPayerOptionsState({ loading: true, error: "" });
     dataService.getPayerOptions({ limit: 80 }).then((result: any) => {
@@ -2815,7 +2853,7 @@ export function CoordinatorDashboard({
     return () => {
       cancelled = true;
     };
-  }, [canCreatePatients, isPatientRegistrationModalOpen]);
+  }, [canCreatePatients, canViewPatientInsurance, hasInsuranceTissModule, isPatientRegistrationModalOpen]);
 
   useEffect(() => {
     if (
@@ -2857,28 +2895,29 @@ export function CoordinatorDashboard({
   }, [activeTab, clinicPayers.length, isTherapist]);
 
   useEffect(() => {
-    if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
+    if (!isPatientRegistrationModalOpen || !hasInsuranceTissModule || !canViewPatientTissAuthorizations) return;
     if (!selectedPatientInsurancePayerIsActive) {
       setPatientTissAuthorizationCatalog({ services: [], codes: [], mappings: [], prices: [] });
       return;
     }
     void loadPatientTissAuthorizationCatalog(selectedPatientInsurancePayer.id);
   }, [
-    canAccessClinicFinance,
+    canViewPatientTissAuthorizations,
+    hasInsuranceTissModule,
     isPatientRegistrationModalOpen,
     selectedPatientInsurancePayer?.id,
     selectedPatientInsurancePayerIsActive,
   ]);
 
   useEffect(() => {
-    if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
+    if (!isPatientRegistrationModalOpen || !hasInsuranceTissModule || !canViewPatientTissAuthorizations) return;
     if (!editingPatientId) {
       setPatientTissAuthorizations([]);
       resetPatientTissAuthorizationForm();
       return;
     }
     void loadPatientTissAuthorizations(editingPatientId);
-  }, [canAccessClinicFinance, editingPatientId, isPatientRegistrationModalOpen]);
+  }, [canViewPatientTissAuthorizations, editingPatientId, hasInsuranceTissModule, isPatientRegistrationModalOpen]);
 
   useEffect(() => {
     const nextProfileMetadata = (
@@ -6362,7 +6401,7 @@ export function CoordinatorDashboard({
       showToast("E-mail do responsável inválido.", "error");
       return;
     }
-    if (newPatientForm.convenioTipo === "convenio" && !String(selectedPatientInsurancePayer?.id || "").trim()) {
+    if (hasInsuranceTissModule && newPatientForm.convenioTipo === "convenio" && !String(selectedPatientInsurancePayer?.id || "").trim()) {
       showToast("Selecione um convênio ativo cadastrado pela clínica.", "error");
       setActivePatientRegistrationTab("insurance");
       return;
@@ -6376,7 +6415,7 @@ export function CoordinatorDashboard({
     const existingPatient = editingPatientId
       ? allPatients.find((p: any) => String(p.id) === String(editingPatientId))
       : null;
-    const financialPlans = canAccessClinicFinance
+    const financialPlans = canManagePatientFinancialPlan
       ? normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm)
           .filter(isPatientFinancialPlanComplete)
           .map(serializePatientFinancialPlanForPayload)
@@ -6389,6 +6428,46 @@ export function CoordinatorDashboard({
     const canonicalProfileType = normalizePatientProfileType(newPatientForm.patientProfileType);
     const legacyPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
     const normalizedBirthDate = normalizeBirthDateForStorage(newPatientForm.dataNascimento);
+    const patientInsurancePayload = hasInsuranceTissModule
+      ? {
+          insuranceType: newPatientForm.convenioTipo || "particular",
+          insurancePayerId:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+              : null,
+          insurance_payer_id:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+              : null,
+          convenioPayerId:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+              : null,
+          convenio_payer_id:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+              : null,
+          insuranceName:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.name || newPatientForm.convenioNome || "").trim() || null
+              : null,
+          cardNumber: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinha || null : null,
+          insuranceCardValidUntil: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinhaValidade || null : null,
+          insurance_card_valid_until: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinhaValidade || null : null,
+          insurancePlanCategory: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioPlanoCategoria || null : null,
+          insurance_plan_category: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioPlanoCategoria || null : null,
+          insuranceHolderName: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularNome || null : null,
+          insurance_holder_name: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularNome || null : null,
+          insuranceHolderCpf: newPatientForm.convenioTipo === "convenio" ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null : null,
+          insurance_holder_cpf: newPatientForm.convenioTipo === "convenio" ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null : null,
+          insuranceHolderRelationship: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularRelacao || null : null,
+          insurance_holder_relationship: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularRelacao || null : null,
+          eligibilityNotes: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioElegibilidadeObs || null : null,
+          eligibility_notes: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioElegibilidadeObs || null : null,
+        }
+      : editingPatientId
+        ? {}
+        : { insuranceType: "particular" };
 
     const newPatient = {
       id: editingPatientId || crypto.randomUUID(),
@@ -6401,79 +6480,7 @@ export function CoordinatorDashboard({
       birth_date: normalizedBirthDate || null,
       dataNascimento: normalizedBirthDate || null,
       gender: newPatientForm.genero || null,
-      insuranceType: newPatientForm.convenioTipo || "particular",
-      insurancePayerId:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
-          : null,
-      insurance_payer_id:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
-          : null,
-      convenioPayerId:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
-          : null,
-      convenio_payer_id:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
-          : null,
-      insuranceName:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.name || newPatientForm.convenioNome || "").trim() || null
-          : null,
-      cardNumber:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioCarteirinha || null
-          : null,
-      insuranceCardValidUntil:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioCarteirinhaValidade || null
-          : null,
-      insurance_card_valid_until:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioCarteirinhaValidade || null
-          : null,
-      insurancePlanCategory:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioPlanoCategoria || null
-          : null,
-      insurance_plan_category:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioPlanoCategoria || null
-          : null,
-      insuranceHolderName:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioTitularNome || null
-          : null,
-      insurance_holder_name:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioTitularNome || null
-          : null,
-      insuranceHolderCpf:
-        newPatientForm.convenioTipo === "convenio"
-          ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null
-          : null,
-      insurance_holder_cpf:
-        newPatientForm.convenioTipo === "convenio"
-          ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null
-          : null,
-      insuranceHolderRelationship:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioTitularRelacao || null
-          : null,
-      insurance_holder_relationship:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioTitularRelacao || null
-          : null,
-      eligibilityNotes:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioElegibilidadeObs || null
-          : null,
-      eligibility_notes:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioElegibilidadeObs || null
-          : null,
+      ...patientInsurancePayload,
       group: newPatientForm.grupo || null,
       source: newPatientForm.comoConheceu || null,
       rg: newPatientForm.rg || null,
@@ -6505,7 +6512,7 @@ export function CoordinatorDashboard({
       type: legacyPortalType,
       patientProfileType: canonicalProfileType,
       panelType: canonicalProfileType,
-      ...(canAccessClinicFinance
+      ...(canManagePatientFinancialPlan
         ? {
             financialPlans,
             monthlyTreatmentValue,
@@ -7157,7 +7164,7 @@ export function CoordinatorDashboard({
       financialPlans: normalizePatientFinancialPlans(profile?.financialPlans || profile?.financial_plans, profile),
     });
     setSelectedPatientProfileAuthorizations([]);
-    if (canAccessClinicFinance && profilePatientId) {
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && profilePatientId) {
       setSelectedPatientProfileAuthorizationsLoading(true);
       void dataService.getPatientTissAuthorizations(profilePatientId)
         .then((result) => {
@@ -10400,14 +10407,16 @@ export function CoordinatorDashboard({
       !String(newPatientForm.convenioPlanoCategoria || "").trim());
   const patientRegistrationTabs: Array<{ id: PatientRegistrationTab; label: string; badge?: string }> = [
     { id: "personal", label: "Dados pessoais" },
-    { id: "insurance", label: "Convênio e elegibilidade", badge: patientRegistrationInsuranceIncomplete ? "Atenção" : undefined },
-    ...(canAccessClinicFinance
-      ? [
-          { id: "tiss" as PatientRegistrationTab, label: "Autorizações TISS", badge: newPatientForm.convenioTipo === "convenio" && !patientRegistrationHasSuggestedTissAuthorization ? "Sem vigente" : undefined },
-          { id: "financial" as PatientRegistrationTab, label: "Plano financeiro", badge: patientRegistrationHasFinancialPlanWithoutValue ? "Revisar" : undefined },
-          { id: "legacy" as PatientRegistrationTab, label: "Histórico / dados legados", badge: patientRegistrationHasLegacyData ? "Legado" : undefined },
-        ]
-      : [{ id: "legacy" as PatientRegistrationTab, label: "Histórico / dados legados", badge: patientRegistrationHasLegacyData ? "Legado" : undefined }]),
+    ...(hasInsuranceTissModule && canViewPatientInsurance
+      ? [{ id: "insurance" as PatientRegistrationTab, label: "Convênio e elegibilidade", badge: patientRegistrationInsuranceIncomplete ? "Atenção" : undefined }]
+      : []),
+    ...(hasInsuranceTissModule && canViewPatientTissAuthorizations
+      ? [{ id: "tiss" as PatientRegistrationTab, label: "Autorizações TISS", badge: newPatientForm.convenioTipo === "convenio" && !patientRegistrationHasSuggestedTissAuthorization ? "Sem vigente" : undefined }]
+      : []),
+    ...(canManagePatientFinancialPlan
+      ? [{ id: "financial" as PatientRegistrationTab, label: "Plano financeiro", badge: patientRegistrationHasFinancialPlanWithoutValue ? "Revisar" : undefined }]
+      : []),
+    { id: "legacy" as PatientRegistrationTab, label: "Histórico / dados legados", badge: patientRegistrationHasLegacyData ? "Legado" : undefined },
   ];
 
   const selectedProfileEligibility = normalizePatientInsuranceEligibility(selectedPatientProfile || {});
@@ -10428,6 +10437,8 @@ export function CoordinatorDashboard({
   const selectedProfileOperationalAlerts = (() => {
     const alerts: string[] = [];
     if (
+      hasInsuranceTissModule &&
+      canViewPatientInsurance &&
       selectedProfileEligibility.convenioTipo === "convenio" &&
       (!selectedProfileEligibility.convenioNome ||
         !selectedProfileEligibility.convenioCarteirinha ||
@@ -10436,6 +10447,8 @@ export function CoordinatorDashboard({
       alerts.push("Convênio incompleto");
     }
     if (
+      hasInsuranceTissModule &&
+      canViewPatientTissAuthorizations &&
       selectedProfileEligibility.convenioTipo === "convenio" &&
       !selectedPatientProfileAuthorizationsLoading &&
       selectedPatientProfileAuthorizations.length > 0 &&
@@ -10443,18 +10456,18 @@ export function CoordinatorDashboard({
     ) {
       alerts.push("Sem autorização TISS vigente");
     }
-    if (!selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "expired")) {
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && !selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "expired")) {
       alerts.push("Autorização TISS vencida");
     }
-    if (!selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "consumed")) {
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && !selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "consumed")) {
       alerts.push("Autorização TISS consumida");
     }
-    if (selectedPatientProfileAuthorizations.some((authorization: any) => authorization && !authorization.tussCode && !authorization.tussCodeId)) {
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && selectedPatientProfileAuthorizations.some((authorization: any) => authorization && !authorization.tussCode && !authorization.tussCodeId)) {
       alerts.push("Sem De/Para TUSS ativo");
     }
     const relevantAuthorizationForPrice = selectedProfileSuggestedAuthorization ||
       selectedPatientProfileAuthorizations.find((authorization: any, index: number) => authorization && selectedProfileAuthorizationStates[index]?.isCurrent);
-    if (relevantAuthorizationForPrice && Number(
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && relevantAuthorizationForPrice && Number(
       relevantAuthorizationForPrice.amountCents ??
       relevantAuthorizationForPrice.negotiatedAmountCents ??
       relevantAuthorizationForPrice.unitAmountCents ??
@@ -12977,7 +12990,9 @@ export function CoordinatorDashboard({
                       </select>
                     </div>
                   )}
-                  {patientSchoolOptionsLoadError && (
+                  {canUseSchoolPatientFilters && (
+                    <>
+                      {patientSchoolOptionsLoadError && (
                     <div className="flex flex-col gap-3 rounded-2xl border border-rose-100 bg-rose-50/70 p-3 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between" role="alert">
                       <span>{patientSchoolOptionsLoadError}</span>
                       <button
@@ -13009,6 +13024,8 @@ export function CoordinatorDashboard({
                   )}
                   {schoolBatchMeetingNotice && <div className="rounded-2xl border border-slate-100 bg-white p-3 text-sm font-semibold text-slate-600">{schoolBatchMeetingNotice}</div>}
                   {patientSchoolFilter && patientSchoolPagination && patientSchoolPagination.totalPages > 1 && <div className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white p-3 text-sm text-slate-600"><span>Página {patientSchoolPagination.page} de {patientSchoolPagination.totalPages}</span><div className="flex gap-2"><button type="button" disabled={patientSchoolPage <= 1 || schoolPatientFilterLoading} onClick={() => setPatientSchoolPage((page) => Math.max(1, page - 1))} className="rounded-xl border border-slate-200 px-3 py-2 disabled:opacity-40">Anterior</button><button type="button" disabled={!patientSchoolPagination.hasNextPage || schoolPatientFilterLoading} onClick={() => setPatientSchoolPage((page) => page + 1)} className="rounded-xl border border-slate-200 px-3 py-2 disabled:opacity-40">Próxima</button></div></div>}
+                    </>
+                  )}
                   {patientQuickFilter === "birthdaysToday" && (
                     <div className="flex flex-col gap-3 rounded-2xl border border-pink-100 bg-pink-50/70 p-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex items-center gap-2 text-sm font-bold text-pink-700">
@@ -15822,7 +15839,9 @@ export function CoordinatorDashboard({
                     {selectedPatientProfile.name || "Paciente"}
                   </h3>
                   <p className="mt-1 text-sm font-medium text-slate-400">
-                    Visão operacional do cadastro, convênio, autorização TISS e plano financeiro.
+                    {hasInsuranceTissModule
+                      ? "Visão operacional do cadastro, convênio, autorização TISS e plano financeiro."
+                      : "Visão operacional do cadastro e plano financeiro do tratamento."}
                   </p>
                 </div>
               </div>
@@ -15854,6 +15873,7 @@ export function CoordinatorDashboard({
                 </div>
               </section>
 
+              {hasInsuranceTissModule && canViewPatientInsurance && (
               <section className="rounded-2xl border border-slate-100 bg-white p-4">
                 <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Convênio e elegibilidade</h4>
                 <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -15867,7 +15887,9 @@ export function CoordinatorDashboard({
                   {renderPatientProfileSummaryField("Observações de elegibilidade", selectedProfileEligibility.convenioElegibilidadeObs || selectedPatientProfile.eligibilityNotes, "xl:col-span-3")}
                 </div>
               </section>
+              )}
 
+              {hasInsuranceTissModule && canViewPatientTissAuthorizations && (
               <section className="rounded-2xl border border-slate-100 bg-white p-4">
                 <div className="flex items-center justify-between gap-3">
                   <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Autorização TISS vigente</h4>
@@ -15898,7 +15920,9 @@ export function CoordinatorDashboard({
                   </div>
                 )}
               </section>
+              )}
 
+              {canManagePatientFinancialPlan && (
               <section className="rounded-2xl border border-slate-100 bg-white p-4">
                 <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Plano financeiro</h4>
                 {selectedProfilePrimaryFinancialPlan ? (
@@ -15917,6 +15941,7 @@ export function CoordinatorDashboard({
                   </div>
                 )}
               </section>
+              )}
 
               <section className="rounded-2xl border border-slate-100 bg-white p-4">
                 <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Alertas operacionais</h4>
@@ -16409,7 +16434,7 @@ export function CoordinatorDashboard({
               </FormSection>
               )}
 
-              {activePatientRegistrationTab === "insurance" && (
+              {hasInsuranceTissModule && canViewPatientInsurance && activePatientRegistrationTab === "insurance" && (
               <FormSection
                 title="Convênio e elegibilidade"
                 description="Dados usados para validação de cobertura, carteirinha, pré-faturamento e Pré-guia TISS."
@@ -16560,7 +16585,7 @@ export function CoordinatorDashboard({
               </FormSection>
               )}
 
-              {canAccessClinicFinance && activePatientRegistrationTab === "tiss" && (
+              {hasInsuranceTissModule && canViewPatientTissAuthorizations && activePatientRegistrationTab === "tiss" && (
                 <div id="patient-tiss-authorizations-section">
                   <FormSection
                     title="Autorizações TISS do paciente"
@@ -16801,7 +16826,7 @@ export function CoordinatorDashboard({
                 </div>
               )}
 
-              {canAccessClinicFinance && activePatientRegistrationTab === "financial" && (
+              {canManagePatientFinancialPlan && activePatientRegistrationTab === "financial" && (
                 <FormSection
                   title="Plano financeiro do tratamento"
                   description="Use esta seção para planejar valores, frequência e modalidade de cobrança. Autorizações TISS ficam na seção própria acima."
@@ -16883,9 +16908,11 @@ export function CoordinatorDashboard({
                                   value={plan.billingMode}
                                   onChange={(e) => handleFinancialPlanChange(plan.id, "billingMode", e.target.value)}
                                 >
-                                  {PATIENT_FINANCIAL_BILLING_MODE_OPTIONS.map((option) => (
-                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                  ))}
+                                  {PATIENT_FINANCIAL_BILLING_MODE_OPTIONS
+                                    .filter((option) => hasInsuranceTissModule || option.value !== "INSURANCE")
+                                    .map((option) => (
+                                      <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
                                 </select>
                               </FormField>
                             {!isCourtesyPlan && (

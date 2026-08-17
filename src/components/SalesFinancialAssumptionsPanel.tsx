@@ -28,6 +28,39 @@ type AssumptionSetRecord = SalesAssumptionSnapshot & {
   createdBy?: string;
 };
 
+const currentOperatingFields: FieldDefinition[] = [
+  {
+    key: 'meiDasMonthlyCents',
+    label: 'DAS MEI mensal',
+    type: 'currency',
+  },
+  {
+    key: 'stripeFeeBasisPoints',
+    label: 'Stripe — tarifa percentual',
+    type: 'percent',
+  },
+  {
+    key: 'stripeFixedFeeCents',
+    label: 'Stripe — tarifa fixa por cobrança',
+    type: 'currency',
+  },
+  {
+    key: 'supabaseMonthlyCostCents',
+    label: 'Supabase — custo real mensal',
+    type: 'currency',
+  },
+  {
+    key: 'railwayMonthlyCostCents',
+    label: 'Railway — custo real mensal',
+    type: 'currency',
+  },
+  {
+    key: 'currentOperatingMarginTargetBasisPoints',
+    label: 'Margem operacional mínima desejada',
+    type: 'percent',
+  },
+];
+
 const basicFields: FieldDefinition[] = [
   {
     key: 'variablePatientCostCents',
@@ -290,7 +323,10 @@ export const SalesFinancialAssumptionsPanel = () => {
     null
   );
   const [name, setName] = useState(
-    `Premissas ${new Date().toLocaleDateString('pt-BR')}`
+    `Custos reais ${new Date().toLocaleDateString('pt-BR', {
+      month: '2-digit',
+      year: 'numeric',
+    })}`
   );
   const [dirtyFields, setDirtyFields] = useState<
     Set<keyof SalesAssumptionValues>
@@ -528,11 +564,11 @@ export const SalesFinancialAssumptionsPanel = () => {
               Configurações financeiras
             </p>
             <h2 className="mt-1 text-xl font-semibold text-slate-900">
-              Premissas de simulação comercial
+              Custos reais da operação atual
             </h2>
             <p className="mt-2 text-sm font-normal leading-6 text-slate-600">
-              Configure uma vez e reutilize automaticamente em todas as
-              simulações. Cada salvamento cria uma versão imutável.
+              Registre uma vez e reutilize nas propostas. Cada salvamento cria
+              uma versão imutável para preservar o histórico das decisões.
             </p>
           </div>
           <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
@@ -580,25 +616,25 @@ export const SalesFinancialAssumptionsPanel = () => {
             </span>
             <div>
               <h3 className="text-base font-semibold text-slate-900">
-                Configuração básica
+                Operação atual — MEI
               </h3>
               <p className="text-xs font-normal text-slate-500">
-                Somente os dados essenciais para margens e classificação.
+                Somente os custos reais que existem hoje na Verto.
               </p>
             </div>
           </div>
 
-          <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-normal leading-5 text-amber-900">
-            Valores vazios permanecem indisponíveis. A Verto não cria
-            estimativas automáticas nem mistura simulações com a DRE realizada.
+          <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-normal leading-5 text-emerald-900">
+            Nesta fase, a proposta usa somente: DAS MEI, Stripe, Supabase e
+            Railway. Como existe uma única clínica pagante, DAS, Supabase e
+            Railway são atribuídos integralmente à operação atual. Atualize os
+            valores reais quando as faturas mudarem.
           </div>
 
-          <div className="mt-3 rounded-xl border border-violet-200 bg-violet-50 p-3 text-xs font-normal leading-5 text-violet-900">
-            Nas propostas modulares novas, a meta de EBITDA atribuída é um
-            preço-alvo não bloqueante. Valores abaixo da meta geram aviso, mas
-            não impedem salvar, publicar, aceitar ou enviar ao Stripe. As
-            referências históricas permanecem disponíveis para simulações
-            antigas.
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-normal leading-5 text-amber-900">
+            Supabase e Railway não recebem valor automático: informe a fatura
+            mensal real. Enquanto algum custo estiver vazio, a margem atual é
+            exibida como dado incompleto em vez de assumir custo zero.
           </div>
 
           <label className="mt-5 block text-xs font-medium text-slate-700">
@@ -611,86 +647,17 @@ export const SalesFinancialAssumptionsPanel = () => {
           </label>
 
           <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {basicFields.map(renderField)}
-            <label className="text-xs font-medium text-slate-700">
-              Método de rateio
-              <select
-                value={values.fixedAllocationMethod}
-                onChange={(event) => {
-                  setValues((current) =>
-                    current
-                      ? {
-                          ...current,
-                          fixedAllocationMethod:
-                            event.target.value as SalesAssumptionValues['fixedAllocationMethod'],
-                        }
-                      : current
-                  );
-                  setDirtyFields((current) =>
-                    new Set(current).add('fixedAllocationMethod')
-                  );
-                }}
-                className="mt-1 min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-normal outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
-              >
-                <option value="none">Sem rateio</option>
-                <option value="per_patient">Por paciente ativo</option>
-                <option value="per_clinic">Por clínica</option>
-                <option value="custom">Personalizado</option>
-              </select>
-              <span className="mt-1 block text-[10px] font-normal text-slate-500">
-                {sourceLabels[getSource('fixedAllocationMethod')]}
-              </span>
-            </label>
-            {values.fixedAllocationMethod === 'per_patient'
-              ? renderField({
-                  key: 'fixedAllocationPatientCount',
-                  label: 'Pacientes na base de rateio',
-                  type: 'count',
-                })
-              : null}
-            {values.fixedAllocationMethod === 'per_clinic'
-              ? renderField({
-                  key: 'fixedAllocationClinicCount',
-                  label: 'Clínicas na base de rateio',
-                  type: 'count',
-                })
-              : null}
-            {values.fixedAllocationMethod === 'custom'
-              ? renderField({
-                  key: 'customFixedAllocationCents',
-                  label: 'Rateio mensal personalizado',
-                  type: 'currency',
-                })
-              : null}
-          </div>
-
-          <div className="mt-6 rounded-2xl border border-violet-200 bg-violet-50/40 p-4 sm:p-5">
-            <div className="flex items-start gap-3">
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-white text-violet-700 shadow-sm">
-                <Database size={18} />
-              </span>
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">
-                  DRE gerencial, perdas e lucro líquido
-                </h3>
-                <p className="mt-1 text-xs font-normal leading-5 text-slate-600">
-                  Estes valores entram no cálculo do faturamento líquido, resultado operacional e lucro gerencial de cada clínica e de cada módulo. Impostos sobre o lucro são aplicados somente após depreciação, despesas financeiras e demais despesas corporativas.
-                </p>
-              </div>
-            </div>
-            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {financialStatementFields.map(renderField)}
-            </div>
+            {currentOperatingFields.map(renderField)}
           </div>
 
           <details className="group mt-6 rounded-xl border border-slate-200 bg-slate-50/50">
             <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-violet-500">
               <span>
                 <span className="block text-sm font-semibold text-slate-900">
-                  Configurações avançadas
+                  Compatibilidade histórica
                 </span>
                 <span className="block text-xs font-normal text-slate-500">
-                  Infraestrutura detalhada, resultado gerencial e perfis de uso.
+                  Premissas antigas preservadas; não entram no resumo operacional atual.
                 </span>
               </span>
               <ChevronDown
@@ -699,6 +666,24 @@ export const SalesFinancialAssumptionsPanel = () => {
               />
             </summary>
             <div className="space-y-6 border-t border-slate-200 bg-white p-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-normal leading-5 text-slate-600">
+                Estes campos continuam disponíveis apenas para leitura de
+                simulações históricas e compatibilidade do motor legado, incluindo
+                DRE gerencial, perdas e lucro líquido. A visão atual da proposta não usa inadimplência presumida,
+                custos diretos por módulo, rateios, EBITDA atribuído ou lucro
+                líquido estimado.
+              </div>
+
+              <fieldset>
+                <legend className="text-sm font-semibold text-slate-900">
+                  Premissas históricas de margem e rateio
+                </legend>
+                <div className="mt-3 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {basicFields.map(renderField)}
+                  {financialStatementFields.map(renderField)}
+                </div>
+              </fieldset>
+
               {advancedGroups.map((group) => (
                 <fieldset key={group.title}>
                   <legend className="text-sm font-semibold text-slate-900">

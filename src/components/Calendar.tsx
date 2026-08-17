@@ -1444,6 +1444,7 @@ export const ClinicalAgendaBoard = ({
   onNavigateTissPreGuides,
   onOpenPatientFinance,
   onAppointmentActionResolved,
+  schoolModuleEnabled = false,
   theme = 'light'
 }: any) => {
   const isDark = theme === 'dark';
@@ -1571,7 +1572,7 @@ export const ClinicalAgendaBoard = ({
   const pendingVisibilityRefreshRef = useRef(false);
   const rescheduleAvailabilityLastRequestedAtRef = useRef(0);
   const localAgendaIdsRef = useRef(new Set<string>());
-  const canEditBillingContext = ['coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
+  const canEditBillingContext = ['director', 'coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
   const roomLookup = useMemo(() => {
     const map = new Map<string, any>();
     (rooms || []).forEach((room: any) => {
@@ -1794,12 +1795,19 @@ export const ClinicalAgendaBoard = ({
   }, [agendaVersion, roomLookup]);
 
   useEffect(() => {
+    if (!schoolModuleEnabled) {
+      setSchoolOptions([]);
+      setSelectedSchoolIds([]);
+      setSelectedSchoolUnitIds([]);
+      setSelectedSchoolEventTypes([]);
+      return;
+    }
     let active = true;
     dataService.getSchoolAutocomplete('', 1, 50)
       .then((result: any) => { if (active && result?.success) setSchoolOptions(result.data || []); })
       .catch(() => undefined);
     return () => { active = false; };
-  }, []);
+  }, [schoolModuleEnabled]);
 
   useEffect(() => {
     let active = true;
@@ -1829,12 +1837,12 @@ export const ClinicalAgendaBoard = ({
       status: selectedStatuses.join(','),
       roomId: selectedRoomIds.join(','),
       locationType: selectedLocationTypes.join(','),
-      schoolId: selectedSchoolIds.join(','),
-      unitId: selectedSchoolUnitIds.join(','),
-      schoolMeetingType: selectedSchoolEventTypes.join(','),
+      schoolId: schoolModuleEnabled ? selectedSchoolIds.join(',') : '',
+      unitId: schoolModuleEnabled ? selectedSchoolUnitIds.join(',') : '',
+      schoolMeetingType: schoolModuleEnabled ? selectedSchoolEventTypes.join(',') : '',
       limit: 180
     };
-    const key = JSON.stringify(params);
+    const key = JSON.stringify({ ...params, schoolModuleEnabled });
     const cached = cacheRef.current.get(key);
     if (cached && Date.now() - cached.fetchedAt < CALENDAR_EVENTS_CACHE_TTL_MS) {
       setRemoteEvents(cached.data);
@@ -1851,15 +1859,17 @@ export const ClinicalAgendaBoard = ({
     setRemoteState((prev) => ({ ...prev, loading: !prev.loaded, refreshing: prev.loaded, error: '' }));
     Promise.allSettled([
       dataService.getCalendarEvents({ ...params, signal: controller?.signal }),
-      dataService.getSchoolCalendarEvents({
-        from: params.from,
-        to: params.to,
-        schoolId: selectedSchoolIds.join(','),
-        unitId: selectedSchoolUnitIds.join(','),
-        meetingType: selectedSchoolEventTypes.join(','),
-        professionalId: selectedTherapistIds.join(','),
-        patientId: selectedPatientIds.join(',')
-      })
+      schoolModuleEnabled
+        ? dataService.getSchoolCalendarEvents({
+            from: params.from,
+            to: params.to,
+            schoolId: selectedSchoolIds.join(','),
+            unitId: selectedSchoolUnitIds.join(','),
+            meetingType: selectedSchoolEventTypes.join(','),
+            professionalId: selectedTherapistIds.join(','),
+            patientId: selectedPatientIds.join(',')
+          })
+        : Promise.resolve({ success: true, data: [] })
     ])
       .then(([clinicalSettled, schoolSettled]: PromiseSettledResult<any>[]) => {
         const clinicalResult = clinicalSettled.status === 'fulfilled' ? clinicalSettled.value : null;
@@ -1918,6 +1928,7 @@ export const ClinicalAgendaBoard = ({
     selectedSchoolIds.join(','),
     selectedSchoolUnitIds.join(','),
     selectedSchoolEventTypes.join(','),
+    schoolModuleEnabled,
     remoteRefreshNonce
   ]);
 
@@ -2956,7 +2967,7 @@ export const ClinicalAgendaBoard = ({
           </div>
         </div>
       ))}
-      {renderSection('school', 'Escola', selectedSchoolIds.length + selectedSchoolUnitIds.length + selectedSchoolEventTypes.length, (
+      {schoolModuleEnabled && renderSection('school', 'Escola', selectedSchoolIds.length + selectedSchoolUnitIds.length + selectedSchoolEventTypes.length, (
         <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
             {schoolOptions.map((school: any) => (

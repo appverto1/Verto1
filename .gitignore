@@ -30,3 +30,5 @@ id_ed25519
 secrets/
 credentials/
 *.secret
+
+supabase/.temp/

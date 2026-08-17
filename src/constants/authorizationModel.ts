@@ -312,6 +312,17 @@ export function getDefaultCapabilitiesForRole(role: ClinicBaseRole | PortalRole)
   return new Set(ROLE_DEFAULT_CAPABILITIES[role]);
 }
 
+export function getDefaultScopesForRole(
+  role: ClinicBaseRole | PortalRole,
+  options: { canSupervise?: boolean } = {},
+): readonly AuthorizationScope[] {
+  const scopes = [...ROLE_DEFAULT_SCOPES[role]];
+  if (options.canSupervise === true && !scopes.includes('SUPERVISED_CASES')) {
+    scopes.push('SUPERVISED_CASES');
+  }
+  return scopes;
+}
+
 export function roleHasDefaultCapability(role: ClinicBaseRole | PortalRole, capability: CapabilityKey): boolean {
   return ROLE_DEFAULT_CAPABILITIES[role].includes(capability);
 }

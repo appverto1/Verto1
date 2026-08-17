@@ -7,3 +7,5 @@ dist
 outputs
 git_acl.txt
 gitindex.tmp
+
+supabase/.temp

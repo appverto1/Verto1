@@ -1166,7 +1166,7 @@ export const SalesModularProposalBuilder = ({
     if (!input || !catalog) return;
     const exists = input.lines.some((line) => line.itemKey === item.itemKey);
     if (exists) {
-      if (item.isRequired && item.itemKey !== 'clinical_core') return;
+      if (item.isRequired || item.itemKey === 'clinical_core') return;
       const remainingRecurringItems = input.lines.filter((line) => {
         if (line.itemKey === item.itemKey) return false;
         const catalogItem = catalog.items.find(
@@ -2024,21 +2024,13 @@ export const SalesModularProposalBuilder = ({
                         Verto Clínica + ABA
                       </p>
                       <p className="mt-1 text-xs font-normal text-slate-500">
-                        Módulo clínico opcional. A Fundação Verto e a faixa de
-                        capacidade permanecem mesmo quando ele não é contratado.
+                        Núcleo clínico obrigatório da Verto: pacientes, prontuários,
+                        painéis e portal do paciente. Os adicionais são contratados separadamente.
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => toggleItem(coreItem)}
-                      className={`min-h-10 rounded-xl border px-4 text-sm font-semibold transition ${
-                        coreSelection
-                          ? 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50'
-                          : 'border-violet-200 bg-violet-600 text-white hover:bg-violet-700'
-                      }`}
-                    >
-                      {coreSelection ? 'Remover módulo clínico' : 'Incluir módulo clínico'}
-                    </button>
+                    <span className="inline-flex min-h-10 items-center rounded-xl border border-violet-200 bg-violet-50 px-4 text-sm font-semibold text-violet-700">
+                      Núcleo obrigatório
+                    </span>
                   </div>
                 ) : null}
                 {coreSelection && selectedBaseTier &&
@@ -2673,9 +2665,8 @@ export const SalesModularProposalBuilder = ({
                   Módulos e adicionais
                 </h2>
                 <p className="mt-1 text-sm font-normal text-slate-500">
-                  Escolha apenas os módulos necessários. A Fundação Verto entra
-                  uma única vez e o módulo clínico também pode ser contratado ou
-                  removido separadamente.
+                  O núcleo clínico Verto é obrigatório. Selecione abaixo apenas
+                  os módulos adicionais necessários para esta clínica.
                 </p>
                 <div className="mt-4 space-y-3">
                   {catalog.items

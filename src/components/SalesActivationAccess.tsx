@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, CheckCircle2, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import { LogoVerto } from './Common';
 import { GoogleIcon } from './GoogleIcon';
@@ -26,6 +26,16 @@ type ActivationSummary = {
   expiresAt: string | null;
 };
 
+const validateActivationPassword = (value: string): string | null => {
+  if (value.length < 12) return 'A senha deve ter no mínimo 12 caracteres.';
+  if (value.length > 128) return 'A senha deve ter no máximo 128 caracteres.';
+  if (!/[A-Z]/.test(value)) return 'Inclua ao menos uma letra maiúscula.';
+  if (!/[a-z]/.test(value)) return 'Inclua ao menos uma letra minúscula.';
+  if (!/\d/.test(value)) return 'Inclua ao menos um número.';
+  if (!/[^A-Za-z0-9]/.test(value)) return 'Inclua ao menos um símbolo.';
+  return null;
+};
+
 const formatDate = (value: string | null) => {
   if (!value) return null;
   const date = new Date(value);
@@ -43,6 +53,9 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
   const [activation, setActivation] = useState<ActivationSummary | null>(null);
   const [password, setPassword] = useState('');
   const [passwordConfirmation, setPasswordConfirmation] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showPasswordConfirmation, setShowPasswordConfirmation] = useState(false);
+  const [passwordSaved, setPasswordSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -97,57 +110,90 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
     }
   };
 
+  const finishPasswordLogin = async () => {
+    if (!activation?.email || !password) {
+      throw new Error('Informe a senha criada para entrar.');
+    }
+
+    const authContext = {
+      provider: 'email',
+      activationFlow: true,
+      passwordSetupCompleted: true,
+      activationEmail: activation.email,
+    };
+
+    // Password activation must be provider-agnostic. A Hotmail address or a
+    // clinic-owned domain is a normal e-mail identity and must not depend on a
+    // Google/browser Auth session. The Verto backend verifies these credentials
+    // against the same Supabase project, provisions the paid clinic, and only
+    // then consumes the one-time commercial activation.
+    const serverLoginResult = await onLogin(
+      null,
+      'director',
+      { email: activation.email, password },
+      authContext,
+    );
+    if (!serverLoginResult?.success) {
+      throw new Error(
+        serverLoginResult?.error ||
+          'Sua senha foi criada, mas não foi possível abrir a clínica agora.',
+      );
+    }
+    return serverLoginResult;
+  };
+
   const handlePasswordActivation = async () => {
     if (!activation?.email) return;
     setSubmitting(true);
     setError('');
     setMessage('');
     try {
+      const passwordValidationError = validateActivationPassword(password);
+      if (passwordValidationError) throw new Error(passwordValidationError);
       if (password !== passwordConfirmation) {
         throw new Error('As senhas informadas não coincidem.');
       }
-      const response = await fetch(
-        `/api/public/sales-activations/${encodeURIComponent(token)}/password`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit',
-          body: JSON.stringify({ password }),
-        },
-      );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.success === false) {
-        throw new Error(payload?.message || 'Não foi possível definir sua senha.');
+
+      if (!passwordSaved) {
+        const response = await fetch(
+          `/api/public/sales-activations/${encodeURIComponent(token)}/password`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'omit',
+            body: JSON.stringify({ password }),
+          },
+        );
+        const payload = await response.json().catch(() => ({}));
+
+        // Provisioning happens after Auth persistence. If a downstream step is
+        // temporarily unavailable, never make the user think the password was
+        // rejected and never force a second password creation against a used
+        // activation link. The server explicitly tells us when Auth persisted.
+        if (payload?.passwordSaved === true) {
+          setPasswordSaved(true);
+        }
+        if (!response.ok || payload?.success === false) {
+          if (payload?.passwordSaved !== true) {
+            throw new Error(payload?.message || 'Não foi possível definir sua senha.');
+          }
+          setMessage('Senha registrada. Concluindo a preparação da sua clínica...');
+        } else {
+          setPasswordSaved(true);
+          setMessage('Senha registrada. Concluindo seu acesso...');
+        }
       }
 
-      const supabase = await getSupabase();
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: activation.email,
-        password,
-      });
-      if (signInError || !data.session) {
-        throw signInError || new Error('Senha definida, mas não foi possível concluir o login.');
-      }
-
-      const loginResult = await onLogin(
-        data.session,
-        'director',
-        { email: activation.email, password },
-        {
-          provider: 'email',
-          activationFlow: true,
-          passwordSetupCompleted: true,
-          activationEmail: activation.email,
-        },
-      );
-      if (!loginResult?.success) {
-        throw new Error(loginResult?.error || 'Não foi possível concluir a ativação.');
-      }
-
+      await finishPasswordLogin();
       window.history.replaceState({}, document.title, '/');
       setMessage('Acesso ativado com sucesso. Abrindo sua clínica...');
     } catch (activationError: any) {
-      setError(activationError?.message || 'Não foi possível concluir a ativação.');
+      setError(
+        passwordSaved
+          ? activationError?.message ||
+              'Sua senha foi salva. Tente novamente para concluir a entrada.'
+          : activationError?.message || 'Não foi possível concluir a ativação.',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -205,29 +251,73 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
               <div className="space-y-3">
                 <label className="block text-sm font-medium text-slate-700">
                   Nova senha
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    autoComplete="new-password"
-                    maxLength={128}
-                    className="mt-1.5 h-12 w-full rounded-2xl border border-slate-200 px-4 text-sm font-normal outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
-                  />
+                  <span className="relative mt-1.5 block">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      autoComplete="new-password"
+                      minLength={12}
+                      maxLength={128}
+                      aria-invalid={Boolean(password && validateActivationPassword(password))}
+                      className="h-12 w-full rounded-2xl border border-slate-200 px-4 pr-12 text-sm font-normal outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((current) => !current)}
+                      className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-slate-400 transition hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500"
+                      aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+                    </button>
+                  </span>
                 </label>
                 <label className="block text-sm font-medium text-slate-700">
                   Confirmar senha
-                  <input
-                    type="password"
-                    value={passwordConfirmation}
-                    onChange={(event) => setPasswordConfirmation(event.target.value)}
-                    autoComplete="new-password"
-                    maxLength={128}
-                    className="mt-1.5 h-12 w-full rounded-2xl border border-slate-200 px-4 text-sm font-normal outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
-                  />
+                  <span className="relative mt-1.5 block">
+                    <input
+                      type={showPasswordConfirmation ? 'text' : 'password'}
+                      value={passwordConfirmation}
+                      onChange={(event) => setPasswordConfirmation(event.target.value)}
+                      autoComplete="new-password"
+                      minLength={12}
+                      maxLength={128}
+                      aria-invalid={Boolean(passwordConfirmation && password !== passwordConfirmation)}
+                      className="h-12 w-full rounded-2xl border border-slate-200 px-4 pr-12 text-sm font-normal outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswordConfirmation((current) => !current)}
+                      className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-slate-400 transition hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500"
+                      aria-label={showPasswordConfirmation ? 'Ocultar confirmação de senha' : 'Mostrar confirmação de senha'}
+                      aria-pressed={showPasswordConfirmation}
+                    >
+                      {showPasswordConfirmation ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+                    </button>
+                  </span>
                 </label>
                 <p className="text-xs leading-5 text-slate-500">
                   Use de 12 a 128 caracteres, com letra maiúscula, minúscula, número e símbolo.
                 </p>
+                {password ? (
+                  <p
+                    className={`text-xs leading-5 ${
+                      validateActivationPassword(password) ||
+                      (passwordConfirmation && password !== passwordConfirmation)
+                        ? 'text-amber-700'
+                        : 'text-emerald-700'
+                    }`}
+                    aria-live="polite"
+                  >
+                    {validateActivationPassword(password) ||
+                      (passwordConfirmation && password !== passwordConfirmation
+                        ? 'As senhas ainda não coincidem.'
+                        : passwordConfirmation
+                          ? 'Senha válida e confirmação idêntica.'
+                          : 'Senha válida. Confirme-a no campo abaixo.')}
+                  </p>
+                ) : null}
               </div>
 
               {activation.expiresAt ? (
@@ -250,11 +340,21 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
               <button
                 type="button"
                 onClick={() => void handlePasswordActivation()}
-                disabled={submitting || !password || !passwordConfirmation}
+                disabled={
+                  submitting ||
+                  !password ||
+                  !passwordConfirmation ||
+                  (!passwordSaved && Boolean(validateActivationPassword(password))) ||
+                  (!passwordSaved && password !== passwordConfirmation)
+                }
                 className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-semibold text-white transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {submitting ? <Loader2 className="animate-spin" size={17} aria-hidden="true" /> : <LockKeyhole size={17} aria-hidden="true" />}
-                {submitting ? 'Concluindo ativação...' : 'Definir senha e criar minha clínica'}
+                {submitting
+                  ? 'Concluindo ativação...'
+                  : passwordSaved
+                    ? 'Entrar com a senha criada'
+                    : 'Definir senha e criar minha clínica'}
               </button>
             </div>
           ) : null}
