@@ -281,6 +281,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
         provider: 'google',
         options: {
           redirectTo: window.location.origin,
+          scopes: 'https://www.googleapis.com/auth/userinfo.email',
         }
       });
       if (error) throw error;
