@@ -1507,6 +1507,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
+    let authSubscription: { unsubscribe: () => void } | null = null;
+    let authChangeQueue: Promise<void> = Promise.resolve();
+
     const initSupabase = async () => {
       try {
         const supabase = await withTimeout(getSupabase(), 8000, null as any);
@@ -1517,8 +1521,17 @@ export default function App() {
 
         const {
           data: { subscription },
-        } = supabase.auth.onAuthStateChange(async (event, session) => {
-          try {
+        } = supabase.auth.onAuthStateChange((event, session) => {
+          // Supabase currently warns that awaiting auth/client work directly inside
+          // onAuthStateChange can deadlock the auth lock after OAuth redirects.
+          // Defer the work to the next macrotask and serialize events so the callback
+          // returns immediately and the SDK can release its internal lock first.
+          window.setTimeout(() => {
+            if (disposed) return;
+            authChangeQueue = authChangeQueue
+              .catch(() => undefined)
+              .then(async () => {
+                try {
             if (event === 'SIGNED_IN' && session) {
               const intendedRole = localStorage.getItem('verto_intended_role') || 'therapist';
               localStorage.removeItem('verto_intended_role');
@@ -1613,20 +1626,31 @@ export default function App() {
                 if (import.meta.env.DEV) console.warn('Recuperacao de sessao via /api/auth/me falhou:', sanitizeTechnicalErrorMessage(error));
               }
             }
-          } catch (authChangeError) {
-            if (import.meta.env.DEV) console.error('Falha no handler de autenticacao:', sanitizeTechnicalErrorMessage(authChangeError));
-          } finally {
-            setLoading(false);
-          }
+                } catch (authChangeError) {
+                  if (import.meta.env.DEV) console.error('Falha no handler de autenticacao:', sanitizeTechnicalErrorMessage(authChangeError));
+                } finally {
+                  if (!disposed) setLoading(false);
+                }
+              });
+          }, 0);
         });
 
-        return () => subscription.unsubscribe();
+        if (disposed) {
+          subscription.unsubscribe();
+          return;
+        }
+        authSubscription = subscription;
       } catch (error) {
         if (import.meta.env.DEV) console.error('Falha ao iniciar autenticacao:', sanitizeTechnicalErrorMessage(error));
         setLoading(false);
       }
     };
-    initSupabase();
+    void initSupabase();
+
+    return () => {
+      disposed = true;
+      authSubscription?.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
