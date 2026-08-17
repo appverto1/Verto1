@@ -39411,6 +39411,48 @@ async function startServer() {
     });
   };
 
+  const PATIENT_FILE_MAX_SIZE_BYTES = 10 * 1024 * 1024;
+  const PATIENT_FILE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
+
+  const normalizePatientFileStorageUsage = (row: any) => {
+    const usedBytes = Math.max(0, Number(row?.used_bytes ?? row?.usedBytes ?? 0) || 0);
+    const limitBytes = Math.max(
+      PATIENT_FILE_STORAGE_LIMIT_BYTES,
+      Number(row?.limit_bytes ?? row?.limitBytes ?? PATIENT_FILE_STORAGE_LIMIT_BYTES) || PATIENT_FILE_STORAGE_LIMIT_BYTES
+    );
+    const remainingBytes = Math.max(
+      0,
+      Number(row?.remaining_bytes ?? row?.remainingBytes ?? (limitBytes - usedBytes)) || 0
+    );
+    return { usedBytes, limitBytes, remainingBytes };
+  };
+
+  const readPatientFileStorageUsage = async (patientId: string, clinicId: string) => {
+    const result = await supabase.rpc('get_patient_file_storage_usage_v1', {
+      p_patient_id: patientId,
+      p_clinic_id: clinicId
+    });
+    if (result.error) return { data: null, error: result.error };
+    const row = Array.isArray(result.data) ? result.data[0] : result.data;
+    return { data: normalizePatientFileStorageUsage(row), error: null };
+  };
+
+  const isPatientFileQuotaError = (error: any) => {
+    const message = `${String(error?.message || '')} ${String(error?.details || '')} ${String(error?.hint || '')}`;
+    return message.includes('PATIENT_FILE_STORAGE_QUOTA_EXCEEDED') || message.includes('limite total de 1 GB');
+  };
+
+  const sendPatientFileQuotaExceeded = (res: any, usage: any, incomingBytes = 0) => {
+    const normalized = normalizePatientFileStorageUsage(usage);
+    return res.status(413).json({
+      success: false,
+      code: 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED',
+      error: 'O Drive deste paciente atingiu o limite total de 1 GB. Remova arquivos antes de enviar novos documentos.',
+      storageUsage: normalized,
+      incomingBytes: Math.max(0, Number(incomingBytes) || 0)
+    });
+  };
+
   app.get('/api/patient-files/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.documents.view'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
@@ -39448,13 +39490,32 @@ async function startServer() {
               ? rawFallbackFiles.filter((row: any) => sanitizeString(row?.id, 120) === requestedFileId)
               : rawFallbackFiles
           );
-          return res.status(200).json({ success: true, data: fallbackFiles, warning: 'Tabela patient_files não criada; usando fallback do prontuário.' });
+          const fallbackUsedBytes = rawFallbackFiles.reduce(
+            (total: number, row: any) => total + Math.max(0, Number(row?.sizeBytes ?? row?.size ?? row?.file_size_bytes ?? 0) || 0),
+            0
+          );
+          return res.status(200).json({
+            success: true,
+            data: fallbackFiles,
+            storageUsage: normalizePatientFileStorageUsage({ usedBytes: fallbackUsedBytes }),
+            warning: 'Tabela patient_files não criada; usando fallback do prontuário.'
+          });
         }
         throw error;
       }
 
       if (requestedFileId && isPatientPortal && rawCanonicalRows.length > 0 && data.length === 0) {
         return res.json({ success: true, data: [] });
+      }
+
+      let storageUsage: any = null;
+      if (!requestedFileId && isUuid(clinicId)) {
+        const usageResult = await readPatientFileStorageUsage(patientId, clinicId);
+        if (usageResult.error) {
+          console.warn('[PatientFiles] Não foi possível ler uso de armazenamento:', usageResult.error?.message || String(usageResult.error));
+        } else {
+          storageUsage = usageResult.data;
+        }
       }
 
       const canonicalRows = Array.isArray(data) ? data : [];
@@ -39499,7 +39560,11 @@ async function startServer() {
         merged.set(key, row);
       });
 
-      return res.json({ success: true, data: Array.from(merged.values()) });
+      return res.json({
+        success: true,
+        data: Array.from(merged.values()),
+        ...(storageUsage ? { storageUsage } : {})
+      });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/patient-files/:patientId [GET]', error, {
         patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120),
@@ -39826,6 +39891,19 @@ async function startServer() {
         }
       }
 
+      const quotaUsageResult = await readPatientFileStorageUsage(patientId, clinicId);
+      if (quotaUsageResult.error || !quotaUsageResult.data) {
+        console.error('[PatientFiles] Quota indisponível; upload bloqueado por segurança:', quotaUsageResult.error?.message || String(quotaUsageResult.error || 'sem dados'));
+        return res.status(503).json({
+          success: false,
+          code: 'PATIENT_FILE_QUOTA_UNAVAILABLE',
+          error: 'Não foi possível validar o limite de armazenamento do paciente. Tente novamente em instantes.'
+        });
+      }
+      if (quotaUsageResult.data.usedBytes + fileBuffer.length > quotaUsageResult.data.limitBytes) {
+        return sendPatientFileQuotaExceeded(res, quotaUsageResult.data, fileBuffer.length);
+      }
+
       const persistInlineFallback = async (reason: string) => {
         const fallbackId = crypto.randomUUID();
         const createdAt = new Date().toISOString();
@@ -39953,6 +40031,19 @@ async function startServer() {
         .single();
 
       if (insertError) {
+        if (isPatientFileQuotaError(insertError)) {
+          const cleanupResult = await supabase.storage.from(bucketName).remove([storagePath]);
+          if (cleanupResult.error) {
+            console.warn('[PatientFiles] Falha ao remover objeto rejeitado pela quota:', cleanupResult.error.message);
+          }
+          const latestUsage = await readPatientFileStorageUsage(patientId, clinicId);
+          return sendPatientFileQuotaExceeded(
+            res,
+            latestUsage.data || quotaUsageResult.data,
+            fileBuffer.length
+          );
+        }
+
         const fallbackId = crypto.randomUUID();
         const { data: signedDataFallback, error: signedErrorFallback } = await supabase.storage
           .from(bucketName)
@@ -40038,10 +40129,15 @@ async function startServer() {
         source: inserted.source || source,
         action: 'UPLOAD'
       });
+      const latestUsage = await readPatientFileStorageUsage(patientId, clinicId);
 
       return res.json({
         success: true,
         auditPersisted,
+        storageUsage: latestUsage.data || normalizePatientFileStorageUsage({
+          usedBytes: quotaUsageResult.data.usedBytes + fileBuffer.length,
+          limitBytes: quotaUsageResult.data.limitBytes
+        }),
         ...(auditPersisted ? {} : { warning: 'Arquivo salvo; auditoria pendente de reconciliação.' }),
         data: {
           id: inserted.id,
@@ -40121,9 +40217,14 @@ async function startServer() {
           source: sanitizeString(existingFallback?.source, 60) || null,
           action: 'DELETE'
         });
+        const fallbackUsedBytes = nextFiles.reduce(
+          (total: number, row: any) => total + Math.max(0, Number(row?.sizeBytes ?? row?.size ?? row?.file_size_bytes ?? 0) || 0),
+          0
+        );
         return res.json({
           success: true,
           auditPersisted,
+          storageUsage: normalizePatientFileStorageUsage({ usedBytes: fallbackUsedBytes }),
           ...(auditPersisted ? {} : { warning: 'Arquivo removido; auditoria pendente de reconciliação.' })
         });
       }
@@ -40155,10 +40256,12 @@ async function startServer() {
         source: sanitizeString(existing.source, 60) || null,
         action: 'DELETE'
       });
+      const latestUsage = await readPatientFileStorageUsage(patientId, clinicId);
 
       return res.json({
         success: true,
         auditPersisted,
+        ...(latestUsage.data ? { storageUsage: latestUsage.data } : {}),
         ...(auditPersisted ? {} : { warning: 'Arquivo removido; auditoria pendente de reconciliação.' })
       });
     } catch (error: any) {

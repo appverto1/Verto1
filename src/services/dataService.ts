@@ -304,6 +304,26 @@ async function fileToDataUrl(file: Blob): Promise<string> {
   });
 }
 
+function dataUrlToBlob(dataUrl: string, fallbackContentType = 'application/octet-stream'): Blob {
+  const match = String(dataUrl || '').match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  if (!match) throw new Error('Imagem comprimida inválida para upload.');
+  const contentType = String(match[1] || fallbackContentType).trim() || fallbackContentType;
+  const encodedPayload = match[3] || '';
+  try {
+    if (match[2]) {
+      const binary = atob(encodedPayload);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return new Blob([bytes], { type: contentType });
+    }
+    return new Blob([decodeURIComponent(encodedPayload)], { type: contentType });
+  } catch {
+    throw new Error('Falha ao preparar a imagem comprimida para upload.');
+  }
+}
+
 async function compressImageDataUrl(
   input: File | Blob | string,
   options: { maxDimension?: number; quality?: number; mimeType?: string } = {}
@@ -1713,7 +1733,7 @@ export const dataService = {
             quality: 0.78,
             mimeType: 'image/webp'
           });
-          uploadBlob = await (await fetch(prepared.dataUrl)).blob();
+          uploadBlob = dataUrlToBlob(prepared.dataUrl, prepared.contentType || 'image/webp');
           requestedMime = 'image/webp';
           requestedFileName = requestedFileName.replace(/\.[a-z0-9]+$/i, '') + '.webp';
         }

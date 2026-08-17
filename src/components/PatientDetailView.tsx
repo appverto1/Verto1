@@ -95,6 +95,29 @@ type PatientHistoryPaginationState = {
 };
 
 const PATIENT_HISTORY_PAGE_SIZE = 40;
+const PATIENT_FILE_MAX_SIZE_BYTES = 10 * 1024 * 1024;
+const PATIENT_FILE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
+
+const formatPatientFileStorageBytes = (value: number) => {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+  if (bytes >= 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${Math.round(bytes)} B`;
+};
+
+const resolvePatientFileStorageUsage = (value: any) => {
+  const usedBytes = Math.max(0, Number(value?.usedBytes ?? value?.used_bytes ?? 0) || 0);
+  const limitBytes = Math.max(
+    PATIENT_FILE_STORAGE_LIMIT_BYTES,
+    Number(value?.limitBytes ?? value?.limit_bytes ?? PATIENT_FILE_STORAGE_LIMIT_BYTES) || PATIENT_FILE_STORAGE_LIMIT_BYTES
+  );
+  return {
+    usedBytes,
+    limitBytes,
+    remainingBytes: Math.max(0, Number(value?.remainingBytes ?? value?.remaining_bytes ?? (limitBytes - usedBytes)) || 0)
+  };
+};
 
 const resolvePatientHistoryRange = (period: PatientHistoryPeriod, customFrom: string, customTo: string) => {
   if (period === 'all') return { from: '', to: '', ready: true };
@@ -1148,6 +1171,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       id: String(file?.id || Date.now()),
       name: safeName,
       size: String(file?.size || (file?.sizeBytes ? `${Math.max(1, Math.round(Number(file.sizeBytes) / 1024))} KB` : '')),
+      sizeBytes: Math.max(0, Number(file?.sizeBytes ?? file?.file_size_bytes ?? 0) || 0),
       date: String(file?.date || (file?.createdAt ? new Date(file.createdAt).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR'))),
       type: safeType,
       source: file?.source || 'upload',
@@ -1188,6 +1212,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const [patientFiles, setPatientFiles] = useState<any[]>([]);
+  const [patientFileStorageUsage, setPatientFileStorageUsage] = useState(() =>
+    resolvePatientFileStorageUsage(null)
+  );
+  const syncPatientFileStorageUsage = (value: any, fallbackDeltaBytes = 0) => {
+    if (value && typeof value === 'object') {
+      setPatientFileStorageUsage(resolvePatientFileStorageUsage(value));
+      return;
+    }
+    if (!fallbackDeltaBytes) return;
+    setPatientFileStorageUsage((current) =>
+      resolvePatientFileStorageUsage({
+        usedBytes: Math.max(0, current.usedBytes + fallbackDeltaBytes),
+        limitBytes: current.limitBytes
+      })
+    );
+  };
+  const patientFileStorageIsFull = patientFileStorageUsage.usedBytes >= patientFileStorageUsage.limitBytes;
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [patientFilesLoadError, setPatientFilesLoadError] = useState<string | null>(null);
   const [patientFilesReloadKey, setPatientFilesReloadKey] = useState(0);
@@ -1226,6 +1267,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     patientFilesPatientIdRef.current = patientId;
     patientFilesLoadedForRef.current = '';
     setPatientFiles([]);
+    setPatientFileStorageUsage(resolvePatientFileStorageUsage(null));
     setPreviewFile(null);
     setIsLoadingFiles(false);
     setPatientFilesLoadError(null);
@@ -1249,7 +1291,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         const result = await dataService.getPatientFiles(patientId);
         if (patientFilesPatientIdRef.current !== patientId) return;
         if (result?.success && Array.isArray(result?.data)) {
-          setPatientFiles(result.data.map(normalizeFileRecord));
+          const normalizedFiles = result.data.map(normalizeFileRecord);
+          setPatientFiles(normalizedFiles);
+          if (result?.storageUsage) {
+            setPatientFileStorageUsage(resolvePatientFileStorageUsage(result.storageUsage));
+          } else {
+            const visibleUsedBytes = normalizedFiles.reduce(
+              (total: number, file: any) => total + Math.max(0, Number(file?.sizeBytes || 0) || 0),
+              0
+            );
+            setPatientFileStorageUsage(resolvePatientFileStorageUsage({ usedBytes: visibleUsedBytes }));
+          }
           loaded = true;
           return;
         }
@@ -5483,8 +5535,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const file = e.target.files[0];
     if (!file) return;
     e.target.value = '';
-    if (Number(file.size || 0) > 10 * 1024 * 1024) {
+    const fileSizeBytes = Math.max(0, Number(file.size || 0) || 0);
+    if (fileSizeBytes <= 0 || fileSizeBytes > PATIENT_FILE_MAX_SIZE_BYTES) {
       alert('O arquivo deve ter no máximo 10 MB.');
+      return;
+    }
+    const imageWillBeCompressed =
+      String(file.type || '').toLowerCase().startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(String(file.name || ''));
+    if (!imageWillBeCompressed && patientFileStorageUsage.usedBytes + fileSizeBytes > patientFileStorageUsage.limitBytes) {
+      alert('Este arquivo ultrapassaria o limite total de 1 GB do Drive deste paciente. Remova arquivos antes de continuar.');
       return;
     }
     setIsUploadingFile(true);
@@ -5525,6 +5584,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const newFile = normalizeFileRecord(uploadResult.data);
 
       setPatientFiles((prev) => [newFile, ...prev]);
+      syncPatientFileStorageUsage(uploadResult?.storageUsage, newFile.sizeBytes || fileSizeBytes);
       setUploadProgress(100);
     } catch (error: any) {
       console.error('Falha ao salvar arquivo do paciente:', error);
@@ -5596,6 +5656,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const removeFile = async (id: any) => {
       if (confirm("Deseja remover este arquivo?")) {
+          const existingFile = patientFiles.find((file: any) => String(file.id) === String(id));
           const removeResult = await dataService.deletePatientFile(String(patient.id), String(id));
           if (!removeResult?.success) {
             alert(removeResult?.warning || removeResult?.error || 'Não foi possível excluir o arquivo.');
@@ -5603,6 +5664,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           }
           const nextFiles = patientFiles.filter((f: any) => String(f.id) !== String(id));
           setPatientFiles(nextFiles);
+          syncPatientFileStorageUsage(
+            removeResult?.storageUsage,
+            -Math.max(0, Number(existingFile?.sizeBytes || 0) || 0)
+          );
       }
   };
 
@@ -5688,15 +5753,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         });
         if (!uploadResult?.success || !uploadResult?.data) {
           uploadErrorMessage = uploadResult?.warning || uploadResult?.error || 'Falha ao salvar a ficha em Arquivos.';
-          uploadResult = {
-            success: true,
-            data: await buildInlineFallbackFile(pdfBlob, documentHtml),
-            warning: uploadErrorMessage
-          };
+          if (uploadResult?.code === 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED') {
+            uploadResult = {
+              success: false,
+              code: uploadResult.code,
+              error: uploadErrorMessage,
+              storageUsage: uploadResult?.storageUsage
+            };
+          } else {
+            uploadResult = {
+              success: true,
+              data: await buildInlineFallbackFile(pdfBlob, documentHtml),
+              warning: uploadErrorMessage
+            };
+          }
         }
       } catch (uploadError: any) {
         uploadErrorMessage = uploadError?.message || String(uploadError);
-        if (generatedPdfBlob) {
+        if (uploadError?.code === 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED') {
+          uploadResult = {
+            success: false,
+            code: uploadError.code,
+            error: uploadErrorMessage,
+            storageUsage: uploadError?.storageUsage
+          };
+        } else if (generatedPdfBlob) {
           uploadResult = {
             success: true,
             data: await buildInlineFallbackFile(generatedPdfBlob, pendingAnamnesisPayload),
@@ -5718,11 +5799,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           throw new Error(submissionResult?.error || 'Falha ao registrar a submissão da anamnese.');
         }
         if (uploadResult?.success && uploadResult?.data) {
-          setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
+          const savedFile = normalizeFileRecord(uploadResult.data);
+          setPatientFiles((prev) => [savedFile, ...prev]);
+          syncPatientFileStorageUsage(uploadResult?.storageUsage, savedFile.sizeBytes || 0);
+        } else if (uploadResult?.storageUsage) {
+          syncPatientFileStorageUsage(uploadResult.storageUsage);
         }
+        const anamnesisFileSaved = Boolean(uploadResult?.success && uploadResult?.data);
+        const anamnesisFileBlockedByQuota = uploadResult?.code === 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED';
         await onAddActivityLog(
           'Ficha de Anamnese Salva',
-          `Ficha de anamnese de ${patient?.name || 'paciente'} salva em Arquivos${anamnesisFileDate ? ` com referência em ${new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString('pt-BR')}` : ''}.`,
+          anamnesisFileSaved
+            ? `Ficha de anamnese de ${patient?.name || 'paciente'} salva em Arquivos${anamnesisFileDate ? ` com referência em ${new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString('pt-BR')}` : ''}.`
+            : anamnesisFileBlockedByQuota
+              ? `Ficha de anamnese de ${patient?.name || 'paciente'} salva no prontuário; o arquivo não foi anexado ao Drive por limite de armazenamento.`
+              : `Ficha de anamnese de ${patient?.name || 'paciente'} salva no prontuário; o arquivo não pôde ser anexado ao Drive.`,
           'clinical'
         );
         setShowAnamnesisFileModal(false);
@@ -5731,7 +5822,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setIsPreparingAnamnesisSave(false);
         setActiveTab(uploadResult?.success ? "files" : "history");
         if (uploadErrorMessage && !uploadResult?.success) {
-          alert('Anamnese salva no banco de dados. Falha apenas no arquivo em Arquivos; você pode tentar novamente depois.');
+          alert(
+            uploadResult?.code === 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED'
+              ? `${uploadErrorMessage} A anamnese foi salva no prontuário, mas o arquivo não foi anexado ao Drive.`
+              : 'Anamnese salva no banco de dados. Falha apenas no arquivo em Arquivos; você pode tentar novamente depois.'
+          );
         }
       } catch (error) {
         console.error('Falha ao persistir ficha de anamnese em arquivos:', error);
@@ -5893,7 +5988,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         throw new Error(uploadResult?.error || uploadResult?.warning || 'Falha ao salvar PDF do relatório.');
       }
 
-      setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
+      const savedReportFile = normalizeFileRecord(uploadResult.data);
+      setPatientFiles((prev) => [savedReportFile, ...prev]);
+      syncPatientFileStorageUsage(uploadResult?.storageUsage, savedReportFile.sizeBytes || pdfBlob.size || 0);
       onAddActivityLog?.(
         'Relatório adulto gerado',
         `Relatório de evolução adulto de ${patient?.name || 'paciente'} gerado e salvo em Arquivos.`,
@@ -5902,7 +5999,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       alert('Relatório de evolução adulto gerado e salvo em Arquivos.');
     } catch (error: any) {
       console.error('Falha ao gerar relatório adulto:', error);
-      alert('Não foi possível gerar o relatório adulto agora.');
+      const message = String(error?.message || error || '').trim();
+      alert(message.includes('1 GB') ? message : 'Não foi possível gerar o relatório adulto agora.');
     } finally {
       setIsGeneratingAdultReport(false);
     }
@@ -11458,11 +11556,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   accept=".pdf,.jpg,.jpeg,.png,.webp,.docx,application/pdf,image/jpeg,image/png,image/webp,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   className="hidden" 
                   onChange={handleFileUpload}
-                  disabled={isUploadingFile}
+                  disabled={isUploadingFile || patientFileStorageIsFull}
                 />
                 <label 
                   htmlFor="patient-file-upload" 
-                  className={`w-full py-10 border-2 border-dashed rounded-[24px] flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${isUploadingFile ? (isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-gray-50 border-gray-200') : (isPanelDark ? 'bg-slate-900/60 border-slate-700 hover:border-[#7a32fc] hover:bg-slate-900' : 'bg-blue-50/30 border-blue-200 hover:border-[#7a32fc] hover:bg-blue-50')}`}
+                  className={`w-full py-10 border-2 border-dashed rounded-[24px] flex flex-col items-center justify-center transition-all duration-300 ${patientFileStorageIsFull ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'} ${isUploadingFile || patientFileStorageIsFull ? (isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-gray-50 border-gray-200') : (isPanelDark ? 'bg-slate-900/60 border-slate-700 hover:border-[#7a32fc] hover:bg-slate-900' : 'bg-blue-50/30 border-blue-200 hover:border-[#7a32fc] hover:bg-blue-50')}`}
                 >
                   {isUploadingFile ? (
                     <div className="w-full max-w-[240px] text-center">
@@ -11476,8 +11574,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       <div className={`p-4 rounded-full mb-3 shadow-sm group-hover:rotate-6 transition-transform ${isPanelDark ? 'bg-violet-500/10 text-violet-200' : 'bg-blue-100 text-[#7a32fc]'}`}>
                         <FileUp size={32} />
                       </div>
-                      <p className={`text-base font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>Clique para selecionar ou arraste arquivos</p>
+                      <p className={`text-base font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>
+                        {patientFileStorageIsFull ? 'Limite de armazenamento atingido' : 'Clique para selecionar ou arraste arquivos'}
+                      </p>
                       <p className={`text-xs mt-1 uppercase font-medium ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>PDF, JPG, PNG, DOCX (Máx. 10MB)</p>
+                      <p className={`text-xs mt-2 ${patientFileStorageIsFull ? (isPanelDark ? 'text-red-300' : 'text-red-600') : (isPanelDark ? 'text-slate-400' : 'text-gray-500')}`}>
+                        {formatPatientFileStorageBytes(patientFileStorageUsage.usedBytes)} de 1 GB usados
+                        {patientFileStorageIsFull ? ' · remova arquivos para liberar espaço' : ''}
+                      </p>
                     </React.Fragment>
                   )}
                 </label>
