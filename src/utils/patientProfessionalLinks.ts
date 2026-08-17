@@ -33,6 +33,48 @@ const cleanText = (value: unknown) => String(value ?? '').trim();
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export const PATIENT_CASE_TEAM_MEMBERSHIP_ROLES = [
+  'therapist',
+  'supervisor',
+  'coordinator',
+  'director',
+] as const;
+
+export function isPatientCaseTeamMembershipRole(value: unknown): boolean {
+  const normalized = cleanText(value).toLowerCase();
+  return (PATIENT_CASE_TEAM_MEMBERSHIP_ROLES as readonly string[]).includes(normalized);
+}
+
+export function resolvePatientPrimaryProfessionalId(source: any): string {
+  const direct = cleanText(
+    source?.therapist_id ||
+      source?.therapistId ||
+      source?.professional_id ||
+      source?.professionalId ||
+      source?.responsible_professional_id ||
+      source?.responsibleProfessionalId ||
+      source?.assigned_professional_id ||
+      source?.assignedProfessionalId ||
+      source?.primary_professional_id ||
+      source?.primaryProfessionalId ||
+      source?.metadata?.therapist_id ||
+      source?.metadata?.professional_id ||
+      source?.metadata?.responsible_professional_id,
+  );
+  if (direct) return direct;
+
+  const links = Array.isArray(source?.professional_links)
+    ? source.professional_links
+    : Array.isArray(source?.professionalLinks)
+      ? source.professionalLinks
+      : [];
+  const primary = links.find((link: any) =>
+    cleanText(link?.status).toLowerCase() !== 'ended' &&
+    cleanText(link?.relationship_type || link?.relationshipType).toLowerCase() === 'primary'
+  );
+  return cleanText(primary?.professional_id || primary?.professionalId);
+}
+
 export function isPatientProfessionalCaseRole(
   value: unknown
 ): value is PatientProfessionalCaseRole {
@@ -73,7 +115,7 @@ export function validatePatientProfessionalCandidate(params: {
     !params.membership ||
     cleanText(params.membership?.user_id) !== professionalId ||
     cleanText(params.membership?.clinic_id) !== clinicId ||
-    cleanText(params.membership?.role).toLowerCase() !== 'therapist' ||
+    !isPatientCaseTeamMembershipRole(params.membership?.role) ||
     cleanText(params.membership?.status).toLowerCase() !== 'active'
   ) {
     return {
@@ -131,7 +173,7 @@ export function resolvePatientProfessionalLinkIntegrity(params: {
   if (
     !params.membership ||
     cleanText(params.membership?.status).toLowerCase() !== 'active' ||
-    cleanText(params.membership?.role).toLowerCase() !== 'therapist'
+    !isPatientCaseTeamMembershipRole(params.membership?.role)
   ) {
     return 'membership_inactive';
   }
@@ -173,7 +215,7 @@ export function isEligiblePatientProfessionalLinkCandidate(
   );
   return Boolean(
     UUID_PATTERN.test(professionalId) &&
-      cleanText(professional?.role).toLowerCase() === 'therapist' &&
+      isPatientCaseTeamMembershipRole(professional?.role) &&
       cleanText(professional?.status).toLowerCase() === 'active' &&
       resolveProfessionalProfileSpecialty(professional).length >= 2 &&
       !activeIds.has(professionalId)

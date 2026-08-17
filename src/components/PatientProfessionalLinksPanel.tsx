@@ -167,7 +167,8 @@ export const PatientProfessionalLinksPanel = ({
       activeProfessionalIds
     );
   const selectedProfessionalCanSupervise = Boolean(
-    selectedProfessional?.canSupervise === true
+    String(selectedProfessional?.role || '').toLowerCase() === 'supervisor'
+    || selectedProfessional?.canSupervise === true
     || selectedProfessional?.can_supervise === true,
   );
   const currentClinicalDate = () =>
@@ -248,7 +249,7 @@ export const PatientProfessionalLinksPanel = ({
         <div>
             <p className="text-sm font-semibold">Equipe do caso</p>
             <p className={`mt-0.5 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-              {loading ? 'Carregando...' : `${active.length} de 5 vínculos ativos`}
+              {loading ? 'Carregando...' : `${active.length} ${active.length === 1 ? 'vínculo ativo' : 'vínculos ativos'} · limite 5`}
             </p>
             {canManage ? (
               <p className={`mt-1 max-w-2xl text-[11px] leading-4 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
@@ -285,14 +286,21 @@ export const PatientProfessionalLinksPanel = ({
                 const nextProfessional = available.find(
                   (professional) => String(professional?.id || '') === professionalId,
                 );
-                const nextCanSupervise = nextProfessional?.canSupervise === true
+                const nextMembershipRole = String(nextProfessional?.role || '').toLowerCase();
+                const nextCanSupervise = nextMembershipRole === 'supervisor'
+                  || nextProfessional?.canSupervise === true
                   || nextProfessional?.can_supervise === true;
+                const nextCaseRole = ['coordinator', 'director'].includes(nextMembershipRole)
+                  ? 'case_coordinator'
+                  : nextMembershipRole === 'supervisor'
+                    ? 'supervisor'
+                    : 'therapist';
                 setDraft((current) => ({
                   ...current,
                   professionalId,
-                  caseRole: current.caseRole === 'supervisor' && !nextCanSupervise
-                    ? 'therapist'
-                    : current.caseRole,
+                  caseRole: nextCanSupervise || nextCaseRole !== 'supervisor'
+                    ? nextCaseRole
+                    : 'therapist',
                 }));
               }}
               className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal text-slate-800"
@@ -309,7 +317,7 @@ export const PatientProfessionalLinksPanel = ({
             </select>
             {available.length === 0 ? (
               <span className="mt-1.5 block font-normal leading-5 text-amber-700">
-                Nenhum terapeuta elegível disponível. É necessário vínculo ativo com a clínica, especialidade cadastrada e ausência de vínculo ativo com este paciente.
+                Nenhum profissional clínico elegível disponível. É necessário vínculo ativo com a clínica, especialidade cadastrada e ausência de vínculo ativo com este paciente.
               </span>
             ) : null}
           </label>
