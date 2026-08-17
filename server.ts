@@ -16004,7 +16004,7 @@ async function persistSpecialtyFromOnboardingContext(params: {
   context: ResolvedOnboardingContext;
 }) {
   const specialty = normalizeClinicalSpecialty(params.context?.membership?.specialty);
-  if (params.context.onboardingMode !== 'invited_professional' || params.context.membership?.role !== 'therapist' || !specialty) {
+  if (params.context.onboardingMode !== 'invited_professional' || !['therapist', 'supervisor', 'coordinator', 'director'].includes(String(params.context.membership?.role || '').toLowerCase()) || !specialty) {
     return;
   }
   const existingResult = await fetchProfessionalProfileWithSchemaFallback({
@@ -28424,7 +28424,7 @@ async function startServer() {
         ) || 50;
         const legacySchedule = readProfessionalWorkingScheduleFromMetadata(metadata, fallbackDuration);
         const specialty = normalizeClinicalSpecialty(m?.specialty) || resolveProfessionalProfileSpecialty(profile) || null;
-        const professionalTitle = m.role === 'therapist' || m.role === 'supervisor'
+        const professionalTitle = ['therapist', 'supervisor', 'coordinator', 'director'].includes(String(m.role || '').toLowerCase()) && specialty
           ? specialty || readProfessionalTitleFromSource({ metadata }) || null
           : null;
         const canSupervise = m.role === 'supervisor' || m?.can_supervise === true;
@@ -34671,13 +34671,12 @@ async function startServer() {
 
         stage = 'membership';
         table = 'clinic_memberships';
-        select = 'user_id,clinic_id,role,status,can_supervise';
+        select = 'user_id,clinic_id,role,status,specialty,can_supervise';
         const membershipResult = await supabase
           .from('clinic_memberships')
           .select(select)
           .eq('user_id', professionalId)
           .eq('clinic_id', clinicId)
-          .eq('role', 'therapist')
           .eq('status', 'active')
           .maybeSingle();
         if (membershipResult.error) throw membershipResult.error;
@@ -34711,7 +34710,7 @@ async function startServer() {
             error: candidate.error
           });
         }
-        if (caseRole === 'supervisor' && membershipResult.data?.can_supervise !== true) {
+        if (caseRole === 'supervisor' && String(membershipResult.data?.role || '').toLowerCase() !== 'supervisor' && membershipResult.data?.can_supervise !== true) {
           return res.status(422).json({
             success: false,
             error: 'PATIENT_SUPERVISION_NOT_ELIGIBLE',
@@ -42765,9 +42764,12 @@ async function startServer() {
         ? clinicOperationTypeRaw
         : 'mixed';
       const authoritativeSpecialty = normalizeClinicalSpecialty(context.membership?.specialty);
+      const requestedSpecialty = normalizeClinicalSpecialty(req.body?.specialty) || null;
       const specialty = role === 'therapist'
         ? authoritativeSpecialty
-        : normalizeClinicalSpecialty(req.body?.specialty) || null;
+        : ['supervisor', 'coordinator', 'director'].includes(String(role || '').toLowerCase())
+          ? authoritativeSpecialty || requestedSpecialty
+          : requestedSpecialty;
       const council = sanitizeString(req.body?.council, 80);
       const councilNumber = sanitizeString(req.body?.councilNumber, 80);
       const signatureDataUrl = sanitizeUrl(req.body?.signatureDataUrl);
