@@ -77,10 +77,10 @@ using (
     and exists (
       select 1
       from public.patients p
-      where p.id = notes.patient_id
+      where p.id::text = notes.patient_id::text
         and (
-          p.responsible_user_id = auth.uid()
-          or p.id = auth.uid()
+          p.responsible_user_id::text = auth.uid()::text
+          or p.id::text = auth.uid()::text
         )
     )
   )
@@ -91,8 +91,8 @@ using (
     and exists (
       select 1
       from public.patient_professional_links link
-      where link.patient_id = notes.patient_id
-        and link.professional_id = auth.uid()::text
+      where link.patient_id::text = notes.patient_id::text
+        and link.professional_id::text = auth.uid()::text
         and link.status = 'active'
         and coalesce((link.permissions ->> 'read')::boolean, true) = true
     )
@@ -104,18 +104,18 @@ using (
     and exists (
       select 1
       from public.clinical_supervision_links supervision
-      where supervision.supervisor_user_id = auth.uid()
+      where supervision.supervisor_user_id::text = auth.uid()::text
         and supervision.status = 'active'
         and (
-          supervision.patient_id = notes.patient_id
+          supervision.patient_id::text = notes.patient_id::text
           or (
             supervision.patient_id is null
             and supervision.supervised_user_id is not null
             and exists (
               select 1
               from public.patient_professional_links supervised_link
-              where supervised_link.patient_id = notes.patient_id
-                and supervised_link.professional_id = supervision.supervised_user_id::text
+              where supervised_link.patient_id::text = notes.patient_id::text
+                and supervised_link.professional_id::text = supervision.supervised_user_id::text
                 and supervised_link.status = 'active'
             )
           )
