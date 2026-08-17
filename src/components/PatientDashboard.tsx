@@ -12,6 +12,7 @@ import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
 import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
+import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from '../constants/organizationModules';
 import {
   resolveAppointmentPatientDisplayStatus,
 } from '../utils/appointmentConfirmationState';
@@ -135,17 +136,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalSelectedRescheduleSlots, setPortalSelectedRescheduleSlots] = useState<any[]>([]);
   const [portalActionSaving, setPortalActionSaving] = useState(false);
   const [portalSection, setPortalSection] = useState<PortalSection>('home');
-  const portalModuleMode = user?.portalContext?.moduleAccessMode === 'contract' ? 'contract' : 'legacy_full';
+  const portalModuleMode: OrganizationModuleAccessMode = user?.portalContext?.moduleAccessMode === 'legacy_full' ? 'legacy_full' : 'contract';
   const portalModules = useMemo(
-    () => new Set(
+    () => new Set<OrganizationModuleKey>(
       Array.isArray(user?.portalContext?.modules)
-        ? user.portalContext.modules.map((value: any) => String(value || '').trim())
+        ? user.portalContext.modules
+            .map((value: any) => String(value || '').trim())
+            .filter((value: string): value is OrganizationModuleKey =>
+              ['clinical_core', 'appointments_communication', 'financial_management', 'insurance_tiss', 'school_management'].includes(value),
+            )
         : []
     ),
     [user?.portalContext?.entitlementVersion, user?.portalContext?.modules],
   );
-  const portalHasModule = (moduleKey: string) =>
-    portalModuleMode === 'legacy_full' || portalModules.has(moduleKey);
+  const portalHasModule = (moduleKey: OrganizationModuleKey) =>
+    hasOrganizationModule(portalModuleMode, portalModules, moduleKey);
   const clinicalPortalEnabled = portalHasModule('clinical_core');
   const appointmentsPortalEnabled = portalHasModule('appointments_communication');
   const [portalAnamnesis, setPortalAnamnesis] = useState<any>(null);
@@ -1955,10 +1960,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const visiblePortalDocuments = useMemo(() => {
     const persisted = portalPatientFiles.map((file: any) => ({
       key: firstPortalText(file?.id, file?.path, file?.fileName),
+      patientFileId: firstPortalText(file?.id),
+      auditedAccess: true,
       name: firstPortalText(file?.fileName, file?.file_name, file?.name) || 'Documento',
       category: firstPortalText(file?.source, file?.mimeType, file?.mime_type) || 'Documento',
       createdAt: firstPortalText(file?.createdAt, file?.created_at),
-      href: firstPortalText(file?.signedUrl, file?.url),
+      href: '',
       mimeType: firstPortalText(file?.mimeType, file?.mime_type)
     }));
     const seen = new Set<string>();
@@ -2820,6 +2827,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setFamilyAnnotationState({ saving: false, message: 'Anotação enviada para a equipe.', error: '' });
   };
 
+  const openPortalPatientFile = async (document: any) => {
+    const fileId = firstPortalText(document?.patientFileId, document?.key);
+    if (!portalPatientId || !fileId) return;
+    const result = await dataService.accessPatientFile(portalPatientId, fileId, 'view');
+    const url = result?.success ? firstPortalText(result?.data?.signedUrl, result?.data?.url, result?.data?.content) : '';
+    if (!url) {
+      setPortalFileState((current) => ({ ...current, error: result?.error || 'Não foi possível abrir o documento com auditoria.' }));
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   const loadPortalPatientFiles = async () => {
     if (!portalPatientId) {
       setPortalPatientFilesLoaded(true);
@@ -2964,7 +2983,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     {document.category}{document.createdAt ? ` · ${formatPortalDate(document.createdAt)}` : ''}
                   </p>
                 </div>
-                {document.href ? (
+                {document.auditedAccess && document.patientFileId ? (
+                  <button type="button" onClick={() => void openPortalPatientFile(document)} className="shrink-0 rounded-full bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#7a32fc]">
+                    Abrir
+                  </button>
+                ) : document.href ? (
                   <a href={document.href} target="_blank" rel="noreferrer" className="shrink-0 rounded-full bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-[#7a32fc]">
                     Abrir
                   </a>

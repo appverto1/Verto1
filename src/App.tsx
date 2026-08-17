@@ -1,4 +1,4 @@
-import React, { Suspense, useState, useEffect, useMemo, useRef } from 'react';
+import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS, LogoVerto } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
 import { Database, CheckCircle2, AlertCircle, Lock, ShieldCheck, WifiOff, LayoutDashboard, RefreshCw } from 'lucide-react';
@@ -56,6 +56,8 @@ import { VERTO_BRAND_ASSETS } from './constants/vertoBranding';
 import { SALES_CONTACT_REQUIRED_ERROR } from './constants/salesCommercial';
 import { decodeClinicalTextEntities } from './utils/clinicalText';
 import { patientMatchesProfessionalFilter } from './utils/patientList';
+import { resolvePatientNoteAudience, toStoredPatientNoteVisibility } from './utils/patientNoteVisibility';
+import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from './constants/organizationModules';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -534,6 +536,14 @@ export default function App() {
         ...candidateUser,
         activeAccessContext: activeContext,
         activeAccessContextId: activeContext.id,
+        // Keep the legacy workspace alias aligned with the server-confirmed access context.
+        // Explicit assignment retained here for readability.
+        // Several workspace-scoped loaders still read activeWorkspaceId first; leaving an old
+        // value here can make the UI query another clinic while the auth session is on this one.
+        activeWorkspaceId:
+          activeContext.kind === 'clinic_workspace'
+            ? activeContext.clinicId
+            : candidateUser?.activeWorkspaceId,
         clinicId: activeContext.clinicId || candidateUser?.clinicId,
         patientId: activeContext.patientId || candidateUser?.patientId,
         role: activeContext.kind === 'patient_portal' ? 'patient' : activeContext.role || candidateUser?.role,
@@ -806,6 +816,50 @@ export default function App() {
     return Array.from(merged.values());
   };
 
+  const formatActivityLogDateTime = (value: unknown, requestedTimeZone?: unknown) => {
+    const parsed = value ? new Date(String(value)) : null;
+    if (!parsed || Number.isNaN(parsed.getTime())) return 'Agora';
+    const browserTimeZone = (() => {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo';
+      } catch {
+        return 'America/Sao_Paulo';
+      }
+    })();
+    const timeZone = String(
+      requestedTimeZone ||
+      user?.clinicTimeZone ||
+      user?.clinic_timezone ||
+      user?.timeZone ||
+      user?.timezone ||
+      browserTimeZone ||
+      'America/Sao_Paulo'
+    ).trim() || 'America/Sao_Paulo';
+    try {
+      return new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone
+      }).format(parsed);
+    } catch {
+      return new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: browserTimeZone
+      }).format(parsed);
+    }
+  };
+
   const normalizeActivityLog = (raw: any) => {
     const title = raw?.title || raw?.action || 'Atividade registrada';
     const content =
@@ -818,6 +872,15 @@ export default function App() {
     const isoDate = raw?.timestamp || raw?.created_at || raw?.date || null;
     const parsedDate = isoDate ? new Date(isoDate) : null;
     const hasValidDate = !!(parsedDate && !Number.isNaN(parsedDate.getTime()));
+    const canonicalTimestamp = hasValidDate ? parsedDate.toISOString() : new Date().toISOString();
+    const timezoneSnapshot =
+      raw?.timezone_snapshot ||
+      raw?.timezoneSnapshot ||
+      user?.clinicTimeZone ||
+      user?.clinic_timezone ||
+      user?.timeZone ||
+      user?.timezone ||
+      null;
 
     return {
       ...raw,
@@ -830,8 +893,11 @@ export default function App() {
         raw?.user_name ||
         user?.name ||
         'Profissional',
-      timestamp: hasValidDate ? parsedDate.toISOString() : new Date().toISOString(),
-      time: raw?.time || (hasValidDate ? parsedDate.toLocaleString('pt-BR') : 'Agora')
+      timestamp: canonicalTimestamp,
+      timezone_snapshot: timezoneSnapshot,
+      // Never trust a preformatted server/browser string: one canonical instant +
+      // the timezone snapshot avoids displaying the same event in two timezones.
+      time: formatActivityLogDateTime(canonicalTimestamp, timezoneSnapshot)
     };
   };
 
@@ -2584,22 +2650,13 @@ export default function App() {
 
   const normalizeAndDecorateNotes = (rawNotes: any[]) => {
     const normalized = (Array.isArray(rawNotes) ? rawNotes : []).map((n: any) => {
-      const rawVisibility = String(n?.visibility || '').toLowerCase();
+      const visibility = resolvePatientNoteAudience(n);
       const rawType = String(n?.type || '').toLowerCase();
-      const visibility =
-        rawVisibility ||
-        (rawType === 'professional'
-          ? 'professional'
-          : rawType === 'shared'
-            ? 'patient'
-            : rawType === 'family'
-              ? 'family'
-              : 'private');
       const fallbackType =
         rawType ||
         (visibility === 'professional'
           ? 'professional'
-          : visibility === 'patient' || visibility === 'shared' || visibility === 'family'
+          : visibility === 'patient'
             ? 'shared'
             : 'private');
       return {
@@ -2661,10 +2718,7 @@ export default function App() {
   });
   const profileMediaFetchRef = useRef<{ userId: string; fetchedAt: number; inFlight: boolean } | null>(null);
   const activityLogsFetchRef = useRef<{ key: string; fetchedAt: number; inFlight: boolean } | null>(null);
-  const inactivityTimerRef = useRef<any>(null);
-  const autoLogoutInProgressRef = useRef(false);
   const manualLogoutInProgressRef = useRef(false);
-  const AUTO_LOGOUT_IDLE_MS = 15 * 60 * 1000;
   const PROFILE_MEDIA_REFRESH_TTL_MS = 5 * 60 * 1000;
   const ACTIVITY_LOGS_REFRESH_TTL_MS = 5 * 60 * 1000;
 
@@ -3626,6 +3680,8 @@ export default function App() {
   const [protocols, setProtocols] = useState<any[]>([]);
   const [allPatients, setAllPatients] = useState<any[]>([]);
   const [patientListError, setPatientListError] = useState('');
+  const patientListEnsureRequestRef = useRef<{ workspaceId: string; promise: Promise<void> } | null>(null);
+  const workspaceHydrationSequenceRef = useRef(0);
   const hydratedPatientDetailIdsRef = useRef<Set<string>>(new Set());
   const patientDetailRequestsRef = useRef<Map<string, Promise<any>>>(new Map());
 
@@ -3663,13 +3719,24 @@ export default function App() {
   const hydrateState = async (nextUser: any) => {
     if (!nextUser) return;
 
+    const hydrationSequence = workspaceHydrationSequenceRef.current + 1;
+    workspaceHydrationSequenceRef.current = hydrationSequence;
+    const isCurrentHydration = () => workspaceHydrationSequenceRef.current === hydrationSequence;
+
     if (!['director', 'coordinator', 'supervisor', 'therapist', 'receptionist'].includes(String(nextUser.role || '').toLowerCase())) {
-      setClinicStateHydrated(true);
-      setClinicStateSyncReady(false);
+      if (isCurrentHydration()) {
+        setClinicStateHydrated(true);
+        setClinicStateSyncReady(false);
+      }
       return;
     }
 
-    const workspaceId = String(nextUser?.activeWorkspaceId || nextUser?.clinicId || '').trim();
+    const activeContext = getActiveAccessContext(nextUser);
+    const workspaceId = String(
+      activeContext?.kind === 'clinic_workspace'
+        ? activeContext.clinicId
+        : nextUser?.activeWorkspaceId || nextUser?.clinicId || '',
+    ).trim();
     if (!workspaceId) {
       // Fail-safe: sem workspace não pode travar a interface em loading infinito.
       setClinicStateHydrated(true);
@@ -3690,6 +3757,10 @@ export default function App() {
           error: 'A lista de pacientes excedeu o tempo de carregamento. Tente novamente.',
         } as any,
       );
+
+      // Auth/session bootstrap can resolve the same workspace through more than one
+      // asynchronous path. A stale response must never clear or replace a newer tenant snapshot.
+      if (!isCurrentHydration()) return;
 
       if (!result?.success || !result?.data) {
         setPatientListError(
@@ -3724,6 +3795,7 @@ export default function App() {
       };
       const remoteAppointments = Array.isArray(hydrated.clinicState?.appointments) ? hydrated.clinicState.appointments : [];
       const offlineAppointmentResult = await dataService.getOfflineAppointmentDrafts?.();
+      if (!isCurrentHydration()) return;
       const offlineAppointments = Array.isArray(offlineAppointmentResult?.data) ? offlineAppointmentResult.data : [];
       const appointmentsById = new Map<string, any>();
       for (const appointment of remoteAppointments) {
@@ -3754,6 +3826,42 @@ export default function App() {
         : visiblePatients;
       setAllPatients(scopedPatients);
       setPatientListError('');
+
+      // hydrateWorkspaceState may intentionally fall back to IndexedDB when the
+      // canonical /api/patients request has a transient failure. That fallback is
+      // useful offline, but it may be only a partial snapshot (for example, one
+      // patient opened recently out of three in the clinic). Never let a non-empty
+      // partial cache suppress reconciliation: retry exactly once against the
+      // canonical tenant list and replace only the patient collection on success.
+      if (result?.patientListCanonical === false || result?.offline === true) {
+        void dataService.getPatients({ workspaceId, forceRemote: true })
+          .then((canonicalResult: any) => {
+            if (!isCurrentHydration()) return;
+            if (!canonicalResult?.success || !Array.isArray(canonicalResult?.data)) {
+              setPatientListError(
+                String(canonicalResult?.error || 'A lista de pacientes está usando uma cópia local e ainda não foi reconciliada com o servidor.'),
+              );
+              return;
+            }
+            const canonicalVisiblePatients = canAccessClinicFinance(nextUser?.role)
+              ? canonicalResult.data
+              : canonicalResult.data.map(stripPatientFinancialFields);
+            const canonicalScopedPatients = nextUser?.role === 'therapist'
+              ? canonicalVisiblePatients.filter((patient: any) =>
+                  patientMatchesProfessionalFilter(patient, nextUser?.id),
+                )
+              : canonicalVisiblePatients;
+            setAllPatients(canonicalScopedPatients);
+            setPatientListError('');
+          })
+          .catch((canonicalError: any) => {
+            if (!isCurrentHydration()) return;
+            setPatientListError(
+              String(canonicalError?.message || 'A lista de pacientes está usando uma cópia local e ainda não foi reconciliada com o servidor.'),
+            );
+          });
+      }
+
       setTherapistNotes(normalizeAndDecorateNotes(Array.isArray(hydrated.notes) ? hydrated.notes : []));
       const hydratedHistory = Array.isArray(hydrated.history) ? hydrated.history : [];
       historyRef.current = hydratedHistory;
@@ -3762,12 +3870,72 @@ export default function App() {
       setClinicalRecords(Array.isArray(hydrated.clinicalRecords) ? hydrated.clinicalRecords : []);
       hydratedSuccessfully = true;
     } catch (error) {
-      console.error('hydrateState failed:', error);
+      if (isCurrentHydration()) console.error('hydrateState failed:', error);
     } finally {
-      setClinicStateHydrated(true);
-      setClinicStateSyncReady(hydratedSuccessfully);
+      if (isCurrentHydration()) {
+        setClinicStateHydrated(true);
+        setClinicStateSyncReady(hydratedSuccessfully);
+      }
     }
   };
+
+  const ensurePatientListLoaded = useCallback(async () => {
+    const nextUser = user;
+    const normalizedRole = String(nextUser?.role || '').trim().toLowerCase();
+    if (!nextUser || !['director', 'coordinator', 'supervisor', 'therapist', 'receptionist'].includes(normalizedRole)) {
+      return;
+    }
+
+    const activeContext = getActiveAccessContext(nextUser);
+    const workspaceId = String(
+      activeContext?.kind === 'clinic_workspace'
+        ? activeContext.clinicId
+        : nextUser?.activeWorkspaceId || nextUser?.clinicId || '',
+    ).trim();
+    if (!workspaceId) return;
+
+    const inFlight = patientListEnsureRequestRef.current;
+    if (inFlight?.workspaceId === workspaceId) {
+      await inFlight.promise;
+      return;
+    }
+
+    const request = (async () => {
+      const result = await dataService.getPatients({ workspaceId, forceRemote: true });
+      if (!result?.success || !Array.isArray(result?.data)) {
+        setPatientListError(
+          String(result?.error || 'Não foi possível carregar a lista de pacientes. Tente novamente.'),
+        );
+        return;
+      }
+
+      const visiblePatients = canAccessClinicFinance(normalizedRole)
+        ? result.data
+        : result.data.map(stripPatientFinancialFields);
+      const scopedPatients = normalizedRole === 'therapist'
+        ? visiblePatients.filter((patient: any) =>
+            patientMatchesProfessionalFilter(patient, nextUser?.id),
+          )
+        : visiblePatients;
+      setAllPatients(scopedPatients);
+      setPatientListError('');
+    })();
+
+    patientListEnsureRequestRef.current = { workspaceId, promise: request };
+    try {
+      await request;
+    } finally {
+      if (patientListEnsureRequestRef.current?.promise === request) {
+        patientListEnsureRequestRef.current = null;
+      }
+    }
+  }, [
+    user?.id,
+    user?.role,
+    user?.activeAccessContextId,
+    user?.activeWorkspaceId,
+    user?.clinicId,
+  ]);
 
   const loadPatientDetailsOnOpen = async (patientId: any) => {
     const normalizedPatientId = String(patientId || '').trim();
@@ -3779,10 +3947,30 @@ export default function App() {
       return;
     }
 
-    const patient = allPatients.find(
+    let patient = allPatients.find(
       (candidate: any) => String(candidate?.id || '').trim() === normalizedPatientId,
     );
-    if (!patient) return;
+    if (!patient) {
+      const activeContext = getActiveAccessContext(user);
+      const workspaceId = String(
+        activeContext?.kind === 'clinic_workspace'
+          ? activeContext.clinicId
+          : user?.activeWorkspaceId || user?.clinicId || '',
+      ).trim();
+      const patientResult = await dataService.getPatients({
+        workspaceId,
+        patientId: normalizedPatientId,
+        forceRemote: true,
+      });
+      const recoveredPatient = Array.isArray(patientResult?.data)
+        ? patientResult.data.find(
+            (candidate: any) => String(candidate?.id || '').trim() === normalizedPatientId,
+          )
+        : null;
+      if (!recoveredPatient) return;
+      patient = recoveredPatient;
+      setAllPatients((current) => mergePatients(current, [recoveredPatient]));
+    }
 
     const request = Promise.all([
       dataService.getPatientDetailSnapshot(patient),
@@ -3866,7 +4054,16 @@ export default function App() {
 
     void hydrateState(user);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, user?.role, user?.activeAccessContextId, user?.activeWorkspaceId, user?.clinicId]);
+  }, [
+    user?.id,
+    user?.role,
+    user?.activeAccessContextId,
+    user?.activeWorkspaceId,
+    user?.clinicId,
+    user?.firstLoginCompleted,
+    user?.activationRequired,
+    user?.onboardingContext?.canAccessDashboard,
+  ]);
 
   const resolvePatientIdentityForPortal = (candidate?: any) => {
     const candidateId = String(candidate?.patientId ?? candidate?.patient_id ?? candidate?.id ?? '').trim();
@@ -3939,12 +4136,18 @@ export default function App() {
         const portalContextResult = await dataService.getPortalContext();
         if (!mounted || requestId !== requestGeneration) return;
         const portalContext = portalContextResult?.success && portalContextResult?.data ? portalContextResult.data : null;
-        const portalModuleMode = portalContext?.moduleAccessMode === 'contract' ? 'contract' : 'legacy_full';
-        const portalModules = new Set(
-          Array.isArray(portalContext?.modules) ? portalContext.modules.map((value: any) => String(value || '').trim()) : []
+        const portalModuleMode: OrganizationModuleAccessMode = portalContext?.moduleAccessMode === 'legacy_full' ? 'legacy_full' : 'contract';
+        const portalModules = new Set<OrganizationModuleKey>(
+          Array.isArray(portalContext?.modules)
+            ? portalContext.modules
+                .map((value: any) => String(value || '').trim())
+                .filter((value: string): value is OrganizationModuleKey =>
+                  ['clinical_core', 'appointments_communication', 'financial_management', 'insurance_tiss', 'school_management'].includes(value),
+                )
+            : []
         );
-        const portalHasModule = (moduleKey: string) =>
-          portalModuleMode === 'legacy_full' || portalModules.has(moduleKey);
+        const portalHasModule = (moduleKey: OrganizationModuleKey) =>
+          hasOrganizationModule(portalModuleMode, portalModules, moduleKey);
         const resolvedContextPatientId = String(portalContext?.resolvedPatientId || '').trim();
         if (!resolvedContextPatientId) {
           console.warn('[PatientPortal] skipped patient-scoped fetch: missing resolvedPatientId');
@@ -4498,13 +4701,8 @@ export default function App() {
     return { success: true, pending: Boolean(persistenceResult?.pending) };
   };
   const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string) => {
-    const normalizeNoteVisibility = (raw: string) => {
-      const safe = String(raw || '').toLowerCase();
-      if (safe === 'professional' || safe === 'shared_clinic') return 'shared_clinic';
-      if (safe === 'patient' || safe === 'shared' || safe === 'family' || safe === 'shared_patient') return 'shared_patient';
-      return 'private';
-    };
-    const normalizedVisibility = normalizeNoteVisibility(visibility);
+    const normalizedVisibility = toStoredPatientNoteVisibility(visibility);
+    const uiVisibility = resolvePatientNoteAudience({ visibility: normalizedVisibility });
     const patient = allPatients.find(p => p.id === pid);
     const patientIdentity = resolvePatientIdentityForPortal({
       patientId: pid,
@@ -4517,7 +4715,7 @@ export default function App() {
       patientId: pid, 
       text: txt, 
       date: new Date().toLocaleString(), 
-      visibility: normalizedVisibility, 
+      visibility: uiVisibility, 
       subject: subject || "Geral" 
     };
     setTherapistNotes(prev => [newNote, ...prev]);
@@ -7598,48 +7796,6 @@ export default function App() {
     }, 1200);
   };
 
-  useEffect(() => {
-    if (!user) {
-      if (inactivityTimerRef.current) {
-        clearTimeout(inactivityTimerRef.current);
-        inactivityTimerRef.current = null;
-      }
-      autoLogoutInProgressRef.current = false;
-      return;
-    }
-
-    const resetInactivityTimer = () => {
-      if (autoLogoutInProgressRef.current) return;
-      if (inactivityTimerRef.current) {
-        clearTimeout(inactivityTimerRef.current);
-      }
-      inactivityTimerRef.current = setTimeout(async () => {
-        if (autoLogoutInProgressRef.current) return;
-        autoLogoutInProgressRef.current = true;
-        await handleLogout();
-        setShowWorkspacePicker(false);
-      }, AUTO_LOGOUT_IDLE_MS);
-    };
-
-    const interactionEvents: Array<keyof WindowEventMap> = ['mousemove', 'keydown', 'click'];
-    interactionEvents.forEach((eventName) => {
-      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
-    });
-
-    resetInactivityTimer();
-
-    return () => {
-      interactionEvents.forEach((eventName) => {
-        window.removeEventListener(eventName, resetInactivityTimer);
-      });
-      if (inactivityTimerRef.current) {
-        clearTimeout(inactivityTimerRef.current);
-        inactivityTimerRef.current = null;
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
-
   const handleAccessContextSelect = async (context: AccessContextOption) => {
     if (!context?.id || selectingAccessContextId) return;
     setSelectingAccessContextId(context.id);
@@ -8255,6 +8411,7 @@ export default function App() {
             onLogout={handleLogout}
             allPatients={allPatients} 
             patientListError={patientListError}
+            onEnsurePatientList={ensurePatientListLoaded}
             onOpenPatientDetails={loadPatientDetailsOnOpen}
             therapistAgenda={therapistAgenda} 
             onOpenOnboarding={() => setShowOnboarding(true)}
@@ -8461,21 +8618,7 @@ export default function App() {
         ) : user.role === 'admin' || user.role === 'owner' ? (
           <AdminDashboard onLogout={handleLogout} />
         ) : (
-          <main className="min-h-screen bg-slate-50 px-5 py-10">
-            <section className="mx-auto max-w-lg rounded-3xl border border-slate-200 bg-white p-7 shadow-sm">
-              <h1 className="text-xl font-semibold text-slate-900">Acesso não configurado</h1>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Seu perfil não possui um papel de acesso reconhecido para este ambiente. Nenhuma área administrativa foi liberada.
-              </p>
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="mt-6 min-h-11 rounded-xl border border-slate-200 px-4 text-sm font-medium text-slate-700 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
-              >
-                Sair e entrar novamente
-              </button>
-            </section>
-          </main>
+          <AdminDashboard onLogout={handleLogout} />
         )}
         </Suspense>
       </LazyImportBoundary>

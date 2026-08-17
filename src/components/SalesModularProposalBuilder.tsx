@@ -25,6 +25,7 @@ import {
   isSalesPackageTierCompatible,
   recommendSalesPackageTier,
   resolveSalesPackageTierSelection,
+  SALES_PLATFORM_FOUNDATION_PUBLIC_NAME,
   salesModularProposalRequiresVersionedProfitabilityPolicy,
   salesPackageDemand,
   type SalesModularLineSelection,
@@ -53,12 +54,7 @@ import {
 } from '../utils/salesModularEconomics';
 import type { SalesAssumptionSnapshot } from '../utils/salesProfitability';
 import { normalizeSalesTrialDays } from '../utils/salesTrialContract';
-import {
-  calculateSalesCurrentOperatingSummary,
-  filterSalesCurrentOperatingTechnicalBlockers,
-  SALES_CURRENT_OPERATING_MODEL_VERSION,
-  type SalesCurrentOperatingSummary
-} from '../utils/salesCurrentOperatingEconomics';
+import { buildSalesRecurringMoneyFlow } from '../utils/salesFinancialExplanation';
 import {
   ModularOfferDetails,
   type ModularPublicOffer
@@ -80,7 +76,6 @@ type SavedModularSimulation = {
   catalog_version_id: string;
   modular_input_snapshot: SalesModularProposalInput;
   results_snapshot: SalesModularProposalResult & {
-    currentOperatingSummary?: SalesCurrentOperatingSummary;
     commercialReview?: SalesProposalReviewClassification & {
       canGeneratePublicOffer?: boolean;
     };
@@ -188,20 +183,37 @@ const selectionForItem = (
   };
 };
 
+const ratingStyle: Record<SalesModularProposalResult['rating'], string> = {
+  healthy: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+  attention: 'border-amber-200 bg-amber-50 text-amber-800',
+  not_recommended: 'border-rose-200 bg-rose-50 text-rose-800',
+  insufficient_data: 'border-slate-200 bg-slate-100 text-slate-700'
+};
+
+const ratingLabel: Record<SalesModularProposalResult['rating'], string> = {
+  healthy: 'Dentro da margem-alvo',
+  attention: 'Abaixo da margem-alvo',
+  not_recommended: 'EBITDA atribuído negativo',
+  insufficient_data: 'Custos ainda incompletos'
+};
+
+const markup = (
+  multiplier: number | null | undefined,
+  basisPoints: number | null | undefined
+) =>
+  multiplier == null || basisPoints == null
+    ? 'Dados insuficientes'
+    : `${multiplier.toLocaleString('pt-BR', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      })}× (${percent(basisPoints)})`;
+
 const costSourceLabel: Record<string, string> = {
   actual: 'Real',
   calculated: 'Calculado',
   estimated: 'Estimado',
   manual: 'Manual',
   unavailable: 'Indisponível'
-};
-
-const currentOperatingMissingLabel: Record<string, string> = {
-  meiDasMonthlyCents: 'DAS MEI',
-  stripeFeeBasisPoints: 'tarifa percentual da Stripe',
-  stripeFixedFeeCents: 'tarifa fixa da Stripe',
-  supabaseMonthlyCostCents: 'Supabase',
-  railwayMonthlyCostCents: 'Railway'
 };
 
 const incrementalMarginLabel = formatSalesIncrementalMarginStatusLabel;
@@ -456,8 +468,8 @@ export const SalesModularProposalBuilder = ({
         if (!core) throw new Error('PRICING_ITEM_NOT_FOUND');
         const initialInput: SalesModularProposalInput = {
           commercialPricingMode: 'manual_module_prices',
-          platformFoundationPricingMode: 'manual',
-          platformFoundationMonthlyAmountCents: 0,
+          platformFoundationPricingMode: 'automatic_target',
+          platformFoundationMonthlyAmountCents: null,
           patientQuantity,
           expectedPatientQuantity12Months: patientQuantity,
           basePackageTierId: recommendedTier.id,
@@ -653,31 +665,18 @@ export const SalesModularProposalBuilder = ({
       return null;
     }
   }, [assumptions, catalog, input, profitabilityPolicyRequired]);
-  const currentOperatingSummary = useMemo(() => {
+  const promotionalMoneyFlow = useMemo(() => {
     if (!preview || !assumptions || !input) return null;
-    return calculateSalesCurrentOperatingSummary(
-      preview.promotionalRecurringRevenueCents,
-      assumptions
-    );
+    return buildSalesRecurringMoneyFlow({
+      period: preview.promotional,
+      assumptions,
+      usageProfile: input.usageProfile,
+      lines: preview.lines
+    });
   }, [assumptions, input, preview]);
   const proposalReview = useMemo(
     () => preview ? classifySalesProposalReview(preview) : null,
     [preview]
-  );
-  const usesCurrentOperatingModel =
-    currentOperatingSummary?.modelVersion ===
-    SALES_CURRENT_OPERATING_MODEL_VERSION;
-  const legacyProposalRequiresApproval = Boolean(
-    !usesCurrentOperatingModel && proposalReview?.requiresCommercialApproval
-  );
-  const currentProposalTechnicalBlockingCodes = useMemo(
-    () =>
-      usesCurrentOperatingModel
-        ? filterSalesCurrentOperatingTechnicalBlockers(
-            proposalReview?.technicalBlockingCodes
-          )
-        : proposalReview?.technicalBlockingCodes || [],
-    [proposalReview, usesCurrentOperatingModel]
   );
   const profitabilityThresholdColumns = useMemo(() => {
     const policy = preview?.economics?.policy;
@@ -836,8 +835,8 @@ export const SalesModularProposalBuilder = ({
         const result = calculateSalesModularProposal(
           {
             ...input,
-            platformFoundationPricingMode: 'manual',
-            platformFoundationMonthlyAmountCents: 0,
+            platformFoundationPricingMode: 'automatic_target',
+            platformFoundationMonthlyAmountCents: null,
             patientQuantity: economySimulatorPatients,
             expectedPatientQuantity12Months: economySimulatorPatients,
             basePackageTierId: customTier.id,
@@ -856,7 +855,9 @@ export const SalesModularProposalBuilder = ({
         );
         rows.push({
           key: String(mask),
-          label: selectedModules.map((item) => item.publicName).join(' + '),
+          label: `${SALES_PLATFORM_FOUNDATION_PUBLIC_NAME} + ${selectedModules
+            .map((item) => item.publicName)
+            .join(' + ')}`,
           revenueCents: result.postPromotion.recurringRevenueCents,
           costCents: result.postPromotion.totalEstimatedCostCents,
           marginBasisPoints: result.postPromotion.ebitdaMarginBasisPoints,
@@ -918,25 +919,9 @@ export const SalesModularProposalBuilder = ({
         : null,
     [selectedSimulation]
   );
-  const selectedSimulationUsesCurrentOperatingModel =
-    selectedSimulation?.results_snapshot?.currentOperatingSummary?.modelVersion ===
-    SALES_CURRENT_OPERATING_MODEL_VERSION;
   const selectedSimulationHasApproval =
     selectedSimulation?.results_snapshot?.commercialExceptionApproval
       ?.status === 'approved';
-  const selectedSimulationRequiresLegacyApproval = Boolean(
-    !selectedSimulationUsesCurrentOperatingModel &&
-      selectedSimulationReview?.requiresCommercialApproval
-  );
-  const selectedSimulationTechnicalBlockingCodes = useMemo(
-    () =>
-      selectedSimulationUsesCurrentOperatingModel
-        ? filterSalesCurrentOperatingTechnicalBlockers(
-            selectedSimulationReview?.technicalBlockingCodes
-          )
-        : selectedSimulationReview?.technicalBlockingCodes || [],
-    [selectedSimulationReview, selectedSimulationUsesCurrentOperatingModel]
-  );
   const comparedSimulations = useMemo(
     () =>
       comparisonIds
@@ -988,13 +973,7 @@ export const SalesModularProposalBuilder = ({
             }
           : null
       },
-      items: preview.lines
-        .filter(
-          (line) =>
-            line.itemKey !== 'platform_foundation' &&
-            line.itemKey !== 'onboarding'
-        )
-        .map((line) => ({
+      items: preview.lines.map((line) => ({
         itemKey: line.itemKey,
         publicName: line.publicName,
         description: line.description,
@@ -1187,7 +1166,7 @@ export const SalesModularProposalBuilder = ({
     if (!input || !catalog) return;
     const exists = input.lines.some((line) => line.itemKey === item.itemKey);
     if (exists) {
-      if (item.isRequired && item.itemKey !== 'clinical_core') return;
+      if (item.isRequired || item.itemKey === 'clinical_core') return;
       const remainingRecurringItems = input.lines.filter((line) => {
         if (line.itemKey === item.itemKey) return false;
         const catalogItem = catalog.items.find(
@@ -1196,7 +1175,7 @@ export const SalesModularProposalBuilder = ({
         return catalogItem?.billingInterval !== 'one_time';
       });
       if (remainingRecurringItems.length < 1) {
-        setError('Selecione pelo menos um módulo recorrente.');
+        setError('Selecione pelo menos um módulo recorrente além da Fundação Verto.');
         return;
       }
       updateInput({
@@ -1405,10 +1384,10 @@ export const SalesModularProposalBuilder = ({
       ...snapshotInput,
       trialDays: normalizeSalesTrialDays(snapshotInput.trialDays, 0),
       commercialPricingMode: 'manual_module_prices',
-      // Duplicar um cenário histórico cria uma nova composição comercial sem
-      // expor a infraestrutura como módulo; o snapshot original permanece intacto.
-      platformFoundationPricingMode: 'manual',
-      platformFoundationMonthlyAmountCents: 0,
+      // Duplicar um cenário histórico é a ação explícita que o moderniza para
+      // a Fundação automática; o snapshot original permanece inalterado.
+      platformFoundationPricingMode: 'automatic_target',
+      platformFoundationMonthlyAmountCents: null,
       usageProfile: 'intensive',
       driverOverrides: {},
       basePackageSelectionMode: inferredMode,
@@ -1418,13 +1397,7 @@ export const SalesModularProposalBuilder = ({
             simulation.results_snapshot?.basePackage?.limitQuantity ??
             snapshotDemand
           : null,
-      lines: snapshotInput.lines
-        .filter(
-          (line) =>
-            line.itemKey !== 'onboarding' &&
-            line.itemKey !== 'platform_foundation'
-        )
-        .map((line) => {
+      lines: snapshotInput.lines.map((line) => {
         const item = catalog?.items.find(
           (candidate) => candidate.itemKey === line.itemKey
         );
@@ -1841,11 +1814,12 @@ export const SalesModularProposalBuilder = ({
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h2 className="text-base font-semibold text-slate-900">
-                      Capacidade e módulo clínico
+                      Fundação, capacidade e módulo clínico
                     </h2>
                     <p className="mt-1 text-sm font-normal text-slate-500">
-                      Dimensione pacientes e capacidade e escolha apenas os módulos
-                      que farão parte da contratação.
+                      A Fundação Verto entra uma única vez. A faixa abaixo
+                      dimensiona pacientes e armazenamento, mesmo quando o
+                      cliente contrata somente outro módulo.
                     </p>
                   </div>
                   <button
@@ -1853,18 +1827,116 @@ export const SalesModularProposalBuilder = ({
                     onClick={onOpenAssumptions}
                     className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
                   >
-                    <Settings2 size={16} /> Custos reais
+                    <Settings2 size={16} /> Premissas financeiras
                   </button>
                 </div>
-                <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
-                  <p className="text-sm font-semibold text-slate-900">
-                    Resultado financeiro simplificado
-                  </p>
-                  <p className="mt-1 text-xs font-normal leading-5 text-slate-600">
-                    Nesta fase, a saúde da proposta considera somente a mensalidade
-                    contratada menos DAS MEI, Stripe, Supabase e Railway. Os modelos
-                    técnicos históricos permanecem guardados apenas para auditoria.
-                  </p>
+                <div className="mt-4 rounded-2xl border border-violet-200 bg-violet-50/70 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-violet-950">
+                        {SALES_PLATFORM_FOUNDATION_PUBLIC_NAME}
+                      </p>
+                      <p className="mt-1 text-xs font-normal leading-5 text-violet-800">
+                        Base segura, infraestrutura, auditoria, operação e
+                        suporte-base. O modo automático completa o valor
+                        necessário para a meta EBITDA do conjunto, sem repetir
+                        os custos dentro de cada módulo.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-violet-200 bg-white px-3 py-1 text-xs font-semibold text-violet-800">
+                      {currency(preview?.platformFoundation.recurringAmountCents)}
+                      /mês
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <label className="text-sm font-medium text-slate-700">
+                      Formação do valor da fundação
+                      <select
+                        value={
+                          input.platformFoundationPricingMode === 'manual'
+                            ? 'manual'
+                            : 'automatic_target'
+                        }
+                        onChange={(event) =>
+                          updateInput({
+                            platformFoundationPricingMode:
+                              event.target.value === 'manual'
+                                ? 'manual'
+                                : 'automatic_target',
+                            platformFoundationMonthlyAmountCents:
+                              event.target.value === 'manual'
+                                ? preview?.platformFoundation
+                                    .recurringAmountCents ?? 0
+                                : null
+                          })
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                      >
+                        <option value="automatic_target">
+                          Automático para a meta EBITDA
+                        </option>
+                        <option value="manual">
+                          Valor comercial manual
+                        </option>
+                      </select>
+                    </label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Mensalidade da fundação
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        disabled={
+                          input.platformFoundationPricingMode !== 'manual'
+                        }
+                        value={
+                          input.platformFoundationPricingMode === 'manual'
+                            ? Number(
+                                input.platformFoundationMonthlyAmountCents || 0
+                              ) / 100
+                            : Number(
+                                preview?.platformFoundation
+                                  .recurringAmountCents || 0
+                              ) / 100
+                        }
+                        onChange={(event) =>
+                          updateInput({
+                            platformFoundationMonthlyAmountCents: Math.max(
+                              0,
+                              Math.round(Number(event.target.value || 0) * 100)
+                            )
+                          })
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none disabled:bg-violet-100/60 disabled:text-violet-700 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-3 grid gap-2 text-xs text-violet-900 sm:grid-cols-3">
+                    <span>
+                      Valor recomendado:{' '}
+                      <strong>
+                        {currency(
+                          preview?.platformFoundation
+                            .recommendedRecurringAmountCents
+                        )}
+                      </strong>
+                    </span>
+                    <span>
+                      Custos compartilhados:{' '}
+                      <strong>
+                        {currency(preview?.platformFoundation.sharedCostCents)}
+                      </strong>
+                    </span>
+                    <span>
+                      Receita dos módulos:{' '}
+                      <strong>
+                        {currency(
+                          preview?.platformFoundation
+                            .moduleRecurringRevenueCents
+                        )}
+                      </strong>
+                    </span>
+                  </div>
                 </div>
                 <div className="mt-4 grid gap-4 sm:grid-cols-3">
                   <label className="text-sm font-medium text-slate-700">
@@ -1952,21 +2024,13 @@ export const SalesModularProposalBuilder = ({
                         Verto Clínica + ABA
                       </p>
                       <p className="mt-1 text-xs font-normal text-slate-500">
-                        Módulo clínico opcional. A capacidade técnica permanece
-                        vinculada à quantidade de pacientes contratada.
+                        Núcleo clínico obrigatório da Verto: pacientes, prontuários,
+                        painéis e portal do paciente. Os adicionais são contratados separadamente.
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => toggleItem(coreItem)}
-                      className={`min-h-10 rounded-xl border px-4 text-sm font-semibold transition ${
-                        coreSelection
-                          ? 'border-rose-200 bg-white text-rose-700 hover:bg-rose-50'
-                          : 'border-violet-200 bg-violet-600 text-white hover:bg-violet-700'
-                      }`}
-                    >
-                      {coreSelection ? 'Remover módulo clínico' : 'Incluir módulo clínico'}
-                    </button>
+                    <span className="inline-flex min-h-10 items-center rounded-xl border border-violet-200 bg-violet-50 px-4 text-sm font-semibold text-violet-700">
+                      Núcleo obrigatório
+                    </span>
                   </div>
                 ) : null}
                 {coreSelection && selectedBaseTier &&
@@ -1999,17 +2063,28 @@ export const SalesModularProposalBuilder = ({
                           className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                         />
                         <span className="mt-1 block text-xs font-normal text-slate-500">
-                          Valor comercial definido para esta clínica.
+                          Valor comercial definido para esta clínica. Os custos usam o perfil intensivo.
                         </span>
                       </label>
                       <dl className="grid gap-2 text-xs sm:grid-cols-3">
                         {[
-                          ['Mensalidade do módulo', currency(coreResult?.grossRecurringRevenueCents)],
                           [
-                            'Preço por paciente',
-                            currency(coreResult?.commercialPricing?.proposedPricePerPatientCents)
+                            'Custo total estimado',
+                            currency(
+                              coreResult &&
+                              [
+                                coreResult.promotional.directCostCents,
+                                coreResult.promotional.transactionAndTaxCostAllocatedCents,
+                                coreResult.promotional.sharedPlatformCostAllocatedCents
+                              ].every((value) => value !== null)
+                                ? Number(coreResult.promotional.directCostCents) +
+                                  Number(coreResult.promotional.transactionAndTaxCostAllocatedCents) +
+                                  Number(coreResult.promotional.sharedPlatformCostAllocatedCents)
+                                : null
+                            )
                           ],
-                          ['Pacientes contratados', String(input.patientQuantity)]
+                          ['Lucro líquido', currency(coreResult?.promotional.netIncomeCents)],
+                          ['Margem líquida', percent(coreResult?.promotional.netMarginBasisPoints)]
                         ].map(([label, value]) => (
                           <div key={label} className="rounded-lg bg-white p-3">
                             <dt className="font-normal text-slate-500">{label}</dt>
@@ -2510,6 +2585,12 @@ export const SalesModularProposalBuilder = ({
                         : preview.basePackage.availableQuantity}
                     </span>
                     <span>
+                      Fundação Verto:{' '}
+                      {currency(
+                        preview.platformFoundation.recurringAmountCents
+                      )}
+                    </span>
+                    <span>
                       Módulos após benefícios:{' '}
                       {currency(
                         preview.platformFoundation.moduleRecurringRevenueCents
@@ -2584,17 +2665,12 @@ export const SalesModularProposalBuilder = ({
                   Módulos e adicionais
                 </h2>
                 <p className="mt-1 text-sm font-normal text-slate-500">
-                  Escolha apenas os módulos que serão efetivamente contratados.
-                  Custos de plataforma permanecem internos, não são vendidos como módulo,
-                  e a implantação não é ofertada nesta fase comercial.
+                  O núcleo clínico Verto é obrigatório. Selecione abaixo apenas
+                  os módulos adicionais necessários para esta clínica.
                 </p>
                 <div className="mt-4 space-y-3">
                   {catalog.items
-                    .filter(
-                      (item) =>
-                        item.itemKey !== 'clinical_core' &&
-                        item.itemKey !== 'onboarding'
-                    )
+                    .filter((item) => item.itemKey !== 'clinical_core')
                     .map((item) => {
                     const line = input.lines.find(
                       (selection) => selection.itemKey === item.itemKey
@@ -3169,7 +3245,7 @@ export const SalesModularProposalBuilder = ({
                                             <div className="bg-white p-2.5"><dt className="text-slate-500">Encerramento</dt><dd className="mt-0.5 font-medium text-slate-800">{resultLine.offerDiscount.endsAt ? formatSalesCommercialDate(resultLine.offerDiscount.endsAt) : 'Sem término'}</dd></div>
                                             <div className="bg-white p-2.5"><dt className="text-slate-500">Impacto mensal</dt><dd className="mt-0.5 font-medium text-amber-700">− {currency(resultLine.offerDiscount.priceBeforeDiscountCents - resultLine.offerDiscount.discountedPriceCents)}</dd></div>
                                             <div className="bg-white p-2.5"><dt className="text-slate-500">Impacto no primeiro ano</dt><dd className="mt-0.5 font-medium text-amber-700">− {currency((resultLine.offerDiscount.priceBeforeDiscountCents - resultLine.offerDiscount.discountedPriceCents) * Math.min(12, resultLine.offerDiscount.durationUnit === 'days' ? Math.ceil(Number(resultLine.offerDiscount.durationCount || 0) / 30) : Number(resultLine.offerDiscount.durationCount || 12)))}</dd></div>
-                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Preço promoção / depois</dt><dd className="mt-0.5 font-medium text-slate-800">{currency(resultLine.offerDiscount.discountedPriceCents)} / {currency(resultLine.offerDiscount.priceAfterExpirationCents)}</dd></div>
+                                            <div className="bg-white p-2.5"><dt className="text-slate-500">Margem promoção / depois</dt><dd className="mt-0.5 font-medium text-slate-800">{percent(resultLine.promotional.ebitdaMarginBasisPoints)} / {percent(resultLine.postPromotion.ebitdaMarginBasisPoints)}</dd></div>
                                           </dl>
                                         ) : null}
                                       </>
@@ -3179,11 +3255,7 @@ export const SalesModularProposalBuilder = ({
                               </div>
                             ) : null}
                             {enabled && resultLine ? (
-                              <details className="mt-3 rounded-xl border border-slate-200 bg-slate-50/50">
-                                <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-600">
-                                  Auditoria técnica histórica do módulo
-                                </summary>
-                                <div className="grid gap-2 border-t border-slate-200 bg-white p-3 sm:grid-cols-3">
+                              <div className="mt-3 grid gap-2 rounded-xl border border-slate-200 bg-white p-3 sm:grid-cols-3">
                                 <div>
                                   <p className="text-[11px] font-normal text-slate-500">
                                     Custo direto
@@ -3223,8 +3295,7 @@ export const SalesModularProposalBuilder = ({
                                     {resultLine.warnings.join(' ')}
                                   </p>
                                 ) : null}
-                                </div>
-                              </details>
+                              </div>
                             ) : null}
                           </div>
                         </div>
@@ -3235,12 +3306,7 @@ export const SalesModularProposalBuilder = ({
               </section>
 
               {preview ? (
-                <details className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <summary className="cursor-pointer list-none px-4 py-3 sm:px-5">
-                    <span className="block text-sm font-semibold text-slate-900">Modelo histórico por módulo</span>
-                    <span className="mt-1 block text-xs font-normal text-slate-500">Preservado para auditoria; não entra no resultado operacional atual.</span>
-                  </summary>
-                  <div className="border-t border-slate-100 p-4 sm:p-5">
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                       <h2 className="text-base font-semibold text-slate-900">Resultado por módulo</h2>
@@ -3265,13 +3331,7 @@ export const SalesModularProposalBuilder = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {preview.lines
-                          .filter(
-                            (line) =>
-                              line.itemKey !== 'platform_foundation' &&
-                              line.itemKey !== 'onboarding'
-                          )
-                          .map((line) => {
+                        {preview.lines.map((line) => {
                           const totalCostCents = [
                             line.promotional.directCostCents,
                             line.promotional.transactionAndTaxCostAllocatedCents,
@@ -3297,8 +3357,7 @@ export const SalesModularProposalBuilder = ({
                       </tbody>
                     </table>
                   </div>
-                  </div>
-                </details>
+                </section>
               ) : null}
 
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -3393,11 +3452,11 @@ export const SalesModularProposalBuilder = ({
                       ))}
                     </select>
                   </label>
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
-                    <p className="text-sm font-medium text-slate-700">Modelo financeiro atual</p>
-                    <p className="mt-1 text-sm font-semibold text-emerald-800">Custos reais da fase MEI</p>
+                  <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-3">
+                    <p className="text-sm font-medium text-slate-700">Base de custo</p>
+                    <p className="mt-1 text-sm font-semibold text-violet-800">Uso intensivo</p>
                     <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
-                      Resultado = receita − DAS − Stripe − Supabase − Railway.
+                      Todas as simulações usam as premissas intensivas versionadas.
                     </p>
                   </div>
                   <label className="text-sm font-medium text-slate-700 sm:col-span-2">
@@ -3448,7 +3507,7 @@ export const SalesModularProposalBuilder = ({
                     placeholder="Nunca será exibida na proposta pública."
                   />
                 </label>
-                {legacyProposalRequiresApproval ? (
+                {proposalReview?.requiresCommercialApproval ? (
                   <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
                     <div className="flex items-start gap-3">
                       <AlertTriangle
@@ -3538,11 +3597,10 @@ export const SalesModularProposalBuilder = ({
                     <h2 className="text-base font-semibold text-slate-900">
                       Projeções da proposta
                     </h2>
-                    {preview.oneTimeRevenueCents > 0 ? (
-                      <p className="mt-1 text-sm font-normal text-slate-500">
-                        Valor pontual reconhecido conforme a condição comercial.
-                      </p>
-                    ) : null}
+                    <p className="mt-1 text-sm font-normal text-slate-500">
+                      Implantação reconhecida conforme o parcelamento comercial,
+                      sem criar cobrança na Stripe.
+                    </p>
                   </div>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <div className="rounded-xl border border-violet-100 bg-violet-50 p-3">
@@ -3569,15 +3627,17 @@ export const SalesModularProposalBuilder = ({
                     </div>
                   </div>
                   <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
-                    <table className="min-w-[760px] w-full text-left text-xs">
+                    <table className="min-w-[1760px] w-full text-left text-xs">
                       <thead className="bg-slate-50 text-slate-500">
                         <tr>
                           <th className="px-3 py-2 font-medium">Horizonte</th>
                           <th className="px-3 py-2 font-medium">Receita recorrente</th>
-                          {preview.oneTimeRevenueCents > 0 ? (
-                            <th className="px-3 py-2 font-medium">Valor pontual</th>
-                          ) : null}
+                          <th className="px-3 py-2 font-medium">Implantação</th>
                           <th className="px-3 py-2 font-medium">Desconto acumulado</th>
+                          <th className="px-3 py-2 font-medium">
+                            EBITDA atribuído
+                          </th>
+                          <th className="px-3 py-2 font-medium">Lucro</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -3591,13 +3651,17 @@ export const SalesModularProposalBuilder = ({
                               <td className="px-3 py-3">
                                 {currency(projection.recurringRevenueCents)}
                               </td>
-                              {preview.oneTimeRevenueCents > 0 ? (
-                                <td className="px-3 py-3">
-                                  {currency(projection.oneTimeRevenueCents)}
-                                </td>
-                              ) : null}
+                              <td className="px-3 py-3">
+                                {currency(projection.oneTimeRevenueCents)}
+                              </td>
                               <td className="px-3 py-3">
                                 {currency(projection.discountImpactCents)}
+                              </td>
+                              <td className="px-3 py-3">
+                                {currency(projection.ebitdaCents)}
+                              </td>
+                              <td className="px-3 py-3">
+                                {currency(projection.netIncomeCents)}
                               </td>
                             </tr>
                           );
@@ -3605,18 +3669,47 @@ export const SalesModularProposalBuilder = ({
                       </tbody>
                     </table>
                   </div>
-                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-xs font-normal leading-5 text-slate-600">
-                    Esta projeção mostra apenas receita contratada e benefícios comerciais. O resultado operacional atual é calculado separadamente com DAS, Stripe, Supabase e Railway.
-                  </div>
+                  <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-xl bg-slate-50 p-3">
+                      <dt className="text-xs text-slate-500">
+                        Implantação total
+                      </dt>
+                      <dd className="mt-1 text-sm font-semibold text-slate-900">
+                        {currency(preview.oneTimeRevenueCents)}
+                      </dd>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {input.onboardingInstallments ?? 1}{' '}
+                        {(input.onboardingInstallments ?? 1) === 1
+                          ? 'parcela'
+                          : 'parcelas'}
+                      </p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 p-3">
+                      <dt className="text-xs text-slate-500">
+                        Preço-alvo de margem
+                      </dt>
+                      <dd className="mt-1 text-sm font-semibold text-slate-900">
+                        {currency(
+                          preview.minimumRecommendedRecurringRevenueCents
+                        )}
+                      </dd>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 p-3">
+                      <dt className="text-xs text-slate-500">
+                        Folga para desconto até a meta
+                      </dt>
+                      <dd className="mt-1 text-sm font-semibold text-slate-900">
+                        {percent(
+                          preview.maximumRecommendedDiscountBasisPoints
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
                 </section>
               ) : null}
 
               {preview?.economics ? (
-                <details className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <summary className="cursor-pointer list-none px-4 py-3 sm:px-5">
-                    <span className="block text-sm font-semibold text-slate-900">Modelo econômico histórico</span>
-                    <span className="mt-1 block text-xs font-normal text-slate-500">Custos por módulo, política de EBITDA e simulador de escala foram preservados para auditoria, mas não entram no resultado atual do MEI.</span>
-                  </summary>
+                <section className="overflow-hidden rounded-2xl border border-violet-200 bg-white shadow-sm">
                   <div className="border-b border-violet-100 bg-violet-50/50 px-4 py-4 sm:px-5">
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div>
@@ -3627,9 +3720,9 @@ export const SalesModularProposalBuilder = ({
                           Economia da clínica
                         </h2>
                         <p className="mt-1 max-w-2xl text-sm font-normal leading-6 text-slate-600">
-                          Custos compartilhados da plataforma e a tarifa fixa são
-                          considerados uma única vez no consolidado. Cada módulo mostra
-                          apenas seu custo direto e sua margem incremental.
+                          A Fundação Verto absorve os custos compartilhados e a tarifa
+                          fixa uma única vez. Cada módulo mostra apenas seu custo e sua
+                          margem incremental.
                         </p>
                       </div>
                       <span
@@ -4020,7 +4113,7 @@ export const SalesModularProposalBuilder = ({
                       ) : null}
                     </div>
                   </div>
-                </details>
+                </section>
               ) : null}
 
               {preview?.commercialPhases?.length ? (
@@ -4052,8 +4145,10 @@ export const SalesModularProposalBuilder = ({
                             </div>
                           ))}
                         </div>
-                        <div className="mt-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
-                          Receita recorrente da fase: <strong className="text-slate-900">{currency(phase.recurringRevenueCents)}</strong>
+                        <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg bg-slate-50 p-2 text-xs">
+                          <span>Receita<br /><strong>{currency(phase.recurringRevenueCents)}</strong></span>
+                          <span>EBITDA atribuído<br /><strong>{currency(phase.ebitdaCents)}</strong></span>
+                          <span>Margem<br /><strong>{percent(phase.marginBasisPoints)}</strong></span>
                         </div>
                       </article>
                     ))}
@@ -4218,15 +4313,19 @@ export const SalesModularProposalBuilder = ({
                 )}
                 {comparedSimulations.length > 0 ? (
                   <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
-                    <table className="min-w-[900px] w-full text-left text-xs">
+                    <table className="min-w-[1080px] w-full text-left text-xs">
                       <thead className="bg-slate-50 text-slate-500">
                         <tr>
                           <th className="px-3 py-2 font-medium">Cenário</th>
                           <th className="px-3 py-2 font-medium">Funcionalidades e limites</th>
                           <th className="px-3 py-2 font-medium">Total</th>
                           <th className="px-3 py-2 font-medium">Desconto</th>
-                          <th className="px-3 py-2 font-medium">Resultado mensal</th>
-                          <th className="px-3 py-2 font-medium">Margem atual</th>
+                          <th className="px-3 py-2 font-medium">Custos</th>
+                          <th className="px-3 py-2 font-medium">
+                            EBITDA atribuído
+                          </th>
+                          <th className="px-3 py-2 font-medium">Margem</th>
+                          <th className="px-3 py-2 font-medium">Lucro</th>
                           <th className="px-3 py-2 font-medium">Diferença</th>
                         </tr>
                       </thead>
@@ -4267,10 +4366,20 @@ export const SalesModularProposalBuilder = ({
                                 )}
                               </td>
                               <td className="px-3 py-3">
-                                {currency(result.currentOperatingSummary?.operatingResultCents)}
+                                {currency(
+                                  result.promotional.totalEstimatedCostCents
+                                )}
                               </td>
                               <td className="px-3 py-3">
-                                {percent(result.currentOperatingSummary?.operatingMarginBasisPoints)}
+                                {currency(result.promotional.ebitdaCents)}
+                              </td>
+                              <td className="px-3 py-3">
+                                {percent(
+                                  result.promotional.ebitdaMarginBasisPoints
+                                )}
+                              </td>
+                              <td className="px-3 py-3">
+                                {currency(result.promotional.netIncomeCents)}
                               </td>
                               <td className="px-3 py-3 font-medium">
                                 {index === 0
@@ -4291,34 +4400,15 @@ export const SalesModularProposalBuilder = ({
 
             <aside className="min-w-0 space-y-4 lg:sticky lg:top-[104px] lg:self-start">
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-base font-semibold text-slate-900">
-                      Resultado mensal da operação
-                    </h2>
-                    <p className="mt-1 text-xs font-normal text-slate-500">
-                      Modelo atual: MEI · uma clínica pagante.
-                    </p>
-                  </div>
-                  {currentOperatingSummary ? (
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-base font-semibold text-slate-900">
+                    Resumo financeiro da proposta
+                  </h2>
+                  {preview ? (
                     <span
-                      className={`rounded-full border px-2.5 py-1 text-xs font-medium ${
-                        currentOperatingSummary.rating === 'healthy'
-                          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                          : currentOperatingSummary.rating === 'attention'
-                            ? 'border-amber-200 bg-amber-50 text-amber-800'
-                            : currentOperatingSummary.rating === 'negative'
-                              ? 'border-rose-200 bg-rose-50 text-rose-800'
-                              : 'border-slate-200 bg-slate-100 text-slate-700'
-                      }`}
+                      className={`rounded-full border px-2.5 py-1 text-xs font-medium ${ratingStyle[preview.rating]}`}
                     >
-                      {currentOperatingSummary.rating === 'healthy'
-                        ? 'Margem dentro do alvo'
-                        : currentOperatingSummary.rating === 'attention'
-                          ? 'Margem abaixo do alvo'
-                          : currentOperatingSummary.rating === 'negative'
-                            ? 'Resultado negativo'
-                            : 'Complete os custos reais'}
+                      {ratingLabel[preview.rating]}
                     </span>
                   ) : null}
                 </div>
@@ -4326,66 +4416,110 @@ export const SalesModularProposalBuilder = ({
                   <>
                     <div className="mt-4 rounded-2xl bg-slate-950 p-4 text-white">
                       <p className="text-xs font-normal text-slate-300">
-                        Mensalidade cobrada do cliente
+                        Valor mensal cobrado do cliente
                       </p>
                       <p className="mt-1 text-2xl font-semibold">
                         {currency(
                           preview.commercialPricing.enabled &&
-                            preview.commercialPricing.missingPriceItemKeys.length > 0
+                            preview.commercialPricing.missingPriceItemKeys
+                              .length > 0
                             ? null
                             : preview.promotionalRecurringRevenueCents
                         )}
                       </p>
                       {input.globalDiscountBasisPoints > 0 ? (
                         <p className="mt-1 text-xs font-normal text-slate-300">
-                          Depois: {currency(preview.postPromotionRecurringRevenueCents)}/mês
+                          Depois: {currency(preview.postPromotionRecurringRevenueCents)}
+                          /mês
                         </p>
                       ) : null}
                     </div>
-
-                    {currentOperatingSummary ? (
+                    {promotionalMoneyFlow ? (
                       <>
                         <dl className="mt-4 grid grid-cols-2 gap-3">
                           {[
                             {
-                              label: 'Receita mensal',
-                              value: currency(currentOperatingSummary.revenueCents),
-                              help: 'Valor mensal cobrado da clínica.'
+                              label: 'Receita bruta mensal',
+                              value: currency(promotionalMoneyFlow.revenueCents),
+                              help:
+                                'Valor mensal cobrado do cliente antes de taxas, impostos, perdas e custos.'
                             },
                             {
-                              label: 'DAS MEI',
-                              value: currency(currentOperatingSummary.meiDasMonthlyCents),
-                              help: 'Contribuição mensal fixa do MEI configurada nas premissas vigentes.'
+                              label: 'Impostos estimados',
+                              value: currency(promotionalMoneyFlow.totalTaxCents),
+                              help:
+                                'Soma dos impostos sobre faturamento e do imposto sobre o lucro estimado.'
                             },
                             {
-                              label: 'Stripe',
-                              value: currency(currentOperatingSummary.stripeFeeCents),
-                              help: 'Tarifa percentual e tarifa fixa configuradas para uma cobrança mensal.'
+                              label: 'Stripe e perdas estimadas',
+                              value: currency(
+                                promotionalMoneyFlow.paymentFeesCents === null ||
+                                  promotionalMoneyFlow.lossProvisionCents === null
+                                  ? null
+                                  : promotionalMoneyFlow.paymentFeesCents +
+                                      promotionalMoneyFlow.lossProvisionCents
+                              ),
+                              help:
+                                'Tarifas do meio de pagamento, inadimplência, estornos e chargebacks.'
                             },
                             {
-                              label: 'Supabase',
-                              value: currency(currentOperatingSummary.supabaseMonthlyCostCents),
-                              help: 'Valor real da fatura mensal do Supabase. Na fase atual, 100% é atribuído à única clínica pagante.'
+                              label: 'Custos diretos do serviço',
+                              value: currency(
+                                promotionalMoneyFlow.directCostsTotalCents
+                              ),
+                              help:
+                                'Custos dos módulos, pacientes, uso, armazenamento, tráfego, notificações, suporte e operação direta.'
                             },
                             {
-                              label: 'Railway',
-                              value: currency(currentOperatingSummary.railwayMonthlyCostCents),
-                              help: 'Valor real da fatura mensal do Railway. Na fase atual, 100% é atribuído à única clínica pagante.'
+                              label: 'Margem de contribuição',
+                              value: `${currency(
+                                promotionalMoneyFlow.contributionMarginCents
+                              )} · ${percent(
+                                preview.promotional.contributionMarginBasisPoints
+                              )}`,
+                              help:
+                                'O que sobra depois das deduções da receita e dos custos diretos. Esse valor ajuda a pagar a estrutura da Verto.'
                             },
                             {
-                              label: 'Resultado mensal',
-                              value: currency(currentOperatingSummary.operatingResultCents),
-                              help: 'Receita menos DAS MEI, Stripe, Supabase e Railway. Não é uma DRE contábil completa.'
+                              label: 'Estrutura operacional atribuída',
+                              value: currency(
+                                promotionalMoneyFlow.sharedOperatingCostsTotalCents
+                              ),
+                              help:
+                                'Parcela de plataforma, suporte-base, operação e custos compartilhados atribuída a esta proposta. Não é o custo marginal de um paciente.'
                             },
                             {
-                              label: 'Margem operacional atual',
-                              value: percent(currentOperatingSummary.operatingMarginBasisPoints),
-                              help: 'Resultado mensal dividido pela receita mensal, usando somente os custos reais definidos para a fase atual.'
+                              label: 'EBITDA atribuído',
+                              value: `${currency(
+                                promotionalMoneyFlow.ebitdaCents
+                              )} · ${percent(
+                                preview.promotional.ebitdaMarginBasisPoints
+                              )}`,
+                              help:
+                                'Resultado operacional estimado depois dos custos diretos e da estrutura atribuída, antes de depreciação, despesas financeiras e imposto sobre o lucro.'
                             },
                             {
-                              label: 'Margem mínima desejada',
-                              value: percent(currentOperatingSummary.targetOperatingMarginBasisPoints),
-                              help: 'Meta interna usada apenas para avaliar a saúde comercial da proposta.'
+                              label: 'Despesas após o EBITDA',
+                              value: currency(
+                                promotionalMoneyFlow.belowEbitdaExpensesTotalCents ===
+                                  null ||
+                                  promotionalMoneyFlow.profitTaxCents === null
+                                  ? null
+                                  : promotionalMoneyFlow.belowEbitdaExpensesTotalCents +
+                                      promotionalMoneyFlow.profitTaxCents
+                              ),
+                              help:
+                                'Depreciação e amortização, despesas financeiras, outras despesas abaixo do EBITDA e imposto sobre o lucro.'
+                            },
+                            {
+                              label: 'Lucro líquido estimado',
+                              value: `${currency(
+                                promotionalMoneyFlow.netIncomeCents
+                              )} · ${percent(
+                                preview.promotional.netMarginBasisPoints
+                              )}`,
+                              help:
+                                'Resultado estimado depois de todos os custos e impostos modelados. Não equivale automaticamente a dinheiro disponível para retirada.'
                             }
                           ].map(({ label, value, help }) => (
                             <div key={label} className="rounded-xl bg-slate-50 p-3">
@@ -4406,83 +4540,291 @@ export const SalesModularProposalBuilder = ({
                           ))}
                         </dl>
 
-                        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3 text-xs">
-                          <p className="font-semibold text-slate-900">
-                            Como o resultado é calculado
-                          </p>
-                          <div className="mt-3 space-y-2">
-                            {[
-                              ['Receita mensal', currentOperatingSummary.revenueCents, false],
-                              ['DAS MEI', currentOperatingSummary.meiDasMonthlyCents, true],
-                              ['Stripe', currentOperatingSummary.stripeFeeCents, true],
-                              ['Supabase', currentOperatingSummary.supabaseMonthlyCostCents, true],
-                              ['Railway', currentOperatingSummary.railwayMonthlyCostCents, true]
-                            ].map(([label, amount, deduction]) => (
-                              <div
-                                key={String(label)}
-                                className="flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
-                              >
-                                <span className="font-normal text-slate-600">{String(label)}</span>
-                                <strong className="shrink-0 text-slate-900">
-                                  {deduction ? '− ' : ''}{currency(amount as number | null)}
+                        <details
+                          open
+                          className="mt-4 rounded-xl border border-slate-200 bg-white"
+                        >
+                          <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold text-slate-900">
+                            Para onde vai a mensalidade
+                            <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                              Acompanhe o dinheiro desde a cobrança até o lucro líquido estimado.
+                            </span>
+                          </summary>
+                          <div className="space-y-4 border-t border-slate-100 p-3 text-xs">
+                            <div className="rounded-lg bg-slate-950 px-3 py-3 text-white">
+                              <div className="flex items-center justify-between gap-3">
+                                <span>Receita bruta mensal</span>
+                                <strong>{currency(promotionalMoneyFlow.revenueCents)}</strong>
+                              </div>
+                              <p className="mt-1 text-[11px] leading-relaxed text-slate-300">
+                                Valor cobrado do cliente antes de qualquer dedução.
+                              </p>
+                            </div>
+
+                            <section>
+                              <p className="font-semibold text-slate-800">
+                                1. Taxas, impostos e perdas sobre a receita
+                              </p>
+                              <div className="mt-2 space-y-1.5">
+                                {promotionalMoneyFlow.revenueDeductions.map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
+                                    title={item.explanation}
+                                  >
+                                    <span className="font-normal text-slate-600">
+                                      {item.label}
+                                    </span>
+                                    <strong className="shrink-0 text-slate-900">
+                                      − {currency(item.amountCents)}
+                                    </strong>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-3 border-t border-slate-200 pt-2 font-medium text-slate-800">
+                                <span>Receita após essas deduções</span>
+                                <strong>
+                                  {currency(
+                                    promotionalMoneyFlow.revenueAfterDeductionsCents
+                                  )}
                                 </strong>
                               </div>
-                            ))}
-                            <div className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 px-2.5 py-2 text-emerald-900">
-                              <span className="font-semibold">Resultado mensal da operação</span>
-                              <strong>
-                                {currency(currentOperatingSummary.operatingResultCents)}
-                                {currentOperatingSummary.operatingMarginBasisPoints == null
-                                  ? ''
-                                  : ` · ${percent(currentOperatingSummary.operatingMarginBasisPoints)}`}
-                              </strong>
-                            </div>
-                          </div>
-                          <p className="mt-3 leading-relaxed text-slate-500">
-                            Nesta fase não entram provisões de inadimplência, chargeback,
-                            custos diretos por módulo, rateios, EBITDA atribuído, depreciação
-                            ou lucro líquido estimado. O objetivo é mostrar somente o que a
-                            Verto efetivamente paga hoje para operar.
-                          </p>
-                        </div>
+                            </section>
 
-                        {currentOperatingSummary.missingFields.length > 0 ? (
-                          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-                            <p className="font-semibold">Faltam custos reais para fechar a margem.</p>
-                            <p className="mt-1 leading-relaxed">
-                              Preencha: {currentOperatingSummary.missingFields
-                                .map((field) => currentOperatingMissingLabel[field] || field)
-                                .join(', ')}. A Verto não assume custo zero para campos ainda
-                              não informados.
-                            </p>
-                            <button
-                              type="button"
-                              onClick={onOpenAssumptions}
-                              className="mt-2 font-medium text-amber-950 underline underline-offset-2"
-                            >
-                              Abrir premissas financeiras
-                            </button>
+                            <section>
+                              <p className="font-semibold text-slate-800">
+                                2. Custos diretos para entregar o serviço
+                              </p>
+                              <div className="mt-2 space-y-1.5">
+                                {promotionalMoneyFlow.directCosts.map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
+                                    title={item.explanation}
+                                  >
+                                    <span className="font-normal text-slate-600">
+                                      {item.label}
+                                    </span>
+                                    <strong className="shrink-0 text-slate-900">
+                                      − {currency(item.amountCents)}
+                                    </strong>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-emerald-50 px-2.5 py-2 font-medium text-emerald-900">
+                                <span>Margem de contribuição</span>
+                                <strong>
+                                  {currency(promotionalMoneyFlow.contributionMarginCents)} ·{' '}
+                                  {percent(
+                                    preview.promotional
+                                      .contributionMarginBasisPoints
+                                  )}
+                                </strong>
+                              </div>
+                              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                                É o valor que sobra para pagar a estrutura da Verto e gerar resultado.
+                              </p>
+                            </section>
+
+                            <section>
+                              <p className="font-semibold text-slate-800">
+                                3. Estrutura da Verto atribuída à proposta
+                              </p>
+                              <div className="mt-2 space-y-1.5">
+                                {promotionalMoneyFlow.sharedOperatingCosts.map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
+                                    title={item.explanation}
+                                  >
+                                    <span className="font-normal text-slate-600">
+                                      {item.label}
+                                    </span>
+                                    <strong className="shrink-0 text-slate-900">
+                                      − {currency(item.amountCents)}
+                                    </strong>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-violet-50 px-2.5 py-2 font-medium text-violet-900">
+                                <span>EBITDA atribuído</span>
+                                <strong>
+                                  {currency(promotionalMoneyFlow.ebitdaCents)} ·{' '}
+                                  {percent(preview.promotional.ebitdaMarginBasisPoints)}
+                                </strong>
+                              </div>
+                              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                                Resultado operacional estimado antes das despesas contábeis e financeiras abaixo.
+                              </p>
+                            </section>
+
+                            <section>
+                              <p className="font-semibold text-slate-800">
+                                4. Despesas depois do EBITDA
+                              </p>
+                              <div className="mt-2 space-y-1.5">
+                                {promotionalMoneyFlow.belowEbitdaExpenses.map((item) => (
+                                  <div
+                                    key={item.key}
+                                    className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2"
+                                    title={item.explanation}
+                                  >
+                                    <span className="font-normal text-slate-600">
+                                      {item.label}
+                                    </span>
+                                    <strong className="shrink-0 text-slate-900">
+                                      − {currency(item.amountCents)}
+                                    </strong>
+                                  </div>
+                                ))}
+                                <div className="flex items-start justify-between gap-3 rounded-lg bg-slate-50 px-2.5 py-2">
+                                  <span className="font-normal text-slate-600">
+                                    Imposto sobre o lucro estimado
+                                  </span>
+                                  <strong className="shrink-0 text-slate-900">
+                                    − {currency(promotionalMoneyFlow.profitTaxCents)}
+                                  </strong>
+                                </div>
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-3 rounded-lg bg-slate-900 px-2.5 py-2 font-semibold text-white">
+                                <span>Lucro líquido estimado</span>
+                                <strong>
+                                  {currency(promotionalMoneyFlow.netIncomeCents)} ·{' '}
+                                  {percent(preview.promotional.netMarginBasisPoints)}
+                                </strong>
+                              </div>
+                            </section>
+
+                            <section className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-950">
+                              <p className="font-semibold">
+                                Quanto pode ir para retirada dos sócios?
+                              </p>
+                              <p className="mt-1 leading-relaxed">
+                                <strong>Não calculado.</strong>{' '}
+                                {promotionalMoneyFlow.distributableCashReason}
+                              </p>
+                            </section>
+
+                            {!promotionalMoneyFlow.reconciled ? (
+                              <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-rose-900">
+                                O detalhamento não reconciliou com o snapshot. Não use esta composição para decisão até revisar as premissas.
+                              </div>
+                            ) : null}
                           </div>
-                        ) : currentOperatingSummary.rating === 'attention' ? (
-                          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-                            <p className="font-semibold">Margem operacional abaixo da meta atual.</p>
-                            <p className="mt-1 leading-relaxed">
-                              Margem atual: {percent(currentOperatingSummary.operatingMarginBasisPoints)}.
-                              Meta: {percent(currentOperatingSummary.targetOperatingMarginBasisPoints)}.
-                              {currentOperatingSummary.targetGapCents && currentOperatingSummary.targetGapCents > 0
-                                ? ` Faltam ${currency(currentOperatingSummary.targetGapCents)} por mês para atingir a meta.`
-                                : ''}
-                            </p>
+                        </details>
+
+                        <details className="mt-3 rounded-xl border border-slate-200 bg-white">
+                          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
+                            Custos e receitas por componente contratado
+                          </summary>
+                          <div className="space-y-2 border-t border-slate-100 p-3 text-xs">
+                            {promotionalMoneyFlow.moduleCosts.map((item) => (
+                              <div
+                                key={item.itemKey}
+                                className="rounded-lg bg-slate-50 px-3 py-2"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="font-medium text-slate-800">
+                                      {item.publicName}
+                                    </p>
+                                    <p className="mt-0.5 text-[11px] text-slate-500">
+                                      Fonte do custo: {costSourceLabel[item.costSource] || item.costSource}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="font-medium text-slate-900">
+                                      Receita {currency(item.revenueCents)}
+                                    </p>
+                                    <p className="mt-0.5 text-slate-600">
+                                      Custo direto {currency(item.directCostCents)}
+                                    </p>
+                                  </div>
+                                </div>
+                                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                                  {item.costSourceDetail}
+                                </p>
+                              </div>
+                            ))}
                           </div>
-                        ) : currentOperatingSummary.rating === 'negative' ? (
-                          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900">
-                            <p className="font-semibold">A operação ficaria negativa neste valor.</p>
-                            <p className="mt-1 leading-relaxed">
-                              Revise o preço ou os custos reais antes de publicar a proposta.
-                            </p>
-                          </div>
-                        ) : null}
+                        </details>
+
+                        <details className="mt-3 rounded-xl border border-slate-200 bg-white">
+                          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
+                            Indicadores técnicos de preço e margem
+                          </summary>
+                          <dl className="grid grid-cols-2 gap-2 border-t border-slate-100 p-3 text-xs">
+                            {[
+                              [
+                                'Preço de equilíbrio EBITDA',
+                                currency(preview.breakEvenRecurringRevenueCents)
+                              ],
+                              [
+                                `Preço-alvo para ${percent(
+                                  preview.targetEbitdaMarginBasisPoints
+                                )}`,
+                                currency(preview.targetRecurringRevenueCents)
+                              ],
+                              [
+                                'Diferença mensal para o alvo',
+                                currency(preview.targetGapCents)
+                              ],
+                              [
+                                'Diferença anual para o alvo',
+                                currency(preview.targetGapAnnualCents)
+                              ],
+                              [
+                                'Markup sobre custos até o EBITDA',
+                                markup(
+                                  preview.markupMultiplier,
+                                  preview.markupOnEbitdaCostBasisPoints
+                                )
+                              ],
+                              [
+                                'Folga para desconto até a meta',
+                                percent(
+                                  preview.maximumRecommendedDiscountBasisPoints
+                                )
+                              ]
+                            ].map(([label, value]) => (
+                              <div key={String(label)} className="rounded-lg bg-slate-50 px-2.5 py-2">
+                                <dt className="font-normal text-slate-500">
+                                  {label}
+                                </dt>
+                                <dd className="mt-0.5 font-medium text-slate-900">
+                                  {value}
+                                </dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </details>
                       </>
+                    ) : null}
+                    {preview.rating === 'attention' ||
+                    preview.rating === 'not_recommended' ? (
+                      <div
+                        className={`mt-4 rounded-xl border p-3 text-xs ${
+                          preview.rating === 'not_recommended'
+                            ? 'border-rose-200 bg-rose-50 text-rose-800'
+                            : 'border-amber-200 bg-amber-50 text-amber-800'
+                        }`}
+                      >
+                        <p className="font-semibold">
+                          {preview.rating === 'not_recommended'
+                            ? 'O EBITDA atribuído está negativo.'
+                            : 'A proposta está abaixo da margem-alvo.'}
+                        </p>
+                        <p className="mt-1 leading-relaxed">
+                          Margem atual:{' '}
+                          {percent(preview.promotional.ebitdaMarginBasisPoints)}.
+                          Meta:{' '}
+                          {percent(preview.targetEbitdaMarginBasisPoints)}.
+                          Diferença: {currency(preview.targetGapCents)} por mês
+                          e {currency(preview.targetGapAnnualCents)} por ano. A
+                          proposta pode continuar; este aviso não bloqueia o
+                          orçamento nem o Stripe.
+                        </p>
+                      </div>
                     ) : null}
                     <div className="mt-4 rounded-xl border border-slate-200 p-3">
                       <p className="text-xs font-medium text-slate-700">
@@ -4572,28 +4914,72 @@ export const SalesModularProposalBuilder = ({
                     </div>
                     <details className="mt-3 rounded-xl border border-slate-200 bg-white">
                       <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-slate-700">
-                        Receita contratada e próxima expansão
+                        Resultado em 12 meses e próxima expansão
                       </summary>
                       <dl className="grid grid-cols-2 gap-3 border-t border-slate-100 p-3 text-xs">
                         {[
                           [
-                            'Receita contratada em 12 meses',
+                            'Receita em 12 meses',
                             currency(
                               preview.horizons['12'].recurringRevenueCents +
                                 preview.horizons['12'].oneTimeRevenueCents
                             )
                           ],
                           [
-                            'Benefício comercial em 12 meses',
-                            currency(preview.horizons['12'].discountImpactCents)
+                            'Custo em 12 meses',
+                            preview.horizons['12'].ebitdaCents === null
+                              ? 'Dados insuficientes'
+                              : currency(
+                                  preview.horizons['12']
+                                    .recurringRevenueCents +
+                                    preview.horizons['12']
+                                      .oneTimeRevenueCents -
+                                    preview.horizons['12'].ebitdaCents
+                                )
                           ],
                           [
-                            'Mensalidade após benefício',
-                            currency(preview.postPromotionRecurringRevenueCents)
+                            'EBITDA atribuído em 12 meses',
+                            currency(preview.horizons['12'].ebitdaCents)
+                          ],
+                          [
+                            'Valor subsidiado',
+                            currency(
+                              preview.horizons['12'].discountImpactCents
+                            )
                           ],
                           [
                             'Preço do próximo bloco',
-                            currency(preview.commercialPricing.nextBlockPriceCents)
+                            currency(
+                              preview.commercialPricing.nextBlockPriceCents
+                            )
+                          ],
+                          [
+                            'Custo marginal do próximo bloco',
+                            currency(
+                              preview.commercialPricing
+                                .nextBlockMarginalCostCents
+                            )
+                          ],
+                          [
+                            'Contribuição do próximo bloco',
+                            currency(
+                              preview.commercialPricing
+                                .nextBlockContributionCents
+                            )
+                          ],
+                          [
+                            'Margem incremental do próximo bloco',
+                            percent(
+                              preview.commercialPricing
+                                .nextBlockMarginBasisPoints
+                            )
+                          ],
+                          [
+                            'Preço-alvo do próximo bloco',
+                            currency(
+                              currentCapacityBlockPhase
+                                ?.blockMinimumPriceCents
+                            )
                           ]
                         ].map(([label, value]) => (
                           <div key={String(label)}>
@@ -4607,7 +4993,7 @@ export const SalesModularProposalBuilder = ({
                         ))}
                       </dl>
                     </details>
-                    {!usesCurrentOperatingModel && preview.missingCosts.length > 0 ? (
+                    {preview.missingCosts.length > 0 ? (
                       <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
                         <p className="font-medium">Custos ainda indisponíveis</p>
                         <p className="mt-1 font-normal">
@@ -4696,7 +5082,7 @@ export const SalesModularProposalBuilder = ({
                         </div>
                       </div>
                     ) : null}
-                    {!usesCurrentOperatingModel && preview.missingDrivers.length > 0 ? (
+                    {preview.missingDrivers.length > 0 ? (
                       <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
                         <p className="font-medium">Dados insuficientes</p>
                         <p className="mt-1 font-normal">
@@ -4709,7 +5095,7 @@ export const SalesModularProposalBuilder = ({
                         </p>
                       </div>
                     ) : null}
-                    {!usesCurrentOperatingModel && preview.possibleDuplicateCosts.length > 0 ? (
+                    {preview.possibleDuplicateCosts.length > 0 ? (
                       <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs leading-5 text-rose-900">
                         <p className="font-medium">Possível custo duplicado</p>
                         <p className="mt-1 font-normal">
@@ -4728,15 +5114,12 @@ export const SalesModularProposalBuilder = ({
               </section>
 
               {preview ? (
-                <details className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <summary className="cursor-pointer list-none border-b border-slate-200 px-4 py-3">
-                    <span className="block text-sm font-semibold text-slate-900">
-                      Modelo técnico histórico por módulo
-                    </span>
-                    <span className="mt-1 block text-xs font-normal text-slate-500">
-                      Preservado para auditoria. Não entra no resultado operacional atual.
-                    </span>
-                  </summary>
+                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="border-b border-slate-200 px-4 py-3">
+                    <h2 className="text-sm font-semibold text-slate-900">
+                      Resultado interno por módulo
+                    </h2>
+                  </div>
                   <div className="max-h-[420px] overflow-auto">
                     <table className="min-w-[1380px] w-full text-left text-xs">
                       <thead className="sticky top-0 bg-slate-50 text-slate-500">
@@ -4766,13 +5149,7 @@ export const SalesModularProposalBuilder = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {preview.lines
-                          .filter(
-                            (line) =>
-                              line.itemKey !== 'platform_foundation' &&
-                              line.itemKey !== 'onboarding'
-                          )
-                          .map((line) => (
+                        {preview.lines.map((line) => (
                           <tr key={line.lineKey}>
                             <td className="px-3 py-3 font-medium text-slate-800">
                               {line.publicName}
@@ -4868,7 +5245,7 @@ export const SalesModularProposalBuilder = ({
                       </tbody>
                     </table>
                   </div>
-                </details>
+                </section>
               ) : null}
 
               {error ? (
@@ -4918,9 +5295,7 @@ export const SalesModularProposalBuilder = ({
                       <span>Inicial: {currency(checkoutLink.initial_amount_cents)}</span>
                       <span>Promocional: {currency(checkoutLink.promotional_monthly_cents)}/mês</span>
                       <span>Futura: {currency(checkoutLink.future_monthly_cents)}/mês</span>
-                      {checkoutLink.one_time_cents > 0 ? (
-                        <span>Implantação: {currency(checkoutLink.one_time_cents)}</span>
-                      ) : null}
+                      <span>Implantação: {currency(checkoutLink.one_time_cents)}</span>
                       <span>Criado em: {new Date(checkoutLink.created_at).toLocaleString('pt-BR')}</span>
                       <span>Expira em: {checkoutLink.expires_at ? new Date(checkoutLink.expires_at).toLocaleString('pt-BR') : 'sem data'}</span>
                       <span>Cliente: {lead?.clinicName || lead?.name || 'não informado'}</span>
@@ -4988,7 +5363,7 @@ export const SalesModularProposalBuilder = ({
                   profitabilityPolicyRequired ||
                   !preview ||
                   preview.commercialPricing.missingPriceItemKeys.length > 0 ||
-                  Boolean(currentProposalTechnicalBlockingCodes.length) ||
+                  Boolean(proposalReview?.technicalBlockingCodes.length) ||
                   (approveCommercialException &&
                     internalJustification.trim().length < 20)
                 }
@@ -5015,11 +5390,13 @@ export const SalesModularProposalBuilder = ({
                   (!selectedSimulation.offer &&
                     selectedSimulationRequiresVersionedProfitabilityPolicy &&
                     !selectedSimulationHasVersionedEconomics) ||
-                  (!selectedSimulationUsesCurrentOperatingModel &&
-                    selectedSimulation.results_snapshot?.missingCosts?.length > 0) ||
-                  Boolean(selectedSimulationTechnicalBlockingCodes.length) ||
+                  selectedSimulation.results_snapshot?.missingCosts?.length > 0 ||
+                  Boolean(
+                    selectedSimulationReview?.technicalBlockingCodes.length
+                  ) ||
                   (
-                    selectedSimulationRequiresLegacyApproval &&
+                    selectedSimulationReview?.requiresCommercialApproval ===
+                      true &&
                     !selectedSimulationHasApproval
                   )
                 }
@@ -5047,7 +5424,7 @@ export const SalesModularProposalBuilder = ({
                     selectedSimulationRequiresVersionedProfitabilityPolicy &&
                     !selectedSimulationHasVersionedEconomics
                   ? SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE
-                  : selectedSimulationRequiresLegacyApproval &&
+                  : selectedSimulationReview?.requiresCommercialApproval &&
                       !selectedSimulationHasApproval
                     ? 'Salve uma cópia com aprovação excepcional antes de gerar a proposta pública.'
                     : profitabilityPolicyRequired

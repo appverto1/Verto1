@@ -77,6 +77,7 @@ import { LogoVerto } from "./Common";
 import { SecureImage } from "./SecureMedia";
 import { VERTO_BRAND_ASSETS } from "../constants/vertoBranding";
 import {
+  filterCapabilitiesByOrganizationModules,
   hasOrganizationModule,
   type OrganizationModuleAccessMode,
   type OrganizationModuleKey,
@@ -97,7 +98,7 @@ import {
 } from "recharts";
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
 import { dataService } from "../services/dataService";
-import { isClinicBaseRole } from "../constants/authorizationModel";
+import { getDefaultCapabilitiesForRole, isClinicBaseRole } from "../constants/authorizationModel";
 import {
   getAgendaViewPreferenceKey,
   readAgendaViewPreference,
@@ -530,6 +531,7 @@ interface CoordinatorDashboardProps {
   onLogout: () => void;
   allPatients: any[];
   patientListError?: string;
+  onEnsurePatientList?: () => Promise<any> | any;
   onOpenPatientDetails?: (patientId: any) => Promise<any> | any;
   therapistAgenda: any[];
   onOpenOnboarding?: () => void;
@@ -663,6 +665,7 @@ export function CoordinatorDashboard({
   onLogout,
   allPatients,
   patientListError = "",
+  onEnsurePatientList,
   onOpenPatientDetails,
   therapistAgenda,
   onOpenOnboarding,
@@ -710,101 +713,59 @@ export function CoordinatorDashboard({
   // but patient scoping continues to come from SUPERVISED_CASES on the server.
   const isTherapist = isDirectTherapist || isSupervisor;
   const isReceptionist = normalizedRole === "receptionist";
+  const baseCapabilities = useMemo(() => {
+    if (!isClinicBaseRole(normalizedRole)) return new Set<string>();
+    return new Set<string>(getDefaultCapabilitiesForRole(normalizedRole));
+  }, [normalizedRole]);
   const [effectiveCapabilities, setEffectiveCapabilities] = useState<Set<string>>(new Set());
   const [organizationModules, setOrganizationModules] = useState<Set<OrganizationModuleKey>>(new Set());
   const [moduleAccessMode, setModuleAccessMode] = useState<OrganizationModuleAccessMode>("contract");
   const [entitlementVersion, setEntitlementVersion] = useState(1);
   const [authorizationHydrated, setAuthorizationHydrated] = useState(false);
-  const verifiedAuthorizationKeyRef = useRef("");
 
   useEffect(() => {
     let cancelled = false;
-    const authorizationKey = [
-      normalizedRole,
-      String(user?.activeWorkspaceId || user?.clinicId || "").trim(),
-    ].join(":");
-    const hasVerifiedCurrentContext =
-      Boolean(authorizationKey) && verifiedAuthorizationKeyRef.current === authorizationKey;
-
-    // Fail closed only when the tenant actually changes. A transient 5xx must
-    // never erase an authorization context that this same workspace already
-    // received successfully from the server.
-    if (!hasVerifiedCurrentContext) {
-      setEffectiveCapabilities(new Set());
-      setOrganizationModules(new Set());
-      setModuleAccessMode("contract");
-      setEntitlementVersion(1);
-      setAuthorizationHydrated(false);
-    }
+    setEffectiveCapabilities(new Set());
+    setOrganizationModules(new Set());
+    setModuleAccessMode("contract");
+    setEntitlementVersion(1);
+    setAuthorizationHydrated(false);
     if (!isClinicBaseRole(normalizedRole)) {
-      verifiedAuthorizationKeyRef.current = authorizationKey;
       setAuthorizationHydrated(true);
       return () => { cancelled = true; };
     }
-
-    const loadAuthorization = async () => {
-      const retryDelaysMs = [0, 350, 900];
-      let lastFailure: any = null;
-      for (let attempt = 0; attempt < retryDelaysMs.length; attempt += 1) {
-        if (retryDelaysMs[attempt] > 0) {
-          await new Promise((resolve) => window.setTimeout(resolve, retryDelaysMs[attempt]));
-        }
-        if (cancelled) return;
-        const result: any = await dataService.getClinicAuthorizationContext();
-        if (cancelled) return;
-        if (result?.success && Array.isArray(result?.data?.capabilities)) {
-          const nextMode: OrganizationModuleAccessMode =
-            result?.data?.moduleAccessMode === "contract" ? "contract" : "legacy_full";
-          const nextModules = new Set<OrganizationModuleKey>(
-            Array.isArray(result?.data?.modules)
-              ? result.data.modules
-                  .map((value: any) => String(value || '').trim())
-                  .filter((value: string): value is OrganizationModuleKey =>
-                    ["clinical_core", "appointments_communication", "financial_management", "insurance_tiss", "school_management"].includes(value),
-                  )
-              : [],
-          );
-
-          // A modular paid contract is required by the backend to contain at
-          // least one operational module. Treat contract+empty as an incomplete
-          // provisioning state, not as a legitimate plan that should wipe the UI.
-          if (nextMode === "contract" && nextModules.size === 0) {
-            lastFailure = { code: "CLINIC_MODULE_ENTITLEMENTS_EMPTY", status: 503 };
-            continue;
-          }
-
-          setEffectiveCapabilities(new Set(
-            result.data.capabilities
-              .map((value: any) => String(value || '').trim())
-              .filter(Boolean),
-          ));
-          setModuleAccessMode(nextMode);
-          setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
-          setOrganizationModules(nextModules);
-          verifiedAuthorizationKeyRef.current = authorizationKey;
-          setAuthorizationHydrated(true);
-          return;
-        }
-        lastFailure = result;
-        const status = Number(result?.status || 0);
-        if (status > 0 && status < 500 && status !== 429) break;
-      }
-
+    void dataService.getClinicAuthorizationContext().then((result: any) => {
       if (cancelled) return;
-      console.error('[Authorization] Não foi possível validar módulos/capabilities da clínica.', {
-        code: String(lastFailure?.code || lastFailure?.error || 'CLINIC_AUTHORIZATION_UNAVAILABLE'),
-        status: Number(lastFailure?.status || 0) || null,
-      });
-      // Preserve a last-known-good context for this exact workspace only. On a
-      // first load with no verified context, remain fail-closed until recovery.
-      setAuthorizationHydrated(
-        verifiedAuthorizationKeyRef.current === authorizationKey,
-      );
-    };
-
-    void loadAuthorization();
+      if (result?.success && Array.isArray(result?.data?.capabilities)) {
+        setEffectiveCapabilities(new Set(result.data.capabilities.map((value: any) => String(value || '').trim()).filter(Boolean)));
+        const nextMode = result?.data?.moduleAccessMode === "legacy_full" ? "legacy_full" : "contract";
+        setModuleAccessMode(nextMode);
+        setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
+        setOrganizationModules(new Set(
+          Array.isArray(result?.data?.modules)
+            ? result.data.modules
+                .map((value: any) => String(value || '').trim())
+                .filter((value: string): value is OrganizationModuleKey =>
+                  ["clinical_core", "appointments_communication", "financial_management", "insurance_tiss", "school_management"].includes(value),
+                )
+            : [],
+        ));
+      }
+      setAuthorizationHydrated(true);
+    }).catch(() => {
+      if (!cancelled) {
+        // Authorization hydration failures must fail closed for optional modules
+        // while preserving the mandatory clinical baseline.
+        setEffectiveCapabilities(
+          new Set(filterCapabilitiesByOrganizationModules(baseCapabilities, 'contract', new Set<OrganizationModuleKey>())),
+        );
+        setModuleAccessMode('contract');
+        setOrganizationModules(new Set());
+        setAuthorizationHydrated(true);
+      }
+    });
     return () => { cancelled = true; };
-  }, [normalizedRole, user?.activeWorkspaceId, user?.clinicId]);
+  }, [baseCapabilities, normalizedRole, user?.activeWorkspaceId, user?.clinicId]);
 
   const hasCapability = useCallback(
     (capability: string) => effectiveCapabilities.has(capability),
@@ -821,6 +782,11 @@ export function CoordinatorDashboard({
   const canCancelRecurringAppointments = hasCapability("calendar.appointment.cancel");
   const canDeleteRecurringAppointments = canCancelRecurringAppointments;
   const canAccessClinicFinance = hasCapability("finance.payments.view");
+  // Patient treatment pricing is part of the mandatory patient core.
+  // Full finance (payments, ledger, DRE, transfers) remains an optional module.
+  const canManagePatientFinancialPlan = hasCapability("patient.demographics.edit");
+  const canViewPatientInsurance = hasCapability("patient.insurance.view");
+  const canViewPatientTissAuthorizations = hasCapability("patient.insurance.authorization.view");
   const canCreatePatients = hasCapability("patient.create");
   const canManageRooms = hasCapability("clinic.rooms.manage");
   const workspaceScopeKey = useMemo(
@@ -859,6 +825,7 @@ export function CoordinatorDashboard({
   };
 
   const hasAppointmentsCommunicationModule = authorizationHydrated && hasModule("appointments_communication");
+  const hasInsuranceTissModule = authorizationHydrated && hasModule("insurance_tiss");
 
   const tabCapabilityMap: Record<string, string | null> = {
     dashboard: "engagement-widgets",
@@ -932,6 +899,7 @@ export function CoordinatorDashboard({
     | "flow"
     | "birthdays"
   >("dashboard");
+  const patientListEnsureAttemptedWorkspaceRef = useRef("");
   const [tabHistory, setTabHistory] = useState<string[]>(["dashboard"]);
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
@@ -994,6 +962,26 @@ export function CoordinatorDashboard({
   const [schoolBatchMeetingNotice, setSchoolBatchMeetingNotice] = useState("");
   const [schoolBatchMeetingForm, setSchoolBatchMeetingForm] = useState({ title: "Reunião escolar", scheduledStart: "", scheduledEnd: "", meetingType: "SCHOOL_MEETING", responsibleProfessionalId: "", agenda: "" });
 
+  useEffect(() => {
+    patientListEnsureAttemptedWorkspaceRef.current = "";
+  }, [workspaceScopeKey]);
+
+  useEffect(() => {
+    if (activeTab !== "patients" || !onEnsurePatientList) return;
+    const needsCanonicalPatientList = allPatients.length === 0 || Boolean(patientListError);
+    if (!needsCanonicalPatientList) return;
+    if (!workspaceScopeKey || patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) return;
+
+    // Pacientes são recurso transversal da clínica, não um módulo comercial. Se o
+    // bootstrap global não hidratou a lista, ou precisou usar um snapshot local
+    // incompleto, a própria tela faz uma única leitura canônica do tenant. Uma lista
+    // local não vazia nunca pode mascarar pacientes que existem no servidor.
+    patientListEnsureAttemptedWorkspaceRef.current = workspaceScopeKey;
+    void Promise.resolve(onEnsurePatientList()).catch(() => {
+      // O estado de erro é controlado no App para manter uma única fonte de verdade.
+    });
+  }, [activeTab, allPatients.length, onEnsurePatientList, patientListError, workspaceScopeKey]);
+
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
     if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };
     if (tab === "payers") {
@@ -1051,7 +1039,10 @@ export function CoordinatorDashboard({
 
   const goBackTab = () => {
     setTabHistory((prev) => {
-      if (prev.length <= 1) return prev;
+      if (prev.length <= 1) {
+        if (activeTab !== "dashboard") setActiveTab("dashboard");
+        return ["dashboard"];
+      }
       const next = prev.slice(0, -1);
       const previousTab = next[next.length - 1] as typeof activeTab;
       setActiveTab(previousTab);
@@ -1065,7 +1056,7 @@ export function CoordinatorDashboard({
     therapistMembersRequestSeqRef.current = requestSeq;
     therapistMembersWorkspaceRef.current = workspaceId;
     setTherapistMembersById({});
-    if (!workspaceId || !authorizationHydrated || !hasCapability("team.view")) return;
+    if (!workspaceId) return;
     const loadTherapistMembers = async () => {
       try {
         const result = await dataService.getClinicMembers();
@@ -1092,7 +1083,7 @@ export function CoordinatorDashboard({
       }
     };
     void loadTherapistMembers();
-  }, [authorizationHydrated, effectiveCapabilities, user?.activeWorkspaceId, user?.clinicId]);
+  }, [user?.activeWorkspaceId, user?.clinicId]);
 
   const therapistFilterOptions = useMemo(() => {
     const entries = Object.entries(therapistMembersById as Record<string, any>)
@@ -1215,18 +1206,6 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     if (activeTab !== "patients") return;
-    if (!authorizationHydrated || !hasModule("school_management")) {
-      patientSchoolOptionsLoadedForRef.current = "";
-      patientSchoolOptionsRequestForRef.current = "";
-      setPatientSchoolOptions([]);
-      setPatientSchoolOptionsWorkspaceId("");
-      setPatientSchoolOptionsLoading(false);
-      setPatientSchoolOptionsLoadError("");
-      setPatientSchoolFilter("");
-      setPatientSchoolUnitFilter("");
-      setSelectedSchoolPatientIds([]);
-      return;
-    }
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
     const requestSeq = patientSchoolOptionsRequestSeqRef.current + 1;
     patientSchoolOptionsRequestSeqRef.current = requestSeq;
@@ -1278,7 +1257,7 @@ export function CoordinatorDashboard({
         }
       });
     return () => controller.abort();
-  }, [activeTab, authorizationHydrated, moduleAccessMode, organizationModules, patientSchoolOptionsRevision, user?.activeWorkspaceId, user?.clinicId]);
+  }, [activeTab, patientSchoolOptionsRevision, user?.activeWorkspaceId, user?.clinicId]);
 
   const patientSchoolOptionsForCurrentWorkspace =
     patientSchoolOptionsWorkspaceId === String(user?.activeWorkspaceId || user?.clinicId || "").trim()
@@ -1583,6 +1562,11 @@ export function CoordinatorDashboard({
     useState(false);
   const [activePatientRegistrationTab, setActivePatientRegistrationTab] =
     useState<PatientRegistrationTab>("personal");
+  useEffect(() => {
+    if (!hasInsuranceTissModule && (activePatientRegistrationTab === "insurance" || activePatientRegistrationTab === "tiss")) {
+      setActivePatientRegistrationTab("personal");
+    }
+  }, [activePatientRegistrationTab, hasInsuranceTissModule]);
   const [agendaSearchMode, setAgendaSearchMode] = useState<
     "patient" | "professional"
   >("patient");
@@ -1709,11 +1693,14 @@ export function CoordinatorDashboard({
   const [appointmentEditScope, setAppointmentEditScope] = useState<"single" | "future">("single");
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
   const [view, setView] = useState<"home" | "patient">("home");
+  const [patientRestorePending, setPatientRestorePending] = useState(false);
+  const patientRestoreAttemptRef = useRef("");
   const [patientOpenTab, setPatientOpenTab] = useState<
     "history" | "notes" | "report" | "plan" | "session" | "school" | "files"
   >("history");
   const [openAnamnesisOnPatientOpen, setOpenAnamnesisOnPatientOpen] =
     useState(false);
+  const [patientSessionReportId, setPatientSessionReportId] = useState('');
   const [isPatientProfileModalOpen, setIsPatientProfileModalOpen] =
     useState(false);
   const [selectedPatientProfile, setSelectedPatientProfile] = useState<any>(null);
@@ -1773,10 +1760,18 @@ export function CoordinatorDashboard({
       const nextView = String(state?.view || "home");
       const nextPatientId = String(state?.selectedPatientId || "").trim();
       const nextPatientTab = String(state?.patientOpenTab || "history");
+      const nextSessionReportId = String(state?.patientSessionReportId || "").trim();
 
       if (canAccessTab(nextTab)) {
+        const persistedHistory = Array.isArray(state?.tabHistory)
+          ? state.tabHistory
+              .map((tab: any) => String(tab || "").trim())
+              .filter((tab: any) => tab && canAccessTab(tab as DashboardTab))
+          : [];
+        const restoredHistory = persistedHistory.slice(-20);
+        if (restoredHistory[restoredHistory.length - 1] !== nextTab) restoredHistory.push(nextTab);
         setActiveTab(nextTab);
-        setTabHistory([nextTab]);
+        setTabHistory(restoredHistory.length > 0 ? restoredHistory : [nextTab]);
       } else {
         setActiveTab("dashboard");
         setTabHistory(["dashboard"]);
@@ -1794,6 +1789,7 @@ export function CoordinatorDashboard({
         ) {
           setPatientOpenTab(nextPatientTab);
         }
+        setPatientSessionReportId(nextSessionReportId);
         setView("patient");
       } else {
         setView("home");
@@ -1810,20 +1806,39 @@ export function CoordinatorDashboard({
         dashboardResumeKey,
         JSON.stringify({
           activeTab,
+          tabHistory: tabHistory.slice(-20),
           view,
           selectedPatientId: selectedPatientId ? String(selectedPatientId) : null,
           patientOpenTab,
+          patientSessionReportId: patientSessionReportId || null,
         }),
       );
     } catch (error) {
       console.warn("Falha ao persistir contexto do painel:", error);
     }
-  }, [dashboardResumeKey, activeTab, view, selectedPatientId, patientOpenTab]);
+  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId]);
 
   useEffect(() => {
-    if (view !== "patient" || !selectedPatientId) return;
-    void onOpenPatientDetails?.(selectedPatientId);
-  }, [onOpenPatientDetails, selectedPatientId, view]);
+    if (view !== "patient" || !selectedPatientId || !onOpenPatientDetails) {
+      setPatientRestorePending(false);
+      return;
+    }
+    const patientId = String(selectedPatientId).trim();
+    const patientExists = allPatients.some((patient: any) => String(patient?.id || "").trim() === patientId);
+    const restoreKey = `${workspaceScopeKey}:${patientId}`;
+    if (!patientExists && patientRestoreAttemptRef.current === restoreKey) return;
+    if (!patientExists) {
+      patientRestoreAttemptRef.current = restoreKey;
+      setPatientRestorePending(true);
+    }
+    let cancelled = false;
+    void Promise.resolve(onOpenPatientDetails(patientId)).finally(() => {
+      if (!cancelled) setPatientRestorePending(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [allPatients, onOpenPatientDetails, selectedPatientId, view, workspaceScopeKey]);
 
   const [payments, setPayments] = useState<any[]>([]);
   const [professionalPayments, setProfessionalPayments] = useState<any[]>([]);
@@ -2290,18 +2305,16 @@ export function CoordinatorDashboard({
   }>({ services: [], codes: [], mappings: [], prices: [] });
 
   useEffect(() => {
-    if (authorizationHydrated && hasCapability("clinical.anamnesis.view") && isAnamnesisTemplateModalOpen) {
+    if (isAnamnesisTemplateModalOpen) {
       loadClinicAnamnesisTemplate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authorizationHydrated, effectiveCapabilities, isAnamnesisTemplateModalOpen]);
+  }, [isAnamnesisTemplateModalOpen]);
 
   useEffect(() => {
-    if (authorizationHydrated && hasCapability("clinical.anamnesis.view")) {
-      loadClinicAnamnesisTemplate();
-    }
+    loadClinicAnamnesisTemplate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authorizationHydrated, effectiveCapabilities, user?.activeWorkspaceId, user?.clinicId]);
+  }, []);
 
   const normalizeLookupText = (value: any) =>
     normalizeUtf8Text(String(value || "")).trim().toLowerCase();
@@ -2771,6 +2784,7 @@ export function CoordinatorDashboard({
   };
 
   const scrollToPatientTissAuthorizations = () => {
+    if (!hasInsuranceTissModule || !canViewPatientTissAuthorizations) return;
     setActivePatientRegistrationTab("tiss");
     window.setTimeout(() => {
       document.getElementById("patient-tiss-authorizations-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -2778,6 +2792,7 @@ export function CoordinatorDashboard({
   };
 
   const goToNewPatientTissAuthorization = () => {
+    if (!hasInsuranceTissModule || !canViewPatientTissAuthorizations) return;
     setActivePatientRegistrationTab("tiss");
     window.setTimeout(() => {
       openNewPatientTissAuthorizationForm();
@@ -2805,7 +2820,7 @@ export function CoordinatorDashboard({
   }, [activeTab, canAccessClinicFinance, isReceptionist]);
 
   useEffect(() => {
-    if (!isPatientRegistrationModalOpen || !canCreatePatients) return;
+    if (!isPatientRegistrationModalOpen || !canCreatePatients || !hasInsuranceTissModule || !canViewPatientInsurance) return;
     let cancelled = false;
     setClinicPayerOptionsState({ loading: true, error: "" });
     dataService.getPayerOptions({ limit: 80 }).then((result: any) => {
@@ -2823,7 +2838,7 @@ export function CoordinatorDashboard({
     return () => {
       cancelled = true;
     };
-  }, [canCreatePatients, isPatientRegistrationModalOpen]);
+  }, [canCreatePatients, canViewPatientInsurance, hasInsuranceTissModule, isPatientRegistrationModalOpen]);
 
   useEffect(() => {
     if (
@@ -2865,28 +2880,29 @@ export function CoordinatorDashboard({
   }, [activeTab, clinicPayers.length, isTherapist]);
 
   useEffect(() => {
-    if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
+    if (!isPatientRegistrationModalOpen || !hasInsuranceTissModule || !canViewPatientTissAuthorizations) return;
     if (!selectedPatientInsurancePayerIsActive) {
       setPatientTissAuthorizationCatalog({ services: [], codes: [], mappings: [], prices: [] });
       return;
     }
     void loadPatientTissAuthorizationCatalog(selectedPatientInsurancePayer.id);
   }, [
-    canAccessClinicFinance,
+    canViewPatientTissAuthorizations,
+    hasInsuranceTissModule,
     isPatientRegistrationModalOpen,
     selectedPatientInsurancePayer?.id,
     selectedPatientInsurancePayerIsActive,
   ]);
 
   useEffect(() => {
-    if (!isPatientRegistrationModalOpen || !canAccessClinicFinance) return;
+    if (!isPatientRegistrationModalOpen || !hasInsuranceTissModule || !canViewPatientTissAuthorizations) return;
     if (!editingPatientId) {
       setPatientTissAuthorizations([]);
       resetPatientTissAuthorizationForm();
       return;
     }
     void loadPatientTissAuthorizations(editingPatientId);
-  }, [canAccessClinicFinance, editingPatientId, isPatientRegistrationModalOpen]);
+  }, [canViewPatientTissAuthorizations, editingPatientId, hasInsuranceTissModule, isPatientRegistrationModalOpen]);
 
   useEffect(() => {
     const nextProfileMetadata = (
@@ -4788,7 +4804,7 @@ export function CoordinatorDashboard({
           : sessionLocationType === "escola"
             ? "SCHOOL"
             : "OTHER";
-  const canManagePrivateSessionAmount = ["owner", "admin", "director"].includes(
+  const canManagePrivateSessionAmount = ["owner", "admin"].includes(
     String(user?.role || "").toLowerCase(),
   );
   const canOperatePrivateSessionAmount = ["coordinator", "receptionist"].includes(
@@ -6370,7 +6386,7 @@ export function CoordinatorDashboard({
       showToast("E-mail do responsável inválido.", "error");
       return;
     }
-    if (newPatientForm.convenioTipo === "convenio" && !String(selectedPatientInsurancePayer?.id || "").trim()) {
+    if (hasInsuranceTissModule && newPatientForm.convenioTipo === "convenio" && !String(selectedPatientInsurancePayer?.id || "").trim()) {
       showToast("Selecione um convênio ativo cadastrado pela clínica.", "error");
       setActivePatientRegistrationTab("insurance");
       return;
@@ -6384,7 +6400,7 @@ export function CoordinatorDashboard({
     const existingPatient = editingPatientId
       ? allPatients.find((p: any) => String(p.id) === String(editingPatientId))
       : null;
-    const financialPlans = canAccessClinicFinance
+    const financialPlans = canManagePatientFinancialPlan
       ? normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm)
           .filter(isPatientFinancialPlanComplete)
           .map(serializePatientFinancialPlanForPayload)
@@ -6397,6 +6413,46 @@ export function CoordinatorDashboard({
     const canonicalProfileType = normalizePatientProfileType(newPatientForm.patientProfileType);
     const legacyPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
     const normalizedBirthDate = normalizeBirthDateForStorage(newPatientForm.dataNascimento);
+    const patientInsurancePayload = hasInsuranceTissModule
+      ? {
+          insuranceType: newPatientForm.convenioTipo || "particular",
+          insurancePayerId:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+              : null,
+          insurance_payer_id:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+              : null,
+          convenioPayerId:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+              : null,
+          convenio_payer_id:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
+              : null,
+          insuranceName:
+            newPatientForm.convenioTipo === "convenio"
+              ? String(selectedPatientInsurancePayer?.name || newPatientForm.convenioNome || "").trim() || null
+              : null,
+          cardNumber: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinha || null : null,
+          insuranceCardValidUntil: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinhaValidade || null : null,
+          insurance_card_valid_until: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinhaValidade || null : null,
+          insurancePlanCategory: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioPlanoCategoria || null : null,
+          insurance_plan_category: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioPlanoCategoria || null : null,
+          insuranceHolderName: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularNome || null : null,
+          insurance_holder_name: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularNome || null : null,
+          insuranceHolderCpf: newPatientForm.convenioTipo === "convenio" ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null : null,
+          insurance_holder_cpf: newPatientForm.convenioTipo === "convenio" ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null : null,
+          insuranceHolderRelationship: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularRelacao || null : null,
+          insurance_holder_relationship: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularRelacao || null : null,
+          eligibilityNotes: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioElegibilidadeObs || null : null,
+          eligibility_notes: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioElegibilidadeObs || null : null,
+        }
+      : editingPatientId
+        ? {}
+        : { insuranceType: "particular" };
 
     const newPatient = {
       id: editingPatientId || crypto.randomUUID(),
@@ -6409,79 +6465,7 @@ export function CoordinatorDashboard({
       birth_date: normalizedBirthDate || null,
       dataNascimento: normalizedBirthDate || null,
       gender: newPatientForm.genero || null,
-      insuranceType: newPatientForm.convenioTipo || "particular",
-      insurancePayerId:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
-          : null,
-      insurance_payer_id:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
-          : null,
-      convenioPayerId:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
-          : null,
-      convenio_payer_id:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.id || newPatientForm.convenioPayerId || "").trim() || null
-          : null,
-      insuranceName:
-        newPatientForm.convenioTipo === "convenio"
-          ? String(selectedPatientInsurancePayer?.name || newPatientForm.convenioNome || "").trim() || null
-          : null,
-      cardNumber:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioCarteirinha || null
-          : null,
-      insuranceCardValidUntil:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioCarteirinhaValidade || null
-          : null,
-      insurance_card_valid_until:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioCarteirinhaValidade || null
-          : null,
-      insurancePlanCategory:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioPlanoCategoria || null
-          : null,
-      insurance_plan_category:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioPlanoCategoria || null
-          : null,
-      insuranceHolderName:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioTitularNome || null
-          : null,
-      insurance_holder_name:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioTitularNome || null
-          : null,
-      insuranceHolderCpf:
-        newPatientForm.convenioTipo === "convenio"
-          ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null
-          : null,
-      insurance_holder_cpf:
-        newPatientForm.convenioTipo === "convenio"
-          ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null
-          : null,
-      insuranceHolderRelationship:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioTitularRelacao || null
-          : null,
-      insurance_holder_relationship:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioTitularRelacao || null
-          : null,
-      eligibilityNotes:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioElegibilidadeObs || null
-          : null,
-      eligibility_notes:
-        newPatientForm.convenioTipo === "convenio"
-          ? newPatientForm.convenioElegibilidadeObs || null
-          : null,
+      ...patientInsurancePayload,
       group: newPatientForm.grupo || null,
       source: newPatientForm.comoConheceu || null,
       rg: newPatientForm.rg || null,
@@ -6513,7 +6497,7 @@ export function CoordinatorDashboard({
       type: legacyPortalType,
       patientProfileType: canonicalProfileType,
       panelType: canonicalProfileType,
-      ...(canAccessClinicFinance
+      ...(canManagePatientFinancialPlan
         ? {
             financialPlans,
             monthlyTreatmentValue,
@@ -7049,6 +7033,7 @@ export function CoordinatorDashboard({
     options?: {
       tab?: "history" | "notes" | "report" | "plan" | "session" | "school" | "files";
       openAnamnesis?: boolean;
+      sessionReportId?: string | null;
     },
     fallbackPatientName?: string,
   ) => {
@@ -7105,6 +7090,7 @@ export function CoordinatorDashboard({
     void onOpenPatientDetails?.(resolvedPatient.id);
     setPatientOpenTab(nextOptions.tab || "history");
     setOpenAnamnesisOnPatientOpen(Boolean(nextOptions.openAnamnesis));
+    setPatientSessionReportId(String((nextOptions as any).sessionReportId || '').trim());
     setView("patient");
   };
 
@@ -7163,7 +7149,7 @@ export function CoordinatorDashboard({
       financialPlans: normalizePatientFinancialPlans(profile?.financialPlans || profile?.financial_plans, profile),
     });
     setSelectedPatientProfileAuthorizations([]);
-    if (canAccessClinicFinance && profilePatientId) {
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && profilePatientId) {
       setSelectedPatientProfileAuthorizationsLoading(true);
       void dataService.getPatientTissAuthorizations(profilePatientId)
         .then((result) => {
@@ -7797,7 +7783,7 @@ export function CoordinatorDashboard({
   );
 
   useEffect(() => {
-    if (!["director", "coordinator", "receptionist", "admin", "owner"].includes(role)) return;
+    if (!["coordinator", "receptionist", "admin", "owner"].includes(role)) return;
     dueSoonPatientPayments.forEach((payment: any) => {
       const paymentId = String(payment?.id || `${payment?.patient_id}-${payment?.due_date}`);
       const noticeKey = `verto:payment-due-soon:${paymentId}:${payment?.due_date}`;
@@ -8679,7 +8665,7 @@ export function CoordinatorDashboard({
     setAnamnesisTemplates((prev) => {
       const templateId = String((normalizedSavedTemplate as any)?.selectedTemplateId || (normalizedSavedTemplate as any)?.id || "");
       const withoutCurrent = prev.filter((item: any) => String(item?.selectedTemplateId || item?.id || "") !== templateId);
-      return [normalizedSavedTemplate, ...withoutCurrent].slice(0, isTherapist ? 20 : 5);
+      return [normalizedSavedTemplate, ...withoutCurrent].slice(0, isTherapist ? 15 : 10);
     });
     onAddActivityLog(
       isTherapist ? "Ficha profissional atualizada" : "Template de anamnese atualizado",
@@ -9459,9 +9445,9 @@ export function CoordinatorDashboard({
       rooms={rooms}
       teamMembers={therapistFilterOptions}
       currentUser={user}
+      capabilities={effectiveCapabilities}
       currentDate={calendarDate}
       view={agendaView}
-      schoolModuleEnabled={authorizationHydrated && hasModule("school_management")}
       onDateChange={setCalendarDate}
       onViewChange={handleAgendaViewChange}
       onCreateAppointment={openNewAppointmentAt}
@@ -10406,14 +10392,16 @@ export function CoordinatorDashboard({
       !String(newPatientForm.convenioPlanoCategoria || "").trim());
   const patientRegistrationTabs: Array<{ id: PatientRegistrationTab; label: string; badge?: string }> = [
     { id: "personal", label: "Dados pessoais" },
-    { id: "insurance", label: "Convênio e elegibilidade", badge: patientRegistrationInsuranceIncomplete ? "Atenção" : undefined },
-    ...(canAccessClinicFinance
-      ? [
-          { id: "tiss" as PatientRegistrationTab, label: "Autorizações TISS", badge: newPatientForm.convenioTipo === "convenio" && !patientRegistrationHasSuggestedTissAuthorization ? "Sem vigente" : undefined },
-          { id: "financial" as PatientRegistrationTab, label: "Plano financeiro", badge: patientRegistrationHasFinancialPlanWithoutValue ? "Revisar" : undefined },
-          { id: "legacy" as PatientRegistrationTab, label: "Histórico / dados legados", badge: patientRegistrationHasLegacyData ? "Legado" : undefined },
-        ]
-      : [{ id: "legacy" as PatientRegistrationTab, label: "Histórico / dados legados", badge: patientRegistrationHasLegacyData ? "Legado" : undefined }]),
+    ...(hasInsuranceTissModule && canViewPatientInsurance
+      ? [{ id: "insurance" as PatientRegistrationTab, label: "Convênio e elegibilidade", badge: patientRegistrationInsuranceIncomplete ? "Atenção" : undefined }]
+      : []),
+    ...(hasInsuranceTissModule && canViewPatientTissAuthorizations
+      ? [{ id: "tiss" as PatientRegistrationTab, label: "Autorizações TISS", badge: newPatientForm.convenioTipo === "convenio" && !patientRegistrationHasSuggestedTissAuthorization ? "Sem vigente" : undefined }]
+      : []),
+    ...(canManagePatientFinancialPlan
+      ? [{ id: "financial" as PatientRegistrationTab, label: "Plano financeiro", badge: patientRegistrationHasFinancialPlanWithoutValue ? "Revisar" : undefined }]
+      : []),
+    { id: "legacy" as PatientRegistrationTab, label: "Histórico / dados legados", badge: patientRegistrationHasLegacyData ? "Legado" : undefined },
   ];
 
   const selectedProfileEligibility = normalizePatientInsuranceEligibility(selectedPatientProfile || {});
@@ -10434,6 +10422,8 @@ export function CoordinatorDashboard({
   const selectedProfileOperationalAlerts = (() => {
     const alerts: string[] = [];
     if (
+      hasInsuranceTissModule &&
+      canViewPatientInsurance &&
       selectedProfileEligibility.convenioTipo === "convenio" &&
       (!selectedProfileEligibility.convenioNome ||
         !selectedProfileEligibility.convenioCarteirinha ||
@@ -10442,6 +10432,8 @@ export function CoordinatorDashboard({
       alerts.push("Convênio incompleto");
     }
     if (
+      hasInsuranceTissModule &&
+      canViewPatientTissAuthorizations &&
       selectedProfileEligibility.convenioTipo === "convenio" &&
       !selectedPatientProfileAuthorizationsLoading &&
       selectedPatientProfileAuthorizations.length > 0 &&
@@ -10449,18 +10441,18 @@ export function CoordinatorDashboard({
     ) {
       alerts.push("Sem autorização TISS vigente");
     }
-    if (!selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "expired")) {
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && !selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "expired")) {
       alerts.push("Autorização TISS vencida");
     }
-    if (!selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "consumed")) {
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && !selectedProfileSuggestedAuthorization && selectedProfileAuthorizationStates.some((state) => state.status === "consumed")) {
       alerts.push("Autorização TISS consumida");
     }
-    if (selectedPatientProfileAuthorizations.some((authorization: any) => authorization && !authorization.tussCode && !authorization.tussCodeId)) {
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && selectedPatientProfileAuthorizations.some((authorization: any) => authorization && !authorization.tussCode && !authorization.tussCodeId)) {
       alerts.push("Sem De/Para TUSS ativo");
     }
     const relevantAuthorizationForPrice = selectedProfileSuggestedAuthorization ||
       selectedPatientProfileAuthorizations.find((authorization: any, index: number) => authorization && selectedProfileAuthorizationStates[index]?.isCurrent);
-    if (relevantAuthorizationForPrice && Number(
+    if (hasInsuranceTissModule && canViewPatientTissAuthorizations && relevantAuthorizationForPrice && Number(
       relevantAuthorizationForPrice.amountCents ??
       relevantAuthorizationForPrice.negotiatedAmountCents ??
       relevantAuthorizationForPrice.unitAmountCents ??
@@ -10485,6 +10477,16 @@ export function CoordinatorDashboard({
     const patient = allPatients.find(
       (p) => String(p.id) === String(selectedPatientId),
     );
+    if (!patient && patientRestorePending) {
+      return (
+        <div className="min-h-screen bg-[#F4F7FE] flex items-center justify-center p-6">
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 max-w-lg w-full text-center">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#7a32fc] mx-auto" />
+            <p className="mt-4 text-sm font-semibold text-slate-600">Restaurando prontuário...</p>
+          </div>
+        </div>
+      );
+    }
     if (!patient) {
       return (
         <div className="min-h-screen bg-[#F4F7FE] flex items-center justify-center p-6">
@@ -10714,6 +10716,8 @@ export function CoordinatorDashboard({
                   : ""
               }
               initialTab={patientOpenTab}
+              sessionReportId={patientSessionReportId}
+              onSessionReportConsumed={() => setPatientSessionReportId('')}
               openAnamnesisOnLoad={openAnamnesisOnPatientOpen}
               onAnamnesisOpenConsumed={() => setOpenAnamnesisOnPatientOpen(false)}
               history={patientsHistory.filter((h) => {
@@ -10831,12 +10835,10 @@ export function CoordinatorDashboard({
           <div className="flex items-center gap-4">
             {activeTab !== "dashboard" && (
               <button
-                onClick={() => {
-                  setActiveTab("dashboard");
-                  setTabHistory(["dashboard"]);
-                  setIsEditingRooms(true);
-                }}
+                onClick={goBackTab}
                 className="p-2 bg-white rounded-xl text-slate-400 hover:text-[#7a32fc] shadow-sm border border-slate-100 transition-all"
+                aria-label="Voltar à página anterior"
+                title="Voltar"
               >
                 <ChevronRight size={20} className="rotate-180" />
               </button>
@@ -13778,13 +13780,49 @@ export function CoordinatorDashboard({
                               </p>
                               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                                 {(() => {
-                                  if (log.time) return log.time;
                                   const rawTs = log.timestamp || log.created_at || log.date;
                                   if (!rawTs) return "Agora";
                                   const parsed = new Date(rawTs);
-                                  return Number.isNaN(parsed.getTime())
-                                    ? "Agora"
-                                    : parsed.toLocaleString("pt-BR");
+                                  if (Number.isNaN(parsed.getTime())) return "Agora";
+                                  const browserTimeZone = (() => {
+                                    try {
+                                      return Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Sao_Paulo";
+                                    } catch {
+                                      return "America/Sao_Paulo";
+                                    }
+                                  })();
+                                  const timeZone = String(
+                                    log.timezone_snapshot ||
+                                      log.timezoneSnapshot ||
+                                      user?.clinicTimeZone ||
+                                      user?.clinic_timezone ||
+                                      user?.timeZone ||
+                                      user?.timezone ||
+                                      browserTimeZone
+                                  ).trim() || browserTimeZone;
+                                  try {
+                                    return new Intl.DateTimeFormat("pt-BR", {
+                                      day: "2-digit",
+                                      month: "2-digit",
+                                      year: "numeric",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                      second: "2-digit",
+                                      hour12: false,
+                                      timeZone
+                                    }).format(parsed);
+                                  } catch {
+                                    return new Intl.DateTimeFormat("pt-BR", {
+                                      day: "2-digit",
+                                      month: "2-digit",
+                                      year: "numeric",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                      second: "2-digit",
+                                      hour12: false,
+                                      timeZone: browserTimeZone
+                                    }).format(parsed);
+                                  }
                                 })()}
                               </span>
                             </div>
@@ -14498,7 +14536,7 @@ export function CoordinatorDashboard({
         canEditTemplate={canEditAnamnesisTemplate}
         loadLatestTemplate={false}
         templateManagerLabel={isTherapist ? "Ficha profissional" : "Ficha da clínica"}
-        maxSavedTemplates={isTherapist ? 20 : 5}
+        maxSavedTemplates={isTherapist ? 15 : 10}
         onTemplateSave={handleSaveClinicAnamnesisTemplate}
         onTemplateSelect={handleSelectClinicAnamnesisTemplate}
         onTemplateDelete={handleDeleteClinicAnamnesisTemplate}
@@ -15782,7 +15820,9 @@ export function CoordinatorDashboard({
                     {selectedPatientProfile.name || "Paciente"}
                   </h3>
                   <p className="mt-1 text-sm font-medium text-slate-400">
-                    Visão operacional do cadastro, convênio, autorização TISS e plano financeiro.
+                    {hasInsuranceTissModule
+                      ? "Visão operacional do cadastro, convênio, autorização TISS e plano financeiro."
+                      : "Visão operacional do cadastro e plano financeiro do tratamento."}
                   </p>
                 </div>
               </div>
@@ -15814,6 +15854,7 @@ export function CoordinatorDashboard({
                 </div>
               </section>
 
+              {hasInsuranceTissModule && canViewPatientInsurance && (
               <section className="rounded-2xl border border-slate-100 bg-white p-4">
                 <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Convênio e elegibilidade</h4>
                 <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -15827,7 +15868,9 @@ export function CoordinatorDashboard({
                   {renderPatientProfileSummaryField("Observações de elegibilidade", selectedProfileEligibility.convenioElegibilidadeObs || selectedPatientProfile.eligibilityNotes, "xl:col-span-3")}
                 </div>
               </section>
+              )}
 
+              {hasInsuranceTissModule && canViewPatientTissAuthorizations && (
               <section className="rounded-2xl border border-slate-100 bg-white p-4">
                 <div className="flex items-center justify-between gap-3">
                   <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Autorização TISS vigente</h4>
@@ -15858,7 +15901,9 @@ export function CoordinatorDashboard({
                   </div>
                 )}
               </section>
+              )}
 
+              {canManagePatientFinancialPlan && (
               <section className="rounded-2xl border border-slate-100 bg-white p-4">
                 <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Plano financeiro</h4>
                 {selectedProfilePrimaryFinancialPlan ? (
@@ -15877,6 +15922,7 @@ export function CoordinatorDashboard({
                   </div>
                 )}
               </section>
+              )}
 
               <section className="rounded-2xl border border-slate-100 bg-white p-4">
                 <h4 className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Alertas operacionais</h4>
@@ -16369,7 +16415,7 @@ export function CoordinatorDashboard({
               </FormSection>
               )}
 
-              {activePatientRegistrationTab === "insurance" && (
+              {hasInsuranceTissModule && canViewPatientInsurance && activePatientRegistrationTab === "insurance" && (
               <FormSection
                 title="Convênio e elegibilidade"
                 description="Dados usados para validação de cobertura, carteirinha, pré-faturamento e Pré-guia TISS."
@@ -16520,7 +16566,7 @@ export function CoordinatorDashboard({
               </FormSection>
               )}
 
-              {canAccessClinicFinance && activePatientRegistrationTab === "tiss" && (
+              {hasInsuranceTissModule && canViewPatientTissAuthorizations && activePatientRegistrationTab === "tiss" && (
                 <div id="patient-tiss-authorizations-section">
                   <FormSection
                     title="Autorizações TISS do paciente"
@@ -16761,7 +16807,7 @@ export function CoordinatorDashboard({
                 </div>
               )}
 
-              {canAccessClinicFinance && activePatientRegistrationTab === "financial" && (
+              {canManagePatientFinancialPlan && activePatientRegistrationTab === "financial" && (
                 <FormSection
                   title="Plano financeiro do tratamento"
                   description="Use esta seção para planejar valores, frequência e modalidade de cobrança. Autorizações TISS ficam na seção própria acima."
@@ -16843,9 +16889,11 @@ export function CoordinatorDashboard({
                                   value={plan.billingMode}
                                   onChange={(e) => handleFinancialPlanChange(plan.id, "billingMode", e.target.value)}
                                 >
-                                  {PATIENT_FINANCIAL_BILLING_MODE_OPTIONS.map((option) => (
-                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                  ))}
+                                  {PATIENT_FINANCIAL_BILLING_MODE_OPTIONS
+                                    .filter((option) => hasInsuranceTissModule || option.value !== "INSURANCE")
+                                    .map((option) => (
+                                      <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
                                 </select>
                               </FormField>
                             {!isCourtesyPlan && (
