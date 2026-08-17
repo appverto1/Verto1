@@ -1681,7 +1681,6 @@ export const dataService = {
   async uploadPatientFile(patientId: string, payload: any) {
     try {
       if (payload?.fileBlob instanceof Blob) {
-        const formData = new FormData();
         let uploadBlob: Blob = payload.fileBlob;
         let requestedFileName = String(payload?.fileName || 'arquivo.pdf').trim() || 'arquivo.pdf';
         const originalSize = Number(payload?.fileBlob?.size || 0);
@@ -1744,27 +1743,34 @@ export const dataService = {
           requiredExtension && !requestedFileName.toLowerCase().endsWith(requiredExtension)
             ? `${requestedFileName}${requiredExtension}`
             : requestedFileName;
-        const file = new File([uploadBlob], normalizedFileName, { type: safeMime });
-        formData.append('file', file, normalizedFileName);
-        formData.append('fileName', normalizedFileName);
-        formData.append('contentType', safeMime);
-        formData.append('source', String(payload?.source || 'upload'));
         const fileHash = await sha256Hex(uploadBlob);
         const metadataWithHash = {
           ...(payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}),
           ...(fileHash ? { fileSha256: fileHash } : {})
         };
-        if (Object.keys(metadataWithHash).length > 0) {
-          formData.append('metadata', JSON.stringify(metadataWithHash));
-        }
+        const encodedMetadata = encodeURIComponent(JSON.stringify(metadataWithHash));
 
         const authHeaders = await getAuthHeaders();
         const { ['Content-Type']: _, ['content-type']: __, ...headersWithoutContentType } = authHeaders as any;
-        const response = await fetch(`/api/patient-files/${patientId}`, {
+        const uploadHeaders: Record<string, string> = {
+          ...headersWithoutContentType,
+          'Content-Type': 'application/octet-stream',
+          'X-Verto-Upload-Mode': 'raw-v1',
+          'X-Verto-File-Name': encodeURIComponent(normalizedFileName),
+          'X-Verto-Declared-Type': safeMime,
+          'X-Verto-Source': String(payload?.source || 'upload').slice(0, 40)
+        };
+        // Headers are intentionally bounded. The server recomputes SHA-256 and
+        // remains the authority for the real MIME/magic bytes.
+        if (encodedMetadata.length > 0 && encodedMetadata.length <= 3000) {
+          uploadHeaders['X-Verto-Upload-Metadata'] = encodedMetadata;
+        }
+
+        const response = await fetch(`/api/patient-files/${encodeURIComponent(String(patientId))}`, {
           method: 'POST',
-          headers: headersWithoutContentType,
+          headers: uploadHeaders,
           credentials: 'include',
-          body: formData
+          body: uploadBlob
         });
         return await safeJson(response);
       }

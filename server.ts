@@ -6374,6 +6374,43 @@ function scanProtocolUpload(dataUrl: string, fileName: string, providedMime: str
   };
 }
 
+async function readBoundedRawUpload(req: any, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let exceeded = false;
+
+  await new Promise<void>((resolve, reject) => {
+    req.on('data', (chunk: Buffer) => {
+      const bufferChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += bufferChunk.length;
+      if (total > maxBytes) {
+        exceeded = true;
+        return;
+      }
+      chunks.push(bufferChunk);
+    });
+    req.once('end', () => resolve());
+    req.once('error', (error: any) => reject(error));
+    req.once('aborted', () => reject(Object.assign(new Error('Upload interrompido antes de concluir.'), { code: 'UPLOAD_ABORTED' })));
+  });
+
+  if (exceeded) {
+    throw Object.assign(new Error('O arquivo deve ter no máximo 10 MB.'), { code: 'UPLOAD_TOO_LARGE' });
+  }
+
+  return Buffer.concat(chunks);
+}
+
+function decodeUploadHeader(value: unknown, maxLength: number): string {
+  const raw = sanitizeString(value, Math.max(maxLength * 3, maxLength));
+  if (!raw) return '';
+  try {
+    return sanitizeString(decodeURIComponent(raw), maxLength);
+  } catch {
+    return sanitizeString(raw, maxLength);
+  }
+}
+
 async function parseMultipartFormData(req: any): Promise<{
   fields: Record<string, string>;
   file: { fileName: string; contentType: string; buffer: Buffer } | null;
@@ -39635,8 +39672,13 @@ async function startServer() {
   app.post('/api/patient-files/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.documents.upload'), checkPatientAccess, uploadLimiter, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 18 * 1024 * 1024, 'Upload de arquivo do paciente')) return;
-      const isMultipart = String(req.headers?.['content-type'] || '').toLowerCase().includes('multipart/form-data');
-      const multipart = isMultipart ? await parseMultipartFormData(req) : null;
+      const requestContentType = String(req.headers?.['content-type'] || '').toLowerCase();
+      const rawUploadMode =
+        requestContentType.startsWith('application/octet-stream') &&
+        sanitizeString(req.headers?.['x-verto-upload-mode'], 40).toLowerCase() === 'raw-v1';
+      const isMultipart = requestContentType.includes('multipart/form-data');
+      const rawUploadBuffer = rawUploadMode ? await readBoundedRawUpload(req, 10 * 1024 * 1024) : null;
+      const multipart = !rawUploadMode && isMultipart ? await parseMultipartFormData(req) : null;
       const multipartFields = multipart?.fields || {};
       const multipartFile = multipart?.file;
 
@@ -39644,6 +39686,7 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       const uploadedBy = sanitizeString(req.session.user?.id, 120);
       const rawName =
+        (rawUploadMode ? decodeUploadHeader(req.headers?.['x-verto-file-name'], 220) : '') ||
         sanitizeString(multipartFile?.fileName || multipartFields.fileName || req.body?.fileName, 220) ||
         `arquivo_${Date.now()}`;
       const safeName = rawName.replace(/[^\w.\-() ]+/g, '_').slice(0, 220);
@@ -39651,13 +39694,22 @@ async function startServer() {
       const isPatientUploader = isResponsiblePortalRole(uploaderRole);
       const source = isPatientUploader
         ? 'family_portal_document'
-        : sanitizeString(multipartFields.source || req.body?.source, 40) || 'upload';
+        : sanitizeString(
+            (rawUploadMode ? req.headers?.['x-verto-source'] : '') || multipartFields.source || req.body?.source,
+            40
+          ) || 'upload';
       const contentType = sanitizeString(
-        multipartFile?.contentType || multipartFields.contentType || req.body?.contentType,
+        (rawUploadMode ? req.headers?.['x-verto-declared-type'] : '') ||
+          multipartFile?.contentType ||
+          multipartFields.contentType ||
+          req.body?.contentType,
         120
       ) || 'application/octet-stream';
-      const dataUrl = sanitizeString(req.body?.fileBase64, 20_000_000);
-      const metadataRaw = multipartFields.metadata || req.body?.metadata;
+      const dataUrl = rawUploadMode ? '' : sanitizeString(req.body?.fileBase64, 20_000_000);
+      const rawMetadataHeader = rawUploadMode
+        ? decodeUploadHeader(req.headers?.['x-verto-upload-metadata'], 3000)
+        : '';
+      const metadataRaw = rawUploadMode ? rawMetadataHeader : (multipartFields.metadata || req.body?.metadata);
       const parsedMetadata =
         typeof metadataRaw === 'string'
           ? (() => {
@@ -39697,7 +39749,7 @@ async function startServer() {
       if (!patientId || !clinicId || !uploadedBy) {
         return res.status(400).json({ success: false, error: 'Dados obrigatórios ausentes.' });
       }
-      if (!dataUrl && !multipartFile?.buffer?.length) {
+      if (!rawUploadBuffer?.length && !dataUrl && !multipartFile?.buffer?.length) {
         return res.status(400).json({ success: false, error: 'Arquivo ausente.' });
       }
 
@@ -39705,9 +39757,11 @@ async function startServer() {
       const base64Payload = matches?.[2] || dataUrl;
       const mimeFromDataUrl = matches?.[1] || contentType;
       const fileBuffer =
-        multipartFile?.buffer?.length
-          ? multipartFile.buffer
-          : Buffer.from(String(base64Payload || ''), 'base64');
+        rawUploadBuffer?.length
+          ? rawUploadBuffer
+          : multipartFile?.buffer?.length
+            ? multipartFile.buffer
+            : Buffer.from(String(base64Payload || ''), 'base64');
       if (!fileBuffer.length || fileBuffer.length > 10 * 1024 * 1024) {
         return res.status(400).json({ success: false, error: 'Arquivo inválido ou acima de 10MB.' });
       }
@@ -40003,6 +40057,12 @@ async function startServer() {
         }
       });
     } catch (error: any) {
+      if (error?.code === 'UPLOAD_TOO_LARGE') {
+        return res.status(413).json({ success: false, error: 'O arquivo deve ter no máximo 10 MB.' });
+      }
+      if (error?.code === 'UPLOAD_ABORTED') {
+        return res.status(400).json({ success: false, error: 'Upload interrompido antes de concluir.' });
+      }
       return res.status(500).json({ success: false, error: error.message || String(error) });
     }
   });
