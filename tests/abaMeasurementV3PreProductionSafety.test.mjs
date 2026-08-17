@@ -56,7 +56,7 @@ assert.doesNotMatch(sessionMode, /\.filter\(\(prompt\) => abaV3UiEnabled \|\| !p
 
 assert.match(featureFlags, /isAbaV3UiEnabled[\s\S]*storage: null/);
 assert.match(featureFlags, /hasOwnProperty\.call\(options, 'storage'\)/);
-assert.match(settings, /const v3PromptSemantics = isAbaV3UiEnabled\(\) && !legacyV2StillEnabled/);
+assert.match(settings, /const v3PromptSemantics = isAbaV3UiEnabled\(\);/);
 assert.match(env, /^FEATURE_ABA_V3_PREFLIGHT_API=false$/m);
 assert.match(smoke, /drain-status/);
 assert.match(smoke, /session-collection-plan/);

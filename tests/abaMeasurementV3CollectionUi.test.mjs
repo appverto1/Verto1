@@ -134,10 +134,12 @@ assert.match(sessionMode, /Proteção ABA V3: persistência Legacy bloqueada par
 // In V3, Legacy prompt score/independence toggles disappear instead of being reinterpreted.
 assert.match(featureFlags, /resolveFeatureFlag\('aba_v3_ui', \{ defaultValue: false/);
 assert.match(settings, /Ajuda categórica na ABA V3/);
-assert.match(settings, /nenhuma pontuação de prompt entra nos cálculos clínicos/);
+assert.match(settings, /não usam pontuação 0–100/);
 assert.match(settings, /\{!v3PromptSemantics && <th[^\n]*Pontuação de independência/);
 assert.match(settings, /\{!v3PromptSemantics && <th[^\n]*Conta como resposta independente/);
 assert.match(settings, /disabled=\{v3PromptSemantics && legacyV2StillEnabled\}/);
+assert.match(settings, /<details className=\"group rounded-xl border border-slate-200 bg-slate-50\/60\">/);
+assert.match(settings, /Configurar tipos de ajuda/);
 assert.match(sessionMode, /legacyPromptedPromptOptions[\s\S]*?\.filter\(\(prompt\) => !prompt\.countsAsIndependent\)/);
 assert.match(sessionMode, /promptedPromptOptionsForGoal[\s\S]*?isGoalPlannedForV3Ui/);
 

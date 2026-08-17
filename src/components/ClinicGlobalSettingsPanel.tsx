@@ -801,9 +801,10 @@ function AbaPromptTypesSettings() {
 
 function AbaPromptTypesClinicalSettings() {
   const legacyV2StillEnabled = isAbaV2Enabled();
-  // During a cohort pilot V2 and V3 coexist. Keep clinic-global prompt settings
-  // compatible with V2; V3 session collection ignores legacy numeric scores.
-  const v3PromptSemantics = isAbaV3UiEnabled() && !legacyV2StillEnabled;
+  // V3 prompt semantics must be visual whenever the V3 UI is enabled, even while
+  // Legacy V2 remains available for historical compatibility. Numeric Legacy
+  // scores stay persisted for old events but are never exposed as V3 semantics.
+  const v3PromptSemantics = isAbaV3UiEnabled();
   const [promptTypes, setPromptTypes] = useState<AbaPromptTypeConfig[]>(() => normalizeAbaPromptTypeConfig());
   const [savingId, setSavingId] = useState('');
   const [savedId, setSavedId] = useState('');
@@ -982,12 +983,25 @@ function AbaPromptTypesClinicalSettings() {
     <SectionCard
       title="Tipos de ajuda ABA"
       description={v3PromptSemantics
-        ? 'Configure os tipos de ajuda usados durante as tentativas. Na V3, ajuda é categórica: nome, categoria e ordem; nenhuma pontuação de prompt entra nos cálculos clínicos.'
+        ? `${activePromptTypes.length} tipos ativos. Na V3, os prompts são categóricos e não usam pontuação 0–100.`
         : 'Configure os tipos de ajuda usados durante as tentativas. A pontuação indica o nível de independência usado em gráficos, relatórios e critérios clínicos.'}
       complete={promptTypes.some((prompt) => prompt.active)}
       hasAnyData
     >
-      <div className="space-y-5">
+      <details className="group rounded-xl border border-slate-200 bg-slate-50/60">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-slate-800">Configurar tipos de ajuda</p>
+            <p className="mt-0.5 text-xs font-normal text-slate-500">
+              {activePromptTypes.length} ativos · clique para {v3PromptSemantics ? 'revisar a hierarquia categórica' : 'revisar a configuração'}
+            </p>
+          </div>
+          <span className="shrink-0 text-xs font-semibold text-[#7a32fc]">
+            <span className="group-open:hidden">Abrir</span>
+            <span className="hidden group-open:inline">Fechar</span>
+          </span>
+        </summary>
+        <div className="space-y-5 border-t border-slate-200 bg-white p-4">
         {v3PromptSemantics ? (
           <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
             <p className="text-sm font-semibold text-violet-950">Ajuda categórica na ABA V3</p>
@@ -1158,7 +1172,8 @@ function AbaPromptTypesClinicalSettings() {
             </div>
           </details>
         )}
-      </div>
+        </div>
+      </details>
 
       {editingPrompt && (
         <div
