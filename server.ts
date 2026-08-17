@@ -75,6 +75,10 @@ import {
   createPasswordRecoveryToken,
   verifyPasswordRecoveryToken
 } from './src/utils/passwordRecoveryLink';
+import {
+  createClinicInvitationActivationToken,
+  verifyClinicInvitationActivationToken
+} from './src/utils/clinicInvitationActivationToken';
 import { buildPatientGlobalIdentityUpdate } from './src/utils/patientAccountLinking';
 import {
   resolveAuthoritativeHistoricalTissServiceCatalogId,
@@ -3938,6 +3942,51 @@ function getClinicInvitationAcceptanceUrl(invitationIdValue: unknown): string {
     invitation_id: invitationId,
   });
   return `${baseUrl.replace(/\/+$/, '')}/?${params.toString()}`;
+}
+
+const CLINIC_INVITATION_ACTIVATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+function clinicInvitationActivationSigningSecret(): string {
+  const sessionSecret = sanitizeString(process.env.SESSION_SECRET || '', 2000);
+  if (sessionSecret.length < 32) {
+    throw new Error('CLINIC_INVITATION_LINK_SECRET_INVALID');
+  }
+  return crypto
+    .createHmac('sha256', sessionSecret)
+    .update('verto:clinic-invitation-activation:v1')
+    .digest('hex');
+}
+
+function getClinicInvitationActivationUrl(params: {
+  invitationId: unknown;
+  userId: unknown;
+  email: unknown;
+  nonce: unknown;
+}): string {
+  const invitationId = sanitizeString(params.invitationId, 120);
+  const userId = sanitizeString(params.userId, 120);
+  const email = sanitizeEmail(params.email);
+  const nonce = sanitizeString(params.nonce, 200);
+  if (!isUuid(invitationId) || !isUuid(userId) || !email || nonce.length < 32) {
+    throw new Error('CLINIC_INVITATION_ACTIVATION_CONTEXT_INVALID');
+  }
+
+  const token = createClinicInvitationActivationToken({
+    invitationId,
+    userId,
+    nonce,
+    expiresAt: Date.now() + CLINIC_INVITATION_ACTIVATION_TTL_MS,
+    signingSecret: clinicInvitationActivationSigningSecret(),
+  });
+  const activationUrl = new URL(
+    getActivationRedirectUrl('coordinator', email, {
+      invitationId,
+      inviteMode: 'new',
+    }),
+  );
+  const fragment = new URLSearchParams({ invite_token: token });
+  activationUrl.hash = fragment.toString();
+  return activationUrl.toString();
 }
 
 function getRecoveryRedirectUrl(recoveryToken?: unknown): string {
@@ -24508,6 +24557,7 @@ async function startServer() {
       "/auth/logout",
       "/auth/resend-confirmation",
       "/auth/activation/bootstrap",
+      "/auth/invitation/password",
       "/auth/password/recovery/bootstrap",
       "/auth/password/recovery/email/request",
       "/auth/password/recovery/verify",
@@ -25287,6 +25337,174 @@ async function startServer() {
     }
   });
 
+  app.post('/api/auth/invitation/password', authMfaLimiter, async (req, res) => {
+    const token = sanitizeString(req.body?.token, 4096);
+    const password = validateStrongPassword(req.body?.newPassword);
+    if (!token || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'CLINIC_INVITATION_ACTIVATION_INVALID',
+        message: 'Link de ativação inválido ou senha fora da política de segurança.'
+      });
+    }
+
+    let claims: ReturnType<typeof verifyClinicInvitationActivationToken> = null;
+    try {
+      claims = verifyClinicInvitationActivationToken({
+        token,
+        signingSecret: clinicInvitationActivationSigningSecret(),
+      });
+    } catch (error: any) {
+      console.error('[Auth] clinic invitation activation signing unavailable:', {
+        message: sanitizeString(error?.message || String(error), 180)
+      });
+      return res.status(503).json({
+        success: false,
+        error: 'CLINIC_INVITATION_ACTIVATION_UNAVAILABLE',
+        message: 'A ativação está temporariamente indisponível. Tente novamente em alguns instantes.'
+      });
+    }
+
+    if (!claims || !isUuid(claims.invitationId) || !isUuid(claims.userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'CLINIC_INVITATION_ACTIVATION_EXPIRED',
+        message: 'Este link de ativação é inválido ou expirou. Solicite um novo convite.'
+      });
+    }
+
+    let leaseAcquired = false;
+    const leaseKey = `clinic-invite-activate:${claims.invitationId}`;
+    try {
+      if (requiresDistributedRuntimeState()) {
+        leaseAcquired = await tryAcquireDistributedJobLease({
+          supabase,
+          jobKey: leaseKey,
+          ownerId: runtimeOwnerId,
+          leaseSeconds: 30,
+        });
+        if (!leaseAcquired) {
+          return res.status(409).json({
+            success: false,
+            error: 'CLINIC_INVITATION_ACTIVATION_IN_PROGRESS',
+            message: 'Esta ativação já está sendo processada. Aguarde alguns instantes e tente novamente.'
+          });
+        }
+      }
+
+      const { data: invitation, error: invitationError } = await supabase
+        .from('invitations')
+        .select('id,email,status')
+        .eq('id', claims.invitationId)
+        .limit(1)
+        .maybeSingle();
+      if (invitationError) throw invitationError;
+
+      const invitationEmail = sanitizeEmail(invitation?.email);
+      const invitationStatus = sanitizeString(invitation?.status, 40).toLowerCase();
+      if (!invitation || !invitationEmail || invitationStatus !== 'pending') {
+        return res.status(409).json({
+          success: false,
+          error: 'CLINIC_INVITATION_NOT_AVAILABLE',
+          message: 'Este convite expirou, foi cancelado ou já foi utilizado.'
+        });
+      }
+
+      const { data: authUserResult, error: authUserError } = await supabase.auth.admin.getUserById(claims.userId);
+      const authUser = authUserResult?.user || null;
+      if (authUserError || !authUser?.id) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_INVITATION_AUTH_USER_NOT_FOUND',
+          message: 'Não foi possível validar a conta deste convite.'
+        });
+      }
+
+      const authEmail = sanitizeEmail(authUser.email);
+      const metadata: Record<string, any> = authUser.user_metadata && typeof authUser.user_metadata === 'object'
+        ? { ...authUser.user_metadata }
+        : {};
+      const metadataInvitationId = sanitizeString(
+        metadata?.invitation_id || metadata?.clinic_invitation_id,
+        120
+      );
+      const metadataNonce = sanitizeString(metadata?.invitation_activation_nonce, 200);
+      const suppliedNonce = sanitizeString(claims.nonce, 200);
+      const metadataNonceBuffer = Buffer.from(metadataNonce, 'utf8');
+      const suppliedNonceBuffer = Buffer.from(suppliedNonce, 'utf8');
+      const nonceMatches = Boolean(
+        metadataNonce &&
+        suppliedNonce &&
+        metadataNonceBuffer.length === suppliedNonceBuffer.length &&
+        crypto.timingSafeEqual(metadataNonceBuffer, suppliedNonceBuffer)
+      );
+
+      if (
+        authEmail !== invitationEmail ||
+        metadataInvitationId !== claims.invitationId ||
+        !nonceMatches
+      ) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_INVITATION_ACTIVATION_MISMATCH',
+          message: 'Este link não corresponde mais ao convite ativo. Solicite um novo convite.'
+        });
+      }
+
+      delete metadata.invitation_activation_nonce;
+      const { error: updateUserError } = await supabase.auth.admin.updateUserById(
+        claims.userId,
+        {
+          password,
+          email_confirm: true,
+          user_metadata: metadata,
+        }
+      );
+      if (updateUserError) throw updateUserError;
+
+      await persistIdentityAuditLog({
+        title: 'Senha definida por convite de clínica',
+        content: `Conta ${maskEmail(invitationEmail)} confirmou o link seguro de convite e definiu a senha.`,
+        identifier: invitationEmail,
+        channel: 'email',
+        userId: claims.userId,
+        request: req,
+        status: 'success'
+      });
+
+      return res.json({
+        success: true,
+        loginEmail: invitationEmail,
+        invitationId: claims.invitationId,
+      });
+    } catch (error: any) {
+      console.error('[Auth] clinic invitation password activation failed:', {
+        invitationId: sanitizeString(claims?.invitationId, 120),
+        message: sanitizeString(error?.message || String(error), 240)
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'CLINIC_INVITATION_ACTIVATION_FAILED',
+        message: 'Não foi possível concluir a ativação agora. Tente novamente.'
+      });
+    } finally {
+      if (leaseAcquired) {
+        try {
+          await releaseDistributedJobLease({
+            supabase,
+            jobKey: leaseKey,
+            ownerId: runtimeOwnerId,
+          });
+        } catch (releaseError: any) {
+          console.warn('[Auth] clinic invitation activation lease release failed:', {
+            invitationId: sanitizeString(claims?.invitationId, 120),
+            message: sanitizeString(releaseError?.message || String(releaseError), 180)
+          });
+        }
+      }
+    }
+  });
+
   app.post('/api/auth/activation/bootstrap', recoveryLimiter, async (req, res) => {
     const genericResponse = {
       success: true,
@@ -25308,23 +25526,68 @@ async function startServer() {
         .select('name,role')
         .eq('id', authUser.id)
         .maybeSingle();
+      const authMetadata: Record<string, any> = (authUser as any)?.user_metadata && typeof (authUser as any).user_metadata === 'object'
+        ? { ...(authUser as any).user_metadata }
+        : {};
       const persistedRole = sanitizeString(
-        profile?.role || (authUser as any)?.user_metadata?.role,
+        profile?.role || authMetadata?.invited_role || authMetadata?.role,
         40
       );
       const templateProfile = resolveTemplateProfileByRole(persistedRole);
-      const activationLinkFromSignup = await generateSupabaseActionLink({
-        type: 'signup',
-        email,
-        redirectTo: getActivationRedirectUrl(persistedRole, email),
-      });
-      const activationLink =
-        activationLinkFromSignup ||
-        (await generateSupabaseActionLink({
-          type: 'recovery',
+      const metadataInvitationId = sanitizeString(
+        authMetadata?.invitation_id || authMetadata?.clinic_invitation_id,
+        120
+      );
+      let activationLink: string | null = null;
+
+      if (isUuid(metadataInvitationId)) {
+        const { data: pendingInvitation, error: pendingInvitationError } = await supabase
+          .from('invitations')
+          .select('id,email,status')
+          .eq('id', metadataInvitationId)
+          .eq('status', 'pending')
+          .limit(1)
+          .maybeSingle();
+        if (pendingInvitationError) throw pendingInvitationError;
+
+        if (
+          pendingInvitation?.id &&
+          sanitizeEmail(pendingInvitation.email) === email
+        ) {
+          const invitationActivationNonce = crypto.randomBytes(32).toString('base64url');
+          const { error: updateActivationNonceError } = await supabase.auth.admin.updateUserById(
+            authUser.id,
+            {
+              user_metadata: {
+                ...authMetadata,
+                invitation_activation_nonce: invitationActivationNonce,
+              }
+            }
+          );
+          if (updateActivationNonceError) throw updateActivationNonceError;
+          activationLink = getClinicInvitationActivationUrl({
+            invitationId: pendingInvitation.id,
+            userId: authUser.id,
+            email,
+            nonce: invitationActivationNonce,
+          });
+        }
+      }
+
+      if (!activationLink) {
+        const activationLinkFromSignup = await generateSupabaseActionLink({
+          type: 'signup',
           email,
           redirectTo: getActivationRedirectUrl(persistedRole, email),
-        }));
+        });
+        activationLink =
+          activationLinkFromSignup ||
+          (await generateSupabaseActionLink({
+            type: 'recovery',
+            email,
+            redirectTo: getActivationRedirectUrl(persistedRole, email),
+          }));
+      }
 
       if (activationLink) {
         const activationEmail = buildActivationEmailTemplate({
@@ -28605,7 +28868,6 @@ async function startServer() {
       const data = insertedInvitation;
 
       // Garante usuário Auth para fluxo de ativação por senha/google sem depender do e-mail do Supabase.
-      const authUserAlreadyExisted = Boolean(authUser?.id);
       const authUserHadVerifiedEmail = Boolean(
         authUser?.id && (authUser?.email_confirmed_at || authUser?.confirmed_at)
       );
@@ -28635,6 +28897,9 @@ async function startServer() {
       const reusedExistingAuthAccess = Boolean(
         authUserHadVerifiedEmail && invitedProfileExists
       );
+      const invitationActivationNonce = reusedExistingAuthAccess
+        ? ''
+        : crypto.randomBytes(32).toString('base64url');
 
       if (authUser?.id && !reusedExistingAuthAccess) {
         const currentMetadata = authUser?.user_metadata && typeof authUser.user_metadata === 'object'
@@ -28649,7 +28914,8 @@ async function startServer() {
               professional_title: professionalTitle,
               specialty,
               clinic_id: clinicId,
-              invitation_id: data?.id
+              invitation_id: data?.id,
+              invitation_activation_nonce: invitationActivationNonce
             }
           }
         );
@@ -28657,24 +28923,14 @@ async function startServer() {
         authUser = updatedAuthData?.user || authUser;
       }
 
-      const activationEntryUrl = reusedExistingAuthAccess
-        ? getClinicInvitationAcceptanceUrl(data?.id)
-        : getActivationRedirectUrl('coordinator', email, {
-            invitationId: data?.id,
-            inviteMode: 'new'
-          });
       const activationLink = reusedExistingAuthAccess
-        ? activationEntryUrl
-        : (await withTimeoutOrFallback(
-            generateSupabaseActionLink({
-              type: authUserAlreadyExisted ? 'recovery' : 'signup',
-              email,
-              redirectTo: activationEntryUrl
-            }),
-            8000,
-            null,
-            'generateSupabaseActionLink(clinic_invite)'
-          )) || activationEntryUrl;
+        ? getClinicInvitationAcceptanceUrl(data?.id)
+        : getClinicInvitationActivationUrl({
+            invitationId: data?.id,
+            userId: authUser?.id,
+            email,
+            nonce: invitationActivationNonce
+          });
 
       const invitedProfessionalName = sanitizeString(
         invitedProfileResult.data?.name || authUser?.user_metadata?.full_name || authUser?.user_metadata?.name,
