@@ -297,11 +297,11 @@ export function TeamManagement({
   const canManageTeamAccess = capabilities?.has('team.permissions.manage') === true;
   const canManageSupervision = capabilities?.has('team.supervision.manage') === true;
   const canGrantDirector = actorRole === 'director';
-  const canGrantAdministrativeRoles = actorRole === 'director';
+  const canGrantAdministrativeRoles = actorRole === 'director' || actorRole === 'coordinator';
   const canCreateAccounts =
     (actorRole === 'director' || actorRole === 'coordinator') &&
     capabilities?.has('team.invite') === true;
-  const canChangeMemberRole = actorRole === 'director' && canManageTeamAccess;
+  const canChangeMemberRole = (actorRole === 'director' || actorRole === 'coordinator') && canManageTeamAccess;
   const canManageMemberAccess = (member: Member) =>
     canManageTeamAccess &&
     member.id !== user.id &&
@@ -358,8 +358,8 @@ export function TeamManagement({
       setIsAssigning(false);
       return;
     }
-    if (actorRole === 'coordinator' && newMemberRole !== 'therapist') {
-      setError('Coordenadores podem convidar apenas profissionais de atendimento da própria unidade.');
+    if (actorRole === 'coordinator' && newMemberRole === 'director') {
+      setError('Coordenadores podem convidar e gerir colaboradores da própria unidade, mas não podem conceder o papel de Diretor.');
       setIsAssigning(false);
       return;
     }
@@ -1540,7 +1540,7 @@ export function TeamManagement({
             <form onSubmit={handleInvite} className="space-y-5">
               {actorRole === 'coordinator' && (
                 <p className="rounded-xl bg-slate-50 px-3.5 py-2.5 text-xs leading-5 text-slate-500">
-                  Como Coordenador, você pode convidar profissionais de atendimento para esta unidade.
+                  Como Coordenador, você pode convidar e gerir os colaboradores desta unidade. O papel de Diretor permanece restrito à gestão organizacional e multiunidade.
                 </p>
               )}
               <div>

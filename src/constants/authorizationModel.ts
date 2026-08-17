@@ -72,7 +72,7 @@ export const CAPABILITY_CATALOG = [
   { key: 'workspace.multiclinic.analytics', label: 'Visualizar dados consolidados de múltiplas unidades', domain: 'clinic', delegable: true, sensitive: true },
 
   { key: 'team.view', label: 'Visualizar equipe da clínica', domain: 'team', delegable: true },
-  { key: 'team.invite', label: 'Convidar profissionais', domain: 'team', delegable: false, sensitive: true },
+  { key: 'team.invite', label: 'Convidar colaboradores', domain: 'team', delegable: false, sensitive: true },
   { key: 'team.edit', label: 'Editar profissionais', domain: 'team', delegable: true, sensitive: true },
   { key: 'team.deactivate', label: 'Desativar profissionais', domain: 'team', delegable: true, sensitive: true },
   { key: 'team.permissions.manage', label: 'Definir papéis e permissões', domain: 'team', delegable: true, sensitive: true },

@@ -94,10 +94,12 @@ export function canAssignClinicRole(
   // supervision is granted to a professional through can_supervise.
   if (targetRole === 'supervisor') return false;
 
-  // Directors can provision any canonical clinic role. Coordinators remain
-  // unit-scoped and may create only professional (therapist) memberships.
+  // Directors can provision any canonical clinic role. Coordinators have the
+  // same team-management authority inside their active unit, but cannot grant
+  // the organization-level Director role. Their unit boundary is enforced by
+  // the active clinic membership used by the route authorization layer.
   if (actorRole === 'director') return true;
-  if (actorRole === 'coordinator') return targetRole === 'therapist';
+  if (actorRole === 'coordinator') return targetRole !== 'director';
 
   return false;
 }

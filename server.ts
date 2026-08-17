@@ -28375,7 +28375,7 @@ async function startServer() {
           success: false,
           error: 'CLINIC_ROLE_DELEGATION_DENIED',
           message: actorRole === 'coordinator'
-            ? 'Coordenadores podem convidar apenas profissionais de atendimento da própria unidade.'
+            ? 'Coordenadores podem convidar colaboradores da própria unidade, mas não podem conceder o papel de Diretor.'
             : 'Seu papel atual não pode conceder este nível de acesso.'
         });
       }
@@ -28442,14 +28442,15 @@ async function startServer() {
       if (pendingInvitationError) throw pendingInvitationError;
       let existing = pendingInvitation;
 
-      // A Coordinator may create professional invitations, but must never
-      // repurpose a pending invitation for a higher/different clinic role.
+      // A Coordinator may create supported collaborator invitations inside
+      // the active unit, but must never repurpose a pending invitation into the
+      // organization-level Director role (or the legacy Supervisor role).
       if (existing && !canAssignClinicRole(actorRole, existing.role)) {
         return res.status(409).json({
           success: false,
           error: 'CLINIC_PENDING_INVITATION_ROLE_CONFLICT',
           message: actorRole === 'coordinator'
-            ? 'Já existe um convite pendente para este e-mail com outro nível de acesso. Peça ao Diretor para revisá-lo.'
+            ? 'Já existe um convite pendente para este e-mail com um papel que o Coordenador não pode administrar nesta unidade. Peça ao Diretor para revisá-lo.'
             : 'Já existe um convite pendente incompatível com este nível de acesso.'
         });
       }
@@ -28926,7 +28927,7 @@ async function startServer() {
           success: false,
           error: 'CLINIC_INVITATION_CANCEL_DENIED',
           message: actorRole === 'coordinator'
-            ? 'Coordenadores podem cancelar apenas convites de profissionais da própria unidade.'
+            ? 'Coordenadores podem cancelar convites de colaboradores da própria unidade, exceto convites de Diretor.'
             : 'Seu papel atual não pode cancelar este convite.'
         });
       }

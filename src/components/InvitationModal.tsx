@@ -47,7 +47,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const maxMembers = Number.isFinite(explicitTeamLimit) && explicitTeamLimit > 0 ? explicitTeamLimit : null;
   const actorRole = String(user?.role || '').trim().toLowerCase();
   const canGrantDirector = actorRole === 'director';
-  const canGrantAdministrativeRoles = actorRole === 'director';
+  const canGrantAdministrativeRoles = actorRole === 'director' || actorRole === 'coordinator';
   const canCreateAccounts = actorRole === 'director' || actorRole === 'coordinator';
 
   const handleInvite = async (e: React.FormEvent) => {
@@ -56,8 +56,8 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
       setError('Somente Diretor e Coordenador podem enviar convites de equipe.');
       return;
     }
-    if (actorRole === 'coordinator' && role !== 'therapist') {
-      setError('Coordenadores podem convidar apenas profissionais de atendimento da própria unidade.');
+    if (actorRole === 'coordinator' && role === 'director') {
+      setError('Coordenadores podem convidar colaboradores da própria unidade, mas não podem conceder o papel de Diretor.');
       return;
     }
     if (maxMembers && invitations.length + 1 >= maxMembers) {

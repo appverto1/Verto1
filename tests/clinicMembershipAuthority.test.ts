@@ -92,6 +92,8 @@ assert.equal(
 );
 
 const server = fs.readFileSync('server.ts', 'utf8');
+const teamManagement = fs.readFileSync('src/components/TeamManagement.tsx', 'utf8');
+const invitationModal = fs.readFileSync('src/components/InvitationModal.tsx', 'utf8');
 assert.doesNotMatch(
   server,
   /function requireActiveClinicRoles/,
@@ -165,10 +167,10 @@ assert.equal(canAssignClinicRole('director', 'director'), true);
 assert.equal(canAssignClinicRole('director', 'biller'), true);
 assert.equal(canAssignClinicRole('director', 'supervisor'), false);
 assert.equal(canAssignClinicRole('coordinator', 'therapist'), true);
+assert.equal(canAssignClinicRole('coordinator', 'receptionist'), true);
+assert.equal(canAssignClinicRole('coordinator', 'biller'), true);
+assert.equal(canAssignClinicRole('coordinator', 'coordinator'), true);
 assert.equal(canAssignClinicRole('coordinator', 'supervisor'), false);
-assert.equal(canAssignClinicRole('coordinator', 'biller'), false);
-assert.equal(canAssignClinicRole('coordinator', 'receptionist'), false);
-assert.equal(canAssignClinicRole('coordinator', 'coordinator'), false);
 assert.equal(canAssignClinicRole('coordinator', 'director'), false);
 assert.equal(canAssignClinicRole('supervisor', 'therapist'), false);
 assert.equal(canAssignClinicRole('biller', 'biller'), false);
@@ -182,6 +184,23 @@ assert.equal(canManageClinicRole('coordinator', 'biller'), true);
 assert.equal(canManageClinicRole('coordinator', 'director'), false);
 assert.equal(canManageClinicRole('supervisor', 'therapist'), false);
 
+
+assert.match(
+  teamManagement,
+  /canGrantAdministrativeRoles = actorRole === 'director' \|\| actorRole === 'coordinator'/,
+  'gestão da equipe deve expor Coordenador, Recepção e Faturista ao Coordenador da unidade',
+);
+assert.match(
+  invitationModal,
+  /canGrantAdministrativeRoles = actorRole === 'director' \|\| actorRole === 'coordinator'/,
+  'modal de convite deve usar a mesma autoridade de papéis da unidade',
+);
+assert.match(
+  teamManagement,
+  /canGrantDirector = actorRole === 'director'/,
+  'somente Diretor pode conceder o papel organizacional de Diretor',
+);
+
 assert.match(
   server,
   /app\.post\('\/api\/clinic\/invite'[\s\S]*?requireClinicCapability\('team\.invite'\)/,
@@ -194,8 +213,8 @@ assert.match(
 );
 assert.match(
   server,
-  /Coordenadores podem convidar apenas profissionais de atendimento da própria unidade/,
-  'backend precisa limitar convite do coordenador ao papel profissional',
+  /Coordenadores podem convidar colaboradores da própria unidade, mas não podem conceder o papel de Diretor/,
+  'backend precisa permitir gestão da equipe da unidade sem permitir promoção para Diretor',
 );
 assert.match(
   server,
