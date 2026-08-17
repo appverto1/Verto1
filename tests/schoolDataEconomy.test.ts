@@ -65,6 +65,14 @@ const patientSchoolOptionsEffect = coordinatorDashboard.slice(
 );
 assert.match(patientSchoolOptionsEffect, /if \(activeTab !== "patients"\) return;/,
   'a lista escolar nao deve ser carregada em abas que nao exibem o filtro');
+assert.match(patientSchoolOptionsEffect, /if \(!authorizationHydrated\) return;/,
+  'o filtro escolar nao deve consultar APIs opcionais antes da autorizacao canonica hidratar');
+assert.match(patientSchoolOptionsEffect, /if \(!canUseSchoolPatientFilters\) \{[\s\S]*?setPatientSchoolOptions\(\[\]\);[\s\S]*?setPatientSchoolOptionsLoadError\(""\);[\s\S]*?return;/,
+  'clinicas sem modulo escolar/capability nao devem consultar nem manter estado escolar residual');
+assert.match(coordinatorDashboard, /const canUseSchoolPatientFilters =[\s\S]*?authorizationHydrated && hasModule\("school_management"\) && hasCapability\("school\.view"\);/,
+  'filtros escolares do paciente devem exigir entitlement do modulo e capability efetiva');
+assert.match(coordinatorDashboard, /\{canUseSchoolPatientFilters && \([\s\S]*?patientSchoolOptionsLoadError[\s\S]*?>Escola<[\s\S]*?>Autorização<[\s\S]*?\)\}/,
+  'UI escolar deve desaparecer por completo quando o modulo nao foi contratado');
 assert.match(patientSchoolOptionsEffect, /setPatientSchoolOptions\(\[\]\);[\s\S]*?setPatientSchoolOptionsWorkspaceId\(""\);/,
   'trocar de workspace ou invalidar o cache deve remover imediatamente opções antigas');
 assert.match(patientSchoolOptionsEffect, /getSchoolAutocomplete\("", 1, 100, \{ signal: controller\.signal \}\)/,

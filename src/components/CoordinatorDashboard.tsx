@@ -789,6 +789,8 @@ export function CoordinatorDashboard({
   const canViewPatientTissAuthorizations = hasCapability("patient.insurance.authorization.view");
   const canCreatePatients = hasCapability("patient.create");
   const canManageRooms = hasCapability("clinic.rooms.manage");
+  const canUseSchoolPatientFilters =
+    authorizationHydrated && hasModule("school_management") && hasCapability("school.view");
   const workspaceScopeKey = useMemo(
     () => String(user?.activeWorkspaceId || user?.clinicId || "").trim(),
     [user?.activeWorkspaceId, user?.clinicId],
@@ -1206,6 +1208,19 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     if (activeTab !== "patients") return;
+    if (!authorizationHydrated) return;
+    if (!canUseSchoolPatientFilters) {
+      patientSchoolOptionsLoadedForRef.current = "";
+      patientSchoolOptionsRequestForRef.current = "";
+      setPatientSchoolOptions([]);
+      setPatientSchoolOptionsWorkspaceId("");
+      setPatientSchoolOptionsLoading(false);
+      setPatientSchoolOptionsLoadError("");
+      setPatientSchoolFilter("");
+      setPatientSchoolUnitFilter("");
+      setSelectedSchoolPatientIds([]);
+      return;
+    }
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
     const requestSeq = patientSchoolOptionsRequestSeqRef.current + 1;
     patientSchoolOptionsRequestSeqRef.current = requestSeq;
@@ -1257,7 +1272,7 @@ export function CoordinatorDashboard({
         }
       });
     return () => controller.abort();
-  }, [activeTab, patientSchoolOptionsRevision, user?.activeWorkspaceId, user?.clinicId]);
+  }, [activeTab, authorizationHydrated, canUseSchoolPatientFilters, patientSchoolOptionsRevision, user?.activeWorkspaceId, user?.clinicId]);
 
   const patientSchoolOptionsForCurrentWorkspace =
     patientSchoolOptionsWorkspaceId === String(user?.activeWorkspaceId || user?.clinicId || "").trim()
@@ -12975,7 +12990,9 @@ export function CoordinatorDashboard({
                       </select>
                     </div>
                   )}
-                  {patientSchoolOptionsLoadError && (
+                  {canUseSchoolPatientFilters && (
+                    <>
+                      {patientSchoolOptionsLoadError && (
                     <div className="flex flex-col gap-3 rounded-2xl border border-rose-100 bg-rose-50/70 p-3 text-sm text-rose-700 sm:flex-row sm:items-center sm:justify-between" role="alert">
                       <span>{patientSchoolOptionsLoadError}</span>
                       <button
@@ -13007,6 +13024,8 @@ export function CoordinatorDashboard({
                   )}
                   {schoolBatchMeetingNotice && <div className="rounded-2xl border border-slate-100 bg-white p-3 text-sm font-semibold text-slate-600">{schoolBatchMeetingNotice}</div>}
                   {patientSchoolFilter && patientSchoolPagination && patientSchoolPagination.totalPages > 1 && <div className="flex items-center justify-between rounded-2xl border border-slate-100 bg-white p-3 text-sm text-slate-600"><span>Página {patientSchoolPagination.page} de {patientSchoolPagination.totalPages}</span><div className="flex gap-2"><button type="button" disabled={patientSchoolPage <= 1 || schoolPatientFilterLoading} onClick={() => setPatientSchoolPage((page) => Math.max(1, page - 1))} className="rounded-xl border border-slate-200 px-3 py-2 disabled:opacity-40">Anterior</button><button type="button" disabled={!patientSchoolPagination.hasNextPage || schoolPatientFilterLoading} onClick={() => setPatientSchoolPage((page) => page + 1)} className="rounded-xl border border-slate-200 px-3 py-2 disabled:opacity-40">Próxima</button></div></div>}
+                    </>
+                  )}
                   {patientQuickFilter === "birthdaysToday" && (
                     <div className="flex flex-col gap-3 rounded-2xl border border-pink-100 bg-pink-50/70 p-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex items-center gap-2 text-sm font-bold text-pink-700">
