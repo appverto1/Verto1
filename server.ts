@@ -5917,6 +5917,7 @@ type DetectedUploadMime =
   | 'image/gif'
   | 'image/webp'
   | 'application/pdf'
+  | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   | 'text/html'
   | 'application/json';
 type UploadContext = 'image-only' | 'image-or-pdf' | 'anamnesis-document';
@@ -5957,6 +5958,20 @@ function detectMimeByMagicBytes(buffer: Buffer): DetectedUploadMime | null {
     const riff = buffer.subarray(0, 4).toString('ascii');
     const webp = buffer.subarray(8, 12).toString('ascii');
     if (riff === 'RIFF' && webp === 'WEBP') return 'image/webp';
+  }
+
+  if (buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && buffer[2] === 0x03 && buffer[3] === 0x04) {
+    // DOCX is an OOXML ZIP package. We never trust the extension alone: the
+    // archive must expose the canonical Word package entries and must not
+    // contain a VBA project (DOCM/macro-enabled document).
+    const zipMetadataProbe = buffer.toString('latin1');
+    const hasContentTypes = zipMetadataProbe.includes('[Content_Types].xml');
+    const hasRootRelationships = zipMetadataProbe.includes('_rels/.rels');
+    const hasWordDocument = zipMetadataProbe.includes('word/document.xml');
+    const hasMacroProject = /word\/vbaProject\.bin/i.test(zipMetadataProbe);
+    if (hasContentTypes && hasRootRelationships && hasWordDocument && !hasMacroProject) {
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    }
   }
 
   if (buffer.length >= 5) {
@@ -6013,7 +6028,12 @@ function isAllowedDetectedMime(mime: DetectedUploadMime, context: UploadContext)
   if (context === 'anamnesis-document') {
     return mime === 'application/pdf' || mime === 'text/html' || mime === 'application/json' || mime.startsWith('image/');
   }
-  return mime.startsWith('image/') || mime === 'application/pdf' || mime === 'application/json';
+  return (
+    mime.startsWith('image/') ||
+    mime === 'application/pdf' ||
+    mime === 'application/json' ||
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  );
 }
 
 function validateBinaryUpload(
@@ -6023,7 +6043,7 @@ function validateBinaryUpload(
 ): { ok: true; detectedMime: DetectedUploadMime } | { ok: false; error: string } {
   const detectedMime = detectMimeByMagicBytes(fileBuffer);
   if (!detectedMime) {
-    return { ok: false, error: 'Tipo real do arquivo não reconhecido. Envie imagem válida ou PDF clínico.' };
+    return { ok: false, error: 'Tipo real do arquivo não reconhecido. Envie PDF, imagem válida ou DOCX sem macros.' };
   }
 
   if (!isAllowedDetectedMime(detectedMime, context)) {
@@ -39829,7 +39849,17 @@ async function startServer() {
         if (!exists) {
           const { error: createError } = await supabase.storage.createBucket(bucketName, {
             public: false,
-            fileSizeLimit: 10 * 1024 * 1024
+            fileSizeLimit: 10 * 1024 * 1024,
+            allowedMimeTypes: [
+              'application/pdf',
+              'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              'image/png',
+              'image/jpeg',
+              'image/webp',
+              'application/json',
+              'text/plain',
+              'text/html'
+            ]
           });
           if (createError) throw createError;
         }

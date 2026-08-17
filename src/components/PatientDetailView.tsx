@@ -5482,6 +5482,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
+    e.target.value = '';
+    if (Number(file.size || 0) > 10 * 1024 * 1024) {
+      alert('O arquivo deve ter no máximo 10 MB.');
+      return;
+    }
     setIsUploadingFile(true);
     setUploadProgress(0);
     setUploadProgress(25);
@@ -5520,9 +5525,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
       setPatientFiles((prev) => [newFile, ...prev]);
       setUploadProgress(100);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Falha ao salvar arquivo do paciente:', error);
-      alert('Não foi possível salvar o arquivo. Tente novamente.');
+      const uploadMessage = String(error?.message || error || '').trim();
+      alert(uploadMessage ? `Não foi possível salvar o arquivo. ${uploadMessage}` : 'Não foi possível salvar o arquivo. Tente novamente.');
     } finally {
       setTimeout(() => {
         setIsUploadingFile(false);
@@ -11448,6 +11454,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <input 
                   type="file" 
                   id="patient-file-upload" 
+                  accept=".pdf,.jpg,.jpeg,.png,.webp,.docx,application/pdf,image/jpeg,image/png,image/webp,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   className="hidden" 
                   onChange={handleFileUpload}
                   disabled={isUploadingFile}

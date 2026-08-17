@@ -1684,7 +1684,30 @@ export const dataService = {
         const formData = new FormData();
         let uploadBlob: Blob = payload.fileBlob;
         let requestedFileName = String(payload?.fileName || 'arquivo.pdf').trim() || 'arquivo.pdf';
-        let requestedMime = String(payload?.contentType || payload?.fileBlob?.type || 'application/octet-stream').trim().toLowerCase();
+        const originalSize = Number(payload?.fileBlob?.size || 0);
+        if (!Number.isFinite(originalSize) || originalSize <= 0 || originalSize > 10 * 1024 * 1024) {
+          return { success: false, error: 'O arquivo deve ter no máximo 10 MB.' };
+        }
+        const lowerFileName = requestedFileName.toLowerCase();
+        const mimeByExtension: Record<string, string> = {
+          '.pdf': 'application/pdf',
+          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          '.json': 'application/json',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.webp': 'image/webp'
+        };
+        const matchedExtension = Object.keys(mimeByExtension).find((extension) => lowerFileName.endsWith(extension)) || '';
+        let requestedMime = String(payload?.contentType || payload?.fileBlob?.type || '').trim().toLowerCase();
+        // Browsers/OSes sometimes report DOCX as application/zip, application/msword
+        // or application/octet-stream. The extension only normalizes the declared MIME;
+        // the backend still validates the real bytes before persistence.
+        if (matchedExtension && mimeByExtension[matchedExtension]) {
+          requestedMime = mimeByExtension[matchedExtension];
+        } else if (!requestedMime) {
+          requestedMime = 'application/octet-stream';
+        }
         if (requestedMime.startsWith('image/')) {
           const prepared = await compressImageDataUrl(uploadBlob, {
             maxDimension: 1600,
@@ -1695,18 +1718,25 @@ export const dataService = {
           requestedMime = 'image/webp';
           requestedFileName = requestedFileName.replace(/\.[a-z0-9]+$/i, '') + '.webp';
         }
-        const safeMime =
-          requestedMime === 'application/pdf' ||
-          requestedMime === 'application/json' ||
-          requestedMime.startsWith('image/')
-            ? requestedMime
-            : 'application/pdf';
+        const supportedMimeTypes = new Set([
+          'application/pdf',
+          'application/json',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'image/png',
+          'image/jpeg',
+          'image/jpg',
+          'image/webp'
+        ]);
+        if (!supportedMimeTypes.has(requestedMime)) {
+          return { success: false, error: 'Formato não suportado. Envie PDF, JPG, PNG, WEBP ou DOCX.' };
+        }
+        const safeMime = requestedMime === 'image/jpg' ? 'image/jpeg' : requestedMime;
         const extensionByMime: Record<string, string> = {
           'application/pdf': '.pdf',
           'application/json': '.json',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
           'image/png': '.png',
           'image/jpeg': '.jpg',
-          'image/jpg': '.jpg',
           'image/webp': '.webp'
         };
         const requiredExtension = extensionByMime[safeMime] || '';
