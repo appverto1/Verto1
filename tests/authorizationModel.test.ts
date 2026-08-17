@@ -3,6 +3,7 @@ import {
   CAPABILITY_CATALOG,
   CLINIC_BASE_ROLES,
   ROLE_DEFAULT_SCOPES,
+  getDefaultScopesForRole,
   isDelegableCapability,
   roleHasDefaultCapability,
 } from '../src/constants/authorizationModel';
@@ -36,6 +37,11 @@ assert.equal(isDelegableCapability('billing.xml.generate'), true);
 assert.equal(roleHasDefaultCapability('biller', 'billing.xml.generate'), true);
 assert.equal(roleHasDefaultCapability('biller', 'clinical.record.view'), false);
 assert.deepEqual(ROLE_DEFAULT_SCOPES.biller, ['AUTHORIZED_CLINICS', 'BILLING_SCOPE']);
+assert.deepEqual(getDefaultScopesForRole('coordinator'), ['ACTIVE_CLINIC']);
+assert.deepEqual(
+  getDefaultScopesForRole('therapist', { canSupervise: true }),
+  ['ASSIGNED_PATIENTS', 'OWN_RESOURCES', 'SUPERVISED_CASES'],
+);
 
 assert.equal(roleHasDefaultCapability('patient', 'portal.view'), true);
 assert.equal(roleHasDefaultCapability('patient', 'billing.xml.generate'), false);
