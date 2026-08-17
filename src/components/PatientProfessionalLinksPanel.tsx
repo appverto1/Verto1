@@ -4,6 +4,7 @@ import { getSupabase } from '../lib/supabase';
 import {
   PATIENT_PROFESSIONAL_CASE_ROLE_OPTIONS,
   isEligiblePatientProfessionalLinkCandidate,
+  patientProfessionalCaseRoleLabel,
   resolveProfessionalProfileSpecialty
 } from '../utils/patientProfessionalLinks';
 import { formatDateInAppointmentTimezone } from '../utils/scheduling';
@@ -87,12 +88,16 @@ export const PatientProfessionalLinksPanel = ({
   patientId,
   professionals,
   canManage,
-  dark = false
+  dark = false,
+  refreshKey = 0,
+  onLinksChanged,
 }: {
   patientId: string;
   professionals: any[];
   canManage: boolean;
   dark?: boolean;
+  refreshKey?: string | number;
+  onLinksChanged?: (links: ProfessionalLink[]) => void;
 }) => {
   const [links, setLinks] = useState<ProfessionalLink[]>([]);
   const [loading, setLoading] = useState(true);
@@ -109,7 +114,9 @@ export const PatientProfessionalLinksPanel = ({
     setLoading(true);
     try {
       const data = await api(`/api/patients/${encodeURIComponent(patientId)}/professional-links`);
-      setLinks(data.links || []);
+      const nextLinks = Array.isArray(data.links) ? data.links : [];
+      setLinks(nextLinks);
+      onLinksChanged?.(nextLinks);
       setError('');
     } catch (loadError: any) {
       setError(loadError?.message || 'Não foi possível carregar a equipe.');
@@ -118,7 +125,7 @@ export const PatientProfessionalLinksPanel = ({
     }
   };
 
-  useEffect(() => { void load(); }, [patientId]);
+  useEffect(() => { void load(); }, [patientId, refreshKey]);
 
   const active = useMemo(
     () => links.filter((link) => link.status === 'active'),
@@ -243,6 +250,11 @@ export const PatientProfessionalLinksPanel = ({
             <p className={`mt-0.5 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
               {loading ? 'Carregando...' : `${active.length} de 5 vínculos ativos`}
             </p>
+            {canManage ? (
+              <p className={`mt-1 max-w-2xl text-[11px] leading-4 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+                Para definir supervisão, habilite o profissional para supervisionar na tela Equipe e use Adicionar → Função no caso → Supervisão.
+              </p>
+            ) : null}
           </div>
         {canManage ? (
           <button
@@ -338,6 +350,11 @@ export const PatientProfessionalLinksPanel = ({
                 </option>
               ))}
             </select>
+            {selectedProfessional && !selectedProfessionalCanSupervise ? (
+              <span className="mt-1.5 block font-normal leading-5 text-slate-500">
+                A função Supervisão só fica disponível para profissionais habilitados para supervisionar na tela Equipe.
+              </span>
+            ) : null}
           </label>
           <label className="text-xs font-medium">
             Participação
@@ -390,7 +407,7 @@ export const PatientProfessionalLinksPanel = ({
                 <div className="min-w-0">
                 <p className="truncate text-xs font-medium">{link.professional?.name || professionalById.get(String(link.professional_id || '').trim())?.name || link.professional?.email || 'Profissional'}</p>
                 <p className={`mt-1 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  {link.specialty || 'Especialidade não informada'}
+                  {patientProfessionalCaseRoleLabel(link.case_role)} · {link.specialty || 'Especialidade não informada'}
                 </p>
                 </div>
               </div>

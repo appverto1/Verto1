@@ -518,6 +518,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         '',
     ).trim()
   );
+  const [isSavingPrimaryProfessional, setIsSavingPrimaryProfessional] = useState(false);
+  const [primaryProfessionalError, setPrimaryProfessionalError] = useState('');
+  const [caseTeamRefreshKey, setCaseTeamRefreshKey] = useState(0);
+  const primaryProfessionalOverrideRef = React.useRef<string | null | undefined>(undefined);
 
   const historyRange = useMemo(
     () => resolvePatientHistoryRange(historyPeriod, historyCustomFrom, historyCustomTo),
@@ -724,6 +728,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   useEffect(() => {
+    primaryProfessionalOverrideRef.current = undefined;
     setSelectedTherapistId(resolvePatientProfessionalId(patient));
   }, [
     patient?.therapist_id,
@@ -1139,19 +1144,53 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [canManageCaseTeam, canManageTherapistAssignment, patient?.id]);
 
   const handleTherapistAssignmentChange = async (nextTherapistId: string) => {
-    if (!onUpdatePatient) return;
+    const patientId = String(patient?.id || '').trim();
+    if (!patientId || isSavingPrimaryProfessional) return;
     const normalized = String(nextTherapistId || '').trim();
     const nextValue = isUuidLike(normalized) ? normalized : null;
+    const previousValue = selectedTherapistId;
+    const previousOverride = primaryProfessionalOverrideRef.current;
     setSelectedTherapistId(nextValue || '');
-    onUpdatePatient({
-      ...patient,
-      therapist_id: nextValue,
-      therapistId: nextValue,
-      professional_id: nextValue,
-      professionalId: nextValue,
-      responsible_professional_id: nextValue,
-      responsibleProfessionalId: nextValue
-    });
+    setPrimaryProfessionalError('');
+    setIsSavingPrimaryProfessional(true);
+    try {
+      const result = await dataService.setPatientPrimaryProfessional(patientId, nextValue);
+      if (!result?.success) {
+        throw new Error(result?.message || result?.error || 'Não foi possível atualizar o profissional responsável.');
+      }
+      primaryProfessionalOverrideRef.current = nextValue;
+      setCaseTeamRefreshKey((current) => current + 1);
+    } catch (error: any) {
+      primaryProfessionalOverrideRef.current = previousOverride;
+      setSelectedTherapistId(previousValue);
+      setPrimaryProfessionalError(
+        String(error?.message || 'Não foi possível atualizar o profissional responsável.'),
+      );
+    } finally {
+      setIsSavingPrimaryProfessional(false);
+    }
+  };
+
+  const handleCaseTeamLinksChanged = (links: any[]) => {
+    const primaryLink = (Array.isArray(links) ? links : []).find((link: any) =>
+      String(link?.status || '').toLowerCase() === 'active'
+      && String(link?.relationship_type || '').toLowerCase() === 'primary'
+    );
+    if (primaryLink?.professional_id) {
+      primaryProfessionalOverrideRef.current = undefined;
+      setSelectedTherapistId(String(primaryLink.professional_id));
+      return;
+    }
+    if (isSavingPrimaryProfessional) return;
+    if (primaryProfessionalOverrideRef.current === null) {
+      setSelectedTherapistId('');
+      return;
+    }
+    if (typeof primaryProfessionalOverrideRef.current === 'string') {
+      setSelectedTherapistId(primaryProfessionalOverrideRef.current);
+      return;
+    }
+    setSelectedTherapistId(resolvePatientProfessionalId(patient));
   };
 
   const buildInitialAvatarDataUrl = (name?: string) => {
@@ -9806,7 +9845,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     }`}
                     value={selectedTherapistId}
                     onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
-                    disabled={isLoadingTherapists}
+                    disabled={isLoadingTherapists || isSavingPrimaryProfessional}
                   >
                     <option value="">{isLoadingTherapists ? 'Carregando profissionais...' : 'Sem profissional responsável'}</option>
                     {clinicTherapists.map((therapist: any) => (
@@ -9815,6 +9854,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       </option>
                     ))}
                   </select>
+                  {isSavingPrimaryProfessional ? (
+                    <span className={`mt-1.5 block text-[11px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      Salvando vínculo...
+                    </span>
+                  ) : primaryProfessionalError ? (
+                    <span role="alert" className="mt-1.5 block text-[11px] leading-4 text-rose-600">
+                      {primaryProfessionalError}
+                    </span>
+                  ) : null}
                 </label>
               </section>
             )}
@@ -9825,6 +9873,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 professionals={clinicTherapists}
                 canManage={canManageCaseTeam}
                 dark={isPanelDark}
+                refreshKey={caseTeamRefreshKey}
+                onLinksChanged={handleCaseTeamLinksChanged}
               />
             ) : null}
           </div>

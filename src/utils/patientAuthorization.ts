@@ -58,6 +58,7 @@ export function patientListColumnsForCapabilities(
   if (capabilities.has('clinical.anamnesis.view')) {
     add('anamnesis_required', 'anamnesis_requested_at', 'anamnesis_submitted_at', 'anamnesis_reviewed_at');
   }
+  if (capabilities.has('team.patient_primary.manage')) add('therapist_id');
 
   return Array.from(columns);
 }

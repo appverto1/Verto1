@@ -46,6 +46,11 @@ assert.equal(therapistColumns.has('diagnosis'), true);
 assert.equal(therapistColumns.has('birth_date'), true);
 assert.equal(therapistColumns.has('email'), false);
 assert.equal(therapistColumns.has('phone'), false);
+assert.equal(therapistColumns.has('therapist_id'), false);
+
+const coordinatorCapabilities = getDefaultCapabilitiesForRole('coordinator');
+const coordinatorColumns = new Set(patientListColumnsForCapabilities(coordinatorCapabilities));
+assert.equal(coordinatorColumns.has('therapist_id'), true);
 
 const sample = {
   id: 'patient-1',

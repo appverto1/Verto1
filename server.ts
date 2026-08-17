@@ -34339,6 +34339,82 @@ async function startServer() {
     },
   );
 
+  app.put(
+    '/api/patients/:patientId/primary-professional',
+    checkAuth,
+    checkPatientAccess,
+    requireClinicCapability('team.patient_primary.manage'),
+    async (req: any, res) => {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const rawProfessionalId = req.body?.professionalId ?? req.body?.professional_id ?? null;
+      const professionalId = rawProfessionalId === null || String(rawProfessionalId).trim() === ''
+        ? null
+        : sanitizeString(rawProfessionalId, 120);
+      if (!isUuid(patientId) || !isUuid(actorId) || (professionalId !== null && !isUuid(professionalId))) {
+        return res.status(400).json({
+          success: false,
+          error: 'PATIENT_PRIMARY_PROFESSIONAL_INVALID',
+          message: 'Informe um paciente e um profissional válidos.'
+        });
+      }
+
+      try {
+        const { data, error } = await supabase.rpc('set_patient_primary_professional_v1', {
+          p_actor_id: actorId,
+          p_patient_id: patientId,
+          p_professional_id: professionalId,
+          p_starts_at: dateGroupForClinic(new Date(), req.session.user),
+        });
+        if (error) {
+          const message = sanitizeString(error?.message || String(error), 400);
+          if (sanitizeString(error?.code, 40) === '42883' || message.includes('set_patient_primary_professional_v1')) {
+            return res.status(503).json({
+              success: false,
+              error: 'PATIENT_PRIMARY_PROFESSIONAL_MIGRATION_REQUIRED',
+              message: 'A persistência atômica do profissional responsável ainda não foi aplicada no banco.'
+            });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED')) {
+            return res.status(403).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED' });
+          }
+          if (message.includes('PATIENT_NOT_FOUND')) {
+            return res.status(404).json({ success: false, error: 'PATIENT_NOT_FOUND' });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_NOT_FOUND')) {
+            return res.status(404).json({ success: false, error: 'PATIENT_PROFESSIONAL_NOT_FOUND' });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_MEMBERSHIP_INACTIVE')) {
+            return res.status(409).json({ success: false, error: 'PATIENT_PROFESSIONAL_MEMBERSHIP_INACTIVE' });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_PROFILE_REQUIRED')) {
+            return res.status(422).json({ success: false, error: 'PATIENT_PROFESSIONAL_PROFILE_REQUIRED' });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_SPECIALTY_REQUIRED')) {
+            return res.status(422).json({ success: false, error: 'PATIENT_PROFESSIONAL_SPECIALTY_REQUIRED' });
+          }
+          throw error;
+        }
+        return res.json({
+          success: true,
+          data: data || null,
+          professionalId,
+        });
+      } catch (error: any) {
+        logRouteDbError('/api/patients/:patientId/primary-professional [PUT]', error, {
+          patientId,
+          professionalId: professionalId || null,
+          requestId: requestIdForLogs(req),
+        });
+        return res.status(500).json({
+          success: false,
+          error: 'PATIENT_PRIMARY_PROFESSIONAL_UPDATE_FAILED',
+          message: 'Não foi possível atualizar o profissional responsável.'
+        });
+      }
+    },
+  );
+
   app.post(
     '/api/patients/:patientId/professional-links',
     checkAuth,

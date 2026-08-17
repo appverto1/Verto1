@@ -4852,6 +4852,30 @@ export const dataService = {
     }
   },
 
+  async setPatientPrimaryProfessional(patientId: string, professionalId: string | null) {
+    const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/primary-professional`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PUT',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ professionalId: professionalId || null })
+      }, {
+        helperName: 'setPatientPrimaryProfessional',
+        operation: 'write',
+        table: 'patient_professional_links,patients',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(
+        await safeJson(response),
+        'Não foi possível atualizar o profissional responsável.',
+      );
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar o profissional responsável.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async updatePatientTherapeuticPlanScope(patientId: string, planId: string, payload: any = {}) {
     const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}`;
     try {
