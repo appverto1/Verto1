@@ -47,9 +47,9 @@ assert.match(server, /context\?\.capabilities\.has\('clinical\.history\.view'\)/
 assert.match(server, /resolvePatientListScopedPatientIds\(context\)/);
 assert.doesNotMatch(server, /isPrivileged = \['therapist', 'coordinator', 'receptionist', 'admin', 'owner'\]/);
 
-// Work schedules are capability-gated; Supervisor can only view supervised professionals.
+// Work schedules are capability-gated; a supervision-enabled professional can only view explicitly supervised professionals.
 assert.match(server, /\/api\/clinic\/members\/:memberId\/work-schedule'[^\n]*requireAnyClinicCapability\('calendar\.team\.view', 'calendar\.own\.view'\)/);
-assert.match(server, /authorizationContext\.role === 'supervisor'[\s\S]{0,500}clinical_supervision_links/);
+assert.match(server, /authorizationContext\.canSupervise[\s\S]{0,500}clinical_supervision_links/);
 assert.match(server, /\/api\/clinic\/members\/:memberId\/work-schedule'[^\n]*PATCH|app\.patch\('\/api\/clinic\/members\/:memberId\/work-schedule'[^\n]*requireAnyClinicCapability\('team\.edit', 'calendar\.own\.view'\)/);
 
 // Appointment status changes resolve the exact calendar capability instead of a role whitelist.

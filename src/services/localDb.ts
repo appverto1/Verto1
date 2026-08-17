@@ -13,7 +13,7 @@ export interface OfflineRecord {
   id: string;
   entity_id?: string;
   data: any;
-  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
+  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'aba_v3' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
   sync_status: OfflineSyncStatus;
   last_updated: number;
   retry_count?: number;
@@ -42,6 +42,7 @@ export interface OfflineCacheMeta {
   etag?: string | null;
   last_modified?: string | null;
   last_seen_updated?: number | null;
+  snapshot_count?: number | null;
   updated_at: number;
 }
 
@@ -516,6 +517,22 @@ export async function getRecordById(id: string): Promise<OfflineRecord | null> {
   return base;
 }
 
+export async function discardFailedOfflineEntityMutations(type: OfflineRecord['type'], entityId: string): Promise<number> {
+  const currentUserId = await getCurrentUserIdOrNull();
+  const safeEntityId = String(entityId || '').trim();
+  if (!currentUserId || !safeEntityId) return 0;
+
+  const rows = (await db.records.where('entity_id').equals(safeEntityId).toArray())
+    .filter((row) =>
+      row.user_id === currentUserId &&
+      row.type === type &&
+      (row.sync_status === 'failed' || row.sync_status === 'conflict')
+    );
+  if (rows.length === 0) return 0;
+  await db.records.bulkDelete(rows.map((row) => row.id));
+  return rows.length;
+}
+
 export async function getRecordsByType(type: OfflineRecord['type']): Promise<OfflineRecord[]> {
   const currentUserId = await getCurrentUserIdOrNull();
   if (!currentUserId) return [];
@@ -617,6 +634,7 @@ export async function setEndpointCacheMeta(meta: Omit<OfflineCacheMeta, 'updated
     etag: meta.etag || null,
     last_modified: meta.last_modified || null,
     last_seen_updated: meta.last_seen_updated || null,
+    snapshot_count: Number.isFinite(meta.snapshot_count) ? Number(meta.snapshot_count) : null,
     updated_at: Date.now()
   });
 }

@@ -1,3 +1,4 @@
+// Patient-list regression coverage intentionally stays self-contained.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
@@ -79,6 +80,16 @@ assert.equal(
   isPatientVisibleInMainList({ status: 'deleted', is_active: true, deleted_at: null }),
   false,
   '8. is_active true não pode reabilitar status deleted',
+);
+assert.equal(
+  isPatientVisibleInMainList({ status: 'active', is_active: null, deleted_at: null }),
+  true,
+  '8a. is_active null não pode ocultar paciente operacionalmente ativo',
+);
+assert.equal(
+  isPatientVisibleInMainList({ status: 'PENDING_ANAMNESIS', is_active: null, deleted_at: null }),
+  true,
+  '8b. is_active null não pode ocultar paciente em onboarding',
 );
 
 const neutralList = patients.filter(isPatientVisibleInMainList);
@@ -169,10 +180,77 @@ assert.match(
   /dataService\.hydrateWorkspaceState\(workspaceId\)/,
   '17. a listagem deve hidratar o workspace sem IDs de prontuário',
 );
+assert.match(
+  appSource,
+  /activeWorkspaceId:\s*[\s\S]{0,220}activeContext\.clinicId/,
+  '17a. contexto clínico ativo deve realinhar o alias legado activeWorkspaceId',
+);
+const hydrateStateSource = appSource.slice(
+  appSource.indexOf('const hydrateState = async'),
+  appSource.indexOf('const loadPatientDetailsOnOpen'),
+);
+assert.match(
+  hydrateStateSource,
+  /getActiveAccessContext\(nextUser\)[\s\S]{0,260}activeContext\?\.kind === 'clinic_workspace'[\s\S]{0,180}activeContext\.clinicId/,
+  '17b. hidratação deve preferir o tenant confirmado no activeAccessContext ao alias legado',
+);
+assert.match(
+  hydrateStateSource,
+  /workspaceHydrationSequenceRef[\s\S]*?isCurrentHydration[\s\S]*?if \(!isCurrentHydration\(\)\) return/,
+  '17c. uma hidratação antiga não pode sobrescrever a resposta mais nova do workspace',
+);
+const hydrationEffectSource = appSource.slice(
+  appSource.indexOf('// During first professional onboarding'),
+  appSource.indexOf('const resolvePatientIdentityForPortal'),
+);
+assert.match(
+  hydrationEffectSource,
+  /user\?\.firstLoginCompleted[\s\S]{0,320}user\?\.activationRequired[\s\S]{0,320}user\?\.onboardingContext\?\.canAccessDashboard/,
+  '17c.1. liberar onboarding deve reexecutar a hidratação do workspace e carregar pacientes',
+);
+assert.match(
+  workspaceHydrationSource,
+  /record\?\.sync_status === 'synced'\) continue[\s\S]*?remotePatient[\s\S]*?\{ \.\.\.remotePatient, \.\.\.patient \}/,
+  '17d. cache já sincronizado não pode sobrescrever snapshot remoto fresco; apenas pendência local pode fazer overlay',
+);
 assert.doesNotMatch(
   workspaceHydrationSource,
   /\/api\/patient-records\/|getPatientRecord\(/,
   '17. a hidratação da listagem não pode abrir prontuários',
+);
+
+assert.match(
+  appSource,
+  /onEnsurePatientList=\{ensurePatientListLoaded\}/,
+  '17e. a tela de pacientes deve ter fallback canônico independente do bootstrap global',
+);
+assert.match(
+  coordinatorSource,
+  /activeTab !== "patients"[\s\S]*?onEnsurePatientList\(\)/,
+  '17f. abrir Pacientes com lista vazia deve disparar uma única leitura canônica do tenant',
+);
+const requiredModuleMapSource = coordinatorSource.slice(
+  coordinatorSource.indexOf('const requiredModuleByTab'),
+  coordinatorSource.indexOf('const requiredModule = requiredModuleByTab'),
+);
+assert.doesNotMatch(
+  requiredModuleMapSource,
+  /patients\s*:/,
+  '17g. Pacientes é recurso transversal e não pode depender de módulo comercial contratado',
+);
+const getPatientsSource = dataServiceSource.slice(
+  dataServiceSource.indexOf('async getPatients'),
+  dataServiceSource.indexOf('async savePatient'),
+);
+assert.match(
+  getPatientsSource,
+  /forceRemote[\s\S]*?getNoStoreAuthHeaders\(false\)/,
+  '17h. fallback da lista deve poder usar a sessão HTTP canônica sem depender do bearer Supabase',
+);
+assert.match(
+  getPatientsSource,
+  /record\?\.sync_status === 'synced'\) continue/,
+  '17i. cache sincronizado não pode apagar ou substituir snapshot remoto fresco',
 );
 assert.doesNotMatch(
   coordinatorSource,
@@ -208,15 +286,19 @@ const patientListRouteSource = serverSource.slice(
   serverSource.indexOf("app.get('/api/patients'"),
   serverSource.indexOf("app.post('/api/patients'"),
 );
+const patientListScopeHelperSource = serverSource.slice(
+  serverSource.indexOf('async function resolvePatientListScopedPatientIds'),
+  serverSource.indexOf('async function resolveLegacyClinicalEmailReadScope'),
+);
 assert.match(
-  patientListRouteSource,
-  /\.from\('patient_professional_links'\)[\s\S]*?\.eq\('professional_id', actorUserId\)[\s\S]*?\.eq\('status', 'active'\)/,
+  patientListScopeHelperSource,
+  /\.from\('patient_professional_links'\)[\s\S]*?\.eq\('organization_id', context\.clinicId\)[\s\S]*?\.eq\('professional_id', context\.userId\)[\s\S]*?\.eq\('status', 'active'\)/,
   'terapeuta deve carregar em lote os pacientes vinculados pela equipe do caso',
 );
 assert.match(
   patientListRouteSource,
-  /linkedPatientIds[\s\S]*?\.from\('patients'\)[\s\S]*?\.in\('id', linkedPatientIds\)/,
-  'pacientes do vínculo canônico devem ser buscados em uma consulta filtrada por IDs',
+  /resolvePatientListScopedPatientIds\(context\)[\s\S]*?fetchPatientsWithSchemaFallback\([\s\S]*?patientIds:\s*scopedPatientIds/,
+  'a rota deve repassar o escopo canônico ao fetch em lote de pacientes',
 );
 assert.doesNotMatch(
   patientListRouteSource,

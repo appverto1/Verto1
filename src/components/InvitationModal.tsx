@@ -18,7 +18,7 @@ interface InvitationModalProps {
   onClose: () => void;
 }
 
-type InviteRole = 'director' | 'coordinator' | 'supervisor' | 'therapist' | 'receptionist' | 'biller';
+type InviteRole = 'director' | 'coordinator' | 'therapist' | 'receptionist' | 'biller';
 
 const formatInviteRoleLabel = (
   role: string,
@@ -26,7 +26,6 @@ const formatInviteRoleLabel = (
 ) => {
   if (role === 'director') return 'Diretor';
   if (role === 'coordinator') return 'Coordenador';
-  if (role === 'supervisor') return 'Supervisor';
   if (role === 'therapist') {
     return `Profissional de atendimento · ${specialty || 'Especialidade pendente'}`;
   }
@@ -47,10 +46,20 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const explicitTeamLimit = Number(user?.teamMemberLimit || user?.team_member_limit || 0);
   const maxMembers = Number.isFinite(explicitTeamLimit) && explicitTeamLimit > 0 ? explicitTeamLimit : null;
   const actorRole = String(user?.role || '').trim().toLowerCase();
-  const canGrantDirector = actorRole === 'director' || actorRole === 'admin' || actorRole === 'owner';
+  const canGrantDirector = actorRole === 'director';
+  const canGrantAdministrativeRoles = actorRole === 'director' || actorRole === 'coordinator';
+  const canCreateAccounts = actorRole === 'director' || actorRole === 'coordinator';
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canCreateAccounts) {
+      setError('Somente Diretor e Coordenador podem enviar convites de equipe.');
+      return;
+    }
+    if (actorRole === 'coordinator' && role === 'director') {
+      setError('Coordenadores podem convidar colaboradores da própria unidade, mas não podem conceder o papel de Diretor.');
+      return;
+    }
     if (maxMembers && invitations.length + 1 >= maxMembers) {
       setError(`Sua configuracao permite no maximo ${maxMembers} profissionais.`);
       return;
@@ -171,12 +180,15 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
                   className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/10"
                 >
                   {canGrantDirector && <option value="director">Diretor</option>}
-                  <option value="coordinator">Coordenador</option>
-                  <option value="supervisor">Supervisor</option>
+                  {canGrantAdministrativeRoles && <option value="coordinator">Coordenador</option>}
                   <option value="therapist">Profissional de atendimento</option>
-                  <option value="receptionist">Recepcionista/Assistente</option>
-                  <option value="biller">Faturista</option>
+                  {canGrantAdministrativeRoles && <option value="receptionist">Recepcionista/Assistente</option>}
+                  {canGrantAdministrativeRoles && <option value="biller">Faturista</option>}
                 </select>
+
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Supervisão é atribuída depois do vínculo. Convide a pessoa como Profissional e, após ela entrar na equipe, habilite a função de supervisor no cadastro.
+                </p>
 
                 {role === 'therapist' && (
                   <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50/40 p-3">

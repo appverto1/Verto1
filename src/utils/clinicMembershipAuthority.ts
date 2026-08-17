@@ -89,15 +89,17 @@ export function canAssignClinicRole(
     return false;
   }
 
-  // Directors may manage every clinic-scoped role, including another director,
-  // but only after the active-clinic membership check performed by the server.
-  if (actorRole === 'director') return true;
+  // Supervisor is no longer an assignable base role. Existing supervisor
+  // memberships remain readable for backwards compatibility while new
+  // supervision is granted to a professional through can_supervise.
+  if (targetRole === 'supervisor') return false;
 
-  // Coordinators manage operational roles inside their own clinic, but cannot
-  // create or promote a director.
-  if (actorRole === 'coordinator') {
-    return targetRole !== 'director';
-  }
+  // Directors can provision any canonical clinic role. Coordinators have the
+  // same team-management authority inside their active unit, but cannot grant
+  // the organization-level Director role. Their unit boundary is enforced by
+  // the active clinic membership used by the route authorization layer.
+  if (actorRole === 'director') return true;
+  if (actorRole === 'coordinator') return targetRole !== 'director';
 
   return false;
 }

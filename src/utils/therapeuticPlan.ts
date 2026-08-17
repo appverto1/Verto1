@@ -50,6 +50,52 @@ export const THERAPEUTIC_MEASUREMENT_OPTIONS: Array<{
   { value: 'percentage', label: 'Percentual', sessionPreview: ['0%', '50%', '100%'] },
 ];
 
+export const therapeuticMeasurementDefaultMasteryMeasure = (measurementType: unknown) => {
+  const normalized = safeText(measurementType).toLowerCase() as TherapeuticMeasurementType;
+  const defaults: Partial<Record<TherapeuticMeasurementType, string>> = {
+    independent_prompted_no_response: 'accuracy_percent',
+    correct_incorrect: 'accuracy_percent',
+    frequency: 'frequency',
+    duration: 'duration_seconds',
+    latency: 'latency_seconds',
+    task_analysis: 'steps_percent',
+    percentage: 'accuracy_percent',
+  };
+  return defaults[normalized] || 'accuracy_percent';
+};
+
+export const isTherapeuticMasteryCriteriaCompatible = (measurementType: unknown, criteria: any) => {
+  const normalizedMeasurement = safeText(measurementType).toLowerCase() as TherapeuticMeasurementType;
+  const source = criteria && typeof criteria === 'object' ? criteria : {};
+  const type = safeText(source.type).toLowerCase();
+  const customMeasure = safeText(source.measure || source.customMeasure || source.custom_measure).toLowerCase();
+
+  if (customMeasure) {
+    const allowedMeasures: Partial<Record<TherapeuticMeasurementType, Set<string>>> = {
+      independent_prompted_no_response: new Set(['accuracy_percent', 'independent_responses']),
+      correct_incorrect: new Set(['accuracy_percent']),
+      frequency: new Set(['frequency']),
+      duration: new Set(['duration_seconds']),
+      latency: new Set(['latency_seconds']),
+      task_analysis: new Set(['steps_percent']),
+      percentage: new Set(['accuracy_percent']),
+    };
+    return allowedMeasures[normalizedMeasurement]?.has(customMeasure) === true;
+  }
+
+  if (type === 'steps_independent') return normalizedMeasurement === 'task_analysis';
+  if (Number(source.requiredIndependentCorrectTrials ?? source.required_independent_correct_trials) > 0) {
+    return normalizedMeasurement === 'independent_prompted_no_response';
+  }
+  if (Number(source.minAccuracyPercent ?? source.min_accuracy_percent) >= 0 && (
+    source.minAccuracyPercent !== undefined || source.min_accuracy_percent !== undefined
+  )) {
+    return ['independent_prompted_no_response', 'correct_incorrect', 'percentage'].includes(normalizedMeasurement);
+  }
+  return true;
+};
+
+
 export const THERAPEUTIC_RECOMMENDATION_TYPE_LABELS: Record<string, string> = {
   MAINTENANCE_PROBE: 'Sondagem de manutenção',
   REGRESSION_ATTENTION: 'Regressão',
@@ -518,7 +564,27 @@ export const therapeuticProgramsToSessionGoals = (programs: any[]) => {
       if (!targetId || seenTargetIds.has(targetId)) return [];
       seenTargetIds.add(targetId);
       const name = safeText(target?.name || target?.target_name || target?.targetName) || 'Alvo do programa';
-      const masteryCriteria = target?.mastery_criteria || target?.masteryCriteria || program?.mastery_criteria || program?.masteryCriteria || {};
+      const targetMasteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' && !Array.isArray(target.mastery_criteria)
+        ? target.mastery_criteria
+        : target?.masteryCriteria && typeof target.masteryCriteria === 'object' && !Array.isArray(target.masteryCriteria)
+          ? target.masteryCriteria
+          : null;
+      const programMasteryCriteria = program?.mastery_criteria && typeof program.mastery_criteria === 'object' && !Array.isArray(program.mastery_criteria)
+        ? program.mastery_criteria
+        : program?.masteryCriteria && typeof program.masteryCriteria === 'object' && !Array.isArray(program.masteryCriteria)
+          ? program.masteryCriteria
+          : null;
+      const hasTargetMasteryCriteria = Boolean(targetMasteryCriteria && Object.keys(targetMasteryCriteria).length > 0);
+      const hasProgramMasteryCriteria = Boolean(programMasteryCriteria && Object.keys(programMasteryCriteria).length > 0);
+      const masteryCriteria = hasTargetMasteryCriteria
+        ? targetMasteryCriteria
+        : hasProgramMasteryCriteria
+          ? {
+              ...programMasteryCriteria,
+              source: programMasteryCriteria?.source || programMasteryCriteria?.criterionSource || programMasteryCriteria?.criterion_source || 'program_inherited',
+              sourceLabel: programMasteryCriteria?.sourceLabel || programMasteryCriteria?.source_label || 'Critério do programa',
+            }
+          : {};
       return [{
         id: targetId,
         target_id: targetId,

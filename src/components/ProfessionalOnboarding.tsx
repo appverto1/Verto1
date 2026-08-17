@@ -57,7 +57,7 @@ const WEEKDAYS = [
 const roleLabel = (role: string) => {
   if (role === 'director') return 'Diretor';
   if (role === 'coordinator') return 'Coordenador';
-  if (role === 'supervisor') return 'Supervisor';
+  if (role === 'supervisor') return 'Profissional · Supervisor';
   if (role === 'receptionist') return 'Recepcionista/Assistente';
   if (role === 'biller') return 'Faturista';
   if (role === 'admin') return 'Administrador';

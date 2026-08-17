@@ -5,6 +5,7 @@ import {
   getLatestTypeUpdate,
   getRecordById,
   getRecordsByType,
+  discardFailedOfflineEntityMutations,
   markRecordSyncStatus,
   markRecordSyncFailure,
   saveEncryptedRecord,
@@ -16,7 +17,7 @@ import {
   resolveAbaPromptLevel,
   resolveTrialPromptInfo
 } from '../utils/abaPromptLevels';
-import { isAbaV2Enabled } from '../utils/featureFlags';
+import { isAbaV2Enabled, isAbaV3UiEnabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
 import { normalizePatientProfileType } from '../utils/patientProfileType';
@@ -301,6 +302,26 @@ async function fileToDataUrl(file: Blob): Promise<string> {
     reader.onerror = () => reject(new Error('Falha ao ler arquivo para upload'));
     reader.readAsDataURL(file);
   });
+}
+
+function dataUrlToBlob(dataUrl: string, fallbackContentType = 'application/octet-stream'): Blob {
+  const match = String(dataUrl || '').match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  if (!match) throw new Error('Imagem comprimida inválida para upload.');
+  const contentType = String(match[1] || fallbackContentType).trim() || fallbackContentType;
+  const encodedPayload = match[3] || '';
+  try {
+    if (match[2]) {
+      const binary = atob(encodedPayload);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return new Blob([bytes], { type: contentType });
+    }
+    return new Blob([decodeURIComponent(encodedPayload)], { type: contentType });
+  } catch {
+    throw new Error('Falha ao preparar a imagem comprimida para upload.');
+  }
 }
 
 async function compressImageDataUrl(
@@ -886,7 +907,7 @@ function normalizeNoteVisibility(value: any): 'private' | 'shared_patient' | 'sh
   return 'private';
 }
 
-type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
+type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'aba_v3' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
 
 async function buildConditionalHeaders(endpoint: string, type: OfflineType, includeBearer = false) {
   const headers = await getAuthHeaders(includeBearer);
@@ -900,12 +921,18 @@ async function buildConditionalHeaders(endpoint: string, type: OfflineType, incl
   return headers;
 }
 
-async function cacheResponseMetadata(endpoint: string, response: Response, lastUpdated?: number | null) {
+async function cacheResponseMetadata(
+  endpoint: string,
+  response: Response,
+  lastUpdated?: number | null,
+  snapshotCount?: number | null,
+) {
   await setEndpointCacheMeta({
     endpoint,
     etag: response.headers.get('etag'),
     last_modified: response.headers.get('last-modified'),
-    last_seen_updated: lastUpdated || null
+    last_seen_updated: lastUpdated || null,
+    snapshot_count: Number.isFinite(snapshotCount) ? Number(snapshotCount) : null,
   });
 }
 
@@ -997,11 +1024,12 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
 }
 
 // Helper to handle offline-first saving
-async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST') {
+async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string } = {}) {
   const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
   // Every mutation gets its own durable outbox row. Reusing an id while a prior
   // request is in-flight can let the older response acknowledge/delete the newer edit.
   const queueId = `${type}:${id}:${crypto.randomUUID()}`;
+  const queueEntityId = String(options?.queueEntityId || id).trim() || id;
   const payloadWithIdempotency = {
     ...(data || {}),
     idempotencyKey
@@ -1012,7 +1040,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
   try {
     await saveEncryptedRecord({
       id: queueId,
-      entity_id: id,
+      entity_id: queueEntityId,
       data: payloadWithIdempotency,
       type,
       sync_status: 'pending',
@@ -1194,19 +1222,61 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'log', '/api/logs');
   },
 
-  async getPatients() {
-    const endpoint = endpointWithLimit('/api/patients', 200);
+  async getPatients(options: { workspaceId?: string; forceRemote?: boolean; patientId?: string } = {}) {
+    const workspaceId = String(options?.workspaceId || '').trim();
+    const requestedPatientId = String(options?.patientId || '').trim();
+    const endpoint = endpointWithQuery('/api/patients', {
+      limit: requestedPatientId ? 1 : 200,
+      patientId: requestedPatientId || undefined
+    });
+    const forceRemote = options?.forceRemote === true;
     try {
+      const headers = forceRemote
+        ? await getNoStoreAuthHeaders(false)
+        : await buildConditionalHeaders(endpoint, 'patient');
+      if (workspaceId) headers['X-Workspace-Id'] = workspaceId;
       const response = await fetchClinical(endpoint, {
-        headers: await buildConditionalHeaders(endpoint, 'patient'),
-        credentials: 'include'
+        headers,
+        credentials: 'include',
+        ...(forceRemote ? { cache: 'no-store' as RequestCache } : {})
       }, { helperName: 'getPatients', operation: 'list', table: 'patients', hasExplicitColumns: true, requiresPatientOrSession: false });
       if (response.status === 304) {
-        const local304 = await getRecordsByType('patient');
-        return {
-          success: true,
-          data: local304.map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
-        };
+        const [local304, cacheMeta] = await Promise.all([
+          getRecordsByType('patient'),
+          getEndpointCacheMeta(endpoint),
+        ]);
+        const cachedPatients = local304
+          .map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+          .filter((patient: any) => {
+            const patientWorkspaceId = String(patient?.clinic_id || patient?.clinicId || '').trim();
+            const patientId = String(patient?.id || '').trim();
+            return (!workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId) &&
+              (!requestedPatientId || patientId === requestedPatientId);
+          });
+        const rawSnapshotCount = cacheMeta?.snapshot_count;
+        const expectedSnapshotCount = typeof rawSnapshotCount === 'number' ? rawSnapshotCount : Number.NaN;
+        const hasKnownSnapshotCount = Number.isFinite(expectedSnapshotCount) && expectedSnapshotCount >= 0;
+        const cacheLooksComplete = hasKnownSnapshotCount && cachedPatients.length === expectedSnapshotCount;
+
+        // A 304 only proves that the remote representation did not change; it does not
+        // prove that IndexedDB still contains the complete representation that produced
+        // that ETag. A partial/cleared local cache previously made 3 patients render as 1.
+        // Revalidate once without conditional headers instead of treating a partial cache
+        // as authoritative. Healthy complete caches still keep the zero-egress 304 path.
+        if (!cacheLooksComplete && !forceRemote) {
+          console.warn('[PatientList] Snapshot local incompleto após 304; refazendo leitura canônica sem cache.', {
+            cachedCount: cachedPatients.length,
+            expectedSnapshotCount: hasKnownSnapshotCount ? expectedSnapshotCount : null,
+          });
+          return await dataService.getPatients({ ...options, forceRemote: true });
+        }
+        if (!cacheLooksComplete) {
+          return {
+            success: false,
+            error: 'A cópia local da lista de pacientes está incompleta e a leitura canônica não pôde ser confirmada.',
+          };
+        }
+        return { success: true, data: cachedPatients };
       }
       if (response.ok) {
         const result = await response.json();
@@ -1221,27 +1291,55 @@ export const dataService = {
           mirrorPatientInsuranceEligibilityAliases(p || {}, { useResponsibleFallback: true })
         );
         let latest = 0;
-        for (const p of normalizedPatients) {
-          const updatedAtMs = p?.updated_at ? new Date(p.updated_at).getTime() : Date.now();
-          latest = Math.max(latest, Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now());
-          await saveEncryptedRecord({
-            id: p.id,
-            data: p,
-            type: 'patient',
-            sync_status: 'synced',
-            last_updated: latest,
-            method: 'POST',
-            endpoint
-          });
+        try {
+          for (const p of normalizedPatients) {
+            const patientId = String(p?.id || '').trim();
+            if (!patientId) continue;
+            const updatedAtMs = p?.updated_at ? new Date(p.updated_at).getTime() : Date.now();
+            latest = Math.max(latest, Number.isFinite(updatedAtMs) ? updatedAtMs : Date.now());
+            await saveEncryptedRecord({
+              id: patientId,
+              data: p,
+              type: 'patient',
+              sync_status: 'synced',
+              last_updated: latest,
+              method: 'POST',
+              endpoint
+            });
+          }
+          await cacheResponseMetadata(endpoint, response, latest || null, normalizedPatients.length);
+        } catch (cacheError) {
+          console.warn('[PatientList] Cache local indisponível; mantendo snapshot remoto canônico.', cacheError);
         }
-        await cacheResponseMetadata(endpoint, response, latest || null);
-        // Always render the canonical cache overlaid with pending mutations. A
-        // successful GET must not make an unconfirmed local edit disappear after F5.
-        const effectivePatients = (await getRecordsByType('patient')).map((record) => {
-          const { recordPayload: _recordPayload, idempotencyKey: _idempotencyKey, ...patientData } = record?.data || {};
-          return mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
-        });
-        return { ...result, data: effectivePatients };
+
+        // A resposta autenticada do servidor é a autoridade da listagem. O cache só
+        // pode sobrepor um paciente remoto quando existe mutação local ainda pendente.
+        // Assim, IndexedDB vazio/corrompido nunca transforma uma lista remota válida em [].
+        const patientsById = new Map<string, any>();
+        for (const patient of normalizedPatients) {
+          const patientId = String(patient?.id || '').trim();
+          if (patientId) patientsById.set(patientId, patient);
+        }
+        try {
+          const localRecords = await getRecordsByType('patient');
+          for (const record of localRecords) {
+            if (record?.sync_status === 'synced') continue;
+            const { recordPayload: _recordPayload, idempotencyKey: _idempotencyKey, ...patientData } = record?.data || {};
+            const localPatient = mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
+            const patientId = String(localPatient?.id || '').trim();
+            const patientWorkspaceId = String(localPatient?.clinic_id || localPatient?.clinicId || '').trim();
+            if (
+              !patientId ||
+              (workspaceId && patientWorkspaceId && patientWorkspaceId !== workspaceId) ||
+              (requestedPatientId && patientId !== requestedPatientId)
+            ) continue;
+            const remotePatient = patientsById.get(patientId);
+            patientsById.set(patientId, remotePatient ? { ...remotePatient, ...localPatient } : localPatient);
+          }
+        } catch (cacheError) {
+          console.warn('[PatientList] Overlay offline indisponível; renderizando snapshot remoto.', cacheError);
+        }
+        return { ...result, success: true, data: Array.from(patientsById.values()) };
       }
       const errorPayload = await safeJson(response);
       return {
@@ -1269,7 +1367,14 @@ export const dataService = {
     const local = await getRecordsByType('patient');
     return {
       success: true,
-      data: local.map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+      data: local
+        .map((r) => mirrorPatientInsuranceEligibilityAliases(r.data || {}, { useResponsibleFallback: true }))
+        .filter((patient: any) => {
+          const patientWorkspaceId = String(patient?.clinic_id || patient?.clinicId || '').trim();
+          const patientId = String(patient?.id || '').trim();
+          return (!workspaceId || !patientWorkspaceId || patientWorkspaceId === workspaceId) &&
+            (!requestedPatientId || patientId === requestedPatientId);
+        })
     };
   },
 
@@ -1604,35 +1709,83 @@ export const dataService = {
     }
   },
 
+  async accessPatientFile(patientId: string, fileId: string, action: 'view' | 'download') {
+    try {
+      const clientEventId = crypto.randomUUID();
+      const response = await fetch(`/api/patient-files/${encodeURIComponent(String(patientId))}/${encodeURIComponent(String(fileId))}/access`, {
+        method: 'POST',
+        headers: {
+          ...(await getAuthHeaders()),
+          'X-Audit-Event-Id': clientEventId
+        },
+        credentials: 'include',
+        body: JSON.stringify({ action: action.toUpperCase(), client_event_id: clientEventId })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error accessing patient file:', error);
+      return { success: false, error: String(error), data: null };
+    }
+  },
+
   async uploadPatientFile(patientId: string, payload: any) {
     try {
       if (payload?.fileBlob instanceof Blob) {
-        const formData = new FormData();
         let uploadBlob: Blob = payload.fileBlob;
         let requestedFileName = String(payload?.fileName || 'arquivo.pdf').trim() || 'arquivo.pdf';
-        let requestedMime = String(payload?.contentType || payload?.fileBlob?.type || 'application/octet-stream').trim().toLowerCase();
+        const originalSize = Number(payload?.fileBlob?.size || 0);
+        if (!Number.isFinite(originalSize) || originalSize <= 0 || originalSize > 10 * 1024 * 1024) {
+          return { success: false, error: 'O arquivo deve ter no máximo 10 MB.' };
+        }
+        const lowerFileName = requestedFileName.toLowerCase();
+        const mimeByExtension: Record<string, string> = {
+          '.pdf': 'application/pdf',
+          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          '.json': 'application/json',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.webp': 'image/webp'
+        };
+        const matchedExtension = Object.keys(mimeByExtension).find((extension) => lowerFileName.endsWith(extension)) || '';
+        let requestedMime = String(payload?.contentType || payload?.fileBlob?.type || '').trim().toLowerCase();
+        // Browsers/OSes sometimes report DOCX as application/zip, application/msword
+        // or application/octet-stream. The extension only normalizes the declared MIME;
+        // the backend still validates the real bytes before persistence.
+        if (matchedExtension && mimeByExtension[matchedExtension]) {
+          requestedMime = mimeByExtension[matchedExtension];
+        } else if (!requestedMime) {
+          requestedMime = 'application/octet-stream';
+        }
         if (requestedMime.startsWith('image/')) {
           const prepared = await compressImageDataUrl(uploadBlob, {
             maxDimension: 1600,
             quality: 0.78,
             mimeType: 'image/webp'
           });
-          uploadBlob = await (await fetch(prepared.dataUrl)).blob();
+          uploadBlob = dataUrlToBlob(prepared.dataUrl, prepared.contentType || 'image/webp');
           requestedMime = 'image/webp';
           requestedFileName = requestedFileName.replace(/\.[a-z0-9]+$/i, '') + '.webp';
         }
-        const safeMime =
-          requestedMime === 'application/pdf' ||
-          requestedMime === 'application/json' ||
-          requestedMime.startsWith('image/')
-            ? requestedMime
-            : 'application/pdf';
+        const supportedMimeTypes = new Set([
+          'application/pdf',
+          'application/json',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'image/png',
+          'image/jpeg',
+          'image/jpg',
+          'image/webp'
+        ]);
+        if (!supportedMimeTypes.has(requestedMime)) {
+          return { success: false, error: 'Formato não suportado. Envie PDF, JPG, PNG, WEBP ou DOCX.' };
+        }
+        const safeMime = requestedMime === 'image/jpg' ? 'image/jpeg' : requestedMime;
         const extensionByMime: Record<string, string> = {
           'application/pdf': '.pdf',
           'application/json': '.json',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
           'image/png': '.png',
           'image/jpeg': '.jpg',
-          'image/jpg': '.jpg',
           'image/webp': '.webp'
         };
         const requiredExtension = extensionByMime[safeMime] || '';
@@ -1640,29 +1793,81 @@ export const dataService = {
           requiredExtension && !requestedFileName.toLowerCase().endsWith(requiredExtension)
             ? `${requestedFileName}${requiredExtension}`
             : requestedFileName;
-        const file = new File([uploadBlob], normalizedFileName, { type: safeMime });
-        formData.append('file', file, normalizedFileName);
-        formData.append('fileName', normalizedFileName);
-        formData.append('contentType', safeMime);
-        formData.append('source', String(payload?.source || 'upload'));
-        const fileHash = await sha256Hex(uploadBlob);
-        const metadataWithHash = {
-          ...(payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}),
-          ...(fileHash ? { fileSha256: fileHash } : {})
-        };
-        if (Object.keys(metadataWithHash).length > 0) {
-          formData.append('metadata', JSON.stringify(metadataWithHash));
+        const metadataPayload =
+          payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {};
+        let encodedMetadata = '';
+        try {
+          encodedMetadata = encodeURIComponent(JSON.stringify(metadataPayload));
+        } catch {
+          encodedMetadata = '';
         }
 
         const authHeaders = await getAuthHeaders();
         const { ['Content-Type']: _, ['content-type']: __, ...headersWithoutContentType } = authHeaders as any;
-        const response = await fetch(`/api/patient-files/${patientId}`, {
-          method: 'POST',
-          headers: headersWithoutContentType,
-          credentials: 'include',
-          body: formData
+        const uploadHeaders: Record<string, string> = {
+          ...headersWithoutContentType,
+          'Content-Type': 'application/octet-stream',
+          'X-Verto-Upload-Mode': 'raw-v1',
+          'X-Verto-File-Name': encodeURIComponent(normalizedFileName),
+          'X-Verto-Declared-Type': safeMime,
+          'X-Verto-Source': String(payload?.source || 'upload').slice(0, 40)
+        };
+        // The backend recomputes SHA-256 and validates MIME/magic bytes. Do not
+        // hash the file in the browser before transport: a local crypto failure
+        // must never prevent a valid upload from reaching the authoritative API.
+        if (encodedMetadata.length > 0 && encodedMetadata.length <= 3000) {
+          uploadHeaders['X-Verto-Upload-Metadata'] = encodedMetadata;
+        }
+
+        return await new Promise<any>((resolve) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', `/api/patient-files/${encodeURIComponent(String(patientId))}`, true);
+          xhr.withCredentials = true;
+          Object.entries(uploadHeaders).forEach(([key, value]) => {
+            if (typeof value === 'string' && value) xhr.setRequestHeader(key, value);
+          });
+          xhr.upload.onprogress = (event) => {
+            if (!event.lengthComputable || typeof payload?.onProgress !== 'function') return;
+            const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+            payload.onProgress(percent);
+          };
+          xhr.onload = () => {
+            let parsed: any = {};
+            try {
+              parsed = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+            } catch {
+              parsed = {
+                success: xhr.status >= 200 && xhr.status < 300,
+                error: xhr.responseText || `Falha HTTP ${xhr.status}`
+              };
+            }
+            if (!parsed || typeof parsed !== 'object') parsed = {};
+            if (typeof parsed.success !== 'boolean') {
+              parsed.success = xhr.status >= 200 && xhr.status < 300;
+            }
+            if (!parsed.success && !parsed.error) {
+              parsed.error = `Falha HTTP ${xhr.status}`;
+            }
+            resolve({ ...parsed, status: xhr.status });
+          };
+          xhr.onerror = () => resolve({
+            success: false,
+            status: 0,
+            error: 'Falha de rede durante o envio do arquivo.'
+          });
+          xhr.onabort = () => resolve({
+            success: false,
+            status: 0,
+            error: 'Envio do arquivo cancelado.'
+          });
+          xhr.ontimeout = () => resolve({
+            success: false,
+            status: 0,
+            error: 'Tempo limite excedido durante o envio do arquivo.'
+          });
+          xhr.timeout = 120000;
+          xhr.send(uploadBlob);
         });
-        return await safeJson(response);
       }
 
       const response = await fetch(`/api/patient-files/${patientId}`, {
@@ -4677,6 +4882,30 @@ export const dataService = {
     }
   },
 
+  async setPatientPrimaryProfessional(patientId: string, professionalId: string | null) {
+    const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/primary-professional`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PUT',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ professionalId: professionalId || null })
+      }, {
+        helperName: 'setPatientPrimaryProfessional',
+        operation: 'write',
+        table: 'patient_professional_links,patients',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(
+        await safeJson(response),
+        'Não foi possível atualizar o profissional responsável.',
+      );
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar o profissional responsável.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async updatePatientTherapeuticPlanScope(patientId: string, planId: string, payload: any = {}) {
     const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}`;
     try {
@@ -5576,18 +5805,42 @@ export const dataService = {
   },
 
   async getSessionReport(sessionId: string) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/session-reports/${encodeURIComponent(String(sessionId))}`;
+    try {
+      const auditEventId = crypto.randomUUID();
+      const response = await fetchClinical(endpoint, {
+        headers: {
+          ...(await getNoStoreAuthHeaders(false)),
+          'X-Audit-Event-Id': auditEventId
+        },
+        credentials: 'include',
+        cache: 'no-store'
+      }, { helperName: 'getSessionReport', operation: 'detail', table: 'aba_session_summaries', hasExplicitColumns: true });
+      if (response.ok) return await response.json();
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar o relatório desta sessão.');
+    } catch (error) {
+      console.log('Fetching ABA session report from local state only...');
+    }
+    return { success: false, error: 'Não foi possível carregar o relatório desta sessão.', data: null };
+  },
+
+  async getSessionReportRecords(sessionId: string, limit = 120) {
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse([]);
+    if (!String(sessionId || '').trim() || String(sessionId).startsWith('draft-')) return { success: true, data: [] };
+    const safeLimit = normalizeListLimit(limit, 120, 200);
+    const endpoint = endpointWithLimit(`/api/aba/session-reports/${encodeURIComponent(String(sessionId))}/records`, safeLimit);
     try {
       const response = await fetchClinical(endpoint, {
         headers: await buildConditionalHeaders(endpoint, 'aba'),
         credentials: 'include'
-      }, { helperName: 'getSessionReport', operation: 'detail', table: 'aba_session_summaries', hasExplicitColumns: true });
+      }, { helperName: 'getSessionReportRecords', operation: 'list', table: 'aba_trials,aba_behavior_events,aba_effective_trials_v3,aba_trial_steps_v3', hasExplicitColumns: true });
       if (response.ok) return await response.json();
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar os registros desta sessão.');
     } catch (error) {
-      console.log('Fetching ABA session report from local state only...');
+      console.log('Fetching ABA session report records from local state only...');
     }
-    return { success: true, data: null };
+    return { success: false, error: 'Não foi possível carregar os registros desta sessão.', data: [] };
   },
 
   async getPaginatedBehaviorEvents(patientId: string, page = 1, pageSize = 20) {
@@ -5595,7 +5848,7 @@ export const dataService = {
   },
 
   async getAbaSessions(patientId: string, options: { limit?: number; page?: number; pageSize?: number } = {}) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse([]);
     const limit = normalizeListLimit(options.pageSize ?? options.limit, 20, 50);
     const page = Math.max(1, Math.round(Number(options.page || 1) || 1));
     const localStart = (page - 1) * limit;
@@ -5625,7 +5878,7 @@ export const dataService = {
   },
 
   async getAbaPromptTypes() {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse(normalizeAbaPromptTypeConfig());
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse(normalizeAbaPromptTypeConfig());
     const endpoint = '/api/aba/prompt-types';
     try {
       const response = await fetchClinical(endpoint, {
@@ -5646,7 +5899,7 @@ export const dataService = {
   },
 
   async saveAbaPromptType(promptType: any) {
-    if (!isAbaV2Enabled()) return abaV2DisabledResponse(promptType || {});
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return abaV2DisabledResponse(promptType || {});
     const id = String(promptType?.id || promptType?.prompt_type_id || promptType?.promptTypeId || generateId());
     const data = {
       ...(promptType || {}),
@@ -5667,6 +5920,306 @@ export const dataService = {
     const hasPersistedId = Boolean(promptType?.id || promptType?.prompt_type_id || promptType?.promptTypeId);
     const endpoint = hasPersistedId ? `/api/aba/prompt-types/${encodeURIComponent(id)}` : '/api/aba/prompt-types';
     return await saveOfflineFirst(id, data, 'aba', endpoint, hasPersistedId ? 'PATCH' : 'POST');
+  },
+
+  async resolveAbaV3SessionTargetBinding(input: { patientId: string; sessionId: string; targetId: string }) {
+    // Clinical routing is server-authoritative. Do not gate this resolver by the
+    // browser build flag: a stale bundle must still honor a V3 session plan.
+    const patientId = String(input?.patientId || '').trim();
+    const sessionId = String(input?.sessionId || '').trim();
+    const targetId = String(input?.targetId || '').trim();
+    if (!patientId || !sessionId || !targetId) return { success: false, error: 'Escopo ABA V3 incompleto.' };
+    const endpoint = `/api/aba/v3/sessions/${encodeURIComponent(sessionId)}/targets/${encodeURIComponent(targetId)}/resolve-binding`;
+    try {
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'POST',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ patient_id: patientId })
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível resolver a coleta ABA V3.' };
+      }
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível resolver a coleta ABA V3.' };
+    }
+  },
+
+  async saveAbaV3TrialAction(trial: any) {
+    // The server collection feature + session binding authorize this write. The
+    // VITE UI flag must never force an authoritative V3 trial back through V2.
+    const clientEventId = String(trial?.client_event_id || trial?.clientEventId || trial?.id || generateId()).trim();
+    const data = {
+      patient_id: trial?.patient_id || trial?.patientId,
+      session_id: trial?.session_id || trial?.sessionId,
+      target_id: trial?.target_id || trial?.targetId,
+      client_event_id: clientEventId,
+      action_key: trial?.action_key || trial?.actionKey,
+      prompt_type_id: trial?.prompt_type_id || trial?.promptTypeId || undefined,
+      prompt_key: trial?.prompt_key || trial?.promptKey || undefined,
+      trial_type: trial?.trial_type || trial?.trialType || trial?.collection_type || trial?.collectionType,
+      occurred_at: trial?.occurred_at || trial?.occurredAt || trial?.timestamp || new Date().toISOString(),
+      source_device_id: trial?.source_device_id || trial?.sourceDeviceId || undefined,
+      maintenance_schedule_id: trial?.maintenance_schedule_id || trial?.maintenanceScheduleId || undefined,
+      client_metadata: trial?.client_metadata || trial?.clientMetadata || {}
+    };
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/trials', 'POST');
+  },
+
+  async saveAbaV3TrialRevision(input: any) {
+    const originalTrialId = String(input?.original_trial_id || input?.originalTrialId || '').trim();
+    const originalClientEventId = String(input?.original_client_event_id || input?.originalClientEventId || '').trim();
+    const clientRevisionEventId = String(input?.client_revision_event_id || input?.clientRevisionEventId || generateId()).trim();
+    const replacementClientEventId = String(input?.replacement_client_event_id || input?.replacementClientEventId || generateId()).trim();
+    const eventType = String(input?.event_type || input?.eventType || '').trim().toUpperCase();
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      original_trial_id: originalTrialId || undefined,
+      original_client_event_id: originalClientEventId || undefined,
+      event_type: eventType,
+      client_revision_event_id: clientRevisionEventId,
+      replacement_client_event_id: eventType === 'CORRECT' ? replacementClientEventId : undefined,
+      reason: input?.reason,
+      action_key: input?.action_key || input?.actionKey || undefined,
+      prompt_type_id: input?.prompt_type_id || input?.promptTypeId || undefined,
+      prompt_key: input?.prompt_key || input?.promptKey || undefined,
+      client_metadata: input?.client_metadata || input?.clientMetadata || {}
+    };
+    const queueEntityId = originalTrialId || originalClientEventId || clientRevisionEventId;
+    return await saveOfflineFirst(
+      clientRevisionEventId,
+      data,
+      'aba_v3',
+      '/api/aba/v3/trial-revisions',
+      'POST',
+      { queueEntityId }
+    );
+  },
+
+  async discardAbaV3FailedTrial(clientEventId: string) {
+    const safeClientEventId = String(clientEventId || '').trim();
+    if (!safeClientEventId) return { success: false, error: 'Tentativa local não identificada.' };
+    const discarded = await discardFailedOfflineEntityMutations('aba_v3', safeClientEventId);
+    return { success: true, discarded };
+  },
+
+  async getAbaV3BehaviorCatalog(patientId: string) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: [] };
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente não identificado.', data: [] };
+    try {
+      const response = await fetchWithAuthRetry(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/behavior-catalog`, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar os comportamentos ABA V3.', data: [] };
+      return { ...result, success: true, data: Array.isArray(result?.data) ? result.data : [] };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar os comportamentos ABA V3.', data: [] };
+    }
+  },
+
+  async resolveAbaV3BehaviorCollection(input: { patientId: string; sessionId: string; behaviorId: string }) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const patientId = String(input?.patientId || '').trim();
+    const sessionId = String(input?.sessionId || '').trim();
+    const behaviorId = String(input?.behaviorId || '').trim();
+    if (!patientId || !sessionId || !behaviorId) return { success: false, error: 'Escopo do comportamento ABA V3 incompleto.' };
+    const endpoint = `/api/aba/v3/sessions/${encodeURIComponent(sessionId)}/behaviors/${encodeURIComponent(behaviorId)}/resolve-collection`;
+    try {
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'POST',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ patient_id: patientId })
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível resolver o comportamento ABA V3.' };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível resolver o comportamento ABA V3.' };
+    }
+  },
+
+  async saveAbaV3BehaviorAction(action: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const clientEventId = String(action?.client_event_id || action?.clientEventId || generateId()).trim();
+    const data = {
+      patient_id: action?.patient_id || action?.patientId,
+      session_id: action?.session_id || action?.sessionId,
+      behavior_id: action?.behavior_id || action?.behaviorId,
+      action_type: action?.action_type || action?.actionType,
+      client_event_id: clientEventId,
+      episode_event_id: action?.episode_event_id || action?.episodeEventId || undefined,
+      count_delta: action?.count_delta ?? action?.countDelta ?? 1,
+      occurred_at: action?.occurred_at || action?.occurredAt || action?.timestamp || new Date().toISOString(),
+      metadata: action?.metadata || action?.client_metadata || action?.clientMetadata || {}
+    };
+    const queueEntityId = String(action?.causal_entity_id || action?.causalEntityId || action?.episode_event_id || action?.episodeEventId || clientEventId).trim() || clientEventId;
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/behavior-actions', 'POST', { queueEntityId });
+  },
+
+  async startAbaV3IntervalRun(input: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      behavior_id: input?.behavior_id || input?.behaviorId,
+      client_run_event_id: input?.client_run_event_id || input?.clientRunEventId || generateId(),
+      measurement_method: input?.measurement_method || input?.measurementMethod,
+      interval_seconds: input?.interval_seconds ?? input?.intervalSeconds,
+      planned_intervals: input?.planned_intervals ?? input?.plannedIntervals,
+      started_at: input?.started_at || input?.startedAt || new Date().toISOString(),
+      metadata: input?.metadata || {}
+    };
+    try {
+      const response = await fetchWithAuthRetry('/api/aba/v3/interval-runs', {
+        method: 'POST',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(data)
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível iniciar a coleta por intervalo V3.' };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'A coleta por intervalo V3 precisa de conexão para iniciar.' };
+    }
+  },
+
+  async saveAbaV3IntervalObservation(input: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const runId = String(input?.interval_run_id || input?.intervalRunId || '').trim();
+    const clientEventId = String(input?.client_event_id || input?.clientEventId || generateId()).trim();
+    if (!runId) return { success: false, error: 'Coleta por intervalo V3 não identificada.' };
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      interval_index: input?.interval_index ?? input?.intervalIndex,
+      observation_code: input?.observation_code || input?.observationCode,
+      client_event_id: clientEventId,
+      metadata: input?.metadata || {}
+    };
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/observations`, 'POST', { queueEntityId: runId });
+  },
+
+  async finalizeAbaV3IntervalRun(input: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const runId = String(input?.interval_run_id || input?.intervalRunId || '').trim();
+    const clientEventId = String(input?.client_event_id || input?.clientEventId || `interval-finalize-${runId}-${input?.close_reason || input?.closeReason || 'complete'}`).trim();
+    if (!runId) return { success: false, error: 'Coleta por intervalo V3 não identificada.' };
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      ended_at: input?.ended_at || input?.endedAt || new Date().toISOString(),
+      close_reason: input?.close_reason || input?.closeReason || 'CLIENT_COMPLETE',
+      client_event_id: clientEventId
+    };
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/finalize`, 'POST', { queueEntityId: runId });
+  },
+
+  async getAbaV3TaskAnalysisDefinition(input: { patientId: string; sessionId: string; targetId: string }) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const patientId = String(input?.patientId || '').trim();
+    const sessionId = String(input?.sessionId || '').trim();
+    const targetId = String(input?.targetId || '').trim();
+    if (!patientId || !sessionId || !targetId) return { success: false, error: 'Escopo da análise de tarefa ABA V3 incompleto.' };
+    const endpoint = `/api/aba/v3/patients/${encodeURIComponent(patientId)}/sessions/${encodeURIComponent(sessionId)}/targets/${encodeURIComponent(targetId)}/task-analysis-definition`;
+    try {
+      const response = await fetchWithAuthRetry(endpoint, { method: 'GET', headers: await getNoStoreAuthHeaders(), credentials: 'include' });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar a análise de tarefa V3.' };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar a análise de tarefa V3.' };
+    }
+  },
+
+  async saveAbaV3TaskAnalysisRun(input: any) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.' };
+    const clientEventId = String(input?.client_event_id || input?.clientEventId || generateId()).trim();
+    const data = {
+      patient_id: input?.patient_id || input?.patientId,
+      session_id: input?.session_id || input?.sessionId,
+      target_id: input?.target_id || input?.targetId,
+      client_event_id: clientEventId,
+      occurred_at: input?.occurred_at || input?.occurredAt || new Date().toISOString(),
+      completed_at: input?.completed_at || input?.completedAt || new Date().toISOString(),
+      lifecycle_status: input?.lifecycle_status || input?.lifecycleStatus || 'COMPLETE',
+      results: Array.isArray(input?.results) ? input.results : [],
+      metadata: input?.metadata || {}
+    };
+    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/task-analysis-runs', 'POST');
+  },
+
+  async getAbaV3SessionCollectionPlan(input: { patientId: string; sessionId: string; targetIds?: string[] }) {
+    // Probe the authoritative server plan even when the current browser bundle
+    // has the optional V3 presentation flag disabled. This is one read per
+    // active session and prevents stale clients from attempting Legacy writes.
+    const patientId = String(input?.patientId || '').trim();
+    const sessionId = String(input?.sessionId || '').trim();
+    const targetIds = Array.from(new Set((Array.isArray(input?.targetIds) ? input.targetIds : []).map((value) => String(value || '').trim()).filter(Boolean))).slice(0, 200);
+    if (!patientId || !sessionId) return { success: false, error: 'Escopo do plano de coleta ABA V3 incompleto.', data: { targets: [], v3_behavior_ids: [], complete: false } };
+    try {
+      const response = await fetchWithAuthRetry(`/api/aba/v3/sessions/${encodeURIComponent(sessionId)}/collection-plan`, {
+        method: 'POST',
+        headers: { ...(await getNoStoreAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ patient_id: patientId, target_ids: targetIds })
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar o plano de coleta ABA V3.', data: { targets: [], v3_behavior_ids: [], complete: false } };
+      }
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar o plano de coleta ABA V3.', data: { targets: [], v3_behavior_ids: [], complete: false } };
+    }
+  },
+
+  async getAbaV3ChartCatalog(patientId: string) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { targets: [] } };
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente ABA V3 não identificado.', data: { targets: [] } };
+    try {
+      const response = await fetchWithAuthRetry(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/chart-catalog?days=366`, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar o catálogo de gráficos ABA V3.', data: { targets: [] } };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar o catálogo de gráficos ABA V3.', data: { targets: [] } };
+    }
+  },
+
+  async getAbaV3TargetChartSeries(patientId: string, targetId: string, options: { days?: number; limit?: number } = {}) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { segments: [], available_metrics: [] } };
+    const safePatientId = String(patientId || '').trim();
+    const safeTargetId = String(targetId || '').trim();
+    if (!safePatientId || !safeTargetId) return { success: false, error: 'Alvo ABA V3 não identificado.', data: { segments: [], available_metrics: [] } };
+    const endpoint = endpointWithQuery(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/targets/${encodeURIComponent(safeTargetId)}/chart-series`, {
+      days: Math.max(1, Math.min(Number(options.days || 90), 366)),
+      limit: Math.max(1, Math.min(Number(options.limit || 90), 180))
+    });
+    try {
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar os gráficos ABA V3.', data: { segments: [], available_metrics: [] } };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar os gráficos ABA V3.', data: { segments: [], available_metrics: [] } };
+    }
   },
 
   async saveAbaTrial(trial: any) {
@@ -7339,6 +7892,32 @@ export const dataService = {
     }
   },
 
+  async updateMemberSupervisionEligibility(memberId: string, canSupervise: boolean) {
+    try {
+      const response = await fetch(
+        `/api/clinic/members/${encodeURIComponent(String(memberId))}/supervision-eligibility`,
+        {
+          method: 'PATCH',
+          headers: await getAuthHeaders(),
+          credentials: 'include',
+          body: JSON.stringify({ canSupervise: canSupervise === true }),
+        },
+      );
+      const result = await safeJson(response);
+      if (!response.ok) {
+        return {
+          ...result,
+          success: false,
+          error: result?.message || result?.error || 'Não foi possível atualizar a supervisão.',
+        };
+      }
+      return result;
+    } catch (error) {
+      console.error('Error updating member supervision eligibility:', error);
+      return { success: false, error: 'Não foi possível atualizar a supervisão.' };
+    }
+  },
+
   async updateMemberSpecialty(memberId: string, specialty: string) {
     try {
       const response = await fetch(
@@ -7809,10 +8388,20 @@ export const dataService = {
     const workspaceKey = String(workspaceId || 'active').trim() || 'active';
     const clinicStateEntityId = `clinic-state:${workspaceKey}`;
     const buildLocalWorkspaceHydration = async (error?: unknown) => {
-      const [localPatientRecords, localClinicStateRecord] = await Promise.all([
-        getRecordsByType('patient'),
-        getRecordById(clinicStateEntityId),
-      ]);
+      let localPatientRecords: any[] = [];
+      let localClinicStateRecord: any = null;
+      try {
+        [localPatientRecords, localClinicStateRecord] = await Promise.all([
+          getRecordsByType('patient'),
+          getRecordById(clinicStateEntityId),
+        ]);
+      } catch (cacheError) {
+        console.warn('[workspace-hydration] Cache local indisponível durante fallback; mantendo falha explícita.', cacheError);
+        return {
+          success: false,
+          error: String(error || 'Não foi possível carregar o workspace nem acessar a cópia local persistida.'),
+        };
+      }
       const safeWorkspaceId = String(workspaceId || '').trim();
       const localPatients = localPatientRecords
         .map((record) => {
@@ -7854,6 +8443,7 @@ export const dataService = {
       return {
         success: true,
         offline: true,
+        patientListCanonical: false,
         pending: Boolean(localClinicStateRecord && localClinicStateRecord.sync_status !== 'synced'),
         data: {
           clinicState: {
@@ -7893,17 +8483,6 @@ export const dataService = {
       const patientsRes = await safeJson(patientsResponse);
       const patientList = normalizePatientListResponse(patientsRes);
 
-      if (!clinicStateResponse.ok || clinicStateRes?.success === false) {
-        const localFallback = await buildLocalWorkspaceHydration(
-          clinicStateRes?.error || clinicStateRes?.warning || `Falha ao carregar estado da clínica (HTTP ${clinicStateResponse.status}).`,
-        );
-        if (localFallback.success) return localFallback;
-        return {
-          success: false,
-          error: clinicStateRes?.error || clinicStateRes?.warning || `Falha ao carregar estado da clínica (HTTP ${clinicStateResponse.status}).`
-        };
-      }
-
       if (!patientsResponse.ok || !patientList.success) {
         const failureMessage =
           patientsRes?.error ||
@@ -7920,7 +8499,7 @@ export const dataService = {
         };
       }
 
-      const clinicStateData = clinicStateRes?.data || {
+      const emptyClinicState = {
         clinicId: workspaceId || null,
         rooms: [],
         appointments: [],
@@ -7930,50 +8509,84 @@ export const dataService = {
         revision: 0,
         sectionVersions: {}
       };
-      await saveEncryptedRecord({
-        id: clinicStateEntityId,
-        entity_id: clinicStateEntityId,
-        data: { ...clinicStateData, workspace_id: workspaceId || undefined },
-        type: 'clinic_state',
-        sync_status: 'synced',
-        last_updated: clinicStateData?.updatedAt ? new Date(clinicStateData.updatedAt).getTime() || Date.now() : Date.now(),
-        method: 'POST',
-        endpoint: '/api/clinic/state'
-      });
+      let clinicStateData =
+        clinicStateResponse.ok && clinicStateRes?.success !== false
+          ? clinicStateRes?.data || emptyClinicState
+          : emptyClinicState;
+
+      // Patient visibility must not depend on an unrelated clinic-state bootstrap.
+      // If clinic/state is temporarily unavailable, preserve its last local snapshot
+      // when possible, but continue with the already-confirmed remote patient list.
+      if (!clinicStateResponse.ok || clinicStateRes?.success === false) {
+        try {
+          const localClinicStateRecord = await getRecordById(clinicStateEntityId);
+          if (localClinicStateRecord?.data && typeof localClinicStateRecord.data === 'object') {
+            clinicStateData = { ...emptyClinicState, ...localClinicStateRecord.data };
+          }
+        } catch (cacheError) {
+          console.warn('[workspace-hydration] Estado local da clínica indisponível; pacientes remotos permanecem válidos.', cacheError);
+        }
+      }
 
       const remotePatients = patientList.data.map((patient: any) =>
         mirrorPatientInsuranceEligibilityAliases(patient || {}, { useResponsibleFallback: true }),
       );
-      for (const patient of remotePatients) {
-        const patientId = String(patient?.id || '').trim();
-        if (!patientId) continue;
-        await saveEncryptedRecord({
-          id: patientId,
-          entity_id: patientId,
-          data: patient,
-          type: 'patient',
-          sync_status: 'synced',
-          last_updated: patient?.updated_at ? new Date(patient.updated_at).getTime() || Date.now() : Date.now(),
-          method: 'POST',
-          endpoint: '/api/patients'
-        });
-      }
 
-      // Re-read canonical caches through the outbox overlay. A reload/relogin must
-      // never hide a durable local mutation merely because a remote snapshot is stale.
-      const [effectiveClinicStateRecord, effectivePatientRecords] = await Promise.all([
-        getRecordById(clinicStateEntityId),
-        getRecordsByType('patient'),
-      ]);
+      // The server snapshot is already authenticated and canonical at this point.
+      // IndexedDB is durability/offline support only: a local cache failure must never
+      // turn a valid remote patient list into an empty React state.
+      let effectiveClinicStateRecord: any = null;
+      let effectivePatientRecords: any[] = [];
+      try {
+        await saveEncryptedRecord({
+          id: clinicStateEntityId,
+          entity_id: clinicStateEntityId,
+          data: { ...clinicStateData, workspace_id: workspaceId || undefined },
+          type: 'clinic_state',
+          sync_status: 'synced',
+          last_updated: clinicStateData?.updatedAt ? new Date(clinicStateData.updatedAt).getTime() || Date.now() : Date.now(),
+          method: 'POST',
+          endpoint: '/api/clinic/state'
+        });
+
+        for (const patient of remotePatients) {
+          const patientId = String(patient?.id || '').trim();
+          if (!patientId) continue;
+          await saveEncryptedRecord({
+            id: patientId,
+            entity_id: patientId,
+            data: patient,
+            type: 'patient',
+            sync_status: 'synced',
+            last_updated: patient?.updated_at ? new Date(patient.updated_at).getTime() || Date.now() : Date.now(),
+            method: 'POST',
+            endpoint: '/api/patients'
+          });
+        }
+
+        // Re-read canonical caches through the outbox overlay. A reload/relogin must
+        // never hide a durable local mutation merely because a remote snapshot is stale.
+        [effectiveClinicStateRecord, effectivePatientRecords] = await Promise.all([
+          getRecordById(clinicStateEntityId),
+          getRecordsByType('patient'),
+        ]);
+      } catch (cacheError) {
+        console.warn('[workspace-hydration] Cache local indisponível; usando snapshot remoto confirmado.', cacheError);
+        effectiveClinicStateRecord = null;
+        effectivePatientRecords = [];
+      }
       const localClinicState = effectiveClinicStateRecord?.data || clinicStateData;
       const remotePatientIds = new Set(remotePatients.map((patient: any) => String(patient?.id || '').trim()).filter(Boolean));
       const safeWorkspaceId = String(workspaceId || '').trim();
-      const localPatients = effectivePatientRecords
+      const localPatientEntries = effectivePatientRecords
         .map((record) => {
           const { recordPayload: _recordPayload, idempotencyKey: _idempotencyKey, ...patientData } = record?.data || {};
-          return mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true });
+          return {
+            record,
+            patient: mirrorPatientInsuranceEligibilityAliases(patientData, { useResponsibleFallback: true }),
+          };
         })
-        .filter((patient: any) => {
+        .filter(({ patient }: any) => {
           const patientId = String(patient?.id || '').trim();
           const patientClinicId = String(patient?.clinic_id || patient?.clinicId || '').trim();
           return remotePatientIds.has(patientId) || !safeWorkspaceId || !patientClinicId || patientClinicId === safeWorkspaceId;
@@ -7983,9 +8596,22 @@ export const dataService = {
         const patientId = String(patient?.id || '').trim();
         if (patientId) patientsById.set(patientId, patient);
       }
-      for (const patient of localPatients) {
+      for (const { record, patient } of localPatientEntries) {
         const patientId = String(patient?.id || '').trim();
-        if (patientId) patientsById.set(patientId, patient);
+        if (!patientId) continue;
+        const remotePatient = patientsById.get(patientId);
+        // A fresh server snapshot is authoritative over an already-synced cache copy.
+        // Only a genuinely pending local mutation may overlay it, preserving offline edits.
+        if (remotePatient && record?.sync_status === 'synced') continue;
+        patientsById.set(
+          patientId,
+          remotePatient
+            ? mirrorPatientInsuranceEligibilityAliases(
+                { ...remotePatient, ...patient },
+                { useResponsibleFallback: true },
+              )
+            : patient,
+        );
       }
       const patients = Array.from(patientsById.values());
       const remoteProtocols = normalizeProtocolList(clinicStateData?.protocols);
@@ -8025,6 +8651,7 @@ export const dataService = {
 
       return {
         success: true,
+        patientListCanonical: true,
         data: {
           clinicState: clinicStateWithProtocolFallback,
           clinicAnamnesisTemplate: clinicTemplateRes?.data || {},

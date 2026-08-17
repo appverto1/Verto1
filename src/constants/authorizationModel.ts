@@ -1,10 +1,17 @@
-export const CLINIC_BASE_ROLES = [
+export const CANONICAL_CLINIC_BASE_ROLES = [
   'director',
   'coordinator',
-  'supervisor',
   'therapist',
   'receptionist',
   'biller',
+] as const;
+
+// `supervisor` remains recognized only for backwards compatibility with
+// memberships created before supervision became a contextual capability of a
+// professional. New accounts must use `therapist` + `can_supervise`.
+export const CLINIC_BASE_ROLES = [
+  ...CANONICAL_CLINIC_BASE_ROLES,
+  'supervisor',
 ] as const;
 
 export type ClinicBaseRole = (typeof CLINIC_BASE_ROLES)[number];
@@ -65,7 +72,7 @@ export const CAPABILITY_CATALOG = [
   { key: 'workspace.multiclinic.analytics', label: 'Visualizar dados consolidados de múltiplas unidades', domain: 'clinic', delegable: true, sensitive: true },
 
   { key: 'team.view', label: 'Visualizar equipe da clínica', domain: 'team', delegable: true },
-  { key: 'team.invite', label: 'Convidar profissionais', domain: 'team', delegable: true, sensitive: true },
+  { key: 'team.invite', label: 'Convidar colaboradores', domain: 'team', delegable: false, sensitive: true },
   { key: 'team.edit', label: 'Editar profissionais', domain: 'team', delegable: true, sensitive: true },
   { key: 'team.deactivate', label: 'Desativar profissionais', domain: 'team', delegable: true, sensitive: true },
   { key: 'team.permissions.manage', label: 'Definir papéis e permissões', domain: 'team', delegable: true, sensitive: true },
@@ -202,9 +209,17 @@ export type CapabilityKey = (typeof CAPABILITY_CATALOG)[number]['key'];
 
 const internal = (...keys: CapabilityKey[]) => keys;
 
+export const SUPERVISION_CAPABILITY_OVERLAY = internal(
+  'patient.demographics.view',
+  'treatment_plan.create','treatment_plan.edit','treatment_plan.approve','treatment_goal.manage',
+  'aba.program.create','aba.program.edit','aba.maintenance.manage',
+  'calendar.team.view',
+  'reports.clinical.indicators',
+);
+
 const COORDINATOR_DEFAULTS = internal(
   'clinic.view','clinic.edit','clinic.settings.view','clinic.settings.edit','clinic.rooms.manage','clinic.indicators.view',
-  'team.view','team.invite','team.edit','team.deactivate','team.permissions.manage','team.case.manage','team.patient_primary.manage','team.supervision.manage',
+  'team.view','team.edit','team.deactivate','team.permissions.manage','team.case.manage','team.patient_primary.manage','team.supervision.manage','team.invite',
   'patient.list','patient.create','patient.demographics.view','patient.demographics.edit','patient.contacts.view','patient.birthdays.view','patient.documents.registration.view','patient.clinic_link.manage','patient.archive',
   'patient.insurance.view','patient.insurance.create','patient.insurance.edit','patient.insurance.card.view','patient.insurance.authorization.view','patient.insurance.authorization.edit','patient.insurance.eligibility.view',
   'clinical.record.view','clinical.history.view','clinical.evolution.create','clinical.evolution.own_edit','clinical.evolution.team_view','clinical.notes.create','clinical.documents.view','clinical.documents.upload','clinical.anamnesis.view','clinical.anamnesis.edit',
@@ -246,9 +261,7 @@ export const ROLE_DEFAULT_CAPABILITIES: Record<ClinicBaseRole | PortalRole, read
     'patient.files.view','reports.view','reports.generate','documents.patient_share',
   ),
   receptionist: internal(
-    'patient.list','patient.create','patient.demographics.view','patient.demographics.edit','patient.contacts.view','patient.birthdays.view','patient.documents.registration.view','patient.clinic_link.manage','patient.archive',
-    'patient.insurance.view','patient.insurance.create','patient.insurance.edit','patient.insurance.card.view','patient.insurance.authorization.view','patient.insurance.authorization.edit','patient.insurance.eligibility.view',
-    'school.view','school.manage','school.meetings.manage',
+    'patient.list','patient.create','patient.demographics.view','patient.demographics.edit','patient.contacts.view','patient.birthdays.view','patient.documents.registration.view',
     'calendar.clinic.view','calendar.team.view','calendar.appointment.create','calendar.appointment.edit','calendar.appointment.cancel','calendar.appointment.reschedule','calendar.attendance.confirm','calendar.no_show.record','calendar.requests.manage',
     'finance.payments.view','finance.payments.receive','finance.payments.edit','finance.delinquency.view','finance.entries.view','finance.entries.manage','finance.reports.view','finance.indicators.view',
     'documents.patient_share',
@@ -274,6 +287,16 @@ export const ROLE_DEFAULT_SCOPES: Record<ClinicBaseRole | PortalRole, readonly A
   patient: ['SELF_OR_DEPENDENTS'],
 };
 
+export function getDefaultScopesForRole(
+  role: ClinicBaseRole | PortalRole,
+  options: { canSupervise?: boolean } = {},
+): readonly AuthorizationScope[] {
+  if (role === 'therapist' && options.canSupervise === true) {
+    return ['ASSIGNED_PATIENTS', 'SUPERVISED_CASES', 'OWN_RESOURCES'];
+  }
+  return ROLE_DEFAULT_SCOPES[role];
+}
+
 const CAPABILITY_KEYS = new Set<string>(CAPABILITY_CATALOG.map((item) => item.key));
 const CLINIC_ROLE_KEYS = new Set<string>(CLINIC_BASE_ROLES);
 
@@ -287,17 +310,6 @@ export function isClinicBaseRole(value: unknown): value is ClinicBaseRole {
 
 export function getDefaultCapabilitiesForRole(role: ClinicBaseRole | PortalRole): ReadonlySet<CapabilityKey> {
   return new Set(ROLE_DEFAULT_CAPABILITIES[role]);
-}
-
-export function getDefaultScopesForRole(
-  role: ClinicBaseRole | PortalRole,
-  options: { canSupervise?: boolean } = {},
-): readonly AuthorizationScope[] {
-  const scopes = [...ROLE_DEFAULT_SCOPES[role]];
-  if (options.canSupervise === true && !scopes.includes('SUPERVISED_CASES')) {
-    scopes.push('SUPERVISED_CASES');
-  }
-  return scopes;
 }
 
 export function roleHasDefaultCapability(role: ClinicBaseRole | PortalRole, capability: CapabilityKey): boolean {

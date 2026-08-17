@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronDown, Pencil, RotateCcw, Plus, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import {
@@ -40,6 +40,11 @@ interface QuestionDraft {
   type: AnamnesisQuestionType;
   optionsText: string;
   required: boolean;
+}
+
+interface QuestionEditorDraft {
+  editingQuestionId: string;
+  draftQuestion: QuestionDraft;
 }
 
 const QUESTION_TYPE_LABEL: Record<AnamnesisQuestionType, string> = {
@@ -262,9 +267,7 @@ export const AnamnesisModal = ({
   const [formData, setFormData] = useState<Record<string, any>>({});
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
-  const [editorSectionId, setEditorSectionId] = useState<string | null>(null);
-  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
-  const [draftQuestion, setDraftQuestion] = useState<QuestionDraft | null>(null);
+  const [questionEditors, setQuestionEditors] = useState<Record<string, QuestionEditorDraft>>({});
   const [templateDirty, setTemplateDirty] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [templateName, setTemplateName] = useState('Ficha personalizada');
@@ -272,6 +275,12 @@ export const AnamnesisModal = ({
   const [templateAgeMinYears, setTemplateAgeMinYears] = useState('');
   const [templateAgeMaxYears, setTemplateAgeMaxYears] = useState('');
   const [templatePatientProfileType, setTemplatePatientProfileType] = useState('');
+  const [templateEditorIdentity, setTemplateEditorIdentity] = useState(() =>
+    String((template as any)?.selectedTemplateId || (template as any)?.id || 'new')
+  );
+  const templateDirtyRef = useRef(false);
+  const questionEditorsRef = useRef<Record<string, QuestionEditorDraft>>({});
+  const wasOpenRef = useRef(false);
 
   const [scheduleImmediate, setScheduleImmediate] = useState(false);
   const [registerDate, setRegisterDate] = useState('');
@@ -280,18 +289,45 @@ export const AnamnesisModal = ({
   const [consultationRoom, setConsultationRoom] = useState('');
   const [consultationProfessional, setConsultationProfessional] = useState('');
   const templateScopeKey = String((template as any)?.templateScope || (template as any)?.scope || 'clinic').toLowerCase();
-  const templateDraftStorageKey = `verto_anamnesis_template_draft_${templateScopeKey}_${profileType}`;
+  const templateDraftStorageKey = `verto_anamnesis_template_draft_${templateScopeKey}_${templateEditorIdentity}`;
+
+  const markTemplateDirty = (dirty: boolean) => {
+    templateDirtyRef.current = dirty;
+    setTemplateDirty(dirty);
+  };
+
+  const applyTemplateToEditor = (source: any, markClean = true) => {
+    const normalized = normalizeAnamnesisTemplate(source || getDefaultAnamnesisTemplate());
+    const selectedTemplateId = String(source?.selectedTemplateId || source?.id || '').trim() || null;
+    setTemplateState({
+      ...normalized,
+      selectedTemplateId,
+      templateScope: source?.templateScope || source?.scope || templateScopeKey,
+      scope: source?.templateScope || source?.scope || templateScopeKey
+    } as any);
+    setTemplateName(String(source?.templateName || source?.name || 'Ficha personalizada').slice(0, 80));
+    setTemplateDescription(String(source?.templateDescription || source?.description || '').slice(0, 240));
+    setTemplateAgeMinYears(monthsToYearsInput(source?.ageMinMonths ?? source?.age_min_months));
+    setTemplateAgeMaxYears(monthsToYearsInput(source?.ageMaxMonths ?? source?.age_max_months));
+    setTemplatePatientProfileType(String(source?.patientProfileType || source?.patient_profile_type || '').toUpperCase());
+    setTemplateEditorIdentity(selectedTemplateId || 'new');
+    if (markClean) markTemplateDirty(false);
+  };
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      wasOpenRef.current = false;
+      return;
+    }
 
-    const sourceTemplate = normalizeAnamnesisTemplate(template || getDefaultAnamnesisTemplate());
-    setTemplateState(sourceTemplate);
-    setTemplateName(String((template as any)?.templateName || (template as any)?.name || 'Ficha personalizada').slice(0, 80));
-    setTemplateDescription(String((template as any)?.templateDescription || (template as any)?.description || '').slice(0, 240));
-    setTemplateAgeMinYears(monthsToYearsInput((template as any)?.ageMinMonths ?? (template as any)?.age_min_months));
-    setTemplateAgeMaxYears(monthsToYearsInput((template as any)?.ageMaxMonths ?? (template as any)?.age_max_months));
-    setTemplatePatientProfileType(String((template as any)?.patientProfileType || (template as any)?.patient_profile_type || '').toUpperCase());
+    const firstOpen = !wasOpenRef.current;
+    // A refresh/refetch do pai não pode arrancar uma ficha que o profissional está
+    // editando. Troca de ficha ocorre apenas por ação explícita dentro do modal.
+    if (!firstOpen && (templateDirtyRef.current || Object.keys(questionEditorsRef.current).length > 0)) return;
+    wasOpenRef.current = true;
+
+    const sourceTemplate = template || getDefaultAnamnesisTemplate();
+    applyTemplateToEditor(sourceTemplate, true);
 
     const inferredProfile: AnamnesisProfileType =
       initialData?.formType === 'child' || (typeof initialData?.idade === 'number' && initialData.idade <= 12) ? 'child' : 'adult';
@@ -300,7 +336,8 @@ export const AnamnesisModal = ({
     const nextView: ModalView = canEditTemplate && (initialData?.manageTemplate === true || initialData?.nome === 'Template da Clínica' || initialData?.nome === 'Template Profissional') ? 'template' : 'fill';
     setView(nextView);
 
-    const profileTemplate = getProfileTemplate(sourceTemplate, inferredProfile);
+    const normalizedSource = normalizeAnamnesisTemplate(sourceTemplate);
+    const profileTemplate = getProfileTemplate(normalizedSource, inferredProfile);
     const initialValues: Record<string, any> = { ...(initialData || {}) };
     profileTemplate.questions.forEach((question) => {
       initialValues[question.id] = getFieldValue(initialValues[question.id], question.type);
@@ -313,64 +350,94 @@ export const AnamnesisModal = ({
         return acc;
       }, {} as Record<string, boolean>)
     );
-    setEditingQuestionId(null);
-    setDraftQuestion(null);
-    setEditorSectionId(null);
+    setQuestionEditors({});
     setScheduleImmediate(Boolean(initialData?.scheduleImmediate));
     setRegisterDate(initialData?.date || '');
     setRegisterTime(initialData?.time || '');
     setConsultationApproach(initialData?.approach || '');
     setConsultationRoom(initialData?.room || '');
     setConsultationProfessional(initialData?.professional || '');
-    setTemplateDirty(false);
-  }, [isOpen, initialData, template, canEditTemplate]);
+  }, [isOpen, template, canEditTemplate]);
 
   useEffect(() => {
-    if (!isOpen || !canEditTemplate || view !== 'template') return;
+    questionEditorsRef.current = questionEditors;
+  }, [questionEditors]);
+
+  useEffect(() => {
+    if (!isOpen || !canEditTemplate || view !== 'template' || templateDirtyRef.current) return;
     try {
       const raw = localStorage.getItem(templateDraftStorageKey);
       if (!raw) return;
       const parsed = JSON.parse(raw);
       const draftTemplate = parsed?.template;
       if (!draftTemplate || typeof draftTemplate !== 'object') return;
-      const shouldRestore = confirm('Existe um rascunho não salvo da ficha de anamnese. Deseja restaurar?');
+      const shouldRestore = confirm('Existe um rascunho não salvo desta ficha de anamnese. Deseja restaurar?');
       if (shouldRestore) {
-        setTemplateState(normalizeAnamnesisTemplate(draftTemplate));
-        setTemplateDirty(true);
+        setTemplateState(draftTemplate as AnamnesisTemplate);
+        setTemplateName(String(parsed?.templateName || 'Ficha personalizada').slice(0, 80));
+        setTemplateDescription(String(parsed?.templateDescription || '').slice(0, 240));
+        setTemplateAgeMinYears(String(parsed?.templateAgeMinYears || ''));
+        setTemplateAgeMaxYears(String(parsed?.templateAgeMaxYears || ''));
+        setTemplatePatientProfileType(String(parsed?.templatePatientProfileType || ''));
+        if (parsed?.questionEditors && typeof parsed.questionEditors === 'object') {
+          setQuestionEditors(parsed.questionEditors as Record<string, QuestionEditorDraft>);
+        } else if (parsed?.draftQuestion && typeof parsed.draftQuestion === 'object') {
+          // Compatibilidade com rascunhos criados antes do editor por seção.
+          const legacySectionId = String(parsed?.editorSectionId || '').trim();
+          if (legacySectionId) {
+            setQuestionEditors({
+              [legacySectionId]: {
+                editingQuestionId: String(parsed?.editingQuestionId || parsed.draftQuestion.id || 'new'),
+                draftQuestion: parsed.draftQuestion as QuestionDraft
+              }
+            });
+          }
+        }
+        markTemplateDirty(true);
       } else {
         localStorage.removeItem(templateDraftStorageKey);
       }
     } catch {
       // noop
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, canEditTemplate, view, profileType]);
+  }, [isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
-    if (!isOpen || !canEditTemplate || view !== 'template') return;
+    if (!isOpen || !canEditTemplate || view !== 'template' || (!templateDirty && Object.keys(questionEditors).length === 0)) return;
     try {
       localStorage.setItem(
         templateDraftStorageKey,
         JSON.stringify({
           updatedAt: new Date().toISOString(),
-          profileType,
-          template: templateState
+          template: templateState,
+          templateName,
+          templateDescription,
+          templateAgeMinYears,
+          templateAgeMaxYears,
+          templatePatientProfileType,
+          selectedTemplateId: (templateState as any)?.selectedTemplateId || null,
+          questionEditors
         })
       );
     } catch {
       // noop
     }
-  }, [templateState, profileType, isOpen, canEditTemplate, view, templateDraftStorageKey]);
+  }, [templateState, templateName, templateDescription, templateAgeMinYears, templateAgeMaxYears, templatePatientProfileType, templateDirty, questionEditors, isOpen, canEditTemplate, view, templateDraftStorageKey]);
 
   useEffect(() => {
-    if (!isOpen || !loadLatestTemplate) return;
+    if (!isOpen || !loadLatestTemplate || templateDirtyRef.current || Object.keys(questionEditorsRef.current).length > 0) return;
     let isActive = true;
     const loadLatest = async () => {
       try {
         const result = await dataService.getClinicAnamnesisTemplate();
-        if (!isActive || !result?.success || !result?.data) return;
+        if (!isActive || !result?.success || !result?.data || templateDirtyRef.current || Object.keys(questionEditorsRef.current).length > 0) return;
         const latest = normalizeAnamnesisTemplate(result.data);
-        setTemplateState(latest);
+        setTemplateState((prev) => ({
+          ...latest,
+          selectedTemplateId: (prev as any)?.selectedTemplateId || null,
+          templateScope: (prev as any)?.templateScope || templateScopeKey,
+          scope: (prev as any)?.scope || templateScopeKey
+        } as any));
       } catch {
         // usa template atual como fallback silencioso
       }
@@ -379,7 +446,7 @@ export const AnamnesisModal = ({
     return () => {
       isActive = false;
     };
-  }, [isOpen, loadLatestTemplate]);
+  }, [isOpen, loadLatestTemplate, templateScopeKey]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -481,9 +548,11 @@ export const AnamnesisModal = ({
   };
 
   const updateTemplateProfile = (updater: (profile: typeof profileTemplate) => typeof profileTemplate) => {
-    setTemplateDirty(true);
+    markTemplateDirty(true);
     setTemplateState((prev) => {
-      const copy = normalizeAnamnesisTemplate(prev);
+      // Não normalizar a cada tecla: normalização substitui string vazia por fallback
+      // e tornava impossível apagar completamente o título de uma seção.
+      const copy = JSON.parse(JSON.stringify(prev)) as AnamnesisTemplate;
       copy.profiles[profileType] = updater(copy.profiles[profileType]);
       return copy;
     });
@@ -493,7 +562,7 @@ export const AnamnesisModal = ({
     updateTemplateProfile((profile) => ({
       ...profile,
       sections: profile.sections.map((section) =>
-        section.id === sectionId ? { ...section, title: title.trim() || section.title } : section
+        section.id === sectionId ? { ...section, title } : section
       )
     }));
   };
@@ -534,19 +603,72 @@ export const AnamnesisModal = ({
     }));
   };
 
-  const startQuestionEdit = (question: AnamnesisQuestion) => {
-    setEditingQuestionId(question.id);
-    setDraftQuestion({
-      id: question.id,
-      label: question.label,
-      type: question.type,
-      optionsText: (question.options || []).join(', '),
-      required: question.required
+  const focusQuestionEditor = (sectionId: string) => {
+    if (typeof document === 'undefined') return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.getElementById(`anamnesis-question-editor-${sectionId}`)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest'
+        });
+      });
     });
   };
 
-  const saveQuestionEdit = (sectionId?: string) => {
-    if (!draftQuestion) return;
+  const startQuestionEdit = (question: AnamnesisQuestion) => {
+    const existingEditor = questionEditors[question.sectionId];
+    if (existingEditor && existingEditor.editingQuestionId !== question.id) {
+      showFeedback('info', 'Confirme ou cancele a pergunta que já está em edição nesta seção antes de abrir outra.');
+      setExpandedSections((prev) => ({ ...prev, [question.sectionId]: true }));
+      focusQuestionEditor(question.sectionId);
+      return;
+    }
+
+    setQuestionEditors((prev) => ({
+      ...prev,
+      [question.sectionId]: {
+        editingQuestionId: question.id,
+        draftQuestion: {
+          id: question.id,
+          label: question.label,
+          type: question.type,
+          optionsText: (question.options || []).join(', '),
+          required: question.required
+        }
+      }
+    }));
+    setExpandedSections((prev) => ({ ...prev, [question.sectionId]: true }));
+    focusQuestionEditor(question.sectionId);
+  };
+
+  const updateQuestionDraft = (sectionId: string, updater: (draft: QuestionDraft) => QuestionDraft) => {
+    setQuestionEditors((prev) => {
+      const editor = prev[sectionId];
+      if (!editor) return prev;
+      return {
+        ...prev,
+        [sectionId]: {
+          ...editor,
+          draftQuestion: updater(editor.draftQuestion)
+        }
+      };
+    });
+  };
+
+  const cancelQuestionEdit = (sectionId: string) => {
+    setQuestionEditors((prev) => {
+      if (!prev[sectionId]) return prev;
+      const next = { ...prev };
+      delete next[sectionId];
+      return next;
+    });
+  };
+
+  const saveQuestionEdit = (sectionId: string) => {
+    const editor = questionEditors[sectionId];
+    if (!editor) return;
+    const { draftQuestion } = editor;
+    const targetSectionId = String(sectionId || '').trim();
     const isChoiceType = draftQuestion.type === 'multipla_escolha' || draftQuestion.type === 'multipla_selecao';
     const options = isChoiceType ? normalizeOptions(draftQuestion.optionsText) : [];
 
@@ -561,6 +683,9 @@ export const AnamnesisModal = ({
 
     updateTemplateProfile((profile) => {
       const exists = profile.questions.some((question) => question.id === draftQuestion.id);
+      if (!exists && !profile.sections.some((section) => section.id === targetSectionId)) {
+        return profile;
+      }
       if (exists) {
         return {
           ...profile,
@@ -578,14 +703,16 @@ export const AnamnesisModal = ({
         };
       }
 
-      const nextOrder = Math.max(0, ...profile.questions.filter((question) => question.sectionId === sectionId).map((question) => question.order)) + 1;
+      const nextOrder = Math.max(0, ...profile.questions.filter((question) => question.sectionId === targetSectionId).map((question) => question.order)) + 1;
       return {
         ...profile,
+        // Adição é estritamente aditiva: nenhuma pergunta de outra seção é filtrada,
+        // substituída ou reconstruída quando uma nova pergunta é confirmada.
         questions: [
           ...profile.questions,
           {
             id: draftQuestion.id,
-            sectionId: sectionId || 'personalizadas',
+            sectionId: targetSectionId,
             label: draftQuestion.label.trim(),
             type: draftQuestion.type,
             options: options.length ? options : undefined,
@@ -597,32 +724,55 @@ export const AnamnesisModal = ({
       };
     });
 
-    setEditingQuestionId(null);
-    setDraftQuestion(null);
-    setEditorSectionId(null);
+    cancelQuestionEdit(sectionId);
   };
 
   const startAddQuestion = (sectionId: string) => {
-    setEditingQuestionId('new');
-    setDraftQuestion({
-      id: generateQuestionId(),
-      label: '',
-      type: 'dissertativa',
-      optionsText: '',
-      required: false
-    });
-    setEditorSectionId(sectionId);
+    const existingEditor = questionEditors[sectionId];
+    if (existingEditor) {
+      showFeedback('info', 'Já existe uma pergunta em edição nesta seção. Confirme ou cancele antes de adicionar outra.');
+      setExpandedSections((prev) => ({ ...prev, [sectionId]: true }));
+      focusQuestionEditor(sectionId);
+      return;
+    }
+
+    setQuestionEditors((prev) => ({
+      ...prev,
+      [sectionId]: {
+        editingQuestionId: 'new',
+        draftQuestion: {
+          id: generateQuestionId(),
+          label: '',
+          type: 'dissertativa',
+          optionsText: '',
+          required: false
+        }
+      }
+    }));
     setExpandedSections((prev) => ({ ...prev, [sectionId]: true }));
+    focusQuestionEditor(sectionId);
   };
 
   const saveTemplate = async () => {
     if (!canEditTemplate || !onTemplateSave) return;
+    if (Object.keys(questionEditors).length > 0) {
+      showFeedback('info', 'Confirme ou cancele as perguntas em edição antes de salvar a ficha.');
+      return;
+    }
     const cleanName = templateName.trim();
     if (!cleanName) {
       showFeedback('error', 'Dê um nome para a ficha antes de salvar.');
       return;
     }
+    const hasUntitledSection = (['adult', 'child'] as AnamnesisProfileType[]).some((profile) =>
+      templateState.profiles[profile].sections.some((section) => !String(section.title || '').trim())
+    );
+    if (hasUntitledSection) {
+      showFeedback('error', 'Dê um nome para todas as seções antes de salvar.');
+      return;
+    }
     setIsSavingTemplate(true);
+    const draftKeyToClear = templateDraftStorageKey;
     try {
       const normalized = {
         ...normalizeAnamnesisTemplate(templateState),
@@ -631,22 +781,21 @@ export const AnamnesisModal = ({
         ageMinMonths: yearsInputToMonths(templateAgeMinYears),
         ageMaxMonths: yearsInputToMonths(templateAgeMaxYears, true),
         patientProfileType: templatePatientProfileType || null,
-        selectedTemplateId: (templateState as any)?.selectedTemplateId || (template as any)?.selectedTemplateId || null
+        selectedTemplateId: (templateState as any)?.selectedTemplateId || null
       };
       const savedTemplate = await onTemplateSave(normalized);
       const nextTemplate = savedTemplate || normalized;
-      setTemplateState({
-        ...normalizeAnamnesisTemplate(nextTemplate),
+      applyTemplateToEditor({
+        ...nextTemplate,
         selectedTemplateId: (nextTemplate as any)?.selectedTemplateId || (normalized as any).selectedTemplateId || null,
         templateName: (nextTemplate as any)?.templateName || cleanName,
         templateDescription: (nextTemplate as any)?.templateDescription || templateDescription.trim(),
         ageMinMonths: (nextTemplate as any)?.ageMinMonths ?? (normalized as any).ageMinMonths,
         ageMaxMonths: (nextTemplate as any)?.ageMaxMonths ?? (normalized as any).ageMaxMonths,
         patientProfileType: (nextTemplate as any)?.patientProfileType || templatePatientProfileType || null
-      } as any);
-      setTemplateDirty(false);
+      }, true);
       try {
-        localStorage.removeItem(templateDraftStorageKey);
+        localStorage.removeItem(draftKeyToClear);
       } catch {
         // noop
       }
@@ -663,13 +812,26 @@ export const AnamnesisModal = ({
       showFeedback('error', `Limite de ${maxSavedTemplates} fichas salvas atingido. Remova uma ficha para criar outra.`);
       return;
     }
-    setTemplateState(createBlankAnamnesisTemplate());
+    if (templateDirtyRef.current && !confirm('Há alterações não salvas na ficha atual. Deseja descartá-las e criar uma nova ficha?')) return;
+    try {
+      localStorage.removeItem(templateDraftStorageKey);
+    } catch {
+      // noop
+    }
+    const blank = {
+      ...createBlankAnamnesisTemplate(),
+      selectedTemplateId: null,
+      templateScope: templateScopeKey,
+      scope: templateScopeKey
+    } as any;
+    setTemplateState(blank);
+    setTemplateEditorIdentity('new');
     setTemplateName(`${templateManagerLabel} ${Math.min(savedTemplates.length + 1, maxSavedTemplates)}`);
     setTemplateDescription('');
     setTemplateAgeMinYears('');
     setTemplateAgeMaxYears('');
     setTemplatePatientProfileType('');
-    setTemplateDirty(true);
+    markTemplateDirty(true);
     setView('template');
     setExpandedSections({ personalizadas: true });
     showFeedback('info', 'Ficha em branco criada. Adicione seções/perguntas e salve para persistir.');
@@ -683,20 +845,42 @@ export const AnamnesisModal = ({
       if (!result?.success || !result?.data) {
         throw new Error(result?.error || 'Falha ao buscar o template padrão.');
       }
-      setTemplateState(normalizeAnamnesisTemplate(result.data));
-      setTemplateDirty(false);
-      try {
-        localStorage.removeItem(templateDraftStorageKey);
-      } catch {
-        // noop
-      }
+      const selectedTemplateId = (templateState as any)?.selectedTemplateId || null;
+      setTemplateState({
+        ...normalizeAnamnesisTemplate(result.data),
+        selectedTemplateId,
+        templateScope: templateScopeKey,
+        scope: templateScopeKey
+      } as any);
+      markTemplateDirty(true);
+      showFeedback('info', 'Ficha original restaurada no editor. Clique em Salvar mudanças para persistir.');
     } catch (error: any) {
       showFeedback('error', error?.message || 'Não foi possível restaurar o template padrão.');
     }
   };
 
+  const handleSavedTemplateSelect = (item: any) => {
+    const nextId = String(item?.id || item?.selectedTemplateId || '').trim();
+    const currentId = String((templateState as any)?.selectedTemplateId || '').trim();
+    if (nextId && nextId === currentId) return;
+    if (templateDirtyRef.current && !confirm('Há alterações não salvas na ficha atual. Deseja descartá-las e abrir outra ficha?')) return;
+    try {
+      localStorage.removeItem(templateDraftStorageKey);
+    } catch {
+      // noop
+    }
+    applyTemplateToEditor(item, true);
+    const nextProfile = getProfileTemplate(normalizeAnamnesisTemplate(item), profileType);
+    setExpandedSections(nextProfile.sections.reduce((acc, section) => {
+      acc[section.id] = true;
+      return acc;
+    }, {} as Record<string, boolean>));
+    setQuestionEditors({});
+    onTemplateSelect?.(item);
+  };
+
   const handleCloseModal = () => {
-    if (canEditTemplate && view === 'template' && templateDirty) {
+    if (canEditTemplate && view === 'template' && (templateDirty || Object.keys(questionEditors).length > 0)) {
       const shouldLeave = confirm('Existem mudanças não salvas na ficha de anamnese. Deseja sair sem salvar?');
       if (!shouldLeave) return;
     }
@@ -752,13 +936,13 @@ export const AnamnesisModal = ({
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {savedTemplates.map((item) => {
                     const itemId = String(item?.id || item?.selectedTemplateId || '');
-                    const currentId = String((templateState as any)?.selectedTemplateId || (template as any)?.selectedTemplateId || '');
+                    const currentId = String((templateState as any)?.selectedTemplateId || '');
                     const isActive = itemId && itemId === currentId;
                     return (
                       <button
                         type="button"
                         key={itemId || item?.name}
-                        onClick={() => onTemplateSelect?.(item)}
+                        onClick={() => handleSavedTemplateSelect(item)}
                         className={`min-w-[210px] rounded-xl border px-3 py-2 text-left text-sm transition-all ${
                           isActive ? 'border-[#7a32fc] bg-white text-[#7a32fc] shadow-sm' : 'border-slate-200 bg-white text-slate-700 hover:border-[#7a32fc]/40'
                         }`}
@@ -782,7 +966,7 @@ export const AnamnesisModal = ({
                     value={templateName}
                     onChange={(event) => {
                       setTemplateName(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     maxLength={80}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
@@ -797,7 +981,7 @@ export const AnamnesisModal = ({
                     value={templateAgeMinYears}
                     onChange={(event) => {
                       setTemplateAgeMinYears(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
                     placeholder="0"
@@ -811,7 +995,7 @@ export const AnamnesisModal = ({
                     value={templateAgeMaxYears}
                     onChange={(event) => {
                       setTemplateAgeMaxYears(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
                     placeholder="Sem limite"
@@ -823,7 +1007,7 @@ export const AnamnesisModal = ({
                     value={templatePatientProfileType}
                     onChange={(event) => {
                       setTemplatePatientProfileType(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
                   >
@@ -840,7 +1024,7 @@ export const AnamnesisModal = ({
                     value={templateDescription}
                     onChange={(event) => {
                       setTemplateDescription(event.target.value);
-                      setTemplateDirty(true);
+                      markTemplateDirty(true);
                     }}
                     maxLength={240}
                     className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-[#7a32fc]/20"
@@ -916,12 +1100,15 @@ export const AnamnesisModal = ({
                 </button>
               </div>
               {profileTemplate.sections
+                .slice()
                 .sort((a, b) => a.order - b.order)
                 .map((section) => {
                   const sectionQuestions = profileTemplate.questions
                     .filter((question) => question.sectionId === section.id)
                     .sort((a, b) => a.order - b.order);
                   const expanded = expandedSections[section.id] ?? true;
+                  const questionEditor = questionEditors[section.id];
+                  const draftQuestion = questionEditor?.draftQuestion || null;
                   return (
                     <div key={section.id} className="rounded-2xl border border-slate-200">
                       <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-50 rounded-t-2xl">
@@ -986,28 +1173,24 @@ export const AnamnesisModal = ({
                             </div>
                           ))}
 
-                          {editingQuestionId && draftQuestion && (editorSectionId === section.id || sectionQuestions.some((q) => q.id === editingQuestionId)) && (
-                            <div className="rounded-xl border border-[#7a32fc]/30 bg-[#7a32fc]/5 p-3 space-y-2">
-                              <h4 className="font-semibold text-slate-800">Editar pergunta</h4>
+                          {questionEditor && draftQuestion && (
+                            <div id={`anamnesis-question-editor-${section.id}`} className="rounded-xl border border-[#7a32fc]/30 bg-[#7a32fc]/5 p-3 space-y-2">
+                              <h4 className="font-semibold text-slate-800">{questionEditor.editingQuestionId === 'new' ? 'Nova pergunta' : 'Editar pergunta'}</h4>
                               <input
                                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
                                 placeholder="Texto da pergunta"
                                 value={draftQuestion.label}
-                                onChange={(event) => setDraftQuestion((prev) => (prev ? { ...prev, label: event.target.value } : prev))}
+                                onChange={(event) => updateQuestionDraft(section.id, (prev) => ({ ...prev, label: event.target.value }))}
                               />
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <select
                                   className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
                                   value={draftQuestion.type}
                                   onChange={(event) =>
-                                    setDraftQuestion((prev) =>
-                                      prev
-                                        ? {
-                                            ...prev,
-                                            type: event.target.value as AnamnesisQuestionType
-                                          }
-                                        : prev
-                                    )
+                                    updateQuestionDraft(section.id, (prev) => ({
+                                      ...prev,
+                                      type: event.target.value as AnamnesisQuestionType
+                                    }))
                                   }
                                 >
                                   {Object.keys(QUESTION_TYPE_LABEL).map((questionType) => (
@@ -1020,7 +1203,7 @@ export const AnamnesisModal = ({
                                   <input
                                     type="checkbox"
                                     checked={draftQuestion.required}
-                                    onChange={(event) => setDraftQuestion((prev) => (prev ? { ...prev, required: event.target.checked } : prev))}
+                                    onChange={(event) => updateQuestionDraft(section.id, (prev) => ({ ...prev, required: event.target.checked }))}
                                   />
                                   Obrigatória
                                 </label>
@@ -1031,7 +1214,7 @@ export const AnamnesisModal = ({
                                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-none bg-white text-slate-900"
                                   placeholder="Opções separadas por vírgula"
                                   value={draftQuestion.optionsText}
-                                  onChange={(event) => setDraftQuestion((prev) => (prev ? { ...prev, optionsText: event.target.value } : prev))}
+                                  onChange={(event) => updateQuestionDraft(section.id, (prev) => ({ ...prev, optionsText: event.target.value }))}
                                 />
                               )}
                               <div className="flex items-center gap-2">
@@ -1044,9 +1227,7 @@ export const AnamnesisModal = ({
                                 <button
                                   className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600"
                                   onClick={() => {
-                                    setEditingQuestionId(null);
-                                    setDraftQuestion(null);
-                                    setEditorSectionId(null);
+                                    cancelQuestionEdit(section.id);
                                   }}
                                 >
                                   Cancelar

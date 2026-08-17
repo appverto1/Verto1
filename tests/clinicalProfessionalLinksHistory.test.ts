@@ -780,7 +780,8 @@ const usersBatchSource = getLinksSource.slice(
 assert.match(usersBatchSource, /\.select\(usersSelect\)/);
 assert.doesNotMatch(usersBatchSource, /\.eq\('clinic_id'/);
 assert.doesNotMatch(usersBatchSource, /\.eq\('role'/);
-assert.match(getLinksSource, /const usersSelect = 'id,name,email,profile_picture,profile_picture_path'/);
+assert.match(getLinksSource, /const usersSelect = 'id,name,email,profile_picture'/);
+assert.doesNotMatch(getLinksSource, /profile_picture_path/);
 assert.match(getLinksSource, /canInspectInconsistentLinks/);
 assert.match(getLinksSource, /stage,/);
 assert.match(getLinksSource, /table,/);

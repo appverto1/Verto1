@@ -22,11 +22,12 @@ import {
 } from '../constants/organizationModules';
 import { dataService } from '../services/dataService';
 
-const ROLE_LABELS: Record<Exclude<ClinicBaseRole, 'patient'>, string> = {
+type CanonicalClinicRole = Exclude<ClinicBaseRole, 'supervisor'>;
+
+const ROLE_LABELS: Record<CanonicalClinicRole, string> = {
   director: 'Diretor',
   coordinator: 'Coordenador',
-  supervisor: 'Supervisor',
-  therapist: 'Terapeuta',
+  therapist: 'Profissional',
   receptionist: 'Recepção',
   biller: 'Faturista',
 };
@@ -51,7 +52,7 @@ const DOMAIN_LABELS: Record<string, string> = {
   portal: 'Portal',
 };
 
-const ROLES = Object.keys(ROLE_LABELS) as Array<Exclude<ClinicBaseRole, 'patient'>>;
+const ROLES = Object.keys(ROLE_LABELS) as CanonicalClinicRole[];
 
 const normalizeSearch = (value: string) =>
   value

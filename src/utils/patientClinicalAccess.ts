@@ -14,6 +14,7 @@ type PatientClinicalAccessMembership = {
   clinic_id?: unknown;
   role?: unknown;
   status?: unknown;
+  can_supervise?: unknown;
 } | null;
 
 type PatientClinicalAccessProfile = {
@@ -92,15 +93,26 @@ export function evaluatePatientClinicalAccess(params: {
     return true;
   }
 
-  // Supervisor scope is explicit. A supervisor may reach the patient only
-  // when a current supervision relationship resolves to this exact case.
+  // Supervision is a contextual capability of a professional. The legacy
+  // supervisor role remains accepted only so older memberships do not lose
+  // access before they are migrated.
+  const professionalMembershipRole = cleanText(
+    params.activeProfessionalMembership?.role,
+  ).toLowerCase();
+  const canSupervise =
+    professionalMembershipRole === 'supervisor'
+    || (
+      professionalMembershipRole === 'therapist'
+      && params.activeProfessionalMembership?.can_supervise === true
+    );
   if (
     isActiveMembershipFor(
       params.activeProfessionalMembership,
       actorId,
       patientClinicId,
-      ['supervisor'],
+      ['supervisor', 'therapist'],
     )
+    && canSupervise
   ) {
     const supervision = params.activeSupervisionLink;
     if (
@@ -127,7 +139,7 @@ export function evaluatePatientClinicalAccess(params: {
   const membership = params.activeProfessionalMembership;
   const profile = params.activeProfessionalProfile;
   return Boolean(
-    isActiveMembershipFor(membership, actorId, patientClinicId, ['therapist']) &&
+    isActiveMembershipFor(membership, actorId, patientClinicId, ['therapist', 'supervisor']) &&
       profile &&
       cleanText(profile.user_id) === actorId &&
       cleanText(profile.specialty).length >= 2 &&

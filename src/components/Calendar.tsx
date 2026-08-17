@@ -1429,6 +1429,7 @@ export const ClinicalAgendaBoard = ({
   rooms = [],
   teamMembers = [],
   currentUser = null,
+  capabilities = null,
   currentDate,
   view = 'month',
   onDateChange,
@@ -1448,6 +1449,11 @@ export const ClinicalAgendaBoard = ({
 }: any) => {
   const isDark = theme === 'dark';
   const activeDate = currentDate instanceof Date ? currentDate : new Date(currentDate || Date.now());
+  const canViewAbaSessionReport = capabilities instanceof Set
+    ? capabilities.has('aba.analytics.view')
+    : Array.isArray(capabilities)
+      ? capabilities.includes('aba.analytics.view')
+      : false;
   const [selectedTherapistIds, setSelectedTherapistIds] = useState<string[]>([]);
   const [selectedPatientIds, setSelectedPatientIds] = useState<string[]>([]);
   const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
@@ -4921,10 +4927,22 @@ export const ClinicalAgendaBoard = ({
                 <Zap size={16} />
                 Ver plano sugerido
               </button>
-              <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'report' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
-                <FileText size={16} />
-                Ver relatório
-              </button>
+              {(!detailLinkedAbaSessionId || canViewAbaSessionReport) && (
+                <button
+                  type="button"
+                  onClick={() => onOpenPatient?.(
+                    detailEvent.patientId,
+                    detailLinkedAbaSessionId
+                      ? { tab: 'history', sessionReportId: detailLinkedAbaSessionId }
+                      : { tab: 'report' },
+                    detailEvent.patientName
+                  )}
+                  className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}
+                >
+                  <FileText size={16} />
+                  {detailLinkedAbaSessionId ? 'Relatório da sessão' : 'Ver relatório'}
+                </button>
+              )}
               <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'history' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
                 <BarChart3 size={16} />
                 Ver gráficos
@@ -4947,7 +4965,7 @@ export const ClinicalAgendaBoard = ({
 
             {detailEvent.has_session_record && !detailCancellationState.isCancelled && (
               <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
-                Sessão registrada. Use os botões acima para abrir relatório e gráficos.
+                {canViewAbaSessionReport ? 'Sessão registrada. Use os botões acima para abrir relatório e gráficos.' : 'Sessão registrada.'}
               </div>
             )}
 

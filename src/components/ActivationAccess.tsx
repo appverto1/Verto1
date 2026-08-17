@@ -38,6 +38,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [email, setEmail] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
   const [recoveryToken, setRecoveryToken] = useState('');
+  const [invitationActivationToken, setInvitationActivationToken] = useState('');
   useLayoutEffect(() => {
     if (typeof window === 'undefined') return;
     const recoveryUrlState = extractPasswordRecoveryUrlState(window.location.href);
@@ -49,6 +50,23 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         window.history.state,
         document.title,
         recoveryUrlState.sanitizedRelativeUrl,
+      );
+    }
+
+    const currentUrl = new URL(window.location.href);
+    const hashParams = new URLSearchParams(currentUrl.hash.replace(/^#/, ''));
+    const inviteToken = String(
+      currentUrl.searchParams.get('invite_token') || hashParams.get('invite_token') || '',
+    ).trim();
+    if (inviteToken && inviteToken.length <= 4096) {
+      setInvitationActivationToken(inviteToken);
+      currentUrl.searchParams.delete('invite_token');
+      hashParams.delete('invite_token');
+      currentUrl.hash = hashParams.toString();
+      window.history.replaceState(
+        window.history.state,
+        document.title,
+        `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
       );
     }
   }, []);
@@ -441,6 +459,55 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
           throw new Error(loginRes?.error || 'Senha redefinida, mas nao foi possivel concluir o login.');
         }
         setMessage('Senha redefinida com sucesso. Redirecionando...');
+        return;
+      }
+      if (invitationActivationToken) {
+        const passwordValidationError = validateRecoveryPassword(newPassword);
+        if (passwordValidationError) {
+          throw new Error(passwordValidationError);
+        }
+        const invitedEmail = String(identifiedEmail || email).trim().toLowerCase();
+        if (!invitedEmail || !invitationId) {
+          throw new Error('Não foi possível identificar o convite. Abra novamente pelo e-mail.');
+        }
+
+        const response = await fetch('/api/auth/invitation/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            token: invitationActivationToken,
+            newPassword,
+          }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result?.success) {
+          throw new Error(
+            result?.message ||
+              result?.error ||
+              'Não foi possível concluir a ativação deste convite.',
+          );
+        }
+
+        const loginEmail = String(result?.loginEmail || invitedEmail).trim().toLowerCase();
+        const loginInvitationId = String(result?.invitationId || invitationId).trim();
+        const loginRes = await onLogin(
+          null,
+          intendedRole,
+          { email: loginEmail, password: newPassword },
+          {
+            provider: 'email',
+            activationFlow: true,
+            passwordSetupCompleted: true,
+            activationEmail: loginEmail,
+            invitationId: loginInvitationId || null,
+          },
+        );
+        if (!loginRes?.success) {
+          throw new Error(loginRes?.error || 'Senha definida, mas não foi possível concluir o login.');
+        }
+        setInvitationActivationToken('');
+        setMessage('Senha definida com sucesso. Redirecionando...');
         return;
       }
       const supabase = await getSupabase();

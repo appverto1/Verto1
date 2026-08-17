@@ -43,6 +43,8 @@ import {
   formatTherapeuticPlanDate,
   groupTherapeuticRecommendations,
   masteryCriterionLabel,
+  isTherapeuticMasteryCriteriaCompatible,
+  therapeuticMeasurementDefaultMasteryMeasure,
   normalizeTherapeuticPrograms,
   normalizeTherapeuticProgramStatus,
   recommendationHasTrustedProgramOrigin,
@@ -84,6 +86,28 @@ const CUSTOM_MASTERY_MEASURES = [
   ['latency_seconds', 'Latência em segundos'],
   ['steps_percent', 'Etapas concluídas (%)'],
 ] as const;
+
+
+const masteryPresetCriteriaForCompatibility = (preset: string) => {
+  if (preset === 'accuracy_80_3') return { type: 'accuracy_sessions', minAccuracyPercent: 80, requiredSessions: 3 };
+  if (preset === 'accuracy_90_2') return { type: 'accuracy_sessions', minAccuracyPercent: 90, requiredSessions: 2 };
+  if (preset === 'independent_5') return { type: 'independent_trials', requiredIndependentCorrectTrials: 5 };
+  if (preset === 'all_steps') return { type: 'steps_independent', minAccuracyPercent: 100, requiredSessions: 1 };
+  return null;
+};
+
+const isMasteryPresetCompatibleWithMeasurement = (measurementType: string, preset: string) => {
+  if (preset === 'custom') return true;
+  return isTherapeuticMasteryCriteriaCompatible(measurementType, masteryPresetCriteriaForCompatibility(preset));
+};
+
+const defaultCustomMasteryValue = (measurementType: string) => {
+  if (measurementType === 'duration') return '30';
+  if (measurementType === 'latency') return '5';
+  if (measurementType === 'frequency') return '1';
+  if (measurementType === 'task_analysis') return '100';
+  return '80';
+};
 
 const QUICK_SUGGESTIONS = [
   {
@@ -931,6 +955,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     if (!form.objective.trim()) return 'Informe o objetivo terapêutico.';
     if (!editingProgramId && form.targets.length === 0) return 'Adicione pelo menos um alvo inicial.';
     if (!form.measurementType) return 'Escolha como as respostas serão registradas.';
+    if (!isTherapeuticMasteryCriteriaCompatible(form.measurementType, buildMasteryCriteria(form))) {
+      return 'O critério de domínio não é compatível com a forma de registro escolhida. Ajuste o critério para a mesma medida coletada na sessão.';
+    }
     if (form.masteryPreset === 'custom' && (!form.customMeasure || !form.customOperator)) return 'Complete a medida e o operador do critério personalizado.';
     if (form.masteryPreset === 'custom' && (!Number.isFinite(Number(form.customValue)) || Number(form.customValue) < 0)) return 'Informe um valor válido para o critério personalizado.';
     if (form.masteryPreset === 'custom' && (!Number.isFinite(Number(form.customSessions)) || Number(form.customSessions) < 1)) return 'Informe uma quantidade válida de sessões.';
@@ -1727,12 +1754,26 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
             {editingProgramId && <p className={`mt-2 text-xs ${muted}`}>Alvos já usados em sessões permanecem protegidos. Os novos serão incluídos ao salvar, sem apagar progresso.</p>}
           </div>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <label className={`text-xs ${muted}`}>Como registrar<select className={`${field} mt-1.5`} value={form.measurementType} onChange={(event) => setForm((current) => ({ ...current, measurementType: event.target.value }))}>{THERAPEUTIC_MEASUREMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-            <label className={`text-xs ${muted}`}>Critério de domínio<select className={`${field} mt-1.5`} value={form.masteryPreset} onChange={(event) => setForm((current) => ({ ...current, masteryPreset: event.target.value }))}>{MASTERY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            <label className={`text-xs ${muted}`}>Como registrar<select className={`${field} mt-1.5`} value={form.measurementType} onChange={(event) => {
+              const measurementType = event.target.value;
+              setForm((current) => {
+                const next = { ...current, measurementType };
+                if (isTherapeuticMasteryCriteriaCompatible(measurementType, buildMasteryCriteria(next))) return next;
+                return {
+                  ...next,
+                  masteryPreset: 'custom',
+                  customMeasure: therapeuticMeasurementDefaultMasteryMeasure(measurementType),
+                  customValue: defaultCustomMasteryValue(measurementType),
+                  customSessions: current.customSessions || '3',
+                };
+              });
+            }}>{THERAPEUTIC_MEASUREMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            <label className={`text-xs ${muted}`}>Critério de domínio<select className={`${field} mt-1.5`} value={form.masteryPreset} onChange={(event) => setForm((current) => ({ ...current, masteryPreset: event.target.value }))}>{MASTERY_OPTIONS.map((option) => <option key={option.value} value={option.value} disabled={!isMasteryPresetCompatibleWithMeasurement(form.measurementType, option.value)}>{option.label}</option>)}</select></label>
             <div className={`rounded-xl border p-3 md:col-span-2 ${isDark ? 'border-slate-700 bg-slate-900/45' : 'border-slate-200 bg-slate-50'}`}><p className={`text-xs ${muted}`}>Durante a sessão, o aplicador verá:</p><div className="mt-2 flex flex-wrap gap-2">{measurementPreview.map((label) => <span key={label} className={`rounded-lg border px-3 py-2 text-xs ${isDark ? 'border-slate-600 bg-slate-800 text-slate-200' : 'border-slate-200 bg-white text-slate-700'}`}>{label}</span>)}</div></div>
+            {!isTherapeuticMasteryCriteriaCompatible(form.measurementType, buildMasteryCriteria(form)) && <div className={`rounded-xl border p-3 text-xs md:col-span-2 ${isDark ? 'border-amber-700/50 bg-amber-950/30 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>O critério atual mede outra variável. A sessão só poderá considerar domínio quando o critério usar a mesma medida configurada em “Como registrar”.</div>}
           </div>
           {form.masteryPreset === 'custom' && <div className={`grid grid-cols-1 gap-3 rounded-2xl border p-4 sm:grid-cols-2 ${subpanel}`} data-testid="custom-mastery-fields">
-            <label className={`text-xs ${muted}`}>Medida<select className={`${field} mt-1.5`} value={form.customMeasure} onChange={(event) => setForm((current) => ({ ...current, customMeasure: event.target.value }))}>{CUSTOM_MASTERY_MEASURES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className={`text-xs ${muted}`}>Medida<select className={`${field} mt-1.5`} value={form.customMeasure} onChange={(event) => setForm((current) => ({ ...current, customMeasure: event.target.value }))}>{CUSTOM_MASTERY_MEASURES.map(([value, label]) => <option key={value} value={value} disabled={!isTherapeuticMasteryCriteriaCompatible(form.measurementType, { type: 'custom_measure', measure: value, value: Number(form.customValue) || 0 })}>{label}</option>)}</select></label>
             <label className={`text-xs ${muted}`}>Operador<select className={`${field} mt-1.5`} value={form.customOperator} onChange={(event) => setForm((current) => ({ ...current, customOperator: event.target.value }))}><option value="gte">Maior ou igual a</option><option value="gt">Maior que</option><option value="eq">Igual a</option><option value="lte">Menor ou igual a</option></select></label>
             <label className={`text-xs ${muted}`}>Valor<input type="number" min="0" step="0.01" className={`${field} mt-1.5`} value={form.customValue} onChange={(event) => setForm((current) => ({ ...current, customValue: event.target.value }))} /></label>
             <label className={`text-xs ${muted}`}>Quantidade de sessões<input type="number" min="1" max="30" className={`${field} mt-1.5`} value={form.customSessions} onChange={(event) => setForm((current) => ({ ...current, customSessions: event.target.value }))} /></label>

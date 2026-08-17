@@ -80,6 +80,44 @@ assert.equal(
 assert.equal(
   evaluatePatientClinicalAccess({
     ...base,
+    actorRole: 'therapist',
+    activeProfessionalMembership: {
+      ...membership('therapist'),
+      can_supervise: true,
+    },
+    activeSupervisionLink: {
+      clinic_id: clinicId,
+      supervisor_user_id: actorId,
+      patient_id: patientId,
+      status: 'active',
+    },
+  }),
+  true,
+  'profissional habilitado acessa apenas o caso explicitamente supervisionado',
+);
+
+assert.equal(
+  evaluatePatientClinicalAccess({
+    ...base,
+    actorRole: 'therapist',
+    activeProfessionalMembership: {
+      ...membership('therapist'),
+      can_supervise: false,
+    },
+    activeSupervisionLink: {
+      clinic_id: clinicId,
+      supervisor_user_id: actorId,
+      patient_id: patientId,
+      status: 'active',
+    },
+  }),
+  false,
+  'marcação de profissional sem can_supervise não deve aceitar um vínculo de supervisão injetado',
+);
+
+assert.equal(
+  evaluatePatientClinicalAccess({
+    ...base,
     actorRole: 'biller',
     activeProfessionalMembership: membership('biller'),
   }),

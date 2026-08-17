@@ -22,8 +22,56 @@ const therapistWithBilling = resolveEffectiveClinicCapabilities('therapist', [
 ]);
 assert.equal(
   therapistWithBilling?.capabilities.has('billing.xml.generate'),
+  false,
+  'override não pode romper o teto estrutural do escopo do profissional',
+);
+
+const therapistSupervisor = resolveEffectiveClinicCapabilities('therapist', [], { canSupervise: true });
+assert.equal(therapistSupervisor?.capabilities.has('session.start'), true);
+assert.equal(therapistSupervisor?.capabilities.has('calendar.team.view'), true);
+assert.equal(therapistSupervisor?.capabilities.has('treatment_plan.approve'), true);
+
+const coordinatorInvite = resolveEffectiveClinicCapabilities('coordinator');
+assert.equal(
+  coordinatorInvite?.capabilities.has('team.invite'),
   true,
-  'grant explícito adiciona capability operacional sem trocar papel base',
+  'coordenador pode convidar profissionais dentro da própria unidade',
+);
+
+const receptionistInviteOverride = resolveEffectiveClinicCapabilities('receptionist', [
+  { permission_key: 'team.invite', effect: 'allow' },
+]);
+assert.equal(
+  receptionistInviteOverride?.capabilities.has('team.invite'),
+  false,
+  'papéis operacionais não podem recuperar convite por override antigo',
+);
+
+
+const coordinatorMulticlinicOverride = resolveEffectiveClinicCapabilities('coordinator', [
+  { permission_key: 'workspace.multiclinic.analytics', effect: 'allow' },
+]);
+assert.equal(
+  coordinatorMulticlinicOverride?.capabilities.has('workspace.multiclinic.analytics'),
+  false,
+  'coordenador permanece limitado à unidade mesmo diante de override histórico',
+);
+
+const receptionistArchiveOverride = resolveEffectiveClinicCapabilities('receptionist', [
+  { permission_key: 'patient.archive', effect: 'allow' },
+]);
+assert.equal(
+  receptionistArchiveOverride?.capabilities.has('patient.archive'),
+  false,
+  'recepção não pode receber operação destrutiva de paciente por override',
+);
+const receptionistClinicalOverride = resolveEffectiveClinicCapabilities('receptionist', [
+  { permission_key: 'clinical.record.view', effect: 'allow' },
+]);
+assert.equal(
+  receptionistClinicalOverride?.capabilities.has('clinical.record.view'),
+  false,
+  'recepção nunca recebe prontuário clínico por override',
 );
 
 const therapistWithInvalidOverride = resolveEffectiveClinicCapabilities('therapist', [

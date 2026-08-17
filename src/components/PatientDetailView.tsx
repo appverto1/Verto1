@@ -22,7 +22,7 @@ import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
 import { abaMasteryCriterionSourceLabel, formatAbaMasteryCriterion, normalizeAbaMasteryCriterion } from '../utils/abaMasteryEngine';
-import { isAbaV2Enabled } from '../utils/featureFlags';
+import { isAbaV2Enabled, isAbaV3UiEnabled } from '../utils/featureFlags';
 import { filterHumanDisplayEntries, formatSessionLabel, safeDisplayValue } from '../utils/displayLabels';
 import { normalizePatientInsuranceEligibility } from '../utils/patientInsuranceEligibility';
 import {
@@ -95,6 +95,29 @@ type PatientHistoryPaginationState = {
 };
 
 const PATIENT_HISTORY_PAGE_SIZE = 40;
+const PATIENT_FILE_MAX_SIZE_BYTES = 10 * 1024 * 1024;
+const PATIENT_FILE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
+
+const formatPatientFileStorageBytes = (value: number) => {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+  if (bytes >= 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${Math.round(bytes)} B`;
+};
+
+const resolvePatientFileStorageUsage = (value: any) => {
+  const usedBytes = Math.max(0, Number(value?.usedBytes ?? value?.used_bytes ?? 0) || 0);
+  const limitBytes = Math.max(
+    PATIENT_FILE_STORAGE_LIMIT_BYTES,
+    Number(value?.limitBytes ?? value?.limit_bytes ?? PATIENT_FILE_STORAGE_LIMIT_BYTES) || PATIENT_FILE_STORAGE_LIMIT_BYTES
+  );
+  return {
+    usedBytes,
+    limitBytes,
+    remainingBytes: Math.max(0, Number(value?.remainingBytes ?? value?.remaining_bytes ?? (limitBytes - usedBytes)) || 0)
+  };
+};
 
 const resolvePatientHistoryRange = (period: PatientHistoryPeriod, customFrom: string, customTo: string) => {
   if (period === 'all') return { from: '', to: '', ready: true };
@@ -149,7 +172,7 @@ const patientInitials = (value: unknown) => String(value || 'P')
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const hasCapability = (capability: string) => {
@@ -370,6 +393,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12)
     ));
   const abaV2Enabled = isAbaV2Enabled();
+  const abaV3UiEnabled = isAbaV3UiEnabled();
   const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
   const readPersistedChartFilters = () => {
     if (typeof window === 'undefined') return {};
@@ -473,6 +497,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const peiMaintenancePanelPatientIdRef = React.useRef(String(patient?.id || ''));
   const peiConfirmationTimerRef = React.useRef<number | null>(null);
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
+  const [localSessionReportId, setLocalSessionReportId] = useState('');
+  const [completedSessionReports, setCompletedSessionReports] = useState<any[]>([]);
+  const [completedSessionReportsLoading, setCompletedSessionReportsLoading] = useState(false);
+  const [completedSessionReportsError, setCompletedSessionReportsError] = useState('');
+  const completedSessionReportsLoadedForRef = React.useRef('');
   const [sessionPatientOverride, setSessionPatientOverride] = useState<any>(null);
   const [isUnlinkingModalOpen, setIsUnlinkingModalOpen] = useState(false);
   const [approvedVertoProtocolStatuses, setApprovedVertoProtocolStatuses] = useState<any[]>([]);
@@ -489,6 +518,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         '',
     ).trim()
   );
+  const [isSavingPrimaryProfessional, setIsSavingPrimaryProfessional] = useState(false);
+  const [primaryProfessionalError, setPrimaryProfessionalError] = useState('');
+  const [caseTeamRefreshKey, setCaseTeamRefreshKey] = useState(0);
+  const primaryProfessionalOverrideRef = React.useRef<string | null | undefined>(undefined);
 
   const historyRange = useMemo(
     () => resolvePatientHistoryRange(historyPeriod, historyCustomFrom, historyCustomTo),
@@ -695,6 +728,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   useEffect(() => {
+    primaryProfessionalOverrideRef.current = undefined;
     setSelectedTherapistId(resolvePatientProfessionalId(patient));
   }, [
     patient?.therapist_id,
@@ -781,6 +815,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ageMinMonths: template?.ageMinMonths ?? template?.age_min_months ?? null,
       ageMaxMonths: template?.ageMaxMonths ?? template?.age_max_months ?? null,
       patientProfileType: template?.patientProfileType || template?.patient_profile_type || "",
+      templateScope: String(template?.templateScope || template?.scope || "").trim().toLowerCase(),
+      templateRevision: Math.max(1, Number(template?.templateRevision || template?.revision || 1)),
       recommended: Boolean(template?.recommended) || Boolean(id && selectedId && id === selectedId)
     };
   };
@@ -1108,19 +1144,53 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [canManageCaseTeam, canManageTherapistAssignment, patient?.id]);
 
   const handleTherapistAssignmentChange = async (nextTherapistId: string) => {
-    if (!onUpdatePatient) return;
+    const patientId = String(patient?.id || '').trim();
+    if (!patientId || isSavingPrimaryProfessional) return;
     const normalized = String(nextTherapistId || '').trim();
     const nextValue = isUuidLike(normalized) ? normalized : null;
+    const previousValue = selectedTherapistId;
+    const previousOverride = primaryProfessionalOverrideRef.current;
     setSelectedTherapistId(nextValue || '');
-    onUpdatePatient({
-      ...patient,
-      therapist_id: nextValue,
-      therapistId: nextValue,
-      professional_id: nextValue,
-      professionalId: nextValue,
-      responsible_professional_id: nextValue,
-      responsibleProfessionalId: nextValue
-    });
+    setPrimaryProfessionalError('');
+    setIsSavingPrimaryProfessional(true);
+    try {
+      const result = await dataService.setPatientPrimaryProfessional(patientId, nextValue);
+      if (!result?.success) {
+        throw new Error(result?.message || result?.error || 'Não foi possível atualizar o profissional responsável.');
+      }
+      primaryProfessionalOverrideRef.current = nextValue;
+      setCaseTeamRefreshKey((current) => current + 1);
+    } catch (error: any) {
+      primaryProfessionalOverrideRef.current = previousOverride;
+      setSelectedTherapistId(previousValue);
+      setPrimaryProfessionalError(
+        String(error?.message || 'Não foi possível atualizar o profissional responsável.'),
+      );
+    } finally {
+      setIsSavingPrimaryProfessional(false);
+    }
+  };
+
+  const handleCaseTeamLinksChanged = (links: any[]) => {
+    const primaryLink = (Array.isArray(links) ? links : []).find((link: any) =>
+      String(link?.status || '').toLowerCase() === 'active'
+      && String(link?.relationship_type || '').toLowerCase() === 'primary'
+    );
+    if (primaryLink?.professional_id) {
+      primaryProfessionalOverrideRef.current = undefined;
+      setSelectedTherapistId(String(primaryLink.professional_id));
+      return;
+    }
+    if (isSavingPrimaryProfessional) return;
+    if (primaryProfessionalOverrideRef.current === null) {
+      setSelectedTherapistId('');
+      return;
+    }
+    if (typeof primaryProfessionalOverrideRef.current === 'string') {
+      setSelectedTherapistId(primaryProfessionalOverrideRef.current);
+      return;
+    }
+    setSelectedTherapistId(resolvePatientProfessionalId(patient));
   };
 
   const buildInitialAvatarDataUrl = (name?: string) => {
@@ -1140,6 +1210,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       id: String(file?.id || Date.now()),
       name: safeName,
       size: String(file?.size || (file?.sizeBytes ? `${Math.max(1, Math.round(Number(file.sizeBytes) / 1024))} KB` : '')),
+      sizeBytes: Math.max(0, Number(file?.sizeBytes ?? file?.file_size_bytes ?? 0) || 0),
       date: String(file?.date || (file?.createdAt ? new Date(file.createdAt).toLocaleDateString('pt-BR') : new Date().toLocaleDateString('pt-BR'))),
       type: safeType,
       source: file?.source || 'upload',
@@ -1180,6 +1251,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const [patientFiles, setPatientFiles] = useState<any[]>([]);
+  const [patientFileStorageUsage, setPatientFileStorageUsage] = useState(() =>
+    resolvePatientFileStorageUsage(null)
+  );
+  const syncPatientFileStorageUsage = (value: any, fallbackDeltaBytes = 0) => {
+    if (value && typeof value === 'object') {
+      setPatientFileStorageUsage(resolvePatientFileStorageUsage(value));
+      return;
+    }
+    if (!fallbackDeltaBytes) return;
+    setPatientFileStorageUsage((current) =>
+      resolvePatientFileStorageUsage({
+        usedBytes: Math.max(0, current.usedBytes + fallbackDeltaBytes),
+        limitBytes: current.limitBytes
+      })
+    );
+  };
+  const patientFileStorageIsFull = patientFileStorageUsage.usedBytes >= patientFileStorageUsage.limitBytes;
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [patientFilesLoadError, setPatientFilesLoadError] = useState<string | null>(null);
   const [patientFilesReloadKey, setPatientFilesReloadKey] = useState(0);
@@ -1188,9 +1276,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const patientFilesRequestInFlightRef = React.useRef('');
   const [previewFile, setPreviewFile] = useState<any>(null);
 
-  const openPatientFilePreview = (file: any) => {
-    const objectUrl = resolveFileViewUrl(file);
-    setPreviewFile(objectUrl ? { ...file, objectUrl } : file);
+  const openPatientFilePreview = async (file: any) => {
+    const patientId = String(patient?.id || '').trim();
+    const fileId = String(file?.id || '').trim();
+    let resolvedFile = file;
+    if (patientId && fileId) {
+      const accessResult = await dataService.accessPatientFile(patientId, fileId, 'view');
+      if (!accessResult?.success || !accessResult?.data) {
+        alert(accessResult?.error || 'Não foi possível abrir este arquivo com auditoria.');
+        return;
+      }
+      resolvedFile = normalizeFileRecord(accessResult.data);
+    }
+    const objectUrl = resolveFileViewUrl(resolvedFile);
+    setPreviewFile(objectUrl ? { ...resolvedFile, objectUrl } : resolvedFile);
   };
 
   useEffect(() => () => {
@@ -1207,6 +1306,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     patientFilesPatientIdRef.current = patientId;
     patientFilesLoadedForRef.current = '';
     setPatientFiles([]);
+    setPatientFileStorageUsage(resolvePatientFileStorageUsage(null));
     setPreviewFile(null);
     setIsLoadingFiles(false);
     setPatientFilesLoadError(null);
@@ -1230,7 +1330,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         const result = await dataService.getPatientFiles(patientId);
         if (patientFilesPatientIdRef.current !== patientId) return;
         if (result?.success && Array.isArray(result?.data)) {
-          setPatientFiles(result.data.map(normalizeFileRecord));
+          const normalizedFiles = result.data.map(normalizeFileRecord);
+          setPatientFiles(normalizedFiles);
+          if (result?.storageUsage) {
+            setPatientFileStorageUsage(resolvePatientFileStorageUsage(result.storageUsage));
+          } else {
+            const visibleUsedBytes = normalizedFiles.reduce(
+              (total: number, file: any) => total + Math.max(0, Number(file?.sizeBytes || 0) || 0),
+              0
+            );
+            setPatientFileStorageUsage(resolvePatientFileStorageUsage({ usedBytes: visibleUsedBytes }));
+          }
           loaded = true;
           return;
         }
@@ -1390,6 +1500,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     peiMaintenancePanelRequestSeqRef.current += 1;
     setGeneratedReviewNotes([]);
     setSessionPatientOverride(null);
+    setLocalSessionReportId('');
+    setCompletedSessionReports([]);
+    setCompletedSessionReportsError('');
+    setCompletedSessionReportsLoading(false);
+    completedSessionReportsLoadedForRef.current = '';
     setRestoreSessionData(false);
     setClearMaintenanceOnSessionRestore(false);
     setActivePeiPlanSubtab('teaching');
@@ -1418,6 +1533,61 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
     return patient;
   }, [patient, sessionPatientOverride]);
+
+  const requestedSessionReportId = String(sessionReportId || localSessionReportId || '').trim();
+
+  useEffect(() => {
+    const externalReportId = String(sessionReportId || '').trim();
+    if (!externalReportId) return;
+    setLocalSessionReportId('');
+    setIsSessionModeOpen(true);
+  }, [patient?.id, sessionReportId]);
+
+  useEffect(() => {
+    const patientId = String(patient?.id || '').trim();
+    if (!patientId || !isKidsProfile || !(abaV2Enabled || abaV3UiEnabled) || activeTab !== 'history') return;
+    if (completedSessionReportsLoadedForRef.current === patientId) return;
+    let cancelled = false;
+    setCompletedSessionReportsLoading(true);
+    setCompletedSessionReportsError('');
+    dataService.getAbaSessions(patientId, { page: 1, pageSize: 10 })
+      .then((result: any) => {
+        if (cancelled) return;
+        if (result?.success === false || !Array.isArray(result?.data)) {
+          setCompletedSessionReportsError(result?.error || 'Não foi possível carregar as sessões finalizadas.');
+          return;
+        }
+        const completed = result.data
+          .filter((session: any) => ['completed', 'concluida', 'concluída'].includes(String(session?.status || '').trim().toLowerCase()))
+          .sort((left: any, right: any) => new Date(right?.ended_at || right?.actual_end_at || right?.updated_at || 0).getTime() - new Date(left?.ended_at || left?.actual_end_at || left?.updated_at || 0).getTime());
+        setCompletedSessionReports(completed);
+        completedSessionReportsLoadedForRef.current = patientId;
+      })
+      .catch(() => {
+        if (!cancelled) setCompletedSessionReportsError('Não foi possível carregar as sessões finalizadas.');
+      })
+      .finally(() => {
+        if (!cancelled) setCompletedSessionReportsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, abaV2Enabled, abaV3UiEnabled, isKidsProfile, patient?.id]);
+
+  const openCompletedSessionReport = (sessionId: any) => {
+    const nextSessionId = String(sessionId || '').trim();
+    if (!nextSessionId) return;
+    setLocalSessionReportId(nextSessionId);
+    setIsSessionModeOpen(true);
+  };
+
+  const closeSessionMode = () => {
+    setIsSessionModeOpen(false);
+    if (requestedSessionReportId) {
+      setLocalSessionReportId('');
+      onSessionReportConsumed?.();
+    }
+  };
 
   useEffect(() => {
     const patientId = String(patient?.id || '');
@@ -3533,6 +3703,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replace(/Â/g, ''),
   ).trim();
 
+  const isTherapeuticProgramMeasurementTrial = (trial: any) => {
+    const raw = trial?.raw_payload || trial?.rawPayload || {};
+    return raw?.therapeuticMeasurement === true || raw?.therapeutic_measurement === true || String(raw?.source || '').trim() === 'therapeutic_program_measurement';
+  };
+
   const formatAbaDateTime = (value: any) => {
     const date = new Date(value || 0);
     if (Number.isNaN(date.getTime())) return 'Sem data';
@@ -3606,7 +3781,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const collectionType = String(trial?.collection_type || trial?.collectionType || 'dtt').toLowerCase();
       const score = trial?.response_score ?? trial?.responseScore ?? trial?.score;
       const maxScore = trial?.max_score ?? trial?.maxScore;
-      const prompt = resolveAbaPromptLevel({
+      const rawPayload = trial?.raw_payload || trial?.rawPayload || {};
+      const therapeuticMeasurement = isTherapeuticProgramMeasurementTrial(trial);
+      const therapeuticMeasurementType = String(rawPayload?.measurementType || rawPayload?.measurement_type || '').trim().toLowerCase();
+      const therapeuticMeasurementValue = Number(rawPayload?.measurementValue ?? rawPayload?.measurement_value);
+      const therapeuticDisplayLabel = String(rawPayload?.displayLabel || rawPayload?.display_label || '').trim();
+      const prompt = therapeuticMeasurement ? '' : resolveAbaPromptLevel({
         promptLevelKey: trial?.prompt_level_key || trial?.promptLevelKey,
         promptLevelName: trial?.prompt_level_name || trial?.promptLevelName,
         score,
@@ -3617,19 +3797,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const title = normalizeNoteText(safeDisplayValue(trial?.target_name || trial?.targetName || trial?.title, 'Meta sem nome'));
       const sessionId = String(trial?.session_id || trial?.sessionId || '').trim();
       const occurredAt = trial?.occurred_at || trial?.occurredAt || trial?.created_at || trial?.createdAt;
+      const therapeuticDetail = therapeuticDisplayLabel || (Number.isFinite(therapeuticMeasurementValue)
+        ? therapeuticMeasurementType === 'duration' || therapeuticMeasurementType === 'latency'
+          ? `${therapeuticMeasurementType === 'duration' ? 'Duração' : 'Latência'} ${Math.round(therapeuticMeasurementValue * 100) / 100}s`
+          : therapeuticMeasurementType === 'percentage' || therapeuticMeasurementType === 'task_analysis'
+            ? `${Math.round(therapeuticMeasurementValue * 100) / 100}%`
+            : therapeuticMeasurementType === 'frequency'
+              ? `Frequência +${Math.round(therapeuticMeasurementValue * 100) / 100}`
+              : therapeuticMeasurementType === 'correct_incorrect'
+                ? (therapeuticMeasurementValue > 0 ? 'Acerto' : 'Erro')
+                : String(therapeuticMeasurementValue)
+        : 'Medida registrada');
       return {
         id: `trial-${String(trial?.id || `${title}-${occurredAt}`)}`,
         kind: 'trial',
         tableName: 'aba_trials',
-        sourceLabel: 'Tentativa ABA',
+        sourceLabel: therapeuticMeasurement ? 'Medida terapêutica' : 'Tentativa ABA',
         sessionId,
         occurredAt,
         title,
-        label: abaCollectionTypeLabels[collectionType] || collectionType.toUpperCase(),
-        detail: `Pontuacao ${score ?? '-'}${maxScore !== null && maxScore !== undefined ? `/${maxScore}` : ''} - ${prompt}`,
+        label: therapeuticMeasurement ? (therapeuticMeasurementType === 'duration' ? 'Duração' : therapeuticMeasurementType === 'latency' ? 'Latência' : therapeuticMeasurementType === 'frequency' ? 'Frequência' : therapeuticMeasurementType === 'correct_incorrect' ? 'Acerto / Erro' : therapeuticMeasurementType === 'task_analysis' ? 'Etapas' : therapeuticMeasurementType === 'percentage' ? 'Percentual' : 'Medida') : (abaCollectionTypeLabels[collectionType] || collectionType.toUpperCase()),
+        detail: therapeuticMeasurement ? therapeuticDetail : `Pontuacao ${score ?? '-'}${maxScore !== null && maxScore !== undefined ? `/${maxScore}` : ''} - ${prompt}`,
         note: normalizeNoteText(trial?.notes || trial?.note || ''),
         meta: trial,
-        searchText: `${title} ${collectionType} ${prompt} ${trial?.domain_name || trial?.domainName || ''} ${trial?.protocol_title || trial?.protocolTitle || ''}`.toLowerCase()
+        searchText: `${title} ${collectionType} ${therapeuticMeasurementType} ${therapeuticDetail} ${prompt} ${trial?.domain_name || trial?.domainName || ''} ${trial?.protocol_title || trial?.protocolTitle || ''}`.toLowerCase()
       };
     });
 
@@ -3743,7 +3934,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const summary = abaPatientSummary || {};
     return {
       totalSessions: Number(summary.total_sessions ?? summary.totalSessions ?? abaSessionOptions.length) || 0,
-      totalTrials: Number(summary.total_trials ?? summary.totalTrials ?? abaTrials.length) || 0,
+      totalTrials: Number(summary.total_trials ?? summary.totalTrials ?? (Array.isArray(abaTrials) ? abaTrials.filter((trial: any) => !isTherapeuticProgramMeasurementTrial(trial)).length : 0)) || 0,
       totalBehaviorEvents: Number(summary.total_behavior_events ?? summary.totalBehaviorEvents ?? abaBehaviorEvents.length) || 0,
       masteredTargets: Number(summary.mastered_targets_count ?? summary.masteredTargetsCount ?? abaMasteryEvaluations.length) || 0,
       maintenanceTargets: Number(summary.maintenance_targets_count ?? summary.maintenanceTargetsCount ?? abaMaintenanceOverview?.summary?.maintenance_targets_count ?? abaMaintenanceOverview?.summary?.maintenanceTargetsCount ?? (Array.isArray(abaMaintenanceOverview?.schedules) ? new Set(abaMaintenanceOverview.schedules.map((item: any) => String(item?.target_id || item?.targetId || ''))).size : 0)) || 0,
@@ -5403,6 +5594,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
+    e.target.value = '';
+    const fileSizeBytes = Math.max(0, Number(file.size || 0) || 0);
+    if (fileSizeBytes <= 0 || fileSizeBytes > PATIENT_FILE_MAX_SIZE_BYTES) {
+      alert('O arquivo deve ter no máximo 10 MB.');
+      return;
+    }
+    const imageWillBeCompressed =
+      String(file.type || '').toLowerCase().startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(String(file.name || ''));
+    if (!imageWillBeCompressed && patientFileStorageUsage.usedBytes + fileSizeBytes > patientFileStorageUsage.limitBytes) {
+      alert('Este arquivo ultrapassaria o limite total de 1 GB do Drive deste paciente. Remova arquivos antes de continuar.');
+      return;
+    }
     setIsUploadingFile(true);
     setUploadProgress(0);
     setUploadProgress(25);
@@ -5421,9 +5624,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const normalizedName = hasExtension
         ? String(file.name)
         : `${String(file.name || `arquivo_${Date.now()}`).replace(/\.+$/g, '')}${fallbackExtension}`;
-      const fileBuffer = await file.arrayBuffer();
-      const fileBlob = new Blob([fileBuffer], { type: mimeType });
-      setUploadProgress(80);
+      const fileBlob: Blob = file;
 
       const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
         fileName: normalizedName,
@@ -5432,6 +5633,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         source: 'upload',
         metadata: {
           patientName: patient?.name || null
+        },
+        onProgress: (percent: number) => {
+          setUploadProgress(Math.max(25, Math.min(95, percent)));
         }
       });
       if (!uploadResult?.success || !uploadResult?.data) {
@@ -5440,10 +5644,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const newFile = normalizeFileRecord(uploadResult.data);
 
       setPatientFiles((prev) => [newFile, ...prev]);
+      syncPatientFileStorageUsage(uploadResult?.storageUsage, newFile.sizeBytes || fileSizeBytes);
       setUploadProgress(100);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Falha ao salvar arquivo do paciente:', error);
-      alert('Não foi possível salvar o arquivo. Tente novamente.');
+      const uploadMessage = String(error?.message || error || '').trim();
+      alert(uploadMessage ? `Não foi possível salvar o arquivo. ${uploadMessage}` : 'Não foi possível salvar o arquivo. Tente novamente.');
     } finally {
       setTimeout(() => {
         setIsUploadingFile(false);
@@ -5510,6 +5716,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const removeFile = async (id: any) => {
       if (confirm("Deseja remover este arquivo?")) {
+          const existingFile = patientFiles.find((file: any) => String(file.id) === String(id));
           const removeResult = await dataService.deletePatientFile(String(patient.id), String(id));
           if (!removeResult?.success) {
             alert(removeResult?.warning || removeResult?.error || 'Não foi possível excluir o arquivo.');
@@ -5517,6 +5724,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           }
           const nextFiles = patientFiles.filter((f: any) => String(f.id) !== String(id));
           setPatientFiles(nextFiles);
+          syncPatientFileStorageUsage(
+            removeResult?.storageUsage,
+            -Math.max(0, Number(existingFile?.sizeBytes || 0) || 0)
+          );
       }
   };
 
@@ -5602,15 +5813,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         });
         if (!uploadResult?.success || !uploadResult?.data) {
           uploadErrorMessage = uploadResult?.warning || uploadResult?.error || 'Falha ao salvar a ficha em Arquivos.';
-          uploadResult = {
-            success: true,
-            data: await buildInlineFallbackFile(pdfBlob, documentHtml),
-            warning: uploadErrorMessage
-          };
+          if (uploadResult?.code === 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED') {
+            uploadResult = {
+              success: false,
+              code: uploadResult.code,
+              error: uploadErrorMessage,
+              storageUsage: uploadResult?.storageUsage
+            };
+          } else {
+            uploadResult = {
+              success: true,
+              data: await buildInlineFallbackFile(pdfBlob, documentHtml),
+              warning: uploadErrorMessage
+            };
+          }
         }
       } catch (uploadError: any) {
         uploadErrorMessage = uploadError?.message || String(uploadError);
-        if (generatedPdfBlob) {
+        if (uploadError?.code === 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED') {
+          uploadResult = {
+            success: false,
+            code: uploadError.code,
+            error: uploadErrorMessage,
+            storageUsage: uploadError?.storageUsage
+          };
+        } else if (generatedPdfBlob) {
           uploadResult = {
             success: true,
             data: await buildInlineFallbackFile(generatedPdfBlob, pendingAnamnesisPayload),
@@ -5632,11 +5859,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           throw new Error(submissionResult?.error || 'Falha ao registrar a submissão da anamnese.');
         }
         if (uploadResult?.success && uploadResult?.data) {
-          setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
+          const savedFile = normalizeFileRecord(uploadResult.data);
+          setPatientFiles((prev) => [savedFile, ...prev]);
+          syncPatientFileStorageUsage(uploadResult?.storageUsage, savedFile.sizeBytes || 0);
+        } else if (uploadResult?.storageUsage) {
+          syncPatientFileStorageUsage(uploadResult.storageUsage);
         }
+        const anamnesisFileSaved = Boolean(uploadResult?.success && uploadResult?.data);
+        const anamnesisFileBlockedByQuota = uploadResult?.code === 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED';
         await onAddActivityLog(
           'Ficha de Anamnese Salva',
-          `Ficha de anamnese de ${patient?.name || 'paciente'} salva em Arquivos${anamnesisFileDate ? ` com referência em ${new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString('pt-BR')}` : ''}.`,
+          anamnesisFileSaved
+            ? `Ficha de anamnese de ${patient?.name || 'paciente'} salva em Arquivos${anamnesisFileDate ? ` com referência em ${new Date(`${anamnesisFileDate}T00:00:00`).toLocaleDateString('pt-BR')}` : ''}.`
+            : anamnesisFileBlockedByQuota
+              ? `Ficha de anamnese de ${patient?.name || 'paciente'} salva no prontuário; o arquivo não foi anexado ao Drive por limite de armazenamento.`
+              : `Ficha de anamnese de ${patient?.name || 'paciente'} salva no prontuário; o arquivo não pôde ser anexado ao Drive.`,
           'clinical'
         );
         setShowAnamnesisFileModal(false);
@@ -5645,7 +5882,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setIsPreparingAnamnesisSave(false);
         setActiveTab(uploadResult?.success ? "files" : "history");
         if (uploadErrorMessage && !uploadResult?.success) {
-          alert('Anamnese salva no banco de dados. Falha apenas no arquivo em Arquivos; você pode tentar novamente depois.');
+          alert(
+            uploadResult?.code === 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED'
+              ? `${uploadErrorMessage} A anamnese foi salva no prontuário, mas o arquivo não foi anexado ao Drive.`
+              : 'Anamnese salva no banco de dados. Falha apenas no arquivo em Arquivos; você pode tentar novamente depois.'
+          );
         }
       } catch (error) {
         console.error('Falha ao persistir ficha de anamnese em arquivos:', error);
@@ -5658,13 +5899,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     void persist();
   };
 
-  const handleDownloadPatientFile = (file: any) => {
-    const content = typeof file?.content === 'string' ? file.content : '';
+  const handleDownloadPatientFile = async (file: any) => {
+    const patientId = String(patient?.id || '').trim();
+    const fileId = String(file?.id || '').trim();
+    let resolvedFile = file;
+    if (patientId && fileId) {
+      const accessResult = await dataService.accessPatientFile(patientId, fileId, 'download');
+      if (!accessResult?.success || !accessResult?.data) {
+        alert(accessResult?.error || 'Não foi possível baixar este arquivo com auditoria.');
+        return;
+      }
+      resolvedFile = normalizeFileRecord(accessResult.data);
+    }
+
+    const content = typeof resolvedFile?.content === 'string' ? resolvedFile.content : '';
     if (content.startsWith('data:application/pdf')) {
       const href = createObjectUrlFromDataUrl(content, 'application/pdf');
       const a = document.createElement("a");
       a.href = href;
-      a.download = file.name || "arquivo.pdf";
+      a.download = resolvedFile.name || "arquivo.pdf";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -5676,16 +5929,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
 
-    if (file?.source === "anamnesis" && file?.content) {
-      openPrintWindowForPdf(file.content);
+    if (resolvedFile?.source === "anamnesis" && resolvedFile?.content) {
+      openPrintWindowForPdf(resolvedFile.content);
       return;
     }
 
-    const href = file.objectUrl || file.url;
+    const href = resolvedFile.objectUrl || resolvedFile.url;
     if (href) {
       const a = document.createElement("a");
       a.href = href;
-      a.download = file.name || "arquivo";
+      a.download = resolvedFile.name || "arquivo";
       a.target = "_blank";
       a.rel = "noopener noreferrer";
       document.body.appendChild(a);
@@ -5695,11 +5948,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
 
     if (content) {
-      const blob = new Blob([content], { type: file.type || "application/json" });
+      const blob = new Blob([content], { type: resolvedFile.type || "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = file.name || "arquivo.json";
+      a.download = resolvedFile.name || "arquivo.json";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -5795,7 +6048,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         throw new Error(uploadResult?.error || uploadResult?.warning || 'Falha ao salvar PDF do relatório.');
       }
 
-      setPatientFiles((prev) => [normalizeFileRecord(uploadResult.data), ...prev]);
+      const savedReportFile = normalizeFileRecord(uploadResult.data);
+      setPatientFiles((prev) => [savedReportFile, ...prev]);
+      syncPatientFileStorageUsage(uploadResult?.storageUsage, savedReportFile.sizeBytes || pdfBlob.size || 0);
       onAddActivityLog?.(
         'Relatório adulto gerado',
         `Relatório de evolução adulto de ${patient?.name || 'paciente'} gerado e salvo em Arquivos.`,
@@ -5804,7 +6059,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       alert('Relatório de evolução adulto gerado e salvo em Arquivos.');
     } catch (error: any) {
       console.error('Falha ao gerar relatório adulto:', error);
-      alert('Não foi possível gerar o relatório adulto agora.');
+      const message = String(error?.message || error || '').trim();
+      alert(message.includes('1 GB') ? message : 'Não foi possível gerar o relatório adulto agora.');
     } finally {
       setIsGeneratingAdultReport(false);
     }
@@ -6060,6 +6316,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const trials = (Array.isArray(abaTrials) ? abaTrials : [])
       .filter((trial: any) =>
         String(trial?.patient_id || trial?.patientId || '') === String(patient?.id || '') &&
+        !isTherapeuticProgramMeasurementTrial(trial) &&
         String(trial?.collection_type || trial?.collectionType || trial?.trialType || '').toLowerCase() !== 'maintenance_probe' &&
         rowMatchesGoalEvidence(trial, goal, { allowNameFallback: true }) &&
         (!goal || getStructuredTrialProgressMarker(trial) > resetMarker || !resetMarker)
@@ -8635,15 +8892,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           />
         </div>
       </div>
-      {abaV2Enabled && isSessionModeOpen && (
+      {(abaV2Enabled || abaV3UiEnabled) && isSessionModeOpen && (
         <SessionMode 
           patient={{ ...sessionModePatient, history: history.filter((h: any) => h.patientId === patient.id) }} 
-          onClose={() => setIsSessionModeOpen(false)} 
+          onClose={closeSessionMode} 
           onRecordTrial={onRecordTrial} 
           onDeleteHistoryItem={onDeleteHistoryItem}
           onUpdateHistoryItem={onEvaluateHistoryItem}
-          activeSession={activeSession}
-          remainingSeconds={remainingSessionSeconds}
+          activeSession={requestedSessionReportId
+            ? {
+                id: requestedSessionReportId,
+                status: 'completed',
+                patientId: patient?.id || null,
+                patient_id: patient?.id || null,
+                clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null,
+                clinic_id: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null
+              }
+            : activeSession}
+          reviewSessionId={requestedSessionReportId}
+          openCompletedReport={Boolean(requestedSessionReportId)}
+          remainingSeconds={requestedSessionReportId ? 0 : remainingSessionSeconds}
           formatCountdown={formatSessionCountdown}
           onConfirmEndSession={handleConfirmSessionEnd}
           onSessionSummaryPersisted={applySessionMasterySummaryToPei}
@@ -9300,6 +9568,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         <span className="min-w-0 flex-1">
                           <span className="flex flex-wrap items-center gap-2">
                             <span className="break-words text-sm font-semibold">{template.name}</span>
+                            {template.templateScope === 'personal' && (
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'bg-violet-500/10 text-violet-200' : 'bg-violet-50 text-violet-700'}`}>
+                                Minha ficha
+                              </span>
+                            )}
+                            {template.templateScope === 'clinic' && (
+                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'bg-sky-500/10 text-sky-200' : 'bg-sky-50 text-sky-700'}`}>
+                                Clínica
+                              </span>
+                            )}
                             {template.recommended && (
                               <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'bg-emerald-500/10 text-emerald-200' : 'bg-emerald-50 text-emerald-700'}`}>
                                 Recomendada
@@ -9589,7 +9867,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     }`}
                     value={selectedTherapistId}
                     onChange={(e) => handleTherapistAssignmentChange(e.target.value)}
-                    disabled={isLoadingTherapists}
+                    disabled={isLoadingTherapists || isSavingPrimaryProfessional}
                   >
                     <option value="">{isLoadingTherapists ? 'Carregando profissionais...' : 'Sem profissional responsável'}</option>
                     {clinicTherapists.map((therapist: any) => (
@@ -9598,6 +9876,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       </option>
                     ))}
                   </select>
+                  {isSavingPrimaryProfessional ? (
+                    <span className={`mt-1.5 block text-[11px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      Salvando vínculo...
+                    </span>
+                  ) : primaryProfessionalError ? (
+                    <span role="alert" className="mt-1.5 block text-[11px] leading-4 text-rose-600">
+                      {primaryProfessionalError}
+                    </span>
+                  ) : null}
                 </label>
               </section>
             )}
@@ -9608,6 +9895,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 professionals={clinicTherapists}
                 canManage={canManageCaseTeam}
                 dark={isPanelDark}
+                refreshKey={caseTeamRefreshKey}
+                onLinksChanged={handleCaseTeamLinksChanged}
               />
             ) : null}
           </div>
@@ -9933,6 +10222,44 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         dark={isPanelDark}
                       />
                     </div>
+                  )}
+                </section>
+                <section className={`space-y-3 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-white'}`} aria-labelledby="patient-session-reports-heading">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h2 id="patient-session-reports-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Relatórios de sessão</h2>
+                      <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Abra sessões finalizadas para revisar tentativas, retificações e complementos clínicos.</p>
+                    </div>
+                    {completedSessionReports.length > 0 && (
+                      <span className={`text-xs font-medium ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Últimas {completedSessionReports.length}</span>
+                    )}
+                  </div>
+                  {completedSessionReportsLoading ? (
+                    <div className={`rounded-xl border px-4 py-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-600'}`}>Carregando sessões finalizadas...</div>
+                  ) : completedSessionReportsError ? (
+                    <div className={`rounded-xl border px-4 py-3 text-sm ${isPanelDark ? 'border-amber-400/30 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>{completedSessionReportsError}</div>
+                  ) : completedSessionReports.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+                      {completedSessionReports.slice(0, 6).map((session: any) => {
+                        const endedAt = session?.ended_at || session?.actual_end_at || session?.updated_at || session?.started_at || session?.created_at;
+                        const endedDate = endedAt ? new Date(endedAt) : null;
+                        const dateLabel = endedDate && !Number.isNaN(endedDate.getTime())
+                          ? endedDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                          : 'Data não informada';
+                        const duration = Number(session?.duration_minutes ?? session?.actual_duration_minutes ?? (Number(session?.duration_seconds || 0) / 60));
+                        return (
+                          <div key={`session-report-${session.id}`} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${isPanelDark ? 'border-slate-700 bg-slate-900/70' : 'border-slate-100 bg-slate-50/70'}`}>
+                            <div className="min-w-0">
+                              <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{dateLabel}</p>
+                              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)} min` : 'Sessão finalizada'}{session?.room_name ? ` · ${session.room_name}` : ''}</p>
+                            </div>
+                            <button type="button" onClick={() => openCompletedSessionReport(session.id)} className="min-h-10 shrink-0 rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white hover:opacity-90">Abrir relatório</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className={`rounded-xl border border-dashed px-4 py-4 text-sm ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma sessão finalizada encontrada para este paciente.</div>
                   )}
                 </section>
                 <section className="space-y-4" aria-labelledby="patient-timeline-heading">
@@ -11283,7 +11610,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} />
+          <ClinicalChartsWorkspace patientId={String(patient.id)} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} showAbaV3Details={isKidsProfile && abaV3UiEnabled} />
         ) : activeTab === 'session' && isKidsProfile ? (
           null
         ) : activeTab === 'school' ? (
@@ -11298,13 +11625,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <input 
                   type="file" 
                   id="patient-file-upload" 
+                  accept=".pdf,.jpg,.jpeg,.png,.webp,.docx,application/pdf,image/jpeg,image/png,image/webp,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   className="hidden" 
                   onChange={handleFileUpload}
-                  disabled={isUploadingFile}
+                  disabled={isUploadingFile || patientFileStorageIsFull}
                 />
                 <label 
                   htmlFor="patient-file-upload" 
-                  className={`w-full py-10 border-2 border-dashed rounded-[24px] flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${isUploadingFile ? (isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-gray-50 border-gray-200') : (isPanelDark ? 'bg-slate-900/60 border-slate-700 hover:border-[#7a32fc] hover:bg-slate-900' : 'bg-blue-50/30 border-blue-200 hover:border-[#7a32fc] hover:bg-blue-50')}`}
+                  className={`w-full py-10 border-2 border-dashed rounded-[24px] flex flex-col items-center justify-center transition-all duration-300 ${patientFileStorageIsFull ? 'cursor-not-allowed opacity-75' : 'cursor-pointer'} ${isUploadingFile || patientFileStorageIsFull ? (isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-gray-50 border-gray-200') : (isPanelDark ? 'bg-slate-900/60 border-slate-700 hover:border-[#7a32fc] hover:bg-slate-900' : 'bg-blue-50/30 border-blue-200 hover:border-[#7a32fc] hover:bg-blue-50')}`}
                 >
                   {isUploadingFile ? (
                     <div className="w-full max-w-[240px] text-center">
@@ -11318,8 +11646,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       <div className={`p-4 rounded-full mb-3 shadow-sm group-hover:rotate-6 transition-transform ${isPanelDark ? 'bg-violet-500/10 text-violet-200' : 'bg-blue-100 text-[#7a32fc]'}`}>
                         <FileUp size={32} />
                       </div>
-                      <p className={`text-base font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>Clique para selecionar ou arraste arquivos</p>
+                      <p className={`text-base font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>
+                        {patientFileStorageIsFull ? 'Limite de armazenamento atingido' : 'Clique para selecionar ou arraste arquivos'}
+                      </p>
                       <p className={`text-xs mt-1 uppercase font-medium ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>PDF, JPG, PNG, DOCX (Máx. 10MB)</p>
+                      <p className={`text-xs mt-2 ${patientFileStorageIsFull ? (isPanelDark ? 'text-red-300' : 'text-red-600') : (isPanelDark ? 'text-slate-400' : 'text-gray-500')}`}>
+                        {formatPatientFileStorageBytes(patientFileStorageUsage.usedBytes)} de 1 GB usados
+                        {patientFileStorageIsFull ? ' · remova arquivos para liberar espaço' : ''}
+                      </p>
                     </React.Fragment>
                   )}
                 </label>
@@ -11362,14 +11696,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   <div className="flex items-center gap-2">
                     <button
                       title="Visualizar"
-                      onClick={() => openPatientFilePreview(file)}
+                      onClick={() => void openPatientFilePreview(file)}
                       className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-violet-200 hover:bg-slate-800' : 'text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50'}`}
                     >
                       <Eye size={18} />
                     </button>
                     <button
                       title="Download"
-                      onClick={() => handleDownloadPatientFile(file)}
+                      onClick={() => void handleDownloadPatientFile(file)}
                       className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-violet-200 hover:bg-slate-800' : 'text-gray-400 hover:text-[#7a32fc] hover:bg-blue-50'}`}
                     >
                       <Download size={18} />

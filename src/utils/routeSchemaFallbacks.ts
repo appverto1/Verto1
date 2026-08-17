@@ -1,3 +1,5 @@
+import { resolvePatientNoteAudience } from './patientNoteVisibility';
+
 type SupabaseLike = {
   from: (table: string) => any;
   rpc?: (name: string, payload?: Record<string, unknown>) => PromiseLike<any>;
@@ -273,9 +275,11 @@ export const NOTE_SELECT_COLUMNS = [
   'id',
   'patient_id',
   'patient_email',
+  'visibility',
   'type',
   'subject',
   'content',
+  'original_id',
   'assigned_task_id',
   'source',
   'portability_scope',
@@ -284,6 +288,7 @@ export const NOTE_SELECT_COLUMNS = [
   'shared_with_professionals',
   'original_organization_id',
   'original_author_id',
+  'created_by',
   'created_at',
   'is_active',
   'deleted_at'
@@ -815,8 +820,10 @@ const NOTE_OPTIONAL_COLUMNS = new Set([
   'type',
   'visibility',
   'subject',
+  'text',
   'content',
   'note',
+  'original_id',
   'assigned_task_id',
   'source',
   'portability_scope',
@@ -826,6 +833,8 @@ const NOTE_OPTIONAL_COLUMNS = new Set([
   'original_organization_id',
   'original_author_id',
   'created_by',
+  'therapist_id',
+  'user_id',
   'created_at',
   'updated_at',
   'is_active',
@@ -1987,26 +1996,19 @@ function noteIsReadableWithoutVisibility(note: any): boolean {
 
 function normalizeNoteRowForUi(row: any): any {
   if (!row || typeof row !== 'object') return row;
-  const type = cleanString(row.type, 80);
-  const scope = cleanString(row.portability_scope, 80);
-  const visibility =
-    row.shared_with_patient === true || ['patient', 'shared', 'family', 'shared_patient'].includes(type.toLowerCase())
-      ? 'shared_patient'
-      : row.shared_with_professionals === true
-        ? 'shared_clinic'
-        : row.is_portable === true && scope
-          ? scope
-          : 'private';
+  const audience = resolvePatientNoteAudience(row);
 
   return {
     ...row,
-    note: row.note ?? row.content ?? row.subject ?? '',
+    note: row.note ?? row.content ?? row.text ?? row.subject ?? '',
     text: row.text ?? row.content ?? row.note ?? '',
-    created_by: row.created_by ?? row.original_author_id ?? null,
-    createdBy: row.createdBy ?? row.created_by ?? row.original_author_id ?? null,
+    original_id: row.original_id ?? null,
+    originalId: row.originalId ?? row.original_id ?? null,
+    created_by: row.created_by ?? row.original_author_id ?? row.therapist_id ?? row.user_id ?? null,
+    createdBy: row.createdBy ?? row.created_by ?? row.original_author_id ?? row.therapist_id ?? row.user_id ?? null,
     updated_at: row.updated_at ?? row.created_at ?? null,
     updatedAt: row.updatedAt ?? row.updated_at ?? row.created_at ?? null,
-    visibility: row.visibility ?? visibility
+    visibility: audience
   };
 }
 
@@ -2226,10 +2228,16 @@ export async function fetchPatientsWithSchemaFallback(params: {
       .from('patients')
       .select(joinColumns(columns));
 
-    if (filterIsActive) query = query.eq('is_active', true);
+    // Historical rows may have a nullable activation flag. Only an explicit
+    // false removes a patient from the main list; null keeps the row visible.
+    if (filterIsActive) query = query.or('is_active.eq.true,is_active.is.null');
     if (filterDeletedAt) query = query.is('deleted_at', null);
     if (columns.includes('status')) {
-      query = query.neq('status', 'ARCHIVED').neq('status', 'archived');
+      // Keep onboarding and legacy rows whose status was never populated,
+      // while excluding removed statuses case-insensitively in PostgREST.
+      query = query.or(
+        'status.is.null,and(status.not.ilike.ARCHIVED,status.not.ilike.DELETED)',
+      );
     }
 
     const clinicId = cleanString(params.clinicId, 120);

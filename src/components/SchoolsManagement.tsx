@@ -429,7 +429,7 @@ export function SchoolsManagement({
       setNotice('Este vínculo documental não possui paciente canônico para gerar acesso seguro.');
       return;
     }
-    const result = await dataService.getPatientFile(String(link.patient_id), String(link.document_id));
+    const result = await dataService.accessPatientFile(String(link.patient_id), String(link.document_id), 'view');
     const file = result?.success ? result.data : null;
     if (file?.signedUrl) window.open(file.signedUrl, '_blank', 'noopener,noreferrer');
     else setNotice('Não foi possível gerar um acesso seguro ao documento.');
