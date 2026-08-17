@@ -356,6 +356,9 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/?${redirectParams.toString()}`,
+          // Some Google Workspace tenants require the e-mail scope explicitly.
+          // The server still enforces that the authenticated e-mail matches the invite.
+          scopes: 'https://www.googleapis.com/auth/userinfo.email',
         },
       });
       if (oauthError) throw oauthError;
@@ -615,12 +618,13 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         <div className="space-y-4">
           {!isRecoveryRoute ? (
             <button
+              type="button"
               onClick={handleGoogleLogin}
               disabled={loading}
-              className="w-full h-11 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50 transition disabled:opacity-60"
+              className="w-full h-11 rounded-xl border border-slate-200 bg-white text-slate-800 font-semibold hover:bg-slate-50 transition disabled:opacity-60 flex items-center justify-center gap-3"
             >
-              <GoogleIcon size={18} />
-              Entrar com Google
+              <GoogleIcon size={18} className="shrink-0" />
+              <span>Entrar com Google</span>
             </button>
           ) : null}
 

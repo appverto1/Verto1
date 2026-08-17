@@ -101,6 +101,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/ativacao-comercial/${encodeURIComponent(token)}`,
+          scopes: 'https://www.googleapis.com/auth/userinfo.email',
         },
       });
       if (oauthError) throw oauthError;
