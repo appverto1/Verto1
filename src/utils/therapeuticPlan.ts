@@ -518,7 +518,27 @@ export const therapeuticProgramsToSessionGoals = (programs: any[]) => {
       if (!targetId || seenTargetIds.has(targetId)) return [];
       seenTargetIds.add(targetId);
       const name = safeText(target?.name || target?.target_name || target?.targetName) || 'Alvo do programa';
-      const masteryCriteria = target?.mastery_criteria || target?.masteryCriteria || program?.mastery_criteria || program?.masteryCriteria || {};
+      const targetMasteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' && !Array.isArray(target.mastery_criteria)
+        ? target.mastery_criteria
+        : target?.masteryCriteria && typeof target.masteryCriteria === 'object' && !Array.isArray(target.masteryCriteria)
+          ? target.masteryCriteria
+          : null;
+      const programMasteryCriteria = program?.mastery_criteria && typeof program.mastery_criteria === 'object' && !Array.isArray(program.mastery_criteria)
+        ? program.mastery_criteria
+        : program?.masteryCriteria && typeof program.masteryCriteria === 'object' && !Array.isArray(program.masteryCriteria)
+          ? program.masteryCriteria
+          : null;
+      const hasTargetMasteryCriteria = Boolean(targetMasteryCriteria && Object.keys(targetMasteryCriteria).length > 0);
+      const hasProgramMasteryCriteria = Boolean(programMasteryCriteria && Object.keys(programMasteryCriteria).length > 0);
+      const masteryCriteria = hasTargetMasteryCriteria
+        ? targetMasteryCriteria
+        : hasProgramMasteryCriteria
+          ? {
+              ...programMasteryCriteria,
+              source: programMasteryCriteria?.source || programMasteryCriteria?.criterionSource || programMasteryCriteria?.criterion_source || 'program_inherited',
+              sourceLabel: programMasteryCriteria?.sourceLabel || programMasteryCriteria?.source_label || 'Critério do programa',
+            }
+          : {};
       return [{
         id: targetId,
         target_id: targetId,
