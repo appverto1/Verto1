@@ -443,6 +443,11 @@ import {
   executeAuthorizedHistoryScoreMutation
 } from './src/utils/patientClinicalAccess';
 import {
+  canActorReadPatientNote,
+  resolvePatientNoteAudience,
+  resolvePatientNoteAuthorId,
+} from './src/utils/patientNoteVisibility';
+import {
   patientListColumnsForCapabilities,
   redactPatientListRowForCapabilities,
   requiredPatientLinkPermissionForMethod,
@@ -24379,6 +24384,7 @@ async function startServer() {
         return res.status(403).json({ error: 'Acesso negado a este prontuário' });
       }
       req.resolvedPatientClinicId = sanitizeString(patient.clinic_id, 120);
+      req.resolvedPatientEmail = sanitizeEmail(patient.email);
       if (globalClinicAccess) return next();
 
       const userRole = sanitizeString(
@@ -24418,6 +24424,9 @@ async function startServer() {
             userRole === 'coordinator' ||
             userRole === 'director'
           ) {
+            if (userRole === 'therapist' && sanitizeString(patient.therapist_id, 120) === userId) {
+              req.patientLegacyCaseTeamMember = true;
+            }
             return next();
           }
         } else if (
@@ -40878,9 +40887,25 @@ async function startServer() {
   };
 
   const noteIsReadableByPatient = (note: any): boolean => {
-    const visibility = sanitizeString(note?.visibility, 40).toLowerCase();
-    const legacyType = sanitizeString(note?.type, 40).toLowerCase();
-    return NOTE_VISIBILITY_ALLOWED.has(visibility) || NOTE_VISIBILITY_ALLOWED.has(legacyType);
+    return resolvePatientNoteAudience(note) === 'patient';
+  };
+
+  const filterNotesForActor = (rows: any[], req: any, roleInput?: string) => {
+    const role = sanitizeString(roleInput || req?.effectiveClinicRole || req?.session?.user?.role, 40).toLowerCase();
+    const actorId = sanitizeString(req?.session?.user?.id, 120);
+    const isPatientActor = role === 'patient' || isResponsiblePortalRole(role);
+    const isCaseTeamMember = Boolean(
+      req?.patientProfessionalLink ||
+      req?.patientSupervisionLink ||
+      req?.patientLegacyCaseTeamMember
+    );
+    return (Array.isArray(rows) ? rows : []).filter((note: any) =>
+      canActorReadPatientNote(note, {
+        actorId,
+        isPatientActor,
+        isCaseTeamMember,
+      })
+    );
   };
 
   const fetchNotesWithRoleFilter = async (params: {
@@ -41012,7 +41037,7 @@ async function startServer() {
       const notesByIdError = notesByIdResult.error;
       if (notesByIdError) throw notesByIdError;
 
-      const merged = Array.isArray(notesById) ? notesById : [];
+      const merged = filterNotesForActor(Array.isArray(notesById) ? notesById : [], req, role);
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
         .slice(0, limit);
@@ -41293,6 +41318,7 @@ async function startServer() {
       );
       const normalized = normalizeNoteMutationPayload(req.body, {
         resolvedPatientId,
+        patientEmail: sanitizeEmail(req.resolvedPatientEmail) || undefined,
         userId: sanitizeString(req.session.user?.id, 120),
         userEmail: sanitizeEmail(req.session.user?.email),
         nowIso: new Date().toISOString()
@@ -41310,6 +41336,30 @@ async function startServer() {
       const payload = normalized.payload;
       if (!isUuid(payload.patient_id)) {
         return res.status(400).json({ error: 'patient_id inválido para salvar anotações.' });
+      }
+
+      if (payload.original_id) {
+        const originalId = sanitizeString(payload.original_id, 120);
+        if (!isUuid(originalId)) {
+          return res.status(400).json({ success: false, error: 'original_id inválido.' });
+        }
+        if (resolvePatientNoteAudience(payload) === 'private') {
+          return res.status(400).json({ success: false, error: 'Uma cópia compartilhada precisa ter destinatário explícito.' });
+        }
+        const { data: sourceNote, error: sourceNoteError } = await supabase
+          .from('notes')
+          .select('id,patient_id,visibility,type,portability_scope,shared_with_patient,shared_with_professionals,original_author_id,created_by')
+          .eq('id', originalId)
+          .eq('patient_id', payload.patient_id)
+          .maybeSingle();
+        if (sourceNoteError) throw sourceNoteError;
+        if (!sourceNote?.id) {
+          return res.status(404).json({ success: false, error: 'Anotação original não encontrada para este paciente.' });
+        }
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        if (resolvePatientNoteAuthorId(sourceNote) !== actorId || resolvePatientNoteAudience(sourceNote) !== 'private') {
+          return res.status(403).json({ success: false, error: 'Somente o autor pode compartilhar uma cópia de anotação privada.' });
+        }
       }
 
       const { data, error } = await upsertNoteWithSchemaFallback(payload, {
@@ -43848,6 +43898,13 @@ async function startServer() {
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (
+        resolvePatientNoteAudience(existing) === 'private' &&
+        (!actorId || resolvePatientNoteAuthorId(existing) !== actorId)
+      ) {
+        return res.status(403).json({ success: false, error: 'Somente o autor pode editar uma anotação privada.' });
+      }
 
       const updatedVisibility =
         req.body?.visibility !== undefined
@@ -43894,7 +43951,7 @@ async function startServer() {
       if (isUuid(noteId)) {
         const result = await supabase
           .from('notes')
-          .select('id, patient_id')
+          .select('id,patient_id,visibility,type,portability_scope,shared_with_patient,shared_with_professionals,original_author_id,created_by')
           .eq('id', noteId)
           .eq('is_active', true)
           .is('deleted_at', null)
@@ -43921,6 +43978,13 @@ async function startServer() {
       if (!existing) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
       if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (
+        resolvePatientNoteAudience(existing) === 'private' &&
+        (!actorId || resolvePatientNoteAuthorId(existing) !== actorId)
+      ) {
+        return res.status(403).json({ success: false, error: 'Somente o autor pode remover uma anotação privada.' });
       }
       const { error } = await supabase
         .from('notes')

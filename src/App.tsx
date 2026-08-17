@@ -56,6 +56,7 @@ import { VERTO_BRAND_ASSETS } from './constants/vertoBranding';
 import { SALES_CONTACT_REQUIRED_ERROR } from './constants/salesCommercial';
 import { decodeClinicalTextEntities } from './utils/clinicalText';
 import { patientMatchesProfessionalFilter } from './utils/patientList';
+import { resolvePatientNoteAudience, toStoredPatientNoteVisibility } from './utils/patientNoteVisibility';
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>;
@@ -2648,22 +2649,13 @@ export default function App() {
 
   const normalizeAndDecorateNotes = (rawNotes: any[]) => {
     const normalized = (Array.isArray(rawNotes) ? rawNotes : []).map((n: any) => {
-      const rawVisibility = String(n?.visibility || '').toLowerCase();
+      const visibility = resolvePatientNoteAudience(n);
       const rawType = String(n?.type || '').toLowerCase();
-      const visibility =
-        rawVisibility ||
-        (rawType === 'professional'
-          ? 'professional'
-          : rawType === 'shared'
-            ? 'patient'
-            : rawType === 'family'
-              ? 'family'
-              : 'private');
       const fallbackType =
         rawType ||
         (visibility === 'professional'
           ? 'professional'
-          : visibility === 'patient' || visibility === 'shared' || visibility === 'family'
+          : visibility === 'patient'
             ? 'shared'
             : 'private');
       return {
@@ -4702,13 +4694,8 @@ export default function App() {
     return { success: true, pending: Boolean(persistenceResult?.pending) };
   };
   const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string) => {
-    const normalizeNoteVisibility = (raw: string) => {
-      const safe = String(raw || '').toLowerCase();
-      if (safe === 'professional' || safe === 'shared_clinic') return 'shared_clinic';
-      if (safe === 'patient' || safe === 'shared' || safe === 'family' || safe === 'shared_patient') return 'shared_patient';
-      return 'private';
-    };
-    const normalizedVisibility = normalizeNoteVisibility(visibility);
+    const normalizedVisibility = toStoredPatientNoteVisibility(visibility);
+    const uiVisibility = resolvePatientNoteAudience({ visibility: normalizedVisibility });
     const patient = allPatients.find(p => p.id === pid);
     const patientIdentity = resolvePatientIdentityForPortal({
       patientId: pid,
@@ -4721,7 +4708,7 @@ export default function App() {
       patientId: pid, 
       text: txt, 
       date: new Date().toLocaleString(), 
-      visibility: normalizedVisibility, 
+      visibility: uiVisibility, 
       subject: subject || "Geral" 
     };
     setTherapistNotes(prev => [newNote, ...prev]);

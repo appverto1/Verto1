@@ -140,6 +140,7 @@ export function clinicalPayloadKeys(input: any): string[] {
 
 export function normalizeNoteMutationPayload(input: any, context: {
   resolvedPatientId?: string | null;
+  patientEmail?: string | null;
   userId?: string | null;
   userEmail?: string | null;
   nowIso?: string;
@@ -174,7 +175,7 @@ export function normalizeNoteMutationPayload(input: any, context: {
   const payload = cleanObject({
     id: cleanString(input?.id || input?.clientRecordId || input?.localId, 120) || undefined,
     patient_id: patientId,
-    patient_email: cleanEmail(input?.patient_email || input?.patientEmail || context.userEmail),
+    patient_email: cleanEmail(context.patientEmail || input?.patient_email || input?.patientEmail),
     text,
     content: text,
     note: text,
@@ -190,12 +191,12 @@ export function normalizeNoteMutationPayload(input: any, context: {
     portability_scope: portabilityScope,
     is_portable: portabilityScope === 'PROFESSIONALS' ? markedPortable : portabilityScope === 'PATIENT',
     shared_with_patient: portabilityScope === 'PATIENT',
-    shared_with_professionals: portabilityScope === 'PROFESSIONALS' && markedPortable,
+    shared_with_professionals: portabilityScope === 'PROFESSIONALS',
     original_organization_id: cleanString(input?.original_organization_id || input?.originalOrganizationId, 120) || undefined,
-    original_author_id: cleanString(input?.original_author_id || input?.originalAuthorId || context.userId, 120) || undefined,
-    created_by: cleanString(input?.created_by || input?.createdBy || context.userId, 120),
-    therapist_id: cleanString(input?.therapist_id || input?.therapistId || context.userId, 120),
-    user_id: cleanString(input?.user_id || input?.userId || context.userId, 120),
+    original_author_id: cleanString(context.userId, 120) || undefined,
+    created_by: cleanString(context.userId, 120) || undefined,
+    therapist_id: cleanString(context.userId, 120) || undefined,
+    user_id: cleanString(context.userId, 120) || undefined,
     created_at: cleanString(input?.created_at || input?.createdAt || context.nowIso || new Date().toISOString(), 40)
   });
 
