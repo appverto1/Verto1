@@ -62,9 +62,17 @@ assert.match(
 assert.match(team, /const canGrantDirector = actorRole === 'director'/);
 assert.doesNotMatch(team, /setNewMemberRole\('supervisor'\)/);
 assert.match(team, /Habilitar como supervisor/);
+assert.match(team, /Supervisão não é um papel de convite/);
+assert.match(team, /normalizedRole === 'supervisor'\) return 'Profissional · Supervisor'/);
 assert.match(team, />Faturista</);
 assert.doesNotMatch(invitationModal, /<option value="supervisor">/);
+assert.match(invitationModal, /Supervisão é atribuída depois do vínculo/);
 assert.match(invitationModal, /<option value="biller">Faturista<\/option>/);
+assert.match(
+  server,
+  /if \(role === 'supervisor'\)[\s\S]{0,240}SUPERVISOR_IS_PROFESSIONAL_CAPABILITY/,
+  'backend deve bloquear novos convites de Supervisor mesmo para clientes antigos/cacheados',
+);
 assert.match(supervisionMigration, /add column if not exists can_supervise boolean not null default false/);
 assert.match(supervisionMigration, /set_clinic_member_supervision_eligibility_v1/);
 assert.match(supervisionMigration, /for update/);

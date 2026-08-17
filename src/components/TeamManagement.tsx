@@ -1563,6 +1563,9 @@ export function TeamManagement({
 
               <div>
                 <label className="mb-2 block text-xs font-medium text-slate-600">Papel e nível de acesso</label>
+                <p className="mb-3 text-xs leading-5 text-slate-500">
+                  Supervisão não é um papel de convite. Convide a pessoa como Profissional e habilite a função de supervisor depois que ela entrar na equipe.
+                </p>
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                   {canGrantDirector && (
                     <button

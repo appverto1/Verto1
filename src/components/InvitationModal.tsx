@@ -186,6 +186,10 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
                   {canGrantAdministrativeRoles && <option value="biller">Faturista</option>}
                 </select>
 
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  Supervisão é atribuída depois do vínculo. Convide a pessoa como Profissional e, após ela entrar na equipe, habilite a função de supervisor no cadastro.
+                </p>
+
                 {role === 'therapist' && (
                   <div className="mt-3 rounded-2xl border border-blue-100 bg-blue-50/40 p-3">
                     <label
