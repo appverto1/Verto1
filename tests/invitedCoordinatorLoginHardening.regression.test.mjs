@@ -31,12 +31,12 @@ assert.match(
 
 assert.match(
   loginRoute,
-  /finalRole === "coordinator"[\s\S]*?!invitationPendingAcceptance[\s\S]*?sanitizeString\(clinicId, 120\) === sanitizeString\(user\.id, 120\)/,
+  /\['director', 'coordinator'\]\.includes\(finalRole\)[\s\S]*?!invitationPendingAcceptance[\s\S]*?sanitizeString\(clinicId, 120\) === sanitizeString\(user\.id, 120\)/,
   'convite de coordenador não pode provisionar uma clínica própria',
 );
 assert.match(
   loginRoute,
-  /const shouldEnsureOwnedCoordinatorWorkspace =[\s\S]*?profile\.role === 'coordinator'[\s\S]*?!requestedClinicInvitation[\s\S]*?profile\.clinic_id[\s\S]*?user\.id/,
+  /const shouldEnsureOwnedCoordinatorWorkspace =[\s\S]*?\['director', 'coordinator'\]\.includes\(profile\.role\)[\s\S]*?!requestedClinicInvitation[\s\S]*?profile\.clinic_id[\s\S]*?user\.id/,
   'compatibilidade legada deve ficar restrita ao workspace próprio e fora do fluxo de convite',
 );
 assert.doesNotMatch(

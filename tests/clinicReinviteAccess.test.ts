@@ -76,10 +76,10 @@ assert.match(dataService, /async acceptInvitation\(invitationId: string\)/);
 
 // Conta existente reutiliza Auth e não recebe nova senha/UUID.
 assert.match(inviteRoute, /const reusedExistingAuthAccess = Boolean\(authUserHadVerifiedEmail\)/);
-assert.match(inviteRoute, /inviteMode: 'new'/);
-assert.match(inviteRoute, /const activationLink = reusedExistingAuthAccess[\s\S]*?\? activationEntryUrl/);
+assert.match(activationUrl, /inviteMode: 'new'/);
+assert.match(inviteRoute, /const activationLink = reusedExistingAuthAccess[\s\S]*?getClinicInvitationAcceptanceUrl\(data\?\.id\)[\s\S]*?: getClinicInvitationActivationUrl/);
 assert.match(inviteRoute, /getClinicInvitationAcceptanceUrl\(data\?\.id\)/);
-assert.match(inviteRoute, /invitation_id: data\?\.id/);
+assert.match(inviteRoute, /invitationId: data\?\.id/);
 assert.match(inviteRoute, /updateUserById\(/);
 assert.match(inviteRoute, /pendingInvitationPredatesUnlink/);
 assert.match(inviteRoute, /invitationCreatedAt <= membershipUnlinkedAt/);

@@ -7,7 +7,8 @@ const anamnesis = fs.readFileSync('src/components/Anamnesis.tsx', 'utf8');
 const therapeuticLibrary = fs.readFileSync('src/components/TherapeuticProgramLibrary.tsx', 'utf8');
 const protocols = fs.readFileSync('src/components/Protocols.tsx', 'utf8');
 
-assert.match(settings, /Configurações profissionais/);
+assert.match(settings, /Perfil profissional/);
+assert.match(settings, /Meu perfil profissional/);
 assert.match(settings, /Cadastro e credenciais profissionais/);
 assert.match(settings, /Disponibilidade nesta clínica/);
 assert.match(settings, /getMemberWorkSchedule\(memberId\)/);
@@ -17,9 +18,10 @@ assert.match(settings, /Minha biblioteca terapêutica/);
 assert.match(settings, /font-normal text-slate-800/);
 assert.doesNotMatch(settings, /Meu Perfil Profissional/);
 
-assert.match(coordinator, /settings: isTherapist \? "Configurações Profissionais"/);
-assert.match(coordinator, /label: isTherapist \? "Profissional" : "Clínica"/);
-assert.match(coordinator, /maxSavedTemplates=\{isTherapist \? 20 : 5\}/);
+assert.match(coordinator, /professionalProfile: "Meu perfil profissional"/);
+assert.match(coordinator, /activeTab === "professionalProfile"[\s\S]*?mode="professional"/);
+assert.match(coordinator, /activeTab === "settings"[\s\S]*?mode="clinic"/);
+assert.match(coordinator, /maxSavedTemplates=\{isTherapist \? 15 : 10\}/);
 assert.match(coordinator, /templateScope: isTherapist \? 'personal' : 'clinic'/);
 assert.match(coordinator, /dataService\.getUserProfile\(professionalId\)/);
 assert.match(coordinator, /globalProfile\?\.full_name[\s\S]*billingProfile\?\.display_name/);

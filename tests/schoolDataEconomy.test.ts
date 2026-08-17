@@ -93,12 +93,12 @@ assert.match(coordinatorDashboard, /patientSchoolOptionsRequestSeqRef\.current !
 assert.match(coordinatorDashboard, /key=\{`schools:\$\{workspaceScopeKey\}`\}[\s\S]*?workspaceScopeKey=\{workspaceScopeKey\}/,
   'a gestao escolar precisa ser remontada ao trocar de clinica');
 
-assert.match(dataService, /getPatientFile\(patientId: string, fileId: string\)/,
-  'vinculos documentais precisam buscar somente o arquivo apontado');
-assert.match(schoolsManagement, /dataService\.getPatientFile\(/);
+assert.match(dataService, /accessPatientFile\(patientId: string, fileId: string, action: 'view' \| 'download'\)/,
+  'vinculos documentais precisam acessar somente o arquivo apontado');
+assert.match(schoolsManagement, /dataService\.accessPatientFile\(/);
 assert.doesNotMatch(schoolsManagement, /dataService\.getPatientFiles\(/,
   'abrir um documento escolar nao pode transferir todos os arquivos do paciente');
-assert.match(schoolMeetingWorkspace, /dataService\.getPatientFile\(/);
+assert.match(schoolMeetingWorkspace, /dataService\.accessPatientFile\(/);
 assert.doesNotMatch(schoolMeetingWorkspace, /dataService\.getPatientFiles\(/);
 assert.match(schemaFallbacks, /fileId\?: string \| null[\s\S]*if \(fileId\) query = query\.eq\('id', fileId\)/,
   'a consulta canonica deve filtrar o arquivo no banco');
