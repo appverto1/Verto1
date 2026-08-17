@@ -26119,6 +26119,7 @@ async function startServer() {
     const { intendedRole } = req.body;
     const activationFlow = Boolean(req.body?.activationFlow);
     const passwordSetupCompleted = Boolean(req.body?.passwordSetupCompleted);
+    const deferInvitationAcceptance = Boolean(req.body?.deferInvitationAcceptance);
     const authProvider = sanitizeString(req.body?.provider, 40).toLowerCase();
     const activationEmail = sanitizeEmail(req.body?.activationEmail);
     const requestedInvitationId = sanitizeString(req.body?.invitationId, 120);
@@ -26365,8 +26366,6 @@ async function startServer() {
           }
         }
       }
-
-      const profileExistedBeforeInvitationProvisioning = Boolean(profile);
 
       // A commercial activation that was partially created by an older build may
       // already have a self-owned coordinator profile. Promote only that exact,
@@ -26723,11 +26722,12 @@ async function startServer() {
 
       let workspaces = await fetchUserWorkspaces(user.id);
       // Existing professionals accept invitations from the dedicated, explicit
-      // screen. Automatic acceptance remains only for a first-account
-      // activation link, which carries its own verified invitation id.
+      // screen. A verified activation flow may auto-accept the explicit invitation
+      // even when a partial/reconciled profile already exists; the client marks
+      // existing-account acceptance with deferInvitationAcceptance.
       const invitationForWorkspace =
-        !profileExistedBeforeInvitationProvisioning &&
         activationFlow &&
+        !deferInvitationAcceptance &&
         requestedInvitationId &&
         requestedClinicInvitation
           ? requestedClinicInvitation
@@ -28893,10 +28893,7 @@ async function startServer() {
         ? await supabase.from('users').select('id,name').eq('id', authUser.id).maybeSingle()
         : { data: null, error: null } as any;
       if (invitedProfileResult.error) throw invitedProfileResult.error;
-      const invitedProfileExists = Boolean(invitedProfileResult.data?.id);
-      const reusedExistingAuthAccess = Boolean(
-        authUserHadVerifiedEmail && invitedProfileExists
-      );
+      const reusedExistingAuthAccess = Boolean(authUserHadVerifiedEmail);
       const invitationActivationNonce = reusedExistingAuthAccess
         ? ''
         : crypto.randomBytes(32).toString('base64url');
@@ -42396,6 +42393,13 @@ async function startServer() {
       const role = (context.membership?.role || req.session.user.role) as AppRole;
       const clinicId = context.clinic.id;
       const isClinicManagedMember = ['invited_professional', 'clinic_member'].includes(context.onboardingMode);
+      if (isClinicManagedMember && !context.membership) {
+        return res.status(409).json({
+          success: false,
+          code: 'ONBOARDING_MEMBERSHIP_REQUIRED',
+          error: 'Seu convite ainda não concluiu o vínculo com a clínica. Abra novamente o link recebido por e-mail.'
+        });
+      }
       const fullName = sanitizeString(req.body?.fullName || req.body?.name, 180);
       const birthDate = sanitizeDate(req.body?.birthDate);
       const gender = sanitizeString(req.body?.gender, 40);
