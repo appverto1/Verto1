@@ -50,6 +50,52 @@ export const THERAPEUTIC_MEASUREMENT_OPTIONS: Array<{
   { value: 'percentage', label: 'Percentual', sessionPreview: ['0%', '50%', '100%'] },
 ];
 
+export const therapeuticMeasurementDefaultMasteryMeasure = (measurementType: unknown) => {
+  const normalized = safeText(measurementType).toLowerCase() as TherapeuticMeasurementType;
+  const defaults: Partial<Record<TherapeuticMeasurementType, string>> = {
+    independent_prompted_no_response: 'accuracy_percent',
+    correct_incorrect: 'accuracy_percent',
+    frequency: 'frequency',
+    duration: 'duration_seconds',
+    latency: 'latency_seconds',
+    task_analysis: 'steps_percent',
+    percentage: 'accuracy_percent',
+  };
+  return defaults[normalized] || 'accuracy_percent';
+};
+
+export const isTherapeuticMasteryCriteriaCompatible = (measurementType: unknown, criteria: any) => {
+  const normalizedMeasurement = safeText(measurementType).toLowerCase() as TherapeuticMeasurementType;
+  const source = criteria && typeof criteria === 'object' ? criteria : {};
+  const type = safeText(source.type).toLowerCase();
+  const customMeasure = safeText(source.measure || source.customMeasure || source.custom_measure).toLowerCase();
+
+  if (customMeasure) {
+    const allowedMeasures: Partial<Record<TherapeuticMeasurementType, Set<string>>> = {
+      independent_prompted_no_response: new Set(['accuracy_percent', 'independent_responses']),
+      correct_incorrect: new Set(['accuracy_percent']),
+      frequency: new Set(['frequency']),
+      duration: new Set(['duration_seconds']),
+      latency: new Set(['latency_seconds']),
+      task_analysis: new Set(['steps_percent']),
+      percentage: new Set(['accuracy_percent']),
+    };
+    return allowedMeasures[normalizedMeasurement]?.has(customMeasure) === true;
+  }
+
+  if (type === 'steps_independent') return normalizedMeasurement === 'task_analysis';
+  if (Number(source.requiredIndependentCorrectTrials ?? source.required_independent_correct_trials) > 0) {
+    return normalizedMeasurement === 'independent_prompted_no_response';
+  }
+  if (Number(source.minAccuracyPercent ?? source.min_accuracy_percent) >= 0 && (
+    source.minAccuracyPercent !== undefined || source.min_accuracy_percent !== undefined
+  )) {
+    return ['independent_prompted_no_response', 'correct_incorrect', 'percentage'].includes(normalizedMeasurement);
+  }
+  return true;
+};
+
+
 export const THERAPEUTIC_RECOMMENDATION_TYPE_LABELS: Record<string, string> = {
   MAINTENANCE_PROBE: 'Sondagem de manutenção',
   REGRESSION_ATTENTION: 'Regressão',

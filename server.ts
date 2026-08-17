@@ -45125,6 +45125,8 @@ async function startServer() {
     'independent',
     'prompt_level_key',
     'prompt_level_name',
+    'latency_ms',
+    'raw_payload',
     'prompt_type_id',
     'prompt_type_name_snapshot',
     'prompt_category_snapshot',
@@ -71070,6 +71072,8 @@ async function startServer() {
       'correct',
       'independent',
       'prompt_level_key',
+      'latency_ms',
+      'raw_payload',
       'occurred_at',
       'therapist_id',
       'created_at'
@@ -71112,10 +71116,11 @@ async function startServer() {
 
       let previousQuery = supabase
         .from('aba_mastery_evaluations')
-        .select('id,status,evaluation_status,evaluated_at,therapist_id,consecutive_successful_days')
+        .select('id,session_id,status,evaluation_status,evaluated_at,therapist_id,consecutive_successful_days')
         .eq('organization_id', organizationId)
         .eq('patient_id', patientId)
         .eq('target_id', targetId)
+        .neq('session_id', sessionId)
         .order('evaluated_at', { ascending: false })
         .limit(30);
       if (clinicId) previousQuery = previousQuery.eq('clinic_id', clinicId);
@@ -71169,6 +71174,7 @@ async function startServer() {
           status: evaluation.status,
           criterionLabel: evaluation.criterionLabel,
           criterionProgressLabel: evaluation.criterionProgressLabel,
+          successfulSessions: evaluation.successfulSessions,
           targetPhaseAtEvaluation: target?.phase || null,
           noAutomaticTargetMutation: true
         }),
@@ -71192,6 +71198,7 @@ async function startServer() {
         accuracyPercent: evaluation.accuracyPercent,
         independencePercent: evaluation.independencePercent,
         consecutiveSuccessfulDays: evaluation.consecutiveSuccessfulDays,
+        successfulSessions: evaluation.successfulSessions,
         criterionProgressCount: evaluation.criterionProgressCount,
         criterionRequiredCount: evaluation.criterionRequiredCount,
         criterionProgressLabel: evaluation.criterionProgressLabel,
@@ -79080,6 +79087,31 @@ async function startServer() {
       if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
       if (!isUuid(patientId)) return res.status(400).json({ success: false, error: 'Paciente inválido.' });
 
+      const requestedRawPayload = req.body?.raw_payload && typeof req.body.raw_payload === 'object' && !Array.isArray(req.body.raw_payload)
+        ? req.body.raw_payload
+        : req.body?.rawPayload && typeof req.body.rawPayload === 'object' && !Array.isArray(req.body.rawPayload)
+          ? req.body.rawPayload
+          : {};
+      const therapeuticMeasurementType = sanitizeString(requestedRawPayload?.measurementType || requestedRawPayload?.measurement_type, 80).toLowerCase();
+      const therapeuticMeasurementWrite = requestedRawPayload?.therapeuticMeasurement === true || requestedRawPayload?.therapeutic_measurement === true || sanitizeString(requestedRawPayload?.source, 100) === 'therapeutic_program_measurement';
+      const allowedTherapeuticMeasurementTypes = new Set(['correct_incorrect', 'frequency', 'duration', 'latency', 'task_analysis', 'percentage']);
+      if (therapeuticMeasurementWrite && !allowedTherapeuticMeasurementTypes.has(therapeuticMeasurementType)) {
+        return res.status(400).json({ success: false, error: 'Forma de coleta terapêutica inválida.' });
+      }
+      if (therapeuticMeasurementWrite) {
+        const measurementValue = Number(requestedRawPayload?.measurementValue ?? requestedRawPayload?.measurement_value);
+        if (!Number.isFinite(measurementValue)) return res.status(400).json({ success: false, error: 'Medida terapêutica inválida.' });
+        if (['duration', 'latency', 'frequency'].includes(therapeuticMeasurementType) && measurementValue < 0) {
+          return res.status(400).json({ success: false, error: 'Medida terapêutica não pode ser negativa.' });
+        }
+        if (['percentage', 'task_analysis'].includes(therapeuticMeasurementType) && (measurementValue < 0 || measurementValue > 100)) {
+          return res.status(400).json({ success: false, error: 'Percentual terapêutico deve estar entre 0 e 100.' });
+        }
+        if (therapeuticMeasurementType === 'correct_incorrect' && ![0, 1].includes(measurementValue)) {
+          return res.status(400).json({ success: false, error: 'Resposta terapêutica deve ser Acerto ou Erro.' });
+        }
+      }
+
       const score = req.body?.response_score !== undefined || req.body?.responseScore !== undefined || req.body?.score !== undefined
         ? asSafeNumber(req.body?.response_score ?? req.body?.responseScore ?? req.body?.score, -100000, 100000)
         : null;
@@ -79134,7 +79166,7 @@ async function startServer() {
       const promptInfo = resolveTrialPromptInfo(promptInput, promptTypeRow ? [promptTypeRow] : undefined);
       const promptSnapshot = buildAbaPromptSnapshot(promptInput, promptTypeRow ? [promptTypeRow] : undefined);
       const promptKey = promptInfo.key || promptLevel.key;
-      const independent = correct && promptInfo.isIndependent;
+      const independent = therapeuticMeasurementWrite ? false : correct && promptInfo.isIndependent;
       const targetName = sanitizeTextField(req.body?.target_name || req.body?.targetName || req.body?.title, 240);
       if (!targetName) return res.status(400).json({ success: false, error: 'Target é obrigatório.' });
 
@@ -79226,14 +79258,14 @@ async function startServer() {
         max_score: maxScore,
         correct,
         independent,
-        prompt_level_key: promptKey || null,
-        prompt_level_id: sanitizeString(req.body?.prompt_level_id || req.body?.promptLevelId || promptTypeId || promptKey, 180) || null,
-        prompt_level_name: promptInfo.label || promptLevel.label,
-        prompt_type_id: promptSnapshot.prompt_type_id,
-        prompt_type_name_snapshot: promptSnapshot.prompt_type_name_snapshot,
-        prompt_category_snapshot: promptSnapshot.prompt_category_snapshot,
-        prompt_independence_score_snapshot: promptSnapshot.prompt_independence_score_snapshot,
-        prompt_intrusiveness_order_snapshot: promptSnapshot.prompt_intrusiveness_order_snapshot,
+        prompt_level_key: therapeuticMeasurementWrite ? null : (promptKey || null),
+        prompt_level_id: therapeuticMeasurementWrite ? null : (sanitizeString(req.body?.prompt_level_id || req.body?.promptLevelId || promptTypeId || promptKey, 180) || null),
+        prompt_level_name: therapeuticMeasurementWrite ? null : (promptInfo.label || promptLevel.label),
+        prompt_type_id: therapeuticMeasurementWrite ? null : promptSnapshot.prompt_type_id,
+        prompt_type_name_snapshot: therapeuticMeasurementWrite ? null : promptSnapshot.prompt_type_name_snapshot,
+        prompt_category_snapshot: therapeuticMeasurementWrite ? null : promptSnapshot.prompt_category_snapshot,
+        prompt_independence_score_snapshot: therapeuticMeasurementWrite ? null : promptSnapshot.prompt_independence_score_snapshot,
+        prompt_intrusiveness_order_snapshot: therapeuticMeasurementWrite ? null : promptSnapshot.prompt_intrusiveness_order_snapshot,
         latency_ms: req.body?.latency_ms !== undefined || req.body?.latencyMs !== undefined
           ? asSafeNumber(req.body?.latency_ms ?? req.body?.latencyMs, 0, 3_600_000)
           : null,

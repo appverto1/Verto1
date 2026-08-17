@@ -61,6 +61,11 @@ export type AbaMasteryCriterion = {
   sourceLabel?: string | null;
   masteryCriterionMode?: 'total_independent' | 'consecutive_independent' | 'custom';
   requiresConsecutiveSuccesses?: boolean;
+  measure?: 'accuracy_percent' | 'independent_responses' | 'frequency' | 'duration_seconds' | 'latency_seconds' | 'steps_percent' | string | null;
+  operator?: 'gte' | 'gt' | 'eq' | 'lte' | string | null;
+  value?: number | null;
+  requiredSessions?: number | null;
+  sessionMode?: 'consecutive' | 'cumulative';
 };
 
 export type AbaMasteryEvaluationResult = {
@@ -84,10 +89,11 @@ export type AbaMasteryEvaluationResult = {
   coldProbeTrialsCount: number;
   distinctTherapistsCount: number;
   consecutiveSuccessfulDays: number;
+  successfulSessions: number;
   criterionProgressCount: number;
   criterionRequiredCount: number;
   criterionProgressLabel: string;
-  criterionProgressKind: 'none' | 'total_independent' | 'consecutive_independent' | 'correct' | 'days';
+  criterionProgressKind: 'none' | 'total_independent' | 'consecutive_independent' | 'correct' | 'days' | 'sessions' | 'measurement';
   sequenceBrokenByLastTrial: boolean;
   status: AbaMasteryStatus;
   reasons: AbaMasteryReason[];
@@ -423,6 +429,15 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
     'required_independence_percent',
     'requiredIndependencePercent'
   ), 0, 100);
+
+  const measure = String(readValue(row, 'measure', 'custom_measure', 'customMeasure') || '').trim().toLowerCase() || null;
+  const operatorRaw = String(readValue(row, 'operator', 'comparison_operator', 'comparisonOperator') || 'gte').trim().toLowerCase();
+  const operator = ['gte', 'gt', 'eq', 'lte'].includes(operatorRaw) ? operatorRaw : 'gte';
+  const value = boundedNumberOrNull(readValue(row, 'value', 'criterion_value', 'criterionValue'), -100000, 100000);
+  const requiredSessions = positiveIntegerOrNull(readValue(row, 'required_sessions', 'requiredSessions'), 1, 3650);
+  const sessionMode = String(readValue(row, 'session_mode', 'sessionMode') || 'consecutive').trim().toLowerCase() === 'cumulative'
+    ? 'cumulative'
+    : 'consecutive';
   const explicitMinTrials = positiveIntegerOrNull(readValue(
     row,
     'min_trials_per_session',
@@ -445,6 +460,8 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
       requiredCorrectTrials ||
       minAccuracyPercent !== null ||
       minIndependencePercent !== null ||
+      (Boolean(measure) && value !== null) ||
+      requiredSessions ||
       explicitMinTrials ||
       hasConfiguredValue(row, 'min_consecutive_days', 'minConsecutiveDays') ||
       requireFirstTrialIndependent ||
@@ -483,12 +500,35 @@ export function normalizeAbaMasteryCriterion(row: any | null | undefined): AbaMa
       : requiredIndependentCorrectTrials
         ? 'total_independent'
         : masteryCriterionMode || 'custom',
-    requiresConsecutiveSuccesses
+    requiresConsecutiveSuccesses,
+    measure,
+    operator,
+    value,
+    requiredSessions,
+    sessionMode
   };
 }
 
 export function formatAbaMasteryCriterion(criterion: AbaMasteryCriterion | null): string {
   if (!criterion) return 'Criterio nao configurado';
+  if (criterion.measure && criterion.value !== null && criterion.value !== undefined) {
+    const measureLabels: Record<string, string> = {
+      accuracy_percent: 'acurácia',
+      independent_responses: 'respostas independentes',
+      frequency: 'ocorrências',
+      duration_seconds: 'segundos de duração',
+      latency_seconds: 'segundos de latência',
+      steps_percent: 'etapas concluídas'
+    };
+    const operatorLabels: Record<string, string> = { gte: '≥', gt: '>', eq: '=', lte: '≤' };
+    const valueLabel = ['accuracy_percent', 'steps_percent'].includes(String(criterion.measure))
+      ? `${criterion.value}%`
+      : String(criterion.value);
+    const sessionsLabel = criterion.requiredSessions && criterion.requiredSessions > 1
+      ? ` em ${criterion.requiredSessions} sessões ${criterion.sessionMode === 'cumulative' ? 'acumuladas' : 'consecutivas'}`
+      : '';
+    return `${operatorLabels[String(criterion.operator || 'gte')] || '≥'} ${valueLabel} ${measureLabels[String(criterion.measure)] || criterion.measure}${sessionsLabel}`;
+  }
   const parts = [];
   if (criterion.requiredConsecutiveIndependentCorrectTrials) {
     parts.push(`${criterion.requiredConsecutiveIndependentCorrectTrials} ${criterion.requiredConsecutiveIndependentCorrectTrials === 1 ? 'acerto independente consecutivo' : 'acertos independentes consecutivos'}`);
@@ -506,6 +546,9 @@ export function formatAbaMasteryCriterion(criterion: AbaMasteryCriterion | null)
   }
   if (criterion.minTrialsPerSession && !criterion.minTrialsPerSessionImplicit) {
     parts.push(`${criterion.minTrialsPerSession} tentativa(s)/sessao`);
+  }
+  if (criterion.requiredSessions && criterion.requiredSessions > 1) {
+    parts.push(`${criterion.requiredSessions} sessão(ões) ${criterion.sessionMode === 'cumulative' ? 'acumuladas' : 'consecutivas'}`);
   }
   const usesTrialCountCriterion = Boolean(criterion.requiredConsecutiveIndependentCorrectTrials || criterion.requiredIndependentCorrectTrials || criterion.requiredCorrectTrials);
   if ((!usesTrialCountCriterion && criterion.minConsecutiveDaysExplicit) || criterion.minConsecutiveDays > 1) {
@@ -557,6 +600,73 @@ const isSuccessfulEvaluation = (evaluation: any) => {
   return SUCCESSFUL_STATUSES.has(status);
 };
 
+
+const evaluationSessionId = (evaluation: any) => String(readValue(evaluation, 'session_id', 'sessionId') || '').trim();
+
+const countSuccessfulSessions = (metCurrentSession: boolean, previousEvaluations: any[], mode: 'consecutive' | 'cumulative' = 'consecutive') => {
+  const sorted = (Array.isArray(previousEvaluations) ? previousEvaluations : [])
+    .slice()
+    .sort((a, b) => new Date(readValue(b, 'evaluated_at', 'evaluatedAt', 'created_at', 'createdAt') || 0).getTime() - new Date(readValue(a, 'evaluated_at', 'evaluatedAt', 'created_at', 'createdAt') || 0).getTime());
+  const seenSessions = new Set<string>();
+  if (mode === 'cumulative') {
+    let count = metCurrentSession ? 1 : 0;
+    for (const evaluation of sorted) {
+      if (!isSuccessfulEvaluation(evaluation)) continue;
+      const key = evaluationSessionId(evaluation) || String(readValue(evaluation, 'id') || '').trim();
+      if (!key || seenSessions.has(key)) continue;
+      seenSessions.add(key);
+      count += 1;
+    }
+    return count;
+  }
+  if (!metCurrentSession) return 0;
+  let count = 1;
+  for (const evaluation of sorted) {
+    const key = evaluationSessionId(evaluation) || String(readValue(evaluation, 'id') || '').trim();
+    if (!key || seenSessions.has(key)) continue;
+    seenSessions.add(key);
+    if (!isSuccessfulEvaluation(evaluation)) break;
+    count += 1;
+  }
+  return count;
+};
+
+const therapeuticMeasurementPayload = (trial: any) => {
+  const raw = readValue(trial, 'raw_payload', 'rawPayload');
+  return raw && typeof raw === 'object' ? raw : {};
+};
+
+const therapeuticMeasurementTypeOf = (trial: any) => String(
+  readValue(therapeuticMeasurementPayload(trial), 'measurementType', 'measurement_type') || ''
+).trim().toLowerCase();
+
+const therapeuticMeasurementValueOf = (trial: any) => {
+  const raw = therapeuticMeasurementPayload(trial);
+  const direct = readValue(raw, 'measurementValue', 'measurement_value', 'value');
+  const parsed = Number(direct ?? readValue(trial, 'response_score', 'responseScore', 'score'));
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const criterionMeasureCompatibleWithMeasurementType = (measure: string | null | undefined, measurementType: string) => {
+  if (!measure || !measurementType) return true;
+  const map: Record<string, string[]> = {
+    accuracy_percent: ['independent_prompted_no_response', 'correct_incorrect', 'percentage'],
+    independent_responses: ['independent_prompted_no_response'],
+    frequency: ['frequency'],
+    duration_seconds: ['duration'],
+    latency_seconds: ['latency'],
+    steps_percent: ['task_analysis']
+  };
+  return !map[measure] || map[measure].includes(measurementType);
+};
+
+const compareCriterionValue = (actual: number, operator: string | null | undefined, expected: number) => {
+  if (operator === 'gt') return actual > expected;
+  if (operator === 'eq') return Math.abs(actual - expected) < 0.0001;
+  if (operator === 'lte') return actual <= expected;
+  return actual >= expected;
+};
+
 function countConsecutiveSuccessfulDays(evaluatedAt: string, metToday: boolean, previousEvaluations: any[]) {
   if (!metToday) return 0;
   const successfulDays = new Set(
@@ -591,8 +701,17 @@ const buildCriterionProgressSummary = (
   independentTrials: number,
   correctTrials: number,
   consecutiveIndependentTrials: number,
-  consecutiveSuccessfulDays: number
+  consecutiveSuccessfulDays: number,
+  successfulSessions = 0
 ) => {
+  if (criterion.requiredSessions && criterion.requiredSessions > 1) {
+    return {
+      kind: 'sessions' as const,
+      count: successfulSessions,
+      required: criterion.requiredSessions,
+      label: `${successfulSessions}/${criterion.requiredSessions} sessões ${criterion.sessionMode === 'cumulative' ? 'acumuladas' : 'consecutivas'}`
+    };
+  }
   if (criterion.requiredConsecutiveIndependentCorrectTrials) {
     return {
       kind: 'consecutive_independent' as const,
@@ -667,6 +786,7 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
       coldProbeTrialsCount: 0,
       distinctTherapistsCount: 0,
       consecutiveSuccessfulDays: 0,
+      successfulSessions: 0,
       criterionProgressCount: 0,
       criterionRequiredCount: 0,
       criterionProgressLabel: 'Critério não configurado',
@@ -705,18 +825,18 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
   const sequenceBrokenByLastTrial = Boolean(lastTrial && (!isTrialCorrect(lastTrial) || !isTrialIndependent(lastTrial)));
   const reasons: AbaMasteryReason[] = [];
 
-  if (totalTrials === 0) {
-    reasons.push({ code: criterion.coldProbeOnly ? 'NO_COLD_PROBE_TRIALS' : 'NO_VALID_TRIALS', message: criterion.coldProbeOnly ? 'Nenhuma tentativa Cold Probe valida foi registrada.' : 'Nenhuma tentativa valida foi registrada para esta meta.' });
-  }
-  if (criterion.minTrialsPerSession && totalTrials < criterion.minTrialsPerSession) {
-    reasons.push({ code: 'MIN_TRIALS_NOT_MET', message: `${totalTrials}/${criterion.minTrialsPerSession} tentativas minimas na sessao.` });
-  }
-  if (criterion.coldProbeOnly && criterion.minTrialsPerSession && coldProbeTrialsCount < criterion.minTrialsPerSession) {
-    reasons.push({ code: 'COLD_PROBE_MIN_TRIALS_NOT_MET', message: `${coldProbeTrialsCount}/${criterion.minTrialsPerSession} tentativas Cold Probe.` });
-  }
-
-  if (reasons.length > 0) {
-    const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, consecutiveIndependentTrials, 0);
+  const measurementTypes = Array.from(new Set(consideredTrials.map(therapeuticMeasurementTypeOf).filter(Boolean)));
+  const observedMeasurementType = measurementTypes.length === 1 ? measurementTypes[0] : '';
+  const standardCriterionCompatibleWithObservedMeasurement = !observedMeasurementType || (
+    criterion.measure
+      ? criterionMeasureCompatibleWithMeasurementType(criterion.measure, observedMeasurementType)
+      : criterion.requiredIndependentCorrectTrials || criterion.requiredConsecutiveIndependentCorrectTrials
+        ? observedMeasurementType === 'independent_prompted_no_response'
+        : criterion.minAccuracyPercent !== null && criterion.minAccuracyPercent !== undefined
+          ? ['independent_prompted_no_response', 'correct_incorrect', 'percentage'].includes(observedMeasurementType)
+          : true
+  );
+  if (!standardCriterionCompatibleWithObservedMeasurement) {
     return {
       ...base,
       totalTrials,
@@ -730,6 +850,122 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
       coldProbeTrialsCount,
       distinctTherapistsCount,
       consecutiveSuccessfulDays: 0,
+      successfulSessions: 0,
+      criterionProgressCount: 0,
+      criterionRequiredCount: criterion.requiredSessions || 1,
+      criterionProgressLabel: 'Critério incompatível com a medida coletada',
+      criterionProgressKind: 'measurement',
+      sequenceBrokenByLastTrial,
+      status: 'INSUFFICIENT_DATA',
+      reasons: [{ code: 'MEASUREMENT_CRITERION_MISMATCH', message: 'O critério configurado mede uma variável diferente da forma de coleta do programa.' }],
+      suggestedPhase: 'teaching',
+      criterionLabel: formatAbaMasteryCriterion(criterion),
+      performanceText: 'Revise o critério de domínio do programa.'
+    };
+  }
+
+  if (criterion.measure && criterion.value !== null && criterion.value !== undefined) {
+    const numericValues = consideredTrials
+      .map((trial) => ({ trial, value: therapeuticMeasurementValueOf(trial) }))
+      .filter((item) => item.value !== null) as Array<{ trial: any; value: number }>;
+    let currentMetric: number | null = null;
+    if (criterion.measure === 'accuracy_percent' && observedMeasurementType === 'percentage' && numericValues.length > 0) {
+      currentMetric = numericValues[numericValues.length - 1].value;
+    } else if (criterion.measure === 'accuracy_percent') currentMetric = accuracyPercent;
+    else if (criterion.measure === 'independent_responses') currentMetric = independentTrials;
+    else if (criterion.measure === 'frequency') currentMetric = numericValues.reduce((sum, item) => sum + item.value, 0);
+    else if (numericValues.length > 0) currentMetric = numericValues[numericValues.length - 1].value;
+
+    if (currentMetric === null) {
+      return {
+        ...base,
+        totalTrials,
+        independentTrials,
+        consecutiveIndependentTrials,
+        promptedTrials,
+        errorTrials,
+        accuracyPercent,
+        independencePercent,
+        firstTrialIndependent,
+        coldProbeTrialsCount,
+        distinctTherapistsCount,
+        consecutiveSuccessfulDays: 0,
+        successfulSessions: 0,
+        criterionProgressCount: 0,
+        criterionRequiredCount: criterion.requiredSessions || 1,
+        criterionProgressLabel: 'Nenhuma medida válida registrada nesta sessão',
+        criterionProgressKind: 'measurement',
+        sequenceBrokenByLastTrial,
+        status: 'INSUFFICIENT_DATA',
+        reasons: [{ code: 'NO_VALID_MEASUREMENT', message: 'Nenhuma medida compatível foi registrada para avaliar este critério.' }],
+        suggestedPhase: 'teaching',
+        criterionLabel: formatAbaMasteryCriterion(criterion),
+        performanceText: 'Aguardando coleta compatível.'
+      };
+    }
+
+    const metCurrentSession = compareCriterionValue(currentMetric, criterion.operator, Number(criterion.value));
+    const successfulSessions = countSuccessfulSessions(metCurrentSession, input.previousEvaluations || [], criterion.sessionMode || 'consecutive');
+    const requiredSessions = criterion.requiredSessions || 1;
+    const readyForReview = metCurrentSession && successfulSessions >= requiredSessions;
+    if (!metCurrentSession) reasons.push({ code: 'MEASUREMENT_BELOW_CRITERION', message: `Medida atual ${currentMetric}; critério ${formatAbaMasteryCriterion(criterion)}.` });
+    if (metCurrentSession && successfulSessions < requiredSessions) reasons.push({ code: 'REQUIRED_SESSIONS_PENDING', message: `${successfulSessions}/${requiredSessions} sessões válidas.` });
+    const valueLabel = ['accuracy_percent', 'steps_percent'].includes(String(criterion.measure)) ? `${Math.round(currentMetric * 100) / 100}%` : `${Math.round(currentMetric * 100) / 100}`;
+    return {
+      ...base,
+      totalTrials,
+      independentTrials,
+      consecutiveIndependentTrials,
+      promptedTrials,
+      errorTrials,
+      accuracyPercent,
+      independencePercent,
+      firstTrialIndependent,
+      coldProbeTrialsCount,
+      distinctTherapistsCount,
+      consecutiveSuccessfulDays: 0,
+      successfulSessions,
+      criterionProgressCount: criterion.requiredSessions && criterion.requiredSessions > 1 ? successfulSessions : (metCurrentSession ? 1 : 0),
+      criterionRequiredCount: criterion.requiredSessions || 1,
+      criterionProgressLabel: criterion.requiredSessions && criterion.requiredSessions > 1
+        ? `${successfulSessions}/${criterion.requiredSessions} sessões ${criterion.sessionMode === 'cumulative' ? 'acumuladas' : 'consecutivas'}`
+        : `${valueLabel} nesta sessão`,
+      criterionProgressKind: criterion.requiredSessions && criterion.requiredSessions > 1 ? 'sessions' : 'measurement',
+      sequenceBrokenByLastTrial: false,
+      status: readyForReview ? 'READY_FOR_REVIEW' : metCurrentSession ? 'MET_TODAY' : 'NOT_MET',
+      reasons,
+      suggestedPhase: readyForReview ? 'maintenance' : 'teaching',
+      criterionLabel: formatAbaMasteryCriterion(criterion),
+      performanceText: `${valueLabel} nesta sessão`
+    };
+  }
+
+  if (totalTrials === 0) {
+    reasons.push({ code: criterion.coldProbeOnly ? 'NO_COLD_PROBE_TRIALS' : 'NO_VALID_TRIALS', message: criterion.coldProbeOnly ? 'Nenhuma tentativa Cold Probe valida foi registrada.' : 'Nenhuma tentativa valida foi registrada para esta meta.' });
+  }
+  if (criterion.minTrialsPerSession && totalTrials < criterion.minTrialsPerSession) {
+    reasons.push({ code: 'MIN_TRIALS_NOT_MET', message: `${totalTrials}/${criterion.minTrialsPerSession} tentativas minimas na sessao.` });
+  }
+  if (criterion.coldProbeOnly && criterion.minTrialsPerSession && coldProbeTrialsCount < criterion.minTrialsPerSession) {
+    reasons.push({ code: 'COLD_PROBE_MIN_TRIALS_NOT_MET', message: `${coldProbeTrialsCount}/${criterion.minTrialsPerSession} tentativas Cold Probe.` });
+  }
+
+  if (reasons.length > 0) {
+    const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, consecutiveIndependentTrials, 0, 0);
+    return {
+      ...base,
+      totalTrials,
+      independentTrials,
+      consecutiveIndependentTrials,
+      promptedTrials,
+      errorTrials,
+      accuracyPercent,
+      independencePercent,
+      firstTrialIndependent,
+      coldProbeTrialsCount,
+      distinctTherapistsCount,
+      consecutiveSuccessfulDays: 0,
+      successfulSessions: 0,
       criterionProgressCount: progressSummary.count,
       criterionRequiredCount: progressSummary.required,
       criterionProgressLabel: progressSummary.label,
@@ -765,7 +1001,11 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
   }
 
   const metToday = reasons.length === 0;
+  const successfulSessions = countSuccessfulSessions(metToday, input.previousEvaluations || [], criterion.sessionMode || 'consecutive');
   const consecutiveSuccessfulDays = countConsecutiveSuccessfulDays(evaluatedAt, metToday, input.previousEvaluations || []);
+  if (metToday && criterion.requiredSessions && successfulSessions < criterion.requiredSessions) {
+    reasons.push({ code: 'REQUIRED_SESSIONS_PENDING', message: `${successfulSessions}/${criterion.requiredSessions} sessão(ões) ${criterion.sessionMode === 'cumulative' ? 'acumuladas' : 'consecutivas'}.` });
+  }
   if (metToday && consecutiveSuccessfulDays < criterion.minConsecutiveDays) {
     reasons.push({ code: 'CONSECUTIVE_DAYS_PENDING', message: `${consecutiveSuccessfulDays}/${criterion.minConsecutiveDays} dia(s) consecutivo(s).` });
   }
@@ -776,9 +1016,10 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
   const readyForReview =
     metToday &&
     consecutiveSuccessfulDays >= criterion.minConsecutiveDays &&
+    (!criterion.requiredSessions || successfulSessions >= criterion.requiredSessions) &&
     distinctTherapistsCount >= criterion.minDistinctTherapists;
   const status: AbaMasteryStatus = !metToday ? 'NOT_MET' : readyForReview ? 'READY_FOR_REVIEW' : 'MET_TODAY';
-  const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, consecutiveIndependentTrials, consecutiveSuccessfulDays);
+  const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, consecutiveIndependentTrials, consecutiveSuccessfulDays, successfulSessions);
 
   return {
     ...base,
@@ -793,6 +1034,7 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
     coldProbeTrialsCount,
     distinctTherapistsCount,
     consecutiveSuccessfulDays,
+    successfulSessions,
     criterionProgressCount: progressSummary.count,
     criterionRequiredCount: progressSummary.required,
     criterionProgressLabel: progressSummary.label,

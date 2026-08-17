@@ -3703,6 +3703,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replace(/Â/g, ''),
   ).trim();
 
+  const isTherapeuticProgramMeasurementTrial = (trial: any) => {
+    const raw = trial?.raw_payload || trial?.rawPayload || {};
+    return raw?.therapeuticMeasurement === true || raw?.therapeutic_measurement === true || String(raw?.source || '').trim() === 'therapeutic_program_measurement';
+  };
+
   const formatAbaDateTime = (value: any) => {
     const date = new Date(value || 0);
     if (Number.isNaN(date.getTime())) return 'Sem data';
@@ -3776,7 +3781,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const collectionType = String(trial?.collection_type || trial?.collectionType || 'dtt').toLowerCase();
       const score = trial?.response_score ?? trial?.responseScore ?? trial?.score;
       const maxScore = trial?.max_score ?? trial?.maxScore;
-      const prompt = resolveAbaPromptLevel({
+      const rawPayload = trial?.raw_payload || trial?.rawPayload || {};
+      const therapeuticMeasurement = isTherapeuticProgramMeasurementTrial(trial);
+      const therapeuticMeasurementType = String(rawPayload?.measurementType || rawPayload?.measurement_type || '').trim().toLowerCase();
+      const therapeuticMeasurementValue = Number(rawPayload?.measurementValue ?? rawPayload?.measurement_value);
+      const therapeuticDisplayLabel = String(rawPayload?.displayLabel || rawPayload?.display_label || '').trim();
+      const prompt = therapeuticMeasurement ? '' : resolveAbaPromptLevel({
         promptLevelKey: trial?.prompt_level_key || trial?.promptLevelKey,
         promptLevelName: trial?.prompt_level_name || trial?.promptLevelName,
         score,
@@ -3787,19 +3797,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const title = normalizeNoteText(safeDisplayValue(trial?.target_name || trial?.targetName || trial?.title, 'Meta sem nome'));
       const sessionId = String(trial?.session_id || trial?.sessionId || '').trim();
       const occurredAt = trial?.occurred_at || trial?.occurredAt || trial?.created_at || trial?.createdAt;
+      const therapeuticDetail = therapeuticDisplayLabel || (Number.isFinite(therapeuticMeasurementValue)
+        ? therapeuticMeasurementType === 'duration' || therapeuticMeasurementType === 'latency'
+          ? `${therapeuticMeasurementType === 'duration' ? 'Duração' : 'Latência'} ${Math.round(therapeuticMeasurementValue * 100) / 100}s`
+          : therapeuticMeasurementType === 'percentage' || therapeuticMeasurementType === 'task_analysis'
+            ? `${Math.round(therapeuticMeasurementValue * 100) / 100}%`
+            : therapeuticMeasurementType === 'frequency'
+              ? `Frequência +${Math.round(therapeuticMeasurementValue * 100) / 100}`
+              : therapeuticMeasurementType === 'correct_incorrect'
+                ? (therapeuticMeasurementValue > 0 ? 'Acerto' : 'Erro')
+                : String(therapeuticMeasurementValue)
+        : 'Medida registrada');
       return {
         id: `trial-${String(trial?.id || `${title}-${occurredAt}`)}`,
         kind: 'trial',
         tableName: 'aba_trials',
-        sourceLabel: 'Tentativa ABA',
+        sourceLabel: therapeuticMeasurement ? 'Medida terapêutica' : 'Tentativa ABA',
         sessionId,
         occurredAt,
         title,
-        label: abaCollectionTypeLabels[collectionType] || collectionType.toUpperCase(),
-        detail: `Pontuacao ${score ?? '-'}${maxScore !== null && maxScore !== undefined ? `/${maxScore}` : ''} - ${prompt}`,
+        label: therapeuticMeasurement ? (therapeuticMeasurementType === 'duration' ? 'Duração' : therapeuticMeasurementType === 'latency' ? 'Latência' : therapeuticMeasurementType === 'frequency' ? 'Frequência' : therapeuticMeasurementType === 'correct_incorrect' ? 'Acerto / Erro' : therapeuticMeasurementType === 'task_analysis' ? 'Etapas' : therapeuticMeasurementType === 'percentage' ? 'Percentual' : 'Medida') : (abaCollectionTypeLabels[collectionType] || collectionType.toUpperCase()),
+        detail: therapeuticMeasurement ? therapeuticDetail : `Pontuacao ${score ?? '-'}${maxScore !== null && maxScore !== undefined ? `/${maxScore}` : ''} - ${prompt}`,
         note: normalizeNoteText(trial?.notes || trial?.note || ''),
         meta: trial,
-        searchText: `${title} ${collectionType} ${prompt} ${trial?.domain_name || trial?.domainName || ''} ${trial?.protocol_title || trial?.protocolTitle || ''}`.toLowerCase()
+        searchText: `${title} ${collectionType} ${therapeuticMeasurementType} ${therapeuticDetail} ${prompt} ${trial?.domain_name || trial?.domainName || ''} ${trial?.protocol_title || trial?.protocolTitle || ''}`.toLowerCase()
       };
     });
 
@@ -3913,7 +3934,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const summary = abaPatientSummary || {};
     return {
       totalSessions: Number(summary.total_sessions ?? summary.totalSessions ?? abaSessionOptions.length) || 0,
-      totalTrials: Number(summary.total_trials ?? summary.totalTrials ?? abaTrials.length) || 0,
+      totalTrials: Number(summary.total_trials ?? summary.totalTrials ?? (Array.isArray(abaTrials) ? abaTrials.filter((trial: any) => !isTherapeuticProgramMeasurementTrial(trial)).length : 0)) || 0,
       totalBehaviorEvents: Number(summary.total_behavior_events ?? summary.totalBehaviorEvents ?? abaBehaviorEvents.length) || 0,
       masteredTargets: Number(summary.mastered_targets_count ?? summary.masteredTargetsCount ?? abaMasteryEvaluations.length) || 0,
       maintenanceTargets: Number(summary.maintenance_targets_count ?? summary.maintenanceTargetsCount ?? abaMaintenanceOverview?.summary?.maintenance_targets_count ?? abaMaintenanceOverview?.summary?.maintenanceTargetsCount ?? (Array.isArray(abaMaintenanceOverview?.schedules) ? new Set(abaMaintenanceOverview.schedules.map((item: any) => String(item?.target_id || item?.targetId || ''))).size : 0)) || 0,
@@ -6295,6 +6316,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const trials = (Array.isArray(abaTrials) ? abaTrials : [])
       .filter((trial: any) =>
         String(trial?.patient_id || trial?.patientId || '') === String(patient?.id || '') &&
+        !isTherapeuticProgramMeasurementTrial(trial) &&
         String(trial?.collection_type || trial?.collectionType || trial?.trialType || '').toLowerCase() !== 'maintenance_probe' &&
         rowMatchesGoalEvidence(trial, goal, { allowNameFallback: true }) &&
         (!goal || getStructuredTrialProgressMarker(trial) > resetMarker || !resetMarker)

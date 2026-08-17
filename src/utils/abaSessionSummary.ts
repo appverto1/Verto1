@@ -262,6 +262,12 @@ const valueOf = (row: any, ...keys: string[]) => {
   return undefined;
 };
 
+const isTherapeuticProgramMeasurementRecord = (row: any) => {
+  if (row?.therapeuticMeasurement === true || row?.therapeutic_measurement === true) return true;
+  const raw = valueOf(row, 'rawPayload', 'raw_payload') || {};
+  return raw?.therapeuticMeasurement === true || raw?.therapeutic_measurement === true || String(raw?.source || '').trim() === 'therapeutic_program_measurement';
+};
+
 const safeNumber = (value: any, fallback = 0) => {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -661,7 +667,7 @@ export const calculateSessionSummary = (sessionId: string, input: CalculateSessi
   const endedAt = safeIso(input.endedAt);
   const startedAt = safeIso(input.startedAt, endedAt);
   const durationSeconds = Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1000));
-  const trials = (input.trials || []).filter((trial) => belongsToSession(trial, sessionId));
+  const trials = (input.trials || []).filter((trial) => belongsToSession(trial, sessionId) && !isTherapeuticProgramMeasurementRecord(trial));
   const behaviorEvents = (input.behaviorEvents || []).filter((event) => belongsToSession(event, sessionId));
   const teachingSummary = calculateTeachingSummary(trials);
   const frequencySummary = calculateFrequencySummary(behaviorEvents);
@@ -716,7 +722,7 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
     : Array.isArray((sessionSummary as any).records)
       ? (sessionSummary as any).records
       : [];
-  const sourceTrials = sourceRecords.filter((record) => String(valueOf(record, 'kind') || '').toLowerCase() === 'trial');
+  const sourceTrials = sourceRecords.filter((record) => String(valueOf(record, 'kind') || '').toLowerCase() === 'trial' && !isTherapeuticProgramMeasurementRecord(record));
   const sourceBehaviorRecords = sourceRecords.filter((record) => (
     String(valueOf(record, 'kind') || '').toLowerCase() === 'behavior' &&
     !isCancelledIntervalEvent(record)

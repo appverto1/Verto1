@@ -38,6 +38,7 @@ import {
   mergeLegacyAndTherapeuticSessionGoals,
   normalizeTherapeuticPrograms,
   therapeuticProgramsToSessionGoals,
+  isTherapeuticMasteryCriteriaCompatible,
 } from '../utils/therapeuticPlan';
 import { buildClinicalActionToast, buildClinicalOfflineToast, buildClinicalSaveErrorToast, type ClinicalActionToast } from '../utils/abaSessionFeedback';
 import { getCrisisShortcutIds, getDockVisibleShortcuts, normalizeQuickBehaviorShortcuts } from '../utils/abaClinicalDock';
@@ -146,7 +147,11 @@ type SessionRecord = {
   startedAt?: string;
   endedAt?: string;
   durationSeconds?: number | null;
+  latencyMs?: number | null;
   countDelta?: number | null;
+  therapeuticMeasurement?: boolean;
+  measuredValue?: number | null;
+  measurementUnit?: string | null;
   trialOutcome?: 'independent' | 'prompted' | 'error';
   measurementModelVersion?: 'LEGACY_V2' | 'V3' | 'EMERGENCY_LEGACY_BRIDGE' | string;
   v3ActionKey?: AbaV3TrialActionKey;
@@ -209,6 +214,18 @@ type OpenDurationEvent = {
   severity?: number | null;
   measurementModelVersion?: string;
   v3EpisodeEventId?: string | null;
+};
+
+
+type TherapeuticTimerState = {
+  goalKey: string;
+  targetId: string;
+  targetName: string;
+  programId?: string | null;
+  measurementType: 'duration' | 'latency';
+  startedAt: string;
+  runningSince: string | null;
+  accumulatedMs: number;
 };
 
 type AbaV3BehaviorDecision = {
@@ -436,6 +453,53 @@ const formatDurationSeconds = (durationSeconds: number) => {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
 
+const therapeuticMeasurementTypes = new Set([
+  'independent_prompted_no_response',
+  'correct_incorrect',
+  'frequency',
+  'duration',
+  'latency',
+  'task_analysis',
+  'percentage'
+]);
+
+const normalizeTherapeuticMeasurementType = (value: unknown) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return therapeuticMeasurementTypes.has(normalized) ? normalized : 'independent_prompted_no_response';
+};
+
+const therapeuticMeasurementTypeFromGoal = (goal: any) => normalizeTherapeuticMeasurementType(
+  goal?.measurementType || goal?.measurement_type || goal?.collectionMeasurementType || goal?.collection_measurement_type
+);
+
+const isTherapeuticMeasurementPayload = (raw: any) => raw?.therapeuticMeasurement === true || raw?.therapeutic_measurement === true || String(raw?.source || '').trim() === 'therapeutic_program_measurement';
+
+const formatTherapeuticMeasurementValue = (measurementType: unknown, value: unknown) => {
+  const normalized = normalizeTherapeuticMeasurementType(measurementType);
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return 'Medida registrada';
+  if (normalized === 'duration' || normalized === 'latency') return formatDurationSeconds(numericValue);
+  if (normalized === 'percentage' || normalized === 'task_analysis') return `${Math.round(numericValue * 100) / 100}%`;
+  if (normalized === 'frequency') return `+${Math.round(numericValue * 100) / 100}`;
+  if (normalized === 'correct_incorrect') return numericValue > 0 ? 'Acerto' : 'Erro';
+  return `${Math.round(numericValue * 100) / 100}`;
+};
+
+const formatTherapeuticMeasurementDetail = (measurementType: unknown, value: unknown, raw?: any) => {
+  const normalized = normalizeTherapeuticMeasurementType(measurementType);
+  const explicit = String(raw?.displayLabel || raw?.display_label || '').trim();
+  if (explicit) return explicit;
+  const labels: Record<string, string> = {
+    duration: 'Duração',
+    latency: 'Tempo de resposta',
+    frequency: 'Frequência',
+    correct_incorrect: 'Resposta',
+    task_analysis: 'Etapas',
+    percentage: 'Percentual'
+  };
+  return `${labels[normalized] || 'Medida'} · ${formatTherapeuticMeasurementValue(normalized, value)}`;
+};
+
 const formatSessionDuration = (durationSeconds: number) => {
   const safeSeconds = Math.max(0, Math.round(Number(durationSeconds) || 0));
   if (safeSeconds < 120) return formatDurationSeconds(safeSeconds);
@@ -591,6 +655,36 @@ const mapRecentAbaEventToSessionRecord = (event: any): SessionRecord | null => {
     const promptLevelKey = event.prompt_level_key || event.promptLevelKey;
     const promptLevelName = event.prompt_level_name || event.promptLevelName;
     const rawPayload = event.raw_payload || event.rawPayload || {};
+    if (isTherapeuticMeasurementPayload(rawPayload)) {
+      const therapeuticMeasurementType = normalizeTherapeuticMeasurementType(rawPayload.measurementType || rawPayload.measurement_type);
+      const rawMeasurementValue = rawPayload.measurementValue ?? rawPayload.measurement_value
+        ?? (therapeuticMeasurementType === 'latency' ? Number(event.latency_ms ?? event.latencyMs ?? 0) / 1000 : null);
+      const measuredValue = Number(rawMeasurementValue);
+      const safeMeasuredValue = Number.isFinite(measuredValue) ? measuredValue : null;
+      return {
+        id: String(event.id),
+        kind: 'trial',
+        title: String(event.target_name || event.targetName || 'Medida terapêutica'),
+        detail: formatTherapeuticMeasurementDetail(therapeuticMeasurementType, safeMeasuredValue, rawPayload),
+        timestamp: String(event.occurred_at || event.occurredAt || event.created_at || event.createdAt || new Date().toISOString()),
+        syncStatus: normalizeSyncStatus(event.sync_status || event.syncStatus || 'synced'),
+        targetId: event.target_id || event.targetId || null,
+        targetName: event.target_name || event.targetName || null,
+        programId: event.program_id || event.programId || null,
+        therapistId: event.therapist_id || event.therapistId || null,
+        measurementType: therapeuticMeasurementType,
+        therapeuticMeasurement: true,
+        measuredValue: safeMeasuredValue,
+        measurementUnit: rawPayload.measurementUnit || rawPayload.measurement_unit || null,
+        durationSeconds: therapeuticMeasurementType === 'duration' ? safeMeasuredValue : null,
+        latencyMs: therapeuticMeasurementType === 'latency' ? (event.latency_ms ?? event.latencyMs ?? (safeMeasuredValue !== null ? Math.round(safeMeasuredValue * 1000) : null)) : null,
+        collectionType: normalizeAbaCollectionType(collectionType),
+        score,
+        correct,
+        independent: false,
+        rawPayload
+      };
+    }
     return {
       id: String(event.id),
       kind: 'trial',
@@ -669,6 +763,26 @@ const normalizePersistedSessionRecord = (record: any): SessionRecord => {
     const promptLevelKey = normalizedRecord.promptLevelKey || record?.prompt_level_key || record?.promptLevel;
     const promptLevelName = normalizedRecord.promptLevelName || record?.prompt_level_name;
     const rawPayload = normalizedRecord.rawPayload || record?.raw_payload || record?.rawPayload || {};
+    if (isTherapeuticMeasurementPayload(rawPayload)) {
+      const therapeuticMeasurementType = normalizeTherapeuticMeasurementType(rawPayload.measurementType || rawPayload.measurement_type || normalizedRecord.measurementType);
+      const rawMeasurementValue = rawPayload.measurementValue ?? rawPayload.measurement_value ?? normalizedRecord.measuredValue
+        ?? (therapeuticMeasurementType === 'latency' ? Number(record?.latency_ms ?? normalizedRecord.latencyMs ?? 0) / 1000 : null);
+      const measuredValue = Number(rawMeasurementValue);
+      const safeMeasuredValue = Number.isFinite(measuredValue) ? measuredValue : null;
+      return {
+        ...normalizedRecord,
+        collectionType,
+        measurementType: therapeuticMeasurementType,
+        therapeuticMeasurement: true,
+        measuredValue: safeMeasuredValue,
+        measurementUnit: rawPayload.measurementUnit || rawPayload.measurement_unit || normalizedRecord.measurementUnit || null,
+        durationSeconds: therapeuticMeasurementType === 'duration' ? safeMeasuredValue : normalizedRecord.durationSeconds,
+        latencyMs: therapeuticMeasurementType === 'latency' ? (record?.latency_ms ?? normalizedRecord.latencyMs ?? (safeMeasuredValue !== null ? Math.round(safeMeasuredValue * 1000) : null)) : normalizedRecord.latencyMs,
+        rawPayload,
+        independent: false,
+        detail: formatTherapeuticMeasurementDetail(therapeuticMeasurementType, safeMeasuredValue, rawPayload)
+      };
+    }
     const score = normalizedRecord.score ?? record?.response_score ?? 0;
     const scoreNumber = Number(score);
     const isCorrect = typeof normalizedRecord.correct === 'boolean' ? normalizedRecord.correct : Number.isFinite(scoreNumber) && scoreNumber > 0;
@@ -1037,6 +1151,8 @@ export const SessionMode = ({
     'Outro motivo'
   ];
   const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
+  const [therapeuticTimers, setTherapeuticTimers] = useState<Record<string, TherapeuticTimerState>>({});
+  const [priorMasteryEvaluations, setPriorMasteryEvaluations] = useState<any[]>([]);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
   const [canonicalBehaviorPresets, setCanonicalBehaviorPresets] = useState<any[]>([]);
@@ -1227,6 +1343,26 @@ export const SessionMode = ({
       cancelled = true;
     };
   }, [patientId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!patientId || sessionId.startsWith('draft-')) {
+      setPriorMasteryEvaluations([]);
+      return () => { cancelled = true; };
+    }
+    dataService.getAbaMasteryEvaluations(patientId, { page: 1, pageSize: 50 })
+      .then((result: any) => {
+        if (cancelled) return;
+        const rows = Array.isArray(result?.data) ? result.data : [];
+        setPriorMasteryEvaluations(rows.filter((row: any) => String(row?.session_id || row?.sessionId || '').trim() !== sessionId));
+      })
+      .catch((error: any) => {
+        if (import.meta.env.DEV) console.warn('Falha ao carregar histórico de critérios ABA:', error);
+        if (!cancelled) setPriorMasteryEvaluations([]);
+      });
+    return () => { cancelled = true; };
+  }, [patientId, sessionId]);
+
   const [editingRecordLocation, setEditingRecordLocation] = useState('');
   const [editingRecordSeverity, setEditingRecordSeverity] = useState(2);
   const [editingRecordAntecedent, setEditingRecordAntecedent] = useState('');
@@ -1509,6 +1645,7 @@ export const SessionMode = ({
         ? persisted.records.map(normalizePersistedSessionRecord)
         : []);
       setOpenDurations(Array.isArray(persisted.openDurations) ? persisted.openDurations : []);
+      setTherapeuticTimers(persisted.therapeuticTimers && typeof persisted.therapeuticTimers === 'object' ? persisted.therapeuticTimers : {});
       setRateWindow(persisted.rateWindow || null);
       setIntervalRun(persisted.intervalRun || null);
       setIntervalSummary(persisted.intervalSummary || null);
@@ -1528,6 +1665,7 @@ export const SessionMode = ({
     } catch {
       setRecords([]);
       setOpenDurations([]);
+      setTherapeuticTimers({});
       setRateWindow(null);
       setIntervalRun(null);
       setIntervalSummary(null);
@@ -1555,6 +1693,7 @@ export const SessionMode = ({
         JSON.stringify({
           records: records.slice(0, 40),
           openDurations,
+          therapeuticTimers,
           rateWindow,
           intervalRun,
           intervalSummary,
@@ -1570,7 +1709,7 @@ export const SessionMode = ({
     } catch {
       // Local session history is a convenience layer; encrypted offline cache remains the source of truth.
     }
-  }, [collectionType, hydratedSessionStateKey, intervalRun, intervalSummary, lastRegularTrialType, manualMaintenanceProbeTargets, openDurations, postClosureSummary, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
+  }, [collectionType, hydratedSessionStateKey, intervalRun, intervalSummary, lastRegularTrialType, manualMaintenanceProbeTargets, openDurations, therapeuticTimers, postClosureSummary, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1745,11 +1884,12 @@ export const SessionMode = ({
   }, [patientId, sessionCompleted, sessionId]);
 
   useEffect(() => {
-    const hasRunningTimer = openDurations.length > 0 || rateWindow || intervalRun;
+    const hasRunningTherapeuticTimer = Object.values(therapeuticTimers).some((timer) => Boolean(timer?.runningSince));
+    const hasRunningTimer = openDurations.length > 0 || hasRunningTherapeuticTimer || rateWindow || intervalRun;
     if (!hasRunningTimer) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [intervalRun, openDurations.length, rateWindow]);
+  }, [intervalRun, openDurations.length, rateWindow, therapeuticTimers]);
 
   useEffect(() => {
     if (intervalRunAwaitingResponse) setClinicalDockSheetOpen(false);
@@ -1927,6 +2067,209 @@ export const SessionMode = ({
   const goalTargetId = (goal: any) => String(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || '').trim();
   const goalTargetName = (goal: any) => String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
   const goalTargetType = (goal: any) => String(goal?.target_type || goal?.targetType || '').trim().toLowerCase();
+  const therapeuticGoalKey = (goal: any) => goalTargetId(goal) || goalTargetName(goal) || String(goal?.id || '').trim();
+  const therapeuticTimerElapsedMs = (timer: TherapeuticTimerState | null | undefined) => {
+    if (!timer) return 0;
+    const runningDelta = timer.runningSince ? Math.max(0, nowMs - new Date(timer.runningSince).getTime()) : 0;
+    return Math.max(0, Number(timer.accumulatedMs || 0) + runningDelta);
+  };
+
+  const persistTherapeuticMeasurement = async ({
+    goal,
+    measurementType,
+    measurementValue,
+    measurementUnit,
+    displayLabel,
+    startedAt,
+    endedAt,
+    latencyMs
+  }: {
+    goal: any;
+    measurementType: string;
+    measurementValue: number;
+    measurementUnit?: string;
+    displayLabel?: string;
+    startedAt?: string | null;
+    endedAt?: string | null;
+    latencyMs?: number | null;
+  }) => {
+    if (!ensureSessionCanRecord()) return false;
+    const normalizedMeasurementType = normalizeTherapeuticMeasurementType(measurementType);
+    if (normalizedMeasurementType === 'independent_prompted_no_response') return false;
+    const numericValue = Number(measurementValue);
+    if (!Number.isFinite(numericValue)) {
+      setSessionWarning('A medida clínica informada é inválida. Nenhum dado foi gravado.');
+      return false;
+    }
+    const targetId = goalTargetId(goal);
+    const targetName = goalTargetName(goal) || 'Alvo terapêutico';
+    const programId = String(goal?.programId || goal?.program_id || goal?.protocolId || '').trim() || null;
+    const timestamp = endedAt || new Date().toISOString();
+    const trialId = globalThis.crypto?.randomUUID?.() || `therapeutic-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+    const actionKey = `therapeutic:${normalizedMeasurementType}:${targetId || targetName}`;
+    if (!lockAction(actionKey, 0)) return false;
+    const normalizedCollectionType = normalizeAbaCollectionType(collectionType);
+    const isCorrectIncorrect = normalizedMeasurementType === 'correct_incorrect';
+    const correct = isCorrectIncorrect ? numericValue > 0 : false;
+    const rawPayload = {
+      therapeuticMeasurement: true,
+      source: 'therapeutic_program_measurement',
+      measurementType: normalizedMeasurementType,
+      measurementValue: numericValue,
+      measurementUnit: measurementUnit || null,
+      displayLabel: displayLabel || formatTherapeuticMeasurementDetail(normalizedMeasurementType, numericValue),
+      startedAt: startedAt || null,
+      endedAt: timestamp,
+      durationSeconds: normalizedMeasurementType === 'duration' ? numericValue : null,
+      latencyMs: normalizedMeasurementType === 'latency' ? (latencyMs ?? Math.round(numericValue * 1000)) : null,
+      programId,
+      targetId: targetId || null
+    };
+    const localRecord: Omit<SessionRecord, 'syncStatus'> = {
+      id: trialId,
+      kind: 'trial',
+      title: targetName,
+      detail: formatTherapeuticMeasurementDetail(normalizedMeasurementType, numericValue, rawPayload),
+      timestamp,
+      targetId: targetId || null,
+      targetName,
+      programId,
+      therapistId: resolvedTherapistId || null,
+      measurementType: normalizedMeasurementType,
+      therapeuticMeasurement: true,
+      measuredValue: numericValue,
+      measurementUnit: measurementUnit || null,
+      durationSeconds: normalizedMeasurementType === 'duration' ? numericValue : null,
+      latencyMs: normalizedMeasurementType === 'latency' ? (latencyMs ?? Math.round(numericValue * 1000)) : null,
+      collectionType: normalizedCollectionType,
+      score: isCorrectIncorrect ? numericValue : null,
+      correct,
+      independent: false,
+      rawPayload
+    };
+    addRecord(localRecord, 'local');
+    window.setTimeout(() => updateRecordStatus(trialId, 'syncing'), 30);
+    try {
+      const result = await dataService.saveAbaTrial({
+        id: trialId,
+        clinic_id: resolvedClinicId || undefined,
+        patient_id: patientId,
+        session_id: sessionId,
+        target_id: targetId || undefined,
+        target_name: targetName,
+        program_id: programId || undefined,
+        collection_type: normalizedCollectionType,
+        trial_type: normalizedCollectionType,
+        ...(isCorrectIncorrect ? { response_score: numericValue, max_score: 1, correct } : {}),
+        independent: false,
+        latency_ms: normalizedMeasurementType === 'latency' ? (latencyMs ?? Math.round(numericValue * 1000)) : undefined,
+        occurred_at: timestamp,
+        therapist_id: resolvedTherapistId || undefined,
+        source: 'therapeutic_program_measurement',
+        raw_payload: rawPayload
+      });
+      if (result?.success === false) {
+        updateRecordStatus(trialId, result?.durable ? 'local' : 'error');
+        if (!result?.durable) {
+          setSessionWarning(result?.error || 'Não foi possível salvar esta medida clínica.');
+          showClinicalToast(buildClinicalSaveErrorToast(), 'error');
+          return false;
+        }
+      } else {
+        updateRecordStatus(trialId, result?.pending ? 'local' : 'synced');
+      }
+      triggerMicroFeedback(actionKey, normalizedMeasurementType === 'frequency' ? 'plus' : 'check');
+      const measurementFeedback = displayLabel || formatTherapeuticMeasurementValue(normalizedMeasurementType, numericValue);
+      showClinicalToast({
+        variant: 'success',
+        title: 'Medida registrada',
+        compactTitle: '✓ Medida salva',
+        compactSubtitle: measurementFeedback,
+        subtitle: measurementFeedback
+      });
+      onSessionRecordSaved?.();
+      return true;
+    } catch (error) {
+      updateRecordStatus(trialId, 'error');
+      setSessionWarning('Não foi possível salvar esta medida clínica. O registro local foi preservado para revisão.');
+      showClinicalToast(buildClinicalSaveErrorToast(), 'error');
+      console.error('Falha ao persistir medida do programa terapêutico:', error);
+      return false;
+    } finally {
+      releaseActionLock(actionKey);
+    }
+  };
+
+  const startTherapeuticTimer = (goal: any, measurementType: 'duration' | 'latency') => {
+    if (!ensureSessionCanRecord()) return;
+    const goalKey = therapeuticGoalKey(goal);
+    if (!goalKey) return;
+    const now = new Date().toISOString();
+    setTherapeuticTimers((prev) => ({
+      ...prev,
+      [goalKey]: {
+        goalKey,
+        targetId: goalTargetId(goal),
+        targetName: goalTargetName(goal) || 'Alvo terapêutico',
+        programId: String(goal?.programId || goal?.program_id || goal?.protocolId || '').trim() || null,
+        measurementType,
+        startedAt: now,
+        runningSince: now,
+        accumulatedMs: 0
+      }
+    }));
+  };
+
+  const pauseResumeTherapeuticDuration = (goal: any) => {
+    const goalKey = therapeuticGoalKey(goal);
+    setTherapeuticTimers((prev) => {
+      const timer = prev[goalKey];
+      if (!timer || timer.measurementType !== 'duration') return prev;
+      if (timer.runningSince) {
+        const accumulatedMs = timer.accumulatedMs + Math.max(0, Date.now() - new Date(timer.runningSince).getTime());
+        return { ...prev, [goalKey]: { ...timer, accumulatedMs, runningSince: null } };
+      }
+      return { ...prev, [goalKey]: { ...timer, runningSince: new Date().toISOString() } };
+    });
+  };
+
+  const finishTherapeuticTimer = async (goal: any) => {
+    const goalKey = therapeuticGoalKey(goal);
+    const timer = therapeuticTimers[goalKey];
+    if (!timer) return;
+    const completedAt = new Date().toISOString();
+    const totalMs = timer.accumulatedMs + (timer.runningSince ? Math.max(0, Date.now() - new Date(timer.runningSince).getTime()) : 0);
+    const seconds = Math.max(0.1, Math.round(totalMs / 100) / 10);
+    setTherapeuticTimers((prev) => ({ ...prev, [goalKey]: { ...timer, accumulatedMs: totalMs, runningSince: null } }));
+    const saved = await persistTherapeuticMeasurement({
+      goal,
+      measurementType: timer.measurementType,
+      measurementValue: seconds,
+      measurementUnit: 'seconds',
+      displayLabel: `${timer.measurementType === 'duration' ? 'Duração' : 'Tempo de resposta'} · ${formatDurationSeconds(seconds)}`,
+      startedAt: timer.startedAt,
+      endedAt: completedAt,
+      latencyMs: timer.measurementType === 'latency' ? Math.round(totalMs) : null
+    });
+    if (saved) {
+      setTherapeuticTimers((prev) => {
+        const next = { ...prev };
+        delete next[goalKey];
+        return next;
+      });
+    }
+  };
+
+  const cancelTherapeuticTimer = (goal: any) => {
+    const goalKey = therapeuticGoalKey(goal);
+    setTherapeuticTimers((prev) => {
+      if (!prev[goalKey]) return prev;
+      const next = { ...prev };
+      delete next[goalKey];
+      return next;
+    });
+  };
+
   const normalizeSessionGoalKey = (value: any) => String(value ?? '').trim();
   const uniqueSessionGoalKeys = (values: any[]) =>
     values
@@ -5119,6 +5462,16 @@ export const SessionMode = ({
       incompleteTrial: Boolean(promptSelectionGoal)
     });
     const blockers: SessionSummaryPendingItem[] = [...closure.blockers];
+    const activeTherapeuticTimers = Object.values(therapeuticTimers);
+    if (activeTherapeuticTimers.length > 0) {
+      blockers.push({
+        key: 'therapeutic_measurement_timer_open',
+        label: `${activeTherapeuticTimers.length} coleta(s) terapêutica(s) com cronômetro precisam ser finalizadas ou canceladas`,
+        category: 'blocker',
+        blocking: true,
+        count: activeTherapeuticTimers.length
+      });
+    }
     const warnings: SessionSummaryPendingItem[] = [];
     const isNonAttendance = NON_ATTENDANCE_STATUSES.has(attendanceStatus);
 
@@ -5209,7 +5562,7 @@ export const SessionMode = ({
       startedAt: activeSession?.startedAt || activeSession?.started_at || endedAt,
       endedAt,
       createdAt: endedAt,
-      trials: records.filter((record) => record.kind === 'trial'),
+      trials: records.filter((record) => record.kind === 'trial' && !record.therapeuticMeasurement),
       behaviorEvents: records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)),
       masterySummary: teachingMasteryRows,
       blockingItems: closureIssues.blockers,
@@ -5296,14 +5649,14 @@ export const SessionMode = ({
   };
 
   const sessionSummary = useMemo(() => {
-    const trialTotal = records.filter((record) => record.kind === 'trial').length;
+    const trialTotal = records.filter((record) => record.kind === 'trial' && !record.therapeuticMeasurement).length;
     const behaviorTotal = records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)).length;
     const errorTotal = records.filter((record) => record.syncStatus === 'error').length;
     const localTotal = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'syncing').length;
     return { trialTotal, behaviorTotal, errorTotal, localTotal };
   }, [records]);
 
-  const sessionClosureIssues = useMemo(() => buildSessionClosureIssues(), [attendanceStatus, records, openDurations, intervalRun, promptSelectionGoal, sessionNote, patient?.abaBehaviorSettings, patient?.abaSettings, patient?.clinicSettings]);
+  const sessionClosureIssues = useMemo(() => buildSessionClosureIssues(), [attendanceStatus, records, openDurations, therapeuticTimers, intervalRun, promptSelectionGoal, sessionNote, patient?.abaBehaviorSettings, patient?.abaSettings, patient?.clinicSettings]);
 
   const sessionClosureSummary: SessionSummary = useMemo(() => {
     const endedAt = sessionEndPreviewAt || new Date().toISOString();
@@ -5321,7 +5674,7 @@ export const SessionMode = ({
       therapistName: therapistDisplayName,
       startedAt: activeSession?.startedAt || endedAt,
       endedAt,
-      trials: records.filter((record) => record.kind === 'trial'),
+      trials: records.filter((record) => record.kind === 'trial' && !record.therapeuticMeasurement),
       behaviorEvents: records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)),
       blockingItems: sessionClosureIssues.blockers,
       warningItems: sessionClosureIssues.warnings,
@@ -5625,6 +5978,11 @@ export const SessionMode = ({
     const goalName = String(goal?.name || goal?.target_name || goal?.targetName || 'Meta').trim();
     const goalTrials = records.filter((record) => sessionRecordMatchesTeachingGoal(record, goal));
     const criterion = buildSessionGoalMasteryCriterion(goal);
+    const previousGoalEvaluations = priorMasteryEvaluations.filter((row: any) => {
+      const previousTargetId = String(row?.target_id || row?.targetId || '').trim();
+      const previousTargetName = String(row?.target_name || row?.targetName || '').trim();
+      return (goalId && previousTargetId === goalId) || (!previousTargetId && previousTargetName === goalName);
+    });
     const evaluation = evaluateTargetMastery({
       organizationId: resolvedClinicId || 'local',
       patientId,
@@ -5644,9 +6002,11 @@ export const SessionMode = ({
         prompt_level_key: record.promptLevelKey,
         trial_outcome: record.trialOutcome,
         therapist_id: record.therapistId || resolvedTherapistId || null,
+        latency_ms: record.latencyMs ?? null,
+        raw_payload: record.rawPayload || null,
         occurred_at: record.timestamp
       })),
-      previousEvaluations: [],
+      previousEvaluations: previousGoalEvaluations,
       evaluatedAt: sessionEndPreviewAt || new Date().toISOString()
     });
     return {
@@ -5676,15 +6036,22 @@ export const SessionMode = ({
       accuracyPercent: evaluation.accuracyPercent,
       independencePercent: evaluation.independencePercent,
       consecutiveSuccessfulDays: evaluation.consecutiveSuccessfulDays,
+      successfulSessions: evaluation.successfulSessions,
       criterionProgressCount: evaluation.criterionProgressCount,
       criterionRequiredCount: evaluation.criterionRequiredCount,
       criterionProgressLabel: evaluation.criterionProgressLabel,
       criterionProgressKind: evaluation.criterionProgressKind,
-      criterionProgressPrefix: evaluation.criterionProgressKind === 'consecutive_independent' ? 'Sequencia' : 'Hoje',
+      criterionProgressPrefix: evaluation.criterionProgressKind === 'consecutive_independent'
+        ? 'Sequência'
+        : evaluation.criterionProgressKind === 'sessions'
+          ? 'Sessões'
+          : evaluation.criterionProgressKind === 'measurement'
+            ? 'Medida'
+            : 'Hoje',
       sequenceBrokenByLastTrial: evaluation.sequenceBrokenByLastTrial,
       reasons: evaluation.reasons
     };
-  }), [patientId, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId]);
+  }), [patientId, priorMasteryEvaluations, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId]);
 
   const maintenanceProbeRows = useMemo(() => sessionGoals
     .map((goal: any) => {
@@ -6306,7 +6673,7 @@ export const SessionMode = ({
   }, [records]);
 
   const latestTrialRecord = useMemo(
-    () => records.find((record) => record.kind === 'trial') || null,
+    () => records.find((record) => record.kind === 'trial' && !record.therapeuticMeasurement) || null,
     [records]
   );
 
@@ -6781,7 +7148,7 @@ export const SessionMode = ({
             .sort((left, right) => new Date(right.timestamp || 0).getTime() - new Date(left.timestamp || 0).getTime())
             .slice(0, 180);
         });
-        setTrialCount(serverRecords.filter((record) => record.kind === 'trial').length);
+        setTrialCount(serverRecords.filter((record) => record.kind === 'trial' && !record.therapeuticMeasurement).length);
         if (recordsResult?.success === false) {
           setSessionWarning(recordsResult?.error || 'O relatório abriu, mas alguns registros clínicos não puderam ser carregados.');
         }
@@ -8491,6 +8858,129 @@ export const SessionMode = ({
     </div>
   ) : null;
 
+  const renderTherapeuticMeasurementCollector = (goal: any, compact = false) => {
+    const measurementType = therapeuticMeasurementTypeFromGoal(goal);
+    if (!goal?.isTherapeuticProgramTarget || measurementType === 'independent_prompted_no_response') return null;
+    const goalKey = therapeuticGoalKey(goal);
+    const timer = therapeuticTimers[goalKey] || null;
+    const timerSeconds = timer ? therapeuticTimerElapsedMs(timer) / 1000 : 0;
+    const criterion = buildSessionGoalMasteryCriterion(goal);
+    const criterionCompatible = !criterion || isTherapeuticMasteryCriteriaCompatible(measurementType, criterion);
+    const frequencyTotal = records
+      .filter((record) => sessionRecordMatchesTeachingGoal(record, goal))
+      .filter((record) => record.therapeuticMeasurement && normalizeTherapeuticMeasurementType(record.measurementType) === 'frequency')
+      .reduce((sum, record) => sum + (Number(record.measuredValue) || 0), 0);
+    const stop = (event: React.MouseEvent) => event.stopPropagation();
+    const buttonBase = `${compact ? 'min-h-[46px] text-[11px]' : 'min-h-[56px] text-sm'} inline-flex items-center justify-center gap-2 rounded-2xl px-4 font-medium transition-all active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60`;
+    const recordValue = (value: number, unit: string | undefined, label: string) => async (event: React.MouseEvent) => {
+      stop(event);
+      await persistTherapeuticMeasurement({ goal, measurementType, measurementValue: value, measurementUnit: unit, displayLabel: label });
+    };
+
+    return (
+      <div
+        className={`${compact ? 'rounded-2xl border border-purple-100 bg-[#FBF9FF] p-3' : 'rounded-[24px] border border-purple-100 bg-[#FBF9FF] p-4 sm:p-5'} space-y-3`}
+        data-therapeutic-measurement-collector={measurementType}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-widest text-slate-500">Como registrar</p>
+            <p className="mt-1 text-sm font-medium text-[#1B254B]">
+              {measurementType === 'duration' ? 'Duração' : measurementType === 'latency' ? 'Tempo de resposta' : measurementType === 'frequency' ? 'Frequência' : measurementType === 'correct_incorrect' ? 'Acerto / Erro' : measurementType === 'task_analysis' ? 'Etapas concluídas' : 'Percentual'}
+            </p>
+          </div>
+          {measurementType === 'frequency' && (
+            <span className="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-[#7a32fc] shadow-sm">Nesta sessão: {Math.round(frequencyTotal * 100) / 100}</span>
+          )}
+        </div>
+
+        {!criterionCompatible && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800" data-therapeutic-criterion-mismatch>
+            O critério de domínio atual mede outra variável. A Verto continuará coletando conforme o programa, mas não marcará domínio até o critério ser revisado.
+          </div>
+        )}
+
+        {(measurementType === 'duration' || measurementType === 'latency') && (
+          <div className="rounded-2xl border border-purple-100 bg-white p-4 text-center">
+            <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">{measurementType === 'duration' ? 'Tempo acumulado' : 'Latência'}</p>
+            <p className={`${compact ? 'text-3xl' : 'text-4xl'} mt-1 font-medium tabular-nums text-[#1B254B]`}>{formatDurationSeconds(timerSeconds)}</p>
+            {timer && <p className="mt-1 text-[10px] text-slate-400">Início {formatSessionTime(timer.startedAt)}</p>}
+          </div>
+        )}
+
+        {measurementType === 'duration' && (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {!timer ? (
+              <button type="button" onClick={(event) => { stop(event); startTherapeuticTimer(goal, 'duration'); }} className={`${buttonBase} col-span-2 bg-[#7a32fc] text-white sm:col-span-4`}>
+                <Play size={16} /> Iniciar
+              </button>
+            ) : (
+              <>
+                <button type="button" onClick={(event) => { stop(event); pauseResumeTherapeuticDuration(goal); }} className={`${buttonBase} bg-white text-[#7a32fc] border border-purple-200`}>
+                  {timer.runningSince ? <><Pause size={16} /> Pausar</> : <><Play size={16} /> Retomar</>}
+                </button>
+                <button type="button" onClick={(event) => { stop(event); void finishTherapeuticTimer(goal); }} className={`${buttonBase} bg-[#1B254B] text-white`}>
+                  <Square size={15} /> Finalizar
+                </button>
+                <button type="button" onClick={(event) => { stop(event); cancelTherapeuticTimer(goal); }} className={`${buttonBase} col-span-2 border border-slate-200 bg-white text-slate-500 sm:col-span-2`}>
+                  Cancelar cronômetro
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {measurementType === 'latency' && (
+          <div className="grid grid-cols-2 gap-2">
+            {!timer ? (
+              <button type="button" onClick={(event) => { stop(event); startTherapeuticTimer(goal, 'latency'); }} className={`${buttonBase} col-span-2 bg-[#7a32fc] text-white`}>
+                <Play size={16} /> Iniciar
+              </button>
+            ) : (
+              <>
+                <button type="button" onClick={(event) => { stop(event); void finishTherapeuticTimer(goal); }} className={`${buttonBase} bg-emerald-500 text-white`}>
+                  <CheckCircle2 size={16} /> Responder
+                </button>
+                <button type="button" onClick={(event) => { stop(event); cancelTherapeuticTimer(goal); }} className={`${buttonBase} border border-slate-200 bg-white text-slate-500`}>
+                  Cancelar
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {measurementType === 'frequency' && (
+          <button type="button" onClick={recordValue(1, 'count', 'Frequência · +1')} className={`${buttonBase} w-full bg-[#7a32fc] text-white`}>
+            <Plus size={18} /> +1 ocorrência
+          </button>
+        )}
+
+        {measurementType === 'correct_incorrect' && (
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={recordValue(1, 'binary', 'Resposta · Acerto')} className={`${buttonBase} bg-[#05CD99] text-white`}><CheckCircle2 size={17} /> Acerto</button>
+            <button type="button" onClick={recordValue(0, 'binary', 'Resposta · Erro')} className={`${buttonBase} bg-[#F15B50] text-white`}><X size={17} /> Erro</button>
+          </div>
+        )}
+
+        {measurementType === 'task_analysis' && (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <button type="button" onClick={recordValue(100, 'percent', 'Etapas · Concluída')} className={`${buttonBase} bg-[#05CD99] text-white`}>Concluída</button>
+            <button type="button" onClick={recordValue(50, 'percent', 'Etapas · Com ajuda')} className={`${buttonBase} border border-orange-200 bg-orange-50 text-orange-700`}>Com ajuda</button>
+            <button type="button" onClick={recordValue(0, 'percent', 'Etapas · Não realizada')} className={`${buttonBase} bg-[#F15B50] text-white`}>Não realizada</button>
+          </div>
+        )}
+
+        {measurementType === 'percentage' && (
+          <div className="grid grid-cols-3 gap-2">
+            {[0, 50, 100].map((value) => (
+              <button key={value} type="button" onClick={recordValue(value, 'percent', `Percentual · ${value}%`)} className={`${buttonBase} border border-purple-100 bg-white text-[#7a32fc]`}>{value}%</button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const sessionModeContent = (
     <div className="fixed inset-0 z-[100] bg-[#F4F7FE] flex flex-col overflow-hidden overflow-x-hidden animate-fade-in pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
       <div className="sticky top-0 z-50 shrink-0 border-b border-purple-100 bg-white/95 backdrop-blur shadow-sm" data-aba-session-compact-header>
@@ -9444,7 +9934,9 @@ export const SessionMode = ({
                           Usar sondagem
                         </button>
                       )}
-                      <p className="pt-1 text-[11px] font-medium text-slate-500">Registro de tentativa</p>
+                      {renderTherapeuticMeasurementCollector(goal, true) || (
+                        <>
+                          <p className="pt-1 text-[11px] font-medium text-slate-500">Registro de tentativa</p>
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
@@ -9516,6 +10008,8 @@ export const SessionMode = ({
                           </div>
                         )}
                       </div>
+                        </>
+                      )}
                       <button
                         type="button"
                         onClick={(event) => {
@@ -9682,7 +10176,8 @@ export const SessionMode = ({
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-3" data-aba-trial-response-matrix>
+                  {renderTherapeuticMeasurementCollector(goal) || (
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3" data-aba-trial-response-matrix>
                     <button
                       onClick={() => handleTrialClick(goal, 1, 'independent')}
                       disabled={Boolean(actionLocks[independentTrialLockKey])}
@@ -9729,7 +10224,8 @@ export const SessionMode = ({
                       <span className="mt-2 text-base font-medium">Erro</span>
                       <span className={`${mobileFocusMode ? 'hidden sm:block' : 'block'} text-[10px] opacity-80`}>Erro ou sem resposta</span>
                     </button>
-                  </div>
+                    </div>
+                  )}
 
                   <div className="mt-5 text-center">
                     <button
