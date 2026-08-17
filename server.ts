@@ -16035,6 +16035,7 @@ function clinicInvitationAcceptanceError(error: any): Error & { code: string; st
     'CLINIC_INVITATION_NOT_FOUND',
     'CLINIC_INVITATION_EMAIL_MISMATCH',
     'CLINIC_INVITATION_ROLE_INVALID',
+    'CLINIC_INVITATION_SPECIALTY_INVALID',
     'CLINIC_INVITATION_ALREADY_USED',
     'CLINIC_INVITATION_NOT_AVAILABLE',
     'CLINIC_INVITATION_CONCURRENT_UPDATE',
@@ -16048,6 +16049,7 @@ function clinicInvitationAcceptanceError(error: any): Error & { code: string; st
     CLINIC_INVITATION_NOT_FOUND: 404,
     CLINIC_INVITATION_EMAIL_MISMATCH: 403,
     CLINIC_INVITATION_ROLE_INVALID: 422,
+    CLINIC_INVITATION_SPECIALTY_INVALID: 422,
     CLINIC_INVITATION_ALREADY_USED: 409,
     CLINIC_INVITATION_NOT_AVAILABLE: 409,
     CLINIC_INVITATION_CONCURRENT_UPDATE: 409,
@@ -26484,6 +26486,7 @@ async function startServer() {
             CLINIC_INVITATION_EMAIL_MISMATCH: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.',
             CLINIC_INVITATION_NOT_FOUND: 'Este convite não foi encontrado.',
             CLINIC_INVITATION_NOT_AVAILABLE: 'Este convite expirou, foi cancelado ou não está mais disponível.',
+            CLINIC_INVITATION_SPECIALTY_INVALID: 'A especialidade clínica deste convite está incompleta. Peça ao Diretor para reenviar o convite selecionando novamente a especialidade.',
             CLINIC_INVITATION_MIGRATION_REQUIRED: 'A atualização segura de convites ainda não foi aplicada no banco de dados.',
           };
           return res.status(Number(acceptanceError?.statusCode) || 500).json({
@@ -28979,28 +28982,62 @@ async function startServer() {
       });
     }
 
+    let acceptedInvitation: AtomicClinicInvitationAcceptance;
     try {
-      const acceptedInvitation = await acceptClinicInvitationAtomically({
+      // Keep the transaction boundary explicit: only failures from the atomic
+      // acceptance operation may report that the invitation itself failed.
+      acceptedInvitation = await acceptClinicInvitationAtomically({
         invitationId,
         userId: user.id,
         verifiedEmail: user.email,
       });
-      await persistActivityLog({
-        title: 'Convite aceito',
-        content: `${maskEmail(sanitizeEmail(user.email) || '***')} aceitou convite e entrou na clínica.`,
-        type: 'management',
+    } catch (error: any) {
+      const code = sanitizeString(error?.code, 120) || 'CLINIC_INVITATION_ACCEPT_FAILED';
+      const messages: Record<string, string> = {
+        CLINIC_INVITATION_ALREADY_USED: 'Este convite já foi utilizado. Solicite um novo convite à clínica.',
+        CLINIC_INVITATION_EMAIL_MISMATCH: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.',
+        CLINIC_INVITATION_NOT_FOUND: 'Convite não encontrado.',
+        CLINIC_INVITATION_NOT_AVAILABLE: 'Este convite expirou, foi cancelado ou não está mais disponível.',
+        CLINIC_INVITATION_SPECIALTY_INVALID: 'A especialidade clínica deste convite está incompleta. Peça ao Diretor para reenviar o convite selecionando novamente a especialidade.',
+        CLINIC_INVITATION_MIGRATION_REQUIRED: 'A atualização segura de convites ainda não foi aplicada no banco de dados.',
+      };
+      logRouteDbError('/api/clinic/accept-invite [POST]', error, {
+        invitationId,
         userId: sanitizeString(user?.id, 120),
-        clinicId: acceptedInvitation.clinicId,
-        actorName: sanitizeString(user?.name || user?.email || 'Colaborador', 180)
       });
+      return res.status(Number(error?.statusCode) || 500).json({
+        success: false,
+        error: code,
+        message: messages[code] || 'Não foi possível aceitar o convite com segurança.',
+      });
+    }
 
-      req.session.user.clinicId = acceptedInvitation.clinicId;
-      req.session.user.activeWorkspaceId = acceptedInvitation.clinicId;
-      req.session.user.role = acceptedInvitation.role;
-      req.session.user.activeAccessContextId = clinicAccessContextId(acceptedInvitation.clinicId);
-      req.session.user.accessContextSelectionExplicit = true;
+    // From this point the database transaction is committed. Session refresh,
+    // onboarding hydration and audit enrichment are post-acceptance work and
+    // must never turn a successful link into a misleading HTTP 500.
+    await persistActivityLog({
+      title: 'Convite aceito',
+      content: `${maskEmail(sanitizeEmail(user.email) || '***')} aceitou convite e entrou na clínica.`,
+      type: 'management',
+      userId: sanitizeString(user?.id, 120),
+      clinicId: acceptedInvitation.clinicId,
+      actorName: sanitizeString(user?.name || user?.email || 'Colaborador', 180),
+      resourceType: 'clinic_invitation',
+      resourceId: invitationId,
+      idempotencyKey: `clinic-invitation-accepted:${invitationId}:${sanitizeString(user?.id, 120)}`,
+    });
+
+    req.session.user.clinicId = acceptedInvitation.clinicId;
+    req.session.user.activeWorkspaceId = acceptedInvitation.clinicId;
+    req.session.user.role = acceptedInvitation.role;
+    req.session.user.activeAccessContextId = clinicAccessContextId(acceptedInvitation.clinicId);
+    req.session.user.accessContextSelectionExplicit = true;
+
+    let context: ResolvedOnboardingContext | null = null;
+    let postAcceptanceRefreshPending = false;
+    try {
       req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(user.id));
-      const context = await resolveOnboardingContextForUser({
+      context = await resolveOnboardingContextForUser({
         userId: sanitizeString(user.id, 120),
         email: sanitizeEmail(user.email),
         preferredClinicId: acceptedInvitation.clinicId,
@@ -29015,32 +29052,23 @@ async function startServer() {
         ...req.session.user,
         onboardingContext: context,
       });
-
-      return res.json({
-        success: true,
-        idempotent: acceptedInvitation.idempotent,
-        onboardingContext: context,
-        user: req.session.user,
-      });
-    } catch (error: any) {
-      const code = sanitizeString(error?.code, 120) || 'CLINIC_INVITATION_ACCEPT_FAILED';
-      const messages: Record<string, string> = {
-        CLINIC_INVITATION_ALREADY_USED: 'Este convite já foi utilizado. Solicite um novo convite à clínica.',
-        CLINIC_INVITATION_EMAIL_MISMATCH: 'Este convite foi enviado para outro e-mail. Entre com a conta correta ou confirme o e-mail convidado.',
-        CLINIC_INVITATION_NOT_FOUND: 'Convite não encontrado.',
-        CLINIC_INVITATION_NOT_AVAILABLE: 'Este convite expirou, foi cancelado ou não está mais disponível.',
-        CLINIC_INVITATION_MIGRATION_REQUIRED: 'A atualização segura de convites ainda não foi aplicada no banco de dados.',
-      };
-      logRouteDbError('/api/clinic/accept-invite [POST]', error, {
+    } catch (postAcceptanceError: any) {
+      postAcceptanceRefreshPending = true;
+      logRouteDbError('/api/clinic/accept-invite [POST_ACCEPT_REFRESH]', postAcceptanceError, {
         invitationId,
         userId: sanitizeString(user?.id, 120),
-      });
-      return res.status(Number(error?.statusCode) || 500).json({
-        success: false,
-        error: code,
-        message: messages[code] || 'Não foi possível aceitar o convite com segurança.',
+        clinicId: acceptedInvitation.clinicId,
+        role: acceptedInvitation.role,
       });
     }
+
+    return res.json({
+      success: true,
+      idempotent: acceptedInvitation.idempotent,
+      onboardingContext: context || req.session.user?.onboardingContext || {},
+      user: req.session.user,
+      postAcceptanceRefreshPending,
+    });
   });
 
   app.post('/api/clinic/assign-role', checkAuth, requireClinicCapability('team.permissions.manage'), async (req: any, res) => {
