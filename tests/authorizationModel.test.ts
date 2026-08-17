@@ -31,7 +31,7 @@ assert.equal(roleHasDefaultCapability('director', 'workspace.switch'), true);
 assert.equal(roleHasDefaultCapability('director', 'workspace.multiclinic.analytics'), true);
 assert.equal(roleHasDefaultCapability('coordinator', 'workspace.multiclinic.analytics'), false);
 assert.equal(roleHasDefaultCapability('director', 'team.invite'), true);
-assert.equal(roleHasDefaultCapability('coordinator', 'team.invite'), false);
+assert.equal(roleHasDefaultCapability('coordinator', 'team.invite'), true);
 
 assert.equal(roleHasDefaultCapability('therapist', 'clinical.record.view'), true);
 assert.equal(roleHasDefaultCapability('therapist', 'patient.create'), false);

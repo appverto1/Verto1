@@ -297,7 +297,10 @@ export function TeamManagement({
   const canManageTeamAccess = capabilities?.has('team.permissions.manage') === true;
   const canManageSupervision = capabilities?.has('team.supervision.manage') === true;
   const canGrantDirector = actorRole === 'director';
-  const canCreateAccounts = actorRole === 'director' && capabilities?.has('team.invite') === true;
+  const canGrantAdministrativeRoles = actorRole === 'director';
+  const canCreateAccounts =
+    (actorRole === 'director' || actorRole === 'coordinator') &&
+    capabilities?.has('team.invite') === true;
   const canChangeMemberRole = actorRole === 'director' && canManageTeamAccess;
   const canManageMemberAccess = (member: Member) =>
     canManageTeamAccess &&
@@ -351,7 +354,12 @@ export function TeamManagement({
     setInviteSent(false);
 
     if (!canCreateAccounts) {
-      setError('A criação de contas da clínica é exclusiva do Diretor.');
+      setError('Somente Diretor e Coordenador podem enviar convites de equipe.');
+      setIsAssigning(false);
+      return;
+    }
+    if (actorRole === 'coordinator' && newMemberRole !== 'therapist') {
+      setError('Coordenadores podem convidar apenas profissionais de atendimento da própria unidade.');
       setIsAssigning(false);
       return;
     }
@@ -1526,10 +1534,15 @@ export function TeamManagement({
 
             {!canCreateAccounts ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-600">
-                A criação de contas é exclusiva do Diretor. Coordenadores continuam podendo gerir a equipe e os vínculos de supervisão da própria unidade.
+                Convites de equipe podem ser enviados pelo Diretor ou pelo Coordenador da unidade.
               </div>
             ) : (
             <form onSubmit={handleInvite} className="space-y-5">
+              {actorRole === 'coordinator' && (
+                <p className="rounded-xl bg-slate-50 px-3.5 py-2.5 text-xs leading-5 text-slate-500">
+                  Como Coordenador, você pode convidar profissionais de atendimento para esta unidade.
+                </p>
+              )}
               <div>
                 <label className="mb-2 block text-xs font-medium text-slate-600">E-mail do colaborador</label>
                 <div className="relative">
@@ -1613,6 +1626,8 @@ export function TeamManagement({
                     </div>
                   )}
 
+                  {canGrantAdministrativeRoles && (
+                    <>
                   <button
                     type="button"
                     aria-pressed={newMemberRole === 'coordinator'}
@@ -1656,6 +1671,8 @@ export function TeamManagement({
                       <p className="mt-0.5 text-xs text-slate-500">Convênios, TISS, lotes e retorno financeiro</p>
                     </div>
                   </button>
+                    </>
+                  )}
                 </div>
               </div>
 

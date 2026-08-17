@@ -219,7 +219,7 @@ export const SUPERVISION_CAPABILITY_OVERLAY = internal(
 
 const COORDINATOR_DEFAULTS = internal(
   'clinic.view','clinic.edit','clinic.settings.view','clinic.settings.edit','clinic.rooms.manage','clinic.indicators.view',
-  'team.view','team.edit','team.deactivate','team.permissions.manage','team.case.manage','team.patient_primary.manage','team.supervision.manage',
+  'team.view','team.edit','team.deactivate','team.permissions.manage','team.case.manage','team.patient_primary.manage','team.supervision.manage','team.invite',
   'patient.list','patient.create','patient.demographics.view','patient.demographics.edit','patient.contacts.view','patient.birthdays.view','patient.documents.registration.view','patient.clinic_link.manage','patient.archive',
   'patient.insurance.view','patient.insurance.create','patient.insurance.edit','patient.insurance.card.view','patient.insurance.authorization.view','patient.insurance.authorization.edit','patient.insurance.eligibility.view',
   'clinical.record.view','clinical.history.view','clinical.evolution.create','clinical.evolution.own_edit','clinical.evolution.team_view','clinical.notes.create','clinical.documents.view','clinical.documents.upload','clinical.anamnesis.view','clinical.anamnesis.edit',
@@ -236,7 +236,7 @@ const COORDINATOR_DEFAULTS = internal(
 );
 
 export const ROLE_DEFAULT_CAPABILITIES: Record<ClinicBaseRole | PortalRole, readonly CapabilityKey[]> = {
-  director: [...COORDINATOR_DEFAULTS, 'team.invite', 'workspace.switch', 'workspace.multiclinic.analytics'],
+  director: [...COORDINATOR_DEFAULTS, 'workspace.switch', 'workspace.multiclinic.analytics'],
   coordinator: COORDINATOR_DEFAULTS,
   supervisor: internal(
     'team.view',

@@ -28363,13 +28363,6 @@ async function startServer() {
         return res.status(400).json({ error: 'Email e papel validos sao obrigatorios' });
       }
       const actorRole = sanitizeString(req.effectiveClinicRole || user?.role, 40).toLowerCase();
-      if (actorRole !== 'director') {
-        return res.status(403).json({
-          success: false,
-          error: 'DIRECTOR_ACCOUNT_PROVISIONING_REQUIRED',
-          message: 'A criação de contas da clínica é exclusiva do Diretor.'
-        });
-      }
       if (role === 'supervisor') {
         return res.status(400).json({
           success: false,
@@ -28381,7 +28374,9 @@ async function startServer() {
         return res.status(403).json({
           success: false,
           error: 'CLINIC_ROLE_DELEGATION_DENIED',
-          message: 'Seu papel atual não pode conceder este nível de acesso.'
+          message: actorRole === 'coordinator'
+            ? 'Coordenadores podem convidar apenas profissionais de atendimento da própria unidade.'
+            : 'Seu papel atual não pode conceder este nível de acesso.'
         });
       }
       const requestedSpecialty =
@@ -28446,6 +28441,18 @@ async function startServer() {
         .maybeSingle();
       if (pendingInvitationError) throw pendingInvitationError;
       let existing = pendingInvitation;
+
+      // A Coordinator may create professional invitations, but must never
+      // repurpose a pending invitation for a higher/different clinic role.
+      if (existing && !canAssignClinicRole(actorRole, existing.role)) {
+        return res.status(409).json({
+          success: false,
+          error: 'CLINIC_PENDING_INVITATION_ROLE_CONFLICT',
+          message: actorRole === 'coordinator'
+            ? 'Já existe um convite pendente para este e-mail com outro nível de acesso. Peça ao Diretor para revisá-lo.'
+            : 'Já existe um convite pendente incompatível com este nível de acesso.'
+        });
+      }
 
       if (existing && isUuid(sanitizeString(authUser?.id, 120))) {
         const { data: previousMembership, error: previousMembershipError } = await supabase
@@ -28900,7 +28907,7 @@ async function startServer() {
 
       const { data: invitation, error: findError } = await supabase
         .from('invitations')
-        .select('id,status,clinic_id,email')
+        .select('id,status,clinic_id,email,role')
         .eq('id', invitationId)
         .eq('clinic_id', clinicId)
         .maybeSingle();
@@ -28911,6 +28918,17 @@ async function startServer() {
       }
       if (invitation.status !== 'pending') {
         return res.status(400).json({ error: 'Somente convites pendentes podem ser cancelados' });
+      }
+
+      const actorRole = sanitizeString(req.effectiveClinicRole || user?.role, 40).toLowerCase();
+      if (!canAssignClinicRole(actorRole, invitation.role)) {
+        return res.status(403).json({
+          success: false,
+          error: 'CLINIC_INVITATION_CANCEL_DENIED',
+          message: actorRole === 'coordinator'
+            ? 'Coordenadores podem cancelar apenas convites de profissionais da própria unidade.'
+            : 'Seu papel atual não pode cancelar este convite.'
+        });
       }
 
       let cancelPayload: Record<string, any> = {

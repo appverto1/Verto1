@@ -47,12 +47,17 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const maxMembers = Number.isFinite(explicitTeamLimit) && explicitTeamLimit > 0 ? explicitTeamLimit : null;
   const actorRole = String(user?.role || '').trim().toLowerCase();
   const canGrantDirector = actorRole === 'director';
-  const canCreateAccounts = actorRole === 'director';
+  const canGrantAdministrativeRoles = actorRole === 'director';
+  const canCreateAccounts = actorRole === 'director' || actorRole === 'coordinator';
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canCreateAccounts) {
-      setError('A criação de contas da clínica é exclusiva do Diretor.');
+      setError('Somente Diretor e Coordenador podem enviar convites de equipe.');
+      return;
+    }
+    if (actorRole === 'coordinator' && role !== 'therapist') {
+      setError('Coordenadores podem convidar apenas profissionais de atendimento da própria unidade.');
       return;
     }
     if (maxMembers && invitations.length + 1 >= maxMembers) {
@@ -175,10 +180,10 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
                   className="min-h-12 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/10"
                 >
                   {canGrantDirector && <option value="director">Diretor</option>}
-                  <option value="coordinator">Coordenador</option>
+                  {canGrantAdministrativeRoles && <option value="coordinator">Coordenador</option>}
                   <option value="therapist">Profissional de atendimento</option>
-                  <option value="receptionist">Recepcionista/Assistente</option>
-                  <option value="biller">Faturista</option>
+                  {canGrantAdministrativeRoles && <option value="receptionist">Recepcionista/Assistente</option>}
+                  {canGrantAdministrativeRoles && <option value="biller">Faturista</option>}
                 </select>
 
                 {role === 'therapist' && (

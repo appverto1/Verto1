@@ -94,8 +94,10 @@ export function canAssignClinicRole(
   // supervision is granted to a professional through can_supervise.
   if (targetRole === 'supervisor') return false;
 
-  // Account/role provisioning is Director-only and remains membership-scoped.
+  // Directors can provision any canonical clinic role. Coordinators remain
+  // unit-scoped and may create only professional (therapist) memberships.
   if (actorRole === 'director') return true;
+  if (actorRole === 'coordinator') return targetRole === 'therapist';
 
   return false;
 }

@@ -31,13 +31,20 @@ assert.equal(therapistSupervisor?.capabilities.has('session.start'), true);
 assert.equal(therapistSupervisor?.capabilities.has('calendar.team.view'), true);
 assert.equal(therapistSupervisor?.capabilities.has('treatment_plan.approve'), true);
 
-const coordinatorInviteOverride = resolveEffectiveClinicCapabilities('coordinator', [
+const coordinatorInvite = resolveEffectiveClinicCapabilities('coordinator');
+assert.equal(
+  coordinatorInvite?.capabilities.has('team.invite'),
+  true,
+  'coordenador pode convidar profissionais dentro da própria unidade',
+);
+
+const receptionistInviteOverride = resolveEffectiveClinicCapabilities('receptionist', [
   { permission_key: 'team.invite', effect: 'allow' },
 ]);
 assert.equal(
-  coordinatorInviteOverride?.capabilities.has('team.invite'),
+  receptionistInviteOverride?.capabilities.has('team.invite'),
   false,
-  'criação de conta continua exclusiva do Diretor mesmo com override antigo',
+  'papéis operacionais não podem recuperar convite por override antigo',
 );
 
 

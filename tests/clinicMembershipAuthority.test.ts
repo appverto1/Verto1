@@ -164,8 +164,11 @@ assert.equal(canAssignClinicRole('admin', 'director'), false);
 assert.equal(canAssignClinicRole('director', 'director'), true);
 assert.equal(canAssignClinicRole('director', 'biller'), true);
 assert.equal(canAssignClinicRole('director', 'supervisor'), false);
+assert.equal(canAssignClinicRole('coordinator', 'therapist'), true);
 assert.equal(canAssignClinicRole('coordinator', 'supervisor'), false);
 assert.equal(canAssignClinicRole('coordinator', 'biller'), false);
+assert.equal(canAssignClinicRole('coordinator', 'receptionist'), false);
+assert.equal(canAssignClinicRole('coordinator', 'coordinator'), false);
 assert.equal(canAssignClinicRole('coordinator', 'director'), false);
 assert.equal(canAssignClinicRole('supervisor', 'therapist'), false);
 assert.equal(canAssignClinicRole('biller', 'biller'), false);
@@ -191,8 +194,8 @@ assert.match(
 );
 assert.match(
   server,
-  /DIRECTOR_ACCOUNT_PROVISIONING_REQUIRED/,
-  'criação de contas precisa falhar server-side fora do papel Diretor',
+  /Coordenadores podem convidar apenas profissionais de atendimento da própria unidade/,
+  'backend precisa limitar convite do coordenador ao papel profissional',
 );
 assert.match(
   server,
@@ -203,6 +206,18 @@ assert.match(
   server,
   /CLINIC_ROLE_TARGET_ABOVE_ACTOR/,
   'coordenador não pode administrar membro com papel de diretor',
+);
+
+assert.match(
+  server,
+  /CLINIC_INVITATION_CANCEL_DENIED/,
+  'cancelamento de convite precisa respeitar a mesma hierarquia de delegação',
+);
+
+assert.match(
+  server,
+  /CLINIC_PENDING_INVITATION_ROLE_CONFLICT/,
+  'coordenador não pode reaproveitar convite pendente de papel superior como profissional',
 );
 
 console.log('clinicMembershipAuthority.test.ts: ok');

@@ -77,10 +77,13 @@ export function resolveEffectiveClinicCapabilities(
     appliedOverrides.push({ permissionKey, effect });
   }
 
-  // Account provisioning is a structural Director-only responsibility. It
-  // cannot be reintroduced through an old or manually-written override.
-  if (role !== 'director') {
+  // Invitation authority is structural: Directors may invite supported clinic
+  // roles and Coordinators may invite professionals in their own active unit.
+  // Narrower roles cannot regain invitation authority through stale overrides.
+  if (role !== 'director' && role !== 'coordinator') {
     capabilities.delete('team.invite');
+  }
+  if (role !== 'director') {
     capabilities.delete('workspace.multiclinic.analytics');
   }
 
