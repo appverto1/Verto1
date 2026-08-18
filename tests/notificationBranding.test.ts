@@ -67,7 +67,7 @@ assert.equal(modal.rescheduleLabel, null);
 assert.equal(modal.allowedActions.canRequestReschedule, false);
 
 // Service worker não aceita payload.icon como autoridade e recua sem image em caso de erro.
-assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v15"/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v16"/);
 assert.match(serviceWorker, /const iconUrl = asNotificationAssetUrl\(VERTO_NOTIFICATION_ICON\)/);
 assert.match(serviceWorker, /const imageUrl = asNotificationAssetUrl\(payload\.image \|\| brandLogo \|\| VERTO_NOTIFICATION_ICON\)/);
 assert.match(serviceWorker, /showNotification\(title, notificationOptions\)\.catch/);
