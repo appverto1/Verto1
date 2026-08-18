@@ -559,7 +559,10 @@ export const therapeuticProgramsToSessionGoals = (programs: any[]) => {
     if (!['teaching', 'maintenance'].includes(programStatus)) return [];
     return (Array.isArray(program?.targets) ? program.targets : []).flatMap((target: any) => {
       const targetStatus = normalizeTherapeuticTargetStatus(target);
-      if (['paused', 'mastered'].includes(targetStatus) && programStatus !== 'maintenance') return [];
+      const isActiveSessionTarget = programStatus === 'maintenance'
+        ? targetStatus === 'maintenance'
+        : targetStatus === 'teaching';
+      if (!isActiveSessionTarget) return [];
       const targetId = safeText(target?.id || target?.target_id || target?.targetId);
       if (!targetId || seenTargetIds.has(targetId)) return [];
       seenTargetIds.add(targetId);
@@ -616,8 +619,13 @@ export const therapeuticProgramsToSessionGoals = (programs: any[]) => {
 };
 
 export const mergeLegacyAndTherapeuticSessionGoals = (legacyGoals: any[], therapeuticGoals: any[]) => {
+  const canonicalTherapeuticGoals = Array.isArray(therapeuticGoals) ? therapeuticGoals : [];
+  if (canonicalTherapeuticGoals.length > 0) {
+    return canonicalTherapeuticGoals;
+  }
+
   const merged = new Map<string, any>();
-  (Array.isArray(therapeuticGoals) ? therapeuticGoals : []).forEach((goal: any) => {
+  canonicalTherapeuticGoals.forEach((goal: any) => {
     const key = safeText(goal?.targetId || goal?.target_id || goal?.id || goal?.name).toLowerCase();
     if (key) merged.set(key, goal);
   });
