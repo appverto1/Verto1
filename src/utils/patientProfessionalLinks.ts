@@ -191,17 +191,55 @@ export function isPatientProfessionalLinkManager(params: {
   actorId: unknown;
   actorRole: unknown;
   clinicId: unknown;
+  patientId?: unknown;
   membership?: any;
+  patientLink?: any;
+  supervisionLink?: any;
+  canSupervise?: boolean;
 }): boolean {
   const actorId = cleanText(params.actorId);
   const clinicId = cleanText(params.clinicId);
+  const patientId = cleanText(params.patientId);
   if (!actorId || !clinicId) return false;
-  const membershipRole = cleanText(params.membership?.role).toLowerCase();
-  return Boolean(
+
+  const membershipRole = cleanText(params.membership?.role || params.actorRole).toLowerCase();
+  const hasActiveMembership = Boolean(
     cleanText(params.membership?.user_id) === actorId &&
       cleanText(params.membership?.clinic_id) === clinicId &&
-      ['director', 'coordinator'].includes(membershipRole) &&
       cleanText(params.membership?.status).toLowerCase() === 'active'
+  );
+  if (!hasActiveMembership) return false;
+
+  if (['director', 'coordinator'].includes(membershipRole)) return true;
+
+  const patientLink = params.patientLink;
+  const hasActiveCaseLink = Boolean(
+    cleanText(patientLink?.organization_id || patientLink?.organizationId) === clinicId &&
+      cleanText(patientLink?.clinic_id || patientLink?.clinicId) === clinicId &&
+      (!patientId || cleanText(patientLink?.patient_id || patientLink?.patientId) === patientId) &&
+      cleanText(patientLink?.professional_id || patientLink?.professionalId) === actorId &&
+      cleanText(patientLink?.status).toLowerCase() === 'active'
+  );
+  const canSupervise = Boolean(
+    params.canSupervise === true ||
+      membershipRole === 'supervisor' ||
+      params.membership?.can_supervise === true ||
+      params.membership?.canSupervise === true
+  );
+  // Supervisory authority is attached to the professional membership, not to
+  // a specific label on the case link. Once a supervision-enabled professional
+  // is actively part of this patient case, they may manage this case team.
+  // This stays resource-scoped: can_supervise alone never grants access to
+  // patients where the professional has no active case/supervision link.
+  if (hasActiveCaseLink && canSupervise) return true;
+
+  const supervisionLink = params.supervisionLink;
+  return Boolean(
+    canSupervise &&
+      supervisionLink &&
+      cleanText(supervisionLink?.clinic_id || supervisionLink?.clinicId) === clinicId &&
+      cleanText(supervisionLink?.supervisor_user_id || supervisionLink?.supervisorUserId) === actorId &&
+      cleanText(supervisionLink?.status).toLowerCase() === 'active'
   );
 }
 
