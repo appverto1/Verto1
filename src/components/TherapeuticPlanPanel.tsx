@@ -1955,11 +1955,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const targets = Array.isArray(program?.targets) ? program.targets : [];
     const mastered = Number(program?.masteredTargetCount || targets.filter((target: any) => target?.normalizedStatus === 'mastered').length || 0);
     const total = targets.length;
-    const progress = total > 0 ? Math.min(100, Math.round((mastered / total) * 100)) : 0;
-    const criterionProgress = total > 0 ? Math.max(progress, Number(program?.criterionProgressPercent || 0)) : 0;
+    const masteryProgress = total > 0 ? Math.min(100, Math.round((mastered / total) * 100)) : 0;
     const currentTarget = targets.find((target: any) => ['teaching', 'maintenance'].includes(String(target?.normalizedStatus || '')))
       || targets[0]
       || null;
+    const currentCriterionProgress = Math.min(100, Math.max(0, Number(currentTarget?.criterionProgressPercent || 0)));
     const responsibleIds = Array.isArray(program?.responsible_professional_ids)
       ? program.responsible_professional_ids.map(String)
       : [];
@@ -2027,18 +2027,27 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           </div>
         )}
 
-        <div className="mt-3">
+        <div className="mt-3" data-pts-program-mastery-progress>
           <div className={`mb-1.5 flex flex-wrap items-center justify-between gap-2 text-xs ${muted}`}>
-            <span>Progresso</span>
-            <span>{mastered} de {total || 0} alvos dominados · {criterionProgress}% dos critérios</span>
+            <span>Domínio do programa</span>
+            <span>{mastered} de {total || 0} alvos dominados · {masteryProgress}%</span>
           </div>
           <div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
-            <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${criterionProgress}%` }} />
+            <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${masteryProgress}%` }} />
           </div>
           {currentTarget?.criterionProgressLabel && Number(currentTarget?.criterionRequiredCount || 0) > 1 && currentTarget?.normalizedStatus !== 'mastered' && (
-            <p className={`mt-2 text-[11px] ${muted}`}>
-              Alvo atual: {currentTarget?.name || currentTarget?.target_name || 'Alvo'} · {currentTarget.criterionProgressLabel} do critério
-            </p>
+            <div className="mt-3" data-pts-current-target-criterion-progress>
+              <div className={`mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] ${muted}`}>
+                <span>Critério do alvo atual</span>
+                <span>{currentTarget.criterionProgressLabel}</span>
+              </div>
+              <div className={`h-1.5 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                <div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${currentCriterionProgress}%` }} />
+              </div>
+              <p className={`mt-1.5 text-[11px] ${muted}`}>
+                {currentTarget?.name || currentTarget?.target_name || 'Alvo'} · progresso do critério da habilidade, sem contabilizar domínio antes da conclusão.
+              </p>
+            </div>
           )}
         </div>
 
