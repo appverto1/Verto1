@@ -522,6 +522,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isSavingPrimaryProfessional, setIsSavingPrimaryProfessional] = useState(false);
   const [primaryProfessionalError, setPrimaryProfessionalError] = useState('');
   const [caseTeamRefreshKey, setCaseTeamRefreshKey] = useState(0);
+  const [caseTeamManagementAllowed, setCaseTeamManagementAllowed] = useState(false);
   const primaryProfessionalOverrideRef = React.useRef<string | null | undefined>(undefined);
 
   const historyRange = useMemo(
@@ -1082,6 +1083,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     () => hasCapability('team.case.manage'),
     [capabilities],
   );
+  const effectiveCaseTeamRole = String(
+    userRole || clinicContext?.role || ''
+  ).trim().toLowerCase();
+  const isUnitCaseTeamManager =
+    effectiveCaseTeamRole === 'director' || effectiveCaseTeamRole === 'coordinator';
+  const canManagePrimaryProfessionalForPatient =
+    canManageTherapistAssignment && (isUnitCaseTeamManager || caseTeamManagementAllowed);
   const canManageSchool = useMemo(
     () => hasCapability('school.manage'),
     [capabilities],
@@ -1093,6 +1101,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return document.body.classList.contains('theme-dark');
   }, [themeMode]);
   const showCoordinatorPatientRadar = String(userRole || '').toLowerCase() === 'coordinator';
+
+  useEffect(() => {
+    setCaseTeamManagementAllowed(isUnitCaseTeamManager);
+  }, [patient?.id, isUnitCaseTeamManager]);
   const [expandedSessionHistoryDates, setExpandedSessionHistoryDates] = useState<Record<string, boolean>>({});
   const progressReportPdfRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -9843,12 +9855,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <div
             id="patient-care-context"
             className={`mt-6 grid min-w-0 items-start gap-5 ${
-              canManageTherapistAssignment
+              canManagePrimaryProfessionalForPatient
                 ? 'lg:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]'
                 : ''
             }`}
           >
-            {canManageTherapistAssignment && (
+            {canManagePrimaryProfessionalForPatient && (
               <section aria-labelledby="patient-primary-professional-heading" className="min-w-0">
                 <h2
                   id="patient-primary-professional-heading"
@@ -9892,10 +9904,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               <PatientProfessionalLinksPanel
                 patientId={String(patient.id)}
                 professionals={clinicTherapists}
-                canManage={canManageCaseTeam}
+                canManage={canManageCaseTeam && (isUnitCaseTeamManager || caseTeamManagementAllowed)}
                 dark={isPanelDark}
                 refreshKey={caseTeamRefreshKey}
                 onLinksChanged={handleCaseTeamLinksChanged}
+                onManagementAuthorityChanged={setCaseTeamManagementAllowed}
               />
             ) : null}
           </div>

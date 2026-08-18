@@ -91,6 +91,7 @@ export const PatientProfessionalLinksPanel = ({
   dark = false,
   refreshKey = 0,
   onLinksChanged,
+  onManagementAuthorityChanged,
 }: {
   patientId: string;
   professionals: any[];
@@ -98,11 +99,14 @@ export const PatientProfessionalLinksPanel = ({
   dark?: boolean;
   refreshKey?: string | number;
   onLinksChanged?: (links: ProfessionalLink[]) => void;
+  onManagementAuthorityChanged?: (canManage: boolean) => void;
 }) => {
   const [links, setLinks] = useState<ProfessionalLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [managementResolved, setManagementResolved] = useState(false);
+  const [serverCanManage, setServerCanManage] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [draft, setDraft] = useState({
     professionalId: '',
@@ -117,15 +121,27 @@ export const PatientProfessionalLinksPanel = ({
       const nextLinks = Array.isArray(data.links) ? data.links : [];
       setLinks(nextLinks);
       onLinksChanged?.(nextLinks);
+      const nextCanManage = data?.canManage === true;
+      setServerCanManage(nextCanManage);
+      setManagementResolved(true);
+      onManagementAuthorityChanged?.(nextCanManage);
       setError('');
     } catch (loadError: any) {
+      setServerCanManage(false);
+      setManagementResolved(true);
+      onManagementAuthorityChanged?.(false);
       setError(loadError?.message || 'Não foi possível carregar a equipe.');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { void load(); }, [patientId, refreshKey]);
+  useEffect(() => {
+    setManagementResolved(false);
+    setServerCanManage(false);
+    setShowForm(false);
+    void load();
+  }, [patientId, refreshKey]);
 
   const active = useMemo(
     () => links.filter((link) => link.status === 'active'),
@@ -241,6 +257,7 @@ export const PatientProfessionalLinksPanel = ({
     }
   };
 
+  const effectiveCanManage = managementResolved ? serverCanManage : canManage;
   const shell = dark ? 'text-slate-100' : 'text-slate-900';
 
   return (
@@ -251,13 +268,13 @@ export const PatientProfessionalLinksPanel = ({
             <p className={`mt-0.5 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
               {loading ? 'Carregando...' : `${active.length} ${active.length === 1 ? 'vínculo ativo' : 'vínculos ativos'} · limite 5`}
             </p>
-            {canManage ? (
+            {effectiveCanManage ? (
               <p className={`mt-1 max-w-2xl text-[11px] leading-4 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
                 Para definir supervisão, habilite o profissional para supervisionar na tela Equipe e use Adicionar → Função no caso → Supervisão.
               </p>
             ) : null}
           </div>
-        {canManage ? (
+        {effectiveCanManage ? (
           <button
             type="button"
             onClick={() => setShowForm((value) => !value)}
@@ -428,7 +445,7 @@ export const PatientProfessionalLinksPanel = ({
                 Vínculo ativo com cadastro profissional inconsistente. O acesso clínico está bloqueado; encerre o vínculo ou regularize a membership.
               </p>
             ) : null}
-            {canManage && link.canBeEnded !== false ? (
+            {effectiveCanManage && link.canBeEnded !== false ? (
               <div className={`border-t px-3 ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
                 <button type="button" onClick={() => void end(link)} disabled={busy === `end:${link.id}`} className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 text-xs font-medium text-rose-600 disabled:opacity-50"><UserRoundX size={14} /> Encerrar vínculo</button>
               </div>
