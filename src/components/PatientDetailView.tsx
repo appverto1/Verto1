@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { PatientSchoolInformation } from "./PatientSchoolInformation";
 import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock, Camera } from 'lucide-react';
 import { createPortal } from 'react-dom';
@@ -173,7 +173,7 @@ const patientInitials = (value: unknown) => String(value || 'P')
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, clinicProfessionals: preloadedClinicProfessionals = [], hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, clinicProfessionals: preloadedClinicProfessionals = [], hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities, focusNoteId = '', onFocusNoteConsumed }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const hasCapability = (capability: string) => {
@@ -420,6 +420,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const historyRequestsInFlightRef = React.useRef(new Set<string>());
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
+  const [mentionCandidates, setMentionCandidates] = useState<any[]>([]);
+  const [selectedMentionUserIds, setSelectedMentionUserIds] = useState<string[]>([]);
+  const [focusedNoteId, setFocusedNoteId] = useState('');
+  const mentionCandidatesLoadedForPatientRef = useRef('');
   const [noteSearchQuery, setNoteSearchQuery] = useState("");
   const [noteSubjectFilter, setNoteSubjectFilter] = useState("");
   const [noteDateFilter, setNoteDateFilter] = useState("");
@@ -437,7 +441,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [comparisonDate2, setComparisonDate2] = useState(() => String(initialChartFilters.comparisonDate2 || ''));
   const [adultReportDate1, setAdultReportDate1] = useState(() => String(initialChartFilters.adultReportDate1 || ''));
   const [adultReportDate2, setAdultReportDate2] = useState(() => String(initialChartFilters.adultReportDate2 || ''));
-  const [selectedReportNotes, setSelectedReportNotes] = useState<number[]>([]);
+  const [selectedReportNotes, setSelectedReportNotes] = useState<Array<string | number>>([]);
   const [selectedAdultEvolutionIds, setSelectedAdultEvolutionIds] = useState<string[]>([]);
   const [reportAdditionalNote, setReportAdditionalNote] = useState('');
   const [isGeneratingAdultReport, setIsGeneratingAdultReport] = useState(false);
@@ -4418,6 +4422,84 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return b.localeCompare(a);
   });
   
+  useEffect(() => {
+    const patientId = String(patient?.id || '').trim();
+    if (noteMode !== 'professional' || !patientId || mentionCandidatesLoadedForPatientRef.current === patientId) return;
+    let cancelled = false;
+    void (async () => {
+      const result = await dataService.getPatientProfessionalLinks(patientId);
+      if (cancelled || result?.success === false) return;
+      const currentUserId = String(clinicContext?.userId || '').trim();
+      const next = (Array.isArray(result?.links) ? result.links : [])
+        .filter((link: any) => String(link?.status || '').toLowerCase() === 'active' && link?.accessEnabled !== false)
+        .map((link: any) => ({
+          id: String(link?.professional_id || link?.professional?.id || '').trim(),
+          name: String(link?.professional?.name || '').trim(),
+          specialty: String(link?.specialty || link?.professional?.specialty || '').trim(),
+        }))
+        .filter((item: any) => item.id && item.name && item.id !== currentUserId);
+      setMentionCandidates(Array.from(new Map(next.map((item: any) => [item.id, item])).values()));
+      mentionCandidatesLoadedForPatientRef.current = patientId;
+    })();
+    return () => { cancelled = true; };
+  }, [noteMode, patient?.id, clinicContext?.userId]);
+
+  useEffect(() => {
+    const targetId = String(focusNoteId || '').trim();
+    if (!targetId || activeTab !== 'notes') return;
+    const targetNote = (Array.isArray(notes) ? notes : []).find((note: any) => String(note?.id || '') === targetId);
+    if (targetNote) {
+      const audience = String(targetNote?.visibility || targetNote?.type || '').toLowerCase();
+      const expectedMode = ['professional', 'shared_clinic', 'team'].includes(audience)
+        ? 'professional'
+        : ['patient', 'shared', 'shared_patient', 'family'].includes(audience)
+          ? 'patient'
+          : 'private';
+      if (noteMode !== expectedMode) {
+        setNoteMode(expectedMode);
+        return;
+      }
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      const target = document.getElementById(`patient-note-${targetId}`);
+      if (!target) return;
+      setFocusedNoteId(targetId);
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      window.setTimeout(() => setFocusedNoteId((current) => current === targetId ? '' : current), 2600);
+      if (typeof onFocusNoteConsumed === 'function') onFocusNoteConsumed();
+    }, 120);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [activeTab, focusNoteId, notes, noteMode, onFocusNoteConsumed]);
+
+  const mentionQuery = useMemo(() => {
+    if (noteMode !== 'professional') return '';
+    const match = String(newNote || '').match(/(?:^|\s)@([^@\n]{0,50})$/);
+    return match ? String(match[1] || '').trim().toLowerCase() : '';
+  }, [newNote, noteMode]);
+
+  const visibleMentionCandidates = useMemo(() => {
+    if (noteMode !== 'professional' || !String(newNote || '').includes('@') || /\s$/.test(String(newNote || ''))) return [];
+    return mentionCandidates
+      .filter((item: any) => !mentionQuery || String(item?.name || '').toLowerCase().includes(mentionQuery))
+      .slice(0, 6);
+  }, [mentionCandidates, mentionQuery, newNote, noteMode]);
+
+  const insertMention = (candidate: any) => {
+    const name = String(candidate?.name || '').trim();
+    const id = String(candidate?.id || '').trim();
+    if (!name || !id) return;
+    setNewNote((current: string) => {
+      const source = String(current || '');
+      if (/(?:^|\s)@[^@\n]{0,50}$/.test(source)) {
+        return source.replace(/@[^@\n]{0,50}$/, `@${name} `);
+      }
+      return `${source}${source && !source.endsWith(' ') ? ' ' : ''}@${name} `;
+    });
+    setSelectedMentionUserIds((current) => current.includes(id) ? current : [...current, id]);
+  };
+
   const filteredNotes = useMemo(() => {
     return (notes || []).filter((n: any) => {
       if (isSystemMilestoneEvent(n)) return false;
@@ -4446,9 +4528,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   
   const handleAddNoteWithSubject = () => {
     if (newNote.trim()) {
-      onAddNote(patient.id, newNote, noteMode, newNoteSubject);
+      onAddNote(patient.id, newNote, noteMode, newNoteSubject, {
+        mentionUserIds: noteMode === 'professional' ? selectedMentionUserIds : [],
+      });
       setNewNote("");
       setNewNoteSubject("");
+      setSelectedMentionUserIds([]);
     }
   };
 
@@ -4543,7 +4628,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return data;
   }, [history, protocols, selectedChartProtocolId, patient.id, comparisonDate1, comparisonDate2]);
 
-  const toggleReportNote = (id: number) => {
+  const toggleReportNote = (id: string | number) => {
     setSelectedReportNotes(prev => 
       prev.includes(id) ? prev.filter(nId => nId !== id) : [...prev, id]
     );
@@ -10595,7 +10680,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               </div>
             </div>
 
-            <div id="note-type-toggles" className={`flex p-1 rounded-xl mb-4 border transition-colors ${isPanelDark ? 'bg-slate-900/70 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}> 
+            <div id="note-type-toggles" className={`flex p-1 rounded-xl mb-4 border transition-colors ${isPanelDark ? 'bg-slate-900/70 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}>
               <button onClick={() => setNoteMode('private')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'private' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-slate-100 text-slate-800 shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}><EyeOff size={12} /> Privadas</button> 
               <button onClick={() => setNoteMode('patient')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'patient' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-violet-50 text-[#7a32fc] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}><Share2 size={12} /> Paciente</button> 
               <button onClick={() => setNoteMode('professional')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'professional' ? (isPanelDark ? 'bg-slate-800 text-indigo-200 shadow-sm' : 'bg-indigo-50 text-indigo-600 shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}><SlidersHorizontal size={12} /> Profissionais</button> 
@@ -10631,18 +10716,38 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               </div>
             )}
 
-            <div id="note-input-area" className={`p-4 rounded-2xl shadow-sm border transition-colors ${noteMode === 'patient' ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : noteMode === 'professional' ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}> 
+            <div id="note-input-area" className={`p-4 rounded-2xl shadow-sm border transition-colors ${noteMode === 'patient' ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : noteMode === 'professional' ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}>
               <div className="mb-3">
                 <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1 ml-1">Assunto / Tema</label>
                 <input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-all ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 text-slate-800 focus:bg-white'} focus:border-[#7551FF]`} placeholder="Ex: Comportamento, Evolução, Social..." value={newNoteSubject} onChange={e => setNewNoteSubject(e.target.value)} />
               </div>
-              <textarea className={`w-full h-24 rounded-xl p-3 text-sm outline-none border transition-all resize-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 text-slate-800 focus:bg-white'} focus:border-[#7551FF]`} placeholder={noteMode === 'private' ? "Digite observações clínicas..." : noteMode === 'patient' ? "Escreva uma orientação ou feedback (Portátil)..." : "Informações para outros profissionais (Portátil)..."} value={newNote} onChange={(e) => setNewNote(e.target.value)}></textarea> 
+              <textarea className={`w-full h-24 rounded-xl p-3 text-sm outline-none border transition-all resize-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 text-slate-800 focus:bg-white'} focus:border-[#7551FF]`} placeholder={noteMode === 'private' ? "Digite observações clínicas..." : noteMode === 'patient' ? "Escreva uma orientação ou feedback (Portátil)..." : "Informações para a equipe. Use @ para mencionar alguém..."} value={newNote} onChange={(e) => {
+                const nextValue = e.target.value;
+                setNewNote(nextValue);
+                setSelectedMentionUserIds((current) => current.filter((id) => {
+                  const candidate = mentionCandidates.find((item: any) => item.id === id);
+                  return candidate ? nextValue.includes(`@${candidate.name}`) : false;
+                }));
+              }}></textarea>
+              {noteMode === 'professional' && visibleMentionCandidates.length > 0 && (
+                <div className={`mt-2 overflow-hidden rounded-xl border shadow-sm ${isPanelDark ? 'border-slate-700 bg-slate-900' : 'border-indigo-100 bg-white'}`}>
+                  {visibleMentionCandidates.map((candidate: any) => (
+                    <button key={candidate.id} type="button" onClick={() => insertMention(candidate)} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs transition-colors ${isPanelDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-indigo-50'}`}>
+                      <span className="font-semibold">@{candidate.name}</span>
+                      <span className="text-[10px] text-slate-400">{candidate.specialty || 'Equipe do caso'}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {noteMode === 'professional' && selectedMentionUserIds.length > 0 && (
+                <p className="mt-2 text-[10px] font-medium text-indigo-500">{selectedMentionUserIds.length} membro(s) serão notificados.</p>
+              )}
               <button onClick={handleAddNoteWithSubject} className={`w-full mt-3 text-white font-semibold py-3 rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 ${noteMode === 'private' ? 'bg-[#7551FF]' : noteMode === 'patient' ? 'bg-[#7a32fc]' : 'bg-indigo-600'}`}>{noteMode === 'private' ? "Salvar Nota" : noteMode === 'patient' ? "Enviar Mensagem" : "Compartilhar com Equipe"}</button> 
             </div> 
 
             <div className="space-y-3"> 
               {filteredNotes.length > 0 ? (filteredNotes.map((note: any) => ( 
-                <div key={note.id} className={`p-4 rounded-2xl border shadow-sm relative group transition-all ${(note.visibility === 'patient' || note.type === 'shared') ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : (note.visibility === 'professional' || note.type === 'professional') ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}> 
+                <div id={`patient-note-${note.id}`} key={note.id} className={`p-4 rounded-2xl border shadow-sm relative group transition-all ${focusedNoteId === String(note.id) ? 'ring-2 ring-[#7551FF] ring-offset-2' : ''} ${(note.visibility === 'patient' || note.type === 'shared') ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : (note.visibility === 'professional' || note.type === 'professional') ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}>
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex flex-col">
                       <span className="text-[10px] font-semibold text-gray-400 uppercase block">{note.date}</span>
@@ -10796,6 +10901,55 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 />
               )}
 
+
+              <div className="mt-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className={`text-xs font-semibold uppercase tracking-tight flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>
+                    <FileText size={16} className="text-[#7a32fc]" /> {isKidsProfile ? 'Incluir Observações Clínicas' : 'Incluir Anotações de Evolução'}
+                  </h4>
+                  <span className={`text-[10px] font-semibold uppercase ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>
+                    {isKidsProfile ? `${selectedReportNotes.length} selecionadas` : `${selectedAdultEvolutionIds.length} selecionadas`}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                  {isKidsProfile
+                    ? kidsReportSelectableNotes.map((note: any) => (
+                        <div
+                          key={note.id}
+                          onClick={() => toggleReportNote(note.id)}
+                          className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
+                            {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
+                          </div>
+                          <p className={`text-xs line-clamp-3 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(note.text)}</p>
+                        </div>
+                      ))
+                    : adultTasksInPeriod.map((task: any) => {
+                        const selected = selectedAdultEvolutionIds.includes(String(task.id));
+                        return (
+                          <div
+                            key={`adult-evo-select-${task.id}`}
+                            onClick={() => toggleAdultEvolutionSelection(String(task.id))}
+                            className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <span className="text-[9px] font-semibold text-gray-400 uppercase">
+                                {task.eventDate.toLocaleDateString('pt-BR')}
+                              </span>
+                              {selected && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
+                            </div>
+                            <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>{task.taskTitle}</p>
+                            <p className={`text-[11px] mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>
+                              Energia {task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}
+                            </p>
+                            <p className={`text-xs line-clamp-2 mt-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica.'}</p>
+                          </div>
+                        );
+                      })}
+                </div>
+              </div>
               {isKidsProfile && selectedReportNotes.length > 0 && (
                 <div className="mt-8 p-8 bg-gray-50 rounded-[32px] border border-gray-100 animate-fade-in">
                   <h4 className="text-sm font-semibold text-gray-800 uppercase tracking-tight mb-6 flex items-center gap-2">
@@ -10852,54 +11006,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </div>
               )}
 
-              <div className="mt-8">
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className={`text-xs font-semibold uppercase tracking-tight flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>
-                    <FileText size={16} className="text-[#7a32fc]" /> {isKidsProfile ? 'Incluir Observações Clínicas' : 'Incluir Anotações de Evolução'}
-                  </h4>
-                  <span className={`text-[10px] font-semibold uppercase ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>
-                    {isKidsProfile ? `${selectedReportNotes.length} selecionadas` : `${selectedAdultEvolutionIds.length} selecionadas`}
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                  {isKidsProfile
-                    ? kidsReportSelectableNotes.map((note: any) => (
-                        <div
-                          key={note.id}
-                          onClick={() => toggleReportNote(note.id)}
-                          className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
-                        >
-                          <div className="flex justify-between items-start mb-2">
-                            <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
-                            {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
-                          </div>
-                          <p className={`text-xs line-clamp-3 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(note.text)}</p>
-                        </div>
-                      ))
-                    : adultTasksInPeriod.map((task: any) => {
-                        const selected = selectedAdultEvolutionIds.includes(String(task.id));
-                        return (
-                          <div
-                            key={`adult-evo-select-${task.id}`}
-                            onClick={() => toggleAdultEvolutionSelection(String(task.id))}
-                            className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
-                          >
-                            <div className="flex justify-between items-start mb-2">
-                              <span className="text-[9px] font-semibold text-gray-400 uppercase">
-                                {task.eventDate.toLocaleDateString('pt-BR')}
-                              </span>
-                              {selected && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
-                            </div>
-                            <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>{task.taskTitle}</p>
-                            <p className={`text-[11px] mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>
-                              Energia {task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}
-                            </p>
-                            <p className={`text-xs line-clamp-2 mt-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica.'}</p>
-                          </div>
-                        );
-                      })}
-                </div>
-              </div>
               {!isKidsProfile && (
                 <div className="mt-6">
                   <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>
@@ -11391,12 +11497,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     isDark={isPanelDark}
                   />
                 </div>
-                <div id="new-schedule-card" className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}> 
+                <div id="new-schedule-card" className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
                   <h3 className={`font-semibold text-lg mb-2 tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Plano Semanal Adulto</h3> 
                   <p className={`text-xs font-medium mb-4 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                     Tarefas para execução fora do consultório, sem pontuação em tempo real.
                   </p>
-                  <div className={`flex p-1 rounded-xl mb-6 transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-slate-100'}`}> 
+                  <div className={`flex p-1 rounded-xl mb-6 transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-slate-100'}`}>
                     <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>{!isKidsProfile ? 'Avaliação' : 'Tarefa'}</button> 
                     <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Intervenção</button> 
                     <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Reforço</button> 
@@ -11409,7 +11515,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           <button onClick={() => setIsCreatingNewTask(!isCreatingNewTask)} className="text-xs font-semibold text-[#7551FF] bg-[#7551FF]/10 px-3 py-1 rounded-full transition-colors hover:bg-[#7551FF]/20">{isCreatingNewTask ? "Selecionar Existente" : "Criar Nova"}</button> 
                         </div> 
                         {isCreatingNewTask ? ( 
-                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? 'bg-green-50/30 dark:bg-green-500/10 border-green-100 dark:border-green-400/20' : 'bg-[#F4F7FE] dark:bg-slate-900/70 border-blue-100 dark:border-slate-700'}`}> 
+                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? 'bg-green-50/30 dark:bg-green-500/10 border-green-100 dark:border-green-400/20' : 'bg-[#F4F7FE] dark:bg-slate-900/70 border-blue-100 dark:border-slate-700'}`}>
                             <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-3 text-sm outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF]" placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
                             {planType === 'task' && (
                               <div className="grid grid-cols-1 gap-3 opacity-80 hover:opacity-100 transition-opacity"> 
@@ -11424,7 +11530,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                               </>
                             )}
                             <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Anotações do Profissional</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
-                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? 'border-green-100 dark:border-green-400/20' : 'border-blue-100 dark:border-slate-700'}`}> 
+                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? 'border-green-100 dark:border-green-400/20' : 'border-blue-100 dark:border-slate-700'}`}>
                               <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-2">Salvar no Protocolo:</label> 
                               <div className="flex gap-2 mb-3"> 
                                 <button onClick={() => setAddToProtocolMode('existing')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'existing' ? 'bg-white dark:bg-slate-800 border-[#7551FF] text-[#7551FF] dark:text-violet-200' : 'border-transparent bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-300'}`}>Existente</button> 
@@ -11445,7 +11551,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           </div> 
                         ) : ( 
                           <div className="animate-fade-in space-y-4"> 
-                            <div className={`p-3 rounded-xl border mb-2 transition-colors ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-blue-50/50 border-blue-100'}`}> 
+                            <div className={`p-3 rounded-xl border mb-2 transition-colors ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-blue-50/50 border-blue-100'}`}>
                               <button onClick={() => setIsPlanFilterOpen(!isPlanFilterOpen)} className="w-full flex items-center justify-between text-[#7a32fc] mb-2">
                                 <div className="flex items-center gap-2"><Filter size={14}/><span className="text-[10px] font-semibold uppercase tracking-widest">Filtrar Protocolos</span></div> 
                                 <ChevronDown size={14} className={`transition-transform ${isPlanFilterOpen ? 'rotate-180' : ''}`} />
@@ -11677,7 +11783,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <div className="space-y-3"> 
                   <h3 className={`text-sm font-semibold uppercase tracking-wider ml-2 tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Agendados</h3> 
                   {((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).length || 0) > 0 ? ((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).map((task: any) => ( 
-                    <div key={task.id} className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between ${isPanelDark ? 'bg-[#14233a] border-slate-700' : 'bg-white border-gray-100'}`}> 
+                    <div key={task.id} className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between ${isPanelDark ? 'bg-[#14233a] border-slate-700' : 'bg-white border-gray-100'}`}>
                       <div className="flex items-center gap-3"> 
                         <span className="text-xl">{task.type === 'reinforcement' ? '🌟' : task.type === 'intervention' ? '✍️' : '📋'}</span> 
                         <div><p className={`font-semibold text-sm tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>{task.title}</p><p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{new Date(task.scheduledAt).toLocaleDateString('pt-BR')} • {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</p></div> 

@@ -2358,6 +2358,45 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'note', '/api/notes');
   },
 
+  async getClinicalNoteMentions(limit = 12) {
+    try {
+      const response = await fetchClinical(endpointWithLimit('/api/clinical-note-mentions', normalizeListLimit(limit, 12, 30)), {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getClinicalNoteMentions',
+        operation: 'list',
+        table: 'clinical_note_mentions',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar suas menções.');
+      return { success: false, data: [], error: message, message };
+    }
+  },
+
+  async markClinicalNoteMentionRead(mentionId: string) {
+    try {
+      const response = await fetchClinical(`/api/clinical-note-mentions/${encodeURIComponent(String(mentionId))}/read`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'markClinicalNoteMentionRead',
+        operation: 'write',
+        table: 'clinical_note_mentions',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar a notificação.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async deleteNote(noteId: string) {
     return await saveOfflineFirst(noteId, { id: noteId }, 'note', `/api/notes/${noteId}`, 'DELETE');
   },

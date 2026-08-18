@@ -56,6 +56,7 @@ import {
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { SettingsMenu } from "./SettingsMenu";
+import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
 import { SchoolsManagement } from "./SchoolsManagement";
@@ -1722,6 +1723,7 @@ export function CoordinatorDashboard({
   const [patientOpenTab, setPatientOpenTab] = useState<
     "history" | "notes" | "report" | "plan" | "session" | "school" | "files"
   >("history");
+  const [patientFocusNoteId, setPatientFocusNoteId] = useState("");
   const [openAnamnesisOnPatientOpen, setOpenAnamnesisOnPatientOpen] =
     useState(false);
   const [patientSessionReportId, setPatientSessionReportId] = useState('');
@@ -10501,6 +10503,17 @@ export function CoordinatorDashboard({
     return alerts;
   })();
 
+  const openClinicalMentionNotification = (notification: any) => {
+    const patientId = String(notification?.patientId || '').trim();
+    const noteId = String(notification?.noteId || '').trim();
+    if (!patientId || !noteId) return;
+    setPatientReturnTab(activeTab);
+    setSelectedPatientId(patientId);
+    setPatientOpenTab("notes");
+    setPatientFocusNoteId(noteId);
+    setView("patient");
+  };
+
   const goBackFromPatientRecord = () => {
     const previousTab = canAccessTab(patientReturnTab) ? patientReturnTab : "patients";
     setView("home");
@@ -10633,6 +10646,7 @@ export function CoordinatorDashboard({
               >
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
+              <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
               <SettingsMenu
                 user={user}
                 onLogout={onLogout}
@@ -10759,6 +10773,8 @@ export function CoordinatorDashboard({
                   : ""
               }
               initialTab={patientOpenTab}
+              focusNoteId={patientFocusNoteId}
+              onFocusNoteConsumed={() => setPatientFocusNoteId('')}
               sessionReportId={patientSessionReportId}
               onSessionReportConsumed={() => setPatientSessionReportId('')}
               openAnamnesisOnLoad={openAnamnesisOnPatientOpen}
@@ -10791,9 +10807,10 @@ export function CoordinatorDashboard({
                 txt: string,
                 visibility: string,
                 subject?: string,
+                options?: { mentionUserIds?: string[] },
               ) => {
                 if (!ensureTherapistClinicalProfile()) return;
-                onAddNote(pid, txt, visibility, subject);
+                onAddNote(pid, txt, visibility, subject, options);
               }}
               onAddActivityLog={onAddActivityLog}
               onUpdatePatient={
@@ -10952,6 +10969,7 @@ export function CoordinatorDashboard({
               {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
             </button>
 
+            <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
             <SettingsMenu
               user={user}
               onLogout={onLogout}

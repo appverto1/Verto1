@@ -41289,6 +41289,140 @@ async function startServer() {
     return { data: null, error: { message: 'Falha ao atualizar tarefa adulta após fallback de schema.' }, payload: candidate };
   };
 
+  const parseClinicalNoteMentionUserIds = (value: unknown) => {
+    const source = Array.isArray(value) ? value : [];
+    return Array.from(new Set(source.map((item) => sanitizeString(item, 120)).filter(isUuid))).slice(0, 8);
+  };
+
+  const persistClinicalNoteMentions = async (params: {
+    req: any;
+    note: any;
+    patientId: string;
+    mentionUserIds: string[];
+  }) => {
+    const mentionUserIds = parseClinicalNoteMentionUserIds(params.mentionUserIds);
+    if (mentionUserIds.length === 0 || resolvePatientNoteAudience(params.note) !== 'professional') return 0;
+    const actorId = sanitizeString(params.req?.session?.user?.id, 120);
+    const clinicId = sanitizeString(params.req?.resolvedPatientClinicId || currentClinicId(params.req?.session?.user), 120);
+    const noteId = sanitizeString(params.note?.id, 120);
+    if (!isUuid(actorId) || !isUuid(clinicId) || !isUuid(params.patientId) || !isUuid(noteId)) return 0;
+
+    const { data: links, error: linksError } = await supabase
+      .from('patient_professional_links')
+      .select('professional_id,organization_id,clinic_id,status')
+      .eq('patient_id', params.patientId)
+      .eq('status', 'active')
+      .in('professional_id', mentionUserIds);
+    if (linksError) throw linksError;
+
+    const eligibleIds = Array.from(new Set((links || [])
+      .filter((link: any) => {
+        const scopedClinicId = sanitizeString(link?.organization_id || link?.clinic_id, 120);
+        return scopedClinicId === clinicId && isUuid(link?.professional_id) && sanitizeString(link?.professional_id, 120) !== actorId;
+      })
+      .map((link: any) => sanitizeString(link?.professional_id, 120))));
+    if (eligibleIds.length === 0) return 0;
+
+    const { data: memberships, error: membershipsError } = await supabase
+      .from('clinic_memberships')
+      .select('user_id,status')
+      .eq('clinic_id', clinicId)
+      .eq('status', 'active')
+      .in('user_id', eligibleIds);
+    if (membershipsError) throw membershipsError;
+    const activeIds = new Set((memberships || []).map((row: any) => sanitizeString(row?.user_id, 120)).filter(isUuid));
+    const recipients = eligibleIds.filter((id) => activeIds.has(id));
+    if (recipients.length === 0) return 0;
+
+    const excerpt = sanitizeTextField(params.note?.content || params.note?.text || '', 240) || null;
+    const subject = sanitizeTextField(params.note?.subject || '', 120) || null;
+    const now = new Date().toISOString();
+    const rows = recipients.map((recipientUserId) => ({
+      clinic_id: clinicId,
+      patient_id: params.patientId,
+      note_id: noteId,
+      recipient_user_id: recipientUserId,
+      mentioned_by: actorId,
+      note_subject: subject,
+      note_excerpt: excerpt,
+      created_at: now,
+      updated_at: now,
+    }));
+    const { error } = await supabase
+      .from('clinical_note_mentions')
+      .upsert(rows, { onConflict: 'note_id,recipient_user_id', ignoreDuplicates: true });
+    if (error) throw error;
+    return rows.length;
+  };
+
+  app.get('/api/clinical-note-mentions', checkAuth, async (req: any, res) => {
+    const actorId = sanitizeString(req.session?.user?.id, 120);
+    const limit = parseBoundedListLimit(req.query?.limit, 12, 30);
+    if (!isUuid(actorId)) return res.status(401).json({ success: false, error: 'Sessão inválida.' });
+    try {
+      let query = supabase
+        .from('clinical_note_mentions')
+        .select('id,clinic_id,patient_id,note_id,recipient_user_id,mentioned_by,note_subject,note_excerpt,read_at,created_at')
+        .eq('recipient_user_id', actorId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (String(req.query?.unreadOnly || '').toLowerCase() === 'true') query = query.is('read_at', null);
+      const { data, error } = await query;
+      if (error) {
+        if (isMissingRelationError(error)) return res.json({ success: true, data: [], warning: 'CLINICAL_NOTE_MENTIONS_SCHEMA_PENDING' });
+        throw error;
+      }
+      const rows = data || [];
+      const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row?.patient_id, 120)).filter(isUuid)));
+      const actorIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row?.mentioned_by, 120)).filter(isUuid)));
+      const [patientsResult, usersResult] = await Promise.all([
+        patientIds.length ? supabase.from('patients').select('id,name').in('id', patientIds) : Promise.resolve({ data: [], error: null }),
+        actorIds.length ? supabase.from('users').select('id,name').in('id', actorIds) : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (patientsResult.error) throw patientsResult.error;
+      if (usersResult.error) throw usersResult.error;
+      const patientNames = new Map((patientsResult.data || []).map((row: any) => [String(row.id), sanitizeString(row?.name, 180)]));
+      const actorNames = new Map((usersResult.data || []).map((row: any) => [String(row.id), sanitizeString(row?.name, 180)]));
+      return res.json({
+        success: true,
+        data: rows.map((row: any) => ({
+          id: row.id,
+          patientId: row.patient_id,
+          noteId: row.note_id,
+          patientName: patientNames.get(String(row.patient_id)) || 'Paciente',
+          mentionedByName: actorNames.get(String(row.mentioned_by)) || 'Profissional da equipe',
+          subject: row.note_subject || null,
+          excerpt: row.note_excerpt || null,
+          readAt: row.read_at || null,
+          createdAt: row.created_at,
+        })),
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/clinical-note-mentions [GET]', error, { actorId, limit, requestId: requestIdForLogs(req) });
+    }
+  });
+
+  app.patch('/api/clinical-note-mentions/:mentionId/read', checkAuth, async (req: any, res) => {
+    const actorId = sanitizeString(req.session?.user?.id, 120);
+    const mentionId = sanitizeString(req.params?.mentionId, 120);
+    if (!isUuid(actorId) || !isUuid(mentionId)) return res.status(400).json({ success: false, error: 'Notificação inválida.' });
+    try {
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('clinical_note_mentions')
+        .update({ read_at: now, updated_at: now })
+        .eq('id', mentionId)
+        .eq('recipient_user_id', actorId)
+        .select('id,read_at')
+        .maybeSingle();
+      if (error) throw error;
+      if (!data?.id) return res.status(404).json({ success: false, error: 'Notificação não encontrada.' });
+      return res.json({ success: true, data: { id: data.id, readAt: data.read_at } });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/clinical-note-mentions/:mentionId/read [PATCH]', error, { actorId, mentionId, requestId: requestIdForLogs(req) });
+    }
+  });
+
   // Notes
   app.get('/api/notes/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.history.view'), checkPatientAccess, async (req, res) => {
     try {
@@ -41642,6 +41776,18 @@ async function startServer() {
       });
       
       if (error) throw error;
+      const mentionUserIds = parseClinicalNoteMentionUserIds(req.body?.mention_user_ids || req.body?.mentionUserIds);
+      if (mentionUserIds.length > 0 && resolvePatientNoteAudience(data || payload) === 'professional') {
+        try {
+          await persistClinicalNoteMentions({ req, note: data || payload, patientId: payload.patient_id, mentionUserIds });
+        } catch (mentionError: any) {
+          if (isMissingRelationError(mentionError)) {
+            console.warn('[ClinicalNoteMentions] schema pending; note preserved without mention notification.');
+          } else {
+            logRouteDbError('/api/notes', mentionError, { phase: 'persistClinicalMentions', patientId: payload.patient_id, noteId: data?.id || payload?.id });
+          }
+        }
+      }
       try {
         await persistActivityLog({
           userId: sanitizeString(req.session.user?.id, 120),
