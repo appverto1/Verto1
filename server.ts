@@ -6039,12 +6039,24 @@ function serializePatientMediaForClient(row: any) {
   const profilePicture = profilePicturePath
     ? buildPatientPhotoViewUrl(profilePicturePath)
     : sanitizeSessionUrl(row?.profile_picture || row?.profilePicture);
+  const portalProfilePicturePath =
+    extractPatientPhotosStoragePath(row?.portal_profile_picture_path) ||
+    extractPatientPhotosStoragePath(row?.portalProfilePicturePath) ||
+    extractPatientPhotosStoragePath(row?.portal_profile_picture) ||
+    extractPatientPhotosStoragePath(row?.portalProfilePicture);
+  const portalProfilePicture = portalProfilePicturePath
+    ? buildPatientPhotoViewUrl(portalProfilePicturePath)
+    : sanitizeSessionUrl(row?.portal_profile_picture || row?.portalProfilePicture);
   return {
     ...row,
     profile_picture: profilePicture || row?.profile_picture || null,
     profilePicture: profilePicture || row?.profilePicture || null,
     profile_picture_path: profilePicturePath || row?.profile_picture_path || null,
-    profilePicturePath: profilePicturePath || row?.profilePicturePath || null
+    profilePicturePath: profilePicturePath || row?.profilePicturePath || null,
+    portal_profile_picture: portalProfilePicture || row?.portal_profile_picture || null,
+    portalProfilePicture: portalProfilePicture || row?.portalProfilePicture || null,
+    portal_profile_picture_path: portalProfilePicturePath || row?.portal_profile_picture_path || null,
+    portalProfilePicturePath: portalProfilePicturePath || row?.portalProfilePicturePath || null
   };
 }
 
@@ -15592,6 +15604,7 @@ type ResolvedOnboardingContext = {
     subscriptionStatus: string | null;
     billingModel: string | null;
     address: string | null;
+    patientPhotoPolicy: 'PORTAL' | 'CLINIC';
   } | null;
   membership: {
     role: string;
@@ -15618,6 +15631,7 @@ function compactOnboardingContextForSession(value: any): ResolvedOnboardingConte
         subscriptionStatus: normalizeClinicAccessStatus(value.clinic.subscriptionStatus) || null,
         billingModel: sanitizeString(value.clinic.billingModel, 60).toLowerCase() || null,
         address: sanitizeString(value.clinic.address, 320) || null,
+        patientPhotoPolicy: sanitizeString(value.clinic.patientPhotoPolicy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
       }
     : null;
   const membership = value.membership && typeof value.membership === 'object'
@@ -15663,6 +15677,7 @@ async function fetchClinicOnboardingSnapshot(clinicId: string) {
     'clinic_address',
     'city',
     'state',
+    'patient_photo_policy',
   ];
   let columns = [...requiredColumns, ...optionalColumns];
   let lastError: any = null;
@@ -15857,6 +15872,7 @@ async function resolveOnboardingContextForUser(params: {
           subscriptionStatus: null,
           billingModel: null,
           address: null,
+          patientPhotoPolicy: 'PORTAL',
         },
         membership: null,
       };
@@ -15950,6 +15966,7 @@ async function resolveOnboardingContextForUser(params: {
       subscriptionStatus: clinicSubscriptionStatus || null,
       billingModel: billingModel || null,
       address: clinicOnboardingAddress(clinicRow),
+      patientPhotoPolicy: sanitizeString(clinicRow?.patient_photo_policy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
     },
     membership: membership
       ? {
@@ -16017,6 +16034,7 @@ function mergeAuthoritativeClinicSettings(sessionSettings: any, context: Resolve
     clinicWhatsapp: context.clinic.whatsapp,
     clinicLogoUrl: context.clinic.logoUrl,
     clinicAddress: context.clinic.address,
+    patientPhotoPolicy: context.clinic.patientPhotoPolicy,
     specialty: context.membership?.specialty || sessionSettings?.specialty || null,
   });
 }
@@ -16334,7 +16352,8 @@ function compactClinicSettingsForSession(settings: any) {
     therapistMiniCurriculum: sanitizeString(settings.therapistMiniCurriculum, 3000) || null,
     defaultSessionDuration: asSafeNumber(settings.defaultSessionDuration, 20, 240) || 50,
     workStart: sanitizeString(settings.workStart, 5) || '08:00',
-    workEnd: sanitizeString(settings.workEnd, 5) || '18:00'
+    workEnd: sanitizeString(settings.workEnd, 5) || '18:00',
+    patientPhotoPolicy: sanitizeString(settings.patientPhotoPolicy || settings.patient_photo_policy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL'
   });
 }
 
@@ -32743,6 +32762,19 @@ async function startServer() {
       const profilePicture =
         (profilePicturePath ? await resolvePatientPhotoUrl(requestedProfilePicture, profilePicturePath) : null) ||
         requestedProfilePicture;
+      let patientPhotoPolicy: 'PORTAL' | 'CLINIC' = 'PORTAL';
+      if (isUuid(activeClinicId)) {
+        const { data: clinicPhotoPolicy, error: clinicPhotoPolicyError } = await supabase
+          .from('clinics')
+          .select('patient_photo_policy')
+          .eq('id', activeClinicId)
+          .maybeSingle();
+        if (!clinicPhotoPolicyError) {
+          patientPhotoPolicy = sanitizeString(clinicPhotoPolicy?.patient_photo_policy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL';
+        } else if (extractMissingColumnName(clinicPhotoPolicyError) !== 'patient_photo_policy') {
+          throw clinicPhotoPolicyError;
+        }
+      }
       const updatedAt = new Date().toISOString();
 
       await patchTableSafely('users', { column: 'id', value: userId }, {
@@ -32770,8 +32802,10 @@ async function startServer() {
           metadata: portalDisplayName ? nextPatientMetadata : undefined,
           address: address || undefined,
           endereco: address || undefined,
-          profile_picture: profilePicture || undefined,
-          profile_picture_path: profilePicturePath || undefined,
+          portal_profile_picture: profilePicture || undefined,
+          portal_profile_picture_path: profilePicturePath || undefined,
+          profile_picture: patientPhotoPolicy === 'PORTAL' ? profilePicture || undefined : undefined,
+          profile_picture_path: patientPhotoPolicy === 'PORTAL' ? profilePicturePath || undefined : undefined,
           updated_at: updatedAt
         };
         await patchTableSafely(
@@ -43346,6 +43380,14 @@ async function startServer() {
       const clinicState = sanitizeString(clinicSettingsInput?.clinicState || clinicSettingsInput?.state || req.body?.clinicState, 2).toUpperCase();
       const clinicPostalCode = sanitizeString(clinicSettingsInput?.clinicPostalCode || clinicSettingsInput?.postalCode || req.body?.clinicPostalCode, 20).replace(/\D/g, '');
       const clinicCnesCode = sanitizeString(clinicSettingsInput?.clinicCnesCode || clinicSettingsInput?.cnesCode || req.body?.clinicCnesCode, 40).replace(/\D/g, '');
+      const clinicPatientPhotoPolicy = sanitizeString(
+        clinicSettingsInput?.patientPhotoPolicy ||
+        clinicSettingsInput?.patient_photo_policy ||
+        req.session.user?.clinicSettings?.patientPhotoPolicy ||
+        req.session.user?.clinicSettings?.patient_photo_policy ||
+        'PORTAL',
+        20,
+      ).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL';
       const clinicProviderCode = sanitizeString(clinicSettingsInput?.clinicProviderCode || clinicSettingsInput?.providerCode || req.body?.clinicProviderCode, 80);
       const clinicCnpj = clinicDocumentNumber || sanitizeString(clinicSettingsInput?.clinicCnpj || req.body?.clinicCnpj, 30);
 
@@ -43529,6 +43571,7 @@ async function startServer() {
             ...(clinicState ? { clinicState } : {}),
             ...(clinicPostalCode ? { clinicPostalCode } : {}),
             ...(clinicCnesCode ? { clinicCnesCode } : {}),
+            patientPhotoPolicy: clinicPatientPhotoPolicy,
             ...(clinicProviderCode ? { clinicProviderCode } : {}),
             ...(resolvedCouncil ? { council: resolvedCouncil } : {}),
             ...(resolvedCouncilNumber ? { councilNumber: resolvedCouncilNumber } : {}),
@@ -43570,6 +43613,7 @@ async function startServer() {
               state: clinicState || undefined,
               postal_code: clinicPostalCode || undefined,
               cnes_code: clinicCnesCode || undefined,
+              patient_photo_policy: clinicPatientPhotoPolicy,
               provider_code: clinicProviderCode || undefined,
               logo_url: resolvedClinicLogoUrl || undefined,
               signature_data_url: resolvedSignatureUrl || undefined,

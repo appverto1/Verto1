@@ -4,7 +4,6 @@ import { getSupabase } from '../lib/supabase';
 import {
   PATIENT_PROFESSIONAL_CASE_ROLE_OPTIONS,
   isEligiblePatientProfessionalLinkCandidate,
-  patientProfessionalCaseRoleLabel,
   resolveProfessionalProfileSpecialty
 } from '../utils/patientProfessionalLinks';
 import { formatDateInAppointmentTimezone } from '../utils/scheduling';
@@ -108,6 +107,7 @@ export const PatientProfessionalLinksPanel = ({
   const [managementResolved, setManagementResolved] = useState(false);
   const [serverCanManage, setServerCanManage] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [pendingEndLink, setPendingEndLink] = useState<ProfessionalLink | null>(null);
   const [draft, setDraft] = useState({
     professionalId: '',
     caseRole: 'therapist',
@@ -140,6 +140,8 @@ export const PatientProfessionalLinksPanel = ({
     setManagementResolved(false);
     setServerCanManage(false);
     setShowForm(false);
+    setPendingEndLink(null);
+    setLinks([]);
     void load();
   }, [patientId, refreshKey]);
 
@@ -257,11 +259,18 @@ export const PatientProfessionalLinksPanel = ({
     }
   };
 
-  const effectiveCanManage = managementResolved ? serverCanManage : canManage;
+  const effectiveCanManage = managementResolved && (serverCanManage || canManage);
   const shell = dark ? 'text-slate-100' : 'text-slate-900';
+  const linkClinicalLabel = (link: ProfessionalLink) => {
+    const specialty = String(link.specialty || '').trim();
+    const caseRole = String(link.case_role || '').trim().toLowerCase();
+    if (caseRole === 'supervisor') return ['Supervisão', specialty].filter(Boolean).join(' · ');
+    if (caseRole === 'case_coordinator') return ['Coordenação do caso', specialty].filter(Boolean).join(' · ');
+    return specialty || 'Especialidade não informada';
+  };
 
   return (
-    <section className={`w-full min-w-0 ${shell}`} aria-label="Equipe do caso">
+    <section className={`min-h-[9.5rem] w-full min-w-0 ${shell}`} aria-label="Equipe do caso">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
             <p className="text-sm font-semibold">Equipe do caso</p>
@@ -403,7 +412,22 @@ export const PatientProfessionalLinksPanel = ({
         </div>
       ) : null}
 
-      <div className="mt-2 grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
+      {loading ? (
+        <div className="mt-2 grid min-h-[7rem] gap-2 sm:grid-cols-2 2xl:grid-cols-3" aria-label="Carregando equipe do caso">
+          {[0, 1].map((index) => (
+            <div key={`case-team-skeleton-${index}`} className={`h-[7rem] animate-pulse rounded-xl border ${dark ? 'border-slate-700 bg-slate-800/70' : 'border-slate-200 bg-slate-50'}`}>
+              <div className="flex items-center gap-3 p-3">
+                <span className={`h-9 w-9 rounded-full ${dark ? 'bg-slate-700' : 'bg-slate-200'}`} />
+                <div className="flex-1 space-y-2">
+                  <span className={`block h-3 w-2/3 rounded ${dark ? 'bg-slate-700' : 'bg-slate-200'}`} />
+                  <span className={`block h-3 w-1/2 rounded ${dark ? 'bg-slate-700' : 'bg-slate-200'}`} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+      <div className="mt-2 grid min-h-[7rem] gap-2 sm:grid-cols-2 2xl:grid-cols-3">
         {active.map((link) => (
           <article
             key={link.id}
@@ -432,7 +456,7 @@ export const PatientProfessionalLinksPanel = ({
                 <div className="min-w-0">
                 <p className="truncate text-xs font-medium">{link.professional?.name || professionalById.get(String(link.professional_id || '').trim())?.name || link.professional?.email || 'Profissional'}</p>
                 <p className={`mt-1 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  {patientProfessionalCaseRoleLabel(link.case_role)} · {link.specialty || 'Especialidade não informada'}
+                  {linkClinicalLabel(link)}
                 </p>
                 </div>
               </div>
@@ -447,12 +471,13 @@ export const PatientProfessionalLinksPanel = ({
             ) : null}
             {effectiveCanManage && link.canBeEnded !== false ? (
               <div className={`border-t px-3 ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
-                <button type="button" onClick={() => void end(link)} disabled={busy === `end:${link.id}`} className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 text-xs font-medium text-rose-600 disabled:opacity-50"><UserRoundX size={14} /> Encerrar vínculo</button>
+                <button type="button" onClick={() => setPendingEndLink(link)} disabled={busy === `end:${link.id}`} className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 text-xs font-medium text-rose-600 disabled:opacity-50"><UserRoundX size={14} /> Encerrar vínculo</button>
               </div>
             ) : null}
           </article>
         ))}
       </div>
+      )}
       {!loading && active.length === 0 ? (
         <p className={`mt-3 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>Nenhum vínculo ativo. Adicione o primeiro profissional para formar a equipe.</p>
       ) : null}
@@ -471,6 +496,30 @@ export const PatientProfessionalLinksPanel = ({
             ))}
           </div>
         </details>
+      ) : null}
+      {pendingEndLink ? (
+        <div className="fixed inset-0 z-[160] flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-labelledby="end-patient-professional-link-title">
+          <div className={`w-full max-w-md rounded-3xl border p-5 shadow-2xl ${dark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+            <h3 id="end-patient-professional-link-title" className="text-lg font-semibold">Encerrar vínculo com {pendingEndLink.professional?.name || professionalById.get(String(pendingEndLink.professional_id || '').trim())?.name || 'este profissional'}?</h3>
+            <p className={`mt-2 text-sm leading-6 ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
+              O profissional deixará de fazer parte da equipe ativa deste paciente. O histórico clínico e o vínculo encerrado serão preservados.
+            </p>
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => setPendingEndLink(null)} className={`min-h-11 rounded-xl border px-4 text-sm font-medium ${dark ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-700'}`}>Cancelar</button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = pendingEndLink;
+                  setPendingEndLink(null);
+                  await end(target);
+                }}
+                className="min-h-11 rounded-xl bg-rose-600 px-4 text-sm font-medium text-white hover:bg-rose-700"
+              >
+                Encerrar vínculo
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
       {error ? <p role="alert" className="mt-3 text-xs leading-5 text-rose-600">{error}</p> : null}
     </section>

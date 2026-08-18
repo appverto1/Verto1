@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, CalendarClock, CheckCircle2, ClipboardList, Library, Loader2, Plus, Save, X } from "lucide-react";
+import { AlertCircle, CalendarClock, Camera, CheckCircle2, ClipboardList, Library, Loader2, Plus, Save, X } from "lucide-react";
 import { BillingTissSettingsPanel } from "./BillingTissSettingsPanel";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { SubscriptionDiscountSummary } from "./SubscriptionDiscountSummary";
@@ -1694,14 +1694,41 @@ export function ClinicGlobalSettingsPanel({
               </SectionCard>
 
 
-              <SectionCard title="Preferências da clínica" description="Preferências operacionais usadas na agenda e nas rotinas administrativas." complete={Boolean(values.workStart && values.workEnd)} hasAnyData>
+              <SectionCard title="Preferências da clínica" description="Preferências operacionais usadas na agenda, no prontuário e nas rotinas administrativas." complete={Boolean(values.workStart && values.workEnd && values.clinicPatientPhotoPolicy)} hasAnyData>
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                   <label className={labelClass}>Início do expediente<input type="time" value={values.workStart} onChange={(event) => setters.setWorkStart(event.target.value)} className={inputClass} /></label>
                   <label className={labelClass}>Fim do expediente<input type="time" value={values.workEnd} onChange={(event) => setters.setWorkEnd(event.target.value)} className={inputClass} /></label>
+                  <div className="md:col-span-2 rounded-2xl border border-violet-100 bg-violet-50/40 p-4">
+                    <div className="flex items-start gap-3">
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#7a32fc] shadow-sm"><Camera size={18} /></span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-slate-900">Foto exibida no prontuário do paciente</p>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-500">Escolha uma única fonte para manter a identidade visual da clínica consistente. A troca de política não apaga fotos já enviadas.</p>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <button
+                            type="button"
+                            onClick={() => setters.setClinicPatientPhotoPolicy('PORTAL')}
+                            className={`rounded-xl border px-4 py-3 text-left text-sm transition ${values.clinicPatientPhotoPolicy !== 'CLINIC' ? 'border-violet-300 bg-white text-violet-800 ring-2 ring-violet-100' : 'border-slate-200 bg-white text-slate-600'}`}
+                          >
+                            <span className="block font-semibold">Usar foto do portal</span>
+                            <span className="mt-1 block text-xs font-normal leading-relaxed">A foto enviada pelo paciente ou responsável passa a aparecer automaticamente no prontuário.</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setters.setClinicPatientPhotoPolicy('CLINIC')}
+                            className={`rounded-xl border px-4 py-3 text-left text-sm transition ${values.clinicPatientPhotoPolicy === 'CLINIC' ? 'border-violet-300 bg-white text-violet-800 ring-2 ring-violet-100' : 'border-slate-200 bg-white text-slate-600'}`}
+                          >
+                            <span className="block font-semibold">Foto gerenciada pela clínica</span>
+                            <span className="mt-1 block text-xs font-normal leading-relaxed">Direção, Coordenação e Recepção autorizada podem tirar ou enviar a foto usada no prontuário.</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                   {hasAppointmentsCommunicationModule && (
                     <div className="md:col-span-2"><PatientReschedulePolicySettings /></div>
                   )}
-                  <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar horário da clínica</SaveButton></div>
+                  <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar preferências da clínica</SaveButton></div>
                 </div>
               </SectionCard>
 
