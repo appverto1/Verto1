@@ -304,7 +304,7 @@ const sourceCardClass = (dark: boolean) => `group flex min-h-[150px] flex-col it
     : 'border-slate-200 bg-white text-slate-800 hover:border-violet-300 hover:shadow-sm'
 }`;
 
-export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], userRole, currentUserId, isDark = false, onStartSession }: any) => {
+export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], masteryEvaluations = [], userRole, currentUserId, isDark = false, onStartSession }: any) => {
   const patientId = String(patient?.id || '').trim();
   const patientName = String(patient?.name || patient?.nome || 'Paciente').trim() || 'Paciente';
   const normalizedRole = String(userRole || '').trim().toLowerCase();
@@ -402,7 +402,52 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const initialCreationSnapshotRef = useRef(buildCreationDraftSnapshot(initialForm(), ''));
   const closeRequestFocusRef = useRef<HTMLElement | null>(null);
 
-  const programs = useMemo(() => normalizeTherapeuticPrograms(planData), [planData]);
+  const masteryByTarget = useMemo(() => {
+    const byId = new Map<string, any>();
+    const byName = new Map<string, any>();
+    const rows = (Array.isArray(masteryEvaluations) ? masteryEvaluations : [])
+      .slice()
+      .sort((a: any, b: any) => new Date(b?.evaluated_at || b?.evaluatedAt || b?.created_at || b?.createdAt || 0).getTime() - new Date(a?.evaluated_at || a?.evaluatedAt || a?.created_at || a?.createdAt || 0).getTime());
+    rows.forEach((row: any) => {
+      const targetId = String(row?.target_id || row?.targetId || '').trim();
+      const targetName = String(row?.target_name || row?.targetName || '').trim().toLocaleLowerCase('pt-BR');
+      if (targetId && !byId.has(targetId)) byId.set(targetId, row);
+      if (targetName && !byName.has(targetName)) byName.set(targetName, row);
+    });
+    return { byId, byName };
+  }, [masteryEvaluations]);
+
+  const programs = useMemo(() => normalizeTherapeuticPrograms(planData).map((program: any) => {
+    const targets = (Array.isArray(program?.targets) ? program.targets : []).map((target: any) => {
+      const targetId = String(target?.id || target?.target_id || target?.targetId || '').trim();
+      const targetName = String(target?.name || target?.target_name || target?.targetName || '').trim().toLocaleLowerCase('pt-BR');
+      const evaluation = (targetId && masteryByTarget.byId.get(targetId)) || (targetName && masteryByTarget.byName.get(targetName)) || null;
+      if (!evaluation) return target;
+      const status = String(evaluation?.status || evaluation?.statusCode || evaluation?.evaluation_status || evaluation?.evaluationStatus || '').trim().toUpperCase();
+      const legacyStatus = String(evaluation?.evaluation_status || evaluation?.evaluationStatus || '').trim().toLowerCase();
+      const mastered = status === 'MASTERED_APPROVED' || status === 'MASTERED' || legacyStatus === 'mastered';
+      const progressCount = Math.max(0, Number(evaluation?.criterion_progress_count ?? evaluation?.criterionProgressCount ?? evaluation?.consecutive_successes ?? evaluation?.consecutiveSuccesses ?? 0) || 0);
+      const requiredCount = Math.max(1, Number(evaluation?.criterion_required_count ?? evaluation?.criterionRequiredCount ?? evaluation?.min_consecutive_successes ?? evaluation?.minConsecutiveSuccesses ?? 1) || 1);
+      const criterionProgressPercent = mastered ? 100 : Math.min(100, Math.round((progressCount / requiredCount) * 100));
+      return {
+        ...target,
+        normalizedStatus: mastered ? 'mastered' : target.normalizedStatus,
+        masteryEvaluation: evaluation,
+        masteryStatus: status,
+        criterionProgressCount: progressCount,
+        criterionRequiredCount: requiredCount,
+        criterionProgressPercent,
+        criterionProgressLabel: `${Math.min(progressCount, requiredCount)}/${requiredCount}`
+      };
+    });
+    const masteredTargetCount = targets.filter((target: any) => target.normalizedStatus === 'mastered').length;
+    const criterionProgressUnits = targets.reduce((sum: number, target: any) => {
+      if (target.normalizedStatus === 'mastered') return sum + 1;
+      return sum + Math.min(1, Math.max(0, Number(target?.criterionProgressPercent || 0) / 100));
+    }, 0);
+    const criterionProgressPercent = targets.length > 0 ? Math.round((criterionProgressUnits / targets.length) * 100) : 0;
+    return { ...program, targets, masteredTargetCount, criterionProgressPercent };
+  }), [masteryByTarget, planData]);
   const objectives = Array.isArray(planData?.objectives) ? planData.objectives : [];
   const planScopes = Array.isArray(planData?.planScopes) ? planData.planScopes : [];
   const ptsScopes = useMemo(
@@ -1838,6 +1883,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const waitingTargets = targets.filter((target: any) => target.normalizedStatus === 'not_started').length;
     const pausedTargets = targets.filter((target: any) => target.normalizedStatus === 'paused').length;
     const progress = targetCount ? Math.round((mastered / targetCount) * 100) : 0;
+    const criterionProgress = targetCount ? Math.max(progress, Number(program?.criterionProgressPercent || 0)) : 0;
+    const currentCriterionTarget = targets.find((target: any) => Number(target?.criterionRequiredCount || 0) > 1 && target?.normalizedStatus !== 'mastered');
     const criteria = program.mastery_criteria || program.masteryCriteria || program.criteria;
     const hasConfiguredCriterion = Boolean(
       criteria && typeof criteria === 'object' && Object.values(criteria).some((value) => (
@@ -1888,8 +1935,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
         <footer className={`border-t px-5 py-4 pl-6 ${isDark ? 'border-slate-700 bg-slate-900/25' : 'border-slate-100 bg-slate-50/45'}`}>
           {hasRecordedApplications ? <>
-            <div className={`mb-2 flex justify-between text-xs ${muted}`}><span>{mastered} de {targetCount} alvos dominados</span><span>{progress}%</span></div>
-            <div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} /></div>
+            <div className={`mb-2 flex justify-between gap-3 text-xs ${muted}`}><span>{mastered} de {targetCount} alvos dominados</span><span>{criterionProgress}% do caminho dos critérios</span></div>
+            <div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${criterionProgress}%` }} /></div>
+            {currentCriterionTarget && <p className={`mt-2 text-[11px] ${muted}`}>Alvo atual: {currentCriterionTarget.name} · {currentCriterionTarget.criterionProgressLabel} do critério persistido</p>}
           </> : <p className={`text-xs ${muted}`}>Nenhuma aplicação registrada.</p>}
           <div className={`mt-3 grid grid-cols-1 items-center gap-2 text-xs sm:grid-cols-[1fr_1fr_auto] ${muted}`}>
             <span>Última aplicação: {hasRecordedApplications ? formatTherapeuticPlanDate(program.lastAppliedAt) : 'Não registrada'}</span>
@@ -1908,6 +1956,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const mastered = Number(program?.masteredTargetCount || targets.filter((target: any) => target?.normalizedStatus === 'mastered').length || 0);
     const total = targets.length;
     const progress = total > 0 ? Math.min(100, Math.round((mastered / total) * 100)) : 0;
+    const criterionProgress = total > 0 ? Math.max(progress, Number(program?.criterionProgressPercent || 0)) : 0;
     const currentTarget = targets.find((target: any) => ['teaching', 'maintenance'].includes(String(target?.normalizedStatus || '')))
       || targets[0]
       || null;
@@ -1981,10 +2030,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         <div className="mt-3">
           <div className={`mb-1.5 flex flex-wrap items-center justify-between gap-2 text-xs ${muted}`}>
             <span>Progresso</span>
-            <span>{mastered} de {total || 0} alvos dominados</span>
+            <span>{mastered} de {total || 0} alvos dominados · {criterionProgress}% dos critérios</span>
           </div>
           <div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
-            <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} />
+            <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${criterionProgress}%` }} />
           </div>
         </div>
 

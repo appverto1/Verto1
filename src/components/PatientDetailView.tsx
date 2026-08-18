@@ -395,6 +395,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     ));
   const abaV2Enabled = isAbaV2Enabled();
   const abaV3UiEnabled = isAbaV3UiEnabled();
+  const patientApproachKey = String(patient?.approach || patient?.abordagem || patient?.treatmentApproach || '').toLowerCase();
+  const useCanonicalMasteryGrowth = abaV2Enabled && (
+    isKidsProfile ||
+    rawProfileType.includes('aba') ||
+    rawProfileType.includes('tea') ||
+    patientApproachKey.includes('aba')
+  );
   const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
   const readPersistedChartFilters = () => {
     if (typeof window === 'undefined') return {};
@@ -3547,7 +3554,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .filter((n: any) => {
         const visibility = String(n?.visibility || n?.type || '').toLowerCase();
         const subject = String(n?.subject || '').toLowerCase();
-        const text = String(n?.text || '').toLowerCase();
+        const rawText = String(n?.text || '');
+        const text = rawText.toLowerCase();
+        if (subject === 'milestone_event' || rawText.startsWith('MILESTONE_EVENT|')) return false;
         return (
           visibility === 'family' ||
           subject.includes('fam') ||
@@ -3941,20 +3950,34 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .sort((a, b) => new Date(b.occurredAt || 0).getTime() - new Date(a.occurredAt || 0).getTime());
   }, [abaTrials, abaBehaviorEvents, abaMasteryEvaluations, abaMaintenanceOverview, abaRecordTypeFilter, abaSessionFilter, abaRecordSearch]);
 
+  const approvedMasteryTargetCount = useMemo(() => {
+    const masteredTargets = new Set<string>();
+    (Array.isArray(abaMasteryEvaluations) ? abaMasteryEvaluations : []).forEach((evaluation: any) => {
+      const status = String(evaluation?.status || evaluation?.statusCode || '').trim().toUpperCase();
+      const legacyStatus = String(evaluation?.evaluation_status || evaluation?.evaluationStatus || '').trim().toLowerCase();
+      if (status !== 'MASTERED_APPROVED' && status !== 'MASTERED' && legacyStatus !== 'mastered') return;
+      const targetId = String(evaluation?.target_id || evaluation?.targetId || '').trim();
+      const targetName = String(evaluation?.target_name || evaluation?.targetName || '').trim().toLocaleLowerCase('pt-BR');
+      const key = targetId || targetName;
+      if (key) masteredTargets.add(key);
+    });
+    return masteredTargets.size;
+  }, [abaMasteryEvaluations]);
+
   const abaSummaryMetrics = useMemo(() => {
     const summary = abaPatientSummary || {};
     return {
       totalSessions: Number(summary.total_sessions ?? summary.totalSessions ?? abaSessionOptions.length) || 0,
       totalTrials: Number(summary.total_trials ?? summary.totalTrials ?? (Array.isArray(abaTrials) ? abaTrials.filter((trial: any) => !isTherapeuticProgramMeasurementTrial(trial)).length : 0)) || 0,
       totalBehaviorEvents: Number(summary.total_behavior_events ?? summary.totalBehaviorEvents ?? abaBehaviorEvents.length) || 0,
-      masteredTargets: Number(summary.mastered_targets_count ?? summary.masteredTargetsCount ?? abaMasteryEvaluations.length) || 0,
+      masteredTargets: Number(summary.mastered_targets_count ?? summary.masteredTargetsCount ?? approvedMasteryTargetCount) || 0,
       maintenanceTargets: Number(summary.maintenance_targets_count ?? summary.maintenanceTargetsCount ?? abaMaintenanceOverview?.summary?.maintenance_targets_count ?? abaMaintenanceOverview?.summary?.maintenanceTargetsCount ?? (Array.isArray(abaMaintenanceOverview?.schedules) ? new Set(abaMaintenanceOverview.schedules.map((item: any) => String(item?.target_id || item?.targetId || ''))).size : 0)) || 0,
       pendingMaintenanceProbes: Number(summary.pending_maintenance_probes_count ?? summary.pendingMaintenanceProbesCount ?? abaMaintenanceOverview?.summary?.pending_maintenance_probes_count ?? abaMaintenanceOverview?.summary?.pendingMaintenanceProbesCount ?? (Array.isArray(abaMaintenanceOverview?.schedules) ? abaMaintenanceOverview.schedules.filter((item: any) => String(item?.status || '').toUpperCase() === 'PENDING').length : 0)) || 0,
       activeRegressionRisks: Number(summary.active_regression_risks_count ?? summary.activeRegressionRisksCount ?? abaMaintenanceOverview?.summary?.active_regression_risks_count ?? abaMaintenanceOverview?.summary?.activeRegressionRisksCount ?? (Array.isArray(abaMaintenanceOverview?.alerts) ? abaMaintenanceOverview.alerts.filter((item: any) => !(item?.resolved_at || item?.resolvedAt)).length : 0)) || 0,
       lastEventLabel: summary.last_behavior_event_label || summary.lastBehaviorEventLabel || '',
       lastEventAt: summary.last_behavior_event_at || summary.lastBehaviorEventAt || ''
     };
-  }, [abaPatientSummary, abaSessionOptions.length, abaTrials.length, abaBehaviorEvents.length, abaMasteryEvaluations.length, abaMaintenanceOverview]);
+  }, [abaPatientSummary, abaSessionOptions.length, abaTrials.length, abaBehaviorEvents.length, approvedMasteryTargetCount, abaMaintenanceOverview]);
 
   const renderAbaRecordsPanel = () => {
     const latestRecord = abaStructuredRecords[0];
@@ -10042,6 +10065,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     protocolId={selectedChartProtocolId}
                     compact
                     dark={isPanelDark}
+                    useCanonicalMastery={useCanonicalMasteryGrowth}
                   />
                 </div>
               </section>
@@ -10232,6 +10256,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         protocolId={selectedChartProtocolId}
                         compact
                         dark={isPanelDark}
+                        useCanonicalMastery={useCanonicalMasteryGrowth}
                       />
                     </div>
                   )}
@@ -10842,6 +10867,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       patient={patient}
                       protocols={planProtocolCatalog}
                       professionals={clinicTherapists}
+                      masteryEvaluations={abaMasteryEvaluations}
                       userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                       currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                       isDark={isPanelDark}
@@ -11202,6 +11228,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     patient={patient}
                     protocols={planProtocolCatalog}
                     professionals={clinicTherapists}
+                    masteryEvaluations={abaMasteryEvaluations}
                     userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                     currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                     isDark={isPanelDark}

@@ -48153,6 +48153,64 @@ async function startServer() {
   };
 
 
+  const readPatientMasteryGrowthEvents = async (params: { patientId: string; clinicId?: string | null }) => {
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    if (!isUuid(patientId) || !isUuid(clinicId)) return [];
+    const query = supabase
+      .from('aba_mastery_evaluations')
+      .select('id,patient_id,clinic_id,target_id,target_name,status,evaluation_status,evaluated_at,criteria')
+      .eq('patient_id', patientId)
+      .eq('clinic_id', clinicId)
+      .or('status.eq.MASTERED_APPROVED,status.eq.MASTERED,evaluation_status.eq.mastered')
+      .order('evaluated_at', { ascending: true })
+      .limit(500);
+    const { data, error } = await query;
+    if (error) {
+      if (hasMissingFinancialSchema(error) || isMissingRelationError(error)) return [];
+      throw error;
+    }
+    const seenTargets = new Set<string>();
+    return (Array.isArray(data) ? data : []).flatMap((row: any) => {
+      const targetId = sanitizeString(row?.target_id, 180);
+      const targetName = sanitizeTextField(row?.target_name, 240);
+      const targetKey = targetId || targetName.toLocaleLowerCase('pt-BR');
+      const rawEvaluatedAt = sanitizeString(row?.evaluated_at, 80);
+      const evaluatedAtDate = rawEvaluatedAt ? new Date(rawEvaluatedAt) : null;
+      if (!targetKey || !evaluatedAtDate || Number.isNaN(evaluatedAtDate.getTime()) || seenTargets.has(targetKey)) return [];
+      seenTargets.add(targetKey);
+      return [{
+        id: sanitizeString(row?.id, 180),
+        patientId,
+        targetId: targetId || null,
+        targetName: targetName || 'Habilidade',
+        evaluatedAt: evaluatedAtDate.toISOString(),
+        criteria: sanitizeClinicalPayload(row?.criteria || {})
+      }];
+    });
+  };
+
+  app.get('/api/portal/patients/:patientId/mastery-growth', noStoreDynamicResponse, checkAuth, requireRoles('patient'), requirePatientPortalModule('clinical_core'), async (req: any, res) => {
+    try {
+      const context = req.portalContext || await resolvePatientPortalContext(req.session.user);
+      const requestedPatientId = sanitizeString(req.params.patientId, 120);
+      const allowedPatientIds = new Set((Array.isArray(context?.patientIds) ? context.patientIds : []).map((id: any) => sanitizeString(id, 120)).filter(Boolean));
+      const resolvedPatientId = allowedPatientIds.has(requestedPatientId)
+        ? requestedPatientId
+        : sanitizeString(context?.resolvedPatientId, 120);
+      if (!isUuid(resolvedPatientId) || !allowedPatientIds.has(resolvedPatientId)) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const data = await readPatientMasteryGrowthEvents({ patientId: resolvedPatientId, clinicId: context?.clinicId });
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/portal/patients/:patientId/mastery-growth [GET]', error, {
+        requestId: requestIdForLogs(req),
+        patientId: sanitizeString(req.params.patientId, 120)
+      });
+    }
+  });
+
   app.get('/api/portal/context', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
       const context = await resolvePatientPortalContext(req.session.user);
@@ -77321,6 +77379,20 @@ async function startServer() {
       return res.json({ success: true, data: { points, dailySummaries: dailyResult.error ? [] : dailyResult.data || [], annotations, contextPatterns }, source: snapshotRows.length > 0 ? 'aba_session_metric_snapshots' : 'aba_behavior_daily_summaries' });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Erro interno do servidor.' });
+    }
+  });
+
+  app.get('/api/aba/patients/:patientId/mastery-growth', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.mastery.view'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const data = await readPatientMasteryGrowthEvents({ patientId, clinicId });
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/mastery-growth [GET]', error, {
+        requestId: requestIdForLogs(req),
+        patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120)
+      });
     }
   });
 

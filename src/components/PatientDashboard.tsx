@@ -1846,8 +1846,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (!notePatientId && noteEmail && portalPatientEmail && noteEmail !== portalPatientEmail) return false;
     return true;
   };
+  const isSystemPortalMilestoneEvent = (note: any) => {
+    const subject = normalizePortalLower(note?.subject);
+    const text = normalizePortalText(note?.text || note?.note);
+    return subject === 'milestone_event' || text.startsWith('MILESTONE_EVENT|');
+  };
   const isPortalSharedNote = (note: any) => {
-    if (!note || hasPortalPrivateFlag(note) || !noteBelongsToPortalPatient(note)) return false;
+    if (!note || isSystemPortalMilestoneEvent(note) || hasPortalPrivateFlag(note) || !noteBelongsToPortalPatient(note)) return false;
     const visibility = normalizePortalLower(note?.visibility || note?.audience || note?.scope || note?.access);
     const type = normalizePortalLower(note?.type || note?.kind);
     return hasPortalTrueFlag(note?.sharedWithPatient) ||
@@ -3705,11 +3710,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     patientId={portalPatientId || user.id}
                     protocols={protocols}
                     protocolId={activeKidsProtocol?.id}
-                    history={activeKidsProtocolEvents.map((event: any) => ({
-                      ...event,
-                      patientId: event?.patientId || event?.patient_id || portalPatientId || user.id,
-                      patient_id: event?.patient_id || event?.patientId || portalPatientId || user.id
-                    }))}
+                    useCanonicalMastery
+                    portalMode
                   />
                 </div>
 
