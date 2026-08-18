@@ -41299,13 +41299,13 @@ async function startServer() {
     note: any;
     patientId: string;
     mentionUserIds: string[];
-  }) => {
+  }): Promise<string[]> => {
     const mentionUserIds = parseClinicalNoteMentionUserIds(params.mentionUserIds);
-    if (mentionUserIds.length === 0 || resolvePatientNoteAudience(params.note) !== 'professional') return 0;
+    if (mentionUserIds.length === 0 || resolvePatientNoteAudience(params.note) !== 'professional') return [];
     const actorId = sanitizeString(params.req?.session?.user?.id, 120);
     const clinicId = sanitizeString(params.req?.resolvedPatientClinicId || currentClinicId(params.req?.session?.user), 120);
     const noteId = sanitizeString(params.note?.id, 120);
-    if (!isUuid(actorId) || !isUuid(clinicId) || !isUuid(params.patientId) || !isUuid(noteId)) return 0;
+    if (!isUuid(actorId) || !isUuid(clinicId) || !isUuid(params.patientId) || !isUuid(noteId)) return [];
 
     const { data: links, error: linksError } = await supabase
       .from('patient_professional_links')
@@ -41321,7 +41321,7 @@ async function startServer() {
         return scopedClinicId === clinicId && isUuid(link?.professional_id) && sanitizeString(link?.professional_id, 120) !== actorId;
       })
       .map((link: any) => sanitizeString(link?.professional_id, 120))));
-    if (eligibleIds.length === 0) return 0;
+    if (eligibleIds.length === 0) return [];
 
     const { data: memberships, error: membershipsError } = await supabase
       .from('clinic_memberships')
@@ -41332,7 +41332,7 @@ async function startServer() {
     if (membershipsError) throw membershipsError;
     const activeIds = new Set((memberships || []).map((row: any) => sanitizeString(row?.user_id, 120)).filter(isUuid));
     const recipients = eligibleIds.filter((id) => activeIds.has(id));
-    if (recipients.length === 0) return 0;
+    if (recipients.length === 0) return [];
 
     const excerpt = sanitizeTextField(params.note?.content || params.note?.text || '', 240) || null;
     const subject = sanitizeTextField(params.note?.subject || '', 120) || null;
@@ -41352,7 +41352,30 @@ async function startServer() {
       .from('clinical_note_mentions')
       .upsert(rows, { onConflict: 'note_id,recipient_user_id', ignoreDuplicates: true });
     if (error) throw error;
-    return rows.length;
+    return recipients;
+  };
+
+  const loadClinicalNoteMentionUserIdsByNote = async (noteIds: string[]) => {
+    const ids = Array.from(new Set((noteIds || []).map((id) => sanitizeString(id, 120)).filter(isUuid)));
+    const byNoteId = new Map<string, string[]>();
+    if (ids.length === 0) return byNoteId;
+    const { data, error } = await supabase
+      .from('clinical_note_mentions')
+      .select('note_id,recipient_user_id')
+      .in('note_id', ids);
+    if (error) {
+      if (isMissingRelationError(error)) return byNoteId;
+      throw error;
+    }
+    for (const row of data || []) {
+      const noteId = sanitizeString(row?.note_id, 120);
+      const recipientUserId = sanitizeString(row?.recipient_user_id, 120);
+      if (!isUuid(noteId) || !isUuid(recipientUserId)) continue;
+      const current = byNoteId.get(noteId) || [];
+      if (!current.includes(recipientUserId)) current.push(recipientUserId);
+      byNoteId.set(noteId, current);
+    }
+    return byNoteId;
   };
 
   app.get('/api/clinical-note-mentions', checkAuth, async (req: any, res) => {
@@ -41446,7 +41469,14 @@ async function startServer() {
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
         .slice(0, limit);
-      res.json({ success: true, data: deduped });
+      const mentionUserIdsByNote = await loadClinicalNoteMentionUserIdsByNote(
+        deduped.map((item: any) => sanitizeString(item?.id, 120)).filter(isUuid),
+      );
+      const hydrated = deduped.map((item: any) => ({
+        ...item,
+        mention_user_ids: mentionUserIdsByNote.get(String(item?.id || '')) || [],
+      }));
+      res.json({ success: true, data: hydrated });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/notes/:patientId [GET]', error, {
         patientId: sanitizeString((req as any).resolvedPatientId || req.params.patientId, 120),
@@ -41777,15 +41807,33 @@ async function startServer() {
       
       if (error) throw error;
       const mentionUserIds = parseClinicalNoteMentionUserIds(req.body?.mention_user_ids || req.body?.mentionUserIds);
+      let persistedMentionUserIds: string[] = [];
       if (mentionUserIds.length > 0 && resolvePatientNoteAudience(data || payload) === 'professional') {
         try {
-          await persistClinicalNoteMentions({ req, note: data || payload, patientId: payload.patient_id, mentionUserIds });
+          persistedMentionUserIds = await persistClinicalNoteMentions({
+            req,
+            note: data || payload,
+            patientId: payload.patient_id,
+            mentionUserIds,
+          });
         } catch (mentionError: any) {
-          if (isMissingRelationError(mentionError)) {
-            console.warn('[ClinicalNoteMentions] schema pending; note preserved without mention notification.');
-          } else {
-            logRouteDbError('/api/notes', mentionError, { phase: 'persistClinicalMentions', patientId: payload.patient_id, noteId: data?.id || payload?.id });
-          }
+          logRouteDbError('/api/notes', mentionError, {
+            phase: 'persistClinicalMentions',
+            patientId: payload.patient_id,
+            noteId: data?.id || payload?.id,
+          });
+          return res.status(isMissingRelationError(mentionError) ? 503 : 500).json({
+            success: false,
+            retryable: true,
+            code: isMissingRelationError(mentionError)
+              ? 'CLINICAL_NOTE_MENTIONS_SCHEMA_PENDING'
+              : 'CLINICAL_NOTE_MENTION_PERSISTENCE_FAILED',
+            error: 'A anotação foi preservada, mas a menção ainda não foi confirmada. A sincronização será repetida automaticamente.',
+            data: {
+              ...(data || payload),
+              mention_user_ids: mentionUserIds,
+            },
+          });
         }
       }
       try {
@@ -41800,7 +41848,13 @@ async function startServer() {
       } catch (logError) {
         logRouteDbError('/api/notes', logError, { phase: 'persistActivityLog' });
       }
-      res.json({ success: true, data });
+      res.json({
+        success: true,
+        data: {
+          ...(data || payload),
+          mention_user_ids: persistedMentionUserIds,
+        },
+      });
     } catch (error: any) {
       return sendClinicalMutationError(res, '/api/notes', 'write', error, {
         requestId,
