@@ -1468,6 +1468,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [abaTrials, setAbaTrials] = useState<any[]>([]);
   const [abaBehaviorEvents, setAbaBehaviorEvents] = useState<any[]>([]);
   const [abaMasteryEvaluations, setAbaMasteryEvaluations] = useState<any[]>([]);
+  const [abaMasteryPreviewEvaluations, setAbaMasteryPreviewEvaluations] = useState<any[]>([]);
   const [abaPatientSummary, setAbaPatientSummary] = useState<any>(null);
   const [abaMaintenanceOverview, setAbaMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
   const [isLoadingAbaRecords, setIsLoadingAbaRecords] = useState(false);
@@ -1490,6 +1491,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return [...localOnly, ...baseNotes];
   }, [externalNotes, generatedReviewNotes]);
 
+  const abaMasteryEvaluationsForPlan = useMemo(() => {
+    const persisted = Array.isArray(abaMasteryEvaluations) ? abaMasteryEvaluations : [];
+    const preview = Array.isArray(abaMasteryPreviewEvaluations) ? abaMasteryPreviewEvaluations : [];
+    if (preview.length === 0) return persisted;
+    const normalizeName = (value: any) => String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLocaleLowerCase('pt-BR');
+    const identityKeys = (row: any) => {
+      const id = String(row?.target_id || row?.targetId || '').trim();
+      const name = normalizeName(row?.target_name || row?.targetName || row?.name);
+      return [id ? `id:${id}` : '', name ? `name:${name}` : ''].filter(Boolean);
+    };
+    const previewKeys = new Set(preview.flatMap(identityKeys));
+    return [
+      ...preview,
+      ...persisted.filter((row: any) => !identityKeys(row).some((key: string) => previewKeys.has(key)))
+    ];
+  }, [abaMasteryEvaluations, abaMasteryPreviewEvaluations]);
+
   useEffect(() => {
     setResolvedClinicContext(clinicContext || {});
   }, [clinicContext]);
@@ -1509,6 +1532,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       setAbaTrials([]);
       setAbaBehaviorEvents([]);
       setAbaMasteryEvaluations([]);
+      setAbaMasteryPreviewEvaluations([]);
       setAbaPatientSummary(null);
       setAbaMaintenanceOverview({ schedules: [], probeResults: [], alerts: [], summary: null });
       setAbaRecordsError('');
@@ -2176,6 +2200,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       : Array.isArray(sessionSummary?.mastery_summary)
         ? sessionSummary.mastery_summary
         : [];
+    if (masterySummary.length > 0) {
+      const evaluatedAt = new Date().toISOString();
+      setAbaMasteryPreviewEvaluations(masterySummary.map((row: any) => ({
+        ...row,
+        patient_id: patient?.id || row?.patient_id || row?.patientId || null,
+        patientId: patient?.id || row?.patientId || row?.patient_id || null,
+        target_id: row?.target_id || row?.targetId || null,
+        targetId: row?.targetId || row?.target_id || null,
+        target_name: row?.target_name || row?.targetName || row?.name || null,
+        targetName: row?.targetName || row?.target_name || row?.name || null,
+        status: row?.status || row?.statusCode || null,
+        statusCode: row?.statusCode || row?.status || null,
+        criterion_progress_count: row?.criterion_progress_count ?? row?.criterionProgressCount ?? row?.consecutive_successes ?? row?.consecutiveSuccesses ?? 0,
+        criterionProgressCount: row?.criterionProgressCount ?? row?.criterion_progress_count ?? row?.consecutiveSuccesses ?? row?.consecutive_successes ?? 0,
+        consecutive_successes: row?.consecutive_successes ?? row?.consecutiveSuccesses ?? row?.criterion_progress_count ?? row?.criterionProgressCount ?? 0,
+        criterion_required_count: row?.criterion_required_count ?? row?.criterionRequiredCount ?? row?.min_consecutive_successes ?? row?.minConsecutiveSuccesses ?? 1,
+        criterionRequiredCount: row?.criterionRequiredCount ?? row?.criterion_required_count ?? row?.minConsecutiveSuccesses ?? row?.min_consecutive_successes ?? 1,
+        min_consecutive_successes: row?.min_consecutive_successes ?? row?.minConsecutiveSuccesses ?? row?.criterion_required_count ?? row?.criterionRequiredCount ?? 1,
+        evaluated_at: row?.evaluated_at || row?.evaluatedAt || evaluatedAt,
+        evaluatedAt: row?.evaluatedAt || row?.evaluated_at || evaluatedAt,
+        live_preview: true,
+        livePreview: true
+      })));
+      setAbaRecordsRefreshKey((value) => value + 1);
+    }
     const currentPei = Array.isArray(sessionModePatient?.pei) ? sessionModePatient.pei : patient?.pei;
     if (!patient?.id || !Array.isArray(currentPei) || masterySummary.length === 0) return;
 
@@ -8949,6 +8998,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           formatCountdown={formatSessionCountdown}
           onConfirmEndSession={handleConfirmSessionEnd}
           onSessionSummaryPersisted={applySessionMasterySummaryToPei}
+          onMasteryPreviewChanged={setAbaMasteryPreviewEvaluations}
           onSessionRecordSaved={incrementActiveSessionRecordCount}
           therapistId={resolvedClinicContext?.userId || clinicContext?.userId || null}
           therapistName={resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || null}
@@ -10867,7 +10917,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       patient={patient}
                       protocols={planProtocolCatalog}
                       professionals={clinicTherapists}
-                      masteryEvaluations={abaMasteryEvaluations}
+                      masteryEvaluations={abaMasteryEvaluationsForPlan}
                       userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                       currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                       isDark={isPanelDark}
@@ -11228,7 +11278,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     patient={patient}
                     protocols={planProtocolCatalog}
                     professionals={clinicTherapists}
-                    masteryEvaluations={abaMasteryEvaluations}
+                    masteryEvaluations={abaMasteryEvaluationsForPlan}
                     userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                     currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                     isDark={isPanelDark}
