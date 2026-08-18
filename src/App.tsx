@@ -2703,6 +2703,11 @@ export default function App() {
         type: n?.type || fallbackType,
         hasSharedCopy: Boolean(n?.hasSharedCopy),
         hasProfessionalCopy: Boolean(n?.hasProfessionalCopy),
+        mentionUserIds: Array.isArray(n?.mentionUserIds)
+          ? n.mentionUserIds
+          : Array.isArray(n?.mention_user_ids)
+            ? n.mention_user_ids
+            : [],
         date: n?.date || (n?.created_at ? new Date(n.created_at).toLocaleString() : new Date().toLocaleString())
       };
     });
@@ -4732,7 +4737,7 @@ export default function App() {
     );
     return { success: true, pending: Boolean(persistenceResult?.pending) };
   };
-  const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string) => {
+  const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string, options?: { mentionUserIds?: string[] }) => {
     const normalizedVisibility = toStoredPatientNoteVisibility(visibility);
     const uiVisibility = resolvePatientNoteAudience({ visibility: normalizedVisibility });
     const patient = allPatients.find(p => p.id === pid);
@@ -4748,7 +4753,8 @@ export default function App() {
       text: txt, 
       date: new Date().toLocaleString(), 
       visibility: uiVisibility, 
-      subject: subject || "Geral" 
+      subject: subject || "Geral",
+      mentionUserIds: Array.isArray(options?.mentionUserIds) ? options!.mentionUserIds : [],
     };
     setTherapistNotes(prev => [newNote, ...prev]);
     onAddActivityLog("Registro de EvoluÃ§Ã£o", `Nova nota (${normalizedVisibility}) adicionada ao prontuario de ${formatPatientLabel({ name: patientIdentity.patientName, id: patientIdentity.patientId || pid })}.`);
@@ -4763,10 +4769,19 @@ export default function App() {
         patient_email: patientIdentity.patientEmail,
         text: txt,
         visibility: normalizedVisibility,
-        subject: subject || "Geral"
+        subject: subject || "Geral",
+        mention_user_ids: Array.isArray(options?.mentionUserIds) ? options!.mentionUserIds : []
       });
       if (result?.success && result?.data?.id) {
-        setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? { ...n, id: result.data.id } : n)));
+        setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? {
+          ...n,
+          id: result.data.id,
+          mentionUserIds: Array.isArray(result?.data?.mention_user_ids)
+            ? result.data.mention_user_ids
+            : Array.isArray(options?.mentionUserIds)
+              ? options!.mentionUserIds
+              : [],
+        } : n)));
       } else if (result?.success === false && !(result?.offline && result?.pending)) {
         setTherapistNotes(prev => prev.filter((n: any) => n.id !== tempId));
         const errMsg = String(result?.error || 'Não foi possível persistir a anotação no servidor.');
