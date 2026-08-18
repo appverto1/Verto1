@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { PatientSchoolInformation } from "./PatientSchoolInformation";
-import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock, Camera } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
@@ -1389,6 +1389,81 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isPreparingAnamnesisSave, setIsPreparingAnamnesisSave] = useState(false);
   const [isSavingAnamnesisFile, setIsSavingAnamnesisFile] = useState(false);
   const [resolvedClinicContext, setResolvedClinicContext] = useState<any>(clinicContext || {});
+  const patientPhotoInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [patientPhotoOverride, setPatientPhotoOverride] = useState('');
+  const [isSavingPatientPhoto, setIsSavingPatientPhoto] = useState(false);
+  const [patientPhotoError, setPatientPhotoError] = useState('');
+  const patientPhotoPolicy = String(
+    resolvedClinicContext?.patientPhotoPolicy ||
+    resolvedClinicContext?.patient_photo_policy ||
+    clinicContext?.patientPhotoPolicy ||
+    clinicContext?.patient_photo_policy ||
+    'PORTAL'
+  ).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL';
+  const portalPatientPhotoSource = String(
+    patient?.portalProfilePicture ||
+    patient?.portal_profile_picture ||
+    patient?.portalProfilePictureUrl ||
+    patient?.portal_profile_picture_url ||
+    ''
+  ).trim();
+  const resolvedPatientPhotoSource = patientPhotoOverride || (
+    patientPhotoPolicy === 'PORTAL'
+      ? (portalPatientPhotoSource || patientPhotoSource(patient))
+      : patientPhotoSource(patient)
+  );
+  const normalizedPatientPhotoRole = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').trim().toLowerCase();
+  const canManagePatientPhoto = patientPhotoPolicy === 'CLINIC' &&
+    ['director', 'coordinator', 'receptionist'].includes(normalizedPatientPhotoRole) &&
+    typeof onUpdatePatient === 'function';
+
+  useEffect(() => {
+    setPatientPhotoOverride('');
+    setPatientPhotoError('');
+  }, [patient?.id, patientPhotoPolicy]);
+
+  const handleClinicalPatientPhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !canManagePatientPhoto || !patient?.id) return;
+    if (!String(file.type || '').toLowerCase().startsWith('image/')) {
+      setPatientPhotoError('Selecione uma imagem válida.');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setPatientPhotoError('Escolha uma imagem de até 2MB.');
+      return;
+    }
+
+    setIsSavingPatientPhoto(true);
+    setPatientPhotoError('');
+    try {
+      const extension = file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : file.type.includes('webp') ? 'webp' : 'png';
+      const uploadPath = `${String(patient.id)}/clinic-profile-${Date.now()}.${extension}`;
+      const upload = await dataService.uploadFile('patient-photos', uploadPath, file);
+      if (!upload?.success || !upload?.url) {
+        throw new Error(upload?.error || 'Não foi possível enviar a foto.');
+      }
+
+      const updatedPatient = {
+        ...patient,
+        profilePicture: upload.url,
+        profile_picture: upload.url,
+        profilePicturePath: upload.path || null,
+        profile_picture_path: upload.path || null,
+      };
+      const updateResult = await onUpdatePatient(updatedPatient);
+      if (updateResult?.success === false) {
+        throw new Error(updateResult?.error || updateResult?.message || 'Não foi possível salvar a foto do paciente.');
+      }
+      setPatientPhotoOverride(String(upload.url));
+    } catch (error: any) {
+      setPatientPhotoError(error?.message || 'Não foi possível salvar a foto do paciente.');
+    } finally {
+      setIsSavingPatientPhoto(false);
+    }
+  };
+
   const canReopenAutomaticNoShow = useMemo(
     () => hasCapability('session.no_show.classify'),
     [capabilities],
@@ -9008,7 +9083,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       {isTutorialActive && ( 
         <TutorialOverlay 
           steps={[
-            { targetId: 'back-btn', title: 'Voltar ao Dashboard', content: 'Clique aqui para retornar Ã  tela principal a qualquer momento.', placement: 'bottom' },
+            { targetId: 'back-btn', title: 'Voltar', content: 'Clique aqui para retornar à página anterior.', placement: 'bottom' },
             { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome, categoria (Criança/Adulto) e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
             { targetId: 'tab-nav', title: 'Navegação por Abas', content: 'O prontuário é organizado em abas para facilitar o acesso a diferentes tipos de informação.', placement: 'bottom' },
             { targetId: 'tab-history', title: 'Aba Histórico', content: 'Veja a evolução clínica e o histórico de todas as atividades realizadas pelo paciente.', placement: 'bottom' },
@@ -9784,28 +9859,57 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
                       : 'bg-slate-100 text-slate-500 hover:bg-violet-50'
                   }`}
-                  aria-label="Voltar ao painel"
+                  aria-label="Voltar à página anterior"
                 >
                   <ChevronLeft size={20} className="transition-transform group-hover:-translate-x-0.5" />
                 </button>
               )}
 
               <div id="patient-header-info" className="flex min-w-0 flex-1 items-center gap-3">
-                {patientPhotoSource(patient) ? (
-                  <SecureImage
-                    src={patientPhotoSource(patient)}
-                    alt={`Foto de ${patient?.name || 'paciente'}`}
-                    className="h-12 w-12 shrink-0 rounded-full object-cover ring-1 ring-slate-200 sm:h-14 sm:w-14"
-                  />
-                ) : (
-                  <span
-                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-sm sm:h-14 sm:w-14 ${
-                      isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-violet-50 text-violet-700'
-                    }`}
-                  >
-                    {patientInitials(patient?.name)}
-                  </span>
-                )}
+                <div className="relative h-12 w-12 shrink-0 sm:h-14 sm:w-14">
+                  {resolvedPatientPhotoSource ? (
+                    <SecureImage
+                      src={resolvedPatientPhotoSource}
+                      alt={`Foto de ${patient?.name || 'paciente'}`}
+                      className="h-12 w-12 rounded-full object-cover ring-1 ring-slate-200 sm:h-14 sm:w-14"
+                    />
+                  ) : (
+                    <span
+                      className={`flex h-12 w-12 items-center justify-center rounded-full text-sm sm:h-14 sm:w-14 ${
+                        isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-violet-50 text-violet-700'
+                      }`}
+                    >
+                      {patientInitials(patient?.name)}
+                    </span>
+                  )}
+                  {canManagePatientPhoto && (
+                    <>
+                      <input
+                        ref={patientPhotoInputRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="sr-only"
+                        onChange={handleClinicalPatientPhotoChange}
+                        aria-label="Selecionar foto do paciente"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => patientPhotoInputRef.current?.click()}
+                        disabled={isSavingPatientPhoto}
+                        className={`absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full border shadow-sm transition disabled:cursor-wait disabled:opacity-60 ${
+                          isPanelDark
+                            ? 'border-slate-700 bg-slate-800 text-violet-300 hover:bg-slate-700'
+                            : 'border-white bg-violet-600 text-white hover:bg-violet-700'
+                        }`}
+                        aria-label={resolvedPatientPhotoSource ? 'Trocar foto do paciente' : 'Adicionar foto do paciente'}
+                        title={resolvedPatientPhotoSource ? 'Trocar foto do paciente' : 'Adicionar foto do paciente'}
+                      >
+                        <Camera size={13} aria-hidden="true" />
+                      </button>
+                    </>
+                  )}
+                </div>
 
                 <div className="min-w-0">
                   <h1
@@ -9836,6 +9940,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       </span>
                     )}
                   </div>
+                  {patientPhotoError && (
+                    <p role="alert" className="mt-1 text-[11px] font-medium text-rose-600">{patientPhotoError}</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -9990,35 +10097,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         <nav
           id="tab-nav"
           aria-label="Áreas do prontuário"
-          className={`mt-5 flex gap-1 overflow-x-auto border-t px-4 scrollbar-hide no-scrollbar sm:px-6 ${
+          className={`mt-5 flex w-full gap-1 overflow-x-auto border-t px-4 scrollbar-hide no-scrollbar sm:px-6 ${
             isPanelDark ? 'border-slate-800' : 'border-slate-200/80'
           }`}
         >
           {canAccessTab('history') && (
-            <button id="tab-history" aria-current={activeTab === 'history' ? 'page' : undefined} onClick={() => setActiveTab('history')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'history' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Histórico</button>
+            <button id="tab-history" aria-current={activeTab === 'history' ? 'page' : undefined} onClick={() => setActiveTab('history')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'history' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Histórico</button>
           )}
           {canAccessTab('notes') && (
-            <button id="tab-notes" aria-current={activeTab === 'notes' ? 'page' : undefined} onClick={() => setActiveTab('notes')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'notes' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Anotações</button>
+            <button id="tab-notes" aria-current={activeTab === 'notes' ? 'page' : undefined} onClick={() => setActiveTab('notes')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'notes' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Anotações</button>
           )}
           {canAccessTab('report') && (
-            <button id="tab-report" aria-current={activeTab === 'report' ? 'page' : undefined} onClick={() => setActiveTab('report')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'report' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Relatório</button>
+            <button id="tab-report" aria-current={activeTab === 'report' ? 'page' : undefined} onClick={() => setActiveTab('report')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'report' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Relatório</button>
           )}
           {canAccessTab('plan') && (
-            <button id="tab-plan" aria-current={activeTab === 'plan' ? 'page' : undefined} onClick={() => setActiveTab('plan')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'plan' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>
+            <button id="tab-plan" aria-current={activeTab === 'plan' ? 'page' : undefined} onClick={() => setActiveTab('plan')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'plan' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
           {canAccessTab('session') && isKidsProfile && (
-            <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => requestSessionStart('fullscreen')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
+            <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => requestSessionStart('fullscreen')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
           )}
           {canAccessTab('aba-charts') && (
-            <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-11 min-w-[7rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'aba-charts' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Gráficos</button>
+            <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'aba-charts' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Gráficos</button>
           )}
           {canAccessTab('school') && (
-            <button id="tab-school" aria-current={activeTab === 'school' ? 'page' : undefined} onClick={() => setActiveTab('school')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'school' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Escola</button>
+            <button id="tab-school" aria-current={activeTab === 'school' ? 'page' : undefined} onClick={() => setActiveTab('school')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'school' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Escola</button>
           )}
           {canAccessTab('files') && (
-            <button id="tab-files" aria-current={activeTab === 'files' ? 'page' : undefined} onClick={() => setActiveTab('files')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'files' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Arquivos</button>
+            <button id="tab-files" aria-current={activeTab === 'files' ? 'page' : undefined} onClick={() => setActiveTab('files')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'files' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Arquivos</button>
           )}
         </nav>
       </div>

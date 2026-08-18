@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, Building2, CheckCircle2, Loader2, Plus, Search, X } from 'lucide-react';
 import { dataService } from '../services/dataService';
 
@@ -302,8 +303,8 @@ export function SchoolEnrollmentDialog({
     setSaving(false);
   };
 
-  return (
-    <div className="fixed inset-0 z-[110] flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="school-enrollment-title">
+  return createPortal(
+    <div className="fixed inset-0 z-[180] flex items-end justify-center bg-slate-950/50 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="school-enrollment-title">
       <div className="max-h-[96vh] w-full overflow-y-auto rounded-t-[28px] bg-white shadow-2xl sm:max-w-3xl sm:rounded-[28px]">
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-100 bg-white/95 px-5 py-4 backdrop-blur">
           <div>
@@ -498,6 +499,7 @@ export function SchoolEnrollmentDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

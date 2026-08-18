@@ -18,7 +18,8 @@ assert.match(dataService, /setPatientPrimaryProfessional\(patientId: string, pro
 assert.match(detail, /dataService\.setPatientPrimaryProfessional\(patientId, nextValue\)/);
 assert.match(authorization, /team\.patient_primary\.manage'\)\) add\('therapist_id'\)/);
 assert.match(linksPanel, /Função no caso → Supervisão/);
-assert.match(linksPanel, /patientProfessionalCaseRoleLabel\(link\.case_role\)/);
+assert.match(linksPanel, /linkClinicalLabel\(link\)/);
+assert.match(linksPanel, /caseRole === 'supervisor'/);
 assert.doesNotMatch(
   detail.match(/const handleTherapistAssignmentChange[\s\S]*?\n  };/)?.[0] || '',
   /onUpdatePatient\(/,

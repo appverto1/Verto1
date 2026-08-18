@@ -1715,6 +1715,7 @@ export function CoordinatorDashboard({
   } | null>(null);
   const [appointmentEditScope, setAppointmentEditScope] = useState<"single" | "future">("single");
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
+  const [patientReturnTab, setPatientReturnTab] = useState<DashboardTab>("patients");
   const [view, setView] = useState<"home" | "patient">("home");
   const [patientRestorePending, setPatientRestorePending] = useState(false);
   const patientRestoreAttemptRef = useRef("");
@@ -1784,6 +1785,7 @@ export function CoordinatorDashboard({
       const nextPatientId = String(state?.selectedPatientId || "").trim();
       const nextPatientTab = String(state?.patientOpenTab || "history");
       const nextSessionReportId = String(state?.patientSessionReportId || "").trim();
+      const nextPatientReturnTab = String(state?.patientReturnTab || "patients") as DashboardTab;
 
       if (canAccessTab(nextTab)) {
         const persistedHistory = Array.isArray(state?.tabHistory)
@@ -1802,6 +1804,7 @@ export function CoordinatorDashboard({
 
       if (nextView === "patient" && nextPatientId) {
         setSelectedPatientId(nextPatientId);
+        setPatientReturnTab(canAccessTab(nextPatientReturnTab) ? nextPatientReturnTab : "patients");
         if (
           nextPatientTab === "history" ||
           nextPatientTab === "notes" ||
@@ -1834,12 +1837,13 @@ export function CoordinatorDashboard({
           selectedPatientId: selectedPatientId ? String(selectedPatientId) : null,
           patientOpenTab,
           patientSessionReportId: patientSessionReportId || null,
+          patientReturnTab,
         }),
       );
     } catch (error) {
       console.warn("Falha ao persistir contexto do painel:", error);
     }
-  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId]);
+  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId, patientReturnTab]);
 
   useEffect(() => {
     if (view !== "patient" || !selectedPatientId || !onOpenPatientDetails) {
@@ -2069,6 +2073,9 @@ export function CoordinatorDashboard({
   );
   const [clinicPostalCode, setClinicPostalCode] = useState<string>(
     maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")),
+  );
+  const [clinicPatientPhotoPolicy, setClinicPatientPhotoPolicy] = useState<'PORTAL' | 'CLINIC'>(
+    String(user?.clinicSettings?.patientPhotoPolicy || user?.clinicSettings?.patient_photo_policy || 'PORTAL').toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
   );
   const [mediaRefreshAttempts, setMediaRefreshAttempts] = useState({
     signature: 0,
@@ -3019,6 +3026,7 @@ export function CoordinatorDashboard({
     setClinicCity(String(user?.clinicSettings?.clinicCity || user?.clinicSettings?.city || ""));
     setClinicStateUf(String(user?.clinicSettings?.clinicState || user?.clinicSettings?.state || "").toUpperCase().slice(0, 2));
     setClinicPostalCode(maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")));
+    setClinicPatientPhotoPolicy(String(user?.clinicSettings?.patientPhotoPolicy || user?.clinicSettings?.patient_photo_policy || 'PORTAL').toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL');
   }, [
     user?.crp,
     user?.cpf,
@@ -3076,6 +3084,8 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.state,
     user?.clinicSettings?.clinicPostalCode,
     user?.clinicSettings?.postalCode,
+    user?.clinicSettings?.patientPhotoPolicy,
+    user?.clinicSettings?.patient_photo_policy,
     user?.workspaceName,
   ]);
 
@@ -7109,6 +7119,7 @@ export function CoordinatorDashboard({
           ...(options || {}),
         };
 
+    setPatientReturnTab(activeTab);
     setSelectedPatientId(resolvedPatient.id);
     void onOpenPatientDetails?.(resolvedPatient.id);
     setPatientOpenTab(nextOptions.tab || "history");
@@ -8488,6 +8499,7 @@ export function CoordinatorDashboard({
       clinicState: cleanClinicState || null,
       clinicPostalCode: cleanClinicPostalCode || null,
       clinicCnesCode: cleanClinicCnesCode || null,
+      patientPhotoPolicy: clinicPatientPhotoPolicy,
     };
 
     if (saveScope === "clinic" && canManageClinicSettings && hasModule("insurance_tiss")) {
@@ -10489,6 +10501,16 @@ export function CoordinatorDashboard({
     return alerts;
   })();
 
+  const goBackFromPatientRecord = () => {
+    const previousTab = canAccessTab(patientReturnTab) ? patientReturnTab : "patients";
+    setView("home");
+    setActiveTab(previousTab);
+    setTabHistory((current) => {
+      if (current[current.length - 1] === previousTab) return current;
+      return [...current, previousTab].slice(-20);
+    });
+  };
+
   const renderPatientProfileSummaryField = (label: string, value: any, className = "") => (
     <div className={className}>
       <span className="text-[11px] font-black uppercase tracking-wide text-slate-400">{label}</span>
@@ -10522,10 +10544,10 @@ export function CoordinatorDashboard({
               cadastro.
             </p>
             <button
-              onClick={() => setView("home")}
+              onClick={goBackFromPatientRecord}
               className="px-5 py-2.5 rounded-xl bg-[#7a32fc] text-white font-semibold"
             >
-              Voltar ao painel
+              Voltar
             </button>
           </div>
         </div>
@@ -10578,11 +10600,7 @@ export function CoordinatorDashboard({
           >
             <div className="flex min-w-0 items-center gap-2 sm:gap-4">
               <button
-                onClick={() => {
-                  setView("home");
-                  setActiveTab("dashboard");
-                  setTabHistory(["dashboard"]);
-                }}
+                onClick={goBackFromPatientRecord}
                 className={`shrink-0 rounded-full p-2 transition-all ${
                   theme === "dark"
                     ? "bg-slate-800 text-slate-300 hover:text-violet-300"
@@ -10700,7 +10718,7 @@ export function CoordinatorDashboard({
               themeMode={theme}
               capabilities={effectiveCapabilities}
               clinicProfessionals={patientCareProfessionals}
-              onBack={() => setView("home")}
+              onBack={goBackFromPatientRecord}
               hideBackButton={true}
               clinicContext={{
                 userId: user?.id || "",
@@ -10714,6 +10732,7 @@ export function CoordinatorDashboard({
                 email: user?.clinicSettings?.clinicEmail || "",
                 address: user?.clinicSettings?.clinicAddress || "",
                 logoUrl: user?.clinicSettings?.clinicLogoUrl || null,
+                patientPhotoPolicy: clinicPatientPhotoPolicy,
                 professionalName: user?.name || "Profissional responsável",
                 crp: user?.crp || user?.clinicSettings?.crp || "",
                 professionalCpf:
@@ -10780,7 +10799,7 @@ export function CoordinatorDashboard({
               onUpdatePatient={
                 onUpdatePatient
                   ? (updates: any) => {
-                      if (!ensureTherapistClinicalProfile()) return;
+                      if (!isReceptionist && !ensureTherapistClinicalProfile()) return;
                       return onUpdatePatient(updates);
                     }
                   : undefined
@@ -13994,6 +14013,7 @@ export function CoordinatorDashboard({
                     clinicCity,
                     clinicStateUf,
                     clinicPostalCode,
+                    clinicPatientPhotoPolicy,
                     workStart,
                     workEnd,
                   }}
@@ -14033,6 +14053,7 @@ export function CoordinatorDashboard({
                     setClinicCity,
                     setClinicStateUf,
                     setClinicPostalCode,
+                    setClinicPatientPhotoPolicy,
                     setWorkStart,
                     setWorkEnd,
                   }}

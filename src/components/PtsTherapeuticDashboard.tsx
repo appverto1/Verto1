@@ -8,6 +8,7 @@ import {
   Plus,
   Search,
   Target,
+  Pencil,
 } from 'lucide-react';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
 import { SecureImage } from './SecureMedia';
@@ -358,19 +359,33 @@ export function PtsTherapeuticDashboard({
           ))}
 
           {section('objectives', 'Objetivos compartilhados', (
-            sharedObjectives.length > 0 ? (
-              <ul className={`space-y-2 text-sm leading-5 ${text}`}>
-                {sharedObjectives.slice(0, 5).map((objective, index) => (
-                  <li key={`${objective}-${index}`} className="flex gap-2"><span className="text-violet-500">•</span><span>{objective}</span></li>
-                ))}
-              </ul>
-            ) : <p className={`text-xs leading-5 ${muted}`}>Os objetivos compartilhados ainda não foram definidos.</p>
+            <div className="space-y-3">
+              {sharedObjectives.length > 0 ? (
+                <ul className={`space-y-2 text-sm leading-5 ${text}`}>
+                  {sharedObjectives.slice(0, 5).map((objective, index) => (
+                    <li key={`${objective}-${index}`} className="flex gap-2"><span className="text-violet-500">•</span><span>{objective}</span></li>
+                  ))}
+                </ul>
+              ) : <p className={`text-xs leading-5 ${muted}`}>Os objetivos compartilhados ainda não foram definidos.</p>}
+              {canEditScope && (
+                <button type="button" onClick={onNewVersion} className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-600 hover:underline">
+                  <Pencil size={13} /> Editar na nova versão do PTS
+                </button>
+              )}
+            </div>
           ))}
 
           {section('family', 'Prioridades familiares', (
-            <p className={`whitespace-pre-line text-sm leading-5 ${pts.familyVoice ? text : muted}`}>
-              {pts.familyVoice || 'As prioridades da família ainda não foram registradas.'}
-            </p>
+            <div className="space-y-3">
+              <p className={`whitespace-pre-line text-sm leading-5 ${pts.familyVoice ? text : muted}`}>
+                {pts.familyVoice || 'As prioridades da família ainda não foram registradas.'}
+              </p>
+              {canEditScope && (
+                <button type="button" onClick={onNewVersion} className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-600 hover:underline">
+                  <Pencil size={13} /> Editar prioridades familiares
+                </button>
+              )}
+            </div>
           ))}
 
           {section('versions', 'Histórico de versões', (
