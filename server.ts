@@ -16698,7 +16698,7 @@ async function loadPatientProfessionalAccessEvidence(params: {
   const [professionalLinkResult, membershipResult, profileResult] = await Promise.all([
     supabase
       .from('patient_professional_links')
-      .select('id,organization_id,clinic_id,patient_id,professional_id,status,permissions')
+      .select('id,organization_id,clinic_id,patient_id,professional_id,case_role,status,permissions')
       .eq('organization_id', params.clinicId)
       .eq('patient_id', params.patientId)
       .eq('professional_id', params.actorId)
@@ -34517,9 +34517,29 @@ async function startServer() {
           profiles: professionalProfiles,
           memberships
         });
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+        const actorMembership = {
+          user_id: actorId,
+          clinic_id: clinicId,
+          role: actorRole,
+          status: 'active',
+          can_supervise: req.authorizationContext?.canSupervise === true,
+        };
+        const canManage = isPatientProfessionalLinkManager({
+          actorId,
+          actorRole,
+          clinicId,
+          patientId,
+          membership: actorMembership,
+          patientLink: req.patientProfessionalLink,
+          supervisionLink: req.patientSupervisionLink,
+          canSupervise: req.authorizationContext?.canSupervise === true,
+        });
         return res.json({
           success: true,
-          ...composed
+          ...composed,
+          canManage,
         });
       } catch (error: any) {
         logRouteDbError('/api/patients/:patientId/professional-links [GET]', error, {
@@ -34651,7 +34671,11 @@ async function startServer() {
           actorId,
           actorRole,
           clinicId,
-          membership: actorMembership
+          patientId,
+          membership: actorMembership,
+          patientLink: req.patientProfessionalLink,
+          supervisionLink: req.patientSupervisionLink,
+          canSupervise: req.authorizationContext?.canSupervise === true,
         })) {
           return res.status(403).json({
             success: false,
@@ -34844,7 +34868,11 @@ async function startServer() {
           actorId,
           actorRole,
           clinicId,
-          membership: actorMembership
+          patientId,
+          membership: actorMembership,
+          patientLink: req.patientProfessionalLink,
+          supervisionLink: req.patientSupervisionLink,
+          canSupervise: req.authorizationContext?.canSupervise === true,
         }),
         persist: () => supabase.rpc('end_patient_professional_link_v1', {
           p_actor_id: actorId,

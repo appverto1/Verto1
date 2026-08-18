@@ -210,6 +210,7 @@ export type CapabilityKey = (typeof CAPABILITY_CATALOG)[number]['key'];
 const internal = (...keys: CapabilityKey[]) => keys;
 
 export const SUPERVISION_CAPABILITY_OVERLAY = internal(
+  'team.case.manage','team.patient_primary.manage',
   'patient.demographics.view',
   'treatment_plan.create','treatment_plan.edit','treatment_plan.approve','treatment_goal.manage',
   'aba.program.create','aba.program.edit','aba.maintenance.manage',
@@ -239,7 +240,7 @@ export const ROLE_DEFAULT_CAPABILITIES: Record<ClinicBaseRole | PortalRole, read
   director: [...COORDINATOR_DEFAULTS, 'workspace.switch', 'workspace.multiclinic.analytics'],
   coordinator: COORDINATOR_DEFAULTS,
   supervisor: internal(
-    'team.view',
+    'team.view','team.case.manage','team.patient_primary.manage',
     'patient.list','patient.demographics.view','patient.documents.registration.view',
     'clinical.record.view','clinical.history.view','clinical.evolution.create','clinical.evolution.own_edit','clinical.evolution.team_view','clinical.notes.create','clinical.documents.view','clinical.documents.upload','clinical.anamnesis.view','clinical.anamnesis.edit',
     'treatment_plan.view','treatment_plan.create','treatment_plan.edit','treatment_plan.approve','treatment_goal.view','treatment_goal.manage',
