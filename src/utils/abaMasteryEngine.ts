@@ -603,32 +603,28 @@ const isSuccessfulEvaluation = (evaluation: any) => {
 
 const evaluationSessionId = (evaluation: any) => String(readValue(evaluation, 'session_id', 'sessionId') || '').trim();
 
-const countSuccessfulSessions = (metCurrentSession: boolean, previousEvaluations: any[], mode: 'consecutive' | 'cumulative' = 'consecutive') => {
+const countPriorSuccessfulSessions = (previousEvaluations: any[], mode: 'consecutive' | 'cumulative' = 'consecutive') => {
   const sorted = (Array.isArray(previousEvaluations) ? previousEvaluations : [])
     .slice()
     .sort((a, b) => new Date(readValue(b, 'evaluated_at', 'evaluatedAt', 'created_at', 'createdAt') || 0).getTime() - new Date(readValue(a, 'evaluated_at', 'evaluatedAt', 'created_at', 'createdAt') || 0).getTime());
   const seenSessions = new Set<string>();
-  if (mode === 'cumulative') {
-    let count = metCurrentSession ? 1 : 0;
-    for (const evaluation of sorted) {
-      if (!isSuccessfulEvaluation(evaluation)) continue;
-      const key = evaluationSessionId(evaluation) || String(readValue(evaluation, 'id') || '').trim();
-      if (!key || seenSessions.has(key)) continue;
-      seenSessions.add(key);
-      count += 1;
-    }
-    return count;
-  }
-  if (!metCurrentSession) return 0;
-  let count = 1;
+  let count = 0;
   for (const evaluation of sorted) {
     const key = evaluationSessionId(evaluation) || String(readValue(evaluation, 'id') || '').trim();
     if (!key || seenSessions.has(key)) continue;
     seenSessions.add(key);
-    if (!isSuccessfulEvaluation(evaluation)) break;
-    count += 1;
+    if (isSuccessfulEvaluation(evaluation)) {
+      count += 1;
+      continue;
+    }
+    if (mode === 'consecutive') break;
   }
   return count;
+};
+
+const countSuccessfulSessions = (metCurrentSession: boolean, previousEvaluations: any[], mode: 'consecutive' | 'cumulative' = 'consecutive') => {
+  if (!metCurrentSession) return 0;
+  return 1 + countPriorSuccessfulSessions(previousEvaluations, mode);
 };
 
 const therapeuticMeasurementPayload = (trial: any) => {
@@ -877,6 +873,9 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
     else if (numericValues.length > 0) currentMetric = numericValues[numericValues.length - 1].value;
 
     if (currentMetric === null) {
+      const priorSuccessfulSessions = criterion.requiredSessions && criterion.requiredSessions > 1
+        ? countPriorSuccessfulSessions(input.previousEvaluations || [], criterion.sessionMode || 'consecutive')
+        : 0;
       return {
         ...base,
         totalTrials,
@@ -890,11 +889,13 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
         coldProbeTrialsCount,
         distinctTherapistsCount,
         consecutiveSuccessfulDays: 0,
-        successfulSessions: 0,
-        criterionProgressCount: 0,
+        successfulSessions: priorSuccessfulSessions,
+        criterionProgressCount: criterion.requiredSessions && criterion.requiredSessions > 1 ? priorSuccessfulSessions : 0,
         criterionRequiredCount: criterion.requiredSessions || 1,
-        criterionProgressLabel: 'Nenhuma medida válida registrada nesta sessão',
-        criterionProgressKind: 'measurement',
+        criterionProgressLabel: criterion.requiredSessions && criterion.requiredSessions > 1
+          ? `${priorSuccessfulSessions}/${criterion.requiredSessions} sessões ${criterion.sessionMode === 'cumulative' ? 'acumuladas' : 'consecutivas'}`
+          : 'Nenhuma medida válida registrada nesta sessão',
+        criterionProgressKind: criterion.requiredSessions && criterion.requiredSessions > 1 ? 'sessions' : 'measurement',
         sequenceBrokenByLastTrial,
         status: 'INSUFFICIENT_DATA',
         reasons: [{ code: 'NO_VALID_MEASUREMENT', message: 'Nenhuma medida compatível foi registrada para avaliar este critério.' }],
@@ -951,7 +952,10 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
   }
 
   if (reasons.length > 0) {
-    const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, consecutiveIndependentTrials, 0, 0);
+    const priorSuccessfulSessions = criterion.requiredSessions && criterion.requiredSessions > 1
+      ? countPriorSuccessfulSessions(input.previousEvaluations || [], criterion.sessionMode || 'consecutive')
+      : 0;
+    const progressSummary = buildCriterionProgressSummary(criterion, independentTrials, correctTrials, consecutiveIndependentTrials, 0, priorSuccessfulSessions);
     return {
       ...base,
       totalTrials,
@@ -965,7 +969,7 @@ export function evaluateTargetMastery(input: EvaluateTargetMasteryInput): AbaMas
       coldProbeTrialsCount,
       distinctTherapistsCount,
       consecutiveSuccessfulDays: 0,
-      successfulSessions: 0,
+      successfulSessions: priorSuccessfulSessions,
       criterionProgressCount: progressSummary.count,
       criterionRequiredCount: progressSummary.required,
       criterionProgressLabel: progressSummary.label,

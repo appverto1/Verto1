@@ -9,6 +9,7 @@ import {
 } from 'recharts';
 import { TrendingUp } from 'lucide-react';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
+import { dataService } from '../services/dataService';
 
 type CumulativeGrowthChartProps = {
   patientId: string | number;
@@ -17,12 +18,15 @@ type CumulativeGrowthChartProps = {
   protocolId?: string | number | null;
   compact?: boolean;
   dark?: boolean;
+  useCanonicalMastery?: boolean;
+  portalMode?: boolean;
 };
 
 type CumulativePoint = {
   label: string;
   date: string;
   total: number;
+  added?: number;
 };
 
 const CHART_COLOR = '#3B82F6';
@@ -109,8 +113,13 @@ const CustomTooltip = ({ active, payload, dark = false }: any) => {
     <div className={`rounded-xl border p-3 shadow-sm ${dark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-white'}`}>
       <p className={`text-xs font-semibold ${dark ? 'text-slate-100' : 'text-slate-900'}`}>{row.date}</p>
       <p className="mt-2 text-sm font-medium text-[#3B82F6]">
-        {row.total} habilidade{row.total === 1 ? '' : 's'} dominada{row.total === 1 ? '' : 's'}
+        Total acumulado até esta data: {row.total} habilidade{row.total === 1 ? '' : 's'} dominada{row.total === 1 ? '' : 's'}
       </p>
+      {Number(row.added || 0) > 0 && (
+        <p className={`mt-1 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+          +{row.added} nova{row.added === 1 ? '' : 's'} habilidade{row.added === 1 ? '' : 's'} nesta data
+        </p>
+      )}
     </div>
   );
 };
@@ -121,10 +130,37 @@ export const CumulativeGrowthChart = ({
   protocols = [],
   protocolId = null,
   compact = false,
-  dark = false
+  dark = false,
+  useCanonicalMastery = false,
+  portalMode = false
 }: CumulativeGrowthChartProps) => {
   const [isMounted, setIsMounted] = useState(false);
+  const [canonicalMasteryEvents, setCanonicalMasteryEvents] = useState<any[]>([]);
+  const [canonicalMasteryLoaded, setCanonicalMasteryLoaded] = useState(false);
+  const [canonicalMasteryError, setCanonicalMasteryError] = useState('');
   useEffect(() => setIsMounted(true), []);
+  useEffect(() => {
+    if (!useCanonicalMastery || !patientId) {
+      setCanonicalMasteryEvents([]);
+      setCanonicalMasteryLoaded(false);
+      setCanonicalMasteryError('');
+      return;
+    }
+    let cancelled = false;
+    setCanonicalMasteryLoaded(false);
+    setCanonicalMasteryError('');
+    dataService.getPatientMasteryGrowth(String(patientId), { portal: portalMode })
+      .then((result: any) => {
+        if (cancelled) return;
+        const success = result?.success === true;
+        setCanonicalMasteryEvents(success && Array.isArray(result?.data) ? result.data : []);
+        setCanonicalMasteryError(success ? '' : String(result?.error || 'Não foi possível carregar o crescimento cumulativo.'));
+      })
+      .finally(() => {
+        if (!cancelled) setCanonicalMasteryLoaded(true);
+      });
+    return () => { cancelled = true; };
+  }, [patientId, portalMode, useCanonicalMastery]);
 
   const protocolSkillMap = useMemo(() => {
     const selectedId = String(protocolId || '').trim();
@@ -151,7 +187,59 @@ export const CumulativeGrowthChart = ({
     return map;
   }, [protocolId, protocols]);
 
+  const protocolTargetIds = useMemo(() => {
+    const selectedId = String(protocolId || '').trim();
+    const ids = new Set<string>();
+    (Array.isArray(protocols) ? protocols : []).forEach((protocol: any) => {
+      if (selectedId && selectedId !== 'all' && String(protocol?.id || '').trim() !== selectedId) return;
+      (Array.isArray(protocol?.data) ? protocol.data : []).forEach((domain: any) => {
+        (Array.isArray(domain?.skills) ? domain.skills : []).forEach((skill: any) => {
+          const id = String(skill?.id || skill?.target_id || skill?.targetId || '').trim();
+          if (id) ids.add(id);
+        });
+      });
+    });
+    return ids;
+  }, [protocolId, protocols]);
+
   const chartData = useMemo<CumulativePoint[]>(() => {
+    if (useCanonicalMastery) {
+      const selectedProtocolId = String(protocolId || '').trim();
+      const masteredTargets = new Set<string>();
+      const pointsByDate = new Map<string, CumulativePoint>();
+      const rows = (Array.isArray(canonicalMasteryEvents) ? canonicalMasteryEvents : [])
+        .map((event: any) => {
+          const targetId = String(event?.targetId || event?.target_id || '').trim();
+          const targetName = String(event?.targetName || event?.target_name || '').trim();
+          const skillKey = normalizeSkill(targetName);
+          const matchesSelectedProtocol =
+            !selectedProtocolId ||
+            selectedProtocolId === 'all' ||
+            (targetId && protocolTargetIds.has(targetId)) ||
+            (skillKey && protocolSkillMap.has(skillKey));
+          if (!matchesSelectedProtocol) return null;
+          const ts = new Date(event?.evaluatedAt || event?.evaluated_at || 0).getTime();
+          if (!Number.isFinite(ts) || ts <= 0) return null;
+          return { ...event, _targetKey: targetId || skillKey, _ts: ts };
+        })
+        .filter(Boolean)
+        .sort((a: any, b: any) => a._ts - b._ts);
+
+      rows.forEach((row: any, index: number) => {
+        if (!row._targetKey || masteredTargets.has(row._targetKey)) return;
+        masteredTargets.add(row._targetKey);
+        const date = formatFullDate(row._ts, index);
+        const label = formatDateLabel(row._ts, index);
+        const previous = pointsByDate.get(date);
+        pointsByDate.set(date, {
+          label,
+          date,
+          total: masteredTargets.size,
+          added: Number(previous?.added || 0) + 1
+        });
+      });
+      return Array.from(pointsByDate.values());
+    }
     const targetPatientId = String(patientId || '').trim();
     if (!targetPatientId) return [];
 
@@ -201,21 +289,39 @@ export const CumulativeGrowthChart = ({
     });
 
     return Array.from(pointsByDate.values());
-  }, [history, patientId, protocolId, protocolSkillMap]);
+  }, [canonicalMasteryEvents, history, patientId, protocolId, protocolSkillMap, protocolTargetIds, useCanonicalMastery]);
+
+  if (useCanonicalMastery && !canonicalMasteryLoaded) {
+    return (
+      <div className={`rounded-2xl border p-5 text-center ${dark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-white'}`}>
+        <TrendingUp size={30} className="mx-auto mb-3 text-slate-300" />
+        <p className={`text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>Carregando crescimento de maestria...</p>
+      </div>
+    );
+  }
+
+  if (useCanonicalMastery && canonicalMasteryLoaded && canonicalMasteryError) {
+    return (
+      <div className={`rounded-2xl border p-5 text-center ${dark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-white'}`}>
+        <TrendingUp size={30} className="mx-auto mb-3 text-slate-300" />
+        <p className={`text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>Não foi possível carregar o crescimento cumulativo agora.</p>
+      </div>
+    );
+  }
 
   if (!chartData.length) {
     return (
       <div className={`rounded-2xl border p-5 text-center ${dark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-white'}`}>
         <TrendingUp size={30} className="mx-auto mb-3 text-slate-300" />
         <p className={`text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-          Ainda não há registros suficientes para mostrar o crescimento cumulativo.
+          {useCanonicalMastery ? 'Ainda não há habilidades com maestria aprovada para mostrar o crescimento cumulativo.' : 'Ainda não há registros suficientes para mostrar o crescimento cumulativo.'}
         </p>
       </div>
     );
   }
 
   const latestTotal = chartData[chartData.length - 1]?.total || 0;
-  const growth = latestTotal - (chartData[0]?.total || 0);
+  const growth = useCanonicalMastery ? latestTotal : latestTotal - (chartData[0]?.total || 0);
 
   return (
     <div className={`min-w-0 rounded-2xl border p-4 ${dark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-white'}`}>
@@ -226,7 +332,7 @@ export const CumulativeGrowthChart = ({
             Crescimento cumulativo
           </h3>
           <p className={`mt-1 text-xs leading-5 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-            Habilidades dominadas ao longo das sessões registradas.
+            {useCanonicalMastery ? 'Habilidades com maestria aprovada, acumuladas na data real da validação.' : 'Habilidades dominadas ao longo das sessões registradas.'}
           </p>
         </div>
         <div className="shrink-0 text-right">
@@ -240,7 +346,9 @@ export const CumulativeGrowthChart = ({
       {chartData.length < 2 ? (
         <div className={`flex min-h-40 items-center justify-center rounded-xl border border-dashed px-5 text-center ${dark ? 'border-slate-700 bg-slate-900/50 text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>
           <p className="max-w-sm text-sm leading-6">
-            Há um primeiro registro disponível. A curva aparecerá quando uma nova sessão produzir outro ponto de evolução.
+            {useCanonicalMastery
+              ? 'Há uma primeira maestria aprovada. A curva aparecerá quando outra habilidade tiver maestria aprovada em uma data posterior.'
+              : 'Há um primeiro registro disponível. A curva aparecerá quando uma nova sessão produzir outro ponto de evolução.'}
           </p>
         </div>
       ) : (

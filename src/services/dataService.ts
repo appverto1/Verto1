@@ -6677,6 +6677,27 @@ export const dataService = {
     };
   },
 
+  async getPatientMasteryGrowth(patientId: string, options: { portal?: boolean } = {}) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: true, data: [] };
+    const endpoint = options.portal
+      ? `/api/portal/patients/${encodeURIComponent(safePatientId)}/mastery-growth`
+      : `/api/aba/patients/${encodeURIComponent(safePatientId)}/mastery-growth`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getPatientMasteryGrowth', operation: 'list', table: 'aba_mastery_evaluations', hasExplicitColumns: true });
+      const result = await response.json().catch(() => ({ success: false, data: [] }));
+      if (!response.ok || result?.success === false) {
+        return { success: false, data: [], error: result?.error || `HTTP ${response.status}` };
+      }
+      return { success: true, data: Array.isArray(result?.data) ? result.data : [] };
+    } catch (error: any) {
+      return { success: false, data: [], error: error?.message || 'Não foi possível carregar o crescimento de maestria.' };
+    }
+  },
+
   async addPatientLog(log: {
     id?: string;
     patient_id: string;
