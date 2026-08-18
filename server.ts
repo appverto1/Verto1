@@ -9680,41 +9680,6 @@ function requireAnyClinicCapabilityOrPatientPortal(...capabilities: CapabilityKe
   };
 }
 
-  const requirePatientPortalModule = (moduleKey: OrganizationModuleKey) =>
-    async (req: any, res: any, next: any) => {
-      try {
-        const context = await resolvePatientPortalContext(req.session?.user);
-        const clinicId = sanitizeString(context?.clinicId, 120);
-        if (!isUuid(clinicId)) {
-          return res.status(403).json({ success: false, error: 'CLINIC_MODULE_NOT_ENTITLED', module: moduleKey });
-        }
-        if (moduleKey === 'clinical_core') {
-          req.portalContext = context;
-          return next();
-        }
-        const moduleAccess = await resolveOrganizationModuleAccess(clinicId);
-        if (!hasOrganizationModule(moduleAccess.mode, moduleAccess.modules, moduleKey)) {
-          return res.status(403).json({
-            success: false,
-            error: 'CLINIC_MODULE_NOT_ENTITLED',
-            module: moduleKey,
-            message: 'Este recurso não está contratado pela clínica vinculada.',
-          });
-        }
-        req.portalModuleAccess = moduleAccess;
-        req.portalContext = context;
-        return next();
-      } catch (error: any) {
-        if (isClinicModuleSchemaError(error)) {
-          return res.status(503).json({ success: false, error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE' });
-        }
-        return sendRouteDbError(res, 'requirePatientPortalModule', error, {
-          requestId: requestIdForLogs(req),
-        });
-      }
-    };
-
-
 async function resolvePatientListScopedPatientIds(
   context: ResolvedClinicCapabilityContext,
 ): Promise<string[] | null> {
@@ -18871,6 +18836,43 @@ function deploymentReleaseId(): string | undefined {
 
 async function startServer() {
   const app = express();
+
+  // Portal module guards must live in the same lexical scope as the portal-context
+  // resolver. Keeping this middleware inside startServer prevents runtime
+  // ReferenceError failures while preserving the existing module-entitlement gate.
+  const requirePatientPortalModule = (moduleKey: OrganizationModuleKey) =>
+    async (req: any, res: any, next: any) => {
+      try {
+        const context = await resolvePatientPortalContext(req.session?.user);
+        const clinicId = sanitizeString(context?.clinicId, 120);
+        if (!isUuid(clinicId)) {
+          return res.status(403).json({ success: false, error: 'CLINIC_MODULE_NOT_ENTITLED', module: moduleKey });
+        }
+        if (moduleKey === 'clinical_core') {
+          req.portalContext = context;
+          return next();
+        }
+        const moduleAccess = await resolveOrganizationModuleAccess(clinicId);
+        if (!hasOrganizationModule(moduleAccess.mode, moduleAccess.modules, moduleKey)) {
+          return res.status(403).json({
+            success: false,
+            error: 'CLINIC_MODULE_NOT_ENTITLED',
+            module: moduleKey,
+            message: 'Este recurso não está contratado pela clínica vinculada.',
+          });
+        }
+        req.portalModuleAccess = moduleAccess;
+        req.portalContext = context;
+        return next();
+      } catch (error: any) {
+        if (isClinicModuleSchemaError(error)) {
+          return res.status(503).json({ success: false, error: 'CLINIC_MODULE_SCHEMA_UNAVAILABLE' });
+        }
+        return sendRouteDbError(res, 'requirePatientPortalModule', error, {
+          requestId: requestIdForLogs(req),
+        });
+      }
+    };
   const parsedPort = Number.parseInt(String(process.env.PORT || '8080'), 10);
   const PORT = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 8080;
   const isProd = process.env.NODE_ENV === 'production';
@@ -48195,10 +48197,18 @@ async function startServer() {
       if (error) {
         const errorCode = sanitizeString(error?.code, 40);
         if (errorCode === 'PGRST202' || errorCode === '42883') {
-          return res.status(503).json({
-            success: false,
-            error: 'MILESTONE_CELEBRATION_MIGRATION_REQUIRED',
-            message: 'A celebração de marcos ainda não está disponível.'
+          // Milestone celebration is an enhancement, never a portal blocker.
+          // Missing rollout schema degrades to an empty celebration response while
+          // the migration is applied, avoiding a noisy 503 in the patient journey.
+          return res.json({
+            success: true,
+            available: false,
+            data: {
+              celebrate: false,
+              unseenCount: 0,
+              latestAwardId: null,
+              latestAwardAt: null
+            }
           });
         }
         throw error;
