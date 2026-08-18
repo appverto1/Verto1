@@ -33,6 +33,48 @@ const cleanText = (value: unknown) => String(value ?? '').trim();
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export const PATIENT_CASE_TEAM_MEMBERSHIP_ROLES = [
+  'therapist',
+  'supervisor',
+  'coordinator',
+  'director',
+] as const;
+
+export function isPatientCaseTeamMembershipRole(value: unknown): boolean {
+  const normalized = cleanText(value).toLowerCase();
+  return (PATIENT_CASE_TEAM_MEMBERSHIP_ROLES as readonly string[]).includes(normalized);
+}
+
+export function resolvePatientPrimaryProfessionalId(source: any): string {
+  const direct = cleanText(
+    source?.therapist_id ||
+      source?.therapistId ||
+      source?.professional_id ||
+      source?.professionalId ||
+      source?.responsible_professional_id ||
+      source?.responsibleProfessionalId ||
+      source?.assigned_professional_id ||
+      source?.assignedProfessionalId ||
+      source?.primary_professional_id ||
+      source?.primaryProfessionalId ||
+      source?.metadata?.therapist_id ||
+      source?.metadata?.professional_id ||
+      source?.metadata?.responsible_professional_id,
+  );
+  if (direct) return direct;
+
+  const links = Array.isArray(source?.professional_links)
+    ? source.professional_links
+    : Array.isArray(source?.professionalLinks)
+      ? source.professionalLinks
+      : [];
+  const primary = links.find((link: any) =>
+    cleanText(link?.status).toLowerCase() !== 'ended' &&
+    cleanText(link?.relationship_type || link?.relationshipType).toLowerCase() === 'primary'
+  );
+  return cleanText(primary?.professional_id || primary?.professionalId);
+}
+
 export function isPatientProfessionalCaseRole(
   value: unknown
 ): value is PatientProfessionalCaseRole {
@@ -73,7 +115,7 @@ export function validatePatientProfessionalCandidate(params: {
     !params.membership ||
     cleanText(params.membership?.user_id) !== professionalId ||
     cleanText(params.membership?.clinic_id) !== clinicId ||
-    cleanText(params.membership?.role).toLowerCase() !== 'therapist' ||
+    !isPatientCaseTeamMembershipRole(params.membership?.role) ||
     cleanText(params.membership?.status).toLowerCase() !== 'active'
   ) {
     return {
@@ -131,7 +173,7 @@ export function resolvePatientProfessionalLinkIntegrity(params: {
   if (
     !params.membership ||
     cleanText(params.membership?.status).toLowerCase() !== 'active' ||
-    cleanText(params.membership?.role).toLowerCase() !== 'therapist'
+    !isPatientCaseTeamMembershipRole(params.membership?.role)
   ) {
     return 'membership_inactive';
   }
@@ -149,17 +191,55 @@ export function isPatientProfessionalLinkManager(params: {
   actorId: unknown;
   actorRole: unknown;
   clinicId: unknown;
+  patientId?: unknown;
   membership?: any;
+  patientLink?: any;
+  supervisionLink?: any;
+  canSupervise?: boolean;
 }): boolean {
   const actorId = cleanText(params.actorId);
   const clinicId = cleanText(params.clinicId);
+  const patientId = cleanText(params.patientId);
   if (!actorId || !clinicId) return false;
-  const membershipRole = cleanText(params.membership?.role).toLowerCase();
-  return Boolean(
+
+  const membershipRole = cleanText(params.membership?.role || params.actorRole).toLowerCase();
+  const hasActiveMembership = Boolean(
     cleanText(params.membership?.user_id) === actorId &&
       cleanText(params.membership?.clinic_id) === clinicId &&
-      ['director', 'coordinator'].includes(membershipRole) &&
       cleanText(params.membership?.status).toLowerCase() === 'active'
+  );
+  if (!hasActiveMembership) return false;
+
+  if (['director', 'coordinator'].includes(membershipRole)) return true;
+
+  const patientLink = params.patientLink;
+  const hasActiveCaseLink = Boolean(
+    cleanText(patientLink?.organization_id || patientLink?.organizationId) === clinicId &&
+      cleanText(patientLink?.clinic_id || patientLink?.clinicId) === clinicId &&
+      (!patientId || cleanText(patientLink?.patient_id || patientLink?.patientId) === patientId) &&
+      cleanText(patientLink?.professional_id || patientLink?.professionalId) === actorId &&
+      cleanText(patientLink?.status).toLowerCase() === 'active'
+  );
+  const canSupervise = Boolean(
+    params.canSupervise === true ||
+      membershipRole === 'supervisor' ||
+      params.membership?.can_supervise === true ||
+      params.membership?.canSupervise === true
+  );
+  // Supervisory authority is attached to the professional membership, not to
+  // a specific label on the case link. Once a supervision-enabled professional
+  // is actively part of this patient case, they may manage this case team.
+  // This stays resource-scoped: can_supervise alone never grants access to
+  // patients where the professional has no active case/supervision link.
+  if (hasActiveCaseLink && canSupervise) return true;
+
+  const supervisionLink = params.supervisionLink;
+  return Boolean(
+    canSupervise &&
+      supervisionLink &&
+      cleanText(supervisionLink?.clinic_id || supervisionLink?.clinicId) === clinicId &&
+      cleanText(supervisionLink?.supervisor_user_id || supervisionLink?.supervisorUserId) === actorId &&
+      cleanText(supervisionLink?.status).toLowerCase() === 'active'
   );
 }
 
@@ -173,7 +253,7 @@ export function isEligiblePatientProfessionalLinkCandidate(
   );
   return Boolean(
     UUID_PATTERN.test(professionalId) &&
-      cleanText(professional?.role).toLowerCase() === 'therapist' &&
+      isPatientCaseTeamMembershipRole(professional?.role) &&
       cleanText(professional?.status).toLowerCase() === 'active' &&
       resolveProfessionalProfileSpecialty(professional).length >= 2 &&
       !activeIds.has(professionalId)

@@ -8,6 +8,7 @@ import {
   isPatientProfessionalCaseRole,
   isPatientProfessionalLinkManager,
   patientProfessionalCaseRoleLabel,
+  resolvePatientPrimaryProfessionalId,
   resolvePatientProfessionalLinkIntegrity,
   resolveProfessionalProfileSpecialty,
   validatePatientProfessionalCandidate
@@ -84,6 +85,17 @@ const eligibleProfessional = {
   status: 'active',
   specialty: 'Psicologia'
 };
+
+assert.equal(
+  resolvePatientPrimaryProfessionalId({
+    professional_links: [
+      { professional_id: otherProfessionalId, relationship_type: 'collaborator', status: 'active' },
+      { professional_id: professionalId, relationship_type: 'primary', status: 'active' },
+    ],
+  }),
+  professionalId,
+  'a relação canônica primária resolve o responsável mesmo sem patients.therapist_id'
+);
 
 const activeResult = composePatientProfessionalLinks({
   clinicId,
@@ -305,9 +317,10 @@ assert.deepEqual(
     profile: currentProfile
   }),
   {
-    ok: false,
-    error: 'PATIENT_PROFESSIONAL_MEMBERSHIP_INACTIVE'
-  }
+    ok: true,
+    specialty: 'Psicologia'
+  },
+  'coordenador clinicamente qualificado pode compor a equipe do caso'
 );
 assert.deepEqual(
   validatePatientProfessionalCandidate({
@@ -403,8 +416,24 @@ assert.equal(
     ...eligibleProfessional,
     role: 'coordinator'
   }),
-  false,
-  'coordinator não é elegível'
+  true,
+  'coordinator ativo com especialidade pode compor a equipe do caso'
+);
+assert.equal(
+  isEligiblePatientProfessionalLinkCandidate({
+    ...eligibleProfessional,
+    role: 'director'
+  }),
+  true,
+  'diretor clinicamente qualificado pode compor a equipe sem ampliar quem gerencia vínculos'
+);
+assert.equal(
+  isEligiblePatientProfessionalLinkCandidate({
+    ...eligibleProfessional,
+    role: 'supervisor'
+  }),
+  true,
+  'supervisor legado ativo com especialidade permanece elegível'
 );
 assert.equal(
   isEligiblePatientProfessionalLinkCandidate({
@@ -871,7 +900,7 @@ assert.match(panel, /selectedSpecialty/, '15. especialidade é preenchida pelo p
 assert.doesNotMatch(panel, /value=\{draft\.specialty\}/, '16. especialidade não é editável');
 assert.match(panel, /PATIENT_PROFESSIONAL_CASE_ROLE_OPTIONS\.map/, '17. função usa opções controladas');
 assert.match(panel, /isEligiblePatientProfessionalLinkCandidate/, '19. seletor usa a mesma elegibilidade testada');
-assert.match(panel, /Nenhum terapeuta elegível disponível/);
+assert.match(panel, /Nenhum profissional clínico elegível disponível/);
 assert.match(panel, /O acesso clínico está bloqueado/);
 assert.equal(
   (panel.match(/currentClinicalDate\(\)/g) || []).length,

@@ -99,6 +99,7 @@ import {
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
 import { dataService } from "../services/dataService";
 import { getDefaultCapabilitiesForRole, isClinicBaseRole } from "../constants/authorizationModel";
+import { resolvePatientPrimaryProfessionalId } from "../utils/patientProfessionalLinks";
 import {
   getAgendaViewPreferenceKey,
   readAgendaViewPreference,
@@ -406,9 +407,11 @@ const getProfessionalAccessRoleKeys = (source: any) =>
 
 const isPatientCareProfessionalMember = (source: any) => {
   const accessRoles = getProfessionalAccessRoleKeys(source);
-  const professionalAccessLabels = ["therapist", "professional", "profissional", "profissional de atendimento"];
+  const professionalAccessLabels = ["therapist", "supervisor", "professional", "profissional", "profissional de atendimento"];
+  const clinicalManagerAccessLabels = ["coordinator", "director"];
   if (accessRoles.length > 0) {
-    return accessRoles.some((role) => professionalAccessLabels.includes(role));
+    if (accessRoles.some((role) => professionalAccessLabels.includes(role))) return true;
+    return accessRoles.some((role) => clinicalManagerAccessLabels.includes(role)) && Boolean(pickProfessionalSpecialty(source));
   }
   const profileRoles = [
     source?.profileRole,
@@ -424,23 +427,7 @@ const isPatientCareProfessionalMember = (source: any) => {
   );
 };
 
-const resolvePatientResponsibleProfessionalId = (patient: any) =>
-  String(
-    patient?.therapist_id ||
-      patient?.therapistId ||
-      patient?.professional_id ||
-      patient?.professionalId ||
-      patient?.responsible_professional_id ||
-      patient?.responsibleProfessionalId ||
-      patient?.assigned_professional_id ||
-      patient?.assignedProfessionalId ||
-      patient?.primary_professional_id ||
-      patient?.primaryProfessionalId ||
-      patient?.metadata?.therapist_id ||
-      patient?.metadata?.professional_id ||
-      patient?.metadata?.responsible_professional_id ||
-      "",
-  ).trim();
+const resolvePatientResponsibleProfessionalId = resolvePatientPrimaryProfessionalId;
 
 const collectProfessionalIdentifierCandidates = (source: any, fallbackId: any = "") => {
   const rawIds = [
@@ -483,7 +470,7 @@ const resolvePatientResponsibleProfessionalLabel = (
   const professionalId = resolvePatientResponsibleProfessionalId(patient);
   if (!professionalId) return { id: "", label: "Sem profissional responsável" };
   const professional = professionalsById[professionalId];
-  if (!professional) return { id: professionalId, label: "Sem profissional responsável" };
+  if (!professional) return { id: professionalId, label: "Responsável cadastrado", unresolved: true };
   return {
     id: professionalId,
     label: formatProfessionalDisplayLabel({ ...professional, id: professionalId }, "Profissional"),
@@ -935,6 +922,7 @@ export function CoordinatorDashboard({
     action?: "charge" | "payment" | "partial_payment" | "discount" | "courtesy" | "refund" | "receipt" | "due_date" | "cancel" | "history";
   } | null>(null);
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
+  const [therapistMembersLoading, setTherapistMembersLoading] = useState(false);
   const therapistMembersRequestSeqRef = useRef(0);
   const therapistMembersWorkspaceRef = useRef("");
   const [patientTherapistFilter, setPatientTherapistFilter] = useState<string>("all");
@@ -1058,7 +1046,11 @@ export function CoordinatorDashboard({
     therapistMembersRequestSeqRef.current = requestSeq;
     therapistMembersWorkspaceRef.current = workspaceId;
     setTherapistMembersById({});
-    if (!workspaceId) return;
+    if (!workspaceId) {
+      setTherapistMembersLoading(false);
+      return;
+    }
+    setTherapistMembersLoading(true);
     const loadTherapistMembers = async () => {
       try {
         const result = await dataService.getClinicMembers();
@@ -1082,6 +1074,13 @@ export function CoordinatorDashboard({
         setTherapistMembersById(byId);
       } catch (error) {
         console.error("Erro ao carregar profissionais para exibição de responsáveis:", error);
+      } finally {
+        if (
+          therapistMembersRequestSeqRef.current === requestSeq &&
+          therapistMembersWorkspaceRef.current === workspaceId
+        ) {
+          setTherapistMembersLoading(false);
+        }
       }
     };
     void loadTherapistMembers();
@@ -1127,6 +1126,15 @@ export function CoordinatorDashboard({
       uniqueEntries.push(entry);
     });
     return uniqueEntries;
+  }, [therapistMembersById]);
+
+  const patientCareProfessionals = useMemo(() => {
+    const unique = new Map<string, any>();
+    Object.values(therapistMembersById).forEach((member: any) => {
+      const id = String(member?.id || '').trim();
+      if (id && !unique.has(id)) unique.set(id, member);
+    });
+    return Array.from(unique.values());
   }, [therapistMembersById]);
 
   const isValidDateOnlyParts = (year: number, month: number, day: number) => {
@@ -10691,6 +10699,7 @@ export function CoordinatorDashboard({
               patient={patient}
               themeMode={theme}
               capabilities={effectiveCapabilities}
+              clinicProfessionals={patientCareProfessionals}
               onBack={() => setView("home")}
               hideBackButton={true}
               clinicContext={{
@@ -13110,9 +13119,20 @@ export function CoordinatorDashboard({
                           {(() => {
                             const responsible = resolvePatientResponsibleProfessionalLabel(patient, therapistMembersById);
                             if (!responsible.id) {
-                              return (
+                              return therapistMembersLoading ? (
+                                <p className="text-[10px] mt-1 font-medium text-slate-400">
+                                  Profissional: carregando responsável...
+                                </p>
+                              ) : (
                                 <p className="text-[10px] mt-1 font-semibold text-amber-600">
                                   Profissional: Sem profissional responsável
+                                </p>
+                              );
+                            }
+                            if (therapistMembersLoading || responsible.unresolved) {
+                              return (
+                                <p className="text-[10px] mt-1 font-medium text-slate-400">
+                                  Profissional: {therapistMembersLoading ? 'carregando responsável...' : responsible.label}
                                 </p>
                               );
                             }

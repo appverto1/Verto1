@@ -59,6 +59,7 @@ import { VBMAPP_LEVEL_2_CANONICAL_PROTOCOL } from '../constants/vbmappLevel2Prot
 import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Protocol';
 import html2canvas from 'html2canvas';
 import { decodeClinicalTextEntities } from '../utils/clinicalText';
+import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -172,7 +173,7 @@ const patientInitials = (value: unknown) => String(value || 'P')
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, clinicProfessionals: preloadedClinicProfessionals = [], hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const hasCapability = (capability: string) => {
@@ -521,6 +522,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isSavingPrimaryProfessional, setIsSavingPrimaryProfessional] = useState(false);
   const [primaryProfessionalError, setPrimaryProfessionalError] = useState('');
   const [caseTeamRefreshKey, setCaseTeamRefreshKey] = useState(0);
+  const [caseTeamManagementAllowed, setCaseTeamManagementAllowed] = useState(false);
   const primaryProfessionalOverrideRef = React.useRef<string | null | undefined>(undefined);
 
   const historyRange = useMemo(
@@ -697,20 +699,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
   }, [openAnamnesisOnLoad, onAnamnesisOpenConsumed, patient?.id]);
 
-  const resolvePatientProfessionalId = (source: any) =>
-    String(
-      source?.therapist_id ||
-        source?.therapistId ||
-        source?.professional_id ||
-        source?.professionalId ||
-        source?.responsible_professional_id ||
-        source?.responsibleProfessionalId ||
-        source?.assigned_professional_id ||
-        source?.assignedProfessionalId ||
-        source?.primary_professional_id ||
-        source?.primaryProfessionalId ||
-        '',
-    ).trim();
+  const resolvePatientProfessionalId = resolvePatientPrimaryProfessionalId;
 
   const formatPatientProfessionalOptionLabel = (source: any) => {
     const title = String(
@@ -1094,6 +1083,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     () => hasCapability('team.case.manage'),
     [capabilities],
   );
+  const effectiveCaseTeamRole = String(
+    userRole || clinicContext?.role || ''
+  ).trim().toLowerCase();
+  const isUnitCaseTeamManager =
+    effectiveCaseTeamRole === 'director' || effectiveCaseTeamRole === 'coordinator';
+  const canManagePrimaryProfessionalForPatient =
+    canManageTherapistAssignment && (isUnitCaseTeamManager || caseTeamManagementAllowed);
   const canManageSchool = useMemo(
     () => hasCapability('school.manage'),
     [capabilities],
@@ -1105,6 +1101,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return document.body.classList.contains('theme-dark');
   }, [themeMode]);
   const showCoordinatorPatientRadar = String(userRole || '').toLowerCase() === 'coordinator';
+
+  useEffect(() => {
+    setCaseTeamManagementAllowed(isUnitCaseTeamManager);
+  }, [patient?.id, isUnitCaseTeamManager]);
   const [expandedSessionHistoryDates, setExpandedSessionHistoryDates] = useState<Record<string, boolean>>({});
   const progressReportPdfRef = React.useRef<HTMLDivElement | null>(null);
 
@@ -1116,6 +1116,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   useEffect(() => {
+    const selectCaseTeamProfessionals = (members: any[]) => members.filter((member: any) =>
+      isPatientCaseTeamMembershipRole(member?.role) &&
+      String(member?.status || '').toLowerCase() === 'active' &&
+      String(member?.specialty || '').trim().length >= 2
+    );
+
+    const provided = Array.isArray(preloadedClinicProfessionals)
+      ? selectCaseTeamProfessionals(preloadedClinicProfessionals)
+      : [];
+    if (provided.length > 0) {
+      setClinicTherapists(provided);
+      setIsLoadingTherapists(false);
+      return;
+    }
+
     const loadClinicTherapists = async () => {
       if (!canManageTherapistAssignment && !canManageCaseTeam) {
         setClinicTherapists([]);
@@ -1128,11 +1143,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           setClinicTherapists([]);
           return;
         }
-        const therapists = result.data.filter((member: any) => {
-          const role = String(member?.role || '').toLowerCase();
-          return role === 'therapist';
-        });
-        setClinicTherapists(therapists);
+        setClinicTherapists(selectCaseTeamProfessionals(result.data));
       } catch (error) {
         console.error('Erro ao carregar profissionais da clínica:', error);
         setClinicTherapists([]);
@@ -1140,8 +1151,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setIsLoadingTherapists(false);
       }
     };
-    loadClinicTherapists();
-  }, [canManageCaseTeam, canManageTherapistAssignment, patient?.id]);
+    void loadClinicTherapists();
+  }, [canManageCaseTeam, canManageTherapistAssignment, patient?.id, preloadedClinicProfessionals]);
 
   const handleTherapistAssignmentChange = async (nextTherapistId: string) => {
     const patientId = String(patient?.id || '').trim();
@@ -9844,12 +9855,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <div
             id="patient-care-context"
             className={`mt-6 grid min-w-0 items-start gap-5 ${
-              canManageTherapistAssignment
+              canManagePrimaryProfessionalForPatient
                 ? 'lg:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]'
                 : ''
             }`}
           >
-            {canManageTherapistAssignment && (
+            {canManagePrimaryProfessionalForPatient && (
               <section aria-labelledby="patient-primary-professional-heading" className="min-w-0">
                 <h2
                   id="patient-primary-professional-heading"
@@ -9893,10 +9904,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               <PatientProfessionalLinksPanel
                 patientId={String(patient.id)}
                 professionals={clinicTherapists}
-                canManage={canManageCaseTeam}
+                canManage={canManageCaseTeam && (isUnitCaseTeamManager || caseTeamManagementAllowed)}
                 dark={isPanelDark}
                 refreshKey={caseTeamRefreshKey}
                 onLinksChanged={handleCaseTeamLinksChanged}
+                onManagementAuthorityChanged={setCaseTeamManagementAllowed}
               />
             ) : null}
           </div>

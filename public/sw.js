@@ -1,7 +1,7 @@
-const SW_VERSION = "verto-branding-v15";
-const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260716-3";
-const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260716-3";
-const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14"]);
+const SW_VERSION = "verto-branding-v16";
+const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
+const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
+const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
 
 const isGenericBrandName = (value) => {

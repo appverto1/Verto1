@@ -91,6 +91,7 @@ export const PatientProfessionalLinksPanel = ({
   dark = false,
   refreshKey = 0,
   onLinksChanged,
+  onManagementAuthorityChanged,
 }: {
   patientId: string;
   professionals: any[];
@@ -98,11 +99,14 @@ export const PatientProfessionalLinksPanel = ({
   dark?: boolean;
   refreshKey?: string | number;
   onLinksChanged?: (links: ProfessionalLink[]) => void;
+  onManagementAuthorityChanged?: (canManage: boolean) => void;
 }) => {
   const [links, setLinks] = useState<ProfessionalLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [managementResolved, setManagementResolved] = useState(false);
+  const [serverCanManage, setServerCanManage] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [draft, setDraft] = useState({
     professionalId: '',
@@ -117,15 +121,27 @@ export const PatientProfessionalLinksPanel = ({
       const nextLinks = Array.isArray(data.links) ? data.links : [];
       setLinks(nextLinks);
       onLinksChanged?.(nextLinks);
+      const nextCanManage = data?.canManage === true;
+      setServerCanManage(nextCanManage);
+      setManagementResolved(true);
+      onManagementAuthorityChanged?.(nextCanManage);
       setError('');
     } catch (loadError: any) {
+      setServerCanManage(false);
+      setManagementResolved(true);
+      onManagementAuthorityChanged?.(false);
       setError(loadError?.message || 'Não foi possível carregar a equipe.');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { void load(); }, [patientId, refreshKey]);
+  useEffect(() => {
+    setManagementResolved(false);
+    setServerCanManage(false);
+    setShowForm(false);
+    void load();
+  }, [patientId, refreshKey]);
 
   const active = useMemo(
     () => links.filter((link) => link.status === 'active'),
@@ -167,7 +183,8 @@ export const PatientProfessionalLinksPanel = ({
       activeProfessionalIds
     );
   const selectedProfessionalCanSupervise = Boolean(
-    selectedProfessional?.canSupervise === true
+    String(selectedProfessional?.role || '').toLowerCase() === 'supervisor'
+    || selectedProfessional?.canSupervise === true
     || selectedProfessional?.can_supervise === true,
   );
   const currentClinicalDate = () =>
@@ -240,6 +257,7 @@ export const PatientProfessionalLinksPanel = ({
     }
   };
 
+  const effectiveCanManage = managementResolved ? serverCanManage : canManage;
   const shell = dark ? 'text-slate-100' : 'text-slate-900';
 
   return (
@@ -248,15 +266,15 @@ export const PatientProfessionalLinksPanel = ({
         <div>
             <p className="text-sm font-semibold">Equipe do caso</p>
             <p className={`mt-0.5 text-xs ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-              {loading ? 'Carregando...' : `${active.length} de 5 vínculos ativos`}
+              {loading ? 'Carregando...' : `${active.length} ${active.length === 1 ? 'vínculo ativo' : 'vínculos ativos'} · limite 5`}
             </p>
-            {canManage ? (
+            {effectiveCanManage ? (
               <p className={`mt-1 max-w-2xl text-[11px] leading-4 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
                 Para definir supervisão, habilite o profissional para supervisionar na tela Equipe e use Adicionar → Função no caso → Supervisão.
               </p>
             ) : null}
           </div>
-        {canManage ? (
+        {effectiveCanManage ? (
           <button
             type="button"
             onClick={() => setShowForm((value) => !value)}
@@ -285,14 +303,21 @@ export const PatientProfessionalLinksPanel = ({
                 const nextProfessional = available.find(
                   (professional) => String(professional?.id || '') === professionalId,
                 );
-                const nextCanSupervise = nextProfessional?.canSupervise === true
+                const nextMembershipRole = String(nextProfessional?.role || '').toLowerCase();
+                const nextCanSupervise = nextMembershipRole === 'supervisor'
+                  || nextProfessional?.canSupervise === true
                   || nextProfessional?.can_supervise === true;
+                const nextCaseRole = ['coordinator', 'director'].includes(nextMembershipRole)
+                  ? 'case_coordinator'
+                  : nextMembershipRole === 'supervisor'
+                    ? 'supervisor'
+                    : 'therapist';
                 setDraft((current) => ({
                   ...current,
                   professionalId,
-                  caseRole: current.caseRole === 'supervisor' && !nextCanSupervise
-                    ? 'therapist'
-                    : current.caseRole,
+                  caseRole: nextCanSupervise || nextCaseRole !== 'supervisor'
+                    ? nextCaseRole
+                    : 'therapist',
                 }));
               }}
               className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal text-slate-800"
@@ -309,7 +334,7 @@ export const PatientProfessionalLinksPanel = ({
             </select>
             {available.length === 0 ? (
               <span className="mt-1.5 block font-normal leading-5 text-amber-700">
-                Nenhum terapeuta elegível disponível. É necessário vínculo ativo com a clínica, especialidade cadastrada e ausência de vínculo ativo com este paciente.
+                Nenhum profissional clínico elegível disponível. É necessário vínculo ativo com a clínica, especialidade cadastrada e ausência de vínculo ativo com este paciente.
               </span>
             ) : null}
           </label>
@@ -420,7 +445,7 @@ export const PatientProfessionalLinksPanel = ({
                 Vínculo ativo com cadastro profissional inconsistente. O acesso clínico está bloqueado; encerre o vínculo ou regularize a membership.
               </p>
             ) : null}
-            {canManage && link.canBeEnded !== false ? (
+            {effectiveCanManage && link.canBeEnded !== false ? (
               <div className={`border-t px-3 ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
                 <button type="button" onClick={() => void end(link)} disabled={busy === `end:${link.id}`} className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 text-xs font-medium text-rose-600 disabled:opacity-50"><UserRoundX size={14} /> Encerrar vínculo</button>
               </div>
