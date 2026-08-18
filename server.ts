@@ -77941,6 +77941,227 @@ async function startServer() {
     }
   });
 
+  const normalizeAbaSessionLocationName = (value: any) => (
+    sanitizeString(value, 40).replace(/\s+/g, ' ').trim()
+  );
+  const normalizeAbaSessionLocationKey = (value: any) => (
+    normalizeAbaSessionLocationName(value).normalize('NFKC').toLocaleLowerCase('pt-BR')
+  );
+  const sanitizeAbaQuickBehaviorShortcuts = (value: any) => {
+    const allowedMethods = new Set(['frequency', 'duration', 'rate', 'partial_interval', 'whole_interval', 'momentary_time_sampling', 'abc']);
+    const allowedColors = new Set(['red', 'rose', 'amber', 'violet', 'sky', 'emerald', 'slate']);
+    const allowedIcons = new Set(['duration', 'plus']);
+    const seen = new Set<string>();
+    const rows: any[] = [];
+    for (const item of Array.isArray(value) ? value : []) {
+      const behaviorId = sanitizeString(item?.behaviorId || item?.behavior_id || item?.id, 180);
+      if (!behaviorId || seen.has(behaviorId)) continue;
+      const methodRaw = sanitizeString(item?.method || item?.measurementType || item?.measurement_type, 40).toLowerCase();
+      const method = allowedMethods.has(methodRaw) ? methodRaw : 'frequency';
+      const colorRaw = sanitizeString(item?.color, 24).toLowerCase();
+      const iconRaw = sanitizeString(item?.icon, 24).toLowerCase();
+      seen.add(behaviorId);
+      rows.push({
+        behaviorId,
+        label: sanitizeTextField(item?.label, 80) || null,
+        method,
+        priority: rows.length + 1,
+        visibleInDock: item?.visibleInDock !== false && item?.visible_in_dock !== false,
+        color: allowedColors.has(colorRaw) ? colorRaw : 'slate',
+        icon: allowedIcons.has(iconRaw) ? iconRaw : (method === 'duration' ? 'duration' : 'plus')
+      });
+      if (rows.length >= 6) break;
+    }
+    return rows;
+  };
+
+  app.get('/api/aba/session-quick-collection/preferences', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      if (!isUuid(clinicId) || !isUuid(actorId)) {
+        return res.status(400).json({ success: false, error: 'Escopo da clínica inválido.' });
+      }
+      const [locationsResult, preferencesResult] = await Promise.all([
+        supabase
+          .from('aba_session_locations')
+          .select('id,name,created_at,updated_at')
+          .eq('clinic_id', clinicId)
+          .eq('is_active', true)
+          .order('name', { ascending: true })
+          .limit(100),
+        supabase
+          .from('aba_user_session_preferences')
+          .select('quick_behavior_shortcuts,updated_at')
+          .eq('clinic_id', clinicId)
+          .eq('user_id', actorId)
+          .maybeSingle()
+      ]);
+      const firstError = locationsResult.error || preferencesResult.error;
+      if (firstError) {
+        if (isMissingRelationError(firstError) || hasMissingFinancialSchema(firstError)) {
+          return res.status(503).json({ success: false, error: 'ABA_SESSION_QUICK_COLLECTION_SCHEMA_REQUIRED', message: 'A atualização da coleta rápida ainda não foi aplicada.' });
+        }
+        throw firstError;
+      }
+      return res.json({
+        success: true,
+        data: {
+          locations: Array.isArray(locationsResult.data) ? locationsResult.data : [],
+          quickBehaviorShortcuts: Array.isArray(preferencesResult.data?.quick_behavior_shortcuts)
+            ? preferencesResult.data.quick_behavior_shortcuts
+            : [],
+          preferencesFound: Boolean(preferencesResult.data),
+          preferencesUpdatedAt: preferencesResult.data?.updated_at || null
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar as preferências da coleta rápida.' });
+    }
+  });
+
+  app.put('/api/aba/session-quick-collection/preferences', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Preferências da coleta rápida ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      if (!isUuid(clinicId) || !isUuid(actorId)) {
+        return res.status(400).json({ success: false, error: 'Escopo da clínica inválido.' });
+      }
+      const shortcuts = sanitizeAbaQuickBehaviorShortcuts(req.body?.quickBehaviorShortcuts || req.body?.quick_behavior_shortcuts || []);
+      const { data, error } = await supabase.rpc('save_aba_user_session_preferences_v1', {
+        p_clinic_id: clinicId,
+        p_user_id: actorId,
+        p_quick_behavior_shortcuts: shortcuts
+      });
+      if (error) {
+        if (isMissingRelationError(error) || hasMissingFinancialSchema(error) || sanitizeString(error?.message, 500).includes('save_aba_user_session_preferences_v1')) {
+          return res.status(503).json({ success: false, error: 'ABA_SESSION_QUICK_COLLECTION_SCHEMA_REQUIRED', message: 'A atualização da coleta rápida ainda não foi aplicada.' });
+        }
+        throw error;
+      }
+      const savedPreference = Array.isArray(data) ? data[0] : data;
+      return res.json({
+        success: true,
+        data: {
+          quickBehaviorShortcuts: Array.isArray((savedPreference as any)?.quick_behavior_shortcuts)
+            ? (savedPreference as any).quick_behavior_shortcuts
+            : shortcuts,
+          updatedAt: (savedPreference as any)?.updated_at || new Date().toISOString()
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível salvar os atalhos rápidos.' });
+    }
+  });
+
+  app.post('/api/aba/session-locations', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Novo local da sessão ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const name = normalizeAbaSessionLocationName(req.body?.name);
+      const normalizedName = normalizeAbaSessionLocationKey(name);
+      if (!isUuid(clinicId) || !isUuid(actorId)) return res.status(400).json({ success: false, error: 'Escopo da clínica inválido.' });
+      if (!name || !normalizedName) return res.status(400).json({ success: false, error: 'Informe um nome para o local.' });
+
+      const existing = await supabase
+        .from('aba_session_locations')
+        .select('id,name,created_at,updated_at')
+        .eq('clinic_id', clinicId)
+        .eq('normalized_name', normalizedName)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (existing.error) {
+        if (isMissingRelationError(existing.error) || hasMissingFinancialSchema(existing.error)) {
+          return res.status(503).json({ success: false, error: 'ABA_SESSION_QUICK_COLLECTION_SCHEMA_REQUIRED', message: 'A atualização de locais ainda não foi aplicada.' });
+        }
+        throw existing.error;
+      }
+      if (existing.data?.id) return res.json({ success: true, data: existing.data, idempotent: true });
+
+      const created = await supabase
+        .from('aba_session_locations')
+        .insert({ clinic_id: clinicId, name, normalized_name: normalizedName, created_by: actorId, updated_by: actorId })
+        .select('id,name,created_at,updated_at')
+        .single();
+      if (created.error) {
+        if (sanitizeString(created.error?.code, 40) === '23505') {
+          const replay = await supabase
+            .from('aba_session_locations')
+            .select('id,name,created_at,updated_at')
+            .eq('clinic_id', clinicId)
+            .eq('normalized_name', normalizedName)
+            .eq('is_active', true)
+            .maybeSingle();
+          if (!replay.error && replay.data?.id) return res.json({ success: true, data: replay.data, idempotent: true });
+        }
+        if (isMissingRelationError(created.error) || hasMissingFinancialSchema(created.error)) {
+          return res.status(503).json({ success: false, error: 'ABA_SESSION_QUICK_COLLECTION_SCHEMA_REQUIRED', message: 'A atualização de locais ainda não foi aplicada.' });
+        }
+        throw created.error;
+      }
+      return res.status(201).json({ success: true, data: created.data, idempotent: false });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível adicionar o local.' });
+    }
+  });
+
+  app.patch('/api/aba/session-locations/:locationId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Edição de local da sessão ABA')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const locationId = sanitizeString(req.params.locationId, 120);
+      const name = normalizeAbaSessionLocationName(req.body?.name);
+      const normalizedName = normalizeAbaSessionLocationKey(name);
+      if (!isUuid(clinicId) || !isUuid(actorId) || !isUuid(locationId)) return res.status(400).json({ success: false, error: 'Identificador inválido.' });
+      if (!name || !normalizedName) return res.status(400).json({ success: false, error: 'Informe um nome para o local.' });
+      const updated = await supabase
+        .from('aba_session_locations')
+        .update({ name, normalized_name: normalizedName, updated_by: actorId, updated_at: new Date().toISOString() })
+        .eq('id', locationId)
+        .eq('clinic_id', clinicId)
+        .eq('is_active', true)
+        .select('id,name,created_at,updated_at')
+        .maybeSingle();
+      if (updated.error) {
+        if (sanitizeString(updated.error?.code, 40) === '23505') return res.status(409).json({ success: false, error: 'Este local já existe na clínica.' });
+        if (isMissingRelationError(updated.error) || hasMissingFinancialSchema(updated.error)) return res.status(503).json({ success: false, error: 'ABA_SESSION_QUICK_COLLECTION_SCHEMA_REQUIRED' });
+        throw updated.error;
+      }
+      if (!updated.data?.id) return res.status(404).json({ success: false, error: 'Local não encontrado.' });
+      return res.json({ success: true, data: updated.data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível renomear o local.' });
+    }
+  });
+
+  app.delete('/api/aba/session-locations/:locationId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const locationId = sanitizeString(req.params.locationId, 120);
+      if (!isUuid(clinicId) || !isUuid(actorId) || !isUuid(locationId)) return res.status(400).json({ success: false, error: 'Identificador inválido.' });
+      const updated = await supabase
+        .from('aba_session_locations')
+        .update({ is_active: false, updated_by: actorId, updated_at: new Date().toISOString() })
+        .eq('id', locationId)
+        .eq('clinic_id', clinicId)
+        .eq('is_active', true)
+        .select('id,name')
+        .maybeSingle();
+      if (updated.error) {
+        if (isMissingRelationError(updated.error) || hasMissingFinancialSchema(updated.error)) return res.status(503).json({ success: false, error: 'ABA_SESSION_QUICK_COLLECTION_SCHEMA_REQUIRED' });
+        throw updated.error;
+      }
+      if (!updated.data?.id) return res.status(404).json({ success: false, error: 'Local não encontrado.' });
+      return res.json({ success: true, data: updated.data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível remover o local.' });
+    }
+  });
+
   app.get('/api/aba/prompt-types', requireAbaPromptConfigFeature, checkAuth, requireClinicCapability('aba.program.view'), async (req: any, res) => {
     try {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
