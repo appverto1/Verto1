@@ -213,7 +213,6 @@ export function isPatientProfessionalLinkManager(params: {
   if (['director', 'coordinator'].includes(membershipRole)) return true;
 
   const patientLink = params.patientLink;
-  const caseRole = cleanText(patientLink?.case_role || patientLink?.caseRole).toLowerCase();
   const hasActiveCaseLink = Boolean(
     cleanText(patientLink?.organization_id || patientLink?.organizationId) === clinicId &&
       cleanText(patientLink?.clinic_id || patientLink?.clinicId) === clinicId &&
@@ -227,7 +226,12 @@ export function isPatientProfessionalLinkManager(params: {
       params.membership?.can_supervise === true ||
       params.membership?.canSupervise === true
   );
-  if (hasActiveCaseLink && caseRole === 'supervisor' && canSupervise) return true;
+  // Supervisory authority is attached to the professional membership, not to
+  // a specific label on the case link. Once a supervision-enabled professional
+  // is actively part of this patient case, they may manage this case team.
+  // This stays resource-scoped: can_supervise alone never grants access to
+  // patients where the professional has no active case/supervision link.
+  if (hasActiveCaseLink && canSupervise) return true;
 
   const supervisionLink = params.supervisionLink;
   return Boolean(

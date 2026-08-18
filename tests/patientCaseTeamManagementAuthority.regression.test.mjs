@@ -22,7 +22,7 @@ assert.match(
   'supervisor role exposes case-team management actions',
 );
 
-assert.match(utility, /caseRole === 'supervisor' && canSupervise/);
+assert.match(utility, /hasActiveCaseLink && canSupervise/);
 assert.match(utility, /supervisionLink[\s\S]*?supervisor_user_id/);
 assert.match(utility, /patient_id \|\| patientLink\?\.patientId/);
 assert.doesNotMatch(
