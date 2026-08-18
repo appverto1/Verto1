@@ -2035,6 +2035,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
             <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${criterionProgress}%` }} />
           </div>
+          {currentTarget?.criterionProgressLabel && Number(currentTarget?.criterionRequiredCount || 0) > 1 && currentTarget?.normalizedStatus !== 'mastered' && (
+            <p className={`mt-2 text-[11px] ${muted}`}>
+              Alvo atual: {currentTarget?.name || currentTarget?.target_name || 'Alvo'} · {currentTarget.criterionProgressLabel} do critério
+            </p>
+          )}
         </div>
 
         <div className={`mt-4 rounded-xl border px-3.5 py-3 ${isDark ? 'border-slate-700 bg-slate-950/30' : 'border-slate-100 bg-slate-50/70'}`}>

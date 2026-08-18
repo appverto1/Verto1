@@ -41,7 +41,7 @@ assert(detail.includes("subject === 'milestone_event' || rawText.startsWith('MIL
 assert(plan.includes('masteryEvaluations = []'), 'Plano deve aceitar avaliações de maestria já carregadas, sem nova consulta');
 assert(plan.includes("status === 'MASTERED_APPROVED'"), 'Plano só deve converter avaliação aprovada em alvo dominado');
 assert(plan.includes('criterionProgressPercent'), 'Plano deve refletir progresso parcial do critério sem chamar de domínio');
-assert(detail.includes('masteryEvaluations={abaMasteryEvaluations}'), 'Prontuário deve reaproveitar avaliações já carregadas no Plano');
+assert(detail.includes('masteryEvaluations={abaMasteryEvaluationsForPlan}'), 'Prontuário deve reaproveitar avaliações persistidas e o preview vivo da sessão no Plano');
 assert(detail.includes('approvedMasteryTargetCount'), 'fallback de resumo não pode contar toda avaliação como alvo dominado');
 
 console.log('abaMasteryAnalyticsCanonical.regression.test.mjs: ok');

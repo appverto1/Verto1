@@ -1021,6 +1021,7 @@ export const SessionMode = ({
   formatCountdown,
   onConfirmEndSession,
   onSessionSummaryPersisted,
+  onMasteryPreviewChanged,
   onSessionRecordSaved,
   therapistId,
   therapistName,
@@ -6052,6 +6053,38 @@ export const SessionMode = ({
       reasons: evaluation.reasons
     };
   }), [patientId, priorMasteryEvaluations, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId]);
+
+  useEffect(() => {
+    if (typeof onMasteryPreviewChanged !== 'function' || isCompletedSessionReview) return;
+    const evaluatedAt = sessionEndPreviewAt || new Date().toISOString();
+    const previewRows = teachingMasteryRows.map((row: any) => ({
+      id: `live-mastery-${sessionId}-${String(row?.targetId || row?.id || row?.name || 'target')}`,
+      patient_id: patientId,
+      patientId,
+      session_id: sessionId,
+      sessionId,
+      target_id: row?.targetId || row?.target_id || null,
+      targetId: row?.targetId || row?.target_id || null,
+      target_name: row?.name || null,
+      targetName: row?.name || null,
+      status: row?.statusCode || null,
+      statusCode: row?.statusCode || null,
+      evaluation_status: String(row?.statusCode || '').toUpperCase() === 'MASTERED_APPROVED' ? 'mastered' : 'not_met',
+      criterion_progress_count: Number(row?.criterionProgressCount || 0),
+      criterionProgressCount: Number(row?.criterionProgressCount || 0),
+      consecutive_successes: Number(row?.criterionProgressCount || 0),
+      consecutiveSuccesses: Number(row?.criterionProgressCount || 0),
+      criterion_required_count: Number(row?.criterionRequiredCount || 1),
+      criterionRequiredCount: Number(row?.criterionRequiredCount || 1),
+      min_consecutive_successes: Number(row?.criterionRequiredCount || 1),
+      minConsecutiveSuccesses: Number(row?.criterionRequiredCount || 1),
+      evaluated_at: evaluatedAt,
+      evaluatedAt,
+      live_preview: true,
+      livePreview: true
+    }));
+    onMasteryPreviewChanged(previewRows);
+  }, [isCompletedSessionReview, onMasteryPreviewChanged, patientId, sessionEndPreviewAt, sessionId, teachingMasteryRows]);
 
   const maintenanceProbeRows = useMemo(() => sessionGoals
     .map((goal: any) => {
