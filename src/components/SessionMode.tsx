@@ -1224,6 +1224,10 @@ export const SessionMode = ({
   const [dockLocationsExpanded, setDockLocationsExpanded] = useState(false);
   const [dockLocationManagerOpen, setDockLocationManagerOpen] = useState(false);
   const [customDockLocations, setCustomDockLocations] = useState<string[]>([]);
+  const [dockLocationRows, setDockLocationRows] = useState<Array<{ id: string; name: string }>>([]);
+  const [persistedQuickBehaviorShortcuts, setPersistedQuickBehaviorShortcuts] = useState<any[] | null>(null);
+  const [sessionQuickPreferencesLoading, setSessionQuickPreferencesLoading] = useState(false);
+  const [sessionQuickPreferencesSaving, setSessionQuickPreferencesSaving] = useState(false);
   const [newDockLocationName, setNewDockLocationName] = useState('');
   const [editingDockLocationName, setEditingDockLocationName] = useState('');
   const [editingDockLocationValue, setEditingDockLocationValue] = useState('');
@@ -1234,6 +1238,7 @@ export const SessionMode = ({
   const [actionLocks, setActionLocks] = useState<Record<string, boolean>>({});
   const [microFeedback, setMicroFeedback] = useState<Record<string, 'pulse' | 'check' | 'plus'>>({});
   const [maintenanceProbeFeedback, setMaintenanceProbeFeedback] = useState('');
+  const [maintenanceStartDecision, setMaintenanceStartDecision] = useState<'' | 'added' | 'review' | 'skipped'>('');
   const [pendingMaintenanceProbeTrial, setPendingMaintenanceProbeTrial] = useState<PendingMaintenanceProbeTrial | null>(null);
   const [, setTrialAuditEvents] = useState<TrialAuditEvent[]>([]);
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
@@ -1442,7 +1447,7 @@ export const SessionMode = ({
   const selectedBehaviorMeasurements = getBehaviorAllowedMeasurements(selectedBehavior);
   const selectedBehaviorAllowsMultipleMethods = selectedBehaviorMeasurements.length > 1;
   const selectedBehaviorMethodOptions = behaviorMeasurementOptions.filter((option) => selectedBehaviorMeasurements.includes(option.key as any));
-  const quickBehaviorShortcuts = useMemo(() => normalizeQuickBehaviorShortcuts(
+  const baselineQuickBehaviorShortcuts = useMemo(() => normalizeQuickBehaviorShortcuts(
     patient?.quickBehaviorShortcuts ||
     patient?.quick_behavior_shortcuts ||
     patient?.abaSettings?.quickBehaviorShortcuts ||
@@ -1450,9 +1455,20 @@ export const SessionMode = ({
     patient?.clinicSettings?.abaQuickBehaviorShortcuts,
     sessionBehaviorPresets
   ), [patient?.abaSettings?.quickBehaviorShortcuts, patient?.clinicSettings?.abaQuickBehaviorShortcuts, patient?.clinicSettings?.quickBehaviorShortcuts, patient?.quickBehaviorShortcuts, patient?.quick_behavior_shortcuts, sessionBehaviorPresets]);
-  const dockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode, limit: 3 }), [crisisMode, quickBehaviorShortcuts]);
+  const quickBehaviorShortcuts = useMemo(() => {
+    if (persistedQuickBehaviorShortcuts !== null) {
+      return persistedQuickBehaviorShortcuts.length > 0
+        ? normalizeQuickBehaviorShortcuts(persistedQuickBehaviorShortcuts, sessionBehaviorPresets)
+        : [];
+    }
+    return baselineQuickBehaviorShortcuts;
+  }, [baselineQuickBehaviorShortcuts, persistedQuickBehaviorShortcuts, sessionBehaviorPresets]);
+  const dockShortcuts = useMemo(() => getDockVisibleShortcuts(
+    crisisMode ? baselineQuickBehaviorShortcuts : quickBehaviorShortcuts,
+    { crisisMode, limit: 3 }
+  ), [baselineQuickBehaviorShortcuts, crisisMode, quickBehaviorShortcuts]);
+  const personalizedDockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode: false, limit: 3 }), [quickBehaviorShortcuts]);
   const crisisShortcutIdSet = useMemo(() => new Set(getCrisisShortcutIds()), []);
-  const dockLocationStorageKey = useMemo(() => `verto.aba_dock_locations:${resolvedClinicId || patientId || 'local'}`, [patientId, resolvedClinicId]);
   const dockLocationOptions = useMemo(() => mergeDockLocationOptions(customDockLocations), [customDockLocations]);
   const visibleDockLocationOptions = dockLocationsExpanded ? dockLocationOptions : dockLocationOptions.slice(0, 6);
   const recentBehaviorRecords = useMemo(() => records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)).slice(0, 5), [records]);
@@ -1519,28 +1535,39 @@ export const SessionMode = ({
     }
   };
 
-  const persistCustomDockLocations = (nextOptions: string[]) => {
-    const normalizedOptions = Array.from(new Set(
-      nextOptions
-        .map(normalizeDockLocationLabel)
-        .filter((location) => location && !locationOptions.includes(location))
-    ));
-    setCustomDockLocations(normalizedOptions);
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(dockLocationStorageKey, JSON.stringify(normalizedOptions));
-    } catch {
-      // Custom dock locations are a UI preference; clinical event persistence stays unchanged.
-    }
+  const syncDockLocationRows = (rows: any[]) => {
+    const normalizedRows = (Array.isArray(rows) ? rows : [])
+      .map((row: any) => ({ id: String(row?.id || '').trim(), name: normalizeDockLocationLabel(row?.name) }))
+      .filter((row: any) => row.id && row.name && !locationOptions.includes(row.name));
+    setDockLocationRows(normalizedRows);
+    setCustomDockLocations(Array.from(new Set(normalizedRows.map((row: any) => row.name))));
   };
 
-  const addDockLocation = () => {
+  const addDockLocation = async () => {
     const nextLocation = normalizeDockLocationLabel(newDockLocationName);
     if (!nextLocation) return;
-    persistCustomDockLocations([...customDockLocations, nextLocation]);
-    setSelectedLocation(nextLocation);
+    const defaultLocation = locationOptions.find((location) => location.toLocaleLowerCase('pt-BR') === nextLocation.toLocaleLowerCase('pt-BR'));
+    if (defaultLocation) {
+      setSelectedLocation(defaultLocation);
+      setNewDockLocationName('');
+      setDockLocationsExpanded(true);
+      showClinicalToast({ variant: 'info', title: 'Local já disponível.', subtitle: defaultLocation }, 'none');
+      return;
+    }
+    const result = await dataService.createAbaSessionLocation(nextLocation);
+    if (result?.success === false || !result?.data?.id) {
+      showClinicalToast({ variant: 'error', title: 'Não foi possível adicionar o local.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
+      return;
+    }
+    const nextRows = [
+      ...dockLocationRows.filter((row) => row.id !== String(result.data.id)),
+      { id: String(result.data.id), name: normalizeDockLocationLabel(result.data.name || nextLocation) }
+    ];
+    syncDockLocationRows(nextRows);
+    setSelectedLocation(normalizeDockLocationLabel(result.data.name || nextLocation));
     setNewDockLocationName('');
     setDockLocationsExpanded(true);
+    showClinicalToast({ variant: 'success', title: 'Local adicionado e selecionado.', subtitle: normalizeDockLocationLabel(result.data.name || nextLocation) }, 'none');
   };
 
   const startRenameDockLocation = (location: string) => {
@@ -1548,26 +1575,100 @@ export const SessionMode = ({
     setEditingDockLocationValue(location);
   };
 
-  const renameDockLocation = () => {
+  const renameDockLocation = async () => {
     const currentLocation = normalizeDockLocationLabel(editingDockLocationName);
     const nextLocation = normalizeDockLocationLabel(editingDockLocationValue);
-    if (!currentLocation || !nextLocation) return;
-    persistCustomDockLocations(customDockLocations.map((location) => (
-      location === currentLocation ? nextLocation : location
-    )));
-    if (selectedLocation === currentLocation) setSelectedLocation(nextLocation);
+    const row = dockLocationRows.find((item) => item.name === currentLocation);
+    if (!row?.id || !currentLocation || !nextLocation) return;
+    const result = await dataService.updateAbaSessionLocation(row.id, nextLocation);
+    if (result?.success === false || !result?.data?.id) {
+      showClinicalToast({ variant: 'error', title: 'Não foi possível renomear o local.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
+      return;
+    }
+    const persistedName = normalizeDockLocationLabel(result.data.name || nextLocation);
+    syncDockLocationRows(dockLocationRows.map((item) => item.id === row.id ? { id: row.id, name: persistedName } : item));
+    if (selectedLocation === currentLocation) setSelectedLocation(persistedName);
     setEditingDockLocationName('');
     setEditingDockLocationValue('');
+    showClinicalToast({ variant: 'success', title: 'Local atualizado.', subtitle: persistedName }, 'none');
   };
 
-  const removeDockLocation = (location: string) => {
+  const removeDockLocation = async (location: string) => {
     const removedLocation = normalizeDockLocationLabel(location);
-    persistCustomDockLocations(customDockLocations.filter((item) => item !== removedLocation));
+    const row = dockLocationRows.find((item) => item.name === removedLocation);
+    if (!row?.id) return;
+    const result = await dataService.removeAbaSessionLocation(row.id);
+    if (result?.success === false) {
+      showClinicalToast({ variant: 'error', title: 'Não foi possível remover o local.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
+      return;
+    }
+    syncDockLocationRows(dockLocationRows.filter((item) => item.id !== row.id));
     if (selectedLocation === removedLocation) setSelectedLocation(locationOptions[0]);
     if (editingDockLocationName === removedLocation) {
       setEditingDockLocationName('');
       setEditingDockLocationValue('');
     }
+    showClinicalToast({ variant: 'info', title: 'Local removido da lista rápida.', subtitle: removedLocation }, 'none');
+  };
+
+  const savePersonalizedQuickBehaviorShortcuts = async (nextShortcuts: any[]) => {
+    if (sessionQuickPreferencesSaving) return false;
+    setSessionQuickPreferencesSaving(true);
+    try {
+      const normalized = nextShortcuts.slice(0, 3).map((shortcut: any, index: number) => ({
+        ...shortcut,
+        priority: index + 1,
+        visibleInDock: true
+      }));
+      const result = await dataService.saveAbaQuickBehaviorShortcuts(normalized);
+      if (result?.success === false) {
+        showClinicalToast({ variant: 'error', title: 'Não foi possível salvar os atalhos.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
+        return false;
+      }
+      const persisted = Array.isArray(result?.data?.quickBehaviorShortcuts) ? result.data.quickBehaviorShortcuts : normalized;
+      setPersistedQuickBehaviorShortcuts(persisted);
+      showClinicalToast({ variant: 'success', title: 'Acessos rápidos atualizados.', subtitle: 'A preferência fica salva para você nesta clínica.' }, 'none');
+      return true;
+    } finally {
+      setSessionQuickPreferencesSaving(false);
+    }
+  };
+
+  const toggleSelectedBehaviorQuickShortcut = async () => {
+    const behavior = selectedBehavior;
+    if (!behavior?.id) return;
+    const current = personalizedDockShortcuts;
+    const existing = current.find((shortcut: any) => shortcut.behaviorId === behavior.id);
+    if (existing) {
+      await savePersonalizedQuickBehaviorShortcuts(current.filter((shortcut: any) => shortcut.behaviorId !== behavior.id));
+      return;
+    }
+    if (current.length >= 3) {
+      showClinicalToast({ variant: 'info', title: 'Você já tem 3 acessos rápidos.', subtitle: 'Remova ou reordene um deles antes de fixar outro.' }, 'none');
+      return;
+    }
+    const method = resolveBehaviorMeasurementForAction(behavior, behaviorMeasurementType || behavior.defaultMeasurement || 'frequency');
+    await savePersonalizedQuickBehaviorShortcuts([
+      ...current,
+      {
+        behaviorId: behavior.id,
+        label: behavior.name,
+        method,
+        priority: current.length + 1,
+        visibleInDock: true,
+        color: 'slate',
+        icon: method === 'duration' ? 'duration' : 'plus'
+      }
+    ]);
+  };
+
+  const movePersonalizedQuickShortcut = async (behaviorId: string, direction: -1 | 1) => {
+    const current = [...personalizedDockShortcuts];
+    const index = current.findIndex((shortcut: any) => shortcut.behaviorId === behaviorId);
+    const targetIndex = index + direction;
+    if (index < 0 || targetIndex < 0 || targetIndex >= current.length) return;
+    [current[index], current[targetIndex]] = [current[targetIndex], current[index]];
+    await savePersonalizedQuickBehaviorShortcuts(current);
   };
 
   const dockChipClass = (active: boolean) => `inline-flex min-h-[36px] min-w-0 max-w-full items-center justify-center overflow-hidden whitespace-nowrap rounded-full border px-4 py-2 text-[11px] font-medium transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${active ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/10 ring-2 ring-[#7a32fc]/10' : 'border-[#E2D9EA] bg-white text-slate-700 hover:border-purple-200 hover:bg-white'}`;
@@ -1618,21 +1719,41 @@ export const SessionMode = ({
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const persistedLocations = JSON.parse(window.localStorage.getItem(dockLocationStorageKey) || '[]');
-      const nextLocations = Array.isArray(persistedLocations)
-        ? persistedLocations.map(normalizeDockLocationLabel).filter((location) => location && !locationOptions.includes(location))
-        : [];
-      setCustomDockLocations(Array.from(new Set(nextLocations)));
-    } catch {
-      setCustomDockLocations([]);
-    }
+    let cancelled = false;
     setDockLocationsExpanded(false);
     setDockLocationManagerOpen(false);
     setEditingDockLocationName('');
     setEditingDockLocationValue('');
-  }, [dockLocationStorageKey]);
+    if (!resolvedClinicId) {
+      syncDockLocationRows([]);
+      setPersistedQuickBehaviorShortcuts(null);
+      return () => { cancelled = true; };
+    }
+    setSessionQuickPreferencesLoading(true);
+    dataService.getAbaSessionQuickCollectionPreferences()
+      .then((result: any) => {
+        if (cancelled) return;
+        if (result?.success === false) {
+          syncDockLocationRows([]);
+          setPersistedQuickBehaviorShortcuts(null);
+          return;
+        }
+        const payload = result?.data || {};
+        syncDockLocationRows(Array.isArray(payload?.locations) ? payload.locations : []);
+        setPersistedQuickBehaviorShortcuts(payload?.preferencesFound
+          ? (Array.isArray(payload?.quickBehaviorShortcuts) ? payload.quickBehaviorShortcuts : [])
+          : null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        syncDockLocationRows([]);
+        setPersistedQuickBehaviorShortcuts(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionQuickPreferencesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [resolvedClinicId]);
 
   useEffect(() => {
     setBehaviorMeasurementType(getBehaviorDefaultMeasurement(selectedBehavior));
@@ -1654,6 +1775,9 @@ export const SessionMode = ({
       setSessionCompleted(Boolean(isCompletedSessionReview || persisted.sessionCompleted || String(activeSession?.status || '').toLowerCase() === 'completed'));
       setPostClosureSummary(persisted.postClosureSummary || null);
       setTrialCount(Number(persisted.trialCount || 0));
+      setMaintenanceStartDecision(['added', 'review', 'skipped'].includes(String(persisted.maintenanceStartDecision || ''))
+        ? persisted.maintenanceStartDecision
+        : '');
       const restoredRegularTrialType = normalizeRegularAbaTrialType(persisted.lastRegularTrialType, 'dtt');
       const restoredCollectionType = normalizeAbaCollectionType(persisted.collectionType || restoredRegularTrialType);
       setLastRegularTrialType(restoredRegularTrialType);
@@ -1704,13 +1828,14 @@ export const SessionMode = ({
           trialCount,
           collectionType,
           lastRegularTrialType,
-          manualMaintenanceProbeTargets
+          manualMaintenanceProbeTargets,
+          maintenanceStartDecision
         })
       );
     } catch {
       // Local session history is a convenience layer; encrypted offline cache remains the source of truth.
     }
-  }, [collectionType, hydratedSessionStateKey, intervalRun, intervalSummary, lastRegularTrialType, manualMaintenanceProbeTargets, openDurations, therapeuticTimers, postClosureSummary, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
+  }, [collectionType, hydratedSessionStateKey, intervalRun, intervalSummary, lastRegularTrialType, maintenanceStartDecision, manualMaintenanceProbeTargets, openDurations, therapeuticTimers, postClosureSummary, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -6216,6 +6341,46 @@ export const SessionMode = ({
 
   const maintenanceProbeRegisteredCount = maintenanceProbeQueueItems.filter((item: any) => item.registered).length;
   const maintenanceProbePendingCount = maintenanceProbeQueueItems.filter((item: any) => !item.registered).length;
+  const shouldShowMaintenanceStartPrompt = Boolean(
+    !sessionCompleted &&
+    !isCompletedSessionReview &&
+    !sessionId.startsWith('draft-') &&
+    sessionMaintenanceProbes?.loaded &&
+    maintenanceProbePendingCount > 0 &&
+    maintenanceStartDecision === '' &&
+    records.length === 0
+  );
+
+  const acceptDueMaintenanceProbesForSession = () => {
+    setMaintenanceStartDecision('added');
+    setSessionPlanFilter('maintenance');
+    setMaintenanceProbeQueueExpanded(true);
+    showClinicalToast({
+      variant: 'success',
+      title: `${maintenanceProbePendingCount} sondagem(ns) adicionada(s) ao foco da sessão.`,
+      subtitle: 'Nada foi ativado automaticamente; escolha a sondagem quando for coletar.'
+    }, 'none');
+  };
+
+  const reviewDueMaintenanceProbesForSession = () => {
+    setMaintenanceStartDecision('review');
+    setSessionPlanFilter('maintenance');
+    setMaintenanceProbeQueueExpanded(true);
+    showClinicalToast({
+      variant: 'info',
+      title: 'Sondagens abertas para revisão.',
+      subtitle: 'Revise os alvos e ative somente o que fizer sentido nesta sessão.'
+    }, 'none');
+  };
+
+  const skipDueMaintenanceProbesForSession = () => {
+    setMaintenanceStartDecision('skipped');
+    showClinicalToast({
+      variant: 'info',
+      title: 'Sondagens mantidas pendentes.',
+      subtitle: 'Nenhuma sondagem foi cancelada ou marcada como concluída.'
+    }, 'none');
+  };
   const filteredMaintenanceProbeQueueItems = useMemo(() => {
     if (maintenanceProbeQueueFilter === 'pending') return maintenanceProbeQueueItems.filter((item: any) => !item.registered);
     if (maintenanceProbeQueueFilter === 'registered') return maintenanceProbeQueueItems.filter((item: any) => item.registered);
@@ -8444,7 +8609,18 @@ export const SessionMode = ({
         <section className="space-y-4" data-aba-dock-context-panel data-aba-quick-register-chip-panel>
           <div className="space-y-4">
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-location-chips>
-              <span>Local</span>
+              <div className="flex items-center justify-between gap-2">
+                <span>Local</span>
+                <button
+                  type="button"
+                  onClick={() => setDockLocationManagerOpen((open) => !open)}
+                  disabled={sessionQuickPreferencesLoading}
+                  aria-label="Adicionar local da sessão"
+                  className="inline-flex h-7 items-center gap-1 rounded-full border border-purple-100 bg-white px-2 text-[10px] font-semibold text-[#7a32fc] shadow-sm transition-all active:scale-95 disabled:opacity-50"
+                >
+                  <Plus size={12} /> local
+                </button>
+              </div>
               <div className="mt-1 flex max-h-[88px] flex-wrap gap-2 overflow-y-auto pr-1">
                 {visibleDockLocationOptions.map((location) => (
                   <button
@@ -8531,7 +8707,17 @@ export const SessionMode = ({
               </div>
             </div>
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-behavior-chips>
-              <span>Comportamento</span>
+              <div className="flex items-center justify-between gap-2">
+                <span>Comportamento</span>
+                <button
+                  type="button"
+                  onClick={toggleSelectedBehaviorQuickShortcut}
+                  disabled={sessionQuickPreferencesLoading || sessionQuickPreferencesSaving}
+                  className="inline-flex h-7 items-center gap-1 rounded-full border border-purple-100 bg-white px-2 text-[10px] font-semibold text-[#7a32fc] shadow-sm transition-all active:scale-95 disabled:opacity-50"
+                >
+                  {personalizedDockShortcuts.some((shortcut: any) => shortcut.behaviorId === selectedBehavior.id) ? 'Desafixar' : '+ Fixar'}
+                </button>
+              </div>
               <div className="mt-1 flex max-h-[92px] flex-wrap gap-2 overflow-y-auto pr-1">
                 {(dockMoreBehaviorsOpen ? [...visibleDockBehaviorOptions, ...extraDockBehaviorOptions] : visibleDockBehaviorOptions).map((behavior) => (
                   <button
@@ -8553,6 +8739,29 @@ export const SessionMode = ({
                   >
                     <span className="min-w-0 truncate">{dockMoreBehaviorsOpen ? 'Mostrar menos' : '+ Mais'}</span>
                   </button>
+                )}
+              </div>
+              <div className="mt-3 rounded-2xl border border-purple-100 bg-white/80 p-3" data-aba-personalized-quick-shortcuts>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold text-slate-600">Seus acessos rápidos</span>
+                  <span className="text-[10px] text-slate-400">{personalizedDockShortcuts.length}/3</span>
+                </div>
+                {personalizedDockShortcuts.length === 0 ? (
+                  <p className="mt-2 text-[11px] font-normal text-slate-400">Fixe até 3 comportamentos para aparecerem na barra inferior.</p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    {personalizedDockShortcuts.map((shortcut: any, index: number) => {
+                      const behavior = resolveShortcutBehavior(shortcut);
+                      return (
+                        <div key={`quick-pref-${shortcut.behaviorId}`} className="flex items-center gap-2 rounded-xl border border-slate-100 bg-white px-2 py-2">
+                          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-slate-700">{behavior?.name || shortcut.label}</span>
+                          <button type="button" disabled={index === 0 || sessionQuickPreferencesSaving} onClick={() => movePersonalizedQuickShortcut(shortcut.behaviorId, -1)} className="h-7 w-7 rounded-lg border border-slate-100 text-[11px] text-slate-500 disabled:opacity-30" aria-label="Mover atalho para cima">↑</button>
+                          <button type="button" disabled={index === personalizedDockShortcuts.length - 1 || sessionQuickPreferencesSaving} onClick={() => movePersonalizedQuickShortcut(shortcut.behaviorId, 1)} className="h-7 w-7 rounded-lg border border-slate-100 text-[11px] text-slate-500 disabled:opacity-30" aria-label="Mover atalho para baixo">↓</button>
+                          <button type="button" disabled={sessionQuickPreferencesSaving} onClick={() => savePersonalizedQuickBehaviorShortcuts(personalizedDockShortcuts.filter((item: any) => item.behaviorId !== shortcut.behaviorId))} className="h-7 rounded-lg px-2 text-[10px] font-semibold text-slate-400 disabled:opacity-30">Remover</button>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             </div>
@@ -11063,6 +11272,27 @@ export const SessionMode = ({
                 {endingSession ? 'Encerrando com segurança...' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Confirmar ausência e encerrar' : 'Confirmar encerramento do atendimento'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {shouldShowMaintenanceStartPrompt && (
+        <div className="fixed inset-0 z-[205] flex items-end justify-center bg-slate-950/30 px-3 pb-4 backdrop-blur-[2px] sm:items-center sm:pb-0" data-aba-maintenance-start-prompt>
+          <div className="w-full max-w-md rounded-[24px] border border-amber-100 bg-white p-5 shadow-2xl shadow-slate-950/20">
+            <div className="flex items-start gap-3">
+              <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+                <RotateCcw size={18} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-slate-900">Sondagens previstas para hoje</h3>
+                <p className="mt-1 text-sm text-slate-500">Há {maintenanceProbePendingCount} sondagem(ns) disponível(is). Elas não serão ativadas automaticamente.</p>
+              </div>
+            </div>
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <button type="button" onClick={acceptDueMaintenanceProbesForSession} className="min-h-[44px] rounded-2xl bg-[#7a32fc] px-3 text-xs font-semibold text-white shadow-sm">Adicionar</button>
+              <button type="button" onClick={reviewDueMaintenanceProbesForSession} className="min-h-[44px] rounded-2xl border border-purple-100 bg-purple-50 px-3 text-xs font-semibold text-[#7a32fc]">Revisar</button>
+              <button type="button" onClick={skipDueMaintenanceProbesForSession} className="min-h-[44px] rounded-2xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-500">Agora não</button>
+            </div>
+            <p className="mt-3 text-[11px] text-slate-400">“Agora não” mantém as sondagens pendentes. Não cancela o planejamento clínico.</p>
           </div>
         </div>
       )}

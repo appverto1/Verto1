@@ -5117,6 +5117,119 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+  async getAbaSessionQuickCollectionPreferences() {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ locations: [], quickBehaviorShortcuts: [], preferencesFound: false });
+    const endpoint = '/api/aba/session-quick-collection/preferences';
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, {
+        helperName: 'getAbaSessionQuickCollectionPreferences',
+        operation: 'detail',
+        table: 'aba_session_locations,aba_user_session_preferences',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      const result = await safeJson(response);
+      return response.ok ? result : normalizeClinicalMutationResult(result, 'Não foi possível carregar as preferências da coleta rápida.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar as preferências da coleta rápida.');
+      return { success: false, error: message, message, data: { locations: [], quickBehaviorShortcuts: [], preferencesFound: false } };
+    }
+  },
+
+  async createAbaSessionLocation(name: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = '/api/aba/session-locations';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name })
+      }, {
+        helperName: 'createAbaSessionLocation',
+        operation: 'write',
+        table: 'aba_session_locations',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível adicionar o local.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível adicionar o local.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async updateAbaSessionLocation(locationId: string, name: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/session-locations/${encodeURIComponent(String(locationId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name })
+      }, {
+        helperName: 'updateAbaSessionLocation',
+        operation: 'write',
+        table: 'aba_session_locations',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível renomear o local.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível renomear o local.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async removeAbaSessionLocation(locationId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/session-locations/${encodeURIComponent(String(locationId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'removeAbaSessionLocation',
+        operation: 'write',
+        table: 'aba_session_locations',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível remover o local.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível remover o local.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async saveAbaQuickBehaviorShortcuts(shortcuts: any[]) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = '/api/aba/session-quick-collection/preferences';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PUT',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ quickBehaviorShortcuts: shortcuts })
+      }, {
+        helperName: 'saveAbaQuickBehaviorShortcuts',
+        operation: 'write',
+        table: 'aba_user_session_preferences',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível salvar os atalhos rápidos.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível salvar os atalhos rápidos.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async getAbaSessionMaintenanceProbes(sessionId: string, options: { appointmentId?: string | null; clinicalDate?: string | null; timeZone?: string | null; force?: boolean } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ available: [], upcoming: [] });
     if (!isPersistedUuid(sessionId)) return { success: true, data: { available: [], upcoming: [] }, available: [], upcoming: [] };
