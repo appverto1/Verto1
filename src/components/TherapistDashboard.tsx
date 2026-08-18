@@ -42,6 +42,7 @@ import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
 import { TeamManagement } from "./TeamManagement";
 import { SettingsMenu } from "./SettingsMenu";
+import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { InvitationModal } from "./InvitationModal";
 import {
   RoomReservation,
@@ -332,6 +333,17 @@ export const TherapistDashboard = ({
     setView(previousView);
   };
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
+  const [patientOpenTab, setPatientOpenTab] = useState<"history" | "notes" | "report" | "plan" | "session" | "aba-charts" | "school" | "files">("history");
+  const [patientFocusNoteId, setPatientFocusNoteId] = useState("");
+  const openClinicalMentionNotification = (notification: any) => {
+    const patientId = String(notification?.patientId || '').trim();
+    const noteId = String(notification?.noteId || '').trim();
+    if (!patientId || !noteId) return;
+    setSelectedPatientId(patientId);
+    setPatientOpenTab("notes");
+    setPatientFocusNoteId(noteId);
+    handleSetView("patient");
+  };
   const [runTutorial, setRunTutorial] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
@@ -1446,6 +1458,9 @@ export const TherapistDashboard = ({
               return (
                 <PatientDetailView
                   patient={patientData}
+                  initialTab={patientOpenTab}
+                  focusNoteId={patientFocusNoteId}
+                  onFocusNoteConsumed={() => setPatientFocusNoteId('')}
                   onBack={handleBackView}
                   history={patientsHistory.filter(
                     (h: any) => h.patientId === selectedPatientId,
@@ -1825,6 +1840,7 @@ export const TherapistDashboard = ({
                     {isMenuOpen ? <X size={20} /> : <Menu size={20} />}
                   </button>
 
+                  <ClinicalMentionNotifications onOpenNotification={openClinicalMentionNotification} />
                   <SettingsMenu
                     user={user}
                     onLogout={onLogout}
@@ -1962,6 +1978,7 @@ export const TherapistDashboard = ({
                     <UserPlus size={18} />
                     Novo Paciente
                   </button>
+                  <ClinicalMentionNotifications onOpenNotification={openClinicalMentionNotification} />
                   <SettingsMenu
                     user={user}
                     onLogout={onLogout}

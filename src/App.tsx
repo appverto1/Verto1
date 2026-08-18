@@ -4732,7 +4732,7 @@ export default function App() {
     );
     return { success: true, pending: Boolean(persistenceResult?.pending) };
   };
-  const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string) => {
+  const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string, options?: { mentionUserIds?: string[] }) => {
     const normalizedVisibility = toStoredPatientNoteVisibility(visibility);
     const uiVisibility = resolvePatientNoteAudience({ visibility: normalizedVisibility });
     const patient = allPatients.find(p => p.id === pid);
@@ -4763,7 +4763,8 @@ export default function App() {
         patient_email: patientIdentity.patientEmail,
         text: txt,
         visibility: normalizedVisibility,
-        subject: subject || "Geral"
+        subject: subject || "Geral",
+        mention_user_ids: Array.isArray(options?.mentionUserIds) ? options!.mentionUserIds : []
       });
       if (result?.success && result?.data?.id) {
         setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? { ...n, id: result.data.id } : n)));

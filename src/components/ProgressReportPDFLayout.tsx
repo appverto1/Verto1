@@ -89,14 +89,31 @@ const PdfTooltip = ({ active, payload, label }: any) => {
   );
 };
 
+const observationWeight = (item: ProgressReportObservation) => {
+  const textLength = `${item.activity || ''} ${item.notes || ''}`.trim().length;
+  if (textLength > 1200) return 3;
+  if (textLength > 650) return 2;
+  return 1;
+};
+
 const chunkObservations = (observations: ProgressReportObservation[]) => {
-  if (!observations.length) return [[]] as ProgressReportObservation[][];
-  return observations.reduce<ProgressReportObservation[][]>((pages, item, index) => {
-    const pageIndex = Math.floor(index / 3);
-    if (!pages[pageIndex]) pages[pageIndex] = [];
-    pages[pageIndex].push(item);
-    return pages;
-  }, []);
+  if (!observations.length) return [] as ProgressReportObservation[][];
+  const pages: ProgressReportObservation[][] = [];
+  let page: ProgressReportObservation[] = [];
+  let weight = 0;
+  for (const item of observations) {
+    const nextWeight = observationWeight(item);
+    const shouldBreak = page.length >= 5 || (page.length >= 4 && weight + nextWeight > 5) || weight + nextWeight > 6;
+    if (shouldBreak && page.length > 0) {
+      pages.push(page);
+      page = [];
+      weight = 0;
+    }
+    page.push(item);
+    weight += nextWeight;
+  }
+  if (page.length) pages.push(page);
+  return pages;
 };
 
 const PageFooter = ({ professional, report }: Pick<ProgressReportPDFLayoutProps, 'professional' | 'report'>) => (
@@ -114,6 +131,21 @@ const PageFooter = ({ professional, report }: Pick<ProgressReportPDFLayoutProps,
       </div>
     </div>
   </footer>
+);
+
+const CompactPageHeader = ({ clinic, patient, pageNumber }: Pick<ProgressReportPDFLayoutProps, 'clinic' | 'patient'> & { pageNumber: number }) => (
+  <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, borderBottom: '1px solid #E2E8F0', paddingBottom: 14, marginBottom: 18 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ width: 70, height: 40, border: '1px solid #E2E8F0', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', background: '#F8FAFC' }}>
+        {clinic.logoUrl ? <img src={clinic.logoUrl} alt="Logo da clínica" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} /> : <span style={{ fontSize: 9, fontWeight: 800, color: '#94A3B8' }}>LOGO</span>}
+      </div>
+      <div>
+        <p style={{ margin: 0, fontSize: 11, fontWeight: 800, color: '#0F172A' }}>{clinic.name || 'Clínica'}</p>
+        <p style={{ margin: '2px 0 0', fontSize: 9.5, color: '#64748B' }}>Paciente: {patient.name || '-'}</p>
+      </div>
+    </div>
+    <p style={{ margin: 0, fontSize: 9.5, color: '#94A3B8' }}>Página {pageNumber}</p>
+  </header>
 );
 
 const ObservationCard = ({ item }: { item: ProgressReportObservation }) => (
@@ -249,35 +281,27 @@ export const ProgressReportPDFLayout = ({
         <section style={{ marginTop: 26 }}>
           <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Observações Selecionadas para o Relatório</h2>
           <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
-            Registros clínicos e anotações selecionados pelo profissional para compor a documentação técnica.
+            {observations.length > 0
+              ? `${observations.length} registro(s) selecionado(s). As observações são apresentadas nas páginas seguintes sem dividir um card entre páginas.`
+              : 'Nenhuma observação foi selecionada para este relatório.'}
           </p>
-          <div style={{ display: 'grid', gap: 10 }}>
-            {observationPages[0]?.length ? observationPages[0].map((item) => (
-              <React.Fragment key={item.id}>
-                <ObservationCard item={item} />
-              </React.Fragment>
-            )) : (
-              <div style={{ border: '1px dashed #CBD5E1', borderRadius: 12, padding: 18, color: '#64748B', fontSize: 11, textAlign: 'center' }}>
-                Nenhuma observação foi selecionada para este relatório.
-              </div>
-            )}
-          </div>
         </section>
 
-        {observationPages.length === 1 && additionalNote?.trim() && (
+        {observations.length === 0 && additionalNote?.trim() && (
           <div style={{ marginTop: 12, border: '1px solid #E2E8F0', borderRadius: 12, padding: 14, background: '#F8FAFC', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
             <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: 1 }}>Observação adicional</p>
             <p style={{ margin: 0, fontSize: 11, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{additionalNote}</p>
           </div>
         )}
 
-        {observationPages.length === 1 && <PageFooter professional={professional} report={report} />}
+        {observations.length === 0 && <PageFooter professional={professional} report={report} />}
       </div>
 
-      {observationPages.slice(1).map((pageItems, pageIndex) => {
-        const isLastPage = pageIndex === observationPages.length - 2;
+      {observationPages.map((pageItems, pageIndex) => {
+        const isLastPage = pageIndex === observationPages.length - 1;
         return (
           <div key={`observations-page-${pageIndex}`} className="progress-report-pdf-page" style={pageStyle}>
+            <CompactPageHeader clinic={clinic} patient={patient} pageNumber={pageIndex + 2} />
             <section>
               <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Observações Selecionadas para o Relatório</h2>
               <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
