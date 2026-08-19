@@ -509,41 +509,16 @@ export default function App() {
     const previousBodyOverscrollX = body.style.overscrollBehaviorX;
 
     const stableViewport = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover';
-    const resetViewport = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
-    let resetTimer = 0;
-    let correctionTimer = 0;
-
-    const applyViewportCorrection = () => {
-      const screenWidth = Number(window.screen?.width || 0);
-      const layoutWidth = Number(window.innerWidth || 0);
-      const visualScale = Number(window.visualViewport?.scale || 1);
-      let correction = 1;
-      let constrainedWidth = '100%';
-
-      // Some Android browsers/PWA restores can reopen a previously zoomed-out or desktop-sized
-      // layout viewport. Keep 100% as the floor while preserving zoom-in for accessibility.
-      if (screenWidth > 0 && layoutWidth > screenWidth * 1.2) {
-        correction = Math.min(3, layoutWidth / screenWidth);
-        constrainedWidth = `${100 / correction}%`;
-      } else if (visualScale > 0 && visualScale < 0.98) {
-        correction = Math.min(3, 1 / visualScale);
-      }
-
-      root.style.width = constrainedWidth;
-      root.style.maxWidth = constrainedWidth;
-      if (correction > 1.02) root.style.setProperty('zoom', String(correction));
-      else root.style.removeProperty('zoom');
-      window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' });
-    };
 
     const normalizeViewport = () => {
-      window.clearTimeout(resetTimer);
-      window.clearTimeout(correctionTimer);
-      viewport.setAttribute('content', resetViewport);
-      resetTimer = window.setTimeout(() => {
-        viewport.setAttribute('content', stableViewport);
-        correctionTimer = window.setTimeout(applyViewportCorrection, 60);
-      }, 60);
+      // The portal must always occupy the real device width. Do not derive a narrower root width
+      // from window.innerWidth/screen.width or compensate it with CSS zoom: Android/PWA engines
+      // can apply those two mechanisms differently and squeeze the whole portal into a side strip.
+      viewport.setAttribute('content', stableViewport);
+      root.style.width = '100%';
+      root.style.maxWidth = '100%';
+      root.style.removeProperty('zoom');
+      window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' });
     };
 
     html.style.overflowX = 'clip';
@@ -551,31 +526,12 @@ export default function App() {
     html.style.overscrollBehaviorX = 'none';
     body.style.overscrollBehaviorX = 'none';
     body.style.touchAction = 'pan-y pinch-zoom';
-    root.style.width = '100%';
-    root.style.maxWidth = '100%';
     normalizeViewport();
 
-    const handleViewportChange = () => {
-      const visualScale = Number(window.visualViewport?.scale || 1);
-      const screenWidth = Number(window.screen?.width || 0);
-      const layoutWidth = Number(window.innerWidth || 0);
-      if ((visualScale > 0 && visualScale < 0.98) || (screenWidth > 0 && layoutWidth > screenWidth * 1.2)) {
-        applyViewportCorrection();
-      } else {
-        root.style.width = '100%';
-        root.style.maxWidth = '100%';
-        root.style.removeProperty('zoom');
-      }
-    };
-
-    window.visualViewport?.addEventListener('resize', handleViewportChange);
     window.addEventListener('orientationchange', normalizeViewport);
     window.addEventListener('pageshow', normalizeViewport);
 
     return () => {
-      window.clearTimeout(resetTimer);
-      window.clearTimeout(correctionTimer);
-      window.visualViewport?.removeEventListener('resize', handleViewportChange);
       window.removeEventListener('orientationchange', normalizeViewport);
       window.removeEventListener('pageshow', normalizeViewport);
       viewport.setAttribute('content', previousViewport || stableViewport);
