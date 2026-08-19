@@ -74,9 +74,15 @@ assert.match(patientDashboard, /setInterval\(\(\) => refreshNotifications\(false
 assert.match(patientDashboard, /Ativar notificações da clínica/);
 assert.match(serviceWorker, /VERTO_PORTAL_NOTIFICATION/);
 assert.match(serviceWorker, /clients\.matchAll/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v19"/);
 assert.match(serviceWorker, /const isClinicAnnouncement = notificationType === "clinic_announcement"/);
+assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""/);
 assert.match(serviceWorker, /const imageUrl = isClinicAnnouncement\s*\? ""/);
 assert.match(serviceWorker, /brandLogo \|\| payload\.icon/);
+assert.match(serviceWorker, /fallbackWithoutAssets/);
+assert.match(serviceWorker, /icon: _failedIcon, badge: _failedBadge/);
+assert.match(push, /O logo da clínica é enviado somente como ícone compacto/);
+assert.doesNotMatch(push, /badge: logoUrl \|\| undefined/);
 assert.match(patientDashboard, /w-full h-auto max-h-56 object-contain/);
 assert.match(patientDashboard, /minimum-scale=1, maximum-scale=5, user-scalable=yes/);
 assert.match(patientDashboard, /body\.style\.touchAction = 'pan-y pinch-zoom'/);
