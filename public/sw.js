@@ -1,4 +1,4 @@
-const SW_VERSION = "verto-branding-v17";
+const SW_VERSION = "verto-branding-v18";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
 const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
@@ -73,9 +73,19 @@ self.addEventListener("push", (event) => {
   const title = isGenericBrandName(payload.title) && !isGenericBrandName(brandName)
     ? brandName
     : (payload.title || brandName);
-  const iconUrl = asNotificationAssetUrl(VERTO_NOTIFICATION_ICON);
-  const badgeUrl = asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
-  const imageUrl = asNotificationAssetUrl(payload.image || brandLogo || VERTO_NOTIFICATION_ICON);
+  const notificationType = String(payload.data?.notificationType || '');
+  const isClinicAnnouncement = notificationType === 'clinic_announcement';
+  const iconUrl = asNotificationAssetUrl(
+    isClinicAnnouncement ? (brandLogo || payload.icon || VERTO_NOTIFICATION_ICON) : VERTO_NOTIFICATION_ICON
+  );
+  const badgeUrl = asNotificationAssetUrl(
+    isClinicAnnouncement ? (brandLogo || payload.badge || VERTO_NOTIFICATION_BADGE) : VERTO_NOTIFICATION_BADGE
+  );
+  // Clinic announcements stay compact: no large image card below the notification.
+  // Appointment reminders keep their existing richer visual treatment.
+  const imageUrl = isClinicAnnouncement
+    ? ''
+    : asNotificationAssetUrl(payload.image || brandLogo || VERTO_NOTIFICATION_ICON);
   const notificationOptions = {
     body: payload.body || `Você tem uma sessão agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
     ...(iconUrl ? { icon: iconUrl } : {}),

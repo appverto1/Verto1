@@ -48783,6 +48783,9 @@ async function startServer() {
       const userEmail = sanitizeEmail(req.session.user?.email);
       const patientIds = await getPortalPatientIdsForUser(req.session.user);
       const limit = parseBoundedListLimit(req.query?.limit, 12, 50);
+      const includeAcknowledged = ['1', 'true', 'yes'].includes(String(req.query?.includeAcknowledged || '').trim().toLowerCase());
+      const requestedType = sanitizeString(req.query?.type, 80).trim().toLowerCase();
+      const allowedType = requestedType === 'clinic_announcement' ? 'clinic_announcement' : '';
       if (patientIds.length === 0 || (!isUuid(userId) && !userEmail)) {
         return res.json({ success: true, data: [], pagination: { limit, hasMore: false } });
       }
@@ -48791,9 +48794,10 @@ async function startServer() {
         .from('portal_notifications')
         .select('id, organization_id, clinic_id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
         .in('patient_id', patientIds)
-        .is('acknowledged_at', null)
         .order('created_at', { ascending: false })
         .limit(Math.min(200, limit * 4 + 1));
+      if (!includeAcknowledged) query = query.is('acknowledged_at', null);
+      if (allowedType) query = query.eq('type', allowedType);
       if (isUuid(userId) && userEmail) {
         query = query.or(`recipient_user_id.eq.${userId},recipient_email.eq.${userEmail}`);
       } else if (isUuid(userId)) {
