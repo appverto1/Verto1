@@ -49,15 +49,15 @@ import {
   verifyStableClinicNotificationLogoSignature,
   runAppointmentReminderScan,
   startAppointmentReminderCron,
-  triggerAppointmentReminderScan
+  triggerAppointmentReminderScan,
+  startClinicAnnouncementCron,
+  dispatchClinicAnnouncementNow
 } from './services/cronService';
 import {
-  findPushSubscriptionsForRecipients,
   removePatientPushSubscription,
   resolvePatientIdsForPush,
   savePatientPushSubscription,
-  sendAppointmentNotification,
-  sendPatientPortalNotification
+  sendAppointmentNotification
 } from './services/pushNotificationService';
 import {
   SupabaseRateLimitStore,
@@ -21367,6 +21367,10 @@ async function startServer() {
     1,
     Math.min(90, Number(process.env.SESSION_MAX_AGE_DAYS || 30) || 30)
   );
+  const patientPortalSessionMaxAgeDays = Math.max(
+    sessionMaxAgeDays,
+    Math.min(180, Number(process.env.PATIENT_PORTAL_SESSION_MAX_AGE_DAYS || 90) || 90)
+  );
 
   app.use(session({
     store: sessionStore,
@@ -26110,6 +26114,7 @@ async function startServer() {
       };
       await consumeOtpChallenge(key);
       req.session.user = await hydrateSessionUserWithOnboardingContext(userData);
+      req.session.cookie.maxAge = patientPortalSessionMaxAgeDays * 24 * 60 * 60 * 1000;
       await persistIdentityAuditLog({
         title: 'OTP do portal verificado',
         content: `Login por código do portal concluído para ${maskEmail(email)}.`,
@@ -27259,6 +27264,9 @@ async function startServer() {
 
       const sessionUser = await hydrateSessionUserWithOnboardingContext(userData);
       req.session.user = sessionUser;
+      if (['patient','responsible','responsavel','guardian'].includes(String(sessionUser?.role || '').trim().toLowerCase())) {
+        req.session.cookie.maxAge = patientPortalSessionMaxAgeDays * 24 * 60 * 60 * 1000;
+      }
       const loginResponse = { success: true, user: sessionUser, isFirstLogin: Boolean(req.session.isFirstLogin) };
       console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
       req.session.save((err) => {
@@ -52134,7 +52142,7 @@ async function startServer() {
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const limit = Math.min(50, Math.max(1, Math.round(Number(req.query?.limit || 30) || 30)));
       const { data, error } = await supabase.from('clinic_announcements')
-        .select('id,clinic_id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,created_at,updated_at')
+        .select('id,clinic_id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at,updated_at')
         .eq('clinic_id', clinicId).order('created_at', { ascending: false }).limit(limit);
       if (error) { if (isMissingRelationError(error)) return res.status(503).json({ success:false, error:'O módulo de avisos ainda não foi ativado no banco.' }); throw error; }
       return res.json({ success:true, data:data || [] });
@@ -52153,10 +52161,23 @@ async function startServer() {
       const audienceMode=sanitizeString(req.body?.audienceMode || 'ALL',20).toUpperCase();
       if(!['ALL','SELECTED'].includes(audienceMode)) return res.status(400).json({success:false,error:'Público do aviso inválido.'});
       const eventDateRaw=sanitizeString(req.body?.eventDate,20); const eventDate=/^\d{4}-\d{2}-\d{2}$/.test(eventDateRaw)?eventDateRaw:null;
+      const scheduledForRaw=sanitizeString(req.body?.scheduledFor || req.body?.scheduled_for,120);
+      const scheduledFor=scheduledForRaw ? sanitizeIsoDateTime(scheduledForRaw) : null;
+      if(scheduledForRaw && !scheduledFor) return res.status(400).json({success:false,error:'Data/hora de envio inválida.'});
+      const requestedDeliveryDate = scheduledFor && new Date(scheduledFor).getTime() > Date.now() + 15_000 ? new Date(scheduledFor) : new Date();
+      const localHour = Number(new Intl.DateTimeFormat('en-US',{timeZone:'America/Sao_Paulo',hour:'2-digit',hourCycle:'h23'}).format(requestedDeliveryDate));
+      if(localHour >= 22 || localHour < 6) {
+        return res.status(400).json({
+          success:false,
+          error:'O horário de não perturbe é das 22h às 06h. Escolha um horário entre 06h e 21h59.'
+        });
+      }
+      const normalizedScheduledFor = scheduledFor && new Date(scheduledFor).getTime() > Date.now() + 15_000 ? scheduledFor : null;
       const selectedIds=Array.from(new Set((Array.isArray(req.body?.patientIds)?req.body.patientIds:[]).map((v:unknown)=>sanitizeString(v,120)).filter((v:string)=>isUuid(v)))).slice(0,500) as string[];
       if(audienceMode==='SELECTED' && !selectedIds.length) return res.status(400).json({success:false,error:'Selecione ao menos um paciente.'});
       const idempotencyKey=sanitizeString(req.body?.idempotencyKey,120) || crypto.randomUUID();
-      const existing=await supabase.from('clinic_announcements').select('id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,created_at').eq('clinic_id',clinicId).eq('idempotency_key',idempotencyKey).limit(1).maybeSingle();
+      const announcementSelect='id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at';
+      const existing=await supabase.from('clinic_announcements').select(announcementSelect).eq('clinic_id',clinicId).eq('idempotency_key',idempotencyKey).limit(1).maybeSingle();
       if(!existing.error && existing.data) return res.json({success:true,data:existing.data,duplicate:true});
       if(existing.error && !isMissingRelationError(existing.error)) throw existing.error;
       const context = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
@@ -52175,7 +52196,7 @@ async function startServer() {
         userId: context.userId,
         clinicId,
         patientIds: requestedScopeIds,
-        selectColumns:['id','name','email','responsible_email','clinic_id','is_active','deleted_at'],
+        selectColumns:['id','name','email','responsible_email','responsible_user_id','clinic_id','is_active','deleted_at'],
         limit:500,
         logger:console
       });
@@ -52185,54 +52206,59 @@ async function startServer() {
       const requestedAnnouncementId=crypto.randomUUID();
       const deliveryRecipients=patients.map((patient:any)=>({
         patient_id:sanitizeString(patient.id,120),
-        recipient_user_id:null,
+        recipient_user_id:isUuid(sanitizeString(patient.responsible_user_id,120))?sanitizeString(patient.responsible_user_id,120):null,
         recipient_email:sanitizeEmail(patient.responsible_email||patient.email)||null,
       }));
-      const delivery=await supabase.rpc('create_clinic_announcement_delivery_v2',{
-        p_announcement_id:requestedAnnouncementId, p_organization_id:isUuid(organizationId)?organizationId:clinicId, p_clinic_id:clinicId,
-        p_category:category, p_title:title, p_message:message, p_event_date:eventDate, p_audience_mode:audienceMode,
-        p_idempotency_key:idempotencyKey, p_created_by:isUuid(sanitizeString(req.session.user?.id,120))?sanitizeString(req.session.user.id,120):null, p_recipients:deliveryRecipients
+      const delivery=await supabase.rpc('create_clinic_announcement_delivery_v3',{
+        p_announcement_id:requestedAnnouncementId,
+        p_organization_id:isUuid(organizationId)?organizationId:clinicId,
+        p_clinic_id:clinicId,
+        p_category:category,
+        p_title:title,
+        p_message:message,
+        p_event_date:eventDate,
+        p_audience_mode:audienceMode,
+        p_idempotency_key:idempotencyKey,
+        p_created_by:isUuid(sanitizeString(req.session.user?.id,120))?sanitizeString(req.session.user.id,120):null,
+        p_recipients:deliveryRecipients,
+        p_scheduled_for:normalizedScheduledFor
       });
       if(delivery.error){
-        logRouteDbError('/api/clinic/announcements [POST:delivery]', delivery.error, {
+        logRouteDbError('/api/clinic/announcements [POST:delivery_v3]', delivery.error, {
           clinicId,
           audienceMode,
-          recipientCount: patients.length
+          recipientCount: patients.length,
+          scheduledFor: normalizedScheduledFor
         });
-        if(isMissingRelationError(delivery.error) || /create_clinic_announcement_delivery_v2/i.test(String(delivery.error?.message||''))) {
-          return res.status(503).json({success:false,error:'O módulo de avisos ainda não foi ativado no banco.'});
+        if(/ANNOUNCEMENT_QUIET_HOURS/i.test(String(delivery.error?.message||''))) {
+          return res.status(400).json({success:false,error:'O horário de não perturbe é das 22h às 06h. Escolha um horário entre 06h e 21h59.'});
+        }
+        if(isMissingRelationError(delivery.error) || /create_clinic_announcement_delivery_v3/i.test(String(delivery.error?.message||''))) {
+          return res.status(503).json({success:false,error:'Atualize o módulo de avisos no banco antes de usar o agendamento.'});
         }
         throw delivery.error;
       }
       const deliveryRow=delivery.data && typeof delivery.data==='object' && !Array.isArray(delivery.data) ? delivery.data : {};
       const announcementId=sanitizeString(deliveryRow?.announcement_id || requestedAnnouncementId,120);
-      if(deliveryRow?.created===false){ const duplicate=await supabase.from('clinic_announcements').select('id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,created_at').eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle(); if(!duplicate.error&&duplicate.data)return res.json({success:true,data:duplicate.data,duplicate:true}); }
-      let pushSentCount=0,pushFailedCount=0; const statuses=new Map<string,'SENT'|'NO_SUBSCRIPTION'|'FAILED'>();
-      if(vapidPublicKey && vapidPrivateKey){
-        let batch:{complete:boolean;subscriptionsByRecipientKey:Map<string,any[]>}={complete:false,subscriptionsByRecipientKey:new Map()};
-        try {
-          batch=await findPushSubscriptionsForRecipients({supabase,recipients:patients.map((p:any)=>({key:sanitizeString(p.id,120),patientIds:[sanitizeString(p.id,120)],legacyUserIds:[sanitizeString(p.id,120),sanitizeString(p.responsible_user_id,120)].filter((v)=>isUuid(v)),patientEmail:sanitizeEmail(p.responsible_email||p.email),clinicId})),logger:console});
-        } catch(error:any) {
-          console.warn('[ClinicAnnouncements] batch push lookup failed; using patient fallback:', error?.message || String(error));
-        }
-        let branding:{displayName?:string;logoUrl?:string}={};
-        try { branding=await readClinicBrandingForFamilyView(clinicId); } catch(error:any) { console.warn('[ClinicAnnouncements] branding lookup failed:',error?.message||String(error)); }
-        for(const patient of patients){
-          const patientId=sanitizeString(patient.id,120);
-          try {
-            const result=await sendPatientPortalNotification({supabase,patientId,patientEmail:sanitizeEmail(patient.responsible_email||patient.email),clinicId,title,body:message,url:'/',tag:`clinic-announcement-${announcementId}`,branding:{displayName:branding.displayName,logoUrl:branding.logoUrl},data:{announcementId,category,eventDate,patientId},preloadedSubscriptions:batch.complete?(batch.subscriptionsByRecipientKey.get(patientId)||[]):undefined,logger:console});
-            if(result.sent>0){statuses.set(patientId,'SENT');pushSentCount+=1;}else if(result.subscriptions===0){statuses.set(patientId,'NO_SUBSCRIPTION');}else{statuses.set(patientId,'FAILED');pushFailedCount+=1;}
-          } catch(error:any) {
-            statuses.set(patientId,'FAILED');pushFailedCount+=1;
-            console.warn('[ClinicAnnouncements] patient push failed:',{patientId,message:error?.message||String(error)});
-          }
-        }
-      } else { for(const patient of patients) statuses.set(sanitizeString(patient.id,120),'NO_SUBSCRIPTION'); }
-      for(const status of ['SENT','NO_SUBSCRIPTION','FAILED'] as const){const ids=Array.from(statuses.entries()).filter(([,value])=>value===status).map(([id])=>id);if(!ids.length)continue;const update=await supabase.from('clinic_announcement_recipients').update({push_status:status,push_sent_at:status==='SENT'?new Date().toISOString():null,updated_at:new Date().toISOString()}).eq('announcement_id',announcementId).in('patient_id',ids);if(update.error)console.warn('[ClinicAnnouncements] push status update failed:',update.error.message);}
-      const fallbackData={id:announcementId,category,title,message,event_date:eventDate,audience_mode:audienceMode,recipient_count:patients.length,push_sent_count:pushSentCount,push_failed_count:pushFailedCount,status:'SENT'};
-      const final=await supabase.from('clinic_announcements').update({push_sent_count:pushSentCount,push_failed_count:pushFailedCount,updated_at:new Date().toISOString()}).eq('id',announcementId).eq('clinic_id',clinicId).select('id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,created_at').single();
-      if(final.error){console.warn('[ClinicAnnouncements] push counters update failed after atomic portal delivery:',final.error.message);return res.json({success:true,data:fallbackData,warning:'Aviso salvo; métricas de push serão reconciliadas posteriormente.'});}
-      return res.json({success:true,data:final.data});
+      if(deliveryRow?.created===false){
+        const duplicate=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle();
+        if(!duplicate.error&&duplicate.data)return res.json({success:true,data:duplicate.data,duplicate:true});
+      }
+
+      if(normalizedScheduledFor){
+        const scheduled=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
+        if(scheduled.error) throw scheduled.error;
+        return res.status(201).json({success:true,data:scheduled.data,scheduled:true});
+      }
+
+      const dispatched=await dispatchClinicAnnouncementNow(announcementId,'api_immediate');
+      const final=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
+      if(final.error) throw final.error;
+      return res.status(201).json({
+        success:true,
+        data:final.data,
+        warning:dispatched.failed?'Aviso salvo. A entrega push será repetida automaticamente.':undefined
+      });
     } catch(error:any){
       return sendRouteDbError(res, '/api/clinic/announcements [POST]', error, {
         userId:sanitizeString(req.session?.user?.id,120),
@@ -52242,7 +52268,6 @@ async function startServer() {
       });
     }
   });
-
 
   app.get('/api/reports/time/patient', checkAuth, requireClinicCapability('reports.view'), async (req: any, res) => {
     try {
@@ -90598,6 +90623,14 @@ async function startServer() {
   });
 
   startAppointmentReminderCron({
+    supabase,
+    vapidPublicKey,
+    vapidPrivateKey,
+    logger: console,
+    runtimeOwnerId,
+    requireDistributedLease: requiresDistributedRuntimeState()
+  });
+  startClinicAnnouncementCron({
     supabase,
     vapidPublicKey,
     vapidPrivateKey,

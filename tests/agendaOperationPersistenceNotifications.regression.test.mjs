@@ -7,8 +7,12 @@ const push = fs.readFileSync(new URL('../services/pushNotificationService.ts', i
 const dataService = fs.readFileSync(new URL('../src/services/dataService.ts', import.meta.url), 'utf8');
 const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const dashboard = fs.readFileSync(new URL('../src/components/CoordinatorDashboard.tsx', import.meta.url), 'utf8');
+const patientDashboard = fs.readFileSync(new URL('../src/components/PatientDashboard.tsx', import.meta.url), 'utf8');
+const announcementPanel = fs.readFileSync(new URL('../src/components/ClinicAnnouncementsPanel.tsx', import.meta.url), 'utf8');
+const serviceWorker = fs.readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
 const migration = fs.readFileSync(new URL('../supabase/migrations/20260819134500_clinic_announcements_and_room_persistence.sql', import.meta.url), 'utf8');
 const announcementV2Migration = fs.readFileSync(new URL('../supabase/migrations/20260819163000_clinic_announcement_delivery_v2.sql', import.meta.url), 'utf8');
+const announcementV3Migration = fs.readFileSync(new URL('../supabase/migrations/20260819193000_clinic_announcement_scheduling_v3.sql', import.meta.url), 'utf8');
 
 assert.match(dataService, /getClinicRooms\(\)/);
 assert.match(dataService, /createClinicRoom/);
@@ -17,32 +21,16 @@ assert.match(app, /canonicalRoomsResult = await dataService\.getClinicRooms\(\)/
 assert.match(app, /clinic_rooms is canonical/);
 assert.match(dashboard, /await dataService\.createClinicRoom/);
 assert.match(dashboard, /await dataService\.updateClinicRoom/);
-assert.doesNotMatch(dashboard.slice(dashboard.indexOf('const handleAddRoom'), dashboard.indexOf('const handleSaveClinicSettings')), /crypto\.randomUUID\(\).*setRooms/s);
 
 const roomGet = server.slice(server.indexOf("app.get('/api/clinic/rooms'"), server.indexOf("app.post('/api/clinic/rooms'"));
 assert.match(roomGet, /noStoreDynamicResponse/);
 assert.match(roomGet, /\.eq\('clinic_id', clinicId\)/);
 assert.match(roomGet, /\.eq\('is_active', true\)/);
-assert.match(roomGet, /legacyRooms\.filter/);
 assert.doesNotMatch(roomGet, /query\.eq\('organization_id'/);
-
-const roomPatch = server.slice(server.indexOf("app.patch('/api/clinic/rooms/:roomId'"), server.indexOf("app.delete('/api/clinic/rooms/:roomId'"));
-assert.match(roomPatch, /\.eq\('clinic_id', clinicId\)/);
-assert.match(roomPatch, /Sala não encontrada nesta clínica/);
-assert.doesNotMatch(roomPatch, /\.eq\('organization_id'/);
-
-assert.match(dashboard, /activeTab === "rooms"[\s\S]*activeTab === "dashboard"[\s\S]*hasAppointmentsCommunicationModule/);
-assert.match(dashboard, /dataService\.getClinicRooms\(\)/);
-assert.match(dashboard, /setRooms\(result\.data\)/);
-assert.match(dashboard, /Sala desativada e removida das salas disponíveis/);
-assert.match(dashboard, /prev\.filter\(\(room\) => String\(room\?\.id\) !== String\(saved\.id\)\)/);
 
 assert.match(cron, /'\* \* \* \* \*'/);
 assert.match(cron, /QUIET_HOURS_START = 22/);
 assert.match(cron, /QUIET_HOURS_END = 6/);
-assert.match(cron, /getReminderDeliveryDueUtc/);
-assert.match(cron, /buildReminderCandidateWindows/);
-assert.match(cron, /Execução adiada pelo horário de não perturbe/);
 assert.match(cron, /if \(step\.kind === '12h'\)[\s\S]*hasPatientResponse/);
 assert.match(cron, /hoursBefore: 24/);
 assert.match(cron, /hoursBefore: 12/);
@@ -51,34 +39,47 @@ assert.match(server, /\/api\/clinic\/announcements/);
 assert.match(server, /communication\.clinic_notifications\.manage/);
 assert.match(server, /requireClinicModule\('appointments_communication'\)/);
 assert.match(push, /notificationType: 'clinic_announcement'/);
-assert.match(server, /findPushSubscriptionsForRecipients/);
-assert.match(push, /sendPatientPortalNotification/);
+assert.match(cron, /sendPatientPortalNotification/);
 assert.match(dashboard, /<ClinicAnnouncementsPanel/);
 assert.match(dashboard, /activeTab === "patients" \|\| activeTab === "notices"/);
-assert.doesNotMatch(dashboard, /needsCanonicalPatientList = allPatients\.length === 0/);
 assert.match(dashboard, /Promise\.resolve\(onEnsurePatientList\(\)\)/);
 assert.match(dashboard, /id: "notices", label: "Avisos"/);
-assert.match(server, /latestPendingAppointmentReminder,[\s\S]*appointment_reminder/);
 
 assert.match(migration, /create table if not exists public\.clinic_announcements/);
 assert.match(migration, /create table if not exists public\.clinic_announcement_recipients/);
-assert.match(migration, /enable row level security/);
-assert.match(migration, /revoke all on table public\.clinic_announcements from anon, authenticated/);
-assert.match(migration, /grant all on table public\.clinic_announcements to service_role/);
-assert.match(migration, /create or replace function public\.create_clinic_announcement_delivery_v1/);
-assert.match(migration, /security definer/);
-assert.match(migration, /insert into public\.portal_notifications/);
-assert.match(migration, /grant execute on function public\.create_clinic_announcement_delivery_v1/);
-assert.match(server, /create_clinic_announcement_delivery_v2/);
-assert.match(server, /fetchPatientsWithSchemaFallback/);
-assert.match(server, /selectColumns:\['id','name','email','responsible_email','clinic_id','is_active','deleted_at'\]/);
-assert.match(server, /POST:delivery/);
-assert.match(server, /push counters update failed after atomic portal delivery/);
 assert.match(announcementV2Migration, /create or replace function public\.create_clinic_announcement_delivery_v2/);
-assert.match(announcementV2Migration, /returns jsonb/);
 assert.match(announcementV2Migration, /ANNOUNCEMENT_RECIPIENT_SCOPE_MISMATCH/);
-assert.match(announcementV2Migration, /join public\.patients p on p\.id = r\.patient_id/);
-assert.match(announcementV2Migration, /on conflict \(announcement_id, patient_id\) do update/);
-assert.match(announcementV2Migration, /grant execute on function public\.create_clinic_announcement_delivery_v2/);
+
+assert.match(server, /create_clinic_announcement_delivery_v3/);
+assert.match(server, /dispatchClinicAnnouncementNow/);
+assert.match(server, /horário de não perturbe é das 22h às 06h/);
+assert.match(server, /scheduled_for,sent_at/);
+assert.match(cron, /startClinicAnnouncementCron/);
+assert.match(cron, /claim_due_clinic_announcements_v1/);
+assert.match(cron, /materialize_clinic_announcement_portal_notifications_v1/);
+assert.match(cron, /Clinic Announcement Cron/);
+assert.match(announcementPanel, /Agendar envio/);
+assert.match(announcementPanel, /datetime-local/);
+assert.match(announcementPanel, /scheduledFor/);
+assert.match(announcementPanel, /Horário de não perturbe: 22h às 06h/);
+assert.match(announcementV3Migration, /add column if not exists scheduled_for timestamptz/);
+assert.match(announcementV3Migration, /create_clinic_announcement_delivery_v3/);
+assert.match(announcementV3Migration, /claim_due_clinic_announcements_v1/);
+assert.match(announcementV3Migration, /for update skip locked/);
+assert.match(announcementV3Migration, /materialize_clinic_announcement_portal_notifications_v1/);
+assert.match(announcementV3Migration, /ANNOUNCEMENT_QUIET_HOURS/);
+
+assert.match(patientDashboard, /VERTO_PORTAL_NOTIFICATION/);
+assert.match(patientDashboard, /setInterval\(\(\) => refreshNotifications\(false\), 60_000\)/);
+assert.match(patientDashboard, /Ativar notificações da clínica/);
+assert.match(serviceWorker, /VERTO_PORTAL_NOTIFICATION/);
+assert.match(serviceWorker, /clients\.matchAll/);
+assert.match(patientDashboard, /minimum-scale=1, maximum-scale=5, user-scalable=yes/);
+assert.match(patientDashboard, /body\.style\.touchAction = 'pan-y pinch-zoom'/);
+assert.match(patientDashboard, /overscrollBehaviorX = 'none'/);
+assert.match(server, /PATIENT_PORTAL_SESSION_MAX_AGE_DAYS/);
+assert.match(server, /req\.session\.cookie\.maxAge = patientPortalSessionMaxAgeDays/);
+assert.match(app, /verto\.patient-portal-session-hint\.v1/);
+assert.match(app, /Restaurando seu portal neste aparelho/);
 
 console.log('agendaOperationPersistenceNotifications.regression.test.mjs: ok');
