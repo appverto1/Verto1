@@ -41,8 +41,9 @@ assert.match(server, /requireClinicModule\('appointments_communication'\)/);
 assert.match(push, /notificationType: 'clinic_announcement'/);
 assert.match(cron, /sendPatientPortalNotification/);
 assert.match(dashboard, /<ClinicAnnouncementsPanel/);
-assert.match(dashboard, /activeTab === "patients" \|\| activeTab === "notices"/);
+assert.match(dashboard, /activeTab === "patients" \|\| activeTab === "notices" \|\| activeTab === "agenda"/);
 assert.match(dashboard, /Promise\.resolve\(onEnsurePatientList\(\)\)/);
+assert.match(dashboard, /Pacientes, Avisos e Agenda/);
 assert.match(dashboard, /id: "notices", label: "Avisos"/);
 
 assert.match(migration, /create table if not exists public\.clinic_announcements/);
