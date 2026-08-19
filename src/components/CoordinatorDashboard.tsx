@@ -966,15 +966,15 @@ export function CoordinatorDashboard({
   }, [workspaceScopeKey]);
 
   useEffect(() => {
-    const patientListSurfaceVisible = activeTab === "patients" || activeTab === "notices";
+    const patientListSurfaceVisible = activeTab === "patients" || activeTab === "notices" || activeTab === "agenda";
     if (!patientListSurfaceVisible || !onEnsurePatientList || !workspaceScopeKey) return;
     if (patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) return;
 
-    // A lista de pacientes é compartilhada por Pacientes e Avisos. O bootstrap pode
+    // A lista de pacientes é compartilhada por Pacientes, Avisos e Agenda. O bootstrap pode
     // chegar com um snapshot local vazio ou parcial; portanto uma lista não vazia não
     // é evidência de que a leitura canônica já aconteceu. Faça exatamente uma leitura
     // canônica por workspace quando uma dessas superfícies for aberta e reutilize o
-    // resultado nas duas telas, sem exigir que o usuário visite Pacientes primeiro.
+    // mesmo estado nas três telas, sem exigir que o usuário visite Pacientes ou Avisos primeiro.
     patientListEnsureAttemptedWorkspaceRef.current = workspaceScopeKey;
     void Promise.resolve(onEnsurePatientList()).catch(() => {
       // Permite nova tentativa ao reabrir a superfície após uma falha transitória,
