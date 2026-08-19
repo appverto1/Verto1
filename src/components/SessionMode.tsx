@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Activity,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   Clock,
   FileText,
@@ -1011,6 +1012,44 @@ const mergeSessionGoalsWithAvailableMaintenance = (baseGoals: any[], availableSc
     if (availableDiff !== 0) return availableDiff;
     return (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0);
   });
+};
+
+
+type SessionSummaryDisclosureTone = 'default' | 'amber' | 'red' | 'slate' | 'emerald';
+
+const SessionSummaryDisclosure = ({
+  title,
+  meta,
+  tone = 'default',
+  children
+}: {
+  title: string;
+  meta?: React.ReactNode;
+  tone?: SessionSummaryDisclosureTone;
+  children: React.ReactNode;
+}) => {
+  const toneClasses: Record<SessionSummaryDisclosureTone, string> = {
+    default: 'border-blue-100 bg-white text-gray-900',
+    amber: 'border-amber-100 bg-amber-50/70 text-amber-800',
+    red: 'border-red-100 bg-red-50/70 text-red-700',
+    slate: 'border-slate-200 bg-slate-50 text-slate-700',
+    emerald: 'border-emerald-100 bg-emerald-50/70 text-emerald-700'
+  };
+
+  return (
+    <details className="group mt-3">
+      <summary
+        className={`flex min-h-[52px] cursor-pointer list-none items-center justify-between gap-3 rounded-2xl border px-4 py-3 shadow-sm transition hover:shadow-md [&::-webkit-details-marker]:hidden ${toneClasses[tone]}`}
+      >
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{title}</p>
+          <p className="mt-0.5 text-[11px] font-medium opacity-65">{meta || 'Toque para ver os detalhes'}</p>
+        </div>
+        <ChevronDown size={18} className="shrink-0 transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="mt-2 [&>section]:mt-0">{children}</div>
+    </details>
+  );
 };
 
 export const SessionMode = ({
@@ -5934,6 +5973,22 @@ export const SessionMode = ({
     }
     return sessionGoals;
   }, [sessionAvailableMaintenanceTargetIds, sessionGoals, sessionPlanFilter]);
+  const activeTherapeuticTimerEntries = Object.values(therapeuticTimers);
+  const focusTherapeuticTimerGoal = (timer: TherapeuticTimerState) => {
+    const goal = sessionGoals.find((item: any) => therapeuticGoalKey(item) === timer.goalKey);
+    if (!goal) return;
+    const mobileGoalKey = String(goal?.id || goal?.target_id || goal?.targetId || goal?.name || 'goal');
+    setSessionPlanFilter('all');
+    setMobileSelectedGoalKey(mobileGoalKey);
+    setClinicalDockSheetOpen(false);
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      window.setTimeout(() => {
+        const targetCard = Array.from(document.querySelectorAll<HTMLElement>('[data-aba-mobile-goal-key]'))
+          .find((element) => element.getAttribute('data-aba-mobile-goal-key') === mobileGoalKey);
+        targetCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 0);
+    }
+  };
   const abaV3SessionPlanTargetIds = useMemo(() => Array.from(new Set(
     sessionGoals.map((goal: any) => goalTargetId(goal)).filter(Boolean)
   )).slice(0, 200), [sessionGoals]);
@@ -7773,13 +7828,16 @@ export const SessionMode = ({
               <CheckCircle2 size={44} className={completedWithoutAttendance ? 'text-slate-400' : completedBillingStatus === 'READY' ? 'text-emerald-500' : 'text-amber-500'} />
             </div>
 
-            <section className={`mt-6 rounded-[24px] border p-5 ${completedWithoutAttendance ? 'border-slate-200 bg-slate-50' : completedBillingStatus === 'READY' ? 'border-emerald-100 bg-emerald-50' : 'border-amber-100 bg-amber-50'}`}>
+            <SessionSummaryDisclosure title="Situação operacional" meta={completionStatusLabel} tone="emerald">
+<section className={`mt-6 rounded-[24px] border p-5 ${completedWithoutAttendance ? 'border-slate-200 bg-slate-50' : completedBillingStatus === 'READY' ? 'border-emerald-100 bg-emerald-50' : 'border-amber-100 bg-amber-50'}`}>
               <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Situação operacional</p>
               <p className="mt-1 text-lg font-semibold text-gray-900">{completionStatusLabel}</p>
               <p className="mt-1 text-sm text-gray-600">{completionStatusDescription}</p>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-[#F8FAFF] border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Resumo geral" meta={`${formatSessionDuration(postClosureSummary.durationSeconds)} · ${postClosureSummary.totalTrials} tentativa(s) · ${postClosureSummary.totalBehaviorEvents} registro(s)`}>
+<section className="mt-4 rounded-[24px] bg-[#F8FAFF] border border-blue-100 p-5">
               <h3 className="text-lg font-bold text-gray-900">Resumo geral</h3>
               <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="rounded-2xl bg-white border border-gray-100 p-4">
@@ -7812,10 +7870,12 @@ export const SessionMode = ({
                 </div>
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
             {showPostClosureReport && postClosureReport && (
               <div className="mt-5 space-y-5">
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Dados da sessão">
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <h3 className="text-lg font-bold text-gray-900">Dados da sessão</h3>
                     <span className={`inline-flex w-fit items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${syncClasses[postClosureReport.header.syncStatus]}`}>
@@ -7842,9 +7902,11 @@ export const SessionMode = ({
                     ))}
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
                 {activeAppointmentId && (
-                  <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                  <SessionSummaryDisclosure title="Fechamento operacional">
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <div>
                         <h3 className="text-lg font-bold text-gray-900">Fechamento operacional</h3>
@@ -7908,9 +7970,11 @@ export const SessionMode = ({
                       </p>
                     )}
                   </section>
+            </SessionSummaryDisclosure>
                 )}
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Resumo geral" meta={`${postClosureReport.generalSummary.totalTeachingTrials} tentativa(s) de ensino`}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Resumo geral</h3>
                   <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-3">
                     {[
@@ -7935,8 +7999,10 @@ export const SessionMode = ({
                     <p className="mt-4 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm font-semibold text-amber-700">Observação da sessão pendente.</p>
                   )}
                 </section>
+                </SessionSummaryDisclosure>
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Tentativas de ensino" meta={`${postClosureReport.teachingSummary.totalTrials} tentativa(s)`}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Tentativas de ensino</h3>
                   <div className="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3">
                     {[
@@ -7972,8 +8038,10 @@ export const SessionMode = ({
                     </div>
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Metas trabalhadas" meta={`${postClosureReport.targetSummaries.length} meta(s)`}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Metas trabalhadas</h3>
                   <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
                     {postClosureReport.targetSummaries.length > 0 ? postClosureReport.targetSummaries.map((target) => (
@@ -8000,9 +8068,11 @@ export const SessionMode = ({
                     )) : <p className="text-sm text-gray-500">Nenhuma meta trabalhada nesta sessão.</p>}
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
                 {Array.isArray((postClosureSummary as any).maintenanceSummary) && (postClosureSummary as any).maintenanceSummary.length > 0 && (
-                  <section className="rounded-[24px] bg-white border border-amber-100 p-5">
+                  <SessionSummaryDisclosure title="Manutencao e regressao" tone="amber">
+<section className="rounded-[24px] bg-white border border-amber-100 p-5">
                     <h3 className="text-lg font-bold text-amber-700">Manutencao e regressao</h3>
                     <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
                       {(postClosureSummary as any).maintenanceSummary.map((row: any) => (
@@ -8015,9 +8085,11 @@ export const SessionMode = ({
                       ))}
                     </div>
                   </section>
+            </SessionSummaryDisclosure>
                 )}
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Comportamentos registrados">
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Comportamentos registrados</h3>
                   <div className="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-3">
                     <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
@@ -8069,8 +8141,10 @@ export const SessionMode = ({
                     </div>
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="ABC" meta={`${postClosureReport.abcEvents.length} registro(s)`}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <h3 className="text-lg font-bold text-gray-900">ABC</h3>
                     {postClosureReport.pendingComplements.abcPendingCount > 0 && (
@@ -8102,8 +8176,10 @@ export const SessionMode = ({
                     )}
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Pendências e complementos" tone="amber">
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Pendências e complementos</h3>
                   <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
                     {[
@@ -8119,9 +8195,11 @@ export const SessionMode = ({
                     ))}
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
                 {showComplementEditor && (
-                  <section className="rounded-[24px] bg-slate-900 text-white p-5">
+                  <SessionSummaryDisclosure title="Editar observação e ABC pendente" tone="slate">
+<section className="rounded-[24px] bg-slate-900 text-white p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-[10px] font-bold text-violet-200 uppercase tracking-widest">Complementos autorizados</p>
@@ -8214,6 +8292,7 @@ export const SessionMode = ({
                       </div>
                     )}
                   </section>
+            </SessionSummaryDisclosure>
                 )}
               </div>
             )}
@@ -8494,6 +8573,28 @@ export const SessionMode = ({
       className={`fixed inset-x-0 bottom-0 z-[130] px-2 pb-[calc(0.55rem+env(safe-area-inset-bottom))] pt-2 ${clinicalDockSheetOpen ? 'pointer-events-none' : 'pointer-events-auto'}`}
     >
       <div className={`mx-auto max-w-3xl rounded-[22px] border p-1.5 shadow-xl backdrop-blur-xl ${clinicalDockCompact ? 'opacity-95' : 'shadow-xl'} ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`} data-aba-dock-bottom-bar>
+        {!clinicalDockPausedCompact && activeTherapeuticTimerEntries.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setClinicalDockSheetOpen(true)}
+            className={`mb-1.5 flex min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-2xl px-3 py-2 text-xs font-medium ${crisisMode ? 'bg-white/10 text-white' : 'bg-purple-50 text-purple-800'}`}
+            data-aba-dock-therapeutic-timer-badge
+            title={activeTherapeuticTimerEntries.length === 1
+              ? `${activeTherapeuticTimerEntries[0].targetName} · ${formatDurationSeconds(therapeuticTimerElapsedMs(activeTherapeuticTimerEntries[0]) / 1000)}`
+              : `${activeTherapeuticTimerEntries.length} cronômetros terapêuticos em andamento`}
+          >
+            <span className="min-w-0 truncate">
+              {activeTherapeuticTimerEntries.length === 1
+                ? (activeTherapeuticTimerEntries[0].runningSince ? 'Alvo em andamento' : 'Cronômetro pausado')
+                : `${activeTherapeuticTimerEntries.length} cronômetros de alvo`}
+            </span>
+            <span className="min-w-0 max-w-[58%] truncate text-right tabular-nums">
+              {activeTherapeuticTimerEntries.length === 1
+                ? `⏱ ${activeTherapeuticTimerEntries[0].targetName} · ${formatDurationSeconds(therapeuticTimerElapsedMs(activeTherapeuticTimerEntries[0]) / 1000)}`
+                : 'Toque para revisar'}
+            </span>
+          </button>
+        )}
         {!clinicalDockPausedCompact && openDurations.length > 0 && (
           <div
             className={`mb-1.5 flex min-w-0 items-center justify-between gap-2 overflow-hidden rounded-2xl px-3 py-2 text-xs font-medium ${crisisMode ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-800'}`}
@@ -8956,6 +9057,33 @@ export const SessionMode = ({
                   </div>
                 )}
               </div>
+
+              {activeTherapeuticTimerEntries.length > 0 && (
+                <div data-aba-therapeutic-timers-in-progress>
+                  <p className="text-[11px] font-medium text-slate-500">Cronômetros de alvos</p>
+                  <div className="mt-2 space-y-2">
+                    {activeTherapeuticTimerEntries.map((timer) => {
+                      const timerGoal = sessionGoals.find((goal: any) => therapeuticGoalKey(goal) === timer.goalKey);
+                      const elapsedLabel = formatDurationSeconds(therapeuticTimerElapsedMs(timer) / 1000);
+                      return (
+                        <button
+                          key={timer.goalKey}
+                          type="button"
+                          onClick={() => focusTherapeuticTimerGoal(timer)}
+                          disabled={!timerGoal}
+                          className="flex min-h-[46px] min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-2xl border border-purple-100 bg-[#FBF9FF] px-4 text-left text-xs font-medium text-slate-800 disabled:cursor-default disabled:opacity-70"
+                          title={`${timer.targetName} · ${timer.runningSince ? 'em andamento' : 'pausado'} · ${elapsedLabel}`}
+                        >
+                          <span className="min-w-0 truncate">{timer.targetName}</span>
+                          <span className="shrink-0 tabular-nums text-[#7a32fc]">
+                            {timer.runningSince ? '●' : 'Ⅱ'} {elapsedLabel}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {openDurations.length > 0 && (
                 <div>
@@ -10009,6 +10137,10 @@ export const SessionMode = ({
               const goalPromptCategoryBuckets = promptCategoryBucketsForGoal(goal);
               const selectedPromptCategory = goalPromptCategoryBuckets.find((bucket) => bucket.key === selectedPromptCategoryKey) || null;
               const criteriaOpen = mobileExpandedCriteriaKey === goalKey;
+              const goalTherapeuticTimer = therapeuticTimers[therapeuticGoalKey(goal)] || null;
+              const goalTherapeuticTimerLabel = goalTherapeuticTimer
+                ? formatDurationSeconds(therapeuticTimerElapsedMs(goalTherapeuticTimer) / 1000)
+                : '';
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
               const errorTrialLockKey = `trial:${goalKey}:error:error`;
               const statusLabel = maintenanceProbeCanRunNow
@@ -10031,6 +10163,7 @@ export const SessionMode = ({
                 <article
                   key={`mobile-${goalKey}`}
                   data-aba-mobile-task-card
+                  data-aba-mobile-goal-key={goalKey}
                   data-aba-mobile-primary-card={selected ? 'true' : 'false'}
                   onClick={() => {
                     setMobileSelectedGoalKey(goalKey);
@@ -10057,6 +10190,17 @@ export const SessionMode = ({
                     </div>
                     {programName && <div><p className="text-[10px] text-slate-500">Programa</p><p className="truncate text-xs text-slate-700" title={programName}>{programName}</p></div>}
                     <div><p className="text-[10px] text-slate-500">Alvo atual</p><h2 className={`${selected ? 'text-lg' : 'text-[15px]'} mt-0.5 line-clamp-2 overflow-hidden break-words font-medium leading-snug text-gray-900`}>{targetName}</h2></div>
+                    {goalTherapeuticTimer && !selected && (
+                      <div
+                        className={`inline-flex max-w-full items-center gap-2 self-start rounded-full border px-2.5 py-1 text-[10px] font-semibold ${goalTherapeuticTimer.runningSince ? 'border-purple-100 bg-purple-50 text-[#7a32fc]' : 'border-slate-200 bg-slate-50 text-slate-500'}`}
+                        data-aba-mobile-goal-running-timer
+                        title={`${targetName} · ${goalTherapeuticTimer.runningSince ? 'em andamento' : 'pausado'} · ${goalTherapeuticTimerLabel}`}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${goalTherapeuticTimer.runningSince ? 'bg-[#7a32fc] animate-pulse' : 'bg-slate-400'}`} aria-hidden="true" />
+                        <span className="min-w-0 truncate">{goalTherapeuticTimer.runningSince ? 'Cronômetro ativo' : 'Cronômetro pausado'}</span>
+                        <span className="shrink-0 tabular-nums">{goalTherapeuticTimerLabel}</span>
+                      </div>
+                    )}
                     {selected && (instruction || expectedResponse) && <div className="space-y-1 rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-600"><p>{instruction ? `Instrução: ${instruction}` : `Resposta esperada: ${expectedResponse}`}</p>{instruction && expectedResponse && <p>Resposta esperada: {expectedResponse}</p>}</div>}
                     {selected && (
                       <div className="inline-flex max-w-full items-center gap-2 self-start rounded-xl bg-[#F4EFFF] px-2.5 py-1.5" data-aba-mobile-progress-summary title={progressLabel}>
@@ -11062,7 +11206,8 @@ export const SessionMode = ({
               </button>
             </div>
 
-            <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Presença no atendimento" meta={SESSION_ATTENDANCE_OPTIONS.find((option) => option.value === attendanceStatus)?.label || 'Selecione'}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-semibold text-gray-900">Presença no atendimento</h4>
               <p className="mt-1 text-sm text-gray-500">Essa classificação define o fechamento operacional e a elegibilidade para faturamento.</p>
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" role="radiogroup" aria-label="Presença no atendimento">
@@ -11094,8 +11239,10 @@ export const SessionMode = ({
                 </div>
               )}
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Resumo geral" meta={`${formatSessionDuration(sessionClosureSummary.durationSeconds)} · ${sessionClosureSummary.totalTrials} tentativa(s) · ${sessionClosureSummary.totalBehaviorEvents} registro(s)`}>
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <h4 className="text-lg font-bold text-gray-900">Resumo geral</h4>
                 <span className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${sessionClosureSummary.syncStatus === 'synced' ? 'bg-emerald-50 text-emerald-600' : sessionClosureSummary.syncStatus === 'error' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-600'}`}>
@@ -11129,8 +11276,10 @@ export const SessionMode = ({
                 </div>
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Resumo de comportamentos" meta={`${sessionClosureSummary.totalBehaviorEvents} registro(s)`}>
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-bold text-gray-900">Resumo de comportamentos</h4>
               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 {sessionClosureSummary.frequencySummary.map((item) => (
@@ -11161,8 +11310,10 @@ export const SessionMode = ({
                 {sessionClosureSummary.totalBehaviorEvents === 0 && <p className="text-sm text-gray-500">Nenhum comportamento registrado nesta sessão.</p>}
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Tentativas de ensino" meta={`${sessionClosureSummary.totalTrials} tentativa(s)`}>
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-bold text-gray-900">Tentativas de ensino</h4>
               <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="rounded-2xl bg-[#F8FAFF] p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.totalTrials}</p></div>
@@ -11174,8 +11325,10 @@ export const SessionMode = ({
               <p className="text-sm text-gray-500">Percentual de independência: <span className="font-bold text-gray-900">{sessionClosureSummary.independencePercent}%</span></p>
               <p className="text-sm text-gray-500">Tipos usados: {sessionClosureSummary.trialTypesUsed.join(', ') || 'nenhum'}</p>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Critérios de maestria" meta={`${teachingMasteryRows.length} alvo(s)`}>
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-bold text-gray-900">Critérios de maestria</h4>
               <div className="mt-3 space-y-2">
                 {teachingMasteryRows.length === 0 ? (
@@ -11197,8 +11350,10 @@ export const SessionMode = ({
                 ))}
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
+            <SessionSummaryDisclosure title="Manutencao e regressao" meta={`${maintenanceProbeRows.length} alvo(s)`} tone="amber">
+<section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
               <h4 className="text-lg font-bold text-amber-700">Manutencao e regressao</h4>
               <div className="mt-3 space-y-2">
                 {maintenanceProbeRows.length === 0 ? (
@@ -11216,8 +11371,10 @@ export const SessionMode = ({
                 ))}
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-red-100 p-5">
+            <SessionSummaryDisclosure title="Bloqueios de encerramento" meta={`${closureBlockers.length} bloqueio(s)`} tone="red">
+<section className="mt-4 rounded-[24px] bg-white border border-red-100 p-5">
               <h4 className="text-lg font-bold text-red-700">Bloqueios de encerramento</h4>
               {hasClosureBlockers && (
                 <p className="mt-2 rounded-2xl bg-red-50 border border-red-100 px-4 py-3 text-sm font-semibold text-red-700">
@@ -11266,8 +11423,10 @@ export const SessionMode = ({
                 </div>
               )}
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
+            <SessionSummaryDisclosure title="Avisos de encerramento" meta={`${closureWarnings.length} aviso(s)`} tone="amber">
+<section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
               <h4 className="text-lg font-bold text-amber-700">Avisos de encerramento</h4>
               {hasClosureWarnings && !hasClosureBlockers && (
                 <p className="mt-2 rounded-2xl bg-amber-50 border border-amber-100 px-4 py-3 text-sm font-semibold text-amber-800">
@@ -11284,8 +11443,13 @@ export const SessionMode = ({
                 ))}
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure
+              title={NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Motivo da falta ou do cancelamento' : 'Observação do atendimento'}
+              meta={sessionNote.trim() ? 'preenchida' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'toque para informar' : 'opcional'}
+            >
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <label className="block text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
                 {NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Motivo da falta ou do cancelamento' : 'Observação do atendimento'}
                 <textarea
@@ -11301,6 +11465,7 @@ export const SessionMode = ({
                 <span className="mt-1 block text-right text-[10px] font-normal normal-case tracking-normal text-gray-400">{sessionNote.length}/4000</span>
               </label>
             </section>
+            </SessionSummaryDisclosure>
 
             {sessionEndError && (
               <div role="alert" className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
