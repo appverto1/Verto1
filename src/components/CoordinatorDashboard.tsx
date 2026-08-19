@@ -982,15 +982,19 @@ export function CoordinatorDashboard({
   }, [activeTab, allPatients.length, onEnsurePatientList, patientListError, workspaceScopeKey]);
 
   useEffect(() => {
-    if (activeTab !== "rooms" || !workspaceScopeKey) return;
+    const roomSurfaceVisible =
+      activeTab === "rooms" ||
+      (activeTab === "dashboard" && hasAppointmentsCommunicationModule);
+    if (!roomSurfaceVisible || !workspaceScopeKey) return;
     const requestSeq = roomCanonicalRequestSeqRef.current + 1;
     roomCanonicalRequestSeqRef.current = requestSeq;
     let cancelled = false;
 
-    // Reconcile the room tab with the canonical database every time the user opens
-    // it. The global workspace bootstrap is intentionally broad and can finish
-    // before the active clinic context is fully restored after F5; room management
-    // must not depend on a second manual refresh to see an already-persisted room.
+    // Reconcile every surface that renders room management with the canonical
+    // database. Rooms are shown both on the dedicated Rooms tab and inside the
+    // dashboard overview; limiting this retry to activeTab === "rooms" left the
+    // overview stuck on an early/legacy bootstrap snapshot after F5 even though
+    // the room had already been persisted in clinic_rooms.
     void dataService.getClinicRooms()
       .then((result: any) => {
         if (cancelled || roomCanonicalRequestSeqRef.current !== requestSeq) return;
@@ -1005,7 +1009,7 @@ export function CoordinatorDashboard({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, workspaceScopeKey, setRooms]);
+  }, [activeTab, hasAppointmentsCommunicationModule, workspaceScopeKey, setRooms]);
 
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
     if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };

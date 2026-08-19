@@ -18,10 +18,19 @@ assert.match(dashboard, /await dataService\.createClinicRoom/);
 assert.match(dashboard, /await dataService\.updateClinicRoom/);
 assert.doesNotMatch(dashboard.slice(dashboard.indexOf('const handleAddRoom'), dashboard.indexOf('const handleSaveClinicSettings')), /crypto\.randomUUID\(\).*setRooms/s);
 
+const roomGet = server.slice(server.indexOf("app.get('/api/clinic/rooms'"), server.indexOf("app.post('/api/clinic/rooms'"));
+assert.match(roomGet, /noStoreDynamicResponse/);
+assert.match(roomGet, /\.eq\('clinic_id', clinicId\)/);
+assert.doesNotMatch(roomGet, /query\.eq\('organization_id'/);
+
 const roomPatch = server.slice(server.indexOf("app.patch('/api/clinic/rooms/:roomId'"), server.indexOf("app.delete('/api/clinic/rooms/:roomId'"));
-assert.match(roomPatch, /organization_id/);
-assert.match(roomPatch, /clinic_id/);
+assert.match(roomPatch, /\.eq\('clinic_id', clinicId\)/);
 assert.match(roomPatch, /Sala não encontrada nesta clínica/);
+assert.doesNotMatch(roomPatch, /\.eq\('organization_id'/);
+
+assert.match(dashboard, /activeTab === "rooms"[\s\S]*activeTab === "dashboard"[\s\S]*hasAppointmentsCommunicationModule/);
+assert.match(dashboard, /dataService\.getClinicRooms\(\)/);
+assert.match(dashboard, /setRooms\(result\.data\)/);
 
 assert.match(cron, /'\* \* \* \* \*'/);
 assert.match(cron, /QUIET_HOURS_START = 22/);
