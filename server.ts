@@ -52,10 +52,12 @@ import {
   triggerAppointmentReminderScan
 } from './services/cronService';
 import {
+  findPushSubscriptionsForRecipients,
   removePatientPushSubscription,
   resolvePatientIdsForPush,
   savePatientPushSubscription,
-  sendAppointmentNotification
+  sendAppointmentNotification,
+  sendPatientPortalNotification
 } from './services/pushNotificationService';
 import {
   SupabaseRateLimitStore,
@@ -49033,7 +49035,7 @@ async function startServer() {
         sanitizeString(row?.type, 80).replace(/_(24h|12h)$/i, '') === 'appointment_reminder'
       );
       const visibleRows = latestPendingAppointmentReminder
-        ? [latestPendingAppointmentReminder]
+        ? [latestPendingAppointmentReminder, ...dedupedRows.filter((row: any) => String(row?.id || '') !== String(latestPendingAppointmentReminder?.id || '') && sanitizeString(row?.type, 80).replace(/_(24h|12h)$/i, '') !== 'appointment_reminder').slice(0, Math.max(0, limit - 1))]
         : dedupedRows.slice(0, limit);
       return res.json({
         success: true,
@@ -52026,7 +52028,7 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const name = sanitizeString(req.body?.name, 180);
       if (!name) return res.status(400).json({ success: false, error: 'Informe o nome da sala.' });
-      const id = isUuid(sanitizeString(req.body?.id, 180)) ? sanitizeString(req.body.id, 180) : crypto.randomUUID();
+      const id = crypto.randomUUID();
       const payload = cleanObject({
         id,
         organization_id: isUuid(organizationId) ? organizationId : clinicId,
@@ -52043,10 +52045,11 @@ async function startServer() {
       });
       const { data, error } = await supabase
         .from('clinic_rooms')
-        .upsert([payload], { onConflict: 'id' })
+        .insert([payload])
         .select(CLINIC_ROOM_SELECT)
         .single();
       if (error) {
+        if (String(error?.code || '') === '23505') return res.status(409).json({ success: false, error: 'Já existe uma sala ativa com este nome.' });
         if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
         throw error;
       }
@@ -52060,6 +52063,8 @@ async function startServer() {
   app.patch('/api/clinic/rooms/:roomId', checkAuth, requireClinicCapability('clinic.rooms.manage'), async (req: any, res) => {
     try {
       const roomId = sanitizeString(req.params.roomId, 180);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       if (!isUuid(roomId)) return res.status(400).json({ success: false, error: 'Sala inválida.' });
       const payload = cleanObject({
         ...(req.body?.name !== undefined ? { name: sanitizeString(req.body.name, 180) } : {}),
@@ -52076,16 +52081,16 @@ async function startServer() {
           : {}),
         updated_at: new Date().toISOString()
       });
-      const { data, error } = await supabase
-        .from('clinic_rooms')
-        .update(payload)
-        .eq('id', roomId)
-        .select(CLINIC_ROOM_SELECT)
-        .single();
+      let roomUpdateQuery = supabase.from('clinic_rooms').update(payload).eq('id', roomId);
+      if (isUuid(organizationId)) roomUpdateQuery = roomUpdateQuery.eq('organization_id', organizationId);
+      else if (isUuid(clinicId)) roomUpdateQuery = roomUpdateQuery.eq('clinic_id', clinicId);
+      const { data, error } = await roomUpdateQuery.select(CLINIC_ROOM_SELECT).maybeSingle();
       if (error) {
+        if (String(error?.code || '') === '23505') return res.status(409).json({ success: false, error: 'Já existe uma sala ativa com este nome.' });
         if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
         throw error;
       }
+      if (!data) return res.status(404).json({ success: false, error: 'Sala não encontrada nesta clínica.' });
       return res.json({ success: true, data });
     } catch (error: any) {
       console.warn('[Rooms] update failed:', error?.message || String(error));
@@ -52096,23 +52101,98 @@ async function startServer() {
   app.delete('/api/clinic/rooms/:roomId', checkAuth, requireClinicCapability('clinic.rooms.manage'), async (req: any, res) => {
     try {
       const roomId = sanitizeString(req.params.roomId, 180);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       if (!isUuid(roomId)) return res.status(400).json({ success: false, error: 'Sala inválida.' });
-      const { data, error } = await supabase
-        .from('clinic_rooms')
-        .update({ is_active: false, updated_at: new Date().toISOString() })
-        .eq('id', roomId)
-        .select(CLINIC_ROOM_SELECT)
-        .single();
-      if (error) {
-        if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' });
-        throw error;
-      }
+      let roomDeleteQuery = supabase.from('clinic_rooms').update({ is_active: false, updated_at: new Date().toISOString() }).eq('id', roomId);
+      if (isUuid(organizationId)) roomDeleteQuery = roomDeleteQuery.eq('organization_id', organizationId);
+      else if (isUuid(clinicId)) roomDeleteQuery = roomDeleteQuery.eq('clinic_id', clinicId);
+      const { data, error } = await roomDeleteQuery.select(CLINIC_ROOM_SELECT).maybeSingle();
+      if (error) { if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Cadastro de salas ainda não está disponível no banco.' }); throw error; }
+      if (!data) return res.status(404).json({ success: false, error: 'Sala não encontrada nesta clínica.' });
       return res.json({ success: true, data });
-    } catch (error: any) {
-      console.warn('[Rooms] deactivate failed:', error?.message || String(error));
-      return res.status(500).json({ success: false, error: 'Não foi possível desativar a sala agora.' });
-    }
+    } catch (error: any) { console.warn('[Rooms] deactivate failed:', error?.message || String(error)); return res.status(500).json({ success: false, error: 'Não foi possível desativar a sala agora.' }); }
   });
+
+  app.get('/api/clinic/announcements', noStoreDynamicResponse, checkAuth, requireClinicModule('appointments_communication'), requireClinicCapability('communication.clinic_notifications.manage'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const limit = Math.min(50, Math.max(1, Math.round(Number(req.query?.limit || 30) || 30)));
+      const { data, error } = await supabase.from('clinic_announcements')
+        .select('id,clinic_id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,created_at,updated_at')
+        .eq('clinic_id', clinicId).order('created_at', { ascending: false }).limit(limit);
+      if (error) { if (isMissingRelationError(error)) return res.status(503).json({ success:false, error:'O módulo de avisos ainda não foi ativado no banco.' }); throw error; }
+      return res.json({ success:true, data:data || [] });
+    } catch (error:any) { console.warn('[ClinicAnnouncements] list failed:', error?.message || String(error)); return res.status(500).json({ success:false, error:'Não foi possível carregar os avisos agora.' }); }
+  });
+
+  app.post('/api/clinic/announcements', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('appointments_communication'), requireClinicCapability('communication.clinic_notifications.manage'), async (req:any,res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user),120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId,120);
+      if(!isUuid(clinicId)) return res.status(400).json({success:false,error:'Clínica inválida.'});
+      const category=sanitizeString(req.body?.category || 'NOTICE',20).toUpperCase();
+      if(!['NOTICE','HOLIDAY','EVENT'].includes(category)) return res.status(400).json({success:false,error:'Tipo de aviso inválido.'});
+      const title=sanitizeTextField(req.body?.title,160), message=sanitizeTextField(req.body?.message,1000);
+      if(!title || !message) return res.status(400).json({success:false,error:'Informe título e mensagem.'});
+      const audienceMode=sanitizeString(req.body?.audienceMode || 'ALL',20).toUpperCase();
+      if(!['ALL','SELECTED'].includes(audienceMode)) return res.status(400).json({success:false,error:'Público do aviso inválido.'});
+      const eventDateRaw=sanitizeString(req.body?.eventDate,20); const eventDate=/^\d{4}-\d{2}-\d{2}$/.test(eventDateRaw)?eventDateRaw:null;
+      const selectedIds=Array.from(new Set((Array.isArray(req.body?.patientIds)?req.body.patientIds:[]).map((v:unknown)=>sanitizeString(v,120)).filter((v:string)=>isUuid(v)))).slice(0,500) as string[];
+      if(audienceMode==='SELECTED' && !selectedIds.length) return res.status(400).json({success:false,error:'Selecione ao menos um paciente.'});
+      const idempotencyKey=sanitizeString(req.body?.idempotencyKey,120) || crypto.randomUUID();
+      const existing=await supabase.from('clinic_announcements').select('id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,created_at').eq('clinic_id',clinicId).eq('idempotency_key',idempotencyKey).limit(1).maybeSingle();
+      if(!existing.error && existing.data) return res.json({success:true,data:existing.data,duplicate:true});
+      if(existing.error && !isMissingRelationError(existing.error)) throw existing.error;
+      let patientQuery=supabase.from('patients').select('id,name,email,responsible_email,responsible_user_id,clinic_id,is_active,deleted_at').eq('clinic_id',clinicId).eq('is_active',true).is('deleted_at',null).limit(500);
+      if(audienceMode==='SELECTED') patientQuery=patientQuery.in('id',selectedIds);
+      const patientResult=await patientQuery; if(patientResult.error) throw patientResult.error;
+      const patients=(patientResult.data || []).filter((patient:any)=>isUuid(sanitizeString(patient?.id,120)));
+      if(!patients.length) return res.status(400).json({success:false,error:'Nenhum paciente ativo foi encontrado para este aviso.'});
+      const requestedAnnouncementId=crypto.randomUUID();
+      const deliveryRecipients=patients.map((patient:any)=>({
+        patient_id:sanitizeString(patient.id,120),
+        recipient_user_id:isUuid(sanitizeString(patient.responsible_user_id,120))?sanitizeString(patient.responsible_user_id,120):null,
+        recipient_email:sanitizeEmail(patient.responsible_email||patient.email)||null,
+      }));
+      const delivery=await supabase.rpc('create_clinic_announcement_delivery_v1',{
+        p_announcement_id:requestedAnnouncementId, p_organization_id:isUuid(organizationId)?organizationId:clinicId, p_clinic_id:clinicId,
+        p_category:category, p_title:title, p_message:message, p_event_date:eventDate, p_audience_mode:audienceMode,
+        p_idempotency_key:idempotencyKey, p_created_by:isUuid(sanitizeString(req.session.user?.id,120))?sanitizeString(req.session.user.id,120):null, p_recipients:deliveryRecipients
+      });
+      if(delivery.error){ if(isMissingRelationError(delivery.error) || /create_clinic_announcement_delivery_v1/i.test(String(delivery.error?.message||''))) return res.status(503).json({success:false,error:'O módulo de avisos ainda não foi ativado no banco.'}); throw delivery.error; }
+      const deliveryRow=Array.isArray(delivery.data)?delivery.data[0]:delivery.data;
+      const announcementId=sanitizeString(deliveryRow?.announcement_id || requestedAnnouncementId,120);
+      if(deliveryRow?.created===false){ const duplicate=await supabase.from('clinic_announcements').select('id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,created_at').eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle(); if(!duplicate.error&&duplicate.data)return res.json({success:true,data:duplicate.data,duplicate:true}); }
+      let pushSentCount=0,pushFailedCount=0; const statuses=new Map<string,'SENT'|'NO_SUBSCRIPTION'|'FAILED'>();
+      if(vapidPublicKey && vapidPrivateKey){
+        let batch:{complete:boolean;subscriptionsByRecipientKey:Map<string,any[]>}={complete:false,subscriptionsByRecipientKey:new Map()};
+        try {
+          batch=await findPushSubscriptionsForRecipients({supabase,recipients:patients.map((p:any)=>({key:sanitizeString(p.id,120),patientIds:[sanitizeString(p.id,120)],legacyUserIds:[sanitizeString(p.id,120),sanitizeString(p.responsible_user_id,120)].filter((v)=>isUuid(v)),patientEmail:sanitizeEmail(p.responsible_email||p.email),clinicId})),logger:console});
+        } catch(error:any) {
+          console.warn('[ClinicAnnouncements] batch push lookup failed; using patient fallback:', error?.message || String(error));
+        }
+        let branding:{displayName?:string;logoUrl?:string}={};
+        try { branding=await readClinicBrandingForFamilyView(clinicId); } catch(error:any) { console.warn('[ClinicAnnouncements] branding lookup failed:',error?.message||String(error)); }
+        for(const patient of patients){
+          const patientId=sanitizeString(patient.id,120);
+          try {
+            const result=await sendPatientPortalNotification({supabase,patientId,patientEmail:sanitizeEmail(patient.responsible_email||patient.email),clinicId,title,body:message,url:'/',tag:`clinic-announcement-${announcementId}`,branding:{displayName:branding.displayName,logoUrl:branding.logoUrl},data:{announcementId,category,eventDate,patientId},preloadedSubscriptions:batch.complete?(batch.subscriptionsByRecipientKey.get(patientId)||[]):undefined,logger:console});
+            if(result.sent>0){statuses.set(patientId,'SENT');pushSentCount+=1;}else if(result.subscriptions===0){statuses.set(patientId,'NO_SUBSCRIPTION');}else{statuses.set(patientId,'FAILED');pushFailedCount+=1;}
+          } catch(error:any) {
+            statuses.set(patientId,'FAILED');pushFailedCount+=1;
+            console.warn('[ClinicAnnouncements] patient push failed:',{patientId,message:error?.message||String(error)});
+          }
+        }
+      } else { for(const patient of patients) statuses.set(sanitizeString(patient.id,120),'NO_SUBSCRIPTION'); }
+      for(const status of ['SENT','NO_SUBSCRIPTION','FAILED'] as const){const ids=Array.from(statuses.entries()).filter(([,value])=>value===status).map(([id])=>id);if(!ids.length)continue;const update=await supabase.from('clinic_announcement_recipients').update({push_status:status,push_sent_at:status==='SENT'?new Date().toISOString():null,updated_at:new Date().toISOString()}).eq('announcement_id',announcementId).in('patient_id',ids);if(update.error)console.warn('[ClinicAnnouncements] push status update failed:',update.error.message);}
+      const fallbackData={id:announcementId,category,title,message,event_date:eventDate,audience_mode:audienceMode,recipient_count:patients.length,push_sent_count:pushSentCount,push_failed_count:pushFailedCount,status:'SENT'};
+      const final=await supabase.from('clinic_announcements').update({push_sent_count:pushSentCount,push_failed_count:pushFailedCount,updated_at:new Date().toISOString()}).eq('id',announcementId).eq('clinic_id',clinicId).select('id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,created_at').single();
+      if(final.error){console.warn('[ClinicAnnouncements] push counters update failed after atomic portal delivery:',final.error.message);return res.json({success:true,data:fallbackData,warning:'Aviso salvo; métricas de push serão reconciliadas posteriormente.'});}
+      return res.json({success:true,data:final.data});
+    } catch(error:any){console.warn('[ClinicAnnouncements] send failed:',error?.message||String(error));return res.status(500).json({success:false,error:'Não foi possível enviar o aviso agora.'});}
+  });
+
 
   app.get('/api/reports/time/patient', checkAuth, requireClinicCapability('reports.view'), async (req: any, res) => {
     try {

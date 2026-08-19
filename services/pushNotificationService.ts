@@ -50,6 +50,13 @@ type SavePushSubscriptionParams = {
   logger?: Logger;
 };
 
+export type SendPatientPortalNotificationParams = {
+  supabase: any; patientId: string; patientEmail?: string | null; clinicId?: string | null;
+  title: string; body: string; url?: string; tag?: string; data?: Record<string, unknown>;
+  branding?: { displayName?: string | null; logoUrl?: string | null };
+  preloadedSubscriptions?: AppointmentPushSubscriptionEntry[]; logger?: Logger;
+};
+
 type SendAppointmentNotificationParams = {
   supabase: any;
   patientId: string;
@@ -806,6 +813,36 @@ export async function findPushSubscriptionsForRecipients(params: {
   }
 
   return { complete: true, subscriptionsByRecipientKey: result };
+}
+
+export async function sendPatientPortalNotification(params: SendPatientPortalNotificationParams) {
+  const logger = params.logger || console;
+  const patientId = sanitizeText(params.patientId, 120);
+  const clinicId = sanitizeText(params.clinicId, 120);
+  const patientEmail = sanitizeEmail(params.patientEmail);
+  const patientIds = isUuid(patientId) ? [patientId] : [];
+  const rows = params.preloadedSubscriptions !== undefined ? params.preloadedSubscriptions : await findPushSubscriptionsForPatient({
+    supabase: params.supabase, patientIds, patientEmail, legacyUserIds: patientIds, clinicId, logger
+  });
+  if (!rows.length) return { sent: 0, failed: 0, subscriptions: 0 };
+  const displayName = sanitizeText(params.branding?.displayName || 'Clínica', 160) || 'Clínica';
+  const logoUrl = sanitizeBrandLogoText(params.branding?.logoUrl);
+  const payload = JSON.stringify({
+    title: sanitizeText(params.title, 180) || displayName, body: sanitizeText(params.body, 1000),
+    url: sanitizeText(params.url || '/', 1200) || '/', tag: sanitizeText(params.tag || 'clinic-announcement', 240),
+    icon: logoUrl || undefined, badge: logoUrl || undefined, branding: { displayName, logoUrl: logoUrl || null },
+    data: { notificationType: 'clinic_announcement', clinicId: clinicId || null, ...(params.data || {}) }
+  });
+  let sent = 0; let failed = 0; const invalidEndpoints = new Set<string>();
+  for (const entry of rows) {
+    try { await webpush.sendNotification(entry.subscription, payload); sent += 1; }
+    catch (error: any) { failed += 1; logger.warn('[Push] Falha ao enviar aviso da clínica.', { patientId: isUuid(patientId) ? patientId : null, clinicId: isUuid(clinicId) ? clinicId : null, endpoint: entry.subscription.endpoint.slice(0,80), statusCode: error?.statusCode ?? error?.status ?? null, message: error?.message || String(error) }); if (isGonePushError(error)) invalidEndpoints.add(entry.subscription.endpoint); }
+  }
+  if (invalidEndpoints.size > 0) {
+    const { error } = await params.supabase.from('push_subscriptions').delete().in('endpoint', Array.from(invalidEndpoints));
+    if (error) logger.warn('[Push] Falha ao remover subscriptions expiradas de aviso.', { count: invalidEndpoints.size, message: error.message });
+  }
+  return { sent, failed, subscriptions: rows.length };
 }
 
 export async function sendAppointmentNotification(params: SendAppointmentNotificationParams) {

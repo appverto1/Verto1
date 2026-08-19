@@ -76,8 +76,11 @@ type ReminderAppointment = {
 
 const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
 const DEFAULT_CLINIC_NOTIFICATION_NAME = 'Clínica';
-const CRON_LOOKBACK_MINUTES = 180;
-const QUERY_AHEAD_HOURS = 28;
+const REMINDER_LOOKBACK_MINUTES = 2;
+const REMINDER_LOOKAHEAD_MINUTES = 1;
+const QUIET_HOURS_START = 22;
+const QUIET_HOURS_END = 6;
+const QUIET_RELEASE_CATCHUP_MINUTES = 10;
 const REMINDER_DEDUPE_TTL_MS = 30 * 60 * 60 * 1000;
 const CLINIC_BRANDING_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -210,8 +213,37 @@ const buildScheduledAtFromClinicStateAppointment = (appointment: any) => {
   return candidate.isValid() ? candidate.utc().toISOString() : '';
 };
 
-const getReminderDueUtc = (scheduledAt: string, hoursBefore: number) =>
-  dayjs(scheduledAt).tz(BRAZIL_TIMEZONE).subtract(hoursBefore, 'hour').utc();
+export const isReminderQuietHours = (moment: dayjs.Dayjs) => {
+  const hour = moment.tz(BRAZIL_TIMEZONE).hour();
+  return hour >= QUIET_HOURS_START || hour < QUIET_HOURS_END;
+};
+
+export const getReminderDeliveryDueUtc = (scheduledAt: string, hoursBefore: number) => {
+  const scheduled = dayjs(scheduledAt);
+  if (!scheduled.isValid()) return dayjs('');
+  const rawDueLocal = scheduled.tz(BRAZIL_TIMEZONE).subtract(hoursBefore, 'hour');
+  const hour = rawDueLocal.hour();
+  if (hour >= QUIET_HOURS_START) return rawDueLocal.add(1, 'day').hour(QUIET_HOURS_END).minute(0).second(0).millisecond(0).utc();
+  if (hour < QUIET_HOURS_END) return rawDueLocal.hour(QUIET_HOURS_END).minute(0).second(0).millisecond(0).utc();
+  return rawDueLocal.utc();
+};
+
+type ReminderCandidateWindow = { startUtc: dayjs.Dayjs; endUtc: dayjs.Dayjs };
+export const buildReminderCandidateWindows = (nowUtc: dayjs.Dayjs): ReminderCandidateWindow[] => {
+  const localNow = nowUtc.tz(BRAZIL_TIMEZONE);
+  if (isReminderQuietHours(localNow)) return [];
+  const dueStart = nowUtc.subtract(REMINDER_LOOKBACK_MINUTES, 'minute');
+  const dueEnd = nowUtc.add(REMINDER_LOOKAHEAD_MINUTES, 'minute');
+  const windows: ReminderCandidateWindow[] = REMINDER_STEPS.map((step) => ({
+    startUtc: dueStart.add(step.hoursBefore, 'hour'), endUtc: dueEnd.add(step.hoursBefore, 'hour')
+  }));
+  if (localNow.hour() === QUIET_HOURS_END && localNow.minute() < QUIET_RELEASE_CATCHUP_MINUTES) {
+    const releaseLocal = localNow.hour(QUIET_HOURS_END).minute(0).second(0).millisecond(0);
+    const quietStartLocal = releaseLocal.subtract(8, 'hour');
+    for (const step of REMINDER_STEPS) windows.push({ startUtc: quietStartLocal.utc().add(step.hoursBefore, 'hour'), endUtc: releaseLocal.utc().add(step.hoursBefore, 'hour') });
+  }
+  return windows;
+};
 
 export const reminderScheduleCycleKey = (scheduledAt: unknown) => {
   const parsed = dayjs(sanitizeText(scheduledAt, 120));
@@ -919,7 +951,7 @@ export const chooseDueReminder = (
       }
     }
 
-    const dueUtc = getReminderDueUtc(appointment.scheduledAt, step.hoursBefore);
+    const dueUtc = getReminderDeliveryDueUtc(appointment.scheduledAt, step.hoursBefore);
     if (!dueUtc.isValid()) continue;
     if (!dueUtc.isBefore(reminderWindowStartUtc) && !dueUtc.isAfter(reminderWindowEndUtc)) {
       return step;
@@ -1344,15 +1376,24 @@ async function runAppointmentReminderJob(
       }
     }
     const nowUtc = dayjs().utc();
-    const reminderWindowStartUtc = nowUtc.subtract(CRON_LOOKBACK_MINUTES, 'minute');
-    const reminderWindowEndUtc = nowUtc.add(2, 'minute');
-    const queryScheduledStartUtc = nowUtc;
-    const queryScheduledEndUtc = nowUtc.add(QUERY_AHEAD_HOURS, 'hour');
-    const appointments = await fetchReminderAppointments(
-      options,
-      queryScheduledStartUtc,
-      queryScheduledEndUtc,
-    );
+    if (isReminderQuietHours(nowUtc)) {
+      options.logger.log('[Appointment Reminder Cron] Execução adiada pelo horário de não perturbe.', { trigger, businessTimezone: BRAZIL_TIMEZONE, quietHours: '22:00-06:00' });
+      return { skipped: true, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 0 };
+    }
+    const localNow = nowUtc.tz(BRAZIL_TIMEZONE);
+    const quietReleaseStartUtc = localNow.hour(QUIET_HOURS_END).minute(0).second(0).millisecond(0).utc();
+    const reminderWindowStartUtc = localNow.hour() === QUIET_HOURS_END ? quietReleaseStartUtc.subtract(1, 'minute') : nowUtc.subtract(REMINDER_LOOKBACK_MINUTES, 'minute');
+    const reminderWindowEndUtc = nowUtc.add(REMINDER_LOOKAHEAD_MINUTES, 'minute');
+    const candidateWindows = buildReminderCandidateWindows(nowUtc);
+    const appointmentsBySchedule = new Map<string, ReminderAppointment>();
+    for (const window of candidateWindows) {
+      const rows = await fetchReminderAppointments(options, window.startUtc, window.endUtc);
+      for (const appointment of rows) {
+        const key = `${appointment.appointmentId}:${appointment.scheduledAt}`;
+        if (!appointmentsBySchedule.has(key)) appointmentsBySchedule.set(key, appointment);
+      }
+    }
+    const appointments = Array.from(appointmentsBySchedule.values());
     summary.totalCandidates = appointments.length;
 
     let sent24h = 0;
@@ -1466,7 +1507,7 @@ async function runAppointmentReminderJob(
           kind: dueReminder.kind,
           title,
           body,
-          scheduledFor: getReminderDueUtc(appointment.scheduledAt, dueReminder.hoursBefore).toISOString()
+          scheduledFor: getReminderDeliveryDueUtc(appointment.scheduledAt, dueReminder.hoursBefore).toISOString()
         });
         const result = options.vapidPublicKey && options.vapidPrivateKey
           ? await sendAppointmentNotification({
@@ -1619,18 +1660,18 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
   };
 
   cron.schedule(
-    '*/15 * * * *',
+    '* * * * *',
     () => {
-      void runAppointmentReminderJob(activeOptions as ActiveCronServiceOptions, 'node_cron_15_minutes');
+      void runAppointmentReminderJob(activeOptions as ActiveCronServiceOptions, 'node_cron_1_minute');
     },
     { timezone: 'UTC' }
   );
 
   setTimeout(() => {
     void runAppointmentReminderJob(activeOptions as ActiveCronServiceOptions, 'startup_warmup');
-  }, 20 * 1000);
+  }, 5 * 1000);
 
-  logger.log('[Appointment Reminder Cron] Servico iniciado no backend Node.js a cada 15 minutos.', {
+  logger.log('[Appointment Reminder Cron] Servico iniciado no backend Node.js a cada minuto.', {
     timezone: 'UTC',
     businessTimezone: BRAZIL_TIMEZONE,
     pushEnabled: Boolean(options.vapidPublicKey && options.vapidPrivateKey)

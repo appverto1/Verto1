@@ -8557,6 +8557,36 @@ export const dataService = {
     }
   },
 
+  async getClinicRooms() {
+    try {
+      const response = await fetch('/api/clinic/rooms', { headers: await getNoStoreAuthHeaders(false), credentials: 'include', cache: 'no-store' });
+      const result = await safeJson(response);
+      if (!result?.success || !Array.isArray(result?.data)) return result;
+      return { ...result, data: result.data.map((room: any) => {
+        const specialties = Array.isArray(room?.specialties) ? room.specialties : String(room?.specialties || '').split(',').map((value) => value.trim()).filter(Boolean);
+        const active = room?.is_active !== false && room?.isActive !== false;
+        const preventsOverlap = room?.prevent_overlapping_appointments !== false && room?.preventOverlappingAppointments !== false;
+        return { ...room, specialties, is_active: active, isActive: active, prevent_overlapping_appointments: preventsOverlap, preventOverlappingAppointments: preventsOverlap };
+      }) };
+    } catch (error) { console.error('Error fetching clinic rooms:', error); return { success: false, error: 'Não foi possível carregar as salas agora.' }; }
+  },
+  async createClinicRoom(payload: any) {
+    try { const response = await fetch('/api/clinic/rooms', { method: 'POST', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload || {}) }); return await safeJson(response); }
+    catch (error) { console.error('Error creating clinic room:', error); return { success: false, error: 'Não foi possível salvar a sala agora.' }; }
+  },
+  async updateClinicRoom(roomId: string, payload: any) {
+    try { const response = await fetch(`/api/clinic/rooms/${encodeURIComponent(roomId)}`, { method: 'PATCH', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload || {}) }); return await safeJson(response); }
+    catch (error) { console.error('Error updating clinic room:', error); return { success: false, error: 'Não foi possível atualizar a sala agora.' }; }
+  },
+  async getClinicAnnouncements(limit = 30) {
+    try { const response = await fetch(endpointWithQuery('/api/clinic/announcements', { limit }), { headers: await getNoStoreAuthHeaders(false), credentials: 'include', cache: 'no-store' }); return await safeJson(response); }
+    catch (error) { console.error('Error fetching clinic announcements:', error); return { success: false, error: 'Não foi possível carregar os avisos agora.' }; }
+  },
+  async createClinicAnnouncement(payload: any) {
+    try { const response = await fetch('/api/clinic/announcements', { method: 'POST', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload || {}) }); return await safeJson(response); }
+    catch (error) { console.error('Error creating clinic announcement:', error); return { success: false, error: 'Não foi possível enviar o aviso agora.' }; }
+  },
+
   async hydrateWorkspaceState(workspaceId?: string) {
     const workspaceKey = String(workspaceId || 'active').trim() || 'active';
     const clinicStateEntityId = `clinic-state:${workspaceKey}`;
