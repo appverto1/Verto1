@@ -509,16 +509,27 @@ export default function App() {
     const previousBodyOverscrollX = body.style.overscrollBehaviorX;
 
     const stableViewport = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover';
+    const resetViewport = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+    let resetTimer = 0;
 
     const normalizeViewport = () => {
-      // The portal must always occupy the real device width. Do not derive a narrower root width
-      // from window.innerWidth/screen.width or compensate it with CSS zoom: Android/PWA engines
-      // can apply those two mechanisms differently and squeeze the whole portal into a side strip.
-      viewport.setAttribute('content', stableViewport);
+      // Some Android/PWA restores reopen the portal with a stale zoomed-out visual viewport.
+      // Briefly force scale 1, then restore the accessible viewport. Keep the app root at the
+      // full device width throughout: never derive a narrower width from innerWidth/screen.width
+      // and never compensate width with CSS zoom, which can squeeze the portal into a side strip.
+      window.clearTimeout(resetTimer);
       root.style.width = '100%';
       root.style.maxWidth = '100%';
       root.style.removeProperty('zoom');
+      viewport.setAttribute('content', resetViewport);
       window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' });
+      resetTimer = window.setTimeout(() => {
+        viewport.setAttribute('content', stableViewport);
+        root.style.width = '100%';
+        root.style.maxWidth = '100%';
+        root.style.removeProperty('zoom');
+        window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' });
+      }, 80);
     };
 
     html.style.overflowX = 'clip';
@@ -532,6 +543,7 @@ export default function App() {
     window.addEventListener('pageshow', normalizeViewport);
 
     return () => {
+      window.clearTimeout(resetTimer);
       window.removeEventListener('orientationchange', normalizeViewport);
       window.removeEventListener('pageshow', normalizeViewport);
       viewport.setAttribute('content', previousViewport || stableViewport);
