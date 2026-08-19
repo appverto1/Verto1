@@ -1728,6 +1728,43 @@ export const dataService = {
     }
   },
 
+  async getPatientFilePermissions(patientId: string, fileId: string) {
+    try {
+      const response = await fetch(`/api/patient-files/${encodeURIComponent(String(patientId))}/${encodeURIComponent(String(fileId))}/permissions`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient file permissions:', error);
+      return { success: false, error: String(error), data: null };
+    }
+  },
+
+  async updatePatientFilePermissions(patientId: string, fileId: string, payload: {
+    accessScope: 'OWNER' | 'CASE_TEAM' | 'PATIENT_ACCESS' | 'SELECTED';
+    patientPortalVisible: boolean;
+    selectedUserIds?: string[];
+  }) {
+    try {
+      const response = await fetch(`/api/patient-files/${encodeURIComponent(String(patientId))}/${encodeURIComponent(String(fileId))}/permissions`, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          accessScope: payload.accessScope,
+          patientPortalVisible: payload.patientPortalVisible === true,
+          selectedUserIds: Array.isArray(payload.selectedUserIds) ? payload.selectedUserIds.slice(0, 100) : []
+        })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating patient file permissions:', error);
+      return { success: false, error: String(error), data: null };
+    }
+  },
+
   async uploadPatientFile(patientId: string, payload: any) {
     try {
       if (payload?.fileBlob instanceof Blob) {

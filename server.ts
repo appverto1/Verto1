@@ -56,6 +56,7 @@ import {
 import {
   removePatientPushSubscription,
   resolvePatientIdsForPush,
+  renewPatientPushSubscription,
   savePatientPushSubscription,
   sendAppointmentNotification
 } from './services/pushNotificationService';
@@ -388,6 +389,12 @@ import {
   resolveProfessionalProfileSpecialty,
   validatePatientProfessionalCandidate
 } from './src/utils/patientProfessionalLinks';
+import {
+  filterPatientFilesForActor,
+  isPatientFileAccessScope,
+  isPatientFilePortalVisible,
+  normalizePatientFileAccessScope
+} from './src/utils/patientFileAccess';
 import {
   normalizeClinicalSpecialty,
   readClinicalSpecialtyFromSource
@@ -19384,6 +19391,17 @@ async function startServer() {
     message: { success: false, error: 'Execução temporariamente limitada.' }
   });
 
+  const pushRenewalLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    store: distributedRateLimitStore('push-renewal', 10 * 60 * 1000),
+    passOnStoreError: false,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    message: { success: false, error: 'PUSH_RENEWAL_RATE_LIMITED' }
+  });
+
   const resendActivationLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
     store: distributedRateLimitStore('resend-activation', 10 * 60 * 1000),
@@ -32167,6 +32185,7 @@ async function startServer() {
         resolvedPatientClinicId
       });
 
+      const renewalToken = crypto.randomBytes(32).toString('base64url');
       const result = await savePatientPushSubscription({
         supabase,
         subscription,
@@ -32176,6 +32195,7 @@ async function startServer() {
         clinicId: sessionClinicId,
         resolvedPatientClinicId,
         role,
+        renewalToken,
         logger: console
       });
 
@@ -32191,7 +32211,11 @@ async function startServer() {
         endpointPrefix: endpoint.slice(0, 80)
       });
 
-      return res.json({ success: true, patientId });
+      return res.json({
+        success: true,
+        patientId,
+        ...(result.renewalTokenPersisted ? { renewalToken } : {}),
+      });
     } catch (error: any) {
       console.error('[Push] subscribe error:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Erro ao salvar inscrição push.' });
@@ -32224,8 +32248,36 @@ async function startServer() {
     }
   };
 
+  const handlePushRenew = async (req: any, res: any) => {
+    try {
+      const renewalToken = sanitizeString(req.body?.renewalToken || req.body?.renewal_token, 200);
+      const subscription = req.body?.subscription;
+      const oldEndpoint = sanitizeString(req.body?.oldEndpoint || req.body?.old_endpoint, 2000);
+      const endpoint = sanitizeString(subscription?.endpoint, 2000);
+      if (!renewalToken || !endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+        return res.status(400).json({ success: false, error: 'PUSH_RENEWAL_INVALID' });
+      }
+      const result = await renewPatientPushSubscription({
+        supabase,
+        renewalToken,
+        subscription,
+        oldEndpoint,
+        logger: console,
+      });
+      if (!result.success) {
+        return res.status(result.status || 500).json({ success: false, error: result.error });
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json({ success: true, renewalToken: result.renewalToken });
+    } catch (error: any) {
+      console.error('[Push] renewal error:', error?.message || String(error));
+      return res.status(500).json({ success: false, error: 'PUSH_RENEWAL_FAILED' });
+    }
+  };
+
   app.get('/api/push/vapid-public-key', handleVapidPublicKey);
   app.get('/api/notifications/vapid-key', handleVapidPublicKey);
+  app.post('/api/push/renew', pushRenewalLimiter, handlePushRenew);
   app.post('/api/push/subscribe', checkAuth, handlePushSubscribe);
   app.post('/api/notifications/subscribe', checkAuth, handlePushSubscribe);
   app.delete('/api/push/subscribe', checkAuth, handlePushUnsubscribe);
@@ -40012,18 +40064,7 @@ async function startServer() {
     return mapped;
   };
 
-  const isPatientFileVisibleToPortal = (row: any) => {
-    const source = sanitizeString(row?.source, 60).toLowerCase();
-    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-    return (
-      source === 'family_portal_document' ||
-      metadata?.releasedToPatient === true ||
-      metadata?.released_to_patient === true ||
-      metadata?.visibleToPatient === true ||
-      metadata?.visible_to_patient === true ||
-      ['patient', 'family', 'shared_patient'].includes(sanitizeString(metadata?.visibility, 40).toLowerCase())
-    );
-  };
+  const isPatientFileVisibleToPortal = (row: any) => isPatientFilePortalVisible(row);
 
   const persistPatientFileFallback = async (params: {
     patientId: string;
@@ -40290,12 +40331,18 @@ async function startServer() {
         logger: console
       });
       const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const actorId = sanitizeString(req.session.user?.id, 120);
       const isPatientPortal = isResponsiblePortalRole(role);
-      const isFileVisibleToPatient = isPatientFileVisibleToPortal;
       const rawCanonicalRows = Array.isArray(fileResult.data) ? fileResult.data : [];
-      const data = isPatientPortal
-        ? rawCanonicalRows.filter(isFileVisibleToPatient)
-        : rawCanonicalRows;
+      const data = fileResult.error
+        ? []
+        : await filterPatientFilesForActor({
+            supabase,
+            rows: rawCanonicalRows,
+            actorId,
+            actorRole: role,
+            logger: console
+          });
       const error = fileResult.error;
 
       if (error) {
@@ -40324,7 +40371,7 @@ async function startServer() {
         throw error;
       }
 
-      if (requestedFileId && isPatientPortal && rawCanonicalRows.length > 0 && data.length === 0) {
+      if (requestedFileId && rawCanonicalRows.length > 0 && data.length === 0) {
         return res.json({ success: true, data: [] });
       }
 
@@ -40349,6 +40396,10 @@ async function startServer() {
         source: row.source || 'upload',
         createdAt: row.created_at,
         metadata: row.metadata || {},
+        uploadedBy: row.uploaded_by || null,
+        accessScope: normalizePatientFileAccessScope(row.access_scope),
+        patientPortalVisible: isPatientFileVisibleToPortal(row),
+        canManageAccess: Boolean(actorId && sanitizeString(row.uploaded_by, 120) === actorId),
         requiresAuditedAccess: true,
         signedUrl: null,
         url: null
@@ -40373,7 +40424,16 @@ async function startServer() {
       );
 
       const merged = new Map<string, any>();
-      const visibleFallbackFiles = isPatientPortal ? fallbackFiles.filter(isFileVisibleToPatient) : fallbackFiles;
+      const canonicalKeys = new Set(rawCanonicalRows.flatMap((row: any) => [
+        sanitizeString(row?.id, 120),
+        sanitizeString(row?.storage_path, 500)
+      ]).filter(Boolean));
+      const visibleFallbackFiles = (isPatientPortal ? fallbackFiles.filter(isPatientFileVisibleToPortal) : fallbackFiles)
+        .filter((row: any) => {
+          const fallbackId = sanitizeString(row?.id, 120);
+          const fallbackPath = sanitizeString(row?.path, 500);
+          return (!fallbackId || !canonicalKeys.has(fallbackId)) && (!fallbackPath || !canonicalKeys.has(fallbackPath));
+        });
       [...withUrls, ...visibleFallbackFiles].forEach((row: any) => {
         const key = sanitizeString(row?.id, 120) || sanitizeString(row?.path, 500);
         if (!key || merged.has(key)) return;
@@ -40395,6 +40455,176 @@ async function startServer() {
   });
 
 
+  app.get('/api/patient-files/:patientId/:fileId/permissions', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.documents.view'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const fileId = sanitizeString(req.params.fileId, 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(fileId) || !isUuid(actorId)) {
+        return res.status(400).json({ success: false, error: 'Arquivo inválido.' });
+      }
+
+      const fileResult = await fetchPatientFilesWithSchemaFallback({
+        supabase,
+        patientId,
+        clinicId,
+        fileId,
+        limit: 1,
+        logger: console
+      });
+      if (fileResult.error) throw fileResult.error;
+      const row = Array.isArray(fileResult.data) ? fileResult.data[0] : null;
+      if (!row?.id) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
+      if (sanitizeString(row.uploaded_by, 120) !== actorId) {
+        return res.status(403).json({ success: false, code: 'PATIENT_FILE_ACCESS_OWNER_REQUIRED', error: 'Somente quem enviou este arquivo pode gerenciar quem pode vê-lo.' });
+      }
+
+      const grantsResult = await supabase
+        .from('patient_file_access_grants')
+        .select('grantee_user_id')
+        .eq('file_id', fileId)
+        .limit(100);
+      if (grantsResult.error) {
+        const message = String(grantsResult.error?.message || '').toLowerCase();
+        if (message.includes('patient_file_access_grants') || message.includes('does not exist')) {
+          return res.status(503).json({ success: false, code: 'PATIENT_FILE_ACCESS_MIGRATION_REQUIRED', error: 'A atualização de níveis de acesso dos arquivos ainda não foi aplicada no banco.' });
+        }
+        throw grantsResult.error;
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          fileId,
+          accessScope: normalizePatientFileAccessScope(row.access_scope),
+          patientPortalVisible: isPatientFileVisibleToPortal(row),
+          selectedUserIds: (grantsResult.data || []).map((grant: any) => sanitizeString(grant?.grantee_user_id, 120)).filter(Boolean),
+          canManageAccess: true
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient-files/:patientId/:fileId/permissions [GET]', error, {
+        patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120),
+        fileId: sanitizeString(req.params.fileId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.patch('/api/patient-files/:patientId/:fileId/permissions', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.documents.view'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Permissões de arquivo do paciente')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const fileId = sanitizeString(req.params.fileId, 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const requestedClinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const rawAccessScope = sanitizeString(req.body?.accessScope ?? req.body?.access_scope, 40).toUpperCase();
+      if (!isPatientFileAccessScope(rawAccessScope)) {
+        return res.status(400).json({ success: false, code: 'PATIENT_FILE_ACCESS_SCOPE_INVALID', error: 'Nível de acesso do arquivo inválido.' });
+      }
+      const accessScope = rawAccessScope;
+      const rawPatientPortalVisible = req.body?.patientPortalVisible ?? req.body?.patient_portal_visible;
+      if (typeof rawPatientPortalVisible !== 'boolean') {
+        return res.status(400).json({ success: false, code: 'PATIENT_FILE_PORTAL_VISIBILITY_INVALID', error: 'A visibilidade para paciente/responsável deve ser verdadeira ou falsa.' });
+      }
+      const patientPortalVisible = rawPatientPortalVisible;
+      const rawSelected = Array.isArray(req.body?.selectedUserIds) ? req.body.selectedUserIds : Array.isArray(req.body?.selected_user_ids) ? req.body.selected_user_ids : [];
+      const normalizedSelected = rawSelected.map((value: any) => sanitizeString(value, 120));
+      if (!isUuid(patientId) || !isUuid(fileId) || !isUuid(actorId)) {
+        return res.status(400).json({ success: false, error: 'Permissões de arquivo inválidas.' });
+      }
+      if (rawSelected.length > 100 || normalizedSelected.some((value: string) => !isUuid(value))) {
+        return res.status(400).json({ success: false, error: 'Lista de pessoas selecionadas inválida ou acima do limite.' });
+      }
+      const selectedUserIds = Array.from(new Set(normalizedSelected));
+      if (accessScope === 'SELECTED' && selectedUserIds.length === 0) {
+        return res.status(400).json({ success: false, code: 'PATIENT_FILE_ACCESS_SELECTED_EMPTY', error: 'Selecione ao menos uma pessoa para este nível de acesso.' });
+      }
+
+      const fileResult = await fetchPatientFilesWithSchemaFallback({
+        supabase,
+        patientId,
+        clinicId: requestedClinicId,
+        fileId,
+        limit: 1,
+        logger: console
+      });
+      if (fileResult.error) throw fileResult.error;
+      const row = Array.isArray(fileResult.data) ? fileResult.data[0] : null;
+      if (!row?.id) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
+      if (sanitizeString(row.uploaded_by, 120) !== actorId) {
+        return res.status(403).json({ success: false, code: 'PATIENT_FILE_ACCESS_OWNER_REQUIRED', error: 'Somente quem enviou este arquivo pode alterar o nível de acesso.' });
+      }
+      const fileClinicId = sanitizeString(row.clinic_id || requestedClinicId, 120);
+      if (!isUuid(fileClinicId)) return res.status(409).json({ success: false, error: 'Clínica do arquivo inválida.' });
+
+      const result = await supabase.rpc('set_patient_file_access_v1', {
+        p_file_id: fileId,
+        p_patient_id: patientId,
+        p_clinic_id: fileClinicId,
+        p_actor_id: actorId,
+        p_access_scope: accessScope,
+        p_patient_portal_visible: patientPortalVisible,
+        p_selected_user_ids: accessScope === 'SELECTED' ? selectedUserIds : []
+      });
+      if (result.error) {
+        const rawMessage = String(result.error?.message || '');
+        if (rawMessage.includes('PATIENT_FILE_ACCESS_OWNER_REQUIRED')) {
+          return res.status(403).json({ success: false, code: 'PATIENT_FILE_ACCESS_OWNER_REQUIRED', error: 'Somente quem enviou este arquivo pode alterar o nível de acesso.' });
+        }
+        if (rawMessage.includes('PATIENT_FILE_ACCESS_GRANTEE_OUTSIDE_CASE_TEAM')) {
+          return res.status(400).json({ success: false, code: 'PATIENT_FILE_ACCESS_GRANTEE_OUTSIDE_CASE_TEAM', error: 'Selecione apenas profissionais ativos da equipe deste paciente.' });
+        }
+        if (rawMessage.includes('set_patient_file_access_v1') || rawMessage.toLowerCase().includes('does not exist')) {
+          return res.status(503).json({ success: false, code: 'PATIENT_FILE_ACCESS_MIGRATION_REQUIRED', error: 'A atualização de níveis de acesso dos arquivos ainda não foi aplicada no banco.' });
+        }
+        throw result.error;
+      }
+
+      const actorName = sanitizeString(req.session.user?.name || req.session.user?.email || 'Usuário', 180);
+      const auditOk = await persistActivityLog({
+        userId: actorId,
+        clinicId: fileClinicId,
+        actorName,
+        title: 'Acesso ao arquivo atualizado',
+        content: `${actorName} atualizou quem pode visualizar o arquivo "${sanitizeString(row.file_name, 220) || 'arquivo'}".`,
+        type: 'clinical',
+        action: 'patient_file_access_updated',
+        actionType: 'patient_file_access_updated',
+        payloadDetails: JSON.stringify({ fileId, accessScope, patientPortalVisible, selectedUsersCount: accessScope === 'SELECTED' ? selectedUserIds.length : 0 }),
+        resourceType: 'patient_file',
+        resourceId: fileId,
+        patientId,
+        timezone: currentClinicTimeZone(req.session.user),
+        immutableAudit: true,
+        idempotencyKey: null
+      });
+      if (!auditOk) {
+        console.warn('[PatientFiles] Permissões persistidas, mas auditoria ficou pendente.', { fileId, patientId, actorId });
+      }
+
+      const data = result.data && typeof result.data === 'object' ? result.data : {};
+      return res.json({
+        success: true,
+        auditPersisted: auditOk,
+        data: {
+          fileId,
+          accessScope: normalizePatientFileAccessScope(data.accessScope || accessScope),
+          patientPortalVisible: data.patientPortalVisible === true || patientPortalVisible,
+          selectedUserIds: Array.isArray(data.selectedUserIds) ? data.selectedUserIds : (accessScope === 'SELECTED' ? selectedUserIds : []),
+          canManageAccess: true
+        }
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient-files/:patientId/:fileId/permissions [PATCH]', error, {
+        patientId: sanitizeString(req.resolvedPatientId || req.params.patientId, 120),
+        fileId: sanitizeString(req.params.fileId, 120),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
   app.post('/api/patient-files/:patientId/:fileId/access', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.documents.view'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 8 * 1024, 'Acesso auditado a arquivo do paciente')) return;
@@ -40413,22 +40643,30 @@ async function startServer() {
       const isPatientPortal = isResponsiblePortalRole(actorRole);
       let file: any = null;
       let canonicalUnavailable = false;
-      const canonicalResult = await supabase
-        .from('patient_files')
-        .select('id,patient_id,clinic_id,storage_bucket,storage_path,file_name,mime_type,file_size_bytes,source,metadata,created_at')
-        .eq('id', fileId)
-        .eq('patient_id', patientId)
-        .limit(1)
-        .maybeSingle();
+      const canonicalResult = await fetchPatientFilesWithSchemaFallback({
+        supabase,
+        patientId,
+        clinicId,
+        fileId,
+        limit: 1,
+        logger: console
+      });
       if (canonicalResult.error) {
         canonicalUnavailable = isMissingRelationError(canonicalResult.error) || String(canonicalResult.error?.message || '').toLowerCase().includes('patient_files');
         if (!canonicalUnavailable) throw canonicalResult.error;
-      } else if (canonicalResult.data?.id) {
-        const row = canonicalResult.data as any;
+      } else if (Array.isArray(canonicalResult.data) && canonicalResult.data.length > 0) {
+        const row = canonicalResult.data[0] as any;
         if (!hasGlobalClinicAccess(req.session.user) && clinicId && sanitizeString(row?.clinic_id, 120) !== clinicId) {
           return res.status(403).json({ success: false, error: 'Arquivo fora do escopo da clínica.' });
         }
-        if (isPatientPortal && !isPatientFileVisibleToPortal(row)) {
+        const visibleRows = await filterPatientFilesForActor({
+          supabase,
+          rows: [row],
+          actorId,
+          actorRole,
+          logger: console
+        });
+        if (!visibleRows.length) {
           return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
         }
         const storagePath = sanitizeString(row?.storage_path, 800);
@@ -40449,6 +40687,10 @@ async function startServer() {
           source: row.source || 'upload',
           createdAt: row.created_at,
           metadata: row.metadata || {},
+          uploadedBy: row.uploaded_by || null,
+          accessScope: normalizePatientFileAccessScope(row.access_scope),
+          patientPortalVisible: isPatientFileVisibleToPortal(row),
+          canManageAccess: sanitizeString(row.uploaded_by, 120) === actorId,
           signedUrl: sanitizeUrl(signedData.signedUrl),
           url: sanitizeUrl(signedData.signedUrl)
         };
@@ -40687,7 +40929,7 @@ async function startServer() {
       if (source === 'anamnesis') {
         const { data: duplicateFile, error: duplicateError } = await supabase
           .from('patient_files')
-          .select('id, patient_id, clinic_id, storage_path, file_name, mime_type, file_size_bytes, source, metadata, created_at, updated_at')
+          .select('id, patient_id, clinic_id, uploaded_by, storage_bucket, storage_path, file_name, mime_type, file_size_bytes, source, access_scope, patient_portal_visible, metadata, created_at, updated_at')
           .eq('patient_id', patientId)
           .eq('clinic_id', clinicId)
           .eq('source', 'anamnesis')
@@ -40704,6 +40946,10 @@ async function startServer() {
             deduped: true,
             data: {
               ...duplicateFile,
+              uploadedBy: duplicateFile.uploaded_by || null,
+              accessScope: normalizePatientFileAccessScope(duplicateFile.access_scope),
+              patientPortalVisible: duplicateFile.patient_portal_visible === true || isPatientFileVisibleToPortal(duplicateFile),
+              canManageAccess: sanitizeString(duplicateFile.uploaded_by, 120) === uploadedBy,
               signedUrl: signedDuplicate?.signedUrl || null,
               url: signedDuplicate?.signedUrl || null
             }
@@ -40838,6 +41084,8 @@ async function startServer() {
         mime_type: resolvedMime,
         file_size_bytes: fileBuffer.length,
         source,
+        access_scope: 'PATIENT_ACCESS',
+        patient_portal_visible: isPatientUploader || isPatientFileVisibleToPortal({ source, metadata }),
         metadata: {
           ...metadata,
           fileSha256
@@ -40847,7 +41095,7 @@ async function startServer() {
       const { data: inserted, error: insertError } = await supabase
         .from('patient_files')
         .insert([insertPayload])
-        .select('id, patient_id, clinic_id, uploaded_by, storage_bucket, storage_path, file_name, mime_type, file_size_bytes, source, metadata, created_at, updated_at')
+        .select('id, patient_id, clinic_id, uploaded_by, storage_bucket, storage_path, file_name, mime_type, file_size_bytes, source, access_scope, patient_portal_visible, metadata, created_at, updated_at')
         .single();
 
       if (insertError) {
@@ -40969,6 +41217,10 @@ async function startServer() {
           source: inserted.source || 'upload',
           createdAt: inserted.created_at,
           metadata: inserted.metadata || {},
+          uploadedBy: inserted.uploaded_by || uploadedBy,
+          accessScope: normalizePatientFileAccessScope(inserted.access_scope),
+          patientPortalVisible: inserted.patient_portal_visible === true || isPatientUploader,
+          canManageAccess: sanitizeString(inserted.uploaded_by || uploadedBy, 120) === uploadedBy,
           signedUrl: signedData?.signedUrl || null
         }
       });
@@ -40995,7 +41247,7 @@ async function startServer() {
 
       const { data: existing, error: existingError } = await supabase
         .from('patient_files')
-        .select('id, storage_path, file_name, mime_type, file_size_bytes, source')
+        .select('id, patient_id, clinic_id, uploaded_by, access_scope, patient_portal_visible, metadata, storage_path, file_name, mime_type, file_size_bytes, source')
         .eq('id', fileId)
         .eq('patient_id', patientId)
         .eq('clinic_id', clinicId)
@@ -41049,6 +41301,14 @@ async function startServer() {
         });
       }
       if (!existing) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
+      const deletableRows = await filterPatientFilesForActor({
+        supabase,
+        rows: [existing],
+        actorId: sanitizeString(req.session.user?.id, 120),
+        actorRole: sanitizeString(req.session.user?.role, 40),
+        logger: console
+      });
+      if (!deletableRows.length) return res.status(404).json({ success: false, error: 'Arquivo não encontrado.' });
 
       const { error: removeStorageError } = await supabase.storage
         .from('patient-files-private')

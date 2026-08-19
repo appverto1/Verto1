@@ -77,8 +77,9 @@ type ReminderAppointment = {
 
 const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
 const DEFAULT_CLINIC_NOTIFICATION_NAME = 'Clínica';
-const REMINDER_LOOKBACK_MINUTES = 2;
+const REMINDER_LOOKBACK_MINUTES = 12 * 60;
 const REMINDER_LOOKAHEAD_MINUTES = 1;
+const REMINDER_12H_MAX_LATE_MINUTES = 10 * 60;
 const QUIET_HOURS_START = 22;
 const QUIET_HOURS_END = 6;
 const QUIET_RELEASE_CATCHUP_MINUTES = 10;
@@ -229,19 +230,21 @@ export const getReminderDeliveryDueUtc = (scheduledAt: string, hoursBefore: numb
   return rawDueLocal.utc();
 };
 
-type ReminderCandidateWindow = { startUtc: dayjs.Dayjs; endUtc: dayjs.Dayjs };
+type ReminderCandidateWindow = { kind: ReminderKind; startUtc: dayjs.Dayjs; endUtc: dayjs.Dayjs };
 export const buildReminderCandidateWindows = (nowUtc: dayjs.Dayjs): ReminderCandidateWindow[] => {
   const localNow = nowUtc.tz(BRAZIL_TIMEZONE);
   if (isReminderQuietHours(localNow)) return [];
   const dueStart = nowUtc.subtract(REMINDER_LOOKBACK_MINUTES, 'minute');
   const dueEnd = nowUtc.add(REMINDER_LOOKAHEAD_MINUTES, 'minute');
   const windows: ReminderCandidateWindow[] = REMINDER_STEPS.map((step) => ({
-    startUtc: dueStart.add(step.hoursBefore, 'hour'), endUtc: dueEnd.add(step.hoursBefore, 'hour')
+    kind: step.kind,
+    startUtc: dueStart.add(step.hoursBefore, 'hour'),
+    endUtc: dueEnd.add(step.hoursBefore, 'hour')
   }));
   if (localNow.hour() === QUIET_HOURS_END && localNow.minute() < QUIET_RELEASE_CATCHUP_MINUTES) {
     const releaseLocal = localNow.hour(QUIET_HOURS_END).minute(0).second(0).millisecond(0);
     const quietStartLocal = releaseLocal.subtract(8, 'hour');
-    for (const step of REMINDER_STEPS) windows.push({ startUtc: quietStartLocal.utc().add(step.hoursBefore, 'hour'), endUtc: releaseLocal.utc().add(step.hoursBefore, 'hour') });
+    for (const step of REMINDER_STEPS) windows.push({ kind: step.kind, startUtc: quietStartLocal.utc().add(step.hoursBefore, 'hour'), endUtc: releaseLocal.utc().add(step.hoursBefore, 'hour') });
   }
   return windows;
 };
@@ -417,24 +420,43 @@ async function fetchAppointmentsTable(
   options: ActiveCronServiceOptions,
   queryScheduledStartUtc: dayjs.Dayjs,
   queryScheduledEndUtc: dayjs.Dayjs,
+  reminderKind?: ReminderKind,
 ) {
   const appointments = new Map<string, ReminderAppointment>();
-  const { data, error } = await options.supabase
-    .from('appointments')
-    .select('id, clinic_id, patient_id, scheduled_at, status, patient_response, notification_24h_sent_at, notification_12h_sent_at, is_active, deleted_at')
-    .gte('scheduled_at', queryScheduledStartUtc.toISOString())
-    .lt('scheduled_at', queryScheduledEndUtc.toISOString())
-    .order('scheduled_at', { ascending: true })
-    .limit(500);
+  const rows: any[] = [];
+  const pageSize = 500;
+  for (let page = 0; page < 40; page += 1) {
+    const from = page * pageSize;
+    let query = options.supabase
+      .from('appointments')
+      .select('id, clinic_id, patient_id, scheduled_at, status, patient_response, notification_24h_sent_at, notification_12h_sent_at, is_active, deleted_at')
+      .gte('scheduled_at', queryScheduledStartUtc.toISOString())
+      .lt('scheduled_at', queryScheduledEndUtc.toISOString());
+    if (reminderKind === '24h') query = query.is('notification_24h_sent_at', null);
+    if (reminderKind === '12h') query = query.is('notification_12h_sent_at', null);
+    const { data, error } = await query
+      .order('scheduled_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, from + pageSize - 1);
 
-  if (error) {
-    options.logger.warn('[Appointment Reminder Cron] Query appointments falhou.', {
-      message: error.message
-    });
-    return { appointments, available: false };
+    if (error) {
+      options.logger.warn('[Appointment Reminder Cron] Query appointments falhou.', {
+        message: error.message,
+        page,
+      });
+      return { appointments, available: false };
+    }
+    const pageRows = Array.isArray(data) ? data : [];
+    rows.push(...pageRows);
+    if (pageRows.length < pageSize) break;
+    if (page === 39) {
+      options.logger.error('[Appointment Reminder Cron] Janela canonica excedeu o limite seguro de paginacao.', {
+        windowStart: queryScheduledStartUtc.toISOString(),
+        windowEnd: queryScheduledEndUtc.toISOString(),
+        rowsRead: rows.length,
+      });
+    }
   }
-
-  const rows = Array.isArray(data) ? data : [];
   const approvedRescheduleIds = await reconcileApprovedReschedulesForReminders(options, rows);
 
   for (const row of rows) {
@@ -740,11 +762,13 @@ async function fetchReminderAppointments(
   options: ActiveCronServiceOptions,
   queryScheduledStartUtc: dayjs.Dayjs,
   queryScheduledEndUtc: dayjs.Dayjs,
+  reminderKind?: ReminderKind,
 ) {
   const tableResult = await fetchAppointmentsTable(
     options,
     queryScheduledStartUtc,
     queryScheduledEndUtc,
+    reminderKind,
   );
   const tableAppointments = tableResult.appointments;
   if (!tableResult.available) {
@@ -935,28 +959,29 @@ export const chooseDueReminder = (
   reminderWindowStartUtc: dayjs.Dayjs,
   reminderWindowEndUtc: dayjs.Dayjs,
 ) => {
-  for (const step of REMINDER_STEPS) {
+  // Prefer the most recent due step. If the backend was unavailable across both windows,
+  // send only the 12h follow-up instead of delivering two stale reminders at once.
+  for (const step of [...REMINDER_STEPS].reverse()) {
     const alreadySent =
       step.kind === '24h'
         ? Boolean(appointment.notification24SentAt || appointment.legacyNotification24Sent)
         : Boolean(appointment.notification12SentAt || appointment.legacyNotification12Sent);
     if (alreadySent) continue;
+    // Never send an older 24h reminder after the newer 12h step has already been delivered.
+    if (
+      step.kind === '24h' &&
+      Boolean(appointment.notification12SentAt || appointment.legacyNotification12Sent)
+    ) continue;
 
-    if (step.kind === '12h') {
-      const hasPatientResponse = hasResponse(appointment);
-
-      // A falha ou ausencia de assinatura na janela de 24h nao pode impedir
-      // o lembrete de 12h. Respostas do paciente continuam encerrando o follow-up.
-      if (hasPatientResponse) {
-        continue;
-      }
-    }
+    if (step.kind === '12h' && hasResponse(appointment)) continue;
 
     const dueUtc = getReminderDeliveryDueUtc(appointment.scheduledAt, step.hoursBefore);
     if (!dueUtc.isValid()) continue;
-    if (!dueUtc.isBefore(reminderWindowStartUtc) && !dueUtc.isAfter(reminderWindowEndUtc)) {
-      return step;
-    }
+    if (dueUtc.isBefore(reminderWindowStartUtc) || dueUtc.isAfter(reminderWindowEndUtc)) continue;
+
+    const lateMinutes = Math.max(0, reminderWindowEndUtc.diff(dueUtc, 'minute'));
+    if (step.kind === '12h' && lateMinutes > REMINDER_12H_MAX_LATE_MINUTES) continue;
+    return step;
   }
   return null;
 };
@@ -1381,14 +1406,12 @@ async function runAppointmentReminderJob(
       options.logger.log('[Appointment Reminder Cron] Execução adiada pelo horário de não perturbe.', { trigger, businessTimezone: BRAZIL_TIMEZONE, quietHours: '22:00-06:00' });
       return { skipped: true, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 0 };
     }
-    const localNow = nowUtc.tz(BRAZIL_TIMEZONE);
-    const quietReleaseStartUtc = localNow.hour(QUIET_HOURS_END).minute(0).second(0).millisecond(0).utc();
-    const reminderWindowStartUtc = localNow.hour() === QUIET_HOURS_END ? quietReleaseStartUtc.subtract(1, 'minute') : nowUtc.subtract(REMINDER_LOOKBACK_MINUTES, 'minute');
+    const reminderWindowStartUtc = nowUtc.subtract(REMINDER_LOOKBACK_MINUTES, 'minute');
     const reminderWindowEndUtc = nowUtc.add(REMINDER_LOOKAHEAD_MINUTES, 'minute');
     const candidateWindows = buildReminderCandidateWindows(nowUtc);
     const appointmentsBySchedule = new Map<string, ReminderAppointment>();
     for (const window of candidateWindows) {
-      const rows = await fetchReminderAppointments(options, window.startUtc, window.endUtc);
+      const rows = await fetchReminderAppointments(options, window.startUtc, window.endUtc, window.kind);
       for (const appointment of rows) {
         const key = `${appointment.appointmentId}:${appointment.scheduledAt}`;
         if (!appointmentsBySchedule.has(key)) appointmentsBySchedule.set(key, appointment);
@@ -1596,7 +1619,8 @@ async function runAppointmentReminderJob(
       failed,
       reminderWindowStartUtc: reminderWindowStartUtc.toISOString(),
       reminderWindowEndUtc: reminderWindowEndUtc.toISOString(),
-      businessTimezone: BRAZIL_TIMEZONE
+      businessTimezone: BRAZIL_TIMEZONE,
+      catchupLookbackMinutes: REMINDER_LOOKBACK_MINUTES
     });
     summary = { skipped: false, totalCandidates: appointments.length, sent24h, sent12h, failed };
   } catch (error: any) {

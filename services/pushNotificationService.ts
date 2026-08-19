@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import webpush from 'web-push';
 import {
   buildPatientReminderNotificationPayload,
@@ -47,6 +48,7 @@ type SavePushSubscriptionParams = {
   clinicId?: string | null;
   resolvedPatientClinicId?: string | null;
   role?: string | null;
+  renewalToken?: string | null;
   logger?: Logger;
 };
 
@@ -149,10 +151,22 @@ const isRemovablePushColumn = (column: string | null) =>
         'user_email',
         'clinic_id',
         'role',
+        'renewal_token_hash',
+        'renewal_token_created_at',
+        'last_seen_at',
+        'invalidated_at',
         'created_at',
         'updated_at'
       ].includes(column)
   );
+
+const hashPushRenewalToken = (value: unknown) => {
+  const token = sanitizeText(value, 200);
+  if (!/^[A-Za-z0-9_-]{32,200}$/.test(token)) return '';
+  return crypto.createHash('sha256').update(token).digest('hex');
+};
+
+const createPushRenewalToken = () => crypto.randomBytes(32).toString('base64url');
 
 const safeJsonSubscription = (value: any): PushSubscriptionInput | null => {
   if (!value) return null;
@@ -168,6 +182,7 @@ const safeJsonSubscription = (value: any): PushSubscriptionInput | null => {
 };
 
 export const normalizePushSubscription = (rowOrSubscription: any): NormalizedPushSubscription | null => {
+  if (rowOrSubscription?.invalidated_at) return null;
   const direct = safeJsonSubscription(rowOrSubscription);
   const embedded = safeJsonSubscription(rowOrSubscription?.subscription);
   const source = embedded || direct || {};
@@ -410,6 +425,7 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
   });
 
   const now = new Date().toISOString();
+  const renewalTokenHash = hashPushRenewalToken(params.renewalToken);
   let payload: Record<string, any> = {
     patient_id: patientId,
     endpoint: normalized.endpoint,
@@ -420,6 +436,12 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
     user_email: safeUserEmail || null,
     clinic_id: safeClinicId || null,
     role: sanitizeText(params.role, 40) || null,
+    ...(renewalTokenHash ? {
+      renewal_token_hash: renewalTokenHash,
+      renewal_token_created_at: now,
+    } : {}),
+    last_seen_at: now,
+    invalidated_at: null,
     created_at: now,
     updated_at: now
   };
@@ -469,7 +491,7 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
 
   const existing = await updateExisting();
   if (existing.success && existing.updated) {
-    return { success: true, patientId, endpoint: normalized.endpoint };
+    return { success: true, patientId, endpoint: normalized.endpoint, renewalTokenPersisted: Boolean(payload.renewal_token_hash) };
   }
   if (!existing.success) {
     return { success: false, error: existing.error?.message || 'Erro ao atualizar inscricao push.' };
@@ -485,7 +507,7 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
         patientId,
         endpointPrefix: normalized.endpoint.slice(0, 80)
       });
-      return { success: true, patientId, endpoint: normalized.endpoint };
+      return { success: true, patientId, endpoint: normalized.endpoint, renewalTokenPersisted: Boolean(payload.renewal_token_hash) };
     }
     if (isDuplicatePushError(error)) {
       params.logger?.warn?.('[PushSubscriptionSave] duplicate endpoint on insert; retrying update.', {
@@ -494,7 +516,7 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
       });
       const retryUpdate = await updateExisting();
       if (retryUpdate.success) {
-        return { success: true, patientId, endpoint: normalized.endpoint };
+        return { success: true, patientId, endpoint: normalized.endpoint, renewalTokenPersisted: Boolean(payload.renewal_token_hash) };
       }
       return { success: false, error: retryUpdate.error?.message || error.message || 'Erro ao salvar inscricao push.' };
     }
@@ -534,16 +556,93 @@ export async function deleteInvalidPushSubscription(params: {
 }) {
   const endpoint = sanitizeText(params.endpoint, 2000);
   if (!endpoint) return;
-  const { error } = await params.supabase
+  const invalidatedAt = new Date().toISOString();
+  const mark = await params.supabase
     .from('push_subscriptions')
-    .delete()
+    .update({ invalidated_at: invalidatedAt, p256dh: null, auth: null, subscription: null, updated_at: invalidatedAt })
     .eq('endpoint', endpoint);
-  if (error) {
+  if (!mark.error) return;
+
+  // Compatibility before the self-healing migration is applied: preserve the old cleanup.
+  if (extractMissingColumnName(mark.error) === 'invalidated_at') {
+    const fallback = await params.supabase
+      .from('push_subscriptions')
+      .delete()
+      .eq('endpoint', endpoint);
+    if (!fallback.error) return;
     params.logger?.warn?.('[Push] Falha ao remover subscription expirada.', {
       endpoint: endpoint.slice(0, 80),
-      message: error.message
+      message: fallback.error.message
     });
+    return;
   }
+  params.logger?.warn?.('[Push] Falha ao invalidar subscription expirada.', {
+    endpoint: endpoint.slice(0, 80),
+    message: mark.error.message
+  });
+}
+
+export async function renewPatientPushSubscription(params: {
+  supabase: any;
+  renewalToken: string;
+  subscription: PushSubscriptionInput;
+  oldEndpoint?: string | null;
+  logger?: Logger;
+}) {
+  const tokenHash = hashPushRenewalToken(params.renewalToken);
+  const normalized = normalizePushSubscription(params.subscription);
+  const oldEndpoint = sanitizeText(params.oldEndpoint, 2000);
+  if (!tokenHash || !normalized) {
+    return { success: false, status: 400, error: 'PUSH_RENEWAL_INVALID' };
+  }
+
+  const nextToken = createPushRenewalToken();
+  const nextTokenHash = hashPushRenewalToken(nextToken);
+  const renewal = await params.supabase.rpc('renew_push_subscription_v1', {
+    p_renewal_token_hash: tokenHash,
+    p_next_renewal_token_hash: nextTokenHash,
+    p_new_endpoint: normalized.endpoint,
+    p_p256dh: normalized.keys.p256dh,
+    p_auth: normalized.keys.auth,
+    p_subscription: normalized,
+  });
+
+  if (renewal.error) {
+    const message = String(renewal.error?.message || renewal.error?.details || '');
+    if (/renew_push_subscription_v1|function .* does not exist|schema cache/i.test(message)) {
+      return { success: false, status: 503, error: 'PUSH_RENEWAL_MIGRATION_REQUIRED' };
+    }
+    if (/PUSH_RENEWAL_TOKEN_INVALID/.test(message)) {
+      return { success: false, status: 401, error: 'PUSH_RENEWAL_TOKEN_INVALID' };
+    }
+    if (/PUSH_RENEWAL_ENDPOINT_OWNERSHIP_CONFLICT/.test(message)) {
+      return { success: false, status: 409, error: 'PUSH_RENEWAL_ENDPOINT_OWNERSHIP_CONFLICT' };
+    }
+    if (/PUSH_RENEWAL_RACE_LOST/.test(message)) {
+      return { success: false, status: 409, error: 'PUSH_RENEWAL_RACE_LOST' };
+    }
+    if (/PUSH_RENEWAL_INVALID/.test(message)) {
+      return { success: false, status: 400, error: 'PUSH_RENEWAL_INVALID' };
+    }
+    params.logger?.warn?.('[Push] Falha transacional ao renovar subscription.', {
+      endpointPrefix: normalized.endpoint.slice(0, 80),
+      message: message.slice(0, 240),
+    });
+    return { success: false, status: 500, error: 'PUSH_RENEWAL_UPDATE_FAILED' };
+  }
+
+  const resultRow = Array.isArray(renewal.data) ? renewal.data[0] : renewal.data;
+  const patientId = sanitizeText(resultRow?.patient_id, 120);
+  if (!isUuid(patientId)) {
+    return { success: false, status: 500, error: 'PUSH_RENEWAL_RESULT_INVALID' };
+  }
+
+  params.logger?.log?.('[Push] subscription renovada sem depender de pagina autenticada.', {
+    patientId,
+    endpointChanged: Boolean(oldEndpoint && oldEndpoint !== normalized.endpoint),
+    endpointPrefix: normalized.endpoint.slice(0, 80),
+  });
+  return { success: true, status: 200, renewalToken: nextToken };
 }
 
 export async function findPushSubscriptionsForPatient(params: {
@@ -853,8 +952,9 @@ export async function sendPatientPortalNotification(params: SendPatientPortalNot
     catch (error: any) { failed += 1; logger.warn('[Push] Falha ao enviar aviso da clínica.', { patientId: isUuid(patientId) ? patientId : null, clinicId: isUuid(clinicId) ? clinicId : null, endpoint: entry.subscription.endpoint.slice(0,80), statusCode: error?.statusCode ?? error?.status ?? null, message: error?.message || String(error) }); if (isGonePushError(error)) invalidEndpoints.add(entry.subscription.endpoint); }
   }
   if (invalidEndpoints.size > 0) {
-    const { error } = await params.supabase.from('push_subscriptions').delete().in('endpoint', Array.from(invalidEndpoints));
-    if (error) logger.warn('[Push] Falha ao remover subscriptions expiradas de aviso.', { count: invalidEndpoints.size, message: error.message });
+    await Promise.all(Array.from(invalidEndpoints).map((endpoint) =>
+      deleteInvalidPushSubscription({ supabase: params.supabase, endpoint, logger })
+    ));
   }
   return { sent, failed, subscriptions: rows.length };
 }
@@ -973,16 +1073,9 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
   }
 
   if (invalidEndpoints.size > 0) {
-    const { error } = await params.supabase
-      .from('push_subscriptions')
-      .delete()
-      .in('endpoint', Array.from(invalidEndpoints));
-    if (error) {
-      logger.warn('[Push] Falha ao remover subscriptions expiradas em lote.', {
-        count: invalidEndpoints.size,
-        message: error.message,
-      });
-    }
+    await Promise.all(Array.from(invalidEndpoints).map((endpoint) =>
+      deleteInvalidPushSubscription({ supabase: params.supabase, endpoint, logger })
+    ));
   }
 
   return { sent, failed, subscriptions: rows.length };
