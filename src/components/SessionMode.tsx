@@ -1503,6 +1503,15 @@ export const SessionMode = ({
   const intervalRunPaused = intervalRunStatus === 'PAUSED';
   const intervalRunAwaitingResponse = intervalRunStatus === 'AWAITING_RESPONSE';
   const intervalResponseActive = Boolean((intervalRunAwaitingResponse || intervalRun?.awaitingResponse) && !intervalRun?.paused && !intervalRun?.completed);
+  const intervalDurationMs = Math.max(1000, Number(intervalRun?.intervalSeconds || intervalSeconds || 1) * 1000);
+  const intervalRemainingMs = intervalRun?.intervalEndsAt
+    ? Math.max(0, new Date(intervalRun.intervalEndsAt).getTime() - nowMs)
+    : intervalDurationMs;
+  const intervalProgressPercent = intervalRunAwaitingResponse
+    ? 100
+    : intervalRunPaused
+      ? Math.min(100, Math.max(0, ((intervalDurationMs - Math.max(0, Number(intervalRun?.pauseRemainingMs ?? intervalRemainingMs))) / intervalDurationMs) * 100))
+      : Math.min(100, Math.max(0, ((intervalDurationMs - intervalRemainingMs) / intervalDurationMs) * 100));
   const intervalToastCompact = Boolean(intervalRun && intervalRunStatus !== 'PAUSED' && intervalRunStatus !== 'COMPLETED' && intervalRunStatus !== 'PARTIALLY_COMPLETED' && intervalRunStatus !== 'CANCELLED');
   const vibrateClinicalAction = (pattern: number | number[]) => {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
@@ -9227,119 +9236,130 @@ export const SessionMode = ({
             <div
               data-aba-interval-parallel-banner
               data-aba-interval-response-active={intervalResponseActive ? 'true' : 'false'}
-              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[16px] p-2 shadow-md border transition-all sm:rounded-[22px] sm:p-3 ${intervalRunAwaitingResponse ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200/70' : intervalRunPaused ? 'bg-slate-50 border-slate-200 ring-1 ring-slate-200/70' : 'bg-amber-50 border-amber-100 shadow-amber-900/5'}`}
+              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[16px] border p-2 shadow-md transition-all sm:rounded-[20px] sm:p-2.5 ${intervalRunAwaitingResponse ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200/70' : intervalRunPaused ? 'bg-slate-50 border-slate-200 ring-1 ring-slate-200/70' : 'bg-amber-50 border-amber-100 shadow-amber-900/5'}`}
             >
-              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="mb-1 flex items-center gap-2">
-                        <Timer size={18} className={intervalRunAwaitingResponse ? 'text-amber-600' : intervalRunPaused ? 'text-slate-500' : 'text-[#7a32fc]'} />
-                        <h2 className="text-xs font-black text-amber-900">{intervalRunPaused ? 'Coleta pausada' : 'Coleta por intervalo'}</h2>
-                      </div>
-                      <h3 className="text-sm font-black text-gray-900 sm:text-lg">Intervalo agora: {intervalRun.behaviorName} · {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</h3>
-                      <p className="mt-0.5 text-xs font-semibold text-amber-800">
-                        {intervalRun.location || 'Sem local'} · severidade {intervalRun.severity || '-'}
-                      </p>
-                      <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">
-                        Respondidos: {Number(intervalRun.completedCount || 0)}/{Number(intervalRun.totalIntervals || 1)} - SIM: {Number(intervalRun.occurredCount || 0)}
-                      </p>
-                    </div>
-                    {intervalRunAwaitingResponse && !intervalRunPaused && (
-                      <button
-                        type="button"
-                        onClick={() => setIntervalOptionsOpen((open) => !open)}
-                        data-aba-interval-options-button
-                        className="shrink-0 inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl border border-amber-200 bg-white px-3 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm active:scale-95"
-                      >
-                        <MoreHorizontal size={15} /> Opções
-                      </button>
-                    )}
+                  <div className="flex items-center gap-1.5">
+                    <Timer size={14} className={intervalRunAwaitingResponse ? 'text-amber-600' : intervalRunPaused ? 'text-slate-500' : 'text-[#7a32fc]'} />
+                    <h2 className="text-[10px] font-black uppercase tracking-wide text-amber-900">
+                      {intervalRunPaused ? 'Coleta pausada' : 'Coleta por intervalo'}
+                    </h2>
+                  </div>
+                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                    <h3 className="truncate text-sm font-black leading-tight text-gray-900" title={intervalRun.behaviorName}>
+                      {intervalRun.behaviorName}
+                    </h3>
+                    <span className="shrink-0 rounded-full bg-white/80 px-1.5 py-0.5 text-[9px] font-black text-amber-700">
+                      {intervalRun.intervalIndex}/{intervalRun.totalIntervals}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] font-semibold leading-tight text-amber-800">
+                    <MapPin size={11} className="shrink-0" />
+                    <span className="truncate" title={intervalRun.location || 'Sem local'}>{intervalRun.location || 'Sem local'}</span>
+                    <span aria-hidden="true" className="shrink-0 text-amber-400">·</span>
+                    <span className="shrink-0">sev. {intervalRun.severity || '-'}</span>
                   </div>
                 </div>
-                <div className="hidden w-full grid-cols-3 gap-2 sm:grid lg:w-auto lg:min-w-[280px]">
-                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-2 text-center">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Intervalo</p>
-                    <p className="text-2xl font-bold text-gray-900">{intervalRun.intervalIndex}</p>
-                  </div>
-                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-2 text-center">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p>
-                    <p className="text-2xl font-bold text-gray-900">{intervalRun.totalIntervals}</p>
-                  </div>
-                  <div className={`rounded-2xl border p-2 text-center ${intervalRunAwaitingResponse ? 'bg-amber-100 border-amber-200' : intervalRunPaused ? 'bg-slate-100 border-slate-200' : 'bg-[#F4F7FE] border-blue-100'}`}>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
-                    <p className={`text-2xl font-bold ${intervalRunAwaitingResponse ? 'text-amber-700' : intervalRunPaused ? 'text-slate-700' : 'text-[#7a32fc]'}`}>
-                      {intervalRunAwaitingResponse ? 'Agora' : intervalRunPaused ? 'Pausado' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}
+
+                <div className="flex shrink-0 items-start gap-1">
+                  <div className="min-w-[72px] text-right">
+                    <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
+                      {intervalRunAwaitingResponse ? 'Responder' : intervalRunPaused ? 'Pausado' : 'Restante'}
+                    </p>
+                    <p className={`mt-0.5 text-xl font-black leading-none tabular-nums ${intervalRunAwaitingResponse ? 'text-amber-700' : intervalRunPaused ? 'text-slate-600' : 'text-[#7a32fc]'}`}>
+                      {intervalRunAwaitingResponse ? 'Agora' : intervalRunPaused ? '—' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}
                     </p>
                   </div>
+                  {intervalRunAwaitingResponse && !intervalRunPaused && (
+                    <button
+                      type="button"
+                      onClick={() => setIntervalOptionsOpen((open) => !open)}
+                      data-aba-interval-options-button
+                      aria-label="Opções da coleta por intervalo"
+                      className="inline-flex min-h-[34px] min-w-[34px] items-center justify-center rounded-xl border border-amber-200 bg-white text-amber-700 shadow-sm active:scale-95"
+                    >
+                      <MoreHorizontal size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
-              <div className="mt-2 flex flex-col items-stretch justify-between gap-2 sm:flex-row sm:items-center">
-                <p className="text-xs font-semibold text-amber-800">
+
+              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/80" aria-hidden="true">
+                <div
+                  className={`h-full rounded-full transition-[width] duration-300 ${intervalRunPaused ? 'bg-slate-400' : intervalRunAwaitingResponse ? 'bg-amber-500' : 'bg-[#7a32fc]'}`}
+                  style={{ width: `${intervalProgressPercent}%` }}
+                />
+              </div>
+
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <p className="text-[9px] font-black uppercase tracking-wide text-amber-700">
+                  {Number(intervalRun.completedCount || 0)}/{Number(intervalRun.totalIntervals || 1)} respondidos · SIM {Number(intervalRun.occurredCount || 0)}
+                </p>
+                <p className="text-[10px] font-semibold leading-tight text-amber-800">
                   {getIntervalInstruction(intervalRun.measurementType)}
                 </p>
-                <p className={`rounded-2xl px-3 py-2 text-center text-xs font-bold ${intervalRunAwaitingResponse ? 'bg-amber-100 text-amber-800' : intervalRunPaused ? 'bg-slate-100 text-slate-700' : 'bg-[#F4F7FE] text-gray-500'}`}>
-                  {intervalRunAwaitingResponse ? 'Responda agora' : intervalRunPaused ? 'Coleta pausada' : 'Aguardando fim do intervalo...'}
-                </p>
-                {intervalRunAwaitingResponse && (
-                <div className="grid w-full grid-cols-2 gap-3 sm:w-auto">
+              </div>
+
+              {intervalRunAwaitingResponse && (
+                <div className="mt-2 grid grid-cols-2 gap-2">
                   <button
                     onClick={() => registerInterval(true)}
                     disabled={!intervalRunAwaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[44px] px-5 py-3 rounded-2xl text-sm font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[42px] rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-sm' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     SIM
                   </button>
                   <button
                     onClick={() => registerInterval(false)}
                     disabled={!intervalRunAwaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[44px] px-5 py-3 rounded-2xl text-sm font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[42px] rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-sm' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     NÃO
                   </button>
                 </div>
-                )}
-              </div>
-              <div className={intervalRunPaused ? 'mt-2' : `mt-2 border-t border-blue-100 pt-2 ${intervalResponseActive ? 'pb-1' : ''}`}>
+              )}
+
+              <div className={intervalRunPaused ? 'mt-2' : `mt-2 border-t border-amber-100 pt-2 ${intervalResponseActive ? 'pb-0.5' : ''}`}>
                 {intervalRunPaused ? (
-                  <div ref={intervalPausedControlsRef} className="rounded-2xl border border-slate-200 bg-white p-3 sm:p-4" data-aba-interval-paused-controls>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <button onClick={resumeIntervalRun} className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-3 py-2 text-xs font-bold uppercase tracking-widest text-white active:scale-95"><RotateCcw size={16} /> Retomar</button>
-                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"><Square size={15} /> Finalizar agora</button>
-                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold uppercase tracking-widest text-red-600 active:scale-95"><X size={15} /> Cancelar coleta</button>
+                  <div ref={intervalPausedControlsRef} className="rounded-xl border border-slate-200 bg-white p-2" data-aba-interval-paused-controls>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button onClick={resumeIntervalRun} className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl bg-[#1B254B] px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-white active:scale-95"><RotateCcw size={13} /> Retomar</button>
+                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl border border-emerald-100 bg-emerald-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700 active:scale-95"><Square size={12} /> Finalizar</button>
+                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl border border-red-100 bg-red-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-red-600 active:scale-95"><X size={12} /> Cancelar</button>
                     </div>
-                    <p className="mt-3 text-xs font-semibold text-slate-500">
-                      Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals} preservado. As respostas anteriores foram mantidas.
+                    <p className="mt-1.5 text-[10px] font-semibold text-slate-500">
+                      Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals} preservado · respostas anteriores mantidas.
                     </p>
                   </div>
                 ) : !intervalRunAwaitingResponse ? (
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" data-aba-interval-running-controls>
+                  <div className="grid grid-cols-3 gap-1.5" data-aba-interval-running-controls>
                     <button
                       onClick={pauseIntervalRun}
-                      className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-3 py-2 text-xs font-bold uppercase tracking-widest text-white active:scale-95"
+                      className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl bg-[#1B254B] px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-white active:scale-95"
                     >
-                      <Pause size={16} /> Pausar
+                      <Pause size={13} /> Pausar
                     </button>
                     <button
                       onClick={finishIntervalRunNow}
-                      className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"
+                      className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl bg-emerald-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700 active:scale-95"
                     >
-                      <Square size={15} /> Finalizar agora
+                      <Square size={12} /> Finalizar
                     </button>
                     <button
                       onClick={() => setIntervalOptionsOpen((open) => !open)}
-                      className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs font-bold uppercase tracking-widest text-[#7a32fc] border border-purple-100 active:scale-95"
+                      className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl border border-purple-100 bg-white px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-[#7a32fc] active:scale-95"
                     >
-                      <MoreHorizontal size={16} /> Opções
+                      <MoreHorizontal size={13} /> Opções
                     </button>
                   </div>
                 ) : (
-                  <p className="text-[11px] font-semibold text-amber-700">SIM/NÃO continuam como prioridade. Use Opções no canto para pausar ou encerrar.</p>
+                  <p className="text-center text-[10px] font-semibold text-amber-700">SIM/NÃO são a prioridade · opções no menu acima.</p>
                 )}
                 {intervalOptionsOpen && !intervalRunPaused && (
-                  <div className="mt-3 rounded-2xl border border-blue-100 bg-white p-3 shadow-lg shadow-blue-900/5" data-aba-interval-options-panel>
+                  <div className="mt-2 rounded-xl border border-blue-100 bg-white p-2 shadow-lg shadow-blue-900/5" data-aba-interval-options-panel>
                     {!intervalRunAwaitingResponse && (
-                    <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    <label className="block text-[9px] font-bold uppercase tracking-widest text-gray-400">
                       Motivo opcional
                       <select
                         value={intervalEndReason}
@@ -9352,11 +9372,11 @@ export const SessionMode = ({
                       </select>
                     </label>
                     )}
-                    <div className={`grid grid-cols-1 gap-2 sm:grid-cols-2 ${intervalRunAwaitingResponse ? '' : 'mt-3'}`}>
-                      <button onClick={pauseIntervalRun} className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white active:scale-95"><Pause size={15} /> Pausar coleta</button>
-                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-emerald-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 active:scale-95"><Square size={14} /> Finalizar agora</button>
-                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-600 active:scale-95"><X size={14} /> Cancelar coleta</button>
-                      <button onClick={() => setIntervalOptionsOpen(false)} className="inline-flex min-h-[48px] items-center justify-center rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600 active:scale-95">Voltar</button>
+                    <div className={`grid grid-cols-2 gap-1.5 ${intervalRunAwaitingResponse ? '' : 'mt-2'}`}>
+                      <button onClick={pauseIntervalRun} className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-xl bg-[#1B254B] px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-white active:scale-95"><Pause size={13} /> Pausar</button>
+                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-xl bg-emerald-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700 active:scale-95"><Square size={12} /> Finalizar</button>
+                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-xl bg-red-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-red-600 active:scale-95"><X size={12} /> Cancelar</button>
+                      <button onClick={() => setIntervalOptionsOpen(false)} className="inline-flex min-h-[40px] items-center justify-center rounded-xl bg-gray-100 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-gray-600 active:scale-95">Voltar</button>
                     </div>
                   </div>
                 )}
