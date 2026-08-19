@@ -377,6 +377,7 @@ const intervalAlertOptions = [
 ];
 const intervalQuantityMin = 1;
 const intervalQuantityMax = 200;
+const transientCollectionSummaryMs = 5000;
 const normalizeIntervalQuantityInput = (value: unknown) => {
   const raw = String(value ?? '').trim();
   const parsed = Number.parseInt(raw, 10);
@@ -1770,7 +1771,17 @@ export const SessionMode = ({
       setTherapeuticTimers(persisted.therapeuticTimers && typeof persisted.therapeuticTimers === 'object' ? persisted.therapeuticTimers : {});
       setRateWindow(persisted.rateWindow || null);
       setIntervalRun(persisted.intervalRun || null);
-      setIntervalSummary(persisted.intervalSummary || null);
+      const persistedIntervalSummary = persisted.intervalSummary || null;
+      const persistedSummaryEndedAtMs = persistedIntervalSummary?.endedAt
+        ? new Date(persistedIntervalSummary.endedAt).getTime()
+        : 0;
+      const persistedSummaryStillVisible = Boolean(
+        persistedIntervalSummary
+        && Number.isFinite(persistedSummaryEndedAtMs)
+        && persistedSummaryEndedAtMs > 0
+        && Date.now() - persistedSummaryEndedAtMs < transientCollectionSummaryMs
+      );
+      setIntervalSummary(persistedSummaryStillVisible ? persistedIntervalSummary : null);
       setSessionNote(String(persisted.sessionNote || ''));
       setSessionCompleted(Boolean(isCompletedSessionReview || persisted.sessionCompleted || String(activeSession?.status || '').toLowerCase() === 'completed'));
       setPostClosureSummary(persisted.postClosureSummary || null);
@@ -2060,6 +2071,21 @@ export const SessionMode = ({
     });
     return () => window.cancelAnimationFrame(animationFrame);
   }, [clinicalDockHeight, intervalRun?.id, intervalRun?.intervalIndex, intervalRunPaused]);
+
+  useEffect(() => {
+    if (!intervalSummary) return;
+    const endedAtMs = intervalSummary?.endedAt ? new Date(intervalSummary.endedAt).getTime() : Date.now();
+    const safeEndedAtMs = Number.isFinite(endedAtMs) && endedAtMs > 0 ? endedAtMs : Date.now();
+    const remainingMs = Math.max(0, transientCollectionSummaryMs - (Date.now() - safeEndedAtMs));
+    if (remainingMs <= 0) {
+      setIntervalSummary(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setIntervalSummary(null);
+    }, remainingMs);
+    return () => window.clearTimeout(timer);
+  }, [intervalSummary]);
 
   useEffect(() => {
     if (!(sessionCompleted && postClosureSummary && !showSessionSummary)) return;
@@ -8741,29 +8767,6 @@ export const SessionMode = ({
                   </button>
                 )}
               </div>
-              <div className="mt-3 rounded-2xl border border-purple-100 bg-white/80 p-3" data-aba-personalized-quick-shortcuts>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-semibold text-slate-600">Seus acessos rápidos</span>
-                  <span className="text-[10px] text-slate-400">{personalizedDockShortcuts.length}/3</span>
-                </div>
-                {personalizedDockShortcuts.length === 0 ? (
-                  <p className="mt-2 text-[11px] font-normal text-slate-400">Fixe até 3 comportamentos para aparecerem na barra inferior.</p>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {personalizedDockShortcuts.map((shortcut: any, index: number) => {
-                      const behavior = resolveShortcutBehavior(shortcut);
-                      return (
-                        <div key={`quick-pref-${shortcut.behaviorId}`} className="flex items-center gap-2 rounded-xl border border-slate-100 bg-white px-2 py-2">
-                          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-slate-700">{behavior?.name || shortcut.label}</span>
-                          <button type="button" disabled={index === 0 || sessionQuickPreferencesSaving} onClick={() => movePersonalizedQuickShortcut(shortcut.behaviorId, -1)} className="h-7 w-7 rounded-lg border border-slate-100 text-[11px] text-slate-500 disabled:opacity-30" aria-label="Mover atalho para cima">↑</button>
-                          <button type="button" disabled={index === personalizedDockShortcuts.length - 1 || sessionQuickPreferencesSaving} onClick={() => movePersonalizedQuickShortcut(shortcut.behaviorId, 1)} className="h-7 w-7 rounded-lg border border-slate-100 text-[11px] text-slate-500 disabled:opacity-30" aria-label="Mover atalho para baixo">↓</button>
-                          <button type="button" disabled={sessionQuickPreferencesSaving} onClick={() => savePersonalizedQuickBehaviorShortcuts(personalizedDockShortcuts.filter((item: any) => item.behaviorId !== shortcut.behaviorId))} className="h-7 rounded-lg px-2 text-[10px] font-semibold text-slate-400 disabled:opacity-30">Remover</button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
             </div>
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-method-chips>
               <span>Método</span>
@@ -8919,6 +8922,30 @@ export const SessionMode = ({
                 </button>
                 <button type="button" onClick={() => setDockLocationManagerOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[11px] font-medium text-[#7a32fc]">Gerenciar locais</button>
                 <button type="button" onClick={() => setDockMoreDurationsOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[11px] font-medium text-[#7a32fc]">Mais durações</button>
+              </div>
+
+              <div className="rounded-xl border border-slate-100 bg-white/75 p-2.5" data-aba-personalized-quick-shortcuts>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold text-slate-600">Seus acessos rápidos</span>
+                  <span className="text-[10px] text-slate-400">{personalizedDockShortcuts.length}/3</span>
+                </div>
+                {personalizedDockShortcuts.length === 0 ? (
+                  <p className="mt-2 text-[11px] font-normal text-slate-400">Fixe até 3 comportamentos para aparecerem na barra inferior.</p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    {personalizedDockShortcuts.map((shortcut: any, index: number) => {
+                      const behavior = resolveShortcutBehavior(shortcut);
+                      return (
+                        <div key={`quick-pref-${shortcut.behaviorId}`} className="flex items-center gap-2 rounded-xl border border-slate-100 bg-white px-2 py-2">
+                          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-slate-700">{behavior?.name || shortcut.label}</span>
+                          <button type="button" disabled={index === 0 || sessionQuickPreferencesSaving} onClick={() => movePersonalizedQuickShortcut(shortcut.behaviorId, -1)} className="h-7 w-7 rounded-lg border border-slate-100 text-[11px] text-slate-500 disabled:opacity-30" aria-label="Mover atalho para cima">↑</button>
+                          <button type="button" disabled={index === personalizedDockShortcuts.length - 1 || sessionQuickPreferencesSaving} onClick={() => movePersonalizedQuickShortcut(shortcut.behaviorId, 1)} className="h-7 w-7 rounded-lg border border-slate-100 text-[11px] text-slate-500 disabled:opacity-30" aria-label="Mover atalho para baixo">↓</button>
+                          <button type="button" disabled={sessionQuickPreferencesSaving} onClick={() => savePersonalizedQuickBehaviorShortcuts(personalizedDockShortcuts.filter((item: any) => item.behaviorId !== shortcut.behaviorId))} className="h-7 rounded-lg px-2 text-[10px] font-semibold text-slate-400 disabled:opacity-30">Remover</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {openDurations.length > 0 && (
