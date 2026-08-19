@@ -780,6 +780,7 @@ export function CoordinatorDashboard({
   const canCreatePatients = hasCapability("patient.create");
   const canManageRooms = hasCapability("clinic.rooms.manage");
   const [roomMutationPending, setRoomMutationPending] = useState(false);
+  const roomCanonicalRequestSeqRef = useRef(0);
   const canUseSchoolPatientFilters =
     authorizationHydrated && hasModule("school_management") && hasCapability("school.view");
   const workspaceScopeKey = useMemo(
@@ -979,6 +980,32 @@ export function CoordinatorDashboard({
       // O estado de erro é controlado no App para manter uma única fonte de verdade.
     });
   }, [activeTab, allPatients.length, onEnsurePatientList, patientListError, workspaceScopeKey]);
+
+  useEffect(() => {
+    if (activeTab !== "rooms" || !workspaceScopeKey) return;
+    const requestSeq = roomCanonicalRequestSeqRef.current + 1;
+    roomCanonicalRequestSeqRef.current = requestSeq;
+    let cancelled = false;
+
+    // Reconcile the room tab with the canonical database every time the user opens
+    // it. The global workspace bootstrap is intentionally broad and can finish
+    // before the active clinic context is fully restored after F5; room management
+    // must not depend on a second manual refresh to see an already-persisted room.
+    void dataService.getClinicRooms()
+      .then((result: any) => {
+        if (cancelled || roomCanonicalRequestSeqRef.current !== requestSeq) return;
+        if (!result?.success || !Array.isArray(result?.data)) return;
+        setRooms(result.data);
+      })
+      .catch(() => {
+        // Keep the last known room snapshot. A later tab entry retries the
+        // canonical read without destroying successfully persisted data.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, workspaceScopeKey, setRooms]);
 
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
     if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };
