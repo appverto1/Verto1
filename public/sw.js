@@ -1,4 +1,4 @@
-const SW_VERSION = "verto-branding-v18";
+const SW_VERSION = "verto-branding-v19";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
 const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
@@ -80,8 +80,11 @@ self.addEventListener("push", (event) => {
   const iconUrl = isClinicAnnouncement
     ? asNotificationAssetUrl(brandLogo || payload.icon || "")
     : asNotificationAssetUrl(VERTO_NOTIFICATION_ICON);
+  // Em avisos da clínica o logo deve aparecer somente como ícone compacto.
+  // `badge` é reservado ao identificador monocromático do app/SO e alguns
+  // navegadores rejeitam logos coloridos ou URLs remotas nesse campo.
   const badgeUrl = isClinicAnnouncement
-    ? asNotificationAssetUrl(brandLogo || payload.badge || "")
+    ? ""
     : asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
   const imageUrl = isClinicAnnouncement
     ? ""
@@ -109,10 +112,27 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
-      await self.registration.showNotification(title, notificationOptions).catch(() => {
-        const { image: _failedImage, ...fallbackOptions } = notificationOptions;
-        return self.registration.showNotification(title, fallbackOptions);
-      });
+      try {
+        await self.registration.showNotification(title, notificationOptions);
+      } catch (primaryError) {
+        // Primeiro preserva icon/badge e remove apenas a imagem expandida, quando existir.
+        let optionsWithoutImage = notificationOptions;
+        if (Object.prototype.hasOwnProperty.call(notificationOptions, 'image')) {
+          const { image: _failedImage, ...fallbackWithoutImage } = notificationOptions;
+          optionsWithoutImage = fallbackWithoutImage;
+          try {
+            await self.registration.showNotification(title, optionsWithoutImage);
+            optionsWithoutImage = null;
+          } catch {
+            // Se o navegador também rejeitar algum asset compacto, cai no fallback sem mídia.
+          }
+        }
+
+        if (optionsWithoutImage) {
+          const { icon: _failedIcon, badge: _failedBadge, ...fallbackWithoutAssets } = optionsWithoutImage;
+          await self.registration.showNotification(title, fallbackWithoutAssets);
+        }
+      }
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       await Promise.all(windows.map((client) => client.postMessage({
         type: 'VERTO_PORTAL_NOTIFICATION',

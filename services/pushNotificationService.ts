@@ -836,8 +836,9 @@ export async function sendPatientPortalNotification(params: SendPatientPortalNot
     title: displayName,
     body: compactBody || announcementBody || announcementTitle || 'Você recebeu um novo aviso da clínica.',
     url: sanitizeText(params.url || '/', 1200) || '/', tag: sanitizeText(params.tag || 'clinic-announcement', 240),
+    // O logo da clínica é enviado somente como ícone compacto. Não usar `image`
+    // (cartão grande) nem `badge` (identificador monocromático do app/SO).
     icon: logoUrl || undefined,
-    badge: logoUrl || undefined,
     branding: { displayName, logoUrl: logoUrl || null },
     data: {
       notificationType: 'clinic_announcement',

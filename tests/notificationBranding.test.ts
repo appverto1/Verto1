@@ -66,12 +66,16 @@ assert.equal(modal.brandLogoUrl, branding.logoUrl);
 assert.equal(modal.rescheduleLabel, null);
 assert.equal(modal.allowedActions.canRequestReschedule, false);
 
-// Service worker não aceita payload.icon como autoridade e recua sem image em caso de erro.
-assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v16"/);
-assert.match(serviceWorker, /const iconUrl = asNotificationAssetUrl\(VERTO_NOTIFICATION_ICON\)/);
-assert.match(serviceWorker, /const imageUrl = asNotificationAssetUrl\(payload\.image \|\| brandLogo \|\| VERTO_NOTIFICATION_ICON\)/);
-assert.match(serviceWorker, /showNotification\(title, notificationOptions\)\.catch/);
-assert.match(serviceWorker, /const \{ image: _failedImage, \.\.\.fallbackOptions \}/);
+// Service worker preserva a marca Verto nos lembretes e usa o logo da clínica
+// somente como ícone compacto nos avisos, com fallback real sem assets.
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v19"/);
+assert.match(serviceWorker, /const iconUrl = isClinicAnnouncement[\s\S]*?asNotificationAssetUrl\(VERTO_NOTIFICATION_ICON\)/);
+assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""[\s\S]*?VERTO_NOTIFICATION_BADGE/);
+assert.match(serviceWorker, /const imageUrl = isClinicAnnouncement\s*\? ""[\s\S]*?payload\.image \|\| brandLogo \|\| VERTO_NOTIFICATION_ICON/);
+assert.match(serviceWorker, /showNotification\(title, notificationOptions\)/);
+assert.match(serviceWorker, /fallbackWithoutImage/);
+assert.match(serviceWorker, /fallbackWithoutAssets/);
+assert.match(serviceWorker, /icon: _failedIcon, badge: _failedBadge/);
 assert.doesNotMatch(serviceWorker, /brandLogo \|\| payloadIcon/);
 
 // Logo privado recebe URL HTTPS estável assinada, sem signed URL temporária do Supabase.
