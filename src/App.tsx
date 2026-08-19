@@ -3838,7 +3838,10 @@ export default function App() {
         const id = String(appointment?.id || appointment?.appointment_id || appointment?.clientAppointmentId || '').trim();
         if (id && !appointmentsById.has(id)) appointmentsById.set(id, appointment);
       }
-      setRooms(Array.isArray(hydrated.clinicState?.rooms) ? hydrated.clinicState.rooms : []);
+      const canonicalRoomsResult = await dataService.getClinicRooms();
+      if (!isCurrentHydration()) return;
+      const canonicalRooms = canonicalRoomsResult?.success && Array.isArray(canonicalRoomsResult?.data) ? canonicalRoomsResult.data : null;
+      setRooms(canonicalRooms || (Array.isArray(hydrated.clinicState?.rooms) ? hydrated.clinicState.rooms : []));
       setTherapistAgenda(Array.from(appointmentsById.values()));
       setProtocols(Array.isArray(hydrated.clinicState?.protocols) ? hydrated.clinicState.protocols : []);
       setSpecialtySettings(
@@ -4453,9 +4456,8 @@ export default function App() {
     const canPersistClinicalConfiguration =
       role === 'director' || role === 'coordinator' || role === 'admin' || role === 'owner';
     const dirtySections = {
-      rooms:
-        (canPersistClinicalConfiguration || role === 'receptionist') &&
-        currentSnapshot.rooms !== clinicStatePersistedSnapshotRef.current.rooms,
+      // clinic_rooms is canonical; clinic_state.rooms remains a read-only legacy fallback.
+      rooms: false,
       protocols:
         canPersistClinicalConfiguration &&
         currentSnapshot.protocols !== clinicStatePersistedSnapshotRef.current.protocols,
