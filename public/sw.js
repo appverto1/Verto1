@@ -73,18 +73,18 @@ self.addEventListener("push", (event) => {
   const title = isGenericBrandName(payload.title) && !isGenericBrandName(brandName)
     ? brandName
     : (payload.title || brandName);
-  const notificationType = String(payload.data?.notificationType || '');
-  const isClinicAnnouncement = notificationType === 'clinic_announcement';
-  const iconUrl = asNotificationAssetUrl(
-    isClinicAnnouncement ? (brandLogo || payload.icon || VERTO_NOTIFICATION_ICON) : VERTO_NOTIFICATION_ICON
-  );
-  const badgeUrl = asNotificationAssetUrl(
-    isClinicAnnouncement ? (brandLogo || payload.badge || VERTO_NOTIFICATION_BADGE) : VERTO_NOTIFICATION_BADGE
-  );
-  // Clinic announcements stay compact: no large image card below the notification.
-  // Appointment reminders keep their existing richer visual treatment.
+  const notificationType = String(payload.data?.notificationType || "").trim();
+  const isClinicAnnouncement = notificationType === "clinic_announcement";
+  // Avisos da clínica usam somente a identidade visual da própria clínica em formato compacto.
+  // Não enviamos `image` para evitar o cartão expandido com uma imagem grande abaixo da mensagem.
+  const iconUrl = isClinicAnnouncement
+    ? asNotificationAssetUrl(brandLogo || payload.icon || "")
+    : asNotificationAssetUrl(VERTO_NOTIFICATION_ICON);
+  const badgeUrl = isClinicAnnouncement
+    ? asNotificationAssetUrl(brandLogo || payload.badge || "")
+    : asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
   const imageUrl = isClinicAnnouncement
-    ? ''
+    ? ""
     : asNotificationAssetUrl(payload.image || brandLogo || VERTO_NOTIFICATION_ICON);
   const notificationOptions = {
     body: payload.body || `Você tem uma sessão agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,

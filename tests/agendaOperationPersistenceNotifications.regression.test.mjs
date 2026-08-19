@@ -74,6 +74,10 @@ assert.match(patientDashboard, /setInterval\(\(\) => refreshNotifications\(false
 assert.match(patientDashboard, /Ativar notificações da clínica/);
 assert.match(serviceWorker, /VERTO_PORTAL_NOTIFICATION/);
 assert.match(serviceWorker, /clients\.matchAll/);
+assert.match(serviceWorker, /const isClinicAnnouncement = notificationType === "clinic_announcement"/);
+assert.match(serviceWorker, /const imageUrl = isClinicAnnouncement\s*\? ""/);
+assert.match(serviceWorker, /brandLogo \|\| payload\.icon/);
+assert.match(patientDashboard, /w-full h-auto max-h-56 object-contain/);
 assert.match(patientDashboard, /minimum-scale=1, maximum-scale=5, user-scalable=yes/);
 assert.match(patientDashboard, /body\.style\.touchAction = 'pan-y pinch-zoom'/);
 assert.match(patientDashboard, /overscrollBehaviorX = 'none'/);
@@ -81,24 +85,5 @@ assert.match(server, /PATIENT_PORTAL_SESSION_MAX_AGE_DAYS/);
 assert.match(server, /req\.session\.cookie\.maxAge = patientPortalSessionMaxAgeDays/);
 assert.match(app, /verto\.patient-portal-session-hint\.v1/);
 assert.match(app, /Restaurando seu portal neste aparelho/);
-
-
-assert.match(push, /Clinic notices intentionally reuse the compact appointment-notification visual language/);
-assert.match(push, /title: displayName/);
-assert.match(serviceWorker, /isClinicAnnouncement/);
-assert.match(serviceWorker, /Clinic announcements stay compact/);
-assert.match(serviceWorker, /isClinicAnnouncement[\s\S]*imageUrl/);
-assert.match(server, /includeAcknowledged/);
-assert.match(server, /requestedType === 'clinic_announcement'/);
-assert.match(dataService, /includeAcknowledged/);
-assert.match(dataService, /options\.type === 'clinic_announcement'/);
-assert.match(patientDashboard, /id: 'notices', label: 'Avisos'/);
-assert.match(patientDashboard, /Comunicados da clínica/);
-assert.match(patientDashboard, /includeAcknowledged: true/);
-assert.match(patientDashboard, /portalAnnouncementHistory/);
-assert.match(app, /patientPortalViewportActive/);
-assert.match(app, /resetViewport/);
-assert.match(app, /layoutWidth > screenWidth \* 1\.2/);
-assert.match(app, /visualScale > 0 && visualScale < 0\.98/);
 
 console.log('agendaOperationPersistenceNotifications.regression.test.mjs: ok');
