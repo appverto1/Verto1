@@ -486,6 +486,111 @@ export default function App() {
     }
   });
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const role = String(user?.role || '').trim().toLowerCase();
+    const patientPortalViewportActive = patientSessionRestorePending || ['patient', 'responsible', 'responsavel', 'guardian'].includes(role);
+    if (!patientPortalViewportActive) return;
+
+    const viewport = document.querySelector('meta[name="viewport"]');
+    const root = document.getElementById('root');
+    const html = document.documentElement;
+    const body = document.body;
+    if (!viewport || !root) return;
+
+    const previousViewport = viewport.getAttribute('content') || '';
+    const previousRootZoom = root.style.getPropertyValue('zoom');
+    const previousRootWidth = root.style.width;
+    const previousRootMaxWidth = root.style.maxWidth;
+    const previousHtmlOverflowX = html.style.overflowX;
+    const previousBodyOverflowX = body.style.overflowX;
+    const previousBodyTouchAction = body.style.touchAction;
+    const previousHtmlOverscrollX = html.style.overscrollBehaviorX;
+    const previousBodyOverscrollX = body.style.overscrollBehaviorX;
+
+    const stableViewport = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover';
+    const resetViewport = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+    let resetTimer = 0;
+    let correctionTimer = 0;
+
+    const applyViewportCorrection = () => {
+      const screenWidth = Number(window.screen?.width || 0);
+      const layoutWidth = Number(window.innerWidth || 0);
+      const visualScale = Number(window.visualViewport?.scale || 1);
+      let correction = 1;
+      let constrainedWidth = '100%';
+
+      // Some Android browsers/PWA restores can reopen a previously zoomed-out or desktop-sized
+      // layout viewport. Keep 100% as the floor while preserving zoom-in for accessibility.
+      if (screenWidth > 0 && layoutWidth > screenWidth * 1.2) {
+        correction = Math.min(3, layoutWidth / screenWidth);
+        constrainedWidth = `${100 / correction}%`;
+      } else if (visualScale > 0 && visualScale < 0.98) {
+        correction = Math.min(3, 1 / visualScale);
+      }
+
+      root.style.width = constrainedWidth;
+      root.style.maxWidth = constrainedWidth;
+      if (correction > 1.02) root.style.setProperty('zoom', String(correction));
+      else root.style.removeProperty('zoom');
+      window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' });
+    };
+
+    const normalizeViewport = () => {
+      window.clearTimeout(resetTimer);
+      window.clearTimeout(correctionTimer);
+      viewport.setAttribute('content', resetViewport);
+      resetTimer = window.setTimeout(() => {
+        viewport.setAttribute('content', stableViewport);
+        correctionTimer = window.setTimeout(applyViewportCorrection, 60);
+      }, 60);
+    };
+
+    html.style.overflowX = 'clip';
+    body.style.overflowX = 'clip';
+    html.style.overscrollBehaviorX = 'none';
+    body.style.overscrollBehaviorX = 'none';
+    body.style.touchAction = 'pan-y pinch-zoom';
+    root.style.width = '100%';
+    root.style.maxWidth = '100%';
+    normalizeViewport();
+
+    const handleViewportChange = () => {
+      const visualScale = Number(window.visualViewport?.scale || 1);
+      const screenWidth = Number(window.screen?.width || 0);
+      const layoutWidth = Number(window.innerWidth || 0);
+      if ((visualScale > 0 && visualScale < 0.98) || (screenWidth > 0 && layoutWidth > screenWidth * 1.2)) {
+        applyViewportCorrection();
+      } else {
+        root.style.width = '100%';
+        root.style.maxWidth = '100%';
+        root.style.removeProperty('zoom');
+      }
+    };
+
+    window.visualViewport?.addEventListener('resize', handleViewportChange);
+    window.addEventListener('orientationchange', normalizeViewport);
+    window.addEventListener('pageshow', normalizeViewport);
+
+    return () => {
+      window.clearTimeout(resetTimer);
+      window.clearTimeout(correctionTimer);
+      window.visualViewport?.removeEventListener('resize', handleViewportChange);
+      window.removeEventListener('orientationchange', normalizeViewport);
+      window.removeEventListener('pageshow', normalizeViewport);
+      viewport.setAttribute('content', previousViewport || stableViewport);
+      root.style.width = previousRootWidth;
+      root.style.maxWidth = previousRootMaxWidth;
+      if (previousRootZoom) root.style.setProperty('zoom', previousRootZoom);
+      else root.style.removeProperty('zoom');
+      html.style.overflowX = previousHtmlOverflowX;
+      body.style.overflowX = previousBodyOverflowX;
+      body.style.touchAction = previousBodyTouchAction;
+      html.style.overscrollBehaviorX = previousHtmlOverscrollX;
+      body.style.overscrollBehaviorX = previousBodyOverscrollX;
+    };
+  }, [patientSessionRestorePending, user?.role, user?.id]);
+
   const getLastActiveAccessContextId = (userId?: string | null) => {
     const safeUserId = String(userId || '').trim();
     if (safeUserId) {
@@ -7994,7 +8099,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white">
-        <LogoVerto size={38} showText={true} />
+        <LogoVerto size={patientSessionRestorePending ? 54 : 42} showText={true} />
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Carregando" />
       </div>
     );
@@ -8002,7 +8107,7 @@ export default function App() {
 
   const lazyFallback = (
     <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white">
-      <LogoVerto size={34} showText={true} />
+      <LogoVerto size={48} showText={true} />
       <div className="h-7 w-7 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Carregando" />
     </div>
   );
@@ -8227,7 +8332,7 @@ export default function App() {
             <ActivationAccess onLogin={handleLoginSuccess} />
           ) : patientSessionRestorePending ? (
             <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white px-6 text-center">
-              <LogoVerto size={38} showText={true} />
+              <LogoVerto size={54} showText={true} />
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Restaurando acesso" />
               <p className="text-sm font-semibold text-slate-500">Restaurando seu portal neste aparelho...</p>
             </div>

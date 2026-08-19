@@ -17,7 +17,7 @@ import {
   resolveAppointmentPatientDisplayStatus,
 } from '../utils/appointmentConfirmationState';
 
-type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
+type PortalSection = 'home' | 'appointments' | 'notices' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
 
 const parsePortalMetadata = (value: unknown): Record<string, any> => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
@@ -125,6 +125,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalAppointmentsState, setPortalAppointmentsState] = useState({ loading: false, error: '', message: '' });
   const [portalNotifications, setPortalNotifications] = useState<any[]>([]);
   const [portalNotificationsLoaded, setPortalNotificationsLoaded] = useState(false);
+  const [portalAnnouncementHistory, setPortalAnnouncementHistory] = useState<any[]>([]);
+  const [portalAnnouncementHistoryLoaded, setPortalAnnouncementHistoryLoaded] = useState(false);
   const [portalPatientFiles, setPortalPatientFiles] = useState<any[]>([]);
   const [portalPatientFilesLoaded, setPortalPatientFilesLoaded] = useState(false);
   const [portalFileState, setPortalFileState] = useState({ uploading: false, error: '', message: '' });
@@ -166,10 +168,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const portalAnamnesisLastLoadedAtRef = useRef(0);
   const portalNotificationsRequestRef = useRef(0);
   const portalNotificationsLastLoadedAtRef = useRef(0);
+  const portalAnnouncementHistoryRequestRef = useRef(0);
   const portalFilesRequestRef = useRef(0);
 
   useEffect(() => {
-    if (portalSection === 'appointments' && !appointmentsPortalEnabled) setPortalSection('home');
+    if (['appointments', 'notices'].includes(portalSection) && !appointmentsPortalEnabled) setPortalSection('home');
     if (['anamnesis', 'notes', 'tasks', 'reports', 'documents'].includes(portalSection) && !clinicalPortalEnabled) {
       setPortalSection('home');
     }
@@ -627,12 +630,29 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setPortalNotificationsLoaded(true);
   };
 
+  const loadPortalAnnouncementHistory = async () => {
+    const requestId = ++portalAnnouncementHistoryRequestRef.current;
+    const result = await dataService.getPortalNotifications(50, {
+      includeAcknowledged: true,
+      type: 'clinic_announcement'
+    });
+    if (requestId !== portalAnnouncementHistoryRequestRef.current) return;
+    if (result?.success) {
+      setPortalAnnouncementHistory(dedupePortalNotifications(Array.isArray(result.data) ? result.data : []));
+    }
+    setPortalAnnouncementHistoryLoaded(true);
+  };
+
   useEffect(() => {
     portalNotificationsRequestRef.current += 1;
+    portalAnnouncementHistoryRequestRef.current += 1;
     setPortalNotifications([]);
     setPortalNotificationsLoaded(false);
+    setPortalAnnouncementHistory([]);
+    setPortalAnnouncementHistoryLoaded(false);
     if (!appointmentsPortalEnabled) {
       setPortalNotificationsLoaded(true);
+      setPortalAnnouncementHistoryLoaded(true);
       return;
     }
     void loadPortalNotifications();
@@ -645,6 +665,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const refreshFromPush = (event: MessageEvent) => {
       if (event?.data?.type !== 'VERTO_PORTAL_NOTIFICATION') return;
       refreshNotifications(true);
+      if (event?.data?.notificationType === 'clinic_announcement') {
+        void loadPortalAnnouncementHistory();
+      }
     };
     const interval = window.setInterval(() => refreshNotifications(false), 60_000);
     window.addEventListener('focus', refreshWhenVisible);
@@ -659,17 +682,32 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.email, portalPatientId, appointmentsPortalEnabled]);
 
+  useEffect(() => {
+    if (!appointmentsPortalEnabled || portalSection !== 'notices' || portalAnnouncementHistoryLoaded) return;
+    void loadPortalAnnouncementHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [portalSection, appointmentsPortalEnabled, portalAnnouncementHistoryLoaded, user?.id, user?.email, portalPatientId]);
+
   const markPortalNotificationRead = async (notification: any, acknowledged = false) => {
     if (!notification?.id || (!acknowledged && notification?.read_at)) return;
     const eventKey = getPortalNotificationEventKey(notification);
+    const readAt = new Date().toISOString();
     setPortalNotifications((current) => acknowledged
       ? current.filter((item) => getPortalNotificationEventKey(item) !== eventKey)
       : current.map((item) => String(item?.id) === String(notification.id)
-          ? { ...item, read_at: new Date().toISOString() }
+          ? { ...item, read_at: readAt }
           : item)
     );
+    setPortalAnnouncementHistory((current) => current.map((item) =>
+      String(item?.id) === String(notification.id)
+        ? { ...item, read_at: item?.read_at || readAt, acknowledged_at: acknowledged ? (item?.acknowledged_at || readAt) : item?.acknowledged_at }
+        : item
+    ));
     const result = await dataService.markPortalNotification(String(notification.id), acknowledged);
-    if (!result?.success) void loadPortalNotifications();
+    if (!result?.success) {
+      void loadPortalNotifications();
+      if (portalAnnouncementHistoryLoaded || portalSection === 'notices') void loadPortalAnnouncementHistory();
+    }
   };
 
   const loadPortalAnamnesis = async () => {
@@ -2504,10 +2542,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   ) : null;
 
+  const unreadPortalAnnouncementCount = portalNotifications.filter((notification: any) =>
+    normalizePortalLower(notification?.type).replace(/_(24h|12h)$/i, '') === 'clinic_announcement' && !notification?.read_at
+  ).length;
+
   const portalMenuItems = [
     { id: 'home', label: 'Início', icon: Smile },
     ...(appointmentsPortalEnabled
-      ? [{ id: 'appointments', label: isKidsProfile ? 'Calendário' : 'Sessões', icon: CalendarDays }]
+      ? [
+          { id: 'appointments', label: isKidsProfile ? 'Calendário' : 'Sessões', icon: CalendarDays },
+          { id: 'notices', label: 'Avisos', icon: Bell }
+        ]
       : []),
     ...(clinicalPortalEnabled
       ? [
@@ -2539,6 +2584,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             >
               <Icon size={15} />
               {item.label}
+              {item.id === 'notices' && unreadPortalAnnouncementCount > 0 && (
+                <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-black ${active ? 'bg-white/20 text-white' : 'bg-rose-50 text-rose-600'}`}>
+                  {unreadPortalAnnouncementCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -2701,6 +2751,91 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       })}
     </div>
   ) : null;
+
+  const getPortalAnnouncementTitle = (notification: any) => {
+    const metadata = parsePortalMetadata(notification?.metadata);
+    return firstPortalText(metadata.announcementTitle, metadata.title, notification?.announcementTitle) || 'Aviso da clínica';
+  };
+
+  const getPortalAnnouncementMessage = (notification: any) => {
+    const title = getPortalAnnouncementTitle(notification);
+    const rawMessage = firstPortalText(notification?.message) || 'Você recebeu um novo aviso da clínica.';
+    const prefix = `${title}:`;
+    return rawMessage.startsWith(prefix) ? rawMessage.slice(prefix.length).trim() : rawMessage;
+  };
+
+  const getPortalAnnouncementCategoryLabel = (notification: any) => {
+    const metadata = parsePortalMetadata(notification?.metadata);
+    const category = normalizePortalLower(metadata.category);
+    if (category === 'holiday') return 'Feriado';
+    if (category === 'event') return 'Evento';
+    return 'Aviso';
+  };
+
+  const portalNoticesPanel = (
+    <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-[#7a32fc]">Avisos</p>
+          <h2 className="text-lg font-black text-slate-900">Comunicados da clínica</h2>
+          <p className="mt-1 text-xs font-medium text-slate-500">Mesmo que uma notificação passe despercebida, o aviso continua salvo aqui.</p>
+        </div>
+        {unreadPortalAnnouncementCount > 0 && (
+          <span className="shrink-0 rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-black text-rose-600">
+            {unreadPortalAnnouncementCount} novo{unreadPortalAnnouncementCount === 1 ? '' : 's'}
+          </span>
+        )}
+      </div>
+
+      {!portalAnnouncementHistoryLoaded ? (
+        <div className="space-y-2">
+          {[0, 1, 2].map((item) => <div key={item} className="h-20 animate-pulse rounded-2xl bg-slate-50" />)}
+        </div>
+      ) : portalAnnouncementHistory.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-purple-100 bg-purple-50/50 px-4 py-8 text-center">
+          <Bell className="mx-auto text-purple-300" size={28} />
+          <p className="mt-2 text-sm font-bold text-slate-600">Nenhum aviso recebido ainda.</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {portalAnnouncementHistory.map((notification: any) => {
+            const metadata = parsePortalMetadata(notification?.metadata);
+            const clinicName = getPortalNotificationClinicName(notification);
+            const logoUrl = firstPortalLogoUrl(
+              metadata.clinicLogoUrl,
+              notification?.clinicLogoUrl,
+              notification?.clinic_logo_url,
+              portalContext?.clinicLogoUrl,
+              user?.clinicSettings?.clinicLogoUrl
+            );
+            const unread = !notification?.read_at;
+            return (
+              <button
+                key={notification.id}
+                type="button"
+                onClick={() => { if (!notification?.acknowledged_at) void markPortalNotificationRead(notification, true); }}
+                className={`flex w-full items-start gap-3 rounded-2xl border px-3.5 py-3 text-left transition ${unread ? 'border-purple-200 bg-purple-50/70' : 'border-slate-100 bg-slate-50/60'}`}
+              >
+                <span className="h-9 w-9 shrink-0 overflow-hidden rounded-xl border border-white bg-white shadow-sm">
+                  {renderPortalClinicLogo(logoUrl, clinicName)}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-[0.16em] text-[#7a32fc]">{getPortalAnnouncementCategoryLabel(notification)}</span>
+                    {unread && <span className="h-1.5 w-1.5 rounded-full bg-rose-500" aria-label="Não lido" />}
+                    <span className="text-[10px] font-semibold text-slate-400">{formatPortalDateTime(notification?.sent_at || notification?.created_at)}</span>
+                  </span>
+                  <span className="mt-1 block text-sm font-black text-slate-800">{getPortalAnnouncementTitle(notification)}</span>
+                  <span className="mt-0.5 block whitespace-pre-wrap text-xs font-medium leading-relaxed text-slate-600">{getPortalAnnouncementMessage(notification)}</span>
+                  <span className="mt-1 block truncate text-[10px] font-semibold text-slate-400">{clinicName}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 
   const patientNotificationActivationCard = appointmentsPortalEnabled && notificationStatus !== 'unsupported' && !notificationSubscriptionReady ? (
     <button
@@ -4078,7 +4213,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             className="p-3 bg-white rounded-2xl shadow-sm text-gray-500 hover:bg-white transition-all border border-white/50 relative"
           >
             <Menu size={20} />
-            {portalSharedNotes.length > 0 && <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white"></div>}
+            {(portalSharedNotes.length > 0 || unreadPortalAnnouncementCount > 0) && <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white"></div>}
           </button>
 
           <AnimatePresence>
@@ -4100,7 +4235,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         onClick={() => { setPortalSection(item.id); setIsMenuOpen(false); }}
                         className={`w-full flex items-center gap-3 p-3 text-sm font-medium rounded-xl transition-colors ${active ? 'bg-purple-50 text-[#7a32fc]' : 'text-slate-600 hover:bg-slate-50'}`}
                       >
-                        <Icon size={18} /> {item.label}
+                        <Icon size={18} /> <span className="flex-1 text-left">{item.label}</span>
+                        {item.id === 'notices' && unreadPortalAnnouncementCount > 0 && (
+                          <span className="rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-black text-white">{unreadPortalAnnouncementCount}</span>
+                        )}
                       </button>
                     );
                   })}
@@ -4145,6 +4283,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       {portalMenu}
       {portalSection === 'home' && portalHomeSummary}
       {portalSection === 'appointments' && portalAppointmentsPanel}
+      {portalSection === 'notices' && portalNoticesPanel}
       {portalSection === 'anamnesis' && portalAnamnesisPanel}
       {portalSection === 'notes' && portalNotesPanel}
       {portalSection === 'tasks' && portalPlaceholderPanel('Tarefas enviadas pela clínica aparecerão aqui.')}

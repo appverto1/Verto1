@@ -827,11 +827,24 @@ export async function sendPatientPortalNotification(params: SendPatientPortalNot
   if (!rows.length) return { sent: 0, failed: 0, subscriptions: 0 };
   const displayName = sanitizeText(params.branding?.displayName || 'Clínica', 160) || 'Clínica';
   const logoUrl = sanitizeBrandLogoText(params.branding?.logoUrl);
+  const announcementTitle = sanitizeText(params.title, 180);
+  const announcementBody = sanitizeText(params.body, 1000);
+  const compactBody = [announcementTitle, announcementBody].filter(Boolean).join(' · ').slice(0, 1000);
   const payload = JSON.stringify({
-    title: sanitizeText(params.title, 180) || displayName, body: sanitizeText(params.body, 1000),
+    // Clinic notices intentionally reuse the compact appointment-notification visual language:
+    // clinic identity in the header, small clinic mark, and only the message changes.
+    title: displayName,
+    body: compactBody || announcementBody || announcementTitle || 'Você recebeu um novo aviso da clínica.',
     url: sanitizeText(params.url || '/', 1200) || '/', tag: sanitizeText(params.tag || 'clinic-announcement', 240),
-    icon: logoUrl || undefined, badge: logoUrl || undefined, branding: { displayName, logoUrl: logoUrl || null },
-    data: { notificationType: 'clinic_announcement', clinicId: clinicId || null, ...(params.data || {}) }
+    icon: logoUrl || undefined,
+    badge: logoUrl || undefined,
+    branding: { displayName, logoUrl: logoUrl || null },
+    data: {
+      notificationType: 'clinic_announcement',
+      clinicId: clinicId || null,
+      announcementTitle: announcementTitle || null,
+      ...(params.data || {})
+    }
   });
   let sent = 0; let failed = 0; const invalidEndpoints = new Set<string>();
   for (const entry of rows) {

@@ -2738,12 +2738,16 @@ export const dataService = {
     }
   },
 
-  async getPortalNotifications(limit = 12) {
+  async getPortalNotifications(limit = 12, options: { includeAcknowledged?: boolean; type?: 'clinic_announcement' } = {}) {
     try {
       const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));
-      const response = await fetch(`/api/portal/notifications?limit=${safeLimit}`, {
+      const params = new URLSearchParams({ limit: String(safeLimit) });
+      if (options.includeAcknowledged) params.set('includeAcknowledged', 'true');
+      if (options.type === 'clinic_announcement') params.set('type', 'clinic_announcement');
+      const response = await fetch(`/api/portal/notifications?${params.toString()}`, {
         headers: await getAuthHeaders(),
-        credentials: 'include'
+        credentials: 'include',
+        cache: 'no-store'
       });
       return await safeJson(response);
     } catch (error) {
