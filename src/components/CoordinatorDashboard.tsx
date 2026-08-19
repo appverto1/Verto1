@@ -966,20 +966,24 @@ export function CoordinatorDashboard({
   }, [workspaceScopeKey]);
 
   useEffect(() => {
-    if (activeTab !== "patients" || !onEnsurePatientList) return;
-    const needsCanonicalPatientList = allPatients.length === 0 || Boolean(patientListError);
-    if (!needsCanonicalPatientList) return;
-    if (!workspaceScopeKey || patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) return;
+    const patientListSurfaceVisible = activeTab === "patients" || activeTab === "notices";
+    if (!patientListSurfaceVisible || !onEnsurePatientList || !workspaceScopeKey) return;
+    if (patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) return;
 
-    // Pacientes são recurso transversal da clínica, não um módulo comercial. Se o
-    // bootstrap global não hidratou a lista, ou precisou usar um snapshot local
-    // incompleto, a própria tela faz uma única leitura canônica do tenant. Uma lista
-    // local não vazia nunca pode mascarar pacientes que existem no servidor.
+    // A lista de pacientes é compartilhada por Pacientes e Avisos. O bootstrap pode
+    // chegar com um snapshot local vazio ou parcial; portanto uma lista não vazia não
+    // é evidência de que a leitura canônica já aconteceu. Faça exatamente uma leitura
+    // canônica por workspace quando uma dessas superfícies for aberta e reutilize o
+    // resultado nas duas telas, sem exigir que o usuário visite Pacientes primeiro.
     patientListEnsureAttemptedWorkspaceRef.current = workspaceScopeKey;
     void Promise.resolve(onEnsurePatientList()).catch(() => {
-      // O estado de erro é controlado no App para manter uma única fonte de verdade.
+      // Permite nova tentativa ao reabrir a superfície após uma falha transitória,
+      // preservando no App a única fonte de verdade da lista de pacientes.
+      if (patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) {
+        patientListEnsureAttemptedWorkspaceRef.current = "";
+      }
     });
-  }, [activeTab, allPatients.length, onEnsurePatientList, patientListError, workspaceScopeKey]);
+  }, [activeTab, onEnsurePatientList, workspaceScopeKey]);
 
   useEffect(() => {
     const roomSurfaceVisible =
@@ -8400,8 +8404,11 @@ export function CoordinatorDashboard({
     try {
       const result = await dataService.updateClinicRoom(String(id), { is_active: !roomActive });
       if (!result?.success || !result?.data) { showToast(result?.error || 'Não foi possível alterar a sala.', 'error'); return; }
-      const saved = normalizeRoomFromApi(result.data); setRooms((prev) => prev.map((room) => String(room?.id) === String(saved.id) ? saved : room));
-      showToast(roomActive ? 'Sala desativada.' : 'Sala reativada.', 'success');
+      const saved = normalizeRoomFromApi(result.data);
+      setRooms((prev) => roomActive
+        ? prev.filter((room) => String(room?.id) !== String(saved.id))
+        : [...prev.filter((room) => String(room?.id) !== String(saved.id)), saved]);
+      showToast(roomActive ? 'Sala desativada e removida das salas disponíveis.' : 'Sala reativada.', 'success');
     } finally { setRoomMutationPending(false); }
   };
 
