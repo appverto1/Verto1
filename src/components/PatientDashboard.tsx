@@ -367,6 +367,37 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     };
   }, [notificationStatus, isSettingsOpen]);
 
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const viewport = document.querySelector('meta[name="viewport"]');
+    const previousViewport = viewport?.getAttribute('content') || '';
+    const html = document.documentElement;
+    const body = document.body;
+    const previousHtmlOverflowX = html.style.overflowX;
+    const previousBodyOverflowX = body.style.overflowX;
+    const previousHtmlOverscrollX = html.style.overscrollBehaviorX;
+    const previousBodyOverscrollX = body.style.overscrollBehaviorX;
+    const previousBodyTouchAction = body.style.touchAction;
+    viewport?.setAttribute(
+      'content',
+      'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover',
+    );
+    html.style.overflowX = 'clip';
+    body.style.overflowX = 'clip';
+    html.style.overscrollBehaviorX = 'none';
+    body.style.overscrollBehaviorX = 'none';
+    body.style.touchAction = 'pan-y pinch-zoom';
+    window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' });
+    return () => {
+      if (previousViewport) viewport?.setAttribute('content', previousViewport);
+      html.style.overflowX = previousHtmlOverflowX;
+      body.style.overflowX = previousBodyOverflowX;
+      html.style.overscrollBehaviorX = previousHtmlOverscrollX;
+      body.style.overscrollBehaviorX = previousBodyOverscrollX;
+      body.style.touchAction = previousBodyTouchAction;
+    };
+  }, []);
+
   const formatPortalDateTime = (value: any) => {
     const date = new Date(value || '');
     if (Number.isNaN(date.getTime())) return '';
@@ -605,16 +636,25 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return;
     }
     void loadPortalNotifications();
-    const refreshNotifications = () => {
+    const refreshNotifications = (force = false) => {
       if (document.visibilityState !== 'visible') return;
-      if (Date.now() - portalNotificationsLastLoadedAtRef.current < 30_000) return;
+      if (!force && Date.now() - portalNotificationsLastLoadedAtRef.current < 30_000) return;
       void loadPortalNotifications();
     };
-    window.addEventListener('focus', refreshNotifications);
-    document.addEventListener('visibilitychange', refreshNotifications);
+    const refreshWhenVisible = () => refreshNotifications(false);
+    const refreshFromPush = (event: MessageEvent) => {
+      if (event?.data?.type !== 'VERTO_PORTAL_NOTIFICATION') return;
+      refreshNotifications(true);
+    };
+    const interval = window.setInterval(() => refreshNotifications(false), 60_000);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    navigator.serviceWorker?.addEventListener?.('message', refreshFromPush as EventListener);
     return () => {
-      window.removeEventListener('focus', refreshNotifications);
-      document.removeEventListener('visibilitychange', refreshNotifications);
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      navigator.serviceWorker?.removeEventListener?.('message', refreshFromPush as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.email, portalPatientId, appointmentsPortalEnabled]);
@@ -2662,9 +2702,32 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   ) : null;
 
+  const patientNotificationActivationCard = appointmentsPortalEnabled && notificationStatus !== 'unsupported' && !notificationSubscriptionReady ? (
+    <button
+      type="button"
+      onClick={() => {
+        if (notificationStatus === 'denied') {
+          setSettingsMessage('As notificações estão bloqueadas neste aparelho. Libere a permissão do site/app nas configurações do navegador.');
+          setIsSettingsOpen(true);
+          return;
+        }
+        void enablePatientNotifications();
+      }}
+      disabled={isEnablingNotifications}
+      className="mb-4 flex w-full items-center gap-3 rounded-[22px] border border-violet-100 bg-violet-50/90 px-4 py-3 text-left shadow-sm disabled:opacity-60"
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-white text-[#7a32fc] shadow-sm"><Bell size={17}/></span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs font-black text-slate-800">{notificationStatus === 'denied' ? 'Notificações bloqueadas neste aparelho' : 'Ativar notificações da clínica'}</span>
+        <span className="mt-0.5 block text-[11px] font-medium leading-relaxed text-slate-500">{notificationStatus === 'denied' ? 'Abra as configurações para permitir avisos e lembretes.' : 'Receba avisos e lembretes mesmo com a Verto fechada.'}</span>
+      </span>
+    </button>
+  ) : null;
+
   const portalHomeSummary = (
     <React.Fragment>
       {clinicalPortalEnabled && portalAnamnesisTopNotice}
+      {patientNotificationActivationCard}
       {appointmentsPortalEnabled && portalNotificationsSummary}
       {!isKidsProfile && clinicalPortalEnabled && (
         <div className="mb-6 grid gap-3 sm:grid-cols-2">
@@ -3896,7 +3959,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [history]);
 
   return ( 
-    <div className={`min-h-screen p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}> 
+    <div className={`min-h-screen w-full max-w-full p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}> 
       <AnimatePresence>
         {showStarCelebration && (
           <motion.div

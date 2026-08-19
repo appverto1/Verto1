@@ -477,6 +477,14 @@ export default function App() {
   const LAST_ACTIVE_WORKSPACE_KEY = 'last_active_workspace_id';
   const LAST_ACTIVE_ACCESS_CONTEXT_KEY = 'verto.last_active_access_context';
   const INSTALL_PROMPT_DISMISSED_KEY = 'verto_pwa_install_prompt_dismissed_at';
+  const PATIENT_SESSION_HINT_KEY = 'verto.patient-portal-session-hint.v1';
+  const [patientSessionRestorePending, setPatientSessionRestorePending] = useState(() => {
+    try {
+      return Boolean(window.localStorage.getItem(PATIENT_SESSION_HINT_KEY));
+    } catch {
+      return false;
+    }
+  });
 
   const getLastActiveAccessContextId = (userId?: string | null) => {
     const safeUserId = String(userId || '').trim();
@@ -1145,6 +1153,15 @@ export default function App() {
 
     const commitUserState = (nextUser: any) => {
       setUser(nextUser);
+      const nextRole = String(nextUser?.role || '').trim().toLowerCase();
+      const isPatientPortalSession = ['patient', 'responsible', 'responsavel', 'guardian'].includes(nextRole);
+      setPatientSessionRestorePending(isPatientPortalSession);
+      try {
+        if (isPatientPortalSession) window.localStorage.setItem(PATIENT_SESSION_HINT_KEY, String(Date.now()));
+        else window.localStorage.removeItem(PATIENT_SESSION_HINT_KEY);
+      } catch {
+        // Hint is UX-only. The secure session remains server-side.
+      }
       setProfilePicture(nextUser?.profilePicture || nextUser?.profile_picture || null);
       setCrp(formatProfessionalRegistry(nextUser?.crp || ''));
       if (hasValidWorkspaceContext(nextUser)) {
@@ -1776,6 +1793,8 @@ export default function App() {
               setShowWorkspacePicker(false);
             }
           } else {
+            setPatientSessionRestorePending(false);
+            try { window.localStorage.removeItem(PATIENT_SESSION_HINT_KEY); } catch {}
             setUser(null);
             setProfilePicture(null);
             setShowWorkspacePicker(false);
@@ -1784,6 +1803,8 @@ export default function App() {
           if (import.meta.env.DEV) console.error('Falha na checagem inicial de autenticacao apos retentativas:', sanitizeTechnicalErrorMessage(lastError));
           // Mantém estado atual para evitar queda falsa para LP em falha transitória.
         } else {
+          setPatientSessionRestorePending(false);
+          try { window.localStorage.removeItem(PATIENT_SESSION_HINT_KEY); } catch {}
           setUser(null);
           setProfilePicture(null);
           setShowWorkspacePicker(false);
@@ -7812,6 +7833,8 @@ export default function App() {
     } catch (error) {
       console.warn('Sensitive patient cache cleanup failed:', error);
     }
+    setPatientSessionRestorePending(false);
+    try { window.localStorage.removeItem(PATIENT_SESSION_HINT_KEY); } catch {}
     setLastActiveAccessContextId(null, signingOutUserId);
     setLastActiveAccessContextId(null);
     resetWorkspaceScopedState();
@@ -8202,6 +8225,12 @@ export default function App() {
         ) : !user || userNeedsPatientActivation ? (
           isAuthActionRoute || userNeedsPatientActivation ? (
             <ActivationAccess onLogin={handleLoginSuccess} />
+          ) : patientSessionRestorePending ? (
+            <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white px-6 text-center">
+              <LogoVerto size={38} showText={true} />
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Restaurando acesso" />
+              <p className="text-sm font-semibold text-slate-500">Restaurando seu portal neste aparelho...</p>
+            </div>
           ) : (
             <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
           )

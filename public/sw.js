@@ -1,4 +1,4 @@
-const SW_VERSION = "verto-branding-v16";
+const SW_VERSION = "verto-branding-v17";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
 const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
@@ -98,10 +98,20 @@ self.addEventListener("push", (event) => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(title, notificationOptions).catch(() => {
-      const { image: _failedImage, ...fallbackOptions } = notificationOptions;
-      return self.registration.showNotification(title, fallbackOptions);
-    }),
+    (async () => {
+      await self.registration.showNotification(title, notificationOptions).catch(() => {
+        const { image: _failedImage, ...fallbackOptions } = notificationOptions;
+        return self.registration.showNotification(title, fallbackOptions);
+      });
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      await Promise.all(windows.map((client) => client.postMessage({
+        type: 'VERTO_PORTAL_NOTIFICATION',
+        notificationType: payload.data?.notificationType || null,
+        announcementId: payload.data?.announcementId || null,
+        appointmentId: appointmentId || null,
+        swVersion: SW_VERSION,
+      })));
+    })(),
   );
 });
 
