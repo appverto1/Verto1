@@ -1238,6 +1238,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       source: file?.source || 'upload',
       content: safeContent,
       url: safeUrl || undefined,
+      uploadedBy: String(file?.uploadedBy || file?.uploaded_by || '').trim() || null,
+      accessScope: String(file?.accessScope || file?.access_scope || 'PATIENT_ACCESS').trim().toUpperCase(),
+      patientPortalVisible: file?.patientPortalVisible === true || file?.patient_portal_visible === true,
+      canManageAccess: file?.canManageAccess === true || file?.can_manage_access === true,
       // PDFs em base64 so viram Blob quando o usuario realmente abre o preview.
       objectUrl: safeUrl || (safeType.includes('pdf') ? undefined : sourceUrl)
     };
@@ -1297,6 +1301,89 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const patientFilesLoadedForRef = React.useRef('');
   const patientFilesRequestInFlightRef = React.useRef('');
   const [previewFile, setPreviewFile] = useState<any>(null);
+  const [fileAccessEditor, setFileAccessEditor] = useState<any>(null);
+  const [fileAccessCandidates, setFileAccessCandidates] = useState<any[]>([]);
+  const [fileAccessLoading, setFileAccessLoading] = useState(false);
+  const [fileAccessSaving, setFileAccessSaving] = useState(false);
+  const [fileAccessError, setFileAccessError] = useState('');
+
+  const patientFileAccessLabels: Record<string, string> = {
+    OWNER: 'Somente eu',
+    CASE_TEAM: 'Equipe do caso',
+    PATIENT_ACCESS: 'Quem já acessa o paciente',
+    SELECTED: 'Pessoas selecionadas'
+  };
+
+  const openPatientFileAccessEditor = async (file: any) => {
+    const patientId = String(patient?.id || '').trim();
+    const fileId = String(file?.id || '').trim();
+    if (!patientId || !fileId || file?.canManageAccess !== true) return;
+    setFileAccessLoading(true);
+    setFileAccessError('');
+    setFileAccessCandidates([]);
+    setFileAccessEditor({
+      file,
+      accessScope: String(file?.accessScope || 'PATIENT_ACCESS').toUpperCase(),
+      patientPortalVisible: file?.patientPortalVisible === true,
+      selectedUserIds: []
+    });
+    try {
+      const [permissionsResult, linksResult] = await Promise.all([
+        dataService.getPatientFilePermissions(patientId, fileId),
+        dataService.getPatientProfessionalLinks(patientId)
+      ]);
+      if (!permissionsResult?.success || !permissionsResult?.data) {
+        throw new Error(permissionsResult?.error || 'Não foi possível carregar os níveis de acesso deste arquivo.');
+      }
+      const candidates = (Array.isArray(linksResult?.links) ? linksResult.links : [])
+        .filter((link: any) => String(link?.status || '').toLowerCase() === 'active' && link?.accessEnabled !== false)
+        .map((link: any) => ({
+          id: String(link?.professional_id || link?.professional?.id || '').trim(),
+          name: String(link?.professional?.name || link?.professional_name || '').trim() || 'Profissional',
+          specialty: String(link?.specialty || link?.professional?.specialty || '').trim()
+        }))
+        .filter((item: any) => isUuidLike(item.id));
+      setFileAccessCandidates(Array.from(new Map(candidates.map((item: any) => [item.id, item])).values()));
+      setFileAccessEditor({
+        file,
+        accessScope: String(permissionsResult.data.accessScope || 'PATIENT_ACCESS').toUpperCase(),
+        patientPortalVisible: permissionsResult.data.patientPortalVisible === true,
+        selectedUserIds: Array.isArray(permissionsResult.data.selectedUserIds) ? permissionsResult.data.selectedUserIds.map(String) : []
+      });
+    } catch (error: any) {
+      setFileAccessError(String(error?.message || 'Não foi possível carregar os níveis de acesso.'));
+    } finally {
+      setFileAccessLoading(false);
+    }
+  };
+
+  const savePatientFileAccess = async () => {
+    const patientId = String(patient?.id || '').trim();
+    const fileId = String(fileAccessEditor?.file?.id || '').trim();
+    if (!patientId || !fileId || fileAccessSaving) return;
+    setFileAccessSaving(true);
+    setFileAccessError('');
+    try {
+      const result = await dataService.updatePatientFilePermissions(patientId, fileId, {
+        accessScope: fileAccessEditor.accessScope,
+        patientPortalVisible: fileAccessEditor.patientPortalVisible === true,
+        selectedUserIds: fileAccessEditor.accessScope === 'SELECTED' ? fileAccessEditor.selectedUserIds : []
+      });
+      if (!result?.success || !result?.data) throw new Error(result?.error || 'Não foi possível salvar os níveis de acesso.');
+      setPatientFiles((current) => current.map((item: any) => String(item.id) === fileId ? {
+        ...item,
+        accessScope: String(result.data.accessScope || fileAccessEditor.accessScope).toUpperCase(),
+        patientPortalVisible: result.data.patientPortalVisible === true,
+        canManageAccess: true
+      } : item));
+      setFileAccessEditor(null);
+      setFileAccessCandidates([]);
+    } catch (error: any) {
+      setFileAccessError(String(error?.message || 'Não foi possível salvar os níveis de acesso.'));
+    } finally {
+      setFileAccessSaving(false);
+    }
+  };
 
   const openPatientFilePreview = async (file: any) => {
     const patientId = String(patient?.id || '').trim();
@@ -9886,7 +9973,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               <button
                 onClick={() => void handleConfirmSendAnamnesisRequest()}
                 disabled={isSendingAnamnesisRequest}
-                className="flex items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#6424d6] disabled:opacity-60"
+                className="flex items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#6424d6] disabled:opacity-60"
               >
                 <Share2 size={16} />
                 {isSendingAnamnesisRequest ? 'Enviando...' : 'Enviar para família'}
@@ -11993,9 +12080,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <div>
                       <p className={`font-semibold text-sm truncate max-w-[200px] tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>{file.name}</p>
                       <p className={`text-[10px] font-semibold uppercase ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>{file.size} • {file.date}</p>
+                      <p className={`mt-1 text-[10px] font-medium ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>
+                        {patientFileAccessLabels[String(file.accessScope || 'PATIENT_ACCESS').toUpperCase()] || 'Acesso do paciente'}
+                        {file.patientPortalVisible ? ' · Paciente/responsável' : ''}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {file.canManageAccess && (
+                      <button
+                        type="button"
+                        title="Gerenciar quem pode ver"
+                        onClick={() => void openPatientFileAccessEditor(file)}
+                        className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-violet-300 hover:text-white hover:bg-violet-500/10' : 'text-violet-500 hover:text-violet-700 hover:bg-violet-50'}`}
+                      >
+                        <SlidersHorizontal size={18} />
+                      </button>
+                    )}
                     <button
                       title="Visualizar"
                       onClick={() => void openPatientFilePreview(file)}
@@ -12026,6 +12127,103 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         )}
         </div>
       </div> 
+
+      {fileAccessEditor && (
+        <div className="fixed inset-0 z-[205] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
+          <div className={`w-full max-w-xl rounded-3xl border p-6 shadow-2xl ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${isPanelDark ? 'text-violet-300' : 'text-violet-500'}`}>Nível de acesso</p>
+                <h3 className={`mt-1 truncate text-lg font-semibold ${isPanelDark ? 'text-white' : 'text-slate-900'}`}>{fileAccessEditor.file?.name || 'Arquivo'}</h3>
+                <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Somente quem enviou este arquivo pode alterar estas permissões.</p>
+              </div>
+              <button type="button" onClick={() => { setFileAccessEditor(null); setFileAccessCandidates([]); setFileAccessError(''); }} className={`rounded-xl p-2 ${isPanelDark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`} aria-label="Fechar">
+                <X size={18} />
+              </button>
+            </div>
+
+            {fileAccessLoading ? (
+              <div className={`mt-5 rounded-2xl border border-dashed px-4 py-8 text-center text-sm ${isPanelDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-500'}`}>Carregando permissões...</div>
+            ) : (
+              <div className="mt-5 space-y-4">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {[
+                    ['OWNER', 'Somente eu', 'Apenas você entre os profissionais; o portal é controlado separadamente abaixo.'],
+                    ['CASE_TEAM', 'Equipe do caso', 'Profissionais ativos vinculados a este paciente.'],
+                    ['PATIENT_ACCESS', 'Acesso ao paciente', 'Mantém a visibilidade para quem já pode acessar este paciente.'],
+                    ['SELECTED', 'Pessoas selecionadas', 'Escolha profissionais específicos da equipe do caso.']
+                  ].map(([value, label, description]) => {
+                    const selected = fileAccessEditor.accessScope === value;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setFileAccessEditor((current: any) => ({ ...current, accessScope: value }))}
+                        className={`rounded-2xl border p-3 text-left transition ${selected ? (isPanelDark ? 'border-violet-400 bg-violet-500/10' : 'border-violet-300 bg-violet-50') : (isPanelDark ? 'border-slate-700 bg-slate-900/50 hover:border-slate-600' : 'border-slate-200 bg-white hover:border-violet-200')}`}
+                      >
+                        <span className={`block text-sm font-medium ${selected ? (isPanelDark ? 'text-violet-200' : 'text-violet-700') : (isPanelDark ? 'text-slate-100' : 'text-slate-800')}`}>{label}</span>
+                        <span className={`mt-1 block text-[11px] leading-relaxed ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{description}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {fileAccessEditor.accessScope === 'SELECTED' && (
+                  <div className={`max-h-52 overflow-y-auto rounded-2xl border p-3 ${isPanelDark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-slate-50/70'}`}>
+                    <p className={`mb-2 text-xs font-medium ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>Profissionais da equipe do caso</p>
+                    {fileAccessCandidates.length ? fileAccessCandidates.map((candidate: any) => {
+                      const checked = Array.isArray(fileAccessEditor.selectedUserIds) && fileAccessEditor.selectedUserIds.includes(candidate.id);
+                      return (
+                        <label key={candidate.id} className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl px-2 py-2 ${isPanelDark ? 'hover:bg-slate-800' : 'hover:bg-white'}`}>
+                          <span className="min-w-0">
+                            <span className={`block truncate text-sm font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{candidate.name}</span>
+                            <span className={`block truncate text-[10px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{candidate.specialty || 'Equipe do caso'}</span>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => setFileAccessEditor((current: any) => ({
+                              ...current,
+                              selectedUserIds: checked
+                                ? current.selectedUserIds.filter((id: string) => id !== candidate.id)
+                                : [...current.selectedUserIds, candidate.id]
+                            }))}
+                            className="h-4 w-4 accent-[#7a32fc]"
+                          />
+                        </label>
+                      );
+                    }) : (
+                      <p className={`py-3 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Nenhum outro profissional ativo na equipe do caso.</p>
+                    )}
+                  </div>
+                )}
+
+                <label className={`flex items-center justify-between gap-4 rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/60' : 'border-emerald-100 bg-emerald-50/50'}`}>
+                  <span>
+                    <span className={`block text-sm font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Paciente/responsável pode ver</span>
+                    <span className={`mt-1 block text-[11px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Libera este arquivo também no portal do paciente.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={fileAccessEditor.patientPortalVisible === true}
+                    onChange={(event) => setFileAccessEditor((current: any) => ({ ...current, patientPortalVisible: event.target.checked }))}
+                    className="h-5 w-5 accent-[#7a32fc]"
+                  />
+                </label>
+
+                {fileAccessError && <p className={`rounded-xl px-3 py-2 text-xs font-medium ${isPanelDark ? 'bg-red-500/10 text-red-200' : 'bg-red-50 text-red-700'}`} role="alert">{fileAccessError}</p>}
+
+                <div className="flex justify-end gap-3">
+                  <button type="button" onClick={() => { setFileAccessEditor(null); setFileAccessCandidates([]); setFileAccessError(''); }} className={`rounded-xl px-4 py-2.5 text-sm font-medium ${isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-slate-100 text-slate-700'}`}>Cancelar</button>
+                  <button type="button" disabled={fileAccessSaving || (fileAccessEditor.accessScope === 'SELECTED' && fileAccessEditor.selectedUserIds.length === 0)} onClick={() => void savePatientFileAccess()} className="rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">
+                    {fileAccessSaving ? 'Salvando...' : 'Salvar acesso'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showAnamnesisFileModal && (
         <div className="fixed inset-0 z-[190] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">

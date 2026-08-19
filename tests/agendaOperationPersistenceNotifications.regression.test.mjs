@@ -13,6 +13,7 @@ const serviceWorker = fs.readFileSync(new URL('../public/sw.js', import.meta.url
 const migration = fs.readFileSync(new URL('../supabase/migrations/20260819134500_clinic_announcements_and_room_persistence.sql', import.meta.url), 'utf8');
 const announcementV2Migration = fs.readFileSync(new URL('../supabase/migrations/20260819163000_clinic_announcement_delivery_v2.sql', import.meta.url), 'utf8');
 const announcementV3Migration = fs.readFileSync(new URL('../supabase/migrations/20260819193000_clinic_announcement_scheduling_v3.sql', import.meta.url), 'utf8');
+const pushSelfHealingMigration = fs.readFileSync(new URL('../supabase/migrations/20260819223000_push_subscription_self_healing.sql', import.meta.url), 'utf8');
 
 assert.match(dataService, /getClinicRooms\(\)/);
 assert.match(dataService, /createClinicRoom/);
@@ -31,9 +32,16 @@ assert.doesNotMatch(roomGet, /query\.eq\('organization_id'/);
 assert.match(cron, /'\* \* \* \* \*'/);
 assert.match(cron, /QUIET_HOURS_START = 22/);
 assert.match(cron, /QUIET_HOURS_END = 6/);
-assert.match(cron, /if \(step\.kind === '12h'\)[\s\S]*hasPatientResponse/);
+assert.match(cron, /step\.kind === '12h' && hasResponse\(appointment\)/);
 assert.match(cron, /hoursBefore: 24/);
 assert.match(cron, /hoursBefore: 12/);
+assert.match(cron, /REMINDER_LOOKBACK_MINUTES = 12 \* 60/);
+assert.match(cron, /for \(const step of \[\.\.\.REMINDER_STEPS\]\.reverse\(\)\)/);
+assert.match(cron, /step\.kind === '24h'[\s\S]*notification12SentAt/);
+assert.match(cron, /catchupLookbackMinutes/);
+assert.match(cron, /notification_24h_sent_at/);
+assert.match(cron, /notification_12h_sent_at/);
+assert.match(cron, /pageSize = 500/);
 
 assert.match(server, /\/api\/clinic\/announcements/);
 assert.match(server, /communication\.clinic_notifications\.manage/);
@@ -75,7 +83,7 @@ assert.match(patientDashboard, /setInterval\(\(\) => refreshNotifications\(false
 assert.match(patientDashboard, /Ativar notificações da clínica/);
 assert.match(serviceWorker, /VERTO_PORTAL_NOTIFICATION/);
 assert.match(serviceWorker, /clients\.matchAll/);
-assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v19"/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v20"/);
 assert.match(serviceWorker, /const isClinicAnnouncement = notificationType === "clinic_announcement"/);
 assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""/);
 assert.match(serviceWorker, /const imageUrl = isClinicAnnouncement\s*\? ""/);
@@ -83,11 +91,28 @@ assert.match(serviceWorker, /brandLogo \|\| payload\.icon/);
 assert.match(serviceWorker, /fallbackWithoutAssets/);
 assert.match(serviceWorker, /icon: _failedIcon, badge: _failedBadge/);
 assert.match(push, /O logo da clínica é enviado somente como ícone compacto/);
+
+assert.match(serviceWorker, /pushsubscriptionchange/);
+assert.match(serviceWorker, /VERTO_PUSH_RENEWAL_CONTEXT/);
+assert.match(serviceWorker, /\/api\/push\/renew/);
+assert.match(server, /app\.post\('\/api\/push\/renew', pushRenewalLimiter, handlePushRenew\)/);
+assert.match(push, /renewPatientPushSubscription/);
+assert.match(push, /renewal_token_hash/);
+assert.match(pushSelfHealingMigration, /add column if not exists renewal_token_hash text/);
+assert.match(pushSelfHealingMigration, /add column if not exists invalidated_at timestamptz/);
+assert.match(pushSelfHealingMigration, /enable row level security/);
+assert.match(pushSelfHealingMigration, /renew_push_subscription_v1/);
+assert.match(pushSelfHealingMigration, /for update/);
+assert.match(push, /rpc\('renew_push_subscription_v1'/);
+assert.match(app, /await persistPushRenewalContext/);
+assert.match(patientDashboard, /await persistPushRenewalContext/);
+
 assert.doesNotMatch(push, /badge: logoUrl \|\| undefined/);
 assert.match(patientDashboard, /w-full h-auto max-h-56 object-contain/);
-assert.match(patientDashboard, /minimum-scale=1, maximum-scale=5, user-scalable=yes/);
-assert.match(patientDashboard, /body\.style\.touchAction = 'pan-y pinch-zoom'/);
-assert.match(patientDashboard, /overscrollBehaviorX = 'none'/);
+assert.match(app, /buildPatientPortalViewportContent/);
+assert.match(app, /root\.style\.width = '100%'/);
+assert.doesNotMatch(app, /root\.style\.transform = `scale/);
+assert.doesNotMatch(patientDashboard, /document\.querySelector\('meta\[name="viewport"\]'/);
 assert.match(server, /PATIENT_PORTAL_SESSION_MAX_AGE_DAYS/);
 assert.match(server, /req\.session\.cookie\.maxAge = patientPortalSessionMaxAgeDays/);
 assert.match(app, /verto\.patient-portal-session-hint\.v1/);

@@ -1,8 +1,46 @@
-const SW_VERSION = "verto-branding-v19";
+const SW_VERSION = "verto-branding-v20";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
 const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
+const PUSH_RENEWAL_CACHE = "verto-push-renewal-v1";
+const PUSH_RENEWAL_CONTEXT_URL = "/__verto_push_renewal_context__";
+
+const urlBase64ToUint8Array = (base64String) => {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+};
+
+const writePushRenewalContext = async (context) => {
+  const renewalToken = String(context?.renewalToken || "").trim();
+  const vapidPublicKey = String(context?.vapidPublicKey || "").trim();
+  if (!renewalToken || !vapidPublicKey || !("caches" in self)) return false;
+  const cache = await self.caches.open(PUSH_RENEWAL_CACHE);
+  await cache.put(
+    new Request(PUSH_RENEWAL_CONTEXT_URL, { method: "GET" }),
+    new Response(JSON.stringify({ renewalToken, vapidPublicKey }), {
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    }),
+  );
+  return true;
+};
+
+const readPushRenewalContext = async () => {
+  if (!("caches" in self)) return null;
+  const cache = await self.caches.open(PUSH_RENEWAL_CACHE);
+  const response = await cache.match(PUSH_RENEWAL_CONTEXT_URL);
+  if (!response) return null;
+  try {
+    const value = await response.json();
+    const renewalToken = String(value?.renewalToken || "").trim();
+    const vapidPublicKey = String(value?.vapidPublicKey || "").trim();
+    return renewalToken && vapidPublicKey ? { renewalToken, vapidPublicKey } : null;
+  } catch {
+    return null;
+  }
+};
 
 const isGenericBrandName = (value) => {
   const normalized = String(value || "")
@@ -46,6 +84,46 @@ self.addEventListener("activate", (event) => {
       await self.clients.claim();
     })(),
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type !== "VERTO_PUSH_RENEWAL_CONTEXT") return;
+  event.waitUntil(writePushRenewalContext(event.data));
+});
+
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil((async () => {
+    try {
+      const context = await readPushRenewalContext();
+      if (!context) return;
+
+      const subscription = await self.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(context.vapidPublicKey),
+      });
+      const response = await fetch("/api/push/renew", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "omit",
+        cache: "no-store",
+        body: JSON.stringify({
+          renewalToken: context.renewalToken,
+          oldEndpoint: event.oldSubscription?.endpoint || null,
+          subscription: subscription.toJSON(),
+        }),
+      });
+      if (!response.ok) return;
+      const result = await response.json().catch(() => ({}));
+      if (result?.renewalToken) {
+        await writePushRenewalContext({
+          renewalToken: result.renewalToken,
+          vapidPublicKey: context.vapidPublicKey,
+        });
+      }
+    } catch (error) {
+      console.warn("[push] subscription self-heal failed", error);
+    }
+  })());
 });
 
 self.addEventListener("push", (event) => {

@@ -68,7 +68,7 @@ assert.equal(modal.allowedActions.canRequestReschedule, false);
 
 // Service worker preserva a marca Verto nos lembretes e usa o logo da clínica
 // somente como ícone compacto nos avisos, com fallback real sem assets.
-assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v19"/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v20"/);
 assert.match(serviceWorker, /const iconUrl = isClinicAnnouncement[\s\S]*?asNotificationAssetUrl\(VERTO_NOTIFICATION_ICON\)/);
 assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""[\s\S]*?VERTO_NOTIFICATION_BADGE/);
 assert.match(serviceWorker, /const imageUrl = isClinicAnnouncement\s*\? ""[\s\S]*?payload\.image \|\| brandLogo \|\| VERTO_NOTIFICATION_ICON/);

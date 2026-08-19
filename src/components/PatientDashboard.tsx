@@ -10,6 +10,7 @@ import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
+import { persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
 import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from '../constants/organizationModules';
@@ -367,36 +368,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     };
   }, [notificationStatus, isSettingsOpen]);
 
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const viewport = document.querySelector('meta[name="viewport"]');
-    const previousViewport = viewport?.getAttribute('content') || '';
-    const html = document.documentElement;
-    const body = document.body;
-    const previousHtmlOverflowX = html.style.overflowX;
-    const previousBodyOverflowX = body.style.overflowX;
-    const previousHtmlOverscrollX = html.style.overscrollBehaviorX;
-    const previousBodyOverscrollX = body.style.overscrollBehaviorX;
-    const previousBodyTouchAction = body.style.touchAction;
-    viewport?.setAttribute(
-      'content',
-      'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover',
-    );
-    html.style.overflowX = 'clip';
-    body.style.overflowX = 'clip';
-    html.style.overscrollBehaviorX = 'none';
-    body.style.overscrollBehaviorX = 'none';
-    body.style.touchAction = 'pan-y pinch-zoom';
-    window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' });
-    return () => {
-      if (previousViewport) viewport?.setAttribute('content', previousViewport);
-      html.style.overflowX = previousHtmlOverflowX;
-      body.style.overflowX = previousBodyOverflowX;
-      html.style.overscrollBehaviorX = previousHtmlOverscrollX;
-      body.style.overscrollBehaviorX = previousBodyOverscrollX;
-      body.style.touchAction = previousBodyTouchAction;
-    };
-  }, []);
+  // O viewport global do portal é controlado exclusivamente por App.tsx.
 
   const formatPortalDateTime = (value: any) => {
     const date = new Date(value || '');
@@ -1057,6 +1029,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         return false;
       }
 
+      await persistPushRenewalContext(registration, result?.renewalToken, keyPayload.publicKey);
       console.log('[push] subscription do painel persistida.', {
         patientId: result?.patientId || safePatientIdForPush || null
       });
