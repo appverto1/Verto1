@@ -32,6 +32,7 @@ import {
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
+import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
 import { startAppointmentNoShowCron } from './services/appointmentNoShowService';
 import {
   classifyReservationSchemaProbe,
@@ -90780,6 +90781,16 @@ async function startServer() {
     requireClinicCapability,
     resolvePatientListScopedPatientIds,
     portalActionLimiter,
+    sanitizeString,
+    currentClinicId
+  });
+
+  registerClinicalMeasurementV3Routes(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    checkPatientAccess,
+    requireClinicCapability,
     sanitizeString,
     currentClinicId
   });
