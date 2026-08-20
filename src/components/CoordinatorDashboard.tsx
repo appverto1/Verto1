@@ -99,7 +99,14 @@ import {
   Pie,
 } from "recharts";
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
+import { NewBadge } from "./NewBadge";
 import { dataService } from "../services/dataService";
+import {
+  getActiveNewFeatureKeys,
+  isFeatureWithinNewWindow,
+  shouldShowNewBadge,
+  type NewFeatureKey,
+} from "../constants/featureMetadata";
 import { getDefaultCapabilitiesForRole, isClinicBaseRole } from "../constants/authorizationModel";
 import { resolvePatientPrimaryProfessionalId } from "../utils/patientProfessionalLinks";
 import {
@@ -214,6 +221,7 @@ type NavigationNode = {
   clinicFinanceOnly?: boolean;
   patientFinanceOnly?: boolean;
   requiredModule?: OrganizationModuleKey;
+  newFeatureKey?: NewFeatureKey;
 };
 
 const COORDINATOR_SIDEBAR_PREFERENCE_KEY = "verto:coordinator-sidebar-expanded";
@@ -876,6 +884,8 @@ export function CoordinatorDashboard({
     return capabilityStatusForRole(capability) !== "none";
   };
 
+  const canAccessNotices = canAccessTab("notices");
+
   const [activeTab, setActiveTab] = useState<
     | "dashboard"
     | "team"
@@ -898,6 +908,10 @@ export function CoordinatorDashboard({
     | "birthdays"
   >("dashboard");
   const patientListEnsureAttemptedWorkspaceRef = useRef("");
+  const featureDiscoveryRequestSeqRef = useRef(0);
+  const persistedFeatureAccessRef = useRef<Set<NewFeatureKey>>(new Set());
+  const [featureAccessByKey, setFeatureAccessByKey] = useState<Partial<Record<NewFeatureKey, string | null>>>({});
+  const [featureDiscoveryReady, setFeatureDiscoveryReady] = useState(false);
   const [tabHistory, setTabHistory] = useState<string[]>(["dashboard"]);
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
@@ -960,6 +974,82 @@ export function CoordinatorDashboard({
   const [schoolBatchMeetingSaving, setSchoolBatchMeetingSaving] = useState(false);
   const [schoolBatchMeetingNotice, setSchoolBatchMeetingNotice] = useState("");
   const [schoolBatchMeetingForm, setSchoolBatchMeetingForm] = useState({ title: "Reunião escolar", scheduledStart: "", scheduledEnd: "", meetingType: "SCHOOL_MEETING", responsibleProfessionalId: "", agenda: "" });
+
+  const trackedNewFeatureKeys = useMemo(() => {
+    const activeKeys = getActiveNewFeatureKeys();
+    return activeKeys.filter((featureKey) =>
+      featureKey === "clinic_notices" ? canAccessNotices : false,
+    );
+  }, [canAccessNotices]);
+  const trackedNewFeatureKeySignature = trackedNewFeatureKeys.join(",");
+
+  useEffect(() => {
+    const requestSeq = featureDiscoveryRequestSeqRef.current + 1;
+    featureDiscoveryRequestSeqRef.current = requestSeq;
+    const userId = String(user?.id || "").trim();
+    persistedFeatureAccessRef.current.clear();
+    setFeatureAccessByKey({});
+    setFeatureDiscoveryReady(false);
+
+    if (!userId || !trackedNewFeatureKeys.length) {
+      setFeatureDiscoveryReady(true);
+      return;
+    }
+
+    let cancelled = false;
+    void dataService.getFeatureAccess(trackedNewFeatureKeys)
+      .then((result: any) => {
+        if (cancelled || featureDiscoveryRequestSeqRef.current !== requestSeq) return;
+        if (!result?.success || !Array.isArray(result?.data)) {
+          // Fail closed: an unavailable discovery read must never make a previously
+          // viewed feature look new again. A later remount/relogin retries the read.
+          setFeatureDiscoveryReady(false);
+          return;
+        }
+        const next: Partial<Record<NewFeatureKey, string | null>> = {};
+        for (const row of result.data) {
+          const featureKey = String(row?.feature_key || "").trim() as NewFeatureKey;
+          if (!trackedNewFeatureKeys.includes(featureKey)) continue;
+          const firstAccessedAt = String(row?.first_accessed_at || "").trim() || null;
+          next[featureKey] = firstAccessedAt;
+          if (firstAccessedAt) persistedFeatureAccessRef.current.add(featureKey);
+        }
+        setFeatureAccessByKey(next);
+        setFeatureDiscoveryReady(true);
+      })
+      .catch(() => {
+        if (!cancelled && featureDiscoveryRequestSeqRef.current === requestSeq) {
+          setFeatureDiscoveryReady(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, trackedNewFeatureKeySignature]);
+
+  useEffect(() => {
+    if (activeTab !== "notices" || !canAccessNotices || !isFeatureWithinNewWindow("clinic_notices")) return;
+    if (persistedFeatureAccessRef.current.has("clinic_notices")) return;
+
+    // A real tab entry is the discovery event. Invalidate any older read so it
+    // cannot overwrite the optimistic first-access state while the atomic write
+    // is in flight. If persistence fails, re-entering Avisos retries once.
+    featureDiscoveryRequestSeqRef.current += 1;
+    const optimisticAccessedAt = new Date().toISOString();
+    setFeatureAccessByKey((current) => ({ ...current, clinic_notices: optimisticAccessedAt }));
+    setFeatureDiscoveryReady(true);
+
+    void dataService.markFeatureAccessed("clinic_notices").then((result: any) => {
+      const persistedAt = String(result?.data?.first_accessed_at || "").trim();
+      if (!result?.success || !persistedAt) return;
+      persistedFeatureAccessRef.current.add("clinic_notices");
+      setFeatureAccessByKey((current) => ({ ...current, clinic_notices: persistedAt }));
+    }).catch(() => {
+      // Keep the badge hidden for this live session after a real first access.
+      // Persistence is retried idempotently the next time Avisos is entered.
+    });
+  }, [activeTab, canAccessNotices, user?.id]);
 
   useEffect(() => {
     patientListEnsureAttemptedWorkspaceRef.current = "";
@@ -10184,7 +10274,7 @@ export function CoordinatorDashboard({
         children: [
           { id: "dashboard", label: "Painel", icon: LayoutDashboard },
           { id: "agenda", label: "Agenda", icon: CalendarDays },
-          { id: "notices", label: "Avisos", icon: Bell },
+          { id: "notices", label: "Avisos", icon: Bell, newFeatureKey: "clinic_notices" },
           { id: "patients", label: "Pacientes", icon: ClipboardList },
           { id: "schools", label: "Escolas", icon: GraduationCap },
           { id: "birthdays", label: "Aniversariantes", icon: Heart },
@@ -10361,6 +10451,16 @@ export function CoordinatorDashboard({
     return null;
   };
 
+  const shouldShowNavigationNewBadge = (featureKey?: NewFeatureKey) => {
+    if (!featureKey || !featureDiscoveryReady) return false;
+    const hasAccess = featureKey === "clinic_notices" ? canAccessNotices : false;
+    return shouldShowNewBadge({
+      featureKey,
+      hasAccess,
+      firstAccessedAt: featureAccessByKey[featureKey] || null,
+    });
+  };
+
   const renderNavigationGroups = ({
     expanded,
     iconSize,
@@ -10401,6 +10501,7 @@ export function CoordinatorDashboard({
             {expanded && (
               <>
                 <span className="min-w-0 truncate">{item.label}</span>
+                {shouldShowNavigationNewBadge(item.newFeatureKey) && <NewBadge />}
                 {item.badge && (
                   <span className="ml-auto shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[8px] font-semibold text-[#7a32fc] ring-1 ring-violet-100">
                     {item.badge}
