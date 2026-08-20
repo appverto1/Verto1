@@ -6406,6 +6406,52 @@ export const dataService = {
     }
   },
 
+  async getClinicalMeasurementV3Catalog(patientId: string) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'Clinical Measurement V3 UI desabilitada.', data: { targets: [] } };
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente não identificado.', data: { targets: [] } };
+    try {
+      const response = await fetchWithAuthRetry(`/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/catalog`, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, error: result?.error || 'Não foi possível carregar as métricas clínicas V3.', data: { targets: [] } };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar as métricas clínicas V3.', data: { targets: [] } };
+    }
+  },
+
+  async getClinicalMeasurementV3View(patientId: string, targetId: string, options: { definitionId?: string; days?: number } = {}) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'Clinical Measurement V3 UI desabilitada.', data: null };
+    const safePatientId = String(patientId || '').trim();
+    const safeTargetId = String(targetId || '').trim();
+    const definitionId = String(options.definitionId || '').trim();
+    if (!safePatientId || !safeTargetId) return { success: false, error: 'Escopo clínico V3 incompleto.', data: null };
+    const days = Math.max(1, Math.min(Number(options.days || 90), 366));
+    const periodEnd = new Date();
+    const periodStart = new Date(periodEnd.getTime() - (days - 1) * 86400000);
+    const endpoint = endpointWithQuery(`/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/targets/${encodeURIComponent(safeTargetId)}/view`, {
+      definitionId: definitionId || undefined,
+      periodStart: periodStart.toISOString(),
+      periodEnd: periodEnd.toISOString()
+    });
+    try {
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.error, error: result?.error || 'Não foi possível carregar a visão clínica V3.', data: null };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar a visão clínica V3.', data: null };
+    }
+  },
+
   async getAbaV3ChartCatalog(patientId: string) {
     if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { targets: [] } };
     const safePatientId = String(patientId || '').trim();
