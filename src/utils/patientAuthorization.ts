@@ -27,6 +27,8 @@ const BASE_PATIENT_LIST_COLUMNS = [
   'profile_type',
   'profile_picture',
   'profile_picture_path',
+  'portal_profile_picture',
+  'portal_profile_picture_path',
   'onboarding_status',
   'relationship_status',
   'is_active',

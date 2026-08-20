@@ -1728,6 +1728,43 @@ export const dataService = {
     }
   },
 
+  async getPatientFilePermissions(patientId: string, fileId: string) {
+    try {
+      const response = await fetch(`/api/patient-files/${encodeURIComponent(String(patientId))}/${encodeURIComponent(String(fileId))}/permissions`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient file permissions:', error);
+      return { success: false, error: String(error), data: null };
+    }
+  },
+
+  async updatePatientFilePermissions(patientId: string, fileId: string, payload: {
+    accessScope: 'OWNER' | 'CASE_TEAM' | 'PATIENT_ACCESS' | 'SELECTED';
+    patientPortalVisible: boolean;
+    selectedUserIds?: string[];
+  }) {
+    try {
+      const response = await fetch(`/api/patient-files/${encodeURIComponent(String(patientId))}/${encodeURIComponent(String(fileId))}/permissions`, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          accessScope: payload.accessScope,
+          patientPortalVisible: payload.patientPortalVisible === true,
+          selectedUserIds: Array.isArray(payload.selectedUserIds) ? payload.selectedUserIds.slice(0, 100) : []
+        })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating patient file permissions:', error);
+      return { success: false, error: String(error), data: null };
+    }
+  },
+
   async uploadPatientFile(patientId: string, payload: any) {
     try {
       if (payload?.fileBlob instanceof Blob) {
@@ -2358,6 +2395,45 @@ export const dataService = {
     return await saveOfflineFirst(id, data, 'note', '/api/notes');
   },
 
+  async getClinicalNoteMentions(limit = 12) {
+    try {
+      const response = await fetchClinical(endpointWithLimit('/api/clinical-note-mentions', normalizeListLimit(limit, 12, 30)), {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'getClinicalNoteMentions',
+        operation: 'list',
+        table: 'clinical_note_mentions',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar suas menções.');
+      return { success: false, data: [], error: message, message };
+    }
+  },
+
+  async markClinicalNoteMentionRead(mentionId: string) {
+    try {
+      const response = await fetchClinical(`/api/clinical-note-mentions/${encodeURIComponent(String(mentionId))}/read`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'markClinicalNoteMentionRead',
+        operation: 'write',
+        table: 'clinical_note_mentions',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeJson(response);
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível atualizar a notificação.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async deleteNote(noteId: string) {
     return await saveOfflineFirst(noteId, { id: noteId }, 'note', `/api/notes/${noteId}`, 'DELETE');
   },
@@ -2699,12 +2775,16 @@ export const dataService = {
     }
   },
 
-  async getPortalNotifications(limit = 12) {
+  async getPortalNotifications(limit = 12, options: { includeAcknowledged?: boolean; type?: 'clinic_announcement' } = {}) {
     try {
       const safeLimit = Math.max(1, Math.min(50, Number(limit) || 12));
-      const response = await fetch(`/api/portal/notifications?limit=${safeLimit}`, {
+      const params = new URLSearchParams({ limit: String(safeLimit) });
+      if (options.includeAcknowledged) params.set('includeAcknowledged', 'true');
+      if (options.type === 'clinic_announcement') params.set('type', 'clinic_announcement');
+      const response = await fetch(`/api/portal/notifications?${params.toString()}`, {
         headers: await getAuthHeaders(),
-        credentials: 'include'
+        credentials: 'include',
+        cache: 'no-store'
       });
       return await safeJson(response);
     } catch (error) {
@@ -5078,6 +5158,119 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+  async getAbaSessionQuickCollectionPreferences() {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse({ locations: [], quickBehaviorShortcuts: [], preferencesFound: false });
+    const endpoint = '/api/aba/session-quick-collection/preferences';
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, {
+        helperName: 'getAbaSessionQuickCollectionPreferences',
+        operation: 'detail',
+        table: 'aba_session_locations,aba_user_session_preferences',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      const result = await safeJson(response);
+      return response.ok ? result : normalizeClinicalMutationResult(result, 'Não foi possível carregar as preferências da coleta rápida.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar as preferências da coleta rápida.');
+      return { success: false, error: message, message, data: { locations: [], quickBehaviorShortcuts: [], preferencesFound: false } };
+    }
+  },
+
+  async createAbaSessionLocation(name: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = '/api/aba/session-locations';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name })
+      }, {
+        helperName: 'createAbaSessionLocation',
+        operation: 'write',
+        table: 'aba_session_locations',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível adicionar o local.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível adicionar o local.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async updateAbaSessionLocation(locationId: string, name: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/session-locations/${encodeURIComponent(String(locationId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ name })
+      }, {
+        helperName: 'updateAbaSessionLocation',
+        operation: 'write',
+        table: 'aba_session_locations',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível renomear o local.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível renomear o local.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async removeAbaSessionLocation(locationId: string) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = `/api/aba/session-locations/${encodeURIComponent(String(locationId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'removeAbaSessionLocation',
+        operation: 'write',
+        table: 'aba_session_locations',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível remover o local.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível remover o local.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async saveAbaQuickBehaviorShortcuts(shortcuts: any[]) {
+    if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
+    const endpoint = '/api/aba/session-quick-collection/preferences';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PUT',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ quickBehaviorShortcuts: shortcuts })
+      }, {
+        helperName: 'saveAbaQuickBehaviorShortcuts',
+        operation: 'write',
+        table: 'aba_user_session_preferences',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível salvar os atalhos rápidos.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível salvar os atalhos rápidos.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async getAbaSessionMaintenanceProbes(sessionId: string, options: { appointmentId?: string | null; clinicalDate?: string | null; timeZone?: string | null; force?: boolean } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ available: [], upcoming: [] });
     if (!isPersistedUuid(sessionId)) return { success: true, data: { available: [], upcoming: [] }, available: [], upcoming: [] };
@@ -6675,6 +6868,27 @@ export const dataService = {
           (row?.evaluation_status || row?.evaluationStatus || row?.suggested_phase || row?.suggestedPhase)
         ), ['evaluated_at', 'evaluatedAt', 'created_at', 'createdAt']).slice(localStart, localStart + limit)
     };
+  },
+
+  async getPatientMasteryGrowth(patientId: string, options: { portal?: boolean } = {}) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: true, data: [] };
+    const endpoint = options.portal
+      ? `/api/portal/patients/${encodeURIComponent(safePatientId)}/mastery-growth`
+      : `/api/aba/patients/${encodeURIComponent(safePatientId)}/mastery-growth`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        credentials: 'include'
+      }, { helperName: 'getPatientMasteryGrowth', operation: 'list', table: 'aba_mastery_evaluations', hasExplicitColumns: true });
+      const result = await response.json().catch(() => ({ success: false, data: [] }));
+      if (!response.ok || result?.success === false) {
+        return { success: false, data: [], error: result?.error || `HTTP ${response.status}` };
+      }
+      return { success: true, data: Array.isArray(result?.data) ? result.data : [] };
+    } catch (error: any) {
+      return { success: false, data: [], error: error?.message || 'Não foi possível carregar o crescimento de maestria.' };
+    }
   },
 
   async addPatientLog(log: {
@@ -8382,6 +8596,36 @@ export const dataService = {
       console.error('Error fetching patient anamnesis submissions:', error);
       return { success: false, error: String(error) };
     }
+  },
+
+  async getClinicRooms() {
+    try {
+      const response = await fetch('/api/clinic/rooms', { headers: await getNoStoreAuthHeaders(false), credentials: 'include', cache: 'no-store' });
+      const result = await safeJson(response);
+      if (!result?.success || !Array.isArray(result?.data)) return result;
+      return { ...result, data: result.data.map((room: any) => {
+        const specialties = Array.isArray(room?.specialties) ? room.specialties : String(room?.specialties || '').split(',').map((value) => value.trim()).filter(Boolean);
+        const active = room?.is_active !== false && room?.isActive !== false;
+        const preventsOverlap = room?.prevent_overlapping_appointments !== false && room?.preventOverlappingAppointments !== false;
+        return { ...room, specialties, is_active: active, isActive: active, prevent_overlapping_appointments: preventsOverlap, preventOverlappingAppointments: preventsOverlap };
+      }) };
+    } catch (error) { console.error('Error fetching clinic rooms:', error); return { success: false, error: 'Não foi possível carregar as salas agora.' }; }
+  },
+  async createClinicRoom(payload: any) {
+    try { const response = await fetch('/api/clinic/rooms', { method: 'POST', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload || {}) }); return await safeJson(response); }
+    catch (error) { console.error('Error creating clinic room:', error); return { success: false, error: 'Não foi possível salvar a sala agora.' }; }
+  },
+  async updateClinicRoom(roomId: string, payload: any) {
+    try { const response = await fetch(`/api/clinic/rooms/${encodeURIComponent(roomId)}`, { method: 'PATCH', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload || {}) }); return await safeJson(response); }
+    catch (error) { console.error('Error updating clinic room:', error); return { success: false, error: 'Não foi possível atualizar a sala agora.' }; }
+  },
+  async getClinicAnnouncements(limit = 30) {
+    try { const response = await fetch(endpointWithQuery('/api/clinic/announcements', { limit }), { headers: await getNoStoreAuthHeaders(false), credentials: 'include', cache: 'no-store' }); return await safeJson(response); }
+    catch (error) { console.error('Error fetching clinic announcements:', error); return { success: false, error: 'Não foi possível carregar os avisos agora.' }; }
+  },
+  async createClinicAnnouncement(payload: any) {
+    try { const response = await fetch('/api/clinic/announcements', { method: 'POST', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload || {}) }); return await safeJson(response); }
+    catch (error) { console.error('Error creating clinic announcement:', error); return { success: false, error: 'Não foi possível enviar o aviso agora.' }; }
   },
 
   async hydrateWorkspaceState(workspaceId?: string) {

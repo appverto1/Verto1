@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Activity,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   Clock,
   FileText,
@@ -377,6 +378,7 @@ const intervalAlertOptions = [
 ];
 const intervalQuantityMin = 1;
 const intervalQuantityMax = 200;
+const transientCollectionSummaryMs = 5000;
 const normalizeIntervalQuantityInput = (value: unknown) => {
   const raw = String(value ?? '').trim();
   const parsed = Number.parseInt(raw, 10);
@@ -1012,6 +1014,44 @@ const mergeSessionGoalsWithAvailableMaintenance = (baseGoals: any[], availableSc
   });
 };
 
+
+type SessionSummaryDisclosureTone = 'default' | 'amber' | 'red' | 'slate' | 'emerald';
+
+const SessionSummaryDisclosure = ({
+  title,
+  meta,
+  tone = 'default',
+  children
+}: {
+  title: string;
+  meta?: React.ReactNode;
+  tone?: SessionSummaryDisclosureTone;
+  children: React.ReactNode;
+}) => {
+  const toneClasses: Record<SessionSummaryDisclosureTone, string> = {
+    default: 'border-blue-100 bg-white text-gray-900',
+    amber: 'border-amber-100 bg-amber-50/70 text-amber-800',
+    red: 'border-red-100 bg-red-50/70 text-red-700',
+    slate: 'border-slate-200 bg-slate-50 text-slate-700',
+    emerald: 'border-emerald-100 bg-emerald-50/70 text-emerald-700'
+  };
+
+  return (
+    <details className="group mt-3">
+      <summary
+        className={`flex min-h-[52px] cursor-pointer list-none items-center justify-between gap-3 rounded-2xl border px-4 py-3 shadow-sm transition hover:shadow-md [&::-webkit-details-marker]:hidden ${toneClasses[tone]}`}
+      >
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{title}</p>
+          <p className="mt-0.5 text-[11px] font-medium opacity-65">{meta || 'Toque para ver os detalhes'}</p>
+        </div>
+        <ChevronDown size={18} className="shrink-0 transition-transform duration-200 group-open:rotate-180" aria-hidden="true" />
+      </summary>
+      <div className="mt-2 [&>section]:mt-0">{children}</div>
+    </details>
+  );
+};
+
 export const SessionMode = ({
   patient,
   onClose,
@@ -1021,6 +1061,7 @@ export const SessionMode = ({
   formatCountdown,
   onConfirmEndSession,
   onSessionSummaryPersisted,
+  onMasteryPreviewChanged,
   onSessionRecordSaved,
   therapistId,
   therapistName,
@@ -1223,6 +1264,10 @@ export const SessionMode = ({
   const [dockLocationsExpanded, setDockLocationsExpanded] = useState(false);
   const [dockLocationManagerOpen, setDockLocationManagerOpen] = useState(false);
   const [customDockLocations, setCustomDockLocations] = useState<string[]>([]);
+  const [dockLocationRows, setDockLocationRows] = useState<Array<{ id: string; name: string }>>([]);
+  const [persistedQuickBehaviorShortcuts, setPersistedQuickBehaviorShortcuts] = useState<any[] | null>(null);
+  const [sessionQuickPreferencesLoading, setSessionQuickPreferencesLoading] = useState(false);
+  const [sessionQuickPreferencesSaving, setSessionQuickPreferencesSaving] = useState(false);
   const [newDockLocationName, setNewDockLocationName] = useState('');
   const [editingDockLocationName, setEditingDockLocationName] = useState('');
   const [editingDockLocationValue, setEditingDockLocationValue] = useState('');
@@ -1233,6 +1278,7 @@ export const SessionMode = ({
   const [actionLocks, setActionLocks] = useState<Record<string, boolean>>({});
   const [microFeedback, setMicroFeedback] = useState<Record<string, 'pulse' | 'check' | 'plus'>>({});
   const [maintenanceProbeFeedback, setMaintenanceProbeFeedback] = useState('');
+  const [maintenanceStartDecision, setMaintenanceStartDecision] = useState<'' | 'added' | 'review' | 'skipped'>('');
   const [pendingMaintenanceProbeTrial, setPendingMaintenanceProbeTrial] = useState<PendingMaintenanceProbeTrial | null>(null);
   const [, setTrialAuditEvents] = useState<TrialAuditEvent[]>([]);
   const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
@@ -1441,7 +1487,7 @@ export const SessionMode = ({
   const selectedBehaviorMeasurements = getBehaviorAllowedMeasurements(selectedBehavior);
   const selectedBehaviorAllowsMultipleMethods = selectedBehaviorMeasurements.length > 1;
   const selectedBehaviorMethodOptions = behaviorMeasurementOptions.filter((option) => selectedBehaviorMeasurements.includes(option.key as any));
-  const quickBehaviorShortcuts = useMemo(() => normalizeQuickBehaviorShortcuts(
+  const baselineQuickBehaviorShortcuts = useMemo(() => normalizeQuickBehaviorShortcuts(
     patient?.quickBehaviorShortcuts ||
     patient?.quick_behavior_shortcuts ||
     patient?.abaSettings?.quickBehaviorShortcuts ||
@@ -1449,9 +1495,20 @@ export const SessionMode = ({
     patient?.clinicSettings?.abaQuickBehaviorShortcuts,
     sessionBehaviorPresets
   ), [patient?.abaSettings?.quickBehaviorShortcuts, patient?.clinicSettings?.abaQuickBehaviorShortcuts, patient?.clinicSettings?.quickBehaviorShortcuts, patient?.quickBehaviorShortcuts, patient?.quick_behavior_shortcuts, sessionBehaviorPresets]);
-  const dockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode, limit: 3 }), [crisisMode, quickBehaviorShortcuts]);
+  const quickBehaviorShortcuts = useMemo(() => {
+    if (persistedQuickBehaviorShortcuts !== null) {
+      return persistedQuickBehaviorShortcuts.length > 0
+        ? normalizeQuickBehaviorShortcuts(persistedQuickBehaviorShortcuts, sessionBehaviorPresets)
+        : [];
+    }
+    return baselineQuickBehaviorShortcuts;
+  }, [baselineQuickBehaviorShortcuts, persistedQuickBehaviorShortcuts, sessionBehaviorPresets]);
+  const dockShortcuts = useMemo(() => getDockVisibleShortcuts(
+    crisisMode ? baselineQuickBehaviorShortcuts : quickBehaviorShortcuts,
+    { crisisMode, limit: 3 }
+  ), [baselineQuickBehaviorShortcuts, crisisMode, quickBehaviorShortcuts]);
+  const personalizedDockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode: false, limit: 3 }), [quickBehaviorShortcuts]);
   const crisisShortcutIdSet = useMemo(() => new Set(getCrisisShortcutIds()), []);
-  const dockLocationStorageKey = useMemo(() => `verto.aba_dock_locations:${resolvedClinicId || patientId || 'local'}`, [patientId, resolvedClinicId]);
   const dockLocationOptions = useMemo(() => mergeDockLocationOptions(customDockLocations), [customDockLocations]);
   const visibleDockLocationOptions = dockLocationsExpanded ? dockLocationOptions : dockLocationOptions.slice(0, 6);
   const recentBehaviorRecords = useMemo(() => records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)).slice(0, 5), [records]);
@@ -1486,6 +1543,15 @@ export const SessionMode = ({
   const intervalRunPaused = intervalRunStatus === 'PAUSED';
   const intervalRunAwaitingResponse = intervalRunStatus === 'AWAITING_RESPONSE';
   const intervalResponseActive = Boolean((intervalRunAwaitingResponse || intervalRun?.awaitingResponse) && !intervalRun?.paused && !intervalRun?.completed);
+  const intervalDurationMs = Math.max(1000, Number(intervalRun?.intervalSeconds || intervalSeconds || 1) * 1000);
+  const intervalRemainingMs = intervalRun?.intervalEndsAt
+    ? Math.max(0, new Date(intervalRun.intervalEndsAt).getTime() - nowMs)
+    : intervalDurationMs;
+  const intervalProgressPercent = intervalRunAwaitingResponse
+    ? 100
+    : intervalRunPaused
+      ? Math.min(100, Math.max(0, ((intervalDurationMs - Math.max(0, Number(intervalRun?.pauseRemainingMs ?? intervalRemainingMs))) / intervalDurationMs) * 100))
+      : Math.min(100, Math.max(0, ((intervalDurationMs - intervalRemainingMs) / intervalDurationMs) * 100));
   const intervalToastCompact = Boolean(intervalRun && intervalRunStatus !== 'PAUSED' && intervalRunStatus !== 'COMPLETED' && intervalRunStatus !== 'PARTIALLY_COMPLETED' && intervalRunStatus !== 'CANCELLED');
   const vibrateClinicalAction = (pattern: number | number[]) => {
     if (typeof navigator === 'undefined' || typeof navigator.vibrate !== 'function') return;
@@ -1518,28 +1584,39 @@ export const SessionMode = ({
     }
   };
 
-  const persistCustomDockLocations = (nextOptions: string[]) => {
-    const normalizedOptions = Array.from(new Set(
-      nextOptions
-        .map(normalizeDockLocationLabel)
-        .filter((location) => location && !locationOptions.includes(location))
-    ));
-    setCustomDockLocations(normalizedOptions);
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(dockLocationStorageKey, JSON.stringify(normalizedOptions));
-    } catch {
-      // Custom dock locations are a UI preference; clinical event persistence stays unchanged.
-    }
+  const syncDockLocationRows = (rows: any[]) => {
+    const normalizedRows = (Array.isArray(rows) ? rows : [])
+      .map((row: any) => ({ id: String(row?.id || '').trim(), name: normalizeDockLocationLabel(row?.name) }))
+      .filter((row: any) => row.id && row.name && !locationOptions.includes(row.name));
+    setDockLocationRows(normalizedRows);
+    setCustomDockLocations(Array.from(new Set(normalizedRows.map((row: any) => row.name))));
   };
 
-  const addDockLocation = () => {
+  const addDockLocation = async () => {
     const nextLocation = normalizeDockLocationLabel(newDockLocationName);
     if (!nextLocation) return;
-    persistCustomDockLocations([...customDockLocations, nextLocation]);
-    setSelectedLocation(nextLocation);
+    const defaultLocation = locationOptions.find((location) => location.toLocaleLowerCase('pt-BR') === nextLocation.toLocaleLowerCase('pt-BR'));
+    if (defaultLocation) {
+      setSelectedLocation(defaultLocation);
+      setNewDockLocationName('');
+      setDockLocationsExpanded(true);
+      showClinicalToast({ variant: 'info', title: 'Local já disponível.', subtitle: defaultLocation }, 'none');
+      return;
+    }
+    const result = await dataService.createAbaSessionLocation(nextLocation);
+    if (result?.success === false || !result?.data?.id) {
+      showClinicalToast({ variant: 'error', title: 'Não foi possível adicionar o local.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
+      return;
+    }
+    const nextRows = [
+      ...dockLocationRows.filter((row) => row.id !== String(result.data.id)),
+      { id: String(result.data.id), name: normalizeDockLocationLabel(result.data.name || nextLocation) }
+    ];
+    syncDockLocationRows(nextRows);
+    setSelectedLocation(normalizeDockLocationLabel(result.data.name || nextLocation));
     setNewDockLocationName('');
     setDockLocationsExpanded(true);
+    showClinicalToast({ variant: 'success', title: 'Local adicionado e selecionado.', subtitle: normalizeDockLocationLabel(result.data.name || nextLocation) }, 'none');
   };
 
   const startRenameDockLocation = (location: string) => {
@@ -1547,26 +1624,100 @@ export const SessionMode = ({
     setEditingDockLocationValue(location);
   };
 
-  const renameDockLocation = () => {
+  const renameDockLocation = async () => {
     const currentLocation = normalizeDockLocationLabel(editingDockLocationName);
     const nextLocation = normalizeDockLocationLabel(editingDockLocationValue);
-    if (!currentLocation || !nextLocation) return;
-    persistCustomDockLocations(customDockLocations.map((location) => (
-      location === currentLocation ? nextLocation : location
-    )));
-    if (selectedLocation === currentLocation) setSelectedLocation(nextLocation);
+    const row = dockLocationRows.find((item) => item.name === currentLocation);
+    if (!row?.id || !currentLocation || !nextLocation) return;
+    const result = await dataService.updateAbaSessionLocation(row.id, nextLocation);
+    if (result?.success === false || !result?.data?.id) {
+      showClinicalToast({ variant: 'error', title: 'Não foi possível renomear o local.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
+      return;
+    }
+    const persistedName = normalizeDockLocationLabel(result.data.name || nextLocation);
+    syncDockLocationRows(dockLocationRows.map((item) => item.id === row.id ? { id: row.id, name: persistedName } : item));
+    if (selectedLocation === currentLocation) setSelectedLocation(persistedName);
     setEditingDockLocationName('');
     setEditingDockLocationValue('');
+    showClinicalToast({ variant: 'success', title: 'Local atualizado.', subtitle: persistedName }, 'none');
   };
 
-  const removeDockLocation = (location: string) => {
+  const removeDockLocation = async (location: string) => {
     const removedLocation = normalizeDockLocationLabel(location);
-    persistCustomDockLocations(customDockLocations.filter((item) => item !== removedLocation));
+    const row = dockLocationRows.find((item) => item.name === removedLocation);
+    if (!row?.id) return;
+    const result = await dataService.removeAbaSessionLocation(row.id);
+    if (result?.success === false) {
+      showClinicalToast({ variant: 'error', title: 'Não foi possível remover o local.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
+      return;
+    }
+    syncDockLocationRows(dockLocationRows.filter((item) => item.id !== row.id));
     if (selectedLocation === removedLocation) setSelectedLocation(locationOptions[0]);
     if (editingDockLocationName === removedLocation) {
       setEditingDockLocationName('');
       setEditingDockLocationValue('');
     }
+    showClinicalToast({ variant: 'info', title: 'Local removido da lista rápida.', subtitle: removedLocation }, 'none');
+  };
+
+  const savePersonalizedQuickBehaviorShortcuts = async (nextShortcuts: any[]) => {
+    if (sessionQuickPreferencesSaving) return false;
+    setSessionQuickPreferencesSaving(true);
+    try {
+      const normalized = nextShortcuts.slice(0, 3).map((shortcut: any, index: number) => ({
+        ...shortcut,
+        priority: index + 1,
+        visibleInDock: true
+      }));
+      const result = await dataService.saveAbaQuickBehaviorShortcuts(normalized);
+      if (result?.success === false) {
+        showClinicalToast({ variant: 'error', title: 'Não foi possível salvar os atalhos.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
+        return false;
+      }
+      const persisted = Array.isArray(result?.data?.quickBehaviorShortcuts) ? result.data.quickBehaviorShortcuts : normalized;
+      setPersistedQuickBehaviorShortcuts(persisted);
+      showClinicalToast({ variant: 'success', title: 'Acessos rápidos atualizados.', subtitle: 'A preferência fica salva para você nesta clínica.' }, 'none');
+      return true;
+    } finally {
+      setSessionQuickPreferencesSaving(false);
+    }
+  };
+
+  const toggleSelectedBehaviorQuickShortcut = async () => {
+    const behavior = selectedBehavior;
+    if (!behavior?.id) return;
+    const current = personalizedDockShortcuts;
+    const existing = current.find((shortcut: any) => shortcut.behaviorId === behavior.id);
+    if (existing) {
+      await savePersonalizedQuickBehaviorShortcuts(current.filter((shortcut: any) => shortcut.behaviorId !== behavior.id));
+      return;
+    }
+    if (current.length >= 3) {
+      showClinicalToast({ variant: 'info', title: 'Você já tem 3 acessos rápidos.', subtitle: 'Remova ou reordene um deles antes de fixar outro.' }, 'none');
+      return;
+    }
+    const method = resolveBehaviorMeasurementForAction(behavior, behaviorMeasurementType || behavior.defaultMeasurement || 'frequency');
+    await savePersonalizedQuickBehaviorShortcuts([
+      ...current,
+      {
+        behaviorId: behavior.id,
+        label: behavior.name,
+        method,
+        priority: current.length + 1,
+        visibleInDock: true,
+        color: 'slate',
+        icon: method === 'duration' ? 'duration' : 'plus'
+      }
+    ]);
+  };
+
+  const movePersonalizedQuickShortcut = async (behaviorId: string, direction: -1 | 1) => {
+    const current = [...personalizedDockShortcuts];
+    const index = current.findIndex((shortcut: any) => shortcut.behaviorId === behaviorId);
+    const targetIndex = index + direction;
+    if (index < 0 || targetIndex < 0 || targetIndex >= current.length) return;
+    [current[index], current[targetIndex]] = [current[targetIndex], current[index]];
+    await savePersonalizedQuickBehaviorShortcuts(current);
   };
 
   const dockChipClass = (active: boolean) => `inline-flex min-h-[36px] min-w-0 max-w-full items-center justify-center overflow-hidden whitespace-nowrap rounded-full border px-4 py-2 text-[11px] font-medium transition-all focus:outline-none focus:ring-2 focus:ring-[#7a32fc]/30 active:scale-[0.98] ${active ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-sm shadow-purple-500/10 ring-2 ring-[#7a32fc]/10' : 'border-[#E2D9EA] bg-white text-slate-700 hover:border-purple-200 hover:bg-white'}`;
@@ -1617,21 +1768,41 @@ export const SessionMode = ({
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const persistedLocations = JSON.parse(window.localStorage.getItem(dockLocationStorageKey) || '[]');
-      const nextLocations = Array.isArray(persistedLocations)
-        ? persistedLocations.map(normalizeDockLocationLabel).filter((location) => location && !locationOptions.includes(location))
-        : [];
-      setCustomDockLocations(Array.from(new Set(nextLocations)));
-    } catch {
-      setCustomDockLocations([]);
-    }
+    let cancelled = false;
     setDockLocationsExpanded(false);
     setDockLocationManagerOpen(false);
     setEditingDockLocationName('');
     setEditingDockLocationValue('');
-  }, [dockLocationStorageKey]);
+    if (!resolvedClinicId) {
+      syncDockLocationRows([]);
+      setPersistedQuickBehaviorShortcuts(null);
+      return () => { cancelled = true; };
+    }
+    setSessionQuickPreferencesLoading(true);
+    dataService.getAbaSessionQuickCollectionPreferences()
+      .then((result: any) => {
+        if (cancelled) return;
+        if (result?.success === false) {
+          syncDockLocationRows([]);
+          setPersistedQuickBehaviorShortcuts(null);
+          return;
+        }
+        const payload = result?.data || {};
+        syncDockLocationRows(Array.isArray(payload?.locations) ? payload.locations : []);
+        setPersistedQuickBehaviorShortcuts(payload?.preferencesFound
+          ? (Array.isArray(payload?.quickBehaviorShortcuts) ? payload.quickBehaviorShortcuts : [])
+          : null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        syncDockLocationRows([]);
+        setPersistedQuickBehaviorShortcuts(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSessionQuickPreferencesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [resolvedClinicId]);
 
   useEffect(() => {
     setBehaviorMeasurementType(getBehaviorDefaultMeasurement(selectedBehavior));
@@ -1648,11 +1819,24 @@ export const SessionMode = ({
       setTherapeuticTimers(persisted.therapeuticTimers && typeof persisted.therapeuticTimers === 'object' ? persisted.therapeuticTimers : {});
       setRateWindow(persisted.rateWindow || null);
       setIntervalRun(persisted.intervalRun || null);
-      setIntervalSummary(persisted.intervalSummary || null);
+      const persistedIntervalSummary = persisted.intervalSummary || null;
+      const persistedSummaryEndedAtMs = persistedIntervalSummary?.endedAt
+        ? new Date(persistedIntervalSummary.endedAt).getTime()
+        : 0;
+      const persistedSummaryStillVisible = Boolean(
+        persistedIntervalSummary
+        && Number.isFinite(persistedSummaryEndedAtMs)
+        && persistedSummaryEndedAtMs > 0
+        && Date.now() - persistedSummaryEndedAtMs < transientCollectionSummaryMs
+      );
+      setIntervalSummary(persistedSummaryStillVisible ? persistedIntervalSummary : null);
       setSessionNote(String(persisted.sessionNote || ''));
       setSessionCompleted(Boolean(isCompletedSessionReview || persisted.sessionCompleted || String(activeSession?.status || '').toLowerCase() === 'completed'));
       setPostClosureSummary(persisted.postClosureSummary || null);
       setTrialCount(Number(persisted.trialCount || 0));
+      setMaintenanceStartDecision(['added', 'review', 'skipped'].includes(String(persisted.maintenanceStartDecision || ''))
+        ? persisted.maintenanceStartDecision
+        : '');
       const restoredRegularTrialType = normalizeRegularAbaTrialType(persisted.lastRegularTrialType, 'dtt');
       const restoredCollectionType = normalizeAbaCollectionType(persisted.collectionType || restoredRegularTrialType);
       setLastRegularTrialType(restoredRegularTrialType);
@@ -1703,13 +1887,14 @@ export const SessionMode = ({
           trialCount,
           collectionType,
           lastRegularTrialType,
-          manualMaintenanceProbeTargets
+          manualMaintenanceProbeTargets,
+          maintenanceStartDecision
         })
       );
     } catch {
       // Local session history is a convenience layer; encrypted offline cache remains the source of truth.
     }
-  }, [collectionType, hydratedSessionStateKey, intervalRun, intervalSummary, lastRegularTrialType, manualMaintenanceProbeTargets, openDurations, therapeuticTimers, postClosureSummary, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
+  }, [collectionType, hydratedSessionStateKey, intervalRun, intervalSummary, lastRegularTrialType, maintenanceStartDecision, manualMaintenanceProbeTargets, openDurations, therapeuticTimers, postClosureSummary, rateWindow, records, sessionCompleted, sessionNote, sessionStateKey, trialCount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1934,6 +2119,21 @@ export const SessionMode = ({
     });
     return () => window.cancelAnimationFrame(animationFrame);
   }, [clinicalDockHeight, intervalRun?.id, intervalRun?.intervalIndex, intervalRunPaused]);
+
+  useEffect(() => {
+    if (!intervalSummary) return;
+    const endedAtMs = intervalSummary?.endedAt ? new Date(intervalSummary.endedAt).getTime() : Date.now();
+    const safeEndedAtMs = Number.isFinite(endedAtMs) && endedAtMs > 0 ? endedAtMs : Date.now();
+    const remainingMs = Math.max(0, transientCollectionSummaryMs - (Date.now() - safeEndedAtMs));
+    if (remainingMs <= 0) {
+      setIntervalSummary(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setIntervalSummary(null);
+    }, remainingMs);
+    return () => window.clearTimeout(timer);
+  }, [intervalSummary]);
 
   useEffect(() => {
     if (!(sessionCompleted && postClosureSummary && !showSessionSummary)) return;
@@ -5773,6 +5973,22 @@ export const SessionMode = ({
     }
     return sessionGoals;
   }, [sessionAvailableMaintenanceTargetIds, sessionGoals, sessionPlanFilter]);
+  const activeTherapeuticTimerEntries = Object.values(therapeuticTimers);
+  const focusTherapeuticTimerGoal = (timer: TherapeuticTimerState) => {
+    const goal = sessionGoals.find((item: any) => therapeuticGoalKey(item) === timer.goalKey);
+    if (!goal) return;
+    const mobileGoalKey = String(goal?.id || goal?.target_id || goal?.targetId || goal?.name || 'goal');
+    setSessionPlanFilter('all');
+    setMobileSelectedGoalKey(mobileGoalKey);
+    setClinicalDockSheetOpen(false);
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      window.setTimeout(() => {
+        const targetCard = Array.from(document.querySelectorAll<HTMLElement>('[data-aba-mobile-goal-key]'))
+          .find((element) => element.getAttribute('data-aba-mobile-goal-key') === mobileGoalKey);
+        targetCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 0);
+    }
+  };
   const abaV3SessionPlanTargetIds = useMemo(() => Array.from(new Set(
     sessionGoals.map((goal: any) => goalTargetId(goal)).filter(Boolean)
   )).slice(0, 200), [sessionGoals]);
@@ -6053,6 +6269,38 @@ export const SessionMode = ({
     };
   }), [patientId, priorMasteryEvaluations, records, resolvedClinicId, resolvedTherapistId, sessionEndPreviewAt, sessionGoals, sessionId]);
 
+  useEffect(() => {
+    if (typeof onMasteryPreviewChanged !== 'function' || isCompletedSessionReview) return;
+    const evaluatedAt = sessionEndPreviewAt || new Date().toISOString();
+    const previewRows = teachingMasteryRows.map((row: any) => ({
+      id: `live-mastery-${sessionId}-${String(row?.targetId || row?.id || row?.name || 'target')}`,
+      patient_id: patientId,
+      patientId,
+      session_id: sessionId,
+      sessionId,
+      target_id: row?.targetId || row?.target_id || null,
+      targetId: row?.targetId || row?.target_id || null,
+      target_name: row?.name || null,
+      targetName: row?.name || null,
+      status: row?.statusCode || null,
+      statusCode: row?.statusCode || null,
+      evaluation_status: String(row?.statusCode || '').toUpperCase() === 'MASTERED_APPROVED' ? 'mastered' : 'not_met',
+      criterion_progress_count: Number(row?.criterionProgressCount || 0),
+      criterionProgressCount: Number(row?.criterionProgressCount || 0),
+      consecutive_successes: Number(row?.criterionProgressCount || 0),
+      consecutiveSuccesses: Number(row?.criterionProgressCount || 0),
+      criterion_required_count: Number(row?.criterionRequiredCount || 1),
+      criterionRequiredCount: Number(row?.criterionRequiredCount || 1),
+      min_consecutive_successes: Number(row?.criterionRequiredCount || 1),
+      minConsecutiveSuccesses: Number(row?.criterionRequiredCount || 1),
+      evaluated_at: evaluatedAt,
+      evaluatedAt,
+      live_preview: true,
+      livePreview: true
+    }));
+    onMasteryPreviewChanged(previewRows);
+  }, [isCompletedSessionReview, onMasteryPreviewChanged, patientId, sessionEndPreviewAt, sessionId, teachingMasteryRows]);
+
   const maintenanceProbeRows = useMemo(() => sessionGoals
     .map((goal: any) => {
       const goalId = String(goal?.id || goal?.target_id || goal?.targetId || '').trim();
@@ -6183,6 +6431,46 @@ export const SessionMode = ({
 
   const maintenanceProbeRegisteredCount = maintenanceProbeQueueItems.filter((item: any) => item.registered).length;
   const maintenanceProbePendingCount = maintenanceProbeQueueItems.filter((item: any) => !item.registered).length;
+  const shouldShowMaintenanceStartPrompt = Boolean(
+    !sessionCompleted &&
+    !isCompletedSessionReview &&
+    !sessionId.startsWith('draft-') &&
+    sessionMaintenanceProbes?.loaded &&
+    maintenanceProbePendingCount > 0 &&
+    maintenanceStartDecision === '' &&
+    records.length === 0
+  );
+
+  const acceptDueMaintenanceProbesForSession = () => {
+    setMaintenanceStartDecision('added');
+    setSessionPlanFilter('maintenance');
+    setMaintenanceProbeQueueExpanded(true);
+    showClinicalToast({
+      variant: 'success',
+      title: `${maintenanceProbePendingCount} sondagem(ns) adicionada(s) ao foco da sessão.`,
+      subtitle: 'Nada foi ativado automaticamente; escolha a sondagem quando for coletar.'
+    }, 'none');
+  };
+
+  const reviewDueMaintenanceProbesForSession = () => {
+    setMaintenanceStartDecision('review');
+    setSessionPlanFilter('maintenance');
+    setMaintenanceProbeQueueExpanded(true);
+    showClinicalToast({
+      variant: 'info',
+      title: 'Sondagens abertas para revisão.',
+      subtitle: 'Revise os alvos e ative somente o que fizer sentido nesta sessão.'
+    }, 'none');
+  };
+
+  const skipDueMaintenanceProbesForSession = () => {
+    setMaintenanceStartDecision('skipped');
+    showClinicalToast({
+      variant: 'info',
+      title: 'Sondagens mantidas pendentes.',
+      subtitle: 'Nenhuma sondagem foi cancelada ou marcada como concluída.'
+    }, 'none');
+  };
   const filteredMaintenanceProbeQueueItems = useMemo(() => {
     if (maintenanceProbeQueueFilter === 'pending') return maintenanceProbeQueueItems.filter((item: any) => !item.registered);
     if (maintenanceProbeQueueFilter === 'registered') return maintenanceProbeQueueItems.filter((item: any) => item.registered);
@@ -7540,13 +7828,16 @@ export const SessionMode = ({
               <CheckCircle2 size={44} className={completedWithoutAttendance ? 'text-slate-400' : completedBillingStatus === 'READY' ? 'text-emerald-500' : 'text-amber-500'} />
             </div>
 
-            <section className={`mt-6 rounded-[24px] border p-5 ${completedWithoutAttendance ? 'border-slate-200 bg-slate-50' : completedBillingStatus === 'READY' ? 'border-emerald-100 bg-emerald-50' : 'border-amber-100 bg-amber-50'}`}>
+            <SessionSummaryDisclosure title="Situação operacional" meta={completionStatusLabel} tone="emerald">
+<section className={`mt-6 rounded-[24px] border p-5 ${completedWithoutAttendance ? 'border-slate-200 bg-slate-50' : completedBillingStatus === 'READY' ? 'border-emerald-100 bg-emerald-50' : 'border-amber-100 bg-amber-50'}`}>
               <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Situação operacional</p>
               <p className="mt-1 text-lg font-semibold text-gray-900">{completionStatusLabel}</p>
               <p className="mt-1 text-sm text-gray-600">{completionStatusDescription}</p>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-[#F8FAFF] border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Resumo geral" meta={`${formatSessionDuration(postClosureSummary.durationSeconds)} · ${postClosureSummary.totalTrials} tentativa(s) · ${postClosureSummary.totalBehaviorEvents} registro(s)`}>
+<section className="mt-4 rounded-[24px] bg-[#F8FAFF] border border-blue-100 p-5">
               <h3 className="text-lg font-bold text-gray-900">Resumo geral</h3>
               <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="rounded-2xl bg-white border border-gray-100 p-4">
@@ -7579,10 +7870,12 @@ export const SessionMode = ({
                 </div>
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
             {showPostClosureReport && postClosureReport && (
               <div className="mt-5 space-y-5">
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Dados da sessão">
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <h3 className="text-lg font-bold text-gray-900">Dados da sessão</h3>
                     <span className={`inline-flex w-fit items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${syncClasses[postClosureReport.header.syncStatus]}`}>
@@ -7609,9 +7902,11 @@ export const SessionMode = ({
                     ))}
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
                 {activeAppointmentId && (
-                  <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                  <SessionSummaryDisclosure title="Fechamento operacional">
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                     <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                       <div>
                         <h3 className="text-lg font-bold text-gray-900">Fechamento operacional</h3>
@@ -7675,9 +7970,11 @@ export const SessionMode = ({
                       </p>
                     )}
                   </section>
+            </SessionSummaryDisclosure>
                 )}
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Resumo geral" meta={`${postClosureReport.generalSummary.totalTeachingTrials} tentativa(s) de ensino`}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Resumo geral</h3>
                   <div className="mt-4 grid grid-cols-2 md:grid-cols-5 gap-3">
                     {[
@@ -7702,8 +7999,10 @@ export const SessionMode = ({
                     <p className="mt-4 rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm font-semibold text-amber-700">Observação da sessão pendente.</p>
                   )}
                 </section>
+                </SessionSummaryDisclosure>
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Tentativas de ensino" meta={`${postClosureReport.teachingSummary.totalTrials} tentativa(s)`}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Tentativas de ensino</h3>
                   <div className="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3">
                     {[
@@ -7739,8 +8038,10 @@ export const SessionMode = ({
                     </div>
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Metas trabalhadas" meta={`${postClosureReport.targetSummaries.length} meta(s)`}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Metas trabalhadas</h3>
                   <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
                     {postClosureReport.targetSummaries.length > 0 ? postClosureReport.targetSummaries.map((target) => (
@@ -7767,9 +8068,11 @@ export const SessionMode = ({
                     )) : <p className="text-sm text-gray-500">Nenhuma meta trabalhada nesta sessão.</p>}
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
                 {Array.isArray((postClosureSummary as any).maintenanceSummary) && (postClosureSummary as any).maintenanceSummary.length > 0 && (
-                  <section className="rounded-[24px] bg-white border border-amber-100 p-5">
+                  <SessionSummaryDisclosure title="Manutencao e regressao" tone="amber">
+<section className="rounded-[24px] bg-white border border-amber-100 p-5">
                     <h3 className="text-lg font-bold text-amber-700">Manutencao e regressao</h3>
                     <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
                       {(postClosureSummary as any).maintenanceSummary.map((row: any) => (
@@ -7782,142 +8085,11 @@ export const SessionMode = ({
                       ))}
                     </div>
                   </section>
+            </SessionSummaryDisclosure>
                 )}
 
-                <section className="rounded-[24px] bg-white border border-emerald-100 p-5" data-aba-clinical-suggestions>
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Planejamento sugerido para a próxima sessão</p>
-                      <h3 className="mt-1 text-lg font-bold text-gray-900">Fila de decisão clínica</h3>
-                      <p className="mt-1 text-xs font-semibold text-gray-500">Sugestões baseadas nos dados disponíveis. Aceite, edite ou recuse antes de aplicar.</p>
-                    </div>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <select value={planningFocusType} onChange={(event) => setPlanningFocusType(event.target.value)} className="min-h-[42px] rounded-2xl border border-emerald-100 bg-[#F6FFFB] px-3 text-xs font-bold text-gray-700 outline-none">
-                        <option value="MAINTENANCE">Manutenção</option>
-                        <option value="NEW_SKILLS">Novas habilidades</option>
-                        <option value="BEHAVIOR_REDUCTION">Redução comportamental</option>
-                        <option value="GENERALIZATION">Generalização</option>
-                        <option value="MASTERY_REVIEW">Revisão de maestria</option>
-                        <option value="BALANCED">Equilibrado</option>
-                      </select>
-                      <button type="button" onClick={handleGeneratePlanningRecommendations} disabled={planningLoading} className="min-h-[42px] rounded-2xl bg-emerald-600 px-4 text-xs font-bold uppercase tracking-widest text-white disabled:opacity-60">
-                        {planningLoading ? 'Gerando...' : 'Gerar sugestões'}
-                      </button>
-                    </div>
-                  </div>
-                  {planningMessage && <p className="mt-3 rounded-2xl bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">{planningMessage}</p>}
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {planningFilterOptions.map((option) => {
-                      const selected = planningFilter === option.key;
-                      return (
-                        <button
-                          key={option.key}
-                          type="button"
-                          onClick={() => setPlanningFilter(option.key)}
-                          className={`rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-widest transition ${selected ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-900/10' : 'bg-[#F6FFFB] text-emerald-700 ring-1 ring-emerald-100'}`}
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
-                    {visiblePlanningRecommendations.map((recommendation) => {
-                      const isPending = isPendingPlanningRecommendation(recommendation);
-                      const isMaintenanceSuggestion = String(recommendation?.recommendation_type || '').toUpperCase() === 'MAINTENANCE_PROBE';
-                      const decisionBusy = planningDecisionLoadingId === String(recommendation?.id || '');
-                      return (
-                      <div key={recommendation.id} className="rounded-2xl border border-emerald-100 bg-[#F6FFFB] p-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-700">{abaRecommendationPriorityLabel(recommendation.priority)}</span>
-                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500">{abaRecommendationTypeLabel(recommendation.recommendation_type)}</span>
-                          <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-blue-600">{abaRecommendationStatusLabel(recommendation.status)}</span>
-                          {Number(recommendation.groupedCount || 1) > 1 && (
-                            <span className="rounded-full bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">{recommendation.groupedCount} agrupadas</span>
-                          )}
-                          {recommendation.terminal_conflict && (
-                            <span className="rounded-full bg-red-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-red-700">Conflito histórico</span>
-                          )}
-                        </div>
-                        <h4 className="mt-3 text-sm font-bold text-gray-900">{planningRecommendationTitle(recommendation)}</h4>
-                        {recommendation.summary && <p className="mt-1 text-xs font-semibold text-gray-600">{translateAbaRecommendationText(recommendation.summary)}</p>}
-                        {recommendation.rationale && <p className="mt-1 text-xs font-semibold text-gray-500">{translateAbaRecommendationText(recommendation.rationale)}</p>}
-                        <p className="mt-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-emerald-800">{translateAbaRecommendationText(recommendation.suggested_action || 'Revisar na próxima sessão.')}</p>
-                        <p className="mt-2 text-[11px] font-semibold text-gray-500">
-                          Vínculo: {recommendation.target_id ? 'alvo do PEI' : recommendation.behavior_id ? 'comportamento' : 'resumo clínico'}
-                        </p>
-                        {recommendation.terminal_conflict && (
-                          <p className="mt-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold text-red-700">
-                            Há decisões históricas de aceite e recusa preservadas para este mesmo contexto clínico. O item está bloqueado para nova decisão e deve ser revisado no histórico.
-                          </p>
-                        )}
-                        {isPending ? (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {isMaintenanceSuggestion && (
-                            <>
-                              <button type="button" onClick={() => {
-                                void handleAcceptMaintenanceRecommendation(recommendation, 'NEXT_PATIENT_SESSION');
-                              }} disabled={decisionBusy} className="rounded-full bg-emerald-600 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-white disabled:opacity-60">
-                                Aceitar e agendar para próxima sessão
-                              </button>
-                              <button type="button" onClick={() => {
-                                void handleAcceptMaintenanceRecommendation(recommendation, 'CUSTOM_DATE');
-                              }} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 disabled:opacity-60">
-                                Aceitar e escolher data
-                              </button>
-                              <button type="button" onClick={() => {
-                                void handleAcceptMaintenanceRecommendation(recommendation, 'DEFAULT_SEQUENCE');
-                              }} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 disabled:opacity-60">
-                                Aceitar e usar 7/14/30/60
-                              </button>
-                            </>
-                          )}
-                          <button type="button" onClick={() => handleAcceptRecommendation(recommendation, true)} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 disabled:opacity-60">
-                            {decisionBusy ? 'Salvando...' : 'Aceitar'}
-                          </button>
-                          <button type="button" onClick={() => openEditRecommendationModal(recommendation)} disabled={decisionBusy} className="rounded-full bg-white px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-500 disabled:opacity-60">
-                            Editar
-                          </button>
-                          <button type="button" onClick={() => openRejectRecommendationModal(recommendation)} disabled={decisionBusy} className="rounded-full bg-red-50 px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-red-500 disabled:opacity-60">
-                            Recusar
-                          </button>
-                        </div>
-                        ) : (
-                          <p className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-gray-500">Decisão registrada no histórico.</p>
-                        )}
-                      </div>
-                    );})}
-                    {visiblePlanningRecommendations.length === 0 && (
-                      <p className="rounded-2xl border border-dashed border-emerald-100 bg-[#F6FFFB] p-4 text-sm font-semibold text-gray-500">
-                        {planningRecommendations.length === 0
-                          ? 'Gere sugestões quando o supervisor for planejar a próxima sessão.'
-                          : planningFilter === 'history'
-                            ? 'Nenhuma decisão registrada no histórico deste contexto.'
-                            : pendingPlanningRecommendations.length === 0
-                              ? 'Todas as sugestões desta sessão já foram revisadas.'
-                              : 'Nenhuma sugestão pendente neste filtro.'}
-                      </p>
-                    )}
-                  </div>
-                  {historyPlanningRecommendations.length > 0 && planningFilter !== 'history' && (
-                    <details className="mt-4 rounded-2xl border border-gray-100 bg-white px-4 py-3">
-                      <summary className="cursor-pointer text-xs font-bold uppercase tracking-widest text-gray-500">Histórico de sugestões ({historyPlanningRecommendations.length})</summary>
-                      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                        {historyPlanningRecommendations.slice(0, 6).map((recommendation: any) => (
-                          <div key={recommendation.id} className="rounded-xl bg-gray-50 px-3 py-2">
-                            <p className="text-xs font-bold text-gray-800">{planningRecommendationTitle(recommendation)}</p>
-                            <p className="mt-1 text-[11px] font-semibold text-gray-500">{abaRecommendationStatusLabel(recommendation.status)} · {abaRecommendationPriorityLabel(recommendation.priority)}</p>
-                            {recommendation.terminal_conflict && (
-                              <p className="mt-1 text-[11px] font-bold text-red-600">Conflito histórico entre aceite e recusa preservado.</p>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                </section>
-
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Comportamentos registrados">
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Comportamentos registrados</h3>
                   <div className="mt-4 grid grid-cols-1 xl:grid-cols-3 gap-3">
                     <div className="rounded-2xl bg-[#F8FAFF] border border-gray-100 p-4">
@@ -7969,8 +8141,10 @@ export const SessionMode = ({
                     </div>
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="ABC" meta={`${postClosureReport.abcEvents.length} registro(s)`}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <h3 className="text-lg font-bold text-gray-900">ABC</h3>
                     {postClosureReport.pendingComplements.abcPendingCount > 0 && (
@@ -8002,8 +8176,10 @@ export const SessionMode = ({
                     )}
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
-                <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+                <SessionSummaryDisclosure title="Pendências e complementos" tone="amber">
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
                   <h3 className="text-lg font-bold text-gray-900">Pendências e complementos</h3>
                   <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
                     {[
@@ -8019,9 +8195,11 @@ export const SessionMode = ({
                     ))}
                   </div>
                 </section>
+            </SessionSummaryDisclosure>
 
                 {showComplementEditor && (
-                  <section className="rounded-[24px] bg-slate-900 text-white p-5">
+                  <SessionSummaryDisclosure title="Editar observação e ABC pendente" tone="slate">
+<section className="rounded-[24px] bg-slate-900 text-white p-5">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="text-[10px] font-bold text-violet-200 uppercase tracking-widest">Complementos autorizados</p>
@@ -8114,6 +8292,7 @@ export const SessionMode = ({
                       </div>
                     )}
                   </section>
+            </SessionSummaryDisclosure>
                 )}
               </div>
             )}
@@ -8394,6 +8573,28 @@ export const SessionMode = ({
       className={`fixed inset-x-0 bottom-0 z-[130] px-2 pb-[calc(0.55rem+env(safe-area-inset-bottom))] pt-2 ${clinicalDockSheetOpen ? 'pointer-events-none' : 'pointer-events-auto'}`}
     >
       <div className={`mx-auto max-w-3xl rounded-[22px] border p-1.5 shadow-xl backdrop-blur-xl ${clinicalDockCompact ? 'opacity-95' : 'shadow-xl'} ${crisisMode ? 'border-red-300 bg-slate-950/95 shadow-red-950/30' : 'border-blue-100 bg-white/95 shadow-blue-950/15'}`} data-aba-dock-bottom-bar>
+        {!clinicalDockPausedCompact && activeTherapeuticTimerEntries.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setClinicalDockSheetOpen(true)}
+            className={`mb-1.5 flex min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-2xl px-3 py-2 text-xs font-medium ${crisisMode ? 'bg-white/10 text-white' : 'bg-purple-50 text-purple-800'}`}
+            data-aba-dock-therapeutic-timer-badge
+            title={activeTherapeuticTimerEntries.length === 1
+              ? `${activeTherapeuticTimerEntries[0].targetName} · ${formatDurationSeconds(therapeuticTimerElapsedMs(activeTherapeuticTimerEntries[0]) / 1000)}`
+              : `${activeTherapeuticTimerEntries.length} cronômetros terapêuticos em andamento`}
+          >
+            <span className="min-w-0 truncate">
+              {activeTherapeuticTimerEntries.length === 1
+                ? (activeTherapeuticTimerEntries[0].runningSince ? 'Alvo em andamento' : 'Cronômetro pausado')
+                : `${activeTherapeuticTimerEntries.length} cronômetros de alvo`}
+            </span>
+            <span className="min-w-0 max-w-[58%] truncate text-right tabular-nums">
+              {activeTherapeuticTimerEntries.length === 1
+                ? `⏱ ${activeTherapeuticTimerEntries[0].targetName} · ${formatDurationSeconds(therapeuticTimerElapsedMs(activeTherapeuticTimerEntries[0]) / 1000)}`
+                : 'Toque para revisar'}
+            </span>
+          </button>
+        )}
         {!clinicalDockPausedCompact && openDurations.length > 0 && (
           <div
             className={`mb-1.5 flex min-w-0 items-center justify-between gap-2 overflow-hidden rounded-2xl px-3 py-2 text-xs font-medium ${crisisMode ? 'bg-white/10 text-white' : 'bg-amber-50 text-amber-800'}`}
@@ -8544,7 +8745,18 @@ export const SessionMode = ({
         <section className="space-y-4" data-aba-dock-context-panel data-aba-quick-register-chip-panel>
           <div className="space-y-4">
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-location-chips>
-              <span>Local</span>
+              <div className="flex items-center justify-between gap-2">
+                <span>Local</span>
+                <button
+                  type="button"
+                  onClick={() => setDockLocationManagerOpen((open) => !open)}
+                  disabled={sessionQuickPreferencesLoading}
+                  aria-label="Adicionar local da sessão"
+                  className="inline-flex h-7 items-center gap-1 rounded-full border border-purple-100 bg-white px-2 text-[10px] font-semibold text-[#7a32fc] shadow-sm transition-all active:scale-95 disabled:opacity-50"
+                >
+                  <Plus size={12} /> local
+                </button>
+              </div>
               <div className="mt-1 flex max-h-[88px] flex-wrap gap-2 overflow-y-auto pr-1">
                 {visibleDockLocationOptions.map((location) => (
                   <button
@@ -8631,7 +8843,17 @@ export const SessionMode = ({
               </div>
             </div>
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-behavior-chips>
-              <span>Comportamento</span>
+              <div className="flex items-center justify-between gap-2">
+                <span>Comportamento</span>
+                <button
+                  type="button"
+                  onClick={toggleSelectedBehaviorQuickShortcut}
+                  disabled={sessionQuickPreferencesLoading || sessionQuickPreferencesSaving}
+                  className="inline-flex h-7 items-center gap-1 rounded-full border border-purple-100 bg-white px-2 text-[10px] font-semibold text-[#7a32fc] shadow-sm transition-all active:scale-95 disabled:opacity-50"
+                >
+                  {personalizedDockShortcuts.some((shortcut: any) => shortcut.behaviorId === selectedBehavior.id) ? 'Desafixar' : '+ Fixar'}
+                </button>
+              </div>
               <div className="mt-1 flex max-h-[92px] flex-wrap gap-2 overflow-y-auto pr-1">
                 {(dockMoreBehaviorsOpen ? [...visibleDockBehaviorOptions, ...extraDockBehaviorOptions] : visibleDockBehaviorOptions).map((behavior) => (
                   <button
@@ -8811,6 +9033,57 @@ export const SessionMode = ({
                 <button type="button" onClick={() => setDockLocationManagerOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[11px] font-medium text-[#7a32fc]">Gerenciar locais</button>
                 <button type="button" onClick={() => setDockMoreDurationsOpen((open) => !open)} className="min-h-[40px] rounded-2xl border border-slate-200 bg-white px-3 text-[11px] font-medium text-[#7a32fc]">Mais durações</button>
               </div>
+
+              <div className="rounded-xl border border-slate-100 bg-white/75 p-2.5" data-aba-personalized-quick-shortcuts>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold text-slate-600">Seus acessos rápidos</span>
+                  <span className="text-[10px] text-slate-400">{personalizedDockShortcuts.length}/3</span>
+                </div>
+                {personalizedDockShortcuts.length === 0 ? (
+                  <p className="mt-2 text-[11px] font-normal text-slate-400">Fixe até 3 comportamentos para aparecerem na barra inferior.</p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    {personalizedDockShortcuts.map((shortcut: any, index: number) => {
+                      const behavior = resolveShortcutBehavior(shortcut);
+                      return (
+                        <div key={`quick-pref-${shortcut.behaviorId}`} className="flex items-center gap-2 rounded-xl border border-slate-100 bg-white px-2 py-2">
+                          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-slate-700">{behavior?.name || shortcut.label}</span>
+                          <button type="button" disabled={index === 0 || sessionQuickPreferencesSaving} onClick={() => movePersonalizedQuickShortcut(shortcut.behaviorId, -1)} className="h-7 w-7 rounded-lg border border-slate-100 text-[11px] text-slate-500 disabled:opacity-30" aria-label="Mover atalho para cima">↑</button>
+                          <button type="button" disabled={index === personalizedDockShortcuts.length - 1 || sessionQuickPreferencesSaving} onClick={() => movePersonalizedQuickShortcut(shortcut.behaviorId, 1)} className="h-7 w-7 rounded-lg border border-slate-100 text-[11px] text-slate-500 disabled:opacity-30" aria-label="Mover atalho para baixo">↓</button>
+                          <button type="button" disabled={sessionQuickPreferencesSaving} onClick={() => savePersonalizedQuickBehaviorShortcuts(personalizedDockShortcuts.filter((item: any) => item.behaviorId !== shortcut.behaviorId))} className="h-7 rounded-lg px-2 text-[10px] font-semibold text-slate-400 disabled:opacity-30">Remover</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {activeTherapeuticTimerEntries.length > 0 && (
+                <div data-aba-therapeutic-timers-in-progress>
+                  <p className="text-[11px] font-medium text-slate-500">Cronômetros de alvos</p>
+                  <div className="mt-2 space-y-2">
+                    {activeTherapeuticTimerEntries.map((timer) => {
+                      const timerGoal = sessionGoals.find((goal: any) => therapeuticGoalKey(goal) === timer.goalKey);
+                      const elapsedLabel = formatDurationSeconds(therapeuticTimerElapsedMs(timer) / 1000);
+                      return (
+                        <button
+                          key={timer.goalKey}
+                          type="button"
+                          onClick={() => focusTherapeuticTimerGoal(timer)}
+                          disabled={!timerGoal}
+                          className="flex min-h-[46px] min-w-0 w-full items-center justify-between gap-2 overflow-hidden rounded-2xl border border-purple-100 bg-[#FBF9FF] px-4 text-left text-xs font-medium text-slate-800 disabled:cursor-default disabled:opacity-70"
+                          title={`${timer.targetName} · ${timer.runningSince ? 'em andamento' : 'pausado'} · ${elapsedLabel}`}
+                        >
+                          <span className="min-w-0 truncate">{timer.targetName}</span>
+                          <span className="shrink-0 tabular-nums text-[#7a32fc]">
+                            {timer.runningSince ? '●' : 'Ⅱ'} {elapsedLabel}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {openDurations.length > 0 && (
                 <div>
@@ -9118,119 +9391,130 @@ export const SessionMode = ({
             <div
               data-aba-interval-parallel-banner
               data-aba-interval-response-active={intervalResponseActive ? 'true' : 'false'}
-              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[16px] p-2 shadow-md border transition-all sm:rounded-[22px] sm:p-3 ${intervalRunAwaitingResponse ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200/70' : intervalRunPaused ? 'bg-slate-50 border-slate-200 ring-1 ring-slate-200/70' : 'bg-amber-50 border-amber-100 shadow-amber-900/5'}`}
+              className={`sticky top-0 ${intervalResponseActive ? 'z-[160]' : 'z-40'} rounded-[16px] border p-2 shadow-md transition-all sm:rounded-[20px] sm:p-2.5 ${intervalRunAwaitingResponse ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200/70' : intervalRunPaused ? 'bg-slate-50 border-slate-200 ring-1 ring-slate-200/70' : 'bg-amber-50 border-amber-100 shadow-amber-900/5'}`}
             >
-              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="mb-1 flex items-center gap-2">
-                        <Timer size={18} className={intervalRunAwaitingResponse ? 'text-amber-600' : intervalRunPaused ? 'text-slate-500' : 'text-[#7a32fc]'} />
-                        <h2 className="text-xs font-black text-amber-900">{intervalRunPaused ? 'Coleta pausada' : 'Coleta por intervalo'}</h2>
-                      </div>
-                      <h3 className="text-sm font-black text-gray-900 sm:text-lg">Intervalo agora: {intervalRun.behaviorName} · {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</h3>
-                      <p className="mt-0.5 text-xs font-semibold text-amber-800">
-                        {intervalRun.location || 'Sem local'} · severidade {intervalRun.severity || '-'}
-                      </p>
-                      <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">
-                        Respondidos: {Number(intervalRun.completedCount || 0)}/{Number(intervalRun.totalIntervals || 1)} - SIM: {Number(intervalRun.occurredCount || 0)}
-                      </p>
-                    </div>
-                    {intervalRunAwaitingResponse && !intervalRunPaused && (
-                      <button
-                        type="button"
-                        onClick={() => setIntervalOptionsOpen((open) => !open)}
-                        data-aba-interval-options-button
-                        className="shrink-0 inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-xl border border-amber-200 bg-white px-3 text-[10px] font-bold uppercase tracking-widest text-amber-700 shadow-sm active:scale-95"
-                      >
-                        <MoreHorizontal size={15} /> Opções
-                      </button>
-                    )}
+                  <div className="flex items-center gap-1.5">
+                    <Timer size={14} className={intervalRunAwaitingResponse ? 'text-amber-600' : intervalRunPaused ? 'text-slate-500' : 'text-[#7a32fc]'} />
+                    <h2 className="text-[10px] font-black uppercase tracking-wide text-amber-900">
+                      {intervalRunPaused ? 'Coleta pausada' : 'Coleta por intervalo'}
+                    </h2>
+                  </div>
+                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+                    <h3 className="truncate text-sm font-black leading-tight text-gray-900" title={intervalRun.behaviorName}>
+                      {intervalRun.behaviorName}
+                    </h3>
+                    <span className="shrink-0 rounded-full bg-white/80 px-1.5 py-0.5 text-[9px] font-black text-amber-700">
+                      {intervalRun.intervalIndex}/{intervalRun.totalIntervals}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex min-w-0 items-center gap-1 text-[10px] font-semibold leading-tight text-amber-800">
+                    <MapPin size={11} className="shrink-0" />
+                    <span className="truncate" title={intervalRun.location || 'Sem local'}>{intervalRun.location || 'Sem local'}</span>
+                    <span aria-hidden="true" className="shrink-0 text-amber-400">·</span>
+                    <span className="shrink-0">sev. {intervalRun.severity || '-'}</span>
                   </div>
                 </div>
-                <div className="hidden w-full grid-cols-3 gap-2 sm:grid lg:w-auto lg:min-w-[280px]">
-                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-2 text-center">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Intervalo</p>
-                    <p className="text-2xl font-bold text-gray-900">{intervalRun.intervalIndex}</p>
-                  </div>
-                  <div className="rounded-2xl bg-[#F4F7FE] border border-blue-100 p-2 text-center">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p>
-                    <p className="text-2xl font-bold text-gray-900">{intervalRun.totalIntervals}</p>
-                  </div>
-                  <div className={`rounded-2xl border p-2 text-center ${intervalRunAwaitingResponse ? 'bg-amber-100 border-amber-200' : intervalRunPaused ? 'bg-slate-100 border-slate-200' : 'bg-[#F4F7FE] border-blue-100'}`}>
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Restante</p>
-                    <p className={`text-2xl font-bold ${intervalRunAwaitingResponse ? 'text-amber-700' : intervalRunPaused ? 'text-slate-700' : 'text-[#7a32fc]'}`}>
-                      {intervalRunAwaitingResponse ? 'Agora' : intervalRunPaused ? 'Pausado' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}
+
+                <div className="flex shrink-0 items-start gap-1">
+                  <div className="min-w-[72px] text-right">
+                    <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
+                      {intervalRunAwaitingResponse ? 'Responder' : intervalRunPaused ? 'Pausado' : 'Restante'}
+                    </p>
+                    <p className={`mt-0.5 text-xl font-black leading-none tabular-nums ${intervalRunAwaitingResponse ? 'text-amber-700' : intervalRunPaused ? 'text-slate-600' : 'text-[#7a32fc]'}`}>
+                      {intervalRunAwaitingResponse ? 'Agora' : intervalRunPaused ? '—' : formatRemainingUntil(intervalRun.intervalEndsAt, nowMs)}
                     </p>
                   </div>
+                  {intervalRunAwaitingResponse && !intervalRunPaused && (
+                    <button
+                      type="button"
+                      onClick={() => setIntervalOptionsOpen((open) => !open)}
+                      data-aba-interval-options-button
+                      aria-label="Opções da coleta por intervalo"
+                      className="inline-flex min-h-[34px] min-w-[34px] items-center justify-center rounded-xl border border-amber-200 bg-white text-amber-700 shadow-sm active:scale-95"
+                    >
+                      <MoreHorizontal size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
-              <div className="mt-2 flex flex-col items-stretch justify-between gap-2 sm:flex-row sm:items-center">
-                <p className="text-xs font-semibold text-amber-800">
+
+              <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-white/80" aria-hidden="true">
+                <div
+                  className={`h-full rounded-full transition-[width] duration-300 ${intervalRunPaused ? 'bg-slate-400' : intervalRunAwaitingResponse ? 'bg-amber-500' : 'bg-[#7a32fc]'}`}
+                  style={{ width: `${intervalProgressPercent}%` }}
+                />
+              </div>
+
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <p className="text-[9px] font-black uppercase tracking-wide text-amber-700">
+                  {Number(intervalRun.completedCount || 0)}/{Number(intervalRun.totalIntervals || 1)} respondidos · SIM {Number(intervalRun.occurredCount || 0)}
+                </p>
+                <p className="text-[10px] font-semibold leading-tight text-amber-800">
                   {getIntervalInstruction(intervalRun.measurementType)}
                 </p>
-                <p className={`rounded-2xl px-3 py-2 text-center text-xs font-bold ${intervalRunAwaitingResponse ? 'bg-amber-100 text-amber-800' : intervalRunPaused ? 'bg-slate-100 text-slate-700' : 'bg-[#F4F7FE] text-gray-500'}`}>
-                  {intervalRunAwaitingResponse ? 'Responda agora' : intervalRunPaused ? 'Coleta pausada' : 'Aguardando fim do intervalo...'}
-                </p>
-                {intervalRunAwaitingResponse && (
-                <div className="grid w-full grid-cols-2 gap-3 sm:w-auto">
+              </div>
+
+              {intervalRunAwaitingResponse && (
+                <div className="mt-2 grid grid-cols-2 gap-2">
                   <button
                     onClick={() => registerInterval(true)}
                     disabled={!intervalRunAwaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[44px] px-5 py-3 rounded-2xl text-sm font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[42px] rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-emerald-500 text-white shadow-sm' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     SIM
                   </button>
                   <button
                     onClick={() => registerInterval(false)}
                     disabled={!intervalRunAwaitingResponse || Boolean(actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`])}
-                    className={`min-h-[44px] px-5 py-3 rounded-2xl text-sm font-bold uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                    className={`min-h-[42px] rounded-xl px-4 py-2 text-xs font-black uppercase tracking-widest transition-all active:scale-95 ${intervalRunAwaitingResponse && !actionLocks[`interval:${intervalRun.id}:${Number(intervalRun.intervalIndex || 1)}`] ? 'bg-red-500 text-white shadow-sm' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
                   >
                     NÃO
                   </button>
                 </div>
-                )}
-              </div>
-              <div className={intervalRunPaused ? 'mt-2' : `mt-2 border-t border-blue-100 pt-2 ${intervalResponseActive ? 'pb-1' : ''}`}>
+              )}
+
+              <div className={intervalRunPaused ? 'mt-2' : `mt-2 border-t border-amber-100 pt-2 ${intervalResponseActive ? 'pb-0.5' : ''}`}>
                 {intervalRunPaused ? (
-                  <div ref={intervalPausedControlsRef} className="rounded-2xl border border-slate-200 bg-white p-3 sm:p-4" data-aba-interval-paused-controls>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <button onClick={resumeIntervalRun} className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-3 py-2 text-xs font-bold uppercase tracking-widest text-white active:scale-95"><RotateCcw size={16} /> Retomar</button>
-                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"><Square size={15} /> Finalizar agora</button>
-                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold uppercase tracking-widest text-red-600 active:scale-95"><X size={15} /> Cancelar coleta</button>
+                  <div ref={intervalPausedControlsRef} className="rounded-xl border border-slate-200 bg-white p-2" data-aba-interval-paused-controls>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button onClick={resumeIntervalRun} className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl bg-[#1B254B] px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-white active:scale-95"><RotateCcw size={13} /> Retomar</button>
+                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl border border-emerald-100 bg-emerald-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700 active:scale-95"><Square size={12} /> Finalizar</button>
+                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl border border-red-100 bg-red-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-red-600 active:scale-95"><X size={12} /> Cancelar</button>
                     </div>
-                    <p className="mt-3 text-xs font-semibold text-slate-500">
-                      Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals} preservado. As respostas anteriores foram mantidas.
+                    <p className="mt-1.5 text-[10px] font-semibold text-slate-500">
+                      Intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals} preservado · respostas anteriores mantidas.
                     </p>
                   </div>
                 ) : !intervalRunAwaitingResponse ? (
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" data-aba-interval-running-controls>
+                  <div className="grid grid-cols-3 gap-1.5" data-aba-interval-running-controls>
                     <button
                       onClick={pauseIntervalRun}
-                      className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-2xl bg-[#1B254B] px-3 py-2 text-xs font-bold uppercase tracking-widest text-white active:scale-95"
+                      className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl bg-[#1B254B] px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-white active:scale-95"
                     >
-                      <Pause size={16} /> Pausar
+                      <Pause size={13} /> Pausar
                     </button>
                     <button
                       onClick={finishIntervalRunNow}
-                      className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-bold uppercase tracking-widest text-emerald-700 active:scale-95"
+                      className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl bg-emerald-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700 active:scale-95"
                     >
-                      <Square size={15} /> Finalizar agora
+                      <Square size={12} /> Finalizar
                     </button>
                     <button
                       onClick={() => setIntervalOptionsOpen((open) => !open)}
-                      className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-2xl bg-white px-3 py-2 text-xs font-bold uppercase tracking-widest text-[#7a32fc] border border-purple-100 active:scale-95"
+                      className="inline-flex min-h-[38px] items-center justify-center gap-1 rounded-xl border border-purple-100 bg-white px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-[#7a32fc] active:scale-95"
                     >
-                      <MoreHorizontal size={16} /> Opções
+                      <MoreHorizontal size={13} /> Opções
                     </button>
                   </div>
                 ) : (
-                  <p className="text-[11px] font-semibold text-amber-700">SIM/NÃO continuam como prioridade. Use Opções no canto para pausar ou encerrar.</p>
+                  <p className="text-center text-[10px] font-semibold text-amber-700">SIM/NÃO são a prioridade · opções no menu acima.</p>
                 )}
                 {intervalOptionsOpen && !intervalRunPaused && (
-                  <div className="mt-3 rounded-2xl border border-blue-100 bg-white p-3 shadow-lg shadow-blue-900/5" data-aba-interval-options-panel>
+                  <div className="mt-2 rounded-xl border border-blue-100 bg-white p-2 shadow-lg shadow-blue-900/5" data-aba-interval-options-panel>
                     {!intervalRunAwaitingResponse && (
-                    <label className="block text-[10px] font-bold uppercase tracking-widest text-gray-400">
+                    <label className="block text-[9px] font-bold uppercase tracking-widest text-gray-400">
                       Motivo opcional
                       <select
                         value={intervalEndReason}
@@ -9243,11 +9527,11 @@ export const SessionMode = ({
                       </select>
                     </label>
                     )}
-                    <div className={`grid grid-cols-1 gap-2 sm:grid-cols-2 ${intervalRunAwaitingResponse ? '' : 'mt-3'}`}>
-                      <button onClick={pauseIntervalRun} className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-[#1B254B] px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-white active:scale-95"><Pause size={15} /> Pausar coleta</button>
-                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-emerald-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-emerald-700 active:scale-95"><Square size={14} /> Finalizar agora</button>
-                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl bg-red-50 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-red-600 active:scale-95"><X size={14} /> Cancelar coleta</button>
-                      <button onClick={() => setIntervalOptionsOpen(false)} className="inline-flex min-h-[48px] items-center justify-center rounded-xl bg-gray-100 px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-gray-600 active:scale-95">Voltar</button>
+                    <div className={`grid grid-cols-2 gap-1.5 ${intervalRunAwaitingResponse ? '' : 'mt-2'}`}>
+                      <button onClick={pauseIntervalRun} className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-xl bg-[#1B254B] px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-white active:scale-95"><Pause size={13} /> Pausar</button>
+                      <button onClick={finishIntervalRunNow} className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-xl bg-emerald-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-emerald-700 active:scale-95"><Square size={12} /> Finalizar</button>
+                      <button onClick={requestCancelIntervalRun} className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-xl bg-red-50 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-red-600 active:scale-95"><X size={12} /> Cancelar</button>
+                      <button onClick={() => setIntervalOptionsOpen(false)} className="inline-flex min-h-[40px] items-center justify-center rounded-xl bg-gray-100 px-2 py-1.5 text-[9px] font-bold uppercase tracking-wide text-gray-600 active:scale-95">Voltar</button>
                     </div>
                   </div>
                 )}
@@ -9853,6 +10137,10 @@ export const SessionMode = ({
               const goalPromptCategoryBuckets = promptCategoryBucketsForGoal(goal);
               const selectedPromptCategory = goalPromptCategoryBuckets.find((bucket) => bucket.key === selectedPromptCategoryKey) || null;
               const criteriaOpen = mobileExpandedCriteriaKey === goalKey;
+              const goalTherapeuticTimer = therapeuticTimers[therapeuticGoalKey(goal)] || null;
+              const goalTherapeuticTimerLabel = goalTherapeuticTimer
+                ? formatDurationSeconds(therapeuticTimerElapsedMs(goalTherapeuticTimer) / 1000)
+                : '';
               const independentTrialLockKey = `trial:${goalKey}:independent:independent`;
               const errorTrialLockKey = `trial:${goalKey}:error:error`;
               const statusLabel = maintenanceProbeCanRunNow
@@ -9875,6 +10163,7 @@ export const SessionMode = ({
                 <article
                   key={`mobile-${goalKey}`}
                   data-aba-mobile-task-card
+                  data-aba-mobile-goal-key={goalKey}
                   data-aba-mobile-primary-card={selected ? 'true' : 'false'}
                   onClick={() => {
                     setMobileSelectedGoalKey(goalKey);
@@ -9901,6 +10190,17 @@ export const SessionMode = ({
                     </div>
                     {programName && <div><p className="text-[10px] text-slate-500">Programa</p><p className="truncate text-xs text-slate-700" title={programName}>{programName}</p></div>}
                     <div><p className="text-[10px] text-slate-500">Alvo atual</p><h2 className={`${selected ? 'text-lg' : 'text-[15px]'} mt-0.5 line-clamp-2 overflow-hidden break-words font-medium leading-snug text-gray-900`}>{targetName}</h2></div>
+                    {goalTherapeuticTimer && !selected && (
+                      <div
+                        className={`inline-flex max-w-full items-center gap-2 self-start rounded-full border px-2.5 py-1 text-[10px] font-semibold ${goalTherapeuticTimer.runningSince ? 'border-purple-100 bg-purple-50 text-[#7a32fc]' : 'border-slate-200 bg-slate-50 text-slate-500'}`}
+                        data-aba-mobile-goal-running-timer
+                        title={`${targetName} · ${goalTherapeuticTimer.runningSince ? 'em andamento' : 'pausado'} · ${goalTherapeuticTimerLabel}`}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${goalTherapeuticTimer.runningSince ? 'bg-[#7a32fc] animate-pulse' : 'bg-slate-400'}`} aria-hidden="true" />
+                        <span className="min-w-0 truncate">{goalTherapeuticTimer.runningSince ? 'Cronômetro ativo' : 'Cronômetro pausado'}</span>
+                        <span className="shrink-0 tabular-nums">{goalTherapeuticTimerLabel}</span>
+                      </div>
+                    )}
                     {selected && (instruction || expectedResponse) && <div className="space-y-1 rounded-xl bg-slate-50 px-3 py-2 text-[11px] text-slate-600"><p>{instruction ? `Instrução: ${instruction}` : `Resposta esperada: ${expectedResponse}`}</p>{instruction && expectedResponse && <p>Resposta esperada: {expectedResponse}</p>}</div>}
                     {selected && (
                       <div className="inline-flex max-w-full items-center gap-2 self-start rounded-xl bg-[#F4EFFF] px-2.5 py-1.5" data-aba-mobile-progress-summary title={progressLabel}>
@@ -10906,7 +11206,8 @@ export const SessionMode = ({
               </button>
             </div>
 
-            <section className="rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Presença no atendimento" meta={SESSION_ATTENDANCE_OPTIONS.find((option) => option.value === attendanceStatus)?.label || 'Selecione'}>
+<section className="rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-semibold text-gray-900">Presença no atendimento</h4>
               <p className="mt-1 text-sm text-gray-500">Essa classificação define o fechamento operacional e a elegibilidade para faturamento.</p>
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3" role="radiogroup" aria-label="Presença no atendimento">
@@ -10938,8 +11239,10 @@ export const SessionMode = ({
                 </div>
               )}
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Resumo geral" meta={`${formatSessionDuration(sessionClosureSummary.durationSeconds)} · ${sessionClosureSummary.totalTrials} tentativa(s) · ${sessionClosureSummary.totalBehaviorEvents} registro(s)`}>
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <div className="flex items-center justify-between gap-3 mb-4">
                 <h4 className="text-lg font-bold text-gray-900">Resumo geral</h4>
                 <span className={`rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-widest ${sessionClosureSummary.syncStatus === 'synced' ? 'bg-emerald-50 text-emerald-600' : sessionClosureSummary.syncStatus === 'error' ? 'bg-amber-50 text-amber-700' : 'bg-blue-50 text-blue-600'}`}>
@@ -10973,8 +11276,10 @@ export const SessionMode = ({
                 </div>
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Resumo de comportamentos" meta={`${sessionClosureSummary.totalBehaviorEvents} registro(s)`}>
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-bold text-gray-900">Resumo de comportamentos</h4>
               <div className="mt-3 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                 {sessionClosureSummary.frequencySummary.map((item) => (
@@ -11005,8 +11310,10 @@ export const SessionMode = ({
                 {sessionClosureSummary.totalBehaviorEvents === 0 && <p className="text-sm text-gray-500">Nenhum comportamento registrado nesta sessão.</p>}
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Tentativas de ensino" meta={`${sessionClosureSummary.totalTrials} tentativa(s)`}>
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-bold text-gray-900">Tentativas de ensino</h4>
               <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="rounded-2xl bg-[#F8FAFF] p-3 border border-gray-100"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total</p><p className="text-2xl font-bold text-gray-900">{sessionClosureSummary.totalTrials}</p></div>
@@ -11018,8 +11325,10 @@ export const SessionMode = ({
               <p className="text-sm text-gray-500">Percentual de independência: <span className="font-bold text-gray-900">{sessionClosureSummary.independencePercent}%</span></p>
               <p className="text-sm text-gray-500">Tipos usados: {sessionClosureSummary.trialTypesUsed.join(', ') || 'nenhum'}</p>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure title="Critérios de maestria" meta={`${teachingMasteryRows.length} alvo(s)`}>
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-bold text-gray-900">Critérios de maestria</h4>
               <div className="mt-3 space-y-2">
                 {teachingMasteryRows.length === 0 ? (
@@ -11041,8 +11350,10 @@ export const SessionMode = ({
                 ))}
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
+            <SessionSummaryDisclosure title="Manutencao e regressao" meta={`${maintenanceProbeRows.length} alvo(s)`} tone="amber">
+<section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
               <h4 className="text-lg font-bold text-amber-700">Manutencao e regressao</h4>
               <div className="mt-3 space-y-2">
                 {maintenanceProbeRows.length === 0 ? (
@@ -11060,8 +11371,10 @@ export const SessionMode = ({
                 ))}
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-red-100 p-5">
+            <SessionSummaryDisclosure title="Bloqueios de encerramento" meta={`${closureBlockers.length} bloqueio(s)`} tone="red">
+<section className="mt-4 rounded-[24px] bg-white border border-red-100 p-5">
               <h4 className="text-lg font-bold text-red-700">Bloqueios de encerramento</h4>
               {hasClosureBlockers && (
                 <p className="mt-2 rounded-2xl bg-red-50 border border-red-100 px-4 py-3 text-sm font-semibold text-red-700">
@@ -11110,8 +11423,10 @@ export const SessionMode = ({
                 </div>
               )}
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
+            <SessionSummaryDisclosure title="Avisos de encerramento" meta={`${closureWarnings.length} aviso(s)`} tone="amber">
+<section className="mt-4 rounded-[24px] bg-white border border-amber-100 p-5">
               <h4 className="text-lg font-bold text-amber-700">Avisos de encerramento</h4>
               {hasClosureWarnings && !hasClosureBlockers && (
                 <p className="mt-2 rounded-2xl bg-amber-50 border border-amber-100 px-4 py-3 text-sm font-semibold text-amber-800">
@@ -11128,8 +11443,13 @@ export const SessionMode = ({
                 ))}
               </div>
             </section>
+            </SessionSummaryDisclosure>
 
-            <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+            <SessionSummaryDisclosure
+              title={NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Motivo da falta ou do cancelamento' : 'Observação do atendimento'}
+              meta={sessionNote.trim() ? 'preenchida' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'toque para informar' : 'opcional'}
+            >
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
               <label className="block text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
                 {NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Motivo da falta ou do cancelamento' : 'Observação do atendimento'}
                 <textarea
@@ -11145,6 +11465,7 @@ export const SessionMode = ({
                 <span className="mt-1 block text-right text-[10px] font-normal normal-case tracking-normal text-gray-400">{sessionNote.length}/4000</span>
               </label>
             </section>
+            </SessionSummaryDisclosure>
 
             {sessionEndError && (
               <div role="alert" className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
@@ -11163,6 +11484,27 @@ export const SessionMode = ({
                 {endingSession ? 'Encerrando com segurança...' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Confirmar ausência e encerrar' : 'Confirmar encerramento do atendimento'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {shouldShowMaintenanceStartPrompt && (
+        <div className="fixed inset-0 z-[205] flex items-end justify-center bg-slate-950/30 px-3 pb-4 backdrop-blur-[2px] sm:items-center sm:pb-0" data-aba-maintenance-start-prompt>
+          <div className="w-full max-w-md rounded-[24px] border border-amber-100 bg-white p-5 shadow-2xl shadow-slate-950/20">
+            <div className="flex items-start gap-3">
+              <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+                <RotateCcw size={18} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-slate-900">Sondagens previstas para hoje</h3>
+                <p className="mt-1 text-sm text-slate-500">Há {maintenanceProbePendingCount} sondagem(ns) disponível(is). Elas não serão ativadas automaticamente.</p>
+              </div>
+            </div>
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <button type="button" onClick={acceptDueMaintenanceProbesForSession} className="min-h-[44px] rounded-2xl bg-[#7a32fc] px-3 text-xs font-semibold text-white shadow-sm">Adicionar</button>
+              <button type="button" onClick={reviewDueMaintenanceProbesForSession} className="min-h-[44px] rounded-2xl border border-purple-100 bg-purple-50 px-3 text-xs font-semibold text-[#7a32fc]">Revisar</button>
+              <button type="button" onClick={skipDueMaintenanceProbesForSession} className="min-h-[44px] rounded-2xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-500">Agora não</button>
+            </div>
+            <p className="mt-3 text-[11px] text-slate-400">“Agora não” mantém as sondagens pendentes. Não cancela o planejamento clínico.</p>
           </div>
         </div>
       )}

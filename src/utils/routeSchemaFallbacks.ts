@@ -486,11 +486,15 @@ export const PATIENT_FILE_SELECT_COLUMNS = [
   'id',
   'patient_id',
   'clinic_id',
+  'uploaded_by',
+  'storage_bucket',
   'file_name',
   'storage_path',
   'mime_type',
   'file_size_bytes',
   'source',
+  'access_scope',
+  'patient_portal_visible',
   'created_at',
   'metadata'
 ];
@@ -963,8 +967,12 @@ const PATIENT_LOG_OPTIONAL_COLUMNS = new Set([
 
 const PATIENT_FILE_OPTIONAL_COLUMNS = new Set([
   'clinic_id',
+  'uploaded_by',
+  'storage_bucket',
   'file_size_bytes',
   'source',
+  'access_scope',
+  'patient_portal_visible',
   'metadata'
 ]);
 

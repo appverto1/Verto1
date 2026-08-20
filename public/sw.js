@@ -1,8 +1,46 @@
-const SW_VERSION = "verto-branding-v16";
+const SW_VERSION = "verto-branding-v20";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
 const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
 const APPOINTMENT_NOTIFICATION_CTA = "Toque para confirmar, remarcar ou cancelar.";
+const PUSH_RENEWAL_CACHE = "verto-push-renewal-v1";
+const PUSH_RENEWAL_CONTEXT_URL = "/__verto_push_renewal_context__";
+
+const urlBase64ToUint8Array = (base64String) => {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+};
+
+const writePushRenewalContext = async (context) => {
+  const renewalToken = String(context?.renewalToken || "").trim();
+  const vapidPublicKey = String(context?.vapidPublicKey || "").trim();
+  if (!renewalToken || !vapidPublicKey || !("caches" in self)) return false;
+  const cache = await self.caches.open(PUSH_RENEWAL_CACHE);
+  await cache.put(
+    new Request(PUSH_RENEWAL_CONTEXT_URL, { method: "GET" }),
+    new Response(JSON.stringify({ renewalToken, vapidPublicKey }), {
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+    }),
+  );
+  return true;
+};
+
+const readPushRenewalContext = async () => {
+  if (!("caches" in self)) return null;
+  const cache = await self.caches.open(PUSH_RENEWAL_CACHE);
+  const response = await cache.match(PUSH_RENEWAL_CONTEXT_URL);
+  if (!response) return null;
+  try {
+    const value = await response.json();
+    const renewalToken = String(value?.renewalToken || "").trim();
+    const vapidPublicKey = String(value?.vapidPublicKey || "").trim();
+    return renewalToken && vapidPublicKey ? { renewalToken, vapidPublicKey } : null;
+  } catch {
+    return null;
+  }
+};
 
 const isGenericBrandName = (value) => {
   const normalized = String(value || "")
@@ -48,6 +86,46 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data?.type !== "VERTO_PUSH_RENEWAL_CONTEXT") return;
+  event.waitUntil(writePushRenewalContext(event.data));
+});
+
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil((async () => {
+    try {
+      const context = await readPushRenewalContext();
+      if (!context) return;
+
+      const subscription = await self.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(context.vapidPublicKey),
+      });
+      const response = await fetch("/api/push/renew", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "omit",
+        cache: "no-store",
+        body: JSON.stringify({
+          renewalToken: context.renewalToken,
+          oldEndpoint: event.oldSubscription?.endpoint || null,
+          subscription: subscription.toJSON(),
+        }),
+      });
+      if (!response.ok) return;
+      const result = await response.json().catch(() => ({}));
+      if (result?.renewalToken) {
+        await writePushRenewalContext({
+          renewalToken: result.renewalToken,
+          vapidPublicKey: context.vapidPublicKey,
+        });
+      }
+    } catch (error) {
+      console.warn("[push] subscription self-heal failed", error);
+    }
+  })());
+});
+
 self.addEventListener("push", (event) => {
   let payload = {};
   try {
@@ -73,9 +151,22 @@ self.addEventListener("push", (event) => {
   const title = isGenericBrandName(payload.title) && !isGenericBrandName(brandName)
     ? brandName
     : (payload.title || brandName);
-  const iconUrl = asNotificationAssetUrl(VERTO_NOTIFICATION_ICON);
-  const badgeUrl = asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
-  const imageUrl = asNotificationAssetUrl(payload.image || brandLogo || VERTO_NOTIFICATION_ICON);
+  const notificationType = String(payload.data?.notificationType || "").trim();
+  const isClinicAnnouncement = notificationType === "clinic_announcement";
+  // Avisos da clínica usam somente a identidade visual da própria clínica em formato compacto.
+  // Não enviamos `image` para evitar o cartão expandido com uma imagem grande abaixo da mensagem.
+  const iconUrl = isClinicAnnouncement
+    ? asNotificationAssetUrl(brandLogo || payload.icon || "")
+    : asNotificationAssetUrl(VERTO_NOTIFICATION_ICON);
+  // Em avisos da clínica o logo deve aparecer somente como ícone compacto.
+  // `badge` é reservado ao identificador monocromático do app/SO e alguns
+  // navegadores rejeitam logos coloridos ou URLs remotas nesse campo.
+  const badgeUrl = isClinicAnnouncement
+    ? ""
+    : asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
+  const imageUrl = isClinicAnnouncement
+    ? ""
+    : asNotificationAssetUrl(payload.image || brandLogo || VERTO_NOTIFICATION_ICON);
   const notificationOptions = {
     body: payload.body || `Você tem uma sessão agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
     ...(iconUrl ? { icon: iconUrl } : {}),
@@ -98,10 +189,37 @@ self.addEventListener("push", (event) => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(title, notificationOptions).catch(() => {
-      const { image: _failedImage, ...fallbackOptions } = notificationOptions;
-      return self.registration.showNotification(title, fallbackOptions);
-    }),
+    (async () => {
+      try {
+        await self.registration.showNotification(title, notificationOptions);
+      } catch (primaryError) {
+        // Primeiro preserva icon/badge e remove apenas a imagem expandida, quando existir.
+        let optionsWithoutImage = notificationOptions;
+        if (Object.prototype.hasOwnProperty.call(notificationOptions, 'image')) {
+          const { image: _failedImage, ...fallbackWithoutImage } = notificationOptions;
+          optionsWithoutImage = fallbackWithoutImage;
+          try {
+            await self.registration.showNotification(title, optionsWithoutImage);
+            optionsWithoutImage = null;
+          } catch {
+            // Se o navegador também rejeitar algum asset compacto, cai no fallback sem mídia.
+          }
+        }
+
+        if (optionsWithoutImage) {
+          const { icon: _failedIcon, badge: _failedBadge, ...fallbackWithoutAssets } = optionsWithoutImage;
+          await self.registration.showNotification(title, fallbackWithoutAssets);
+        }
+      }
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      await Promise.all(windows.map((client) => client.postMessage({
+        type: 'VERTO_PORTAL_NOTIFICATION',
+        notificationType: payload.data?.notificationType || null,
+        announcementId: payload.data?.announcementId || null,
+        appointmentId: appointmentId || null,
+        swVersion: SW_VERSION,
+      })));
+    })(),
   );
 });
 

@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 // test
 import {
   HelpCircle,
@@ -292,6 +292,7 @@ export const ReceptionistDashboard = ({
   onOpenOnboarding,
 }: any) => {
   const [view, setView] = useState("home");
+  const viewHistoryRef = useRef<string[]>(["home"]);
   const allowedViews = new Set<string>(RECEPTIONIST_ALLOWED_VIEWS);
   const canOpenPatientRecords = user.role !== "receptionist";
 
@@ -299,7 +300,15 @@ export const ReceptionistDashboard = ({
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace("#", "") || "home";
-      setView(allowedViews.has(hash) ? hash : "home");
+      const nextView = allowedViews.has(hash) ? hash : "home";
+      setView(nextView);
+      const history = viewHistoryRef.current;
+      if (history[history.length - 1] !== nextView) {
+        const previousIndex = history.lastIndexOf(nextView);
+        viewHistoryRef.current = previousIndex >= 0
+          ? history.slice(0, previousIndex + 1)
+          : [...history, nextView].slice(-30);
+      }
     };
     window.addEventListener("hashchange", handleHashChange);
     handleHashChange(); // Initial check
@@ -316,6 +325,18 @@ export const ReceptionistDashboard = ({
     }
     window.location.hash = newView;
     setView(newView);
+  };
+  const handleBackView = () => {
+    const history = viewHistoryRef.current;
+    if (history.length <= 1) {
+      handleSetView("home");
+      return;
+    }
+    history.pop();
+    const previousView = history[history.length - 1] || "home";
+    viewHistoryRef.current = history;
+    window.location.hash = previousView;
+    setView(previousView);
   };
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
   const [runTutorial, setRunTutorial] = useState(false);
@@ -562,7 +583,7 @@ export const ReceptionistDashboard = ({
     }
     if (!canOpenPatientRecords) return;
     setSelectedPatientId(patientId);
-    setView("patient");
+    handleSetView("patient");
     setIsDayDetailsModalOpen(false);
   };
 
@@ -625,7 +646,7 @@ export const ReceptionistDashboard = ({
     onAddPatient(newPatientData);
     setIsRegisterModalOpen(false);
     setSelectedPatientId(newId);
-    setView("patient");
+    handleSetView("patient");
   };
 
   useEffect(() => {
@@ -980,7 +1001,7 @@ export const ReceptionistDashboard = ({
             <PatientRegistry
               patients={allPatients}
               clinicalRecords={clinicalRecords}
-              onBack={() => setView("home")}
+              onBack={handleBackView}
               onSelectPatient={
                 canOpenPatientRecords ? onPatientClick : () => undefined
               }
@@ -999,7 +1020,7 @@ export const ReceptionistDashboard = ({
                 const appointmentId = id.replace("res-", "");
                 onUpdateAgendaStatus(appointmentId, "canceled");
               }}
-              onBack={() => handleSetView("home")}
+              onBack={handleBackView}
             />
           </div>
         )}
@@ -1011,7 +1032,7 @@ export const ReceptionistDashboard = ({
               onUpdateProfile={onUpdateProfile}
               specialtySettings={specialtySettings}
               setSpecialtySettings={setSpecialtySettings}
-              onBack={() => handleSetView("home")}
+              onBack={handleBackView}
             />
           </div>
         )}
@@ -1021,7 +1042,7 @@ export const ReceptionistDashboard = ({
             <div className="max-w-4xl mx-auto">
               <div className="flex items-center gap-4 mb-8">
                 <button
-                  onClick={() => setView("home")}
+                  onClick={handleBackView}
                   className="p-2 hover:bg-white rounded-xl transition-all shadow-sm border border-slate-100"
                 >
                   <ChevronRight className="rotate-180" />
@@ -1162,7 +1183,7 @@ export const ReceptionistDashboard = ({
             <div className="flex items-center justify-between mb-8">
               <div className="flex items-center gap-4">
                 <button
-                  onClick={() => setView("home")}
+                  onClick={handleBackView}
                   className="p-2 hover:bg-white rounded-xl transition-all"
                 >
                   <ChevronRight className="rotate-180" />
@@ -1314,7 +1335,7 @@ export const ReceptionistDashboard = ({
               return (
                 <PatientDetailView
                   patient={patientData}
-                  onBack={() => setView("home")}
+                  onBack={handleBackView}
                   history={patientsHistory.filter(
                     (h: any) => h.patientId === selectedPatientId,
                   )}

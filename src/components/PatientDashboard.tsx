@@ -10,6 +10,7 @@ import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
+import { persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
 import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from '../constants/organizationModules';
@@ -367,6 +368,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     };
   }, [notificationStatus, isSettingsOpen]);
 
+  // O viewport global do portal é controlado exclusivamente por App.tsx.
+
   const formatPortalDateTime = (value: any) => {
     const date = new Date(value || '');
     if (Number.isNaN(date.getTime())) return '';
@@ -605,16 +608,25 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return;
     }
     void loadPortalNotifications();
-    const refreshNotifications = () => {
+    const refreshNotifications = (force = false) => {
       if (document.visibilityState !== 'visible') return;
-      if (Date.now() - portalNotificationsLastLoadedAtRef.current < 30_000) return;
+      if (!force && Date.now() - portalNotificationsLastLoadedAtRef.current < 30_000) return;
       void loadPortalNotifications();
     };
-    window.addEventListener('focus', refreshNotifications);
-    document.addEventListener('visibilitychange', refreshNotifications);
+    const refreshWhenVisible = () => refreshNotifications(false);
+    const refreshFromPush = (event: MessageEvent) => {
+      if (event?.data?.type !== 'VERTO_PORTAL_NOTIFICATION') return;
+      refreshNotifications(true);
+    };
+    const interval = window.setInterval(() => refreshNotifications(false), 60_000);
+    window.addEventListener('focus', refreshWhenVisible);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    navigator.serviceWorker?.addEventListener?.('message', refreshFromPush as EventListener);
     return () => {
-      window.removeEventListener('focus', refreshNotifications);
-      document.removeEventListener('visibilitychange', refreshNotifications);
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refreshWhenVisible);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+      navigator.serviceWorker?.removeEventListener?.('message', refreshFromPush as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.email, portalPatientId, appointmentsPortalEnabled]);
@@ -1017,6 +1029,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         return false;
       }
 
+      await persistPushRenewalContext(registration, result?.renewalToken, keyPayload.publicKey);
       console.log('[push] subscription do painel persistida.', {
         patientId: result?.patientId || safePatientIdForPush || null
       });
@@ -1846,8 +1859,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (!notePatientId && noteEmail && portalPatientEmail && noteEmail !== portalPatientEmail) return false;
     return true;
   };
+  const isSystemPortalMilestoneEvent = (note: any) => {
+    const subject = normalizePortalLower(note?.subject);
+    const text = normalizePortalText(note?.text || note?.note);
+    return subject === 'milestone_event' || text.startsWith('MILESTONE_EVENT|');
+  };
   const isPortalSharedNote = (note: any) => {
-    if (!note || hasPortalPrivateFlag(note) || !noteBelongsToPortalPatient(note)) return false;
+    if (!note || isSystemPortalMilestoneEvent(note) || hasPortalPrivateFlag(note) || !noteBelongsToPortalPatient(note)) return false;
     const visibility = normalizePortalLower(note?.visibility || note?.audience || note?.scope || note?.access);
     const type = normalizePortalLower(note?.type || note?.kind);
     return hasPortalTrueFlag(note?.sharedWithPatient) ||
@@ -2657,9 +2675,32 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   ) : null;
 
+  const patientNotificationActivationCard = appointmentsPortalEnabled && notificationStatus !== 'unsupported' && !notificationSubscriptionReady ? (
+    <button
+      type="button"
+      onClick={() => {
+        if (notificationStatus === 'denied') {
+          setSettingsMessage('As notificações estão bloqueadas neste aparelho. Libere a permissão do site/app nas configurações do navegador.');
+          setIsSettingsOpen(true);
+          return;
+        }
+        void enablePatientNotifications();
+      }}
+      disabled={isEnablingNotifications}
+      className="mb-4 flex w-full items-center gap-3 rounded-[22px] border border-violet-100 bg-violet-50/90 px-4 py-3 text-left shadow-sm disabled:opacity-60"
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-white text-[#7a32fc] shadow-sm"><Bell size={17}/></span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs font-black text-slate-800">{notificationStatus === 'denied' ? 'Notificações bloqueadas neste aparelho' : 'Ativar notificações da clínica'}</span>
+        <span className="mt-0.5 block text-[11px] font-medium leading-relaxed text-slate-500">{notificationStatus === 'denied' ? 'Abra as configurações para permitir avisos e lembretes.' : 'Receba avisos e lembretes mesmo com a Verto fechada.'}</span>
+      </span>
+    </button>
+  ) : null;
+
   const portalHomeSummary = (
     <React.Fragment>
       {clinicalPortalEnabled && portalAnamnesisTopNotice}
+      {patientNotificationActivationCard}
       {appointmentsPortalEnabled && portalNotificationsSummary}
       {!isKidsProfile && clinicalPortalEnabled && (
         <div className="mb-6 grid gap-3 sm:grid-cols-2">
@@ -3705,11 +3746,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     patientId={portalPatientId || user.id}
                     protocols={protocols}
                     protocolId={activeKidsProtocol?.id}
-                    history={activeKidsProtocolEvents.map((event: any) => ({
-                      ...event,
-                      patientId: event?.patientId || event?.patient_id || portalPatientId || user.id,
-                      patient_id: event?.patient_id || event?.patientId || portalPatientId || user.id
-                    }))}
+                    useCanonicalMastery
+                    portalMode
                   />
                 </div>
 
@@ -3737,7 +3775,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             <SecureImage
                               src={getFamilyDiaryImageSource(entry)}
                               alt="Registro do diário"
-                              className="w-full max-h-40 object-cover rounded-xl border border-blue-100"
+                              className="block w-full h-auto max-h-56 object-contain rounded-xl border border-blue-100 bg-white"
                               fallback={
                                 <div className="rounded-xl border border-blue-100 bg-white px-3 py-4 text-center text-[11px] font-semibold text-blue-500">
                                   Foto indisponível no momento
@@ -3894,7 +3932,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [history]);
 
   return ( 
-    <div className={`min-h-screen p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}> 
+    <div className={`min-h-screen w-full max-w-full p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}> 
       <AnimatePresence>
         {showStarCelebration && (
           <motion.div

@@ -56,6 +56,8 @@ import {
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { SettingsMenu } from "./SettingsMenu";
+import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
+import { ClinicAnnouncementsPanel } from "./ClinicAnnouncementsPanel";
 import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
 import { SchoolsManagement } from "./SchoolsManagement";
@@ -149,6 +151,7 @@ type DashboardTab =
   | "patients"
   | "schools"
   | "agenda"
+  | "notices"
   | "closure"
   | "conference"
   | "payers"
@@ -776,6 +779,8 @@ export function CoordinatorDashboard({
   const canViewPatientTissAuthorizations = hasCapability("patient.insurance.authorization.view");
   const canCreatePatients = hasCapability("patient.create");
   const canManageRooms = hasCapability("clinic.rooms.manage");
+  const [roomMutationPending, setRoomMutationPending] = useState(false);
+  const roomCanonicalRequestSeqRef = useRef(0);
   const canUseSchoolPatientFilters =
     authorizationHydrated && hasModule("school_management") && hasCapability("school.view");
   const workspaceScopeKey = useMemo(
@@ -804,6 +809,7 @@ export function CoordinatorDashboard({
     "billing-management": ["billing.sessions.view"],
     "engagement-widgets": ["patient.list"],
     "agenda-multi-view": ["calendar.clinic.view", "calendar.team.view", "calendar.own.view"],
+    "clinic-notifications": ["communication.clinic_notifications.manage"],
     "rooms": ["clinic.rooms.manage"],
   };
 
@@ -830,6 +836,7 @@ export function CoordinatorDashboard({
     flow: "engagement-widgets",
     birthdays: "engagement-widgets",
     agenda: "agenda-multi-view",
+    notices: "clinic-notifications",
     closure: "billing-management",
     conference: "billing-management",
     rooms: "rooms",
@@ -847,6 +854,7 @@ export function CoordinatorDashboard({
     const requiredModuleByTab: Partial<Record<string, OrganizationModuleKey>> = {
       protocols: "clinical_core",
       agenda: "appointments_communication",
+      notices: "appointments_communication",
       rooms: "appointments_communication",
       financial: "financial_management",
       payers: "insurance_tiss",
@@ -875,6 +883,7 @@ export function CoordinatorDashboard({
     | "patients"
     | "schools"
     | "agenda"
+    | "notices"
     | "closure"
     | "conference"
     | "payers"
@@ -957,20 +966,54 @@ export function CoordinatorDashboard({
   }, [workspaceScopeKey]);
 
   useEffect(() => {
-    if (activeTab !== "patients" || !onEnsurePatientList) return;
-    const needsCanonicalPatientList = allPatients.length === 0 || Boolean(patientListError);
-    if (!needsCanonicalPatientList) return;
-    if (!workspaceScopeKey || patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) return;
+    const patientListSurfaceVisible = activeTab === "patients" || activeTab === "notices" || activeTab === "agenda";
+    if (!patientListSurfaceVisible || !onEnsurePatientList || !workspaceScopeKey) return;
+    if (patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) return;
 
-    // Pacientes são recurso transversal da clínica, não um módulo comercial. Se o
-    // bootstrap global não hidratou a lista, ou precisou usar um snapshot local
-    // incompleto, a própria tela faz uma única leitura canônica do tenant. Uma lista
-    // local não vazia nunca pode mascarar pacientes que existem no servidor.
+    // A lista de pacientes é compartilhada por Pacientes, Avisos e Agenda. O bootstrap pode
+    // chegar com um snapshot local vazio ou parcial; portanto uma lista não vazia não
+    // é evidência de que a leitura canônica já aconteceu. Faça exatamente uma leitura
+    // canônica por workspace quando uma dessas superfícies for aberta e reutilize o
+    // mesmo estado nas três telas, sem exigir que o usuário visite Pacientes ou Avisos primeiro.
     patientListEnsureAttemptedWorkspaceRef.current = workspaceScopeKey;
     void Promise.resolve(onEnsurePatientList()).catch(() => {
-      // O estado de erro é controlado no App para manter uma única fonte de verdade.
+      // Permite nova tentativa ao reabrir a superfície após uma falha transitória,
+      // preservando no App a única fonte de verdade da lista de pacientes.
+      if (patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) {
+        patientListEnsureAttemptedWorkspaceRef.current = "";
+      }
     });
-  }, [activeTab, allPatients.length, onEnsurePatientList, patientListError, workspaceScopeKey]);
+  }, [activeTab, onEnsurePatientList, workspaceScopeKey]);
+
+  useEffect(() => {
+    const roomSurfaceVisible =
+      activeTab === "rooms" ||
+      (activeTab === "dashboard" && hasAppointmentsCommunicationModule);
+    if (!roomSurfaceVisible || !workspaceScopeKey) return;
+    const requestSeq = roomCanonicalRequestSeqRef.current + 1;
+    roomCanonicalRequestSeqRef.current = requestSeq;
+    let cancelled = false;
+
+    // Reconcile every surface that renders room management with the canonical
+    // database. Rooms are shown both on the dedicated Rooms tab and inside the
+    // dashboard overview; limiting this retry to activeTab === "rooms" left the
+    // overview stuck on an early/legacy bootstrap snapshot after F5 even though
+    // the room had already been persisted in clinic_rooms.
+    void dataService.getClinicRooms()
+      .then((result: any) => {
+        if (cancelled || roomCanonicalRequestSeqRef.current !== requestSeq) return;
+        if (!result?.success || !Array.isArray(result?.data)) return;
+        setRooms(result.data);
+      })
+      .catch(() => {
+        // Keep the last known room snapshot. A later tab entry retries the
+        // canonical read without destroying successfully persisted data.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, hasAppointmentsCommunicationModule, workspaceScopeKey, setRooms]);
 
   const defaultFinancialNavigationIntent = (tab: DashboardTab): FinancialNavigationIntent | null => {
     if (tab === "financial") return { tab, breadcrumb: ["Financeiro", "Dashboard financeiro"] };
@@ -1478,6 +1521,7 @@ export function CoordinatorDashboard({
     patients: "Pacientes",
     schools: "Escolas",
     agenda: "Agenda",
+    notices: "Avisos",
     closure: "Fechamento operacional",
     conference: "Pré-faturamento mensal",
     payers: "Convênios",
@@ -1715,12 +1759,14 @@ export function CoordinatorDashboard({
   } | null>(null);
   const [appointmentEditScope, setAppointmentEditScope] = useState<"single" | "future">("single");
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
+  const [patientReturnTab, setPatientReturnTab] = useState<DashboardTab>("patients");
   const [view, setView] = useState<"home" | "patient">("home");
   const [patientRestorePending, setPatientRestorePending] = useState(false);
   const patientRestoreAttemptRef = useRef("");
   const [patientOpenTab, setPatientOpenTab] = useState<
     "history" | "notes" | "report" | "plan" | "session" | "school" | "files"
   >("history");
+  const [patientFocusNoteId, setPatientFocusNoteId] = useState("");
   const [openAnamnesisOnPatientOpen, setOpenAnamnesisOnPatientOpen] =
     useState(false);
   const [patientSessionReportId, setPatientSessionReportId] = useState('');
@@ -1784,6 +1830,7 @@ export function CoordinatorDashboard({
       const nextPatientId = String(state?.selectedPatientId || "").trim();
       const nextPatientTab = String(state?.patientOpenTab || "history");
       const nextSessionReportId = String(state?.patientSessionReportId || "").trim();
+      const nextPatientReturnTab = String(state?.patientReturnTab || "patients") as DashboardTab;
 
       if (canAccessTab(nextTab)) {
         const persistedHistory = Array.isArray(state?.tabHistory)
@@ -1802,6 +1849,7 @@ export function CoordinatorDashboard({
 
       if (nextView === "patient" && nextPatientId) {
         setSelectedPatientId(nextPatientId);
+        setPatientReturnTab(canAccessTab(nextPatientReturnTab) ? nextPatientReturnTab : "patients");
         if (
           nextPatientTab === "history" ||
           nextPatientTab === "notes" ||
@@ -1834,12 +1882,13 @@ export function CoordinatorDashboard({
           selectedPatientId: selectedPatientId ? String(selectedPatientId) : null,
           patientOpenTab,
           patientSessionReportId: patientSessionReportId || null,
+          patientReturnTab,
         }),
       );
     } catch (error) {
       console.warn("Falha ao persistir contexto do painel:", error);
     }
-  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId]);
+  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId, patientReturnTab]);
 
   useEffect(() => {
     if (view !== "patient" || !selectedPatientId || !onOpenPatientDetails) {
@@ -2069,6 +2118,9 @@ export function CoordinatorDashboard({
   );
   const [clinicPostalCode, setClinicPostalCode] = useState<string>(
     maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")),
+  );
+  const [clinicPatientPhotoPolicy, setClinicPatientPhotoPolicy] = useState<'PORTAL' | 'CLINIC'>(
+    String(user?.clinicSettings?.patientPhotoPolicy || user?.clinicSettings?.patient_photo_policy || 'PORTAL').toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
   );
   const [mediaRefreshAttempts, setMediaRefreshAttempts] = useState({
     signature: 0,
@@ -3019,6 +3071,7 @@ export function CoordinatorDashboard({
     setClinicCity(String(user?.clinicSettings?.clinicCity || user?.clinicSettings?.city || ""));
     setClinicStateUf(String(user?.clinicSettings?.clinicState || user?.clinicSettings?.state || "").toUpperCase().slice(0, 2));
     setClinicPostalCode(maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")));
+    setClinicPatientPhotoPolicy(String(user?.clinicSettings?.patientPhotoPolicy || user?.clinicSettings?.patient_photo_policy || 'PORTAL').toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL');
   }, [
     user?.crp,
     user?.cpf,
@@ -3076,6 +3129,8 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.state,
     user?.clinicSettings?.clinicPostalCode,
     user?.clinicSettings?.postalCode,
+    user?.clinicSettings?.patientPhotoPolicy,
+    user?.clinicSettings?.patient_photo_policy,
     user?.workspaceName,
   ]);
 
@@ -7109,6 +7164,7 @@ export function CoordinatorDashboard({
           ...(options || {}),
         };
 
+    setPatientReturnTab(activeTab);
     setSelectedPatientId(resolvedPatient.id);
     void onOpenPatientDetails?.(resolvedPatient.id);
     setPatientOpenTab(nextOptions.tab || "history");
@@ -8310,76 +8366,50 @@ export function CoordinatorDashboard({
     }
   };
 
-  const handleAddRoom = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canManageRooms) return;
-    const specialtiesArray = newRoom.specialties
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s !== "");
-    const room = {
-      id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
-      name: newRoom.name,
-      specialties: specialtiesArray,
-      prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false,
-      preventOverlappingAppointments: newRoom.preventOverlappingAppointments !== false,
-      is_active: true,
-      isActive: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    setRooms((prev) => [...prev, room]);
-    setNewRoom({ name: "", specialties: "", preventOverlappingAppointments: true });
+  const normalizeRoomFromApi = (room: any) => {
+    const specialties = Array.isArray(room?.specialties) ? room.specialties : String(room?.specialties || '').split(',').map((value) => value.trim()).filter(Boolean);
+    const active = room?.is_active !== false && room?.isActive !== false;
+    const preventsOverlap = room?.prevent_overlapping_appointments !== false && room?.preventOverlappingAppointments !== false;
+    return { ...room, specialties, is_active: active, isActive: active, prevent_overlapping_appointments: preventsOverlap, preventOverlappingAppointments: preventsOverlap };
   };
-
+  const handleAddRoom = async (e: React.FormEvent) => {
+    e.preventDefault(); if (!canManageRooms || roomMutationPending) return;
+    const name = newRoom.name.trim(); if (!name) return;
+    const specialties = newRoom.specialties.split(',').map((value) => value.trim()).filter(Boolean);
+    setRoomMutationPending(true);
+    try {
+      const result = await dataService.createClinicRoom({ name, specialties, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false, is_active: true });
+      if (!result?.success || !result?.data) { showToast(result?.error || 'Não foi possível salvar a sala.', 'error'); return; }
+      const saved = normalizeRoomFromApi(result.data); setRooms((prev) => [...prev.filter((room) => String(room?.id) !== String(saved.id)), saved]);
+      setNewRoom({ name: '', specialties: '', preventOverlappingAppointments: true }); showToast('Sala salva e disponível na agenda.', 'success');
+    } finally { setRoomMutationPending(false); }
+  };
   const handleEditRoom = (room: any) => {
-    if (!canManageRooms) return;
-    setEditingRoom(room);
-    setNewRoom({
-      name: room.name,
-      specialties: (Array.isArray(room.specialties) ? room.specialties : []).join(", "),
-      preventOverlappingAppointments: room.prevent_overlapping_appointments !== false && room.preventOverlappingAppointments !== false
-    });
+    if (!canManageRooms || roomMutationPending) return; const normalized = normalizeRoomFromApi(room); setEditingRoom(normalized);
+    setNewRoom({ name: normalized.name, specialties: normalized.specialties.join(', '), preventOverlappingAppointments: normalized.preventOverlappingAppointments !== false });
   };
-
-  const handleUpdateRoom = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canManageRooms) return;
-    if (!editingRoom) return;
-    const specialtiesArray = newRoom.specialties
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s !== "");
-    setRooms((prev) =>
-      prev.map((r) =>
-        r.id === editingRoom.id
-          ? {
-              ...r,
-              name: newRoom.name,
-              specialties: specialtiesArray,
-              prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false,
-              preventOverlappingAppointments: newRoom.preventOverlappingAppointments !== false,
-              updated_at: new Date().toISOString()
-            }
-          : r,
-      ),
-    );
-    setEditingRoom(null);
-    setNewRoom({ name: "", specialties: "", preventOverlappingAppointments: true });
+  const handleUpdateRoom = async (e: React.FormEvent) => {
+    e.preventDefault(); if (!canManageRooms || !editingRoom || roomMutationPending) return; const name = newRoom.name.trim(); if (!name) return;
+    const specialties = newRoom.specialties.split(',').map((value) => value.trim()).filter(Boolean); setRoomMutationPending(true);
+    try {
+      const result = await dataService.updateClinicRoom(String(editingRoom.id), { name, specialties, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false });
+      if (!result?.success || !result?.data) { showToast(result?.error || 'Não foi possível atualizar a sala.', 'error'); return; }
+      const saved = normalizeRoomFromApi(result.data); setRooms((prev) => prev.map((room) => String(room?.id) === String(saved.id) ? saved : room));
+      setEditingRoom(null); setNewRoom({ name: '', specialties: '', preventOverlappingAppointments: true }); showToast('Sala atualizada.', 'success');
+    } finally { setRoomMutationPending(false); }
   };
-
-  const handleDeleteRoom = (id: string) => {
-    if (!canManageRooms) return;
-    setRooms((prev) =>
-      prev.map((room) =>
-        String(room.id) === String(id)
-          ? (() => {
-              const nextActive = !(room.is_active !== false && room.isActive !== false);
-              return { ...room, is_active: nextActive, isActive: nextActive, updated_at: new Date().toISOString() };
-            })()
-          : room,
-      ),
-    );
+  const handleDeleteRoom = async (id: string) => {
+    if (!canManageRooms || roomMutationPending) return; const current = rooms.find((room) => String(room?.id) === String(id)); if (!current) return;
+    const roomActive = current.is_active !== false && current.isActive !== false; setRoomMutationPending(true);
+    try {
+      const result = await dataService.updateClinicRoom(String(id), { is_active: !roomActive });
+      if (!result?.success || !result?.data) { showToast(result?.error || 'Não foi possível alterar a sala.', 'error'); return; }
+      const saved = normalizeRoomFromApi(result.data);
+      setRooms((prev) => roomActive
+        ? prev.filter((room) => String(room?.id) !== String(saved.id))
+        : [...prev.filter((room) => String(room?.id) !== String(saved.id)), saved]);
+      showToast(roomActive ? 'Sala desativada e removida das salas disponíveis.' : 'Sala reativada.', 'success');
+    } finally { setRoomMutationPending(false); }
   };
 
   const handleSaveClinicSettings = async (saveScope: "professional" | "clinic" = "clinic") => {
@@ -8488,6 +8518,7 @@ export function CoordinatorDashboard({
       clinicState: cleanClinicState || null,
       clinicPostalCode: cleanClinicPostalCode || null,
       clinicCnesCode: cleanClinicCnesCode || null,
+      patientPhotoPolicy: clinicPatientPhotoPolicy,
     };
 
     if (saveScope === "clinic" && canManageClinicSettings && hasModule("insurance_tiss")) {
@@ -9610,9 +9641,10 @@ export function CoordinatorDashboard({
                 </label>
                 <button
                   type="submit"
-                  className="w-full py-4 bg-[#7a32fc] text-white rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
+                  disabled={roomMutationPending}
+                  className="w-full py-4 disabled:cursor-not-allowed disabled:opacity-60 bg-[#7a32fc] text-white rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 hover:scale-[1.02] transition-all active:scale-[0.98]"
                 >
-                  {editingRoom ? "Atualizar Sala" : "Adicionar Sala"}
+                  {roomMutationPending ? "Salvando..." : editingRoom ? "Atualizar Sala" : "Adicionar Sala"}
                 </button>
                 {editingRoom && (
                   <button
@@ -9679,13 +9711,15 @@ export function CoordinatorDashboard({
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleEditRoom(room)}
-                        className="p-2 text-slate-400 hover:text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-all"
+                        disabled={roomMutationPending}
+                        className="p-2 disabled:cursor-not-allowed disabled:opacity-50 text-slate-400 hover:text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-all"
                       >
                         <Edit2 size={18} />
                       </button>
                       <button
                         onClick={() => handleDeleteRoom(room.id)}
-                        className={`p-2 rounded-xl transition-all ${roomActive ? "text-slate-400 hover:text-red-500 hover:bg-red-50" : "text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"}`}
+                        disabled={roomMutationPending}
+                        className={`p-2 disabled:cursor-not-allowed disabled:opacity-50 rounded-xl transition-all ${roomActive ? "text-slate-400 hover:text-red-500 hover:bg-red-50" : "text-slate-400 hover:text-emerald-600 hover:bg-emerald-50"}`}
                         title={roomActive ? "Desativar sala" : "Reativar sala"}
                       >
                         {roomActive ? <Trash2 size={18} /> : <CheckCircle2 size={18} />}
@@ -10150,6 +10184,7 @@ export function CoordinatorDashboard({
         children: [
           { id: "dashboard", label: "Painel", icon: LayoutDashboard },
           { id: "agenda", label: "Agenda", icon: CalendarDays },
+          { id: "notices", label: "Avisos", icon: Bell },
           { id: "patients", label: "Pacientes", icon: ClipboardList },
           { id: "schools", label: "Escolas", icon: GraduationCap },
           { id: "birthdays", label: "Aniversariantes", icon: Heart },
@@ -10489,6 +10524,27 @@ export function CoordinatorDashboard({
     return alerts;
   })();
 
+  const openClinicalMentionNotification = (notification: any) => {
+    const patientId = String(notification?.patientId || '').trim();
+    const noteId = String(notification?.noteId || '').trim();
+    if (!patientId || !noteId) return;
+    setPatientReturnTab(activeTab);
+    setSelectedPatientId(patientId);
+    setPatientOpenTab("notes");
+    setPatientFocusNoteId(noteId);
+    setView("patient");
+  };
+
+  const goBackFromPatientRecord = () => {
+    const previousTab = canAccessTab(patientReturnTab) ? patientReturnTab : "patients";
+    setView("home");
+    setActiveTab(previousTab);
+    setTabHistory((current) => {
+      if (current[current.length - 1] === previousTab) return current;
+      return [...current, previousTab].slice(-20);
+    });
+  };
+
   const renderPatientProfileSummaryField = (label: string, value: any, className = "") => (
     <div className={className}>
       <span className="text-[11px] font-black uppercase tracking-wide text-slate-400">{label}</span>
@@ -10522,10 +10578,10 @@ export function CoordinatorDashboard({
               cadastro.
             </p>
             <button
-              onClick={() => setView("home")}
+              onClick={goBackFromPatientRecord}
               className="px-5 py-2.5 rounded-xl bg-[#7a32fc] text-white font-semibold"
             >
-              Voltar ao painel
+              Voltar
             </button>
           </div>
         </div>
@@ -10578,11 +10634,7 @@ export function CoordinatorDashboard({
           >
             <div className="flex min-w-0 items-center gap-2 sm:gap-4">
               <button
-                onClick={() => {
-                  setView("home");
-                  setActiveTab("dashboard");
-                  setTabHistory(["dashboard"]);
-                }}
+                onClick={goBackFromPatientRecord}
                 className={`shrink-0 rounded-full p-2 transition-all ${
                   theme === "dark"
                     ? "bg-slate-800 text-slate-300 hover:text-violet-300"
@@ -10615,6 +10667,7 @@ export function CoordinatorDashboard({
               >
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
+              <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
               <SettingsMenu
                 user={user}
                 onLogout={onLogout}
@@ -10700,7 +10753,7 @@ export function CoordinatorDashboard({
               themeMode={theme}
               capabilities={effectiveCapabilities}
               clinicProfessionals={patientCareProfessionals}
-              onBack={() => setView("home")}
+              onBack={goBackFromPatientRecord}
               hideBackButton={true}
               clinicContext={{
                 userId: user?.id || "",
@@ -10714,6 +10767,7 @@ export function CoordinatorDashboard({
                 email: user?.clinicSettings?.clinicEmail || "",
                 address: user?.clinicSettings?.clinicAddress || "",
                 logoUrl: user?.clinicSettings?.clinicLogoUrl || null,
+                patientPhotoPolicy: clinicPatientPhotoPolicy,
                 professionalName: user?.name || "Profissional responsável",
                 crp: user?.crp || user?.clinicSettings?.crp || "",
                 professionalCpf:
@@ -10740,6 +10794,8 @@ export function CoordinatorDashboard({
                   : ""
               }
               initialTab={patientOpenTab}
+              focusNoteId={patientFocusNoteId}
+              onFocusNoteConsumed={() => setPatientFocusNoteId('')}
               sessionReportId={patientSessionReportId}
               onSessionReportConsumed={() => setPatientSessionReportId('')}
               openAnamnesisOnLoad={openAnamnesisOnPatientOpen}
@@ -10772,15 +10828,16 @@ export function CoordinatorDashboard({
                 txt: string,
                 visibility: string,
                 subject?: string,
+                options?: { mentionUserIds?: string[] },
               ) => {
                 if (!ensureTherapistClinicalProfile()) return;
-                onAddNote(pid, txt, visibility, subject);
+                onAddNote(pid, txt, visibility, subject, options);
               }}
               onAddActivityLog={onAddActivityLog}
               onUpdatePatient={
                 onUpdatePatient
                   ? (updates: any) => {
-                      if (!ensureTherapistClinicalProfile()) return;
+                      if (!isReceptionist && !ensureTherapistClinicalProfile()) return;
                       return onUpdatePatient(updates);
                     }
                   : undefined
@@ -10933,6 +10990,7 @@ export function CoordinatorDashboard({
               {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
             </button>
 
+            <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
             <SettingsMenu
               user={user}
               onLogout={onLogout}
@@ -13740,6 +13798,11 @@ export function CoordinatorDashboard({
                 </div>
               </motion.div>
             )}
+            {activeTab === "notices" && (
+              <motion.div key="notices" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-6">
+                <ClinicAnnouncementsPanel patients={allPatients} onToast={showToast} />
+              </motion.div>
+            )}
             {activeTab === "rooms" && (
               <motion.div
                 key="rooms"
@@ -13994,6 +14057,7 @@ export function CoordinatorDashboard({
                     clinicCity,
                     clinicStateUf,
                     clinicPostalCode,
+                    clinicPatientPhotoPolicy,
                     workStart,
                     workEnd,
                   }}
@@ -14033,6 +14097,7 @@ export function CoordinatorDashboard({
                     setClinicCity,
                     setClinicStateUf,
                     setClinicPostalCode,
+                    setClinicPatientPhotoPolicy,
                     setWorkStart,
                     setWorkEnd,
                   }}

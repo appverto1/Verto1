@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { Express } from 'express';
+import { filterPatientFilesForActor } from '../src/utils/patientFileAccess';
 
 type SchoolRouteDeps = {
   supabase: any;
@@ -515,9 +516,10 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
         return !link.meeting_id || visibleMeetingIds.has(String(link.meeting_id));
       });
       const documentIds = uniq(visibleDocuments.map((link: any) => link.document_id));
-      const fileResult = documentIds.length ? await supabase.from('patient_files').select('id,file_name,file_type,file_size,created_at,patient_id').in('id', documentIds) : { data: [] };
+      const fileResult = documentIds.length ? await supabase.from('patient_files').select('id,file_name,mime_type,file_size_bytes,created_at,patient_id,uploaded_by,access_scope,patient_portal_visible,metadata').in('id', documentIds) : { data: [] };
       if ((fileResult as any).error) throw (fileResult as any).error;
-      const fileMap = new Map(((fileResult as any).data || []).map((file: any) => [String(file.id), file]));
+      const visibleFileRows = await filterPatientFilesForActor({ supabase, rows: (fileResult as any).data || [], actorId: scope.actorId, actorRole: scope.role, logger: console });
+      const fileMap = new Map(visibleFileRows.map((file: any) => [String(file.id), file]));
       const patientMap = new Map(((patients as any).data || []).map((patient: any) => [String(patient.id), patient]));
       const meetingMap = new Map(visibleMeetings.map((meeting: any) => [String(meeting.id), meeting]));
 
@@ -530,7 +532,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
           enrollments: visibleEnrollments,
           patients: (patients as any).data || [],
           meetings: visibleMeetings,
-          documents: visibleDocuments.map((link: any) => ({
+          documents: visibleDocuments.filter((link: any) => fileMap.has(String(link.document_id))).map((link: any) => ({
             ...link,
             document: fileMap.get(String(link.document_id)) || null,
             patients: link.patient_id ? patientMap.get(String(link.patient_id)) || null : null,
@@ -807,12 +809,16 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
       const visibleDocuments=(documents.data||[]).filter((row:any)=>!row.patient_id||(scope.role!=='receptionist'&&visiblePatientIds.has(String(row.patient_id))));
       const fileIds=uniq(visibleDocuments.map((row:any)=>row.document_id));
       const [fileResult,availableFiles]=await Promise.all([
-        fileIds.length?supabase.from('patient_files').select('id,file_name,file_type,file_size,patient_id,created_at').in('id',fileIds):Promise.resolve({data:[]}),
-        scope.role !== 'receptionist' && visiblePatients.length?supabase.from('patient_files').select('id,file_name,file_type,file_size,patient_id,created_at').in('patient_id',visiblePatients.map((row:any)=>row.patient_id)).order('created_at',{ascending:false}).limit(300):Promise.resolve({data:[]})
+        fileIds.length?supabase.from('patient_files').select('id,file_name,mime_type,file_size_bytes,patient_id,created_at,uploaded_by,access_scope,patient_portal_visible,metadata').in('id',fileIds):Promise.resolve({data:[]}),
+        scope.role !== 'receptionist' && visiblePatients.length?supabase.from('patient_files').select('id,file_name,mime_type,file_size_bytes,patient_id,created_at,uploaded_by,access_scope,patient_portal_visible,metadata').in('patient_id',visiblePatients.map((row:any)=>row.patient_id)).order('created_at',{ascending:false}).limit(300):Promise.resolve({data:[]})
       ] as any);
       if(fileResult.error)throw fileResult.error;if(availableFiles.error)throw availableFiles.error;
-      const fileMap=new Map((fileResult.data||[]).map((file:any)=>[String(file.id),file]));
-      res.json({success:true,data:{...meeting,patients:visiblePatients,participants:participants.data||[],minutes:minutes.data||null,documents:visibleDocuments.map((link:any)=>({...link,document:fileMap.get(String(link.document_id))||null})),availableDocuments:availableFiles.data||[],referrals:(referrals.data||[]).filter((row:any)=>!row.patient_id||visiblePatientIds.has(String(row.patient_id))),schoolContacts:contacts.data||[]}});
+      const [visibleLinkedFiles,visibleAvailableFiles]=await Promise.all([
+        filterPatientFilesForActor({supabase,rows:fileResult.data||[],actorId:scope.actorId,actorRole:scope.role,logger:console}),
+        filterPatientFilesForActor({supabase,rows:availableFiles.data||[],actorId:scope.actorId,actorRole:scope.role,logger:console})
+      ]);
+      const fileMap=new Map(visibleLinkedFiles.map((file:any)=>[String(file.id),file]));
+      res.json({success:true,data:{...meeting,patients:visiblePatients,participants:participants.data||[],minutes:minutes.data||null,documents:visibleDocuments.filter((link:any)=>fileMap.has(String(link.document_id))).map((link:any)=>({...link,document:fileMap.get(String(link.document_id))||null})),availableDocuments:visibleAvailableFiles,referrals:(referrals.data||[]).filter((row:any)=>!row.patient_id||visiblePatientIds.has(String(row.patient_id))),schoolContacts:contacts.data||[]}});
     }catch(error){errorResponse(res,error);}
   });
 
@@ -895,7 +901,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
     }catch(error){errorResponse(res,error,'Não foi possível salvar a ata e os encaminhamentos.');}
   });
 
-  app.get('/api/school-documents', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async(req:any,res:any)=>{try{const scope=await workspace(req);const requestedSchoolId=sanitizeString(req.query?.schoolId,120);if(requestedSchoolId)await ensureSchoolVisible(scope,requestedSchoolId);let query=supabase.from('school_document_links').select(SCHOOL_DOCUMENT_COLUMNS).eq('organization_id',scope.organizationId).is('archived_at',null);for(const [q,c] of [['schoolId','school_id'],['unitId','school_unit_id'],['meetingId','meeting_id'],['patientId','patient_id']] as any[]){const v=sanitizeString(req.query?.[q],120);if(v)query=query.eq(c,v);}const result=await query.order('created_at',{ascending:false}).limit(200);if(result.error)throw result.error;const patientRows=(result.data||[]).filter((r:any)=>r.patient_id);const allowed=await canAccessPatients(scope,patientRows.map((r:any)=>r.patient_id));const visible=(result.data||[]).filter((r:any)=>{ if(!r.patient_id)return true; if(scope.role==='receptionist')return false; return allowed.has(String(r.patient_id)); });const docIds=uniq(visible.map((r:any)=>r.document_id));const files=docIds.length?await supabase.from('patient_files').select('id,file_name,file_type,file_size,created_at,patient_id').in('id',docIds):{data:[]};const fileMap=new Map((files.data||[]).map((f:any)=>[String(f.id),f]));res.json({success:true,data:visible.map((link:any)=>({...link,document:fileMap.get(String(link.document_id))||null}))});}catch(error){errorResponse(res,error);} });
+  app.get('/api/school-documents', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async(req:any,res:any)=>{try{const scope=await workspace(req);const requestedSchoolId=sanitizeString(req.query?.schoolId,120);if(requestedSchoolId)await ensureSchoolVisible(scope,requestedSchoolId);let query=supabase.from('school_document_links').select(SCHOOL_DOCUMENT_COLUMNS).eq('organization_id',scope.organizationId).is('archived_at',null);for(const [q,c] of [['schoolId','school_id'],['unitId','school_unit_id'],['meetingId','meeting_id'],['patientId','patient_id']] as any[]){const v=sanitizeString(req.query?.[q],120);if(v)query=query.eq(c,v);}const result=await query.order('created_at',{ascending:false}).limit(200);if(result.error)throw result.error;const patientRows=(result.data||[]).filter((r:any)=>r.patient_id);const allowed=await canAccessPatients(scope,patientRows.map((r:any)=>r.patient_id));const visible=(result.data||[]).filter((r:any)=>{ if(!r.patient_id)return true; if(scope.role==='receptionist')return false; return allowed.has(String(r.patient_id)); });const docIds=uniq(visible.map((r:any)=>r.document_id));const files=docIds.length?await supabase.from('patient_files').select('id,file_name,mime_type,file_size_bytes,created_at,patient_id,uploaded_by,access_scope,patient_portal_visible,metadata').in('id',docIds):{data:[]};if(files.error)throw files.error;const visibleFiles=await filterPatientFilesForActor({supabase,rows:files.data||[],actorId:scope.actorId,actorRole:scope.role,logger:console});const fileMap=new Map(visibleFiles.map((f:any)=>[String(f.id),f]));res.json({success:true,data:visible.filter((link:any)=>fileMap.has(String(link.document_id))).map((link:any)=>({...link,document:fileMap.get(String(link.document_id))||null}))});}catch(error){errorResponse(res,error);} });
   app.post('/api/school-documents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.meetings.manage'), async(req:any,res:any)=>{try{const scope=await workspace(req);const body=req.body||{};const schoolId=sanitizeString(body.schoolId,120);if(schoolId)await ensureSchoolVisible(scope,schoolId);const patientId=sanitizeString(body.patientId,120);if(patientId){if(scope.role==='receptionist')throw new Error('ACCESS_DENIED');const allowed=await canAccessPatients(scope,[patientId],true);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');}const result=await rpc('school_link_document_v2',scope,{p_payload:body},body);if(patientId){const patient=await supabase.from('patients').select('id,email,responsible_user_id').eq('id',patientId).eq('clinic_id',scope.clinicId).maybeSingle();if(patient.data){const notification=await supabase.from('portal_notifications').upsert({organization_id:scope.organizationId,clinic_id:scope.clinicId,recipient_user_id:patient.data.responsible_user_id||null,recipient_email:patient.data.email||null,patient_id:patientId,type:'SCHOOL_DOCUMENT_ADDED',title:'Documento escolar adicionado',message:'Um novo documento escolar foi vinculado.',idempotency_key:`school:document:${safeIdempotencyKey(body.idempotencyKey)}`,metadata:{schoolId:body.schoolId||null,meetingId:body.meetingId||null,administrativeOnly:true}},{onConflict:'idempotency_key',ignoreDuplicates:true});if(notification.error)throw notification.error;}}res.status(201).json(result);}catch(error){errorResponse(res,error);} });
   app.patch('/api/school-documents/:linkId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.meetings.manage'), async(req:any,res:any)=>{try{const scope=await workspace(req);const body=req.body||{};const result=await rpc('school_update_document_v2',scope,{p_link_id:sanitizeString(req.params.linkId,120),p_payload:body},body);res.json(result);}catch(error){errorResponse(res,error);} });
 

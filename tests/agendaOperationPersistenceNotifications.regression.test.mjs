@@ -1,0 +1,121 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const cron = fs.readFileSync(new URL('../services/cronService.ts', import.meta.url), 'utf8');
+const push = fs.readFileSync(new URL('../services/pushNotificationService.ts', import.meta.url), 'utf8');
+const dataService = fs.readFileSync(new URL('../src/services/dataService.ts', import.meta.url), 'utf8');
+const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+const dashboard = fs.readFileSync(new URL('../src/components/CoordinatorDashboard.tsx', import.meta.url), 'utf8');
+const patientDashboard = fs.readFileSync(new URL('../src/components/PatientDashboard.tsx', import.meta.url), 'utf8');
+const announcementPanel = fs.readFileSync(new URL('../src/components/ClinicAnnouncementsPanel.tsx', import.meta.url), 'utf8');
+const serviceWorker = fs.readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
+const migration = fs.readFileSync(new URL('../supabase/migrations/20260819134500_clinic_announcements_and_room_persistence.sql', import.meta.url), 'utf8');
+const announcementV2Migration = fs.readFileSync(new URL('../supabase/migrations/20260819163000_clinic_announcement_delivery_v2.sql', import.meta.url), 'utf8');
+const announcementV3Migration = fs.readFileSync(new URL('../supabase/migrations/20260819193000_clinic_announcement_scheduling_v3.sql', import.meta.url), 'utf8');
+const pushSelfHealingMigration = fs.readFileSync(new URL('../supabase/migrations/20260819223000_push_subscription_self_healing.sql', import.meta.url), 'utf8');
+
+assert.match(dataService, /getClinicRooms\(\)/);
+assert.match(dataService, /createClinicRoom/);
+assert.match(dataService, /updateClinicRoom/);
+assert.match(app, /canonicalRoomsResult = await dataService\.getClinicRooms\(\)/);
+assert.match(app, /clinic_rooms is canonical/);
+assert.match(dashboard, /await dataService\.createClinicRoom/);
+assert.match(dashboard, /await dataService\.updateClinicRoom/);
+
+const roomGet = server.slice(server.indexOf("app.get('/api/clinic/rooms'"), server.indexOf("app.post('/api/clinic/rooms'"));
+assert.match(roomGet, /noStoreDynamicResponse/);
+assert.match(roomGet, /\.eq\('clinic_id', clinicId\)/);
+assert.match(roomGet, /\.eq\('is_active', true\)/);
+assert.doesNotMatch(roomGet, /query\.eq\('organization_id'/);
+
+assert.match(cron, /'\* \* \* \* \*'/);
+assert.match(cron, /QUIET_HOURS_START = 22/);
+assert.match(cron, /QUIET_HOURS_END = 6/);
+assert.match(cron, /step\.kind === '12h' && hasResponse\(appointment\)/);
+assert.match(cron, /hoursBefore: 24/);
+assert.match(cron, /hoursBefore: 12/);
+assert.match(cron, /REMINDER_LOOKBACK_MINUTES = 12 \* 60/);
+assert.match(cron, /for \(const step of \[\.\.\.REMINDER_STEPS\]\.reverse\(\)\)/);
+assert.match(cron, /step\.kind === '24h'[\s\S]*notification12SentAt/);
+assert.match(cron, /catchupLookbackMinutes/);
+assert.match(cron, /notification_24h_sent_at/);
+assert.match(cron, /notification_12h_sent_at/);
+assert.match(cron, /pageSize = 500/);
+
+assert.match(server, /\/api\/clinic\/announcements/);
+assert.match(server, /communication\.clinic_notifications\.manage/);
+assert.match(server, /requireClinicModule\('appointments_communication'\)/);
+assert.match(push, /notificationType: 'clinic_announcement'/);
+assert.match(cron, /sendPatientPortalNotification/);
+assert.match(dashboard, /<ClinicAnnouncementsPanel/);
+assert.match(dashboard, /activeTab === "patients" \|\| activeTab === "notices" \|\| activeTab === "agenda"/);
+assert.match(dashboard, /Promise\.resolve\(onEnsurePatientList\(\)\)/);
+assert.match(dashboard, /Pacientes, Avisos e Agenda/);
+assert.match(dashboard, /id: "notices", label: "Avisos"/);
+
+assert.match(migration, /create table if not exists public\.clinic_announcements/);
+assert.match(migration, /create table if not exists public\.clinic_announcement_recipients/);
+assert.match(announcementV2Migration, /create or replace function public\.create_clinic_announcement_delivery_v2/);
+assert.match(announcementV2Migration, /ANNOUNCEMENT_RECIPIENT_SCOPE_MISMATCH/);
+
+assert.match(server, /create_clinic_announcement_delivery_v3/);
+assert.match(server, /dispatchClinicAnnouncementNow/);
+assert.match(server, /horário de não perturbe é das 22h às 06h/);
+assert.match(server, /scheduled_for,sent_at/);
+assert.match(cron, /startClinicAnnouncementCron/);
+assert.match(cron, /claim_due_clinic_announcements_v1/);
+assert.match(cron, /materialize_clinic_announcement_portal_notifications_v1/);
+assert.match(cron, /Clinic Announcement Cron/);
+assert.match(announcementPanel, /Agendar envio/);
+assert.match(announcementPanel, /datetime-local/);
+assert.match(announcementPanel, /scheduledFor/);
+assert.match(announcementPanel, /Horário de não perturbe: 22h às 06h/);
+assert.match(announcementV3Migration, /add column if not exists scheduled_for timestamptz/);
+assert.match(announcementV3Migration, /create_clinic_announcement_delivery_v3/);
+assert.match(announcementV3Migration, /claim_due_clinic_announcements_v1/);
+assert.match(announcementV3Migration, /for update skip locked/);
+assert.match(announcementV3Migration, /materialize_clinic_announcement_portal_notifications_v1/);
+assert.match(announcementV3Migration, /ANNOUNCEMENT_QUIET_HOURS/);
+
+assert.match(patientDashboard, /VERTO_PORTAL_NOTIFICATION/);
+assert.match(patientDashboard, /setInterval\(\(\) => refreshNotifications\(false\), 60_000\)/);
+assert.match(patientDashboard, /Ativar notificações da clínica/);
+assert.match(serviceWorker, /VERTO_PORTAL_NOTIFICATION/);
+assert.match(serviceWorker, /clients\.matchAll/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v20"/);
+assert.match(serviceWorker, /const isClinicAnnouncement = notificationType === "clinic_announcement"/);
+assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""/);
+assert.match(serviceWorker, /const imageUrl = isClinicAnnouncement\s*\? ""/);
+assert.match(serviceWorker, /brandLogo \|\| payload\.icon/);
+assert.match(serviceWorker, /fallbackWithoutAssets/);
+assert.match(serviceWorker, /icon: _failedIcon, badge: _failedBadge/);
+assert.match(push, /O logo da clínica é enviado somente como ícone compacto/);
+
+assert.match(serviceWorker, /pushsubscriptionchange/);
+assert.match(serviceWorker, /VERTO_PUSH_RENEWAL_CONTEXT/);
+assert.match(serviceWorker, /\/api\/push\/renew/);
+assert.match(server, /app\.post\('\/api\/push\/renew', pushRenewalLimiter, handlePushRenew\)/);
+assert.match(push, /renewPatientPushSubscription/);
+assert.match(push, /renewal_token_hash/);
+assert.match(pushSelfHealingMigration, /add column if not exists renewal_token_hash text/);
+assert.match(pushSelfHealingMigration, /add column if not exists invalidated_at timestamptz/);
+assert.match(pushSelfHealingMigration, /enable row level security/);
+assert.match(pushSelfHealingMigration, /renew_push_subscription_v1/);
+assert.match(pushSelfHealingMigration, /for update/);
+assert.match(push, /rpc\('renew_push_subscription_v1'/);
+assert.match(app, /await persistPushRenewalContext/);
+assert.match(patientDashboard, /await persistPushRenewalContext/);
+
+assert.doesNotMatch(push, /badge: logoUrl \|\| undefined/);
+assert.match(patientDashboard, /w-full h-auto max-h-56 object-contain/);
+assert.match(app, /buildPatientPortalViewportContent/);
+assert.match(app, /root\.style\.width = '100%'/);
+assert.doesNotMatch(app, /root\.style\.transform = `scale/);
+assert.doesNotMatch(patientDashboard, /document\.querySelector\('meta\[name="viewport"\]'/);
+assert.match(server, /PATIENT_PORTAL_SESSION_MAX_AGE_DAYS/);
+assert.match(server, /req\.session\.cookie\.maxAge = patientPortalSessionMaxAgeDays/);
+assert.match(app, /verto\.patient-portal-session-hint\.v1/);
+assert.match(app, /Restaurando seu portal neste aparelho/);
+
+console.log('agendaOperationPersistenceNotifications.regression.test.mjs: ok');

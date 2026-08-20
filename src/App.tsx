@@ -53,9 +53,11 @@ import {
   resolveBrandingContext,
 } from './services/notificationBranding';
 import { VERTO_BRAND_ASSETS } from './constants/vertoBranding';
+import { persistPushRenewalContext } from './services/pushSubscriptionRenewal';
 import { SALES_CONTACT_REQUIRED_ERROR } from './constants/salesCommercial';
 import { decodeClinicalTextEntities } from './utils/clinicalText';
 import { patientMatchesProfessionalFilter } from './utils/patientList';
+import { buildPatientPortalViewportContent, resolvePatientPortalViewportWidth } from './utils/patientPortalViewport';
 import { resolvePatientNoteAudience, toStoredPatientNoteVisibility } from './utils/patientNoteVisibility';
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from './constants/organizationModules';
 
@@ -477,6 +479,81 @@ export default function App() {
   const LAST_ACTIVE_WORKSPACE_KEY = 'last_active_workspace_id';
   const LAST_ACTIVE_ACCESS_CONTEXT_KEY = 'verto.last_active_access_context';
   const INSTALL_PROMPT_DISMISSED_KEY = 'verto_pwa_install_prompt_dismissed_at';
+  const PATIENT_SESSION_HINT_KEY = 'verto.patient-portal-session-hint.v1';
+  const PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY = 'verto.patient-viewport-bootstrap-reload.v1';
+  const [patientSessionRestorePending, setPatientSessionRestorePending] = useState(() => {
+    try {
+      return Boolean(window.localStorage.getItem(PATIENT_SESSION_HINT_KEY));
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const role = String(user?.role || '').trim().toLowerCase();
+    const patientPortalViewportActive = patientSessionRestorePending || ['patient', 'responsible', 'responsavel', 'guardian'].includes(role);
+    if (!patientPortalViewportActive) return;
+
+    const viewport = document.querySelector('meta[name="viewport"]');
+    const root = document.getElementById('root');
+    const html = document.documentElement;
+    const body = document.body;
+    if (!viewport || !root) return;
+
+    const previousRootZoom = root.style.getPropertyValue('zoom');
+    const previousRootWidth = root.style.width;
+    const previousRootMaxWidth = root.style.maxWidth;
+    const previousHtmlOverflowX = html.style.overflowX;
+    const previousBodyOverflowX = body.style.overflowX;
+    const previousBodyTouchAction = body.style.touchAction;
+    const previousHtmlOverscrollX = html.style.overscrollBehaviorX;
+    const previousBodyOverscrollX = body.style.overscrollBehaviorX;
+
+    const touchCapable = Boolean(
+      Number(navigator.maxTouchPoints || 0) > 0 ||
+      window.matchMedia?.('(pointer: coarse)')?.matches
+    );
+    const screenWidth = Number(window.screen?.width || 0);
+    const stableViewport = buildPatientPortalViewportContent({ screenWidth, touchCapable });
+    const defaultViewport = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover';
+
+    const normalizeViewport = () => {
+      // The parser-level bootstrap owns the initial mobile scale. React only keeps the same
+      // numeric-width contract after orientation/pageshow; it never applies CSS zoom or
+      // toggles user-scalable at runtime.
+      root.style.width = '100%';
+      root.style.maxWidth = '100%';
+      root.style.removeProperty('zoom');
+      viewport.setAttribute('content', stableViewport);
+      window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' });
+    };
+
+    html.style.overflowX = 'clip';
+    body.style.overflowX = 'clip';
+    html.style.overscrollBehaviorX = 'none';
+    body.style.overscrollBehaviorX = 'none';
+    body.style.touchAction = 'pan-y pinch-zoom';
+    normalizeViewport();
+
+    window.addEventListener('orientationchange', normalizeViewport);
+    window.addEventListener('pageshow', normalizeViewport);
+
+    return () => {
+      window.removeEventListener('orientationchange', normalizeViewport);
+      window.removeEventListener('pageshow', normalizeViewport);
+      viewport.setAttribute('content', defaultViewport);
+      root.style.width = previousRootWidth;
+      root.style.maxWidth = previousRootMaxWidth;
+      if (previousRootZoom) root.style.setProperty('zoom', previousRootZoom);
+      else root.style.removeProperty('zoom');
+      html.style.overflowX = previousHtmlOverflowX;
+      body.style.overflowX = previousBodyOverflowX;
+      body.style.touchAction = previousBodyTouchAction;
+      html.style.overscrollBehaviorX = previousHtmlOverscrollX;
+      body.style.overscrollBehaviorX = previousBodyOverscrollX;
+    };
+  }, [patientSessionRestorePending, user?.role, user?.id]);
 
   const getLastActiveAccessContextId = (userId?: string | null) => {
     const safeUserId = String(userId || '').trim();
@@ -1145,6 +1222,39 @@ export default function App() {
 
     const commitUserState = (nextUser: any) => {
       setUser(nextUser);
+      const nextRole = String(nextUser?.role || '').trim().toLowerCase();
+      const isPatientPortalSession = ['patient', 'responsible', 'responsavel', 'guardian'].includes(nextRole);
+      setPatientSessionRestorePending(isPatientPortalSession);
+      try {
+        if (isPatientPortalSession) {
+          window.localStorage.setItem(PATIENT_SESSION_HINT_KEY, String(Date.now()));
+
+          // On the very first patient login the parser-level viewport bootstrap could not run,
+          // because the session hint did not exist yet. Reload exactly once on touch/mobile so
+          // the next document parses with the physical screen width before React paints.
+          const touchCapable = Boolean(
+            Number(navigator.maxTouchPoints || 0) > 0 ||
+            window.matchMedia?.('(pointer: coarse)')?.matches
+          );
+          const screenWidth = Number(window.screen?.width || 0);
+          const mobileWidth = resolvePatientPortalViewportWidth({ screenWidth, touchCapable });
+          const bootstrappedWidth = Number((window as any).__VERTO_PATIENT_VIEWPORT_BOOTSTRAPPED__ || 0);
+          const reloadGuard = String(window.sessionStorage.getItem(PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY) || '');
+          const userId = String(nextUser?.id || 'patient');
+
+          if (mobileWidth && bootstrappedWidth !== mobileWidth && reloadGuard !== userId) {
+            window.sessionStorage.setItem(PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY, userId);
+            window.setTimeout(() => window.location.replace(window.location.href), 0);
+          } else if (bootstrappedWidth === mobileWidth) {
+            window.sessionStorage.removeItem(PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY);
+          }
+        } else {
+          window.localStorage.removeItem(PATIENT_SESSION_HINT_KEY);
+          window.sessionStorage.removeItem(PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY);
+        }
+      } catch {
+        // Viewport hint is UX-only. The secure session remains server-side.
+      }
       setProfilePicture(nextUser?.profilePicture || nextUser?.profile_picture || null);
       setCrp(formatProfessionalRegistry(nextUser?.crp || ''));
       if (hasValidWorkspaceContext(nextUser)) {
@@ -1776,6 +1886,8 @@ export default function App() {
               setShowWorkspacePicker(false);
             }
           } else {
+            setPatientSessionRestorePending(false);
+            try { window.localStorage.removeItem(PATIENT_SESSION_HINT_KEY); } catch {}
             setUser(null);
             setProfilePicture(null);
             setShowWorkspacePicker(false);
@@ -1784,6 +1896,8 @@ export default function App() {
           if (import.meta.env.DEV) console.error('Falha na checagem inicial de autenticacao apos retentativas:', sanitizeTechnicalErrorMessage(lastError));
           // Mantém estado atual para evitar queda falsa para LP em falha transitória.
         } else {
+          setPatientSessionRestorePending(false);
+          try { window.localStorage.removeItem(PATIENT_SESSION_HINT_KEY); } catch {}
           setUser(null);
           setProfilePicture(null);
           setShowWorkspacePicker(false);
@@ -2476,6 +2590,7 @@ export default function App() {
             result
           });
         } else {
+          await persistPushRenewalContext(registration, result?.renewalToken, keyPayload.publicKey);
           console.log('[push] subscription persistida.', {
             patientId: result?.patientId || safePatientIdForPush || null
           });
@@ -3838,7 +3953,10 @@ export default function App() {
         const id = String(appointment?.id || appointment?.appointment_id || appointment?.clientAppointmentId || '').trim();
         if (id && !appointmentsById.has(id)) appointmentsById.set(id, appointment);
       }
-      setRooms(Array.isArray(hydrated.clinicState?.rooms) ? hydrated.clinicState.rooms : []);
+      const canonicalRoomsResult = await dataService.getClinicRooms();
+      if (!isCurrentHydration()) return;
+      const canonicalRooms = canonicalRoomsResult?.success && Array.isArray(canonicalRoomsResult?.data) ? canonicalRoomsResult.data : null;
+      setRooms(canonicalRooms || (Array.isArray(hydrated.clinicState?.rooms) ? hydrated.clinicState.rooms : []));
       setTherapistAgenda(Array.from(appointmentsById.values()));
       setProtocols(Array.isArray(hydrated.clinicState?.protocols) ? hydrated.clinicState.protocols : []);
       setSpecialtySettings(
@@ -4453,9 +4571,8 @@ export default function App() {
     const canPersistClinicalConfiguration =
       role === 'director' || role === 'coordinator' || role === 'admin' || role === 'owner';
     const dirtySections = {
-      rooms:
-        (canPersistClinicalConfiguration || role === 'receptionist') &&
-        currentSnapshot.rooms !== clinicStatePersistedSnapshotRef.current.rooms,
+      // clinic_rooms is canonical; clinic_state.rooms remains a read-only legacy fallback.
+      rooms: false,
       protocols:
         canPersistClinicalConfiguration &&
         currentSnapshot.protocols !== clinicStatePersistedSnapshotRef.current.protocols,
@@ -4732,7 +4849,7 @@ export default function App() {
     );
     return { success: true, pending: Boolean(persistenceResult?.pending) };
   };
-  const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string) => {
+  const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string, options?: { mentionUserIds?: string[] }) => {
     const normalizedVisibility = toStoredPatientNoteVisibility(visibility);
     const uiVisibility = resolvePatientNoteAudience({ visibility: normalizedVisibility });
     const patient = allPatients.find(p => p.id === pid);
@@ -4763,7 +4880,8 @@ export default function App() {
         patient_email: patientIdentity.patientEmail,
         text: txt,
         visibility: normalizedVisibility,
-        subject: subject || "Geral"
+        subject: subject || "Geral",
+        mention_user_ids: Array.isArray(options?.mentionUserIds) ? options!.mentionUserIds : []
       });
       if (result?.success && result?.data?.id) {
         setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? { ...n, id: result.data.id } : n)));
@@ -7809,6 +7927,8 @@ export default function App() {
     } catch (error) {
       console.warn('Sensitive patient cache cleanup failed:', error);
     }
+    setPatientSessionRestorePending(false);
+    try { window.localStorage.removeItem(PATIENT_SESSION_HINT_KEY); } catch {}
     setLastActiveAccessContextId(null, signingOutUserId);
     setLastActiveAccessContextId(null);
     resetWorkspaceScopedState();
@@ -7968,7 +8088,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white">
-        <LogoVerto size={38} showText={true} />
+        <LogoVerto size={patientSessionRestorePending ? 54 : 42} showText={true} />
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Carregando" />
       </div>
     );
@@ -7976,7 +8096,7 @@ export default function App() {
 
   const lazyFallback = (
     <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white">
-      <LogoVerto size={34} showText={true} />
+      <LogoVerto size={48} showText={true} />
       <div className="h-7 w-7 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Carregando" />
     </div>
   );
@@ -8199,6 +8319,12 @@ export default function App() {
         ) : !user || userNeedsPatientActivation ? (
           isAuthActionRoute || userNeedsPatientActivation ? (
             <ActivationAccess onLogin={handleLoginSuccess} />
+          ) : patientSessionRestorePending ? (
+            <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white px-6 text-center">
+              <LogoVerto size={54} showText={true} />
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Restaurando acesso" />
+              <p className="text-sm font-semibold text-slate-500">Restaurando seu portal neste aparelho...</p>
+            </div>
           ) : (
             <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
           )

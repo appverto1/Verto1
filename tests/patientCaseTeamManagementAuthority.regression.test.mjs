@@ -44,7 +44,7 @@ assert.equal(
   'GET, add and end flows reuse already-resolved supervision evidence',
 );
 
-assert.match(panel, /managementResolved \? serverCanManage : canManage/);
+assert.match(panel, /managementResolved && \(serverCanManage \|\| canManage\)/, 'case-team actions remain hidden until server authority is resolved');
 assert.match(panel, /onManagementAuthorityChanged\?\.\(nextCanManage\)/);
 assert.match(panel, /effectiveCanManage && link\.canBeEnded/);
 assert.match(detail, /canManagePrimaryProfessionalForPatient/);

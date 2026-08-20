@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   HelpCircle,
   ShoppingBag,
@@ -42,6 +42,7 @@ import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
 import { TeamManagement } from "./TeamManagement";
 import { SettingsMenu } from "./SettingsMenu";
+import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { InvitationModal } from "./InvitationModal";
 import {
   RoomReservation,
@@ -290,12 +291,21 @@ export const TherapistDashboard = ({
   onOpenOnboarding,
 }: any) => {
   const [view, setView] = useState("home");
+  const viewHistoryRef = useRef<string[]>(["home"]);
 
-  // Sync view with URL hash to address navigation issues
+  // Sync view with URL hash and keep a bounded in-app history so every
+  // top-level back button returns to the page that actually opened it.
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.replace("#", "") || "home";
       setView(hash);
+      const history = viewHistoryRef.current;
+      if (history[history.length - 1] !== hash) {
+        const previousIndex = history.lastIndexOf(hash);
+        viewHistoryRef.current = previousIndex >= 0
+          ? history.slice(0, previousIndex + 1)
+          : [...history, hash].slice(-30);
+      }
     };
     window.addEventListener("hashchange", handleHashChange);
     handleHashChange(); // Initial check
@@ -310,7 +320,30 @@ export const TherapistDashboard = ({
     window.location.hash = newView;
     setView(newView);
   };
+  const handleBackView = () => {
+    const history = viewHistoryRef.current;
+    if (history.length <= 1) {
+      handleSetView("home");
+      return;
+    }
+    history.pop();
+    const previousView = history[history.length - 1] || "home";
+    viewHistoryRef.current = history;
+    window.location.hash = previousView;
+    setView(previousView);
+  };
   const [selectedPatientId, setSelectedPatientId] = useState<any>(null);
+  const [patientOpenTab, setPatientOpenTab] = useState<"history" | "notes" | "report" | "plan" | "session" | "aba-charts" | "school" | "files">("history");
+  const [patientFocusNoteId, setPatientFocusNoteId] = useState("");
+  const openClinicalMentionNotification = (notification: any) => {
+    const patientId = String(notification?.patientId || '').trim();
+    const noteId = String(notification?.noteId || '').trim();
+    if (!patientId || !noteId) return;
+    setSelectedPatientId(patientId);
+    setPatientOpenTab("notes");
+    setPatientFocusNoteId(noteId);
+    handleSetView("patient");
+  };
   const [runTutorial, setRunTutorial] = useState(false);
   const [tutorialStep, setTutorialStep] = useState(0);
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
@@ -545,7 +578,7 @@ export const TherapistDashboard = ({
   };
   const onPatientClick = (patientId: any) => {
     setSelectedPatientId(patientId);
-    setView("patient");
+    handleSetView("patient");
     setIsDayDetailsModalOpen(false);
   };
 
@@ -591,7 +624,7 @@ export const TherapistDashboard = ({
     onAddPatient(newPatientData);
     setIsRegisterModalOpen(false);
     setSelectedPatientId(newId);
-    setView("patient");
+    handleSetView("patient");
   };
 
   useEffect(() => {
@@ -1033,7 +1066,7 @@ export const TherapistDashboard = ({
               canManageLibrary={false}
               onSaveProtocol={handleSaveProtocol}
               onDeleteProtocol={handleDeleteProtocol}
-              onBack={() => setView("home")}
+              onBack={handleBackView}
             />
           </div>
         )}
@@ -1043,7 +1076,7 @@ export const TherapistDashboard = ({
             <PatientRegistry
               patients={allPatients}
               clinicalRecords={clinicalRecords}
-              onBack={() => setView("home")}
+              onBack={handleBackView}
               onSelectPatient={onPatientClick}
               userRole={user.role}
             />
@@ -1060,7 +1093,7 @@ export const TherapistDashboard = ({
                 const appointmentId = id.replace("res-", "");
                 onUpdateAgendaStatus(appointmentId, "canceled");
               }}
-              onBack={() => handleSetView("home")}
+              onBack={handleBackView}
             />
           </div>
         )}
@@ -1072,7 +1105,7 @@ export const TherapistDashboard = ({
               onUpdateProfile={onUpdateProfile}
               specialtySettings={specialtySettings}
               setSpecialtySettings={setSpecialtySettings}
-              onBack={() => handleSetView("home")}
+              onBack={handleBackView}
             />
           </div>
         )}
@@ -1082,7 +1115,7 @@ export const TherapistDashboard = ({
             <div className="max-w-4xl mx-auto">
               <div className="flex items-center gap-4 mb-8">
                 <button
-                  onClick={() => setView("home")}
+                  onClick={handleBackView}
                   className="p-2 hover:bg-white rounded-xl transition-all shadow-sm border border-slate-100"
                 >
                   <ChevronRight className="rotate-180" />
@@ -1273,7 +1306,7 @@ export const TherapistDashboard = ({
             <div className="flex items-center justify-between mb-8">
               <div className="flex items-center gap-4">
                 <button
-                  onClick={() => setView("home")}
+                  onClick={handleBackView}
                   className="p-2 hover:bg-white rounded-xl transition-all"
                 >
                   <ChevronRight className="rotate-180" />
@@ -1425,7 +1458,10 @@ export const TherapistDashboard = ({
               return (
                 <PatientDetailView
                   patient={patientData}
-                  onBack={() => setView("home")}
+                  initialTab={patientOpenTab}
+                  focusNoteId={patientFocusNoteId}
+                  onFocusNoteConsumed={() => setPatientFocusNoteId('')}
+                  onBack={handleBackView}
                   history={patientsHistory.filter(
                     (h: any) => h.patientId === selectedPatientId,
                   )}
@@ -1804,6 +1840,7 @@ export const TherapistDashboard = ({
                     {isMenuOpen ? <X size={20} /> : <Menu size={20} />}
                   </button>
 
+                  <ClinicalMentionNotifications onOpenNotification={openClinicalMentionNotification} />
                   <SettingsMenu
                     user={user}
                     onLogout={onLogout}
@@ -1941,6 +1978,7 @@ export const TherapistDashboard = ({
                     <UserPlus size={18} />
                     Novo Paciente
                   </button>
+                  <ClinicalMentionNotifications onOpenNotification={openClinicalMentionNotification} />
                   <SettingsMenu
                     user={user}
                     onLogout={onLogout}

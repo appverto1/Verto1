@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { PatientSchoolInformation } from "./PatientSchoolInformation";
-import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, ChevronDown, Calendar, FileOutput, Download, EyeOff, Share2, Eye, Edit, X, UploadCloud, FileUp, File, Trash2, Activity, Search, Plus, Filter, Target, Zap, Info, BarChart2, CheckCircle2, RotateCcw, Clock, Camera } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
@@ -173,7 +173,7 @@ const patientInitials = (value: unknown) => String(value || 'P')
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, clinicProfessionals: preloadedClinicProfessionals = [], hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, clinicProfessionals: preloadedClinicProfessionals = [], hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities, focusNoteId = '', onFocusNoteConsumed }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
   const hasCapability = (capability: string) => {
@@ -395,6 +395,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     ));
   const abaV2Enabled = isAbaV2Enabled();
   const abaV3UiEnabled = isAbaV3UiEnabled();
+  const patientApproachKey = String(patient?.approach || patient?.abordagem || patient?.treatmentApproach || '').toLowerCase();
+  const useCanonicalMasteryGrowth = abaV2Enabled && (
+    isKidsProfile ||
+    rawProfileType.includes('aba') ||
+    rawProfileType.includes('tea') ||
+    patientApproachKey.includes('aba')
+  );
   const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
   const readPersistedChartFilters = () => {
     if (typeof window === 'undefined') return {};
@@ -413,6 +420,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const historyRequestsInFlightRef = React.useRef(new Set<string>());
   const [newNote, setNewNote] = useState(""); 
   const [noteMode, setNoteMode] = useState('private'); 
+  const [mentionCandidates, setMentionCandidates] = useState<any[]>([]);
+  const [selectedMentionUserIds, setSelectedMentionUserIds] = useState<string[]>([]);
+  const [focusedNoteId, setFocusedNoteId] = useState('');
+  const mentionCandidatesLoadedForPatientRef = useRef('');
   const [noteSearchQuery, setNoteSearchQuery] = useState("");
   const [noteSubjectFilter, setNoteSubjectFilter] = useState("");
   const [noteDateFilter, setNoteDateFilter] = useState("");
@@ -430,7 +441,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [comparisonDate2, setComparisonDate2] = useState(() => String(initialChartFilters.comparisonDate2 || ''));
   const [adultReportDate1, setAdultReportDate1] = useState(() => String(initialChartFilters.adultReportDate1 || ''));
   const [adultReportDate2, setAdultReportDate2] = useState(() => String(initialChartFilters.adultReportDate2 || ''));
-  const [selectedReportNotes, setSelectedReportNotes] = useState<number[]>([]);
+  const [selectedReportNotes, setSelectedReportNotes] = useState<Array<string | number>>([]);
   const [selectedAdultEvolutionIds, setSelectedAdultEvolutionIds] = useState<string[]>([]);
   const [reportAdditionalNote, setReportAdditionalNote] = useState('');
   const [isGeneratingAdultReport, setIsGeneratingAdultReport] = useState(false);
@@ -1227,6 +1238,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       source: file?.source || 'upload',
       content: safeContent,
       url: safeUrl || undefined,
+      uploadedBy: String(file?.uploadedBy || file?.uploaded_by || '').trim() || null,
+      accessScope: String(file?.accessScope || file?.access_scope || 'PATIENT_ACCESS').trim().toUpperCase(),
+      patientPortalVisible: file?.patientPortalVisible === true || file?.patient_portal_visible === true,
+      canManageAccess: file?.canManageAccess === true || file?.can_manage_access === true,
       // PDFs em base64 so viram Blob quando o usuario realmente abre o preview.
       objectUrl: safeUrl || (safeType.includes('pdf') ? undefined : sourceUrl)
     };
@@ -1286,6 +1301,89 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const patientFilesLoadedForRef = React.useRef('');
   const patientFilesRequestInFlightRef = React.useRef('');
   const [previewFile, setPreviewFile] = useState<any>(null);
+  const [fileAccessEditor, setFileAccessEditor] = useState<any>(null);
+  const [fileAccessCandidates, setFileAccessCandidates] = useState<any[]>([]);
+  const [fileAccessLoading, setFileAccessLoading] = useState(false);
+  const [fileAccessSaving, setFileAccessSaving] = useState(false);
+  const [fileAccessError, setFileAccessError] = useState('');
+
+  const patientFileAccessLabels: Record<string, string> = {
+    OWNER: 'Somente eu',
+    CASE_TEAM: 'Equipe do caso',
+    PATIENT_ACCESS: 'Quem já acessa o paciente',
+    SELECTED: 'Pessoas selecionadas'
+  };
+
+  const openPatientFileAccessEditor = async (file: any) => {
+    const patientId = String(patient?.id || '').trim();
+    const fileId = String(file?.id || '').trim();
+    if (!patientId || !fileId || file?.canManageAccess !== true) return;
+    setFileAccessLoading(true);
+    setFileAccessError('');
+    setFileAccessCandidates([]);
+    setFileAccessEditor({
+      file,
+      accessScope: String(file?.accessScope || 'PATIENT_ACCESS').toUpperCase(),
+      patientPortalVisible: file?.patientPortalVisible === true,
+      selectedUserIds: []
+    });
+    try {
+      const [permissionsResult, linksResult] = await Promise.all([
+        dataService.getPatientFilePermissions(patientId, fileId),
+        dataService.getPatientProfessionalLinks(patientId)
+      ]);
+      if (!permissionsResult?.success || !permissionsResult?.data) {
+        throw new Error(permissionsResult?.error || 'Não foi possível carregar os níveis de acesso deste arquivo.');
+      }
+      const candidates = (Array.isArray(linksResult?.links) ? linksResult.links : [])
+        .filter((link: any) => String(link?.status || '').toLowerCase() === 'active' && link?.accessEnabled !== false)
+        .map((link: any) => ({
+          id: String(link?.professional_id || link?.professional?.id || '').trim(),
+          name: String(link?.professional?.name || link?.professional_name || '').trim() || 'Profissional',
+          specialty: String(link?.specialty || link?.professional?.specialty || '').trim()
+        }))
+        .filter((item: any) => isUuidLike(item.id));
+      setFileAccessCandidates(Array.from(new Map(candidates.map((item: any) => [item.id, item])).values()));
+      setFileAccessEditor({
+        file,
+        accessScope: String(permissionsResult.data.accessScope || 'PATIENT_ACCESS').toUpperCase(),
+        patientPortalVisible: permissionsResult.data.patientPortalVisible === true,
+        selectedUserIds: Array.isArray(permissionsResult.data.selectedUserIds) ? permissionsResult.data.selectedUserIds.map(String) : []
+      });
+    } catch (error: any) {
+      setFileAccessError(String(error?.message || 'Não foi possível carregar os níveis de acesso.'));
+    } finally {
+      setFileAccessLoading(false);
+    }
+  };
+
+  const savePatientFileAccess = async () => {
+    const patientId = String(patient?.id || '').trim();
+    const fileId = String(fileAccessEditor?.file?.id || '').trim();
+    if (!patientId || !fileId || fileAccessSaving) return;
+    setFileAccessSaving(true);
+    setFileAccessError('');
+    try {
+      const result = await dataService.updatePatientFilePermissions(patientId, fileId, {
+        accessScope: fileAccessEditor.accessScope,
+        patientPortalVisible: fileAccessEditor.patientPortalVisible === true,
+        selectedUserIds: fileAccessEditor.accessScope === 'SELECTED' ? fileAccessEditor.selectedUserIds : []
+      });
+      if (!result?.success || !result?.data) throw new Error(result?.error || 'Não foi possível salvar os níveis de acesso.');
+      setPatientFiles((current) => current.map((item: any) => String(item.id) === fileId ? {
+        ...item,
+        accessScope: String(result.data.accessScope || fileAccessEditor.accessScope).toUpperCase(),
+        patientPortalVisible: result.data.patientPortalVisible === true,
+        canManageAccess: true
+      } : item));
+      setFileAccessEditor(null);
+      setFileAccessCandidates([]);
+    } catch (error: any) {
+      setFileAccessError(String(error?.message || 'Não foi possível salvar os níveis de acesso.'));
+    } finally {
+      setFileAccessSaving(false);
+    }
+  };
 
   const openPatientFilePreview = async (file: any) => {
     const patientId = String(patient?.id || '').trim();
@@ -1382,6 +1480,81 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isPreparingAnamnesisSave, setIsPreparingAnamnesisSave] = useState(false);
   const [isSavingAnamnesisFile, setIsSavingAnamnesisFile] = useState(false);
   const [resolvedClinicContext, setResolvedClinicContext] = useState<any>(clinicContext || {});
+  const patientPhotoInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [patientPhotoOverride, setPatientPhotoOverride] = useState('');
+  const [isSavingPatientPhoto, setIsSavingPatientPhoto] = useState(false);
+  const [patientPhotoError, setPatientPhotoError] = useState('');
+  const patientPhotoPolicy = String(
+    resolvedClinicContext?.patientPhotoPolicy ||
+    resolvedClinicContext?.patient_photo_policy ||
+    clinicContext?.patientPhotoPolicy ||
+    clinicContext?.patient_photo_policy ||
+    'PORTAL'
+  ).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL';
+  const portalPatientPhotoSource = String(
+    patient?.portalProfilePicture ||
+    patient?.portal_profile_picture ||
+    patient?.portalProfilePictureUrl ||
+    patient?.portal_profile_picture_url ||
+    ''
+  ).trim();
+  const resolvedPatientPhotoSource = patientPhotoOverride || (
+    patientPhotoPolicy === 'PORTAL'
+      ? (portalPatientPhotoSource || patientPhotoSource(patient))
+      : patientPhotoSource(patient)
+  );
+  const normalizedPatientPhotoRole = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').trim().toLowerCase();
+  const canManagePatientPhoto = patientPhotoPolicy === 'CLINIC' &&
+    ['director', 'coordinator', 'receptionist'].includes(normalizedPatientPhotoRole) &&
+    typeof onUpdatePatient === 'function';
+
+  useEffect(() => {
+    setPatientPhotoOverride('');
+    setPatientPhotoError('');
+  }, [patient?.id, patientPhotoPolicy]);
+
+  const handleClinicalPatientPhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !canManagePatientPhoto || !patient?.id) return;
+    if (!String(file.type || '').toLowerCase().startsWith('image/')) {
+      setPatientPhotoError('Selecione uma imagem válida.');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setPatientPhotoError('Escolha uma imagem de até 2MB.');
+      return;
+    }
+
+    setIsSavingPatientPhoto(true);
+    setPatientPhotoError('');
+    try {
+      const extension = file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : file.type.includes('webp') ? 'webp' : 'png';
+      const uploadPath = `${String(patient.id)}/clinic-profile-${Date.now()}.${extension}`;
+      const upload = await dataService.uploadFile('patient-photos', uploadPath, file);
+      if (!upload?.success || !upload?.url) {
+        throw new Error(upload?.error || 'Não foi possível enviar a foto.');
+      }
+
+      const updatedPatient = {
+        ...patient,
+        profilePicture: upload.url,
+        profile_picture: upload.url,
+        profilePicturePath: upload.path || null,
+        profile_picture_path: upload.path || null,
+      };
+      const updateResult = await onUpdatePatient(updatedPatient);
+      if (updateResult?.success === false) {
+        throw new Error(updateResult?.error || updateResult?.message || 'Não foi possível salvar a foto do paciente.');
+      }
+      setPatientPhotoOverride(String(upload.url));
+    } catch (error: any) {
+      setPatientPhotoError(error?.message || 'Não foi possível salvar a foto do paciente.');
+    } finally {
+      setIsSavingPatientPhoto(false);
+    }
+  };
+
   const canReopenAutomaticNoShow = useMemo(
     () => hasCapability('session.no_show.classify'),
     [capabilities],
@@ -1461,6 +1634,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [abaTrials, setAbaTrials] = useState<any[]>([]);
   const [abaBehaviorEvents, setAbaBehaviorEvents] = useState<any[]>([]);
   const [abaMasteryEvaluations, setAbaMasteryEvaluations] = useState<any[]>([]);
+  const [abaMasteryPreviewEvaluations, setAbaMasteryPreviewEvaluations] = useState<any[]>([]);
   const [abaPatientSummary, setAbaPatientSummary] = useState<any>(null);
   const [abaMaintenanceOverview, setAbaMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
   const [isLoadingAbaRecords, setIsLoadingAbaRecords] = useState(false);
@@ -1483,6 +1657,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return [...localOnly, ...baseNotes];
   }, [externalNotes, generatedReviewNotes]);
 
+  const abaMasteryEvaluationsForPlan = useMemo(() => {
+    const persisted = Array.isArray(abaMasteryEvaluations) ? abaMasteryEvaluations : [];
+    const preview = Array.isArray(abaMasteryPreviewEvaluations) ? abaMasteryPreviewEvaluations : [];
+    if (preview.length === 0) return persisted;
+    const normalizeName = (value: any) => String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLocaleLowerCase('pt-BR');
+    const identityKeys = (row: any) => {
+      const id = String(row?.target_id || row?.targetId || '').trim();
+      const name = normalizeName(row?.target_name || row?.targetName || row?.name);
+      return [id ? `id:${id}` : '', name ? `name:${name}` : ''].filter(Boolean);
+    };
+    const previewKeys = new Set(preview.flatMap(identityKeys));
+    return [
+      ...preview,
+      ...persisted.filter((row: any) => !identityKeys(row).some((key: string) => previewKeys.has(key)))
+    ];
+  }, [abaMasteryEvaluations, abaMasteryPreviewEvaluations]);
+
   useEffect(() => {
     setResolvedClinicContext(clinicContext || {});
   }, [clinicContext]);
@@ -1502,6 +1698,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       setAbaTrials([]);
       setAbaBehaviorEvents([]);
       setAbaMasteryEvaluations([]);
+      setAbaMasteryPreviewEvaluations([]);
       setAbaPatientSummary(null);
       setAbaMaintenanceOverview({ schedules: [], probeResults: [], alerts: [], summary: null });
       setAbaRecordsError('');
@@ -2169,6 +2366,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       : Array.isArray(sessionSummary?.mastery_summary)
         ? sessionSummary.mastery_summary
         : [];
+    if (masterySummary.length > 0) {
+      const evaluatedAt = new Date().toISOString();
+      setAbaMasteryPreviewEvaluations(masterySummary.map((row: any) => ({
+        ...row,
+        patient_id: patient?.id || row?.patient_id || row?.patientId || null,
+        patientId: patient?.id || row?.patientId || row?.patient_id || null,
+        target_id: row?.target_id || row?.targetId || null,
+        targetId: row?.targetId || row?.target_id || null,
+        target_name: row?.target_name || row?.targetName || row?.name || null,
+        targetName: row?.targetName || row?.target_name || row?.name || null,
+        status: row?.status || row?.statusCode || null,
+        statusCode: row?.statusCode || row?.status || null,
+        criterion_progress_count: row?.criterion_progress_count ?? row?.criterionProgressCount ?? row?.consecutive_successes ?? row?.consecutiveSuccesses ?? 0,
+        criterionProgressCount: row?.criterionProgressCount ?? row?.criterion_progress_count ?? row?.consecutiveSuccesses ?? row?.consecutive_successes ?? 0,
+        consecutive_successes: row?.consecutive_successes ?? row?.consecutiveSuccesses ?? row?.criterion_progress_count ?? row?.criterionProgressCount ?? 0,
+        criterion_required_count: row?.criterion_required_count ?? row?.criterionRequiredCount ?? row?.min_consecutive_successes ?? row?.minConsecutiveSuccesses ?? 1,
+        criterionRequiredCount: row?.criterionRequiredCount ?? row?.criterion_required_count ?? row?.minConsecutiveSuccesses ?? row?.min_consecutive_successes ?? 1,
+        min_consecutive_successes: row?.min_consecutive_successes ?? row?.minConsecutiveSuccesses ?? row?.criterion_required_count ?? row?.criterionRequiredCount ?? 1,
+        evaluated_at: row?.evaluated_at || row?.evaluatedAt || evaluatedAt,
+        evaluatedAt: row?.evaluatedAt || row?.evaluated_at || evaluatedAt,
+        live_preview: true,
+        livePreview: true
+      })));
+      setAbaRecordsRefreshKey((value) => value + 1);
+    }
     const currentPei = Array.isArray(sessionModePatient?.pei) ? sessionModePatient.pei : patient?.pei;
     if (!patient?.id || !Array.isArray(currentPei) || masterySummary.length === 0) return;
 
@@ -3547,7 +3769,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .filter((n: any) => {
         const visibility = String(n?.visibility || n?.type || '').toLowerCase();
         const subject = String(n?.subject || '').toLowerCase();
-        const text = String(n?.text || '').toLowerCase();
+        const rawText = String(n?.text || '');
+        const text = rawText.toLowerCase();
+        if (subject === 'milestone_event' || rawText.startsWith('MILESTONE_EVENT|')) return false;
         return (
           visibility === 'family' ||
           subject.includes('fam') ||
@@ -3941,20 +4165,34 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .sort((a, b) => new Date(b.occurredAt || 0).getTime() - new Date(a.occurredAt || 0).getTime());
   }, [abaTrials, abaBehaviorEvents, abaMasteryEvaluations, abaMaintenanceOverview, abaRecordTypeFilter, abaSessionFilter, abaRecordSearch]);
 
+  const approvedMasteryTargetCount = useMemo(() => {
+    const masteredTargets = new Set<string>();
+    (Array.isArray(abaMasteryEvaluations) ? abaMasteryEvaluations : []).forEach((evaluation: any) => {
+      const status = String(evaluation?.status || evaluation?.statusCode || '').trim().toUpperCase();
+      const legacyStatus = String(evaluation?.evaluation_status || evaluation?.evaluationStatus || '').trim().toLowerCase();
+      if (status !== 'MASTERED_APPROVED' && status !== 'MASTERED' && legacyStatus !== 'mastered') return;
+      const targetId = String(evaluation?.target_id || evaluation?.targetId || '').trim();
+      const targetName = String(evaluation?.target_name || evaluation?.targetName || '').trim().toLocaleLowerCase('pt-BR');
+      const key = targetId || targetName;
+      if (key) masteredTargets.add(key);
+    });
+    return masteredTargets.size;
+  }, [abaMasteryEvaluations]);
+
   const abaSummaryMetrics = useMemo(() => {
     const summary = abaPatientSummary || {};
     return {
       totalSessions: Number(summary.total_sessions ?? summary.totalSessions ?? abaSessionOptions.length) || 0,
       totalTrials: Number(summary.total_trials ?? summary.totalTrials ?? (Array.isArray(abaTrials) ? abaTrials.filter((trial: any) => !isTherapeuticProgramMeasurementTrial(trial)).length : 0)) || 0,
       totalBehaviorEvents: Number(summary.total_behavior_events ?? summary.totalBehaviorEvents ?? abaBehaviorEvents.length) || 0,
-      masteredTargets: Number(summary.mastered_targets_count ?? summary.masteredTargetsCount ?? abaMasteryEvaluations.length) || 0,
+      masteredTargets: Number(summary.mastered_targets_count ?? summary.masteredTargetsCount ?? approvedMasteryTargetCount) || 0,
       maintenanceTargets: Number(summary.maintenance_targets_count ?? summary.maintenanceTargetsCount ?? abaMaintenanceOverview?.summary?.maintenance_targets_count ?? abaMaintenanceOverview?.summary?.maintenanceTargetsCount ?? (Array.isArray(abaMaintenanceOverview?.schedules) ? new Set(abaMaintenanceOverview.schedules.map((item: any) => String(item?.target_id || item?.targetId || ''))).size : 0)) || 0,
       pendingMaintenanceProbes: Number(summary.pending_maintenance_probes_count ?? summary.pendingMaintenanceProbesCount ?? abaMaintenanceOverview?.summary?.pending_maintenance_probes_count ?? abaMaintenanceOverview?.summary?.pendingMaintenanceProbesCount ?? (Array.isArray(abaMaintenanceOverview?.schedules) ? abaMaintenanceOverview.schedules.filter((item: any) => String(item?.status || '').toUpperCase() === 'PENDING').length : 0)) || 0,
       activeRegressionRisks: Number(summary.active_regression_risks_count ?? summary.activeRegressionRisksCount ?? abaMaintenanceOverview?.summary?.active_regression_risks_count ?? abaMaintenanceOverview?.summary?.activeRegressionRisksCount ?? (Array.isArray(abaMaintenanceOverview?.alerts) ? abaMaintenanceOverview.alerts.filter((item: any) => !(item?.resolved_at || item?.resolvedAt)).length : 0)) || 0,
       lastEventLabel: summary.last_behavior_event_label || summary.lastBehaviorEventLabel || '',
       lastEventAt: summary.last_behavior_event_at || summary.lastBehaviorEventAt || ''
     };
-  }, [abaPatientSummary, abaSessionOptions.length, abaTrials.length, abaBehaviorEvents.length, abaMasteryEvaluations.length, abaMaintenanceOverview]);
+  }, [abaPatientSummary, abaSessionOptions.length, abaTrials.length, abaBehaviorEvents.length, approvedMasteryTargetCount, abaMaintenanceOverview]);
 
   const renderAbaRecordsPanel = () => {
     const latestRecord = abaStructuredRecords[0];
@@ -4271,6 +4509,84 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return b.localeCompare(a);
   });
   
+  useEffect(() => {
+    const patientId = String(patient?.id || '').trim();
+    if (noteMode !== 'professional' || !patientId || mentionCandidatesLoadedForPatientRef.current === patientId) return;
+    let cancelled = false;
+    void (async () => {
+      const result = await dataService.getPatientProfessionalLinks(patientId);
+      if (cancelled || result?.success === false) return;
+      const currentUserId = String(clinicContext?.userId || '').trim();
+      const next = (Array.isArray(result?.links) ? result.links : [])
+        .filter((link: any) => String(link?.status || '').toLowerCase() === 'active' && link?.accessEnabled !== false)
+        .map((link: any) => ({
+          id: String(link?.professional_id || link?.professional?.id || '').trim(),
+          name: String(link?.professional?.name || '').trim(),
+          specialty: String(link?.specialty || link?.professional?.specialty || '').trim(),
+        }))
+        .filter((item: any) => item.id && item.name && item.id !== currentUserId);
+      setMentionCandidates(Array.from(new Map(next.map((item: any) => [item.id, item])).values()));
+      mentionCandidatesLoadedForPatientRef.current = patientId;
+    })();
+    return () => { cancelled = true; };
+  }, [noteMode, patient?.id, clinicContext?.userId]);
+
+  useEffect(() => {
+    const targetId = String(focusNoteId || '').trim();
+    if (!targetId || activeTab !== 'notes') return;
+    const targetNote = (Array.isArray(notes) ? notes : []).find((note: any) => String(note?.id || '') === targetId);
+    if (targetNote) {
+      const audience = String(targetNote?.visibility || targetNote?.type || '').toLowerCase();
+      const expectedMode = ['professional', 'shared_clinic', 'team'].includes(audience)
+        ? 'professional'
+        : ['patient', 'shared', 'shared_patient', 'family'].includes(audience)
+          ? 'patient'
+          : 'private';
+      if (noteMode !== expectedMode) {
+        setNoteMode(expectedMode);
+        return;
+      }
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      const target = document.getElementById(`patient-note-${targetId}`);
+      if (!target) return;
+      setFocusedNoteId(targetId);
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      window.setTimeout(() => setFocusedNoteId((current) => current === targetId ? '' : current), 2600);
+      if (typeof onFocusNoteConsumed === 'function') onFocusNoteConsumed();
+    }, 120);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [activeTab, focusNoteId, notes, noteMode, onFocusNoteConsumed]);
+
+  const mentionQuery = useMemo(() => {
+    if (noteMode !== 'professional') return '';
+    const match = String(newNote || '').match(/(?:^|\s)@([^@\n]{0,50})$/);
+    return match ? String(match[1] || '').trim().toLowerCase() : '';
+  }, [newNote, noteMode]);
+
+  const visibleMentionCandidates = useMemo(() => {
+    if (noteMode !== 'professional' || !String(newNote || '').includes('@') || /\s$/.test(String(newNote || ''))) return [];
+    return mentionCandidates
+      .filter((item: any) => !mentionQuery || String(item?.name || '').toLowerCase().includes(mentionQuery))
+      .slice(0, 6);
+  }, [mentionCandidates, mentionQuery, newNote, noteMode]);
+
+  const insertMention = (candidate: any) => {
+    const name = String(candidate?.name || '').trim();
+    const id = String(candidate?.id || '').trim();
+    if (!name || !id) return;
+    setNewNote((current: string) => {
+      const source = String(current || '');
+      if (/(?:^|\s)@[^@\n]{0,50}$/.test(source)) {
+        return source.replace(/@[^@\n]{0,50}$/, `@${name} `);
+      }
+      return `${source}${source && !source.endsWith(' ') ? ' ' : ''}@${name} `;
+    });
+    setSelectedMentionUserIds((current) => current.includes(id) ? current : [...current, id]);
+  };
+
   const filteredNotes = useMemo(() => {
     return (notes || []).filter((n: any) => {
       if (isSystemMilestoneEvent(n)) return false;
@@ -4299,9 +4615,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   
   const handleAddNoteWithSubject = () => {
     if (newNote.trim()) {
-      onAddNote(patient.id, newNote, noteMode, newNoteSubject);
+      onAddNote(patient.id, newNote, noteMode, newNoteSubject, {
+        mentionUserIds: noteMode === 'professional' ? selectedMentionUserIds : [],
+      });
       setNewNote("");
       setNewNoteSubject("");
+      setSelectedMentionUserIds([]);
     }
   };
 
@@ -4396,7 +4715,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return data;
   }, [history, protocols, selectedChartProtocolId, patient.id, comparisonDate1, comparisonDate2]);
 
-  const toggleReportNote = (id: number) => {
+  const toggleReportNote = (id: string | number) => {
     setSelectedReportNotes(prev => 
       prev.includes(id) ? prev.filter(nId => nId !== id) : [...prev, id]
     );
@@ -8926,6 +9245,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           formatCountdown={formatSessionCountdown}
           onConfirmEndSession={handleConfirmSessionEnd}
           onSessionSummaryPersisted={applySessionMasterySummaryToPei}
+          onMasteryPreviewChanged={setAbaMasteryPreviewEvaluations}
           onSessionRecordSaved={incrementActiveSessionRecordCount}
           therapistId={resolvedClinicContext?.userId || clinicContext?.userId || null}
           therapistName={resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || null}
@@ -8935,7 +9255,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       {isTutorialActive && ( 
         <TutorialOverlay 
           steps={[
-            { targetId: 'back-btn', title: 'Voltar ao Dashboard', content: 'Clique aqui para retornar Ã  tela principal a qualquer momento.', placement: 'bottom' },
+            { targetId: 'back-btn', title: 'Voltar', content: 'Clique aqui para retornar à página anterior.', placement: 'bottom' },
             { targetId: 'patient-header-info', title: 'Informações do Paciente', content: 'Aqui você vê o nome, categoria (Criança/Adulto) e acessa o WhatsApp ou Ficha de Anamnese.', placement: 'bottom' },
             { targetId: 'tab-nav', title: 'Navegação por Abas', content: 'O prontuário é organizado em abas para facilitar o acesso a diferentes tipos de informação.', placement: 'bottom' },
             { targetId: 'tab-history', title: 'Aba Histórico', content: 'Veja a evolução clínica e o histórico de todas as atividades realizadas pelo paciente.', placement: 'bottom' },
@@ -9653,7 +9973,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               <button
                 onClick={() => void handleConfirmSendAnamnesisRequest()}
                 disabled={isSendingAnamnesisRequest}
-                className="flex items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#6424d6] disabled:opacity-60"
+                className="flex items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#6424d6] disabled:opacity-60"
               >
                 <Share2 size={16} />
                 {isSendingAnamnesisRequest ? 'Enviando...' : 'Enviar para família'}
@@ -9711,28 +10031,57 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
                       : 'bg-slate-100 text-slate-500 hover:bg-violet-50'
                   }`}
-                  aria-label="Voltar ao painel"
+                  aria-label="Voltar à página anterior"
                 >
                   <ChevronLeft size={20} className="transition-transform group-hover:-translate-x-0.5" />
                 </button>
               )}
 
               <div id="patient-header-info" className="flex min-w-0 flex-1 items-center gap-3">
-                {patientPhotoSource(patient) ? (
-                  <SecureImage
-                    src={patientPhotoSource(patient)}
-                    alt={`Foto de ${patient?.name || 'paciente'}`}
-                    className="h-12 w-12 shrink-0 rounded-full object-cover ring-1 ring-slate-200 sm:h-14 sm:w-14"
-                  />
-                ) : (
-                  <span
-                    className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-sm sm:h-14 sm:w-14 ${
-                      isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-violet-50 text-violet-700'
-                    }`}
-                  >
-                    {patientInitials(patient?.name)}
-                  </span>
-                )}
+                <div className="relative h-12 w-12 shrink-0 sm:h-14 sm:w-14">
+                  {resolvedPatientPhotoSource ? (
+                    <SecureImage
+                      src={resolvedPatientPhotoSource}
+                      alt={`Foto de ${patient?.name || 'paciente'}`}
+                      className="h-12 w-12 rounded-full object-cover ring-1 ring-slate-200 sm:h-14 sm:w-14"
+                    />
+                  ) : (
+                    <span
+                      className={`flex h-12 w-12 items-center justify-center rounded-full text-sm sm:h-14 sm:w-14 ${
+                        isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-violet-50 text-violet-700'
+                      }`}
+                    >
+                      {patientInitials(patient?.name)}
+                    </span>
+                  )}
+                  {canManagePatientPhoto && (
+                    <>
+                      <input
+                        ref={patientPhotoInputRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        className="sr-only"
+                        onChange={handleClinicalPatientPhotoChange}
+                        aria-label="Selecionar foto do paciente"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => patientPhotoInputRef.current?.click()}
+                        disabled={isSavingPatientPhoto}
+                        className={`absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full border shadow-sm transition disabled:cursor-wait disabled:opacity-60 ${
+                          isPanelDark
+                            ? 'border-slate-700 bg-slate-800 text-violet-300 hover:bg-slate-700'
+                            : 'border-white bg-violet-600 text-white hover:bg-violet-700'
+                        }`}
+                        aria-label={resolvedPatientPhotoSource ? 'Trocar foto do paciente' : 'Adicionar foto do paciente'}
+                        title={resolvedPatientPhotoSource ? 'Trocar foto do paciente' : 'Adicionar foto do paciente'}
+                      >
+                        <Camera size={13} aria-hidden="true" />
+                      </button>
+                    </>
+                  )}
+                </div>
 
                 <div className="min-w-0">
                   <h1
@@ -9763,6 +10112,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       </span>
                     )}
                   </div>
+                  {patientPhotoError && (
+                    <p role="alert" className="mt-1 text-[11px] font-medium text-rose-600">{patientPhotoError}</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -9917,35 +10269,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         <nav
           id="tab-nav"
           aria-label="Áreas do prontuário"
-          className={`mt-5 flex gap-1 overflow-x-auto border-t px-4 scrollbar-hide no-scrollbar sm:px-6 ${
+          className={`mt-5 flex w-full gap-1 overflow-x-auto border-t px-4 scrollbar-hide no-scrollbar sm:px-6 ${
             isPanelDark ? 'border-slate-800' : 'border-slate-200/80'
           }`}
         >
           {canAccessTab('history') && (
-            <button id="tab-history" aria-current={activeTab === 'history' ? 'page' : undefined} onClick={() => setActiveTab('history')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'history' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Histórico</button>
+            <button id="tab-history" aria-current={activeTab === 'history' ? 'page' : undefined} onClick={() => setActiveTab('history')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'history' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Histórico</button>
           )}
           {canAccessTab('notes') && (
-            <button id="tab-notes" aria-current={activeTab === 'notes' ? 'page' : undefined} onClick={() => setActiveTab('notes')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'notes' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Anotações</button>
+            <button id="tab-notes" aria-current={activeTab === 'notes' ? 'page' : undefined} onClick={() => setActiveTab('notes')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'notes' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Anotações</button>
           )}
           {canAccessTab('report') && (
-            <button id="tab-report" aria-current={activeTab === 'report' ? 'page' : undefined} onClick={() => setActiveTab('report')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'report' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Relatório</button>
+            <button id="tab-report" aria-current={activeTab === 'report' ? 'page' : undefined} onClick={() => setActiveTab('report')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'report' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Relatório</button>
           )}
           {canAccessTab('plan') && (
-            <button id="tab-plan" aria-current={activeTab === 'plan' ? 'page' : undefined} onClick={() => setActiveTab('plan')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'plan' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>
+            <button id="tab-plan" aria-current={activeTab === 'plan' ? 'page' : undefined} onClick={() => setActiveTab('plan')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'plan' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
           {canAccessTab('session') && isKidsProfile && (
-            <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => requestSessionStart('fullscreen')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
+            <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => requestSessionStart('fullscreen')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
           )}
           {canAccessTab('aba-charts') && (
-            <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-11 min-w-[7rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'aba-charts' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Gráficos</button>
+            <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'aba-charts' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Gráficos</button>
           )}
           {canAccessTab('school') && (
-            <button id="tab-school" aria-current={activeTab === 'school' ? 'page' : undefined} onClick={() => setActiveTab('school')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'school' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Escola</button>
+            <button id="tab-school" aria-current={activeTab === 'school' ? 'page' : undefined} onClick={() => setActiveTab('school')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'school' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Escola</button>
           )}
           {canAccessTab('files') && (
-            <button id="tab-files" aria-current={activeTab === 'files' ? 'page' : undefined} onClick={() => setActiveTab('files')} className={`min-h-11 min-w-[6rem] shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'files' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Arquivos</button>
+            <button id="tab-files" aria-current={activeTab === 'files' ? 'page' : undefined} onClick={() => setActiveTab('files')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'files' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Arquivos</button>
           )}
         </nav>
       </div>
@@ -10042,6 +10394,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     protocolId={selectedChartProtocolId}
                     compact
                     dark={isPanelDark}
+                    useCanonicalMastery={useCanonicalMasteryGrowth}
                   />
                 </div>
               </section>
@@ -10232,6 +10585,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         protocolId={selectedChartProtocolId}
                         compact
                         dark={isPanelDark}
+                        useCanonicalMastery={useCanonicalMasteryGrowth}
                       />
                     </div>
                   )}
@@ -10413,7 +10767,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               </div>
             </div>
 
-            <div id="note-type-toggles" className={`flex p-1 rounded-xl mb-4 border transition-colors ${isPanelDark ? 'bg-slate-900/70 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}> 
+            <div id="note-type-toggles" className={`flex p-1 rounded-xl mb-4 border transition-colors ${isPanelDark ? 'bg-slate-900/70 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}`}>
               <button onClick={() => setNoteMode('private')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'private' ? (isPanelDark ? 'bg-slate-800 text-white shadow-sm' : 'bg-slate-100 text-slate-800 shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}><EyeOff size={12} /> Privadas</button> 
               <button onClick={() => setNoteMode('patient')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'patient' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-violet-50 text-[#7a32fc] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}><Share2 size={12} /> Paciente</button> 
               <button onClick={() => setNoteMode('professional')} className={`flex-1 py-2 text-[10px] font-semibold rounded-lg transition-all flex items-center justify-center gap-2 ${noteMode === 'professional' ? (isPanelDark ? 'bg-slate-800 text-indigo-200 shadow-sm' : 'bg-indigo-50 text-indigo-600 shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}><SlidersHorizontal size={12} /> Profissionais</button> 
@@ -10449,18 +10803,38 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               </div>
             )}
 
-            <div id="note-input-area" className={`p-4 rounded-2xl shadow-sm border transition-colors ${noteMode === 'patient' ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : noteMode === 'professional' ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}> 
+            <div id="note-input-area" className={`p-4 rounded-2xl shadow-sm border transition-colors ${noteMode === 'patient' ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : noteMode === 'professional' ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}>
               <div className="mb-3">
                 <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1 ml-1">Assunto / Tema</label>
                 <input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-all ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 text-slate-800 focus:bg-white'} focus:border-[#7551FF]`} placeholder="Ex: Comportamento, Evolução, Social..." value={newNoteSubject} onChange={e => setNewNoteSubject(e.target.value)} />
               </div>
-              <textarea className={`w-full h-24 rounded-xl p-3 text-sm outline-none border transition-all resize-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 text-slate-800 focus:bg-white'} focus:border-[#7551FF]`} placeholder={noteMode === 'private' ? "Digite observações clínicas..." : noteMode === 'patient' ? "Escreva uma orientação ou feedback (Portátil)..." : "Informações para outros profissionais (Portátil)..."} value={newNote} onChange={(e) => setNewNote(e.target.value)}></textarea> 
+              <textarea className={`w-full h-24 rounded-xl p-3 text-sm outline-none border transition-all resize-none ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 focus:bg-slate-800' : 'bg-slate-50 border-slate-200 text-slate-800 focus:bg-white'} focus:border-[#7551FF]`} placeholder={noteMode === 'private' ? "Digite observações clínicas..." : noteMode === 'patient' ? "Escreva uma orientação ou feedback (Portátil)..." : "Informações para a equipe. Use @ para mencionar alguém..."} value={newNote} onChange={(e) => {
+                const nextValue = e.target.value;
+                setNewNote(nextValue);
+                setSelectedMentionUserIds((current) => current.filter((id) => {
+                  const candidate = mentionCandidates.find((item: any) => item.id === id);
+                  return candidate ? nextValue.includes(`@${candidate.name}`) : false;
+                }));
+              }}></textarea>
+              {noteMode === 'professional' && visibleMentionCandidates.length > 0 && (
+                <div className={`mt-2 overflow-hidden rounded-xl border shadow-sm ${isPanelDark ? 'border-slate-700 bg-slate-900' : 'border-indigo-100 bg-white'}`}>
+                  {visibleMentionCandidates.map((candidate: any) => (
+                    <button key={candidate.id} type="button" onClick={() => insertMention(candidate)} className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs transition-colors ${isPanelDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-indigo-50'}`}>
+                      <span className="font-semibold">@{candidate.name}</span>
+                      <span className="text-[10px] text-slate-400">{candidate.specialty || 'Equipe do caso'}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {noteMode === 'professional' && selectedMentionUserIds.length > 0 && (
+                <p className="mt-2 text-[10px] font-medium text-indigo-500">{selectedMentionUserIds.length} membro(s) serão notificados.</p>
+              )}
               <button onClick={handleAddNoteWithSubject} className={`w-full mt-3 text-white font-semibold py-3 rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 ${noteMode === 'private' ? 'bg-[#7551FF]' : noteMode === 'patient' ? 'bg-[#7a32fc]' : 'bg-indigo-600'}`}>{noteMode === 'private' ? "Salvar Nota" : noteMode === 'patient' ? "Enviar Mensagem" : "Compartilhar com Equipe"}</button> 
             </div> 
 
             <div className="space-y-3"> 
               {filteredNotes.length > 0 ? (filteredNotes.map((note: any) => ( 
-                <div key={note.id} className={`p-4 rounded-2xl border shadow-sm relative group transition-all ${(note.visibility === 'patient' || note.type === 'shared') ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : (note.visibility === 'professional' || note.type === 'professional') ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}> 
+                <div id={`patient-note-${note.id}`} key={note.id} className={`p-4 rounded-2xl border shadow-sm relative group transition-all ${focusedNoteId === String(note.id) ? 'ring-2 ring-[#7551FF] ring-offset-2' : ''} ${(note.visibility === 'patient' || note.type === 'shared') ? (isPanelDark ? 'bg-violet-500/10 border-violet-400/20' : 'bg-violet-50/70 border-violet-200') : (note.visibility === 'professional' || note.type === 'professional') ? (isPanelDark ? 'bg-indigo-500/10 border-indigo-400/20' : 'bg-indigo-50/70 border-indigo-200') : (isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200')}`}>
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex flex-col">
                       <span className="text-[10px] font-semibold text-gray-400 uppercase block">{note.date}</span>
@@ -10614,6 +10988,55 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 />
               )}
 
+
+              <div className="mt-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className={`text-xs font-semibold uppercase tracking-tight flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>
+                    <FileText size={16} className="text-[#7a32fc]" /> {isKidsProfile ? 'Incluir Observações Clínicas' : 'Incluir Anotações de Evolução'}
+                  </h4>
+                  <span className={`text-[10px] font-semibold uppercase ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>
+                    {isKidsProfile ? `${selectedReportNotes.length} selecionadas` : `${selectedAdultEvolutionIds.length} selecionadas`}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                  {isKidsProfile
+                    ? kidsReportSelectableNotes.map((note: any) => (
+                        <div
+                          key={note.id}
+                          onClick={() => toggleReportNote(note.id)}
+                          className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
+                            {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
+                          </div>
+                          <p className={`text-xs line-clamp-3 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(note.text)}</p>
+                        </div>
+                      ))
+                    : adultTasksInPeriod.map((task: any) => {
+                        const selected = selectedAdultEvolutionIds.includes(String(task.id));
+                        return (
+                          <div
+                            key={`adult-evo-select-${task.id}`}
+                            onClick={() => toggleAdultEvolutionSelection(String(task.id))}
+                            className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
+                          >
+                            <div className="flex justify-between items-start mb-2">
+                              <span className="text-[9px] font-semibold text-gray-400 uppercase">
+                                {task.eventDate.toLocaleDateString('pt-BR')}
+                              </span>
+                              {selected && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
+                            </div>
+                            <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>{task.taskTitle}</p>
+                            <p className={`text-[11px] mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>
+                              Energia {task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}
+                            </p>
+                            <p className={`text-xs line-clamp-2 mt-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica.'}</p>
+                          </div>
+                        );
+                      })}
+                </div>
+              </div>
               {isKidsProfile && selectedReportNotes.length > 0 && (
                 <div className="mt-8 p-8 bg-gray-50 rounded-[32px] border border-gray-100 animate-fade-in">
                   <h4 className="text-sm font-semibold text-gray-800 uppercase tracking-tight mb-6 flex items-center gap-2">
@@ -10670,54 +11093,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </div>
               )}
 
-              <div className="mt-8">
-                <div className="flex items-center justify-between mb-4">
-                  <h4 className={`text-xs font-semibold uppercase tracking-tight flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>
-                    <FileText size={16} className="text-[#7a32fc]" /> {isKidsProfile ? 'Incluir Observações Clínicas' : 'Incluir Anotações de Evolução'}
-                  </h4>
-                  <span className={`text-[10px] font-semibold uppercase ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>
-                    {isKidsProfile ? `${selectedReportNotes.length} selecionadas` : `${selectedAdultEvolutionIds.length} selecionadas`}
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                  {isKidsProfile
-                    ? kidsReportSelectableNotes.map((note: any) => (
-                        <div
-                          key={note.id}
-                          onClick={() => toggleReportNote(note.id)}
-                          className={`p-4 rounded-2xl border cursor-pointer transition-all ${selectedReportNotes.includes(note.id) ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
-                        >
-                          <div className="flex justify-between items-start mb-2">
-                            <span className="text-[9px] font-semibold text-gray-400 uppercase">{note.date}</span>
-                            {selectedReportNotes.includes(note.id) && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
-                          </div>
-                          <p className={`text-xs line-clamp-3 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(note.text)}</p>
-                        </div>
-                      ))
-                    : adultTasksInPeriod.map((task: any) => {
-                        const selected = selectedAdultEvolutionIds.includes(String(task.id));
-                        return (
-                          <div
-                            key={`adult-evo-select-${task.id}`}
-                            onClick={() => toggleAdultEvolutionSelection(String(task.id))}
-                            className={`p-4 rounded-2xl border cursor-pointer transition-all ${selected ? (isPanelDark ? 'border-[#7a32fc] bg-violet-500/15 shadow-sm' : 'border-[#7a32fc] bg-blue-50/50 shadow-sm') : (isPanelDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-700' : 'border-gray-100 bg-gray-50 hover:bg-white hover:border-gray-200')}`}
-                          >
-                            <div className="flex justify-between items-start mb-2">
-                              <span className="text-[9px] font-semibold text-gray-400 uppercase">
-                                {task.eventDate.toLocaleDateString('pt-BR')}
-                              </span>
-                              {selected && <div className="w-2 h-2 rounded-full bg-[#7a32fc]"></div>}
-                            </div>
-                            <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-gray-700'}`}>{task.taskTitle}</p>
-                            <p className={`text-[11px] mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>
-                              Energia {task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}% • Nota {task.professionalScore ?? '-'} / {task.maxScore}
-                            </p>
-                            <p className={`text-xs line-clamp-2 mt-1 ${isPanelDark ? 'text-slate-200' : 'text-gray-600'}`}>{normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica.'}</p>
-                          </div>
-                        );
-                      })}
-                </div>
-              </div>
               {!isKidsProfile && (
                 <div className="mt-6">
                   <label className={`block text-[10px] font-semibold uppercase mb-1.5 ml-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>
@@ -10842,6 +11217,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       patient={patient}
                       protocols={planProtocolCatalog}
                       professionals={clinicTherapists}
+                      masteryEvaluations={abaMasteryEvaluationsForPlan}
                       userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                       currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                       isDark={isPanelDark}
@@ -11202,17 +11578,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     patient={patient}
                     protocols={planProtocolCatalog}
                     professionals={clinicTherapists}
+                    masteryEvaluations={abaMasteryEvaluationsForPlan}
                     userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                     currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                     isDark={isPanelDark}
                   />
                 </div>
-                <div id="new-schedule-card" className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}> 
+                <div id="new-schedule-card" className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
                   <h3 className={`font-semibold text-lg mb-2 tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Plano Semanal Adulto</h3> 
                   <p className={`text-xs font-medium mb-4 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                     Tarefas para execução fora do consultório, sem pontuação em tempo real.
                   </p>
-                  <div className={`flex p-1 rounded-xl mb-6 transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-slate-100'}`}> 
+                  <div className={`flex p-1 rounded-xl mb-6 transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-slate-100'}`}>
                     <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>{!isKidsProfile ? 'Avaliação' : 'Tarefa'}</button> 
                     <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Intervenção</button> 
                     <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Reforço</button> 
@@ -11225,7 +11602,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           <button onClick={() => setIsCreatingNewTask(!isCreatingNewTask)} className="text-xs font-semibold text-[#7551FF] bg-[#7551FF]/10 px-3 py-1 rounded-full transition-colors hover:bg-[#7551FF]/20">{isCreatingNewTask ? "Selecionar Existente" : "Criar Nova"}</button> 
                         </div> 
                         {isCreatingNewTask ? ( 
-                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? 'bg-green-50/30 dark:bg-green-500/10 border-green-100 dark:border-green-400/20' : 'bg-[#F4F7FE] dark:bg-slate-900/70 border-blue-100 dark:border-slate-700'}`}> 
+                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? 'bg-green-50/30 dark:bg-green-500/10 border-green-100 dark:border-green-400/20' : 'bg-[#F4F7FE] dark:bg-slate-900/70 border-blue-100 dark:border-slate-700'}`}>
                             <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-3 text-sm outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF]" placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
                             {planType === 'task' && (
                               <div className="grid grid-cols-1 gap-3 opacity-80 hover:opacity-100 transition-opacity"> 
@@ -11240,7 +11617,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                               </>
                             )}
                             <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Anotações do Profissional</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
-                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? 'border-green-100 dark:border-green-400/20' : 'border-blue-100 dark:border-slate-700'}`}> 
+                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? 'border-green-100 dark:border-green-400/20' : 'border-blue-100 dark:border-slate-700'}`}>
                               <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-2">Salvar no Protocolo:</label> 
                               <div className="flex gap-2 mb-3"> 
                                 <button onClick={() => setAddToProtocolMode('existing')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'existing' ? 'bg-white dark:bg-slate-800 border-[#7551FF] text-[#7551FF] dark:text-violet-200' : 'border-transparent bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-300'}`}>Existente</button> 
@@ -11261,7 +11638,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           </div> 
                         ) : ( 
                           <div className="animate-fade-in space-y-4"> 
-                            <div className={`p-3 rounded-xl border mb-2 transition-colors ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-blue-50/50 border-blue-100'}`}> 
+                            <div className={`p-3 rounded-xl border mb-2 transition-colors ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-blue-50/50 border-blue-100'}`}>
                               <button onClick={() => setIsPlanFilterOpen(!isPlanFilterOpen)} className="w-full flex items-center justify-between text-[#7a32fc] mb-2">
                                 <div className="flex items-center gap-2"><Filter size={14}/><span className="text-[10px] font-semibold uppercase tracking-widest">Filtrar Protocolos</span></div> 
                                 <ChevronDown size={14} className={`transition-transform ${isPlanFilterOpen ? 'rotate-180' : ''}`} />
@@ -11493,7 +11870,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <div className="space-y-3"> 
                   <h3 className={`text-sm font-semibold uppercase tracking-wider ml-2 tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Agendados</h3> 
                   {((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).length || 0) > 0 ? ((isKidsProfile ? (patientTasks || []) : adultScheduledTasks).map((task: any) => ( 
-                    <div key={task.id} className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between ${isPanelDark ? 'bg-[#14233a] border-slate-700' : 'bg-white border-gray-100'}`}> 
+                    <div key={task.id} className={`p-4 rounded-2xl border shadow-sm flex items-center justify-between ${isPanelDark ? 'bg-[#14233a] border-slate-700' : 'bg-white border-gray-100'}`}>
                       <div className="flex items-center gap-3"> 
                         <span className="text-xl">{task.type === 'reinforcement' ? '🌟' : task.type === 'intervention' ? '✍️' : '📋'}</span> 
                         <div><p className={`font-semibold text-sm tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>{task.title}</p><p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{new Date(task.scheduledAt).toLocaleDateString('pt-BR')} • {new Date(task.scheduledAt).toLocaleTimeString('pt-BR', {hour: '2-digit', minute:'2-digit'})}</p></div> 
@@ -11703,9 +12080,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <div>
                       <p className={`font-semibold text-sm truncate max-w-[200px] tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>{file.name}</p>
                       <p className={`text-[10px] font-semibold uppercase ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>{file.size} • {file.date}</p>
+                      <p className={`mt-1 text-[10px] font-medium ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>
+                        {patientFileAccessLabels[String(file.accessScope || 'PATIENT_ACCESS').toUpperCase()] || 'Acesso do paciente'}
+                        {file.patientPortalVisible ? ' · Paciente/responsável' : ''}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {file.canManageAccess && (
+                      <button
+                        type="button"
+                        title="Gerenciar quem pode ver"
+                        onClick={() => void openPatientFileAccessEditor(file)}
+                        className={`p-2.5 rounded-xl transition-all ${isPanelDark ? 'text-violet-300 hover:text-white hover:bg-violet-500/10' : 'text-violet-500 hover:text-violet-700 hover:bg-violet-50'}`}
+                      >
+                        <SlidersHorizontal size={18} />
+                      </button>
+                    )}
                     <button
                       title="Visualizar"
                       onClick={() => void openPatientFilePreview(file)}
@@ -11736,6 +12127,103 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         )}
         </div>
       </div> 
+
+      {fileAccessEditor && (
+        <div className="fixed inset-0 z-[205] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
+          <div className={`w-full max-w-xl rounded-3xl border p-6 shadow-2xl ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${isPanelDark ? 'text-violet-300' : 'text-violet-500'}`}>Nível de acesso</p>
+                <h3 className={`mt-1 truncate text-lg font-semibold ${isPanelDark ? 'text-white' : 'text-slate-900'}`}>{fileAccessEditor.file?.name || 'Arquivo'}</h3>
+                <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Somente quem enviou este arquivo pode alterar estas permissões.</p>
+              </div>
+              <button type="button" onClick={() => { setFileAccessEditor(null); setFileAccessCandidates([]); setFileAccessError(''); }} className={`rounded-xl p-2 ${isPanelDark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`} aria-label="Fechar">
+                <X size={18} />
+              </button>
+            </div>
+
+            {fileAccessLoading ? (
+              <div className={`mt-5 rounded-2xl border border-dashed px-4 py-8 text-center text-sm ${isPanelDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-500'}`}>Carregando permissões...</div>
+            ) : (
+              <div className="mt-5 space-y-4">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {[
+                    ['OWNER', 'Somente eu', 'Apenas você entre os profissionais; o portal é controlado separadamente abaixo.'],
+                    ['CASE_TEAM', 'Equipe do caso', 'Profissionais ativos vinculados a este paciente.'],
+                    ['PATIENT_ACCESS', 'Acesso ao paciente', 'Mantém a visibilidade para quem já pode acessar este paciente.'],
+                    ['SELECTED', 'Pessoas selecionadas', 'Escolha profissionais específicos da equipe do caso.']
+                  ].map(([value, label, description]) => {
+                    const selected = fileAccessEditor.accessScope === value;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setFileAccessEditor((current: any) => ({ ...current, accessScope: value }))}
+                        className={`rounded-2xl border p-3 text-left transition ${selected ? (isPanelDark ? 'border-violet-400 bg-violet-500/10' : 'border-violet-300 bg-violet-50') : (isPanelDark ? 'border-slate-700 bg-slate-900/50 hover:border-slate-600' : 'border-slate-200 bg-white hover:border-violet-200')}`}
+                      >
+                        <span className={`block text-sm font-medium ${selected ? (isPanelDark ? 'text-violet-200' : 'text-violet-700') : (isPanelDark ? 'text-slate-100' : 'text-slate-800')}`}>{label}</span>
+                        <span className={`mt-1 block text-[11px] leading-relaxed ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{description}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {fileAccessEditor.accessScope === 'SELECTED' && (
+                  <div className={`max-h-52 overflow-y-auto rounded-2xl border p-3 ${isPanelDark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-slate-50/70'}`}>
+                    <p className={`mb-2 text-xs font-medium ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>Profissionais da equipe do caso</p>
+                    {fileAccessCandidates.length ? fileAccessCandidates.map((candidate: any) => {
+                      const checked = Array.isArray(fileAccessEditor.selectedUserIds) && fileAccessEditor.selectedUserIds.includes(candidate.id);
+                      return (
+                        <label key={candidate.id} className={`flex cursor-pointer items-center justify-between gap-3 rounded-xl px-2 py-2 ${isPanelDark ? 'hover:bg-slate-800' : 'hover:bg-white'}`}>
+                          <span className="min-w-0">
+                            <span className={`block truncate text-sm font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{candidate.name}</span>
+                            <span className={`block truncate text-[10px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{candidate.specialty || 'Equipe do caso'}</span>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => setFileAccessEditor((current: any) => ({
+                              ...current,
+                              selectedUserIds: checked
+                                ? current.selectedUserIds.filter((id: string) => id !== candidate.id)
+                                : [...current.selectedUserIds, candidate.id]
+                            }))}
+                            className="h-4 w-4 accent-[#7a32fc]"
+                          />
+                        </label>
+                      );
+                    }) : (
+                      <p className={`py-3 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Nenhum outro profissional ativo na equipe do caso.</p>
+                    )}
+                  </div>
+                )}
+
+                <label className={`flex items-center justify-between gap-4 rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/60' : 'border-emerald-100 bg-emerald-50/50'}`}>
+                  <span>
+                    <span className={`block text-sm font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Paciente/responsável pode ver</span>
+                    <span className={`mt-1 block text-[11px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Libera este arquivo também no portal do paciente.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={fileAccessEditor.patientPortalVisible === true}
+                    onChange={(event) => setFileAccessEditor((current: any) => ({ ...current, patientPortalVisible: event.target.checked }))}
+                    className="h-5 w-5 accent-[#7a32fc]"
+                  />
+                </label>
+
+                {fileAccessError && <p className={`rounded-xl px-3 py-2 text-xs font-medium ${isPanelDark ? 'bg-red-500/10 text-red-200' : 'bg-red-50 text-red-700'}`} role="alert">{fileAccessError}</p>}
+
+                <div className="flex justify-end gap-3">
+                  <button type="button" onClick={() => { setFileAccessEditor(null); setFileAccessCandidates([]); setFileAccessError(''); }} className={`rounded-xl px-4 py-2.5 text-sm font-medium ${isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-slate-100 text-slate-700'}`}>Cancelar</button>
+                  <button type="button" disabled={fileAccessSaving || (fileAccessEditor.accessScope === 'SELECTED' && fileAccessEditor.selectedUserIds.length === 0)} onClick={() => void savePatientFileAccess()} className="rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">
+                    {fileAccessSaving ? 'Salvando...' : 'Salvar acesso'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {showAnamnesisFileModal && (
         <div className="fixed inset-0 z-[190] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
