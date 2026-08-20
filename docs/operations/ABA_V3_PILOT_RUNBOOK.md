@@ -71,3 +71,19 @@ Nenhuma sessão iniciada antes do `effective_from` muda de modelo retroativament
 7. Desligar rollout-admin somente após a segunda verificação retornar `drained=true`.
 
 Nunca desligar sync antes da drenagem. Durante rollback, `allow_new_v3_sessions=false` faz novas sessões não vinculadas permanecerem no Legacy V2, enquanto bindings V3 já congelados continuam V3 até finalizar. Dados V3 históricos, bindings e revisões permanecem preservados.
+
+## Control Center operacional no Super Admin
+
+Após a validação end-to-end de Produção, o rollout de novos cohorts deve preferir a superfície **Super Admin → Rollout ABA V3** em vez de SQL manual.
+
+O painel usa o contrato `get_aba_v3_exact_target_cohort_snapshot_v1(...)` para leitura e `set_aba_v3_exact_target_cohort_v1(...)` para mutação atômica do cohort exato. A superfície operacional atual é deliberadamente **TARGET-only**: CLINIC + PATIENT + TARGET são atualizados na mesma transação, com optimistic locking e os eventos append-only já produzidos pelo writer canônico.
+
+Regras operacionais:
+
+1. `FEATURE_ABA_V3_READ_API=true`, `FEATURE_ABA_V3_COLLECTION_API=true`, `FEATURE_ABA_V3_PREFLIGHT_API=true` e `VITE_FEATURE_ABA_V3_UI=true` devem estar validados antes de qualquer ativação.
+2. `FEATURE_ABA_V3_ROLLOUT_ADMIN` continua `false` por padrão. Habilite `true` somente na janela operacional em que um platform admin com MFA fará a alteração; depois da operação, retorne a flag a `false`.
+3. Se o preflight reportar bloqueadores ou sessão ABA aberta, não force o cohort.
+4. Ativação vale apenas para sessões novas iniciadas após o `effective_from`; sessões já abertas preservam o binding anterior.
+5. Desativação fecha novas sessões no TARGET e fecha PATIENT/CLINIC somente quando nenhum outro cohort ativo depende desses pais. `accept_v3_sync=true` permanece aberto durante o drain.
+6. Confirme `drain_status.drained=true` antes de qualquer operação futura que pretenda desligar o sync.
+7. SQL de emergência permanece apenas como fallback de break-glass; o fluxo normal é o Control Center auditado.

@@ -37,6 +37,7 @@ import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
 import { SalesProfitabilitySimulator } from './SalesProfitabilitySimulator';
 import { SalesFinancialAssumptionsPanel } from './SalesFinancialAssumptionsPanel';
+import { AbaV3RolloutControlCenter } from './AbaV3RolloutControlCenter';
 import { TechnicalDetails } from './TechnicalDetails';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { getSupabase } from '../lib/supabase';
@@ -125,7 +126,7 @@ const VERTO_PROTOCOL_OPTIONS = VERTO_PROTOCOL_EDITOR_CATALOG.map(({ protocol, ..
 export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [loading, setLoading] = useState(true);
   const [bootstrapping, setBootstrapping] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads' | 'simulation-settings' | 'demos' | 'protocols'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads' | 'simulation-settings' | 'demos' | 'protocols' | 'aba-v3-rollout'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [financial, setFinancial] = useState<any>({
     summary: {},
@@ -882,6 +883,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <SidebarItem icon={<Settings2 size={18} />} label="Configurações financeiras" active={activeTab === 'simulation-settings'} onClick={() => setActiveTab('simulation-settings')} />
           <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => setActiveTab('demos')} />
           <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => setActiveTab('protocols')} />
+          <SidebarItem icon={<Shield size={18} />} label="Rollout ABA V3" active={activeTab === 'aba-v3-rollout'} onClick={() => setActiveTab('aba-v3-rollout')} />
         </nav>
 
         <div className="mt-auto p-6 border-t border-slate-100">
@@ -897,7 +899,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       <main className="flex-1 p-8 overflow-y-auto">
         <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
           <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-slate-400 font-bold">Governanca Financeira</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-400 font-bold">{activeTab === 'aba-v3-rollout' ? 'Governança Clínica' : 'Governanca Financeira'}</p>
             <h1 className="text-3xl font-black text-slate-900">
               {activeTab === 'overview'
                 ? 'Visao Geral da Rentabilidade'
@@ -911,15 +913,19 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         ? 'Configurações financeiras'
                       : activeTab === 'demos'
                         ? 'Ambientes Demo'
-                        : 'Governanca de Protocolos'}
+                        : activeTab === 'protocols'
+                          ? 'Governanca de Protocolos'
+                          : 'Rollout ABA V3'}
             </h1>
           </div>
-          <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
-            Fonte: {financial.source === 'supabase_financial_views' ? 'SQL financeiro ativo' : 'sem dados fictícios'}
-          </div>
+          {activeTab !== 'aba-v3-rollout' && (
+            <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
+              Fonte: {financial.source === 'supabase_financial_views' ? 'SQL financeiro ativo' : 'sem dados fictícios'}
+            </div>
+          )}
         </div>
 
-        {financial.source !== 'supabase_financial_views' && (
+        {activeTab !== 'aba-v3-rollout' && financial.source !== 'supabase_financial_views' && (
           <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-bold text-amber-800">
               A base financeira real ainda não possui lançamentos suficientes. Dados fictícios e estimativas automáticas foram desativados.
@@ -1773,6 +1779,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               </div>
             )}
           </div>
+        )}
+
+        {activeTab === 'aba-v3-rollout' && (
+          <AbaV3RolloutControlCenter />
         )}
 
         {activeTab === 'protocols' && (

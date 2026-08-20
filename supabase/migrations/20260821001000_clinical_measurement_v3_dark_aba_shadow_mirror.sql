@@ -1,0 +1,452 @@
+-- Clinical Measurement Engine V3 - controlled ABA V3 dark shadow mirror.
+-- This migration DOES NOT backfill data automatically. It only installs a
+-- service-role-only, idempotent mirror function and provenance surface.
+-- Source is current-effective immutable ABA V3 raw, never legacy summaries.
+
+begin;
+
+-- Preserve operational provenance. A shadow mirror is neither a live collection,
+-- an offline sync nor a clinician retrospective entry.
+alter table public.clinical_measurement_raw_events_v3
+  drop constraint if exists clinical_measurement_raw_events_v3_ingestion_mode_check;
+alter table public.clinical_measurement_raw_events_v3
+  add constraint clinical_measurement_raw_events_v3_ingestion_mode_check
+  check (ingestion_mode in ('LIVE','OFFLINE_SYNC','RETROSPECTIVE_ENTRY','CORRECTION','SHADOW_MIRROR'));
+
+create table if not exists public.clinical_measurement_shadow_mirror_links_v3 (
+  source_engine text not null default 'ABA_V3' check (source_engine='ABA_V3'),
+  source_trial_id uuid primary key references public.aba_trials_v3(id) on delete restrict,
+  organization_id uuid not null references public.clinics(id) on delete restrict,
+  patient_id uuid not null references public.patients(id) on delete restrict,
+  source_session_id text not null references public.aba_sessions(id) on delete restrict,
+  source_target_id text not null references public.aba_targets(id) on delete restrict,
+  source_collection_definition_version_id uuid not null references public.aba_collection_definition_versions_v3(id) on delete restrict,
+  source_target_phase_assignment_id uuid not null references public.aba_target_phase_assignments_v3(id) on delete restrict,
+  observed_opportunity_mode text not null check (observed_opportunity_mode in ('INDEPENDENT_ELIGIBLE','ERRORLESS_NO_INDEPENDENT')),
+  universal_target_id uuid not null references public.clinical_measurement_targets_v3(id) on delete restrict,
+  universal_definition_id uuid not null references public.clinical_measurement_definitions_v3(id) on delete restrict,
+  universal_session_id uuid not null references public.clinical_measurement_sessions_v3(id) on delete restrict,
+  universal_expectation_id uuid not null references public.clinical_measurement_session_expectations_v3(id) on delete restrict,
+  universal_event_id uuid not null unique references public.clinical_measurement_raw_events_v3(id) on delete restrict,
+  source_latest_revision_id uuid references public.aba_trial_revisions_v3(id) on delete restrict,
+  source_latest_revision_at timestamptz,
+  source_step_hash text not null check (source_step_hash ~ '^[0-9a-f]{64}$'),
+  mirrored_at timestamptz not null default now(),
+  unique (organization_id, universal_event_id)
+);
+
+create index if not exists idx_cmv3_shadow_mirror_target
+  on public.clinical_measurement_shadow_mirror_links_v3
+  (organization_id, patient_id, source_target_id, source_session_id);
+
+create or replace function public.guard_clinical_measurement_shadow_mirror_link_v3()
+returns trigger language plpgsql set search_path=pg_catalog,public as $f$
+begin
+  raise exception 'CMV3_SHADOW_MIRROR_LINK_APPEND_ONLY';
+end;$f$;
+
+drop trigger if exists guard_cmv3_shadow_mirror_link on public.clinical_measurement_shadow_mirror_links_v3;
+create trigger guard_cmv3_shadow_mirror_link
+before update or delete on public.clinical_measurement_shadow_mirror_links_v3
+for each row execute function public.guard_clinical_measurement_shadow_mirror_link_v3();
+
+alter table public.clinical_measurement_shadow_mirror_links_v3 enable row level security;
+revoke all on table public.clinical_measurement_shadow_mirror_links_v3 from public,anon,authenticated;
+grant all on table public.clinical_measurement_shadow_mirror_links_v3 to service_role;
+
+-- Comparator segmentation must mean clinical phase, not "number of expectation
+-- rows". Shadow expectations may be split by observed opportunity mode/observer
+-- while still belonging to one source phase. This fixes a semantic bug in the
+-- previous comparator without changing any canonical summary math.
+create or replace function public.get_clinical_measurement_v3_shadow_comparison(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_target_id uuid,
+  p_definition_id uuid,
+  p_period_start date default (current_date - 90),
+  p_period_end date default current_date
+)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = pg_catalog, public
+set row_security = off
+as $function$
+declare
+  v_aba_target_id text;
+  v_semantic_family text;
+  v_rows jsonb;
+  v_compared integer;
+  v_matches integer;
+  v_mismatches integer;
+  v_incomplete integer;
+  v_multi_segment integer;
+begin
+  if p_organization_id is null or p_patient_id is null or p_target_id is null or p_definition_id is null then
+    raise exception 'CMV3_SHADOW_SCOPE_REQUIRED';
+  end if;
+  if p_period_start is null or p_period_end is null or p_period_start > p_period_end or (p_period_end-p_period_start)>366 then
+    raise exception 'CMV3_SHADOW_PERIOD_INVALID';
+  end if;
+
+  select t.aba_target_id into v_aba_target_id
+  from public.clinical_measurement_targets_v3 t
+  where t.id=p_target_id and t.organization_id=p_organization_id and t.patient_id=p_patient_id and t.source_kind='ABA_TARGET';
+  if v_aba_target_id is null then raise exception 'CMV3_SHADOW_ABA_TARGET_REQUIRED'; end if;
+
+  select d.semantic_family into v_semantic_family
+  from public.clinical_measurement_definitions_v3 d
+  where d.id=p_definition_id and d.organization_id=p_organization_id and d.patient_id=p_patient_id and d.target_id=p_target_id;
+  if v_semantic_family is null then raise exception 'CMV3_SHADOW_DEFINITION_SCOPE_INVALID'; end if;
+  if v_semantic_family<>'PROPORTION' then raise exception 'CMV3_SHADOW_ONLY_PROPORTION_SUPPORTED'; end if;
+
+  with session_scope as (
+    select s.id aba_session_id,coalesce(s.reference_date,s.started_at::date) session_date
+    from public.aba_sessions s
+    where s.patient_id=p_patient_id and s.clinic_id=p_organization_id::text
+      and coalesce(s.reference_date,s.started_at::date) between p_period_start and p_period_end
+  ), universal_v3 as (
+    select cms.aba_session_id,
+      count(distinct coalesce(
+        nullif(snapshot.snapshot->>'source_target_phase_assignment_id',''),
+        p.phase_epoch_id::text,
+        'NO_PHASE'
+      ))::integer segment_count,
+      sum(p.numerator)::integer numerator,
+      sum(p.denominator)::integer denominator
+    from public.clinical_measurement_session_proportion_summaries_v3 p
+    join public.clinical_measurement_sessions_v3 cms
+      on cms.id=p.session_id and cms.organization_id=p.organization_id and cms.patient_id=p.patient_id
+    join public.clinical_measurement_definition_versions_v3 dv
+      on dv.id=p.definition_version_id and dv.organization_id=p.organization_id and dv.patient_id=p.patient_id and dv.target_id=p.target_id
+    join public.clinical_measurement_session_expectations_v3 ex on ex.id=p.expectation_id
+    join public.clinical_collection_protocol_snapshots_v3 snapshot on snapshot.id=ex.protocol_snapshot_id
+    where p.organization_id=p_organization_id and p.patient_id=p_patient_id and p.target_id=p_target_id
+      and dv.definition_id=p_definition_id and cms.source_kind='ABA_SESSION' and cms.aba_session_id is not null
+      and p.clinical_date between p_period_start and p_period_end and p.projection_status='READY'
+    group by cms.aba_session_id
+  ), canonical_aba_v3 as (
+    select a.session_id aba_session_id,count(distinct a.target_phase_assignment_id)::integer segment_count,
+      sum(a.primary_independent_correct_count)::integer numerator,
+      sum(a.eligible_independent_opportunity_count)::integer denominator
+    from public.aba_session_target_summaries_v3 a join session_scope ss on ss.aba_session_id=a.session_id
+    where a.organization_id=p_organization_id and a.patient_id=p_patient_id and a.target_id=v_aba_target_id
+    group by a.session_id
+  ), legacy_v2 as (
+    select t.session_id aba_session_id,count(*)::integer trial_count,count(*) filter(where t.independent)::integer independent_count
+    from public.aba_trials t join session_scope ss on ss.aba_session_id=t.session_id
+    where t.patient_id=p_patient_id and t.clinic_id=p_organization_id::text and t.target_id=v_aba_target_id
+    group by t.session_id
+  ), rows as (
+    select ss.aba_session_id,ss.session_date,
+      coalesce(u.segment_count,0) universal_segment_count,u.numerator universal_numerator,u.denominator universal_denominator,
+      coalesce(c.segment_count,0) canonical_aba_v3_segment_count,c.numerator canonical_aba_v3_numerator,c.denominator canonical_aba_v3_denominator,
+      l.trial_count legacy_v2_trial_count,l.independent_count legacy_v2_independent_count,
+      case
+        when coalesce(u.segment_count,0)>1 or coalesce(c.segment_count,0)>1 then 'NOT_DIRECTLY_COMPARABLE_MULTI_SEGMENT'
+        when u.aba_session_id is null and c.aba_session_id is null then 'NO_CANONICAL_DATA'
+        when u.aba_session_id is null then 'MISSING_UNIVERSAL_V3'
+        when c.aba_session_id is null then 'MISSING_CANONICAL_ABA_V3'
+        when u.numerator=c.numerator and u.denominator=c.denominator then 'MATCH' else 'MISMATCH' end canonical_parity_status
+    from session_scope ss
+    left join universal_v3 u on u.aba_session_id=ss.aba_session_id
+    left join canonical_aba_v3 c on c.aba_session_id=ss.aba_session_id
+    left join legacy_v2 l on l.aba_session_id=ss.aba_session_id
+    where u.aba_session_id is not null or c.aba_session_id is not null or l.aba_session_id is not null
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'session_id',r.aba_session_id,'clinical_date',r.session_date,'canonical_parity_status',r.canonical_parity_status,
+      'universal_v3',jsonb_build_object('segment_count',r.universal_segment_count,'numerator',r.universal_numerator,'denominator',r.universal_denominator,'percent',case when r.universal_denominator>0 then round(100.0*r.universal_numerator/r.universal_denominator,4) end),
+      'canonical_aba_v3',jsonb_build_object('segment_count',r.canonical_aba_v3_segment_count,'numerator',r.canonical_aba_v3_numerator,'denominator',r.canonical_aba_v3_denominator,'percent',case when r.canonical_aba_v3_denominator>0 then round(100.0*r.canonical_aba_v3_numerator/r.canonical_aba_v3_denominator,4) end),
+      'legacy_v2',jsonb_build_object('authority','OBSERVATIONAL_ONLY','trial_count',r.legacy_v2_trial_count,'independent_count',r.legacy_v2_independent_count,'percent',case when r.legacy_v2_trial_count>0 then round(100.0*r.legacy_v2_independent_count/r.legacy_v2_trial_count,4) end)
+    ) order by r.session_date,r.aba_session_id),'[]'::jsonb),
+    count(*) filter(where r.canonical_parity_status in ('MATCH','MISMATCH')),
+    count(*) filter(where r.canonical_parity_status='MATCH'),
+    count(*) filter(where r.canonical_parity_status='MISMATCH'),
+    count(*) filter(where r.canonical_parity_status in ('MISSING_UNIVERSAL_V3','MISSING_CANONICAL_ABA_V3')),
+    count(*) filter(where r.canonical_parity_status='NOT_DIRECTLY_COMPARABLE_MULTI_SEGMENT')
+  into v_rows,v_compared,v_matches,v_mismatches,v_incomplete,v_multi_segment from rows r;
+
+  return jsonb_build_object('organization_id',p_organization_id,'patient_id',p_patient_id,'target_id',p_target_id,
+    'definition_id',p_definition_id,'semantic_family',v_semantic_family,'period_start',p_period_start,'period_end',p_period_end,
+    'canonical_comparison',jsonb_build_object('authority','SHADOW_VALIDATION','compared_session_count',coalesce(v_compared,0),'match_count',coalesce(v_matches,0),'mismatch_count',coalesce(v_mismatches,0),'incomplete_count',coalesce(v_incomplete,0),'multi_segment_not_directly_comparable_count',coalesce(v_multi_segment,0),'parity_clean',coalesce(v_compared,0)>0 and coalesce(v_mismatches,0)=0 and coalesce(v_incomplete,0)=0 and coalesce(v_multi_segment,0)=0),
+    'legacy_v2_policy','OBSERVATIONAL_ONLY_NOT_A_RELEASE_BLOCKER','rows',v_rows,'computed_at',clock_timestamp());
+end;$function$;
+
+create or replace function public.run_clinical_measurement_v3_aba_shadow_mirror(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_aba_target_id text,
+  p_period_start date default (current_date-90),
+  p_period_end date default current_date
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path=pg_catalog,public,extensions
+set row_security=off
+as $function$
+declare
+  v_target_id uuid;
+  v_definition_id uuid;
+  v_definition_version_id uuid;
+  v_activation_id uuid;
+  v_source_definition_id uuid;
+  v_source_definition_version integer;
+  v_source_phase_id uuid;
+  v_source_count integer;
+  v_prompt_hierarchy_id uuid;
+  v_prompt_version_id uuid;
+  v_expectation_ids uuid[];
+  v_compare jsonb;
+  v_tz text;
+begin
+  if p_organization_id is null or p_patient_id is null or nullif(trim(p_aba_target_id),'') is null then raise exception 'CMV3_SHADOW_MIRROR_SCOPE_REQUIRED'; end if;
+  if p_period_start is null or p_period_end is null or p_period_start>p_period_end or (p_period_end-p_period_start)>366 then raise exception 'CMV3_SHADOW_MIRROR_PERIOD_INVALID'; end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_organization_id::text||':'||p_patient_id::text||':'||p_aba_target_id,0));
+
+  create temporary table cmv3_shadow_source on commit drop as
+  select t.*, s.started_at session_started_at,s.ended_at session_ended_at,s.reference_date,s.therapist_id,
+    coalesce(cm_collector.id,cm_session.id) actor_membership_id,
+    coalesce(cm_collector.availability_timezone,cm_session.availability_timezone,'America/Sao_Paulo') actor_timezone,
+    case when exists(select 1 from public.aba_trial_steps_v3 st where st.trial_id=t.id and st.opportunity_role='PRIMARY_INDEPENDENT') then 'INDEPENDENT_ELIGIBLE' else 'ERRORLESS_NO_INDEPENDENT' end observed_opportunity_mode,
+    t.latest_revision_id source_latest_revision_id,t.latest_revision_at source_latest_revision_at
+  from public.aba_effective_trials_v3 t
+  join public.aba_sessions s on s.id=t.session_id and s.patient_id=t.patient_id and s.clinic_id=t.organization_id::text
+  left join lateral (
+    select cm.id,cm.availability_timezone from public.clinic_memberships cm
+    where cm.clinic_id=t.organization_id and cm.user_id=t.collector_user_id and lower(coalesce(cm.status,''))='active'
+    order by cm.created_at,cm.id limit 1
+  ) cm_collector on true
+  left join lateral (
+    select cm.id,cm.availability_timezone from public.clinic_memberships cm
+    where cm.clinic_id=t.organization_id
+      and s.therapist_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+      and cm.user_id=s.therapist_id::uuid and lower(coalesce(cm.status,''))='active'
+    order by cm.created_at,cm.id limit 1
+  ) cm_session on true
+  where t.organization_id=p_organization_id and t.patient_id=p_patient_id and t.target_id=p_aba_target_id
+    and coalesce(s.reference_date,s.started_at::date) between p_period_start and p_period_end
+    and s.status='completed' and s.ended_at is not null and t.trial_type<>'TASK_ANALYSIS';
+
+  select count(*) into v_source_count from cmv3_shadow_source;
+  if v_source_count=0 then raise exception 'CMV3_SHADOW_MIRROR_NO_EFFECTIVE_COMPLETED_TRIALS'; end if;
+  if v_source_count>500 then raise exception 'CMV3_SHADOW_MIRROR_LIMIT_EXCEEDED'; end if;
+  if exists(select 1 from cmv3_shadow_source where actor_membership_id is null) then raise exception 'CMV3_SHADOW_MIRROR_ACTOR_UNRESOLVED'; end if;
+  if (select count(distinct collection_definition_version_id) from cmv3_shadow_source)<>1 then raise exception 'CMV3_SHADOW_MIRROR_MULTIPLE_DEFINITION_VERSIONS_UNSUPPORTED'; end if;
+  if (select count(distinct target_phase_assignment_id) from cmv3_shadow_source)<>1 then raise exception 'CMV3_SHADOW_MIRROR_MULTIPLE_PHASES_NOT_DIRECTLY_COMPARABLE'; end if;
+  if exists(select 1 from cmv3_shadow_source where occurred_at<session_started_at or occurred_at>session_ended_at) then raise exception 'CMV3_SHADOW_MIRROR_TRIAL_OUTSIDE_SESSION'; end if;
+  if exists(select 1 from cmv3_shadow_source where reference_date is not null and timezone(actor_timezone,session_started_at)::date<>reference_date) then raise exception 'CMV3_SHADOW_MIRROR_CLINICAL_DATE_TIMEZONE_UNRESOLVED'; end if;
+  if exists(select 1 from public.aba_trial_steps_v3 st join cmv3_shadow_source src on src.id=st.trial_id where st.step_type='OTHER' or (st.step_type='PROMPT' and nullif(trim(st.prompt_key),'') is null)) then raise exception 'CMV3_SHADOW_MIRROR_UNSUPPORTED_STEP_SHAPE'; end if;
+  if exists(
+    select 1 from cmv3_shadow_source src
+    left join public.aba_trial_steps_v3 first_step on first_step.trial_id=src.id and first_step.sequence_no=1
+    left join public.aba_trial_steps_v3 primary_step on primary_step.trial_id=src.id and primary_step.opportunity_role='PRIMARY_INDEPENDENT'
+    where (src.observed_opportunity_mode='INDEPENDENT_ELIGIBLE' and (primary_step.sequence_no is distinct from 1 or first_step.step_type is distinct from 'RESPONSE'))
+       or (src.observed_opportunity_mode='ERRORLESS_NO_INDEPENDENT' and first_step.step_type='RESPONSE')
+  ) then raise exception 'CMV3_SHADOW_MIRROR_STEP_ORDER_CANNOT_PRESERVE_OPPORTUNITY_ROLE'; end if;
+
+  select collection_definition_version_id,target_phase_assignment_id into v_source_definition_id,v_source_phase_id from cmv3_shadow_source limit 1;
+  select version into v_source_definition_version from public.aba_collection_definition_versions_v3 where id=v_source_definition_id;
+
+  select id into v_target_id from public.clinical_measurement_targets_v3
+   where organization_id=p_organization_id and patient_id=p_patient_id and source_kind='ABA_TARGET' and aba_target_id=p_aba_target_id;
+  if v_target_id is null then
+    insert into public.clinical_measurement_targets_v3(organization_id,patient_id,target_key,source_kind,aba_target_id,status,created_by)
+    select p_organization_id,p_patient_id,left('shadow:aba-v3:'||t.id,180),'ABA_TARGET',t.id,'PAUSED','CMV3_SHADOW_MIRROR'
+    from public.aba_targets t where t.id=p_aba_target_id and t.patient_id=p_patient_id and t.clinic_id=p_organization_id::text
+    returning id into v_target_id;
+  end if;
+  if v_target_id is null then raise exception 'CMV3_SHADOW_MIRROR_TARGET_SCOPE_INVALID'; end if;
+
+  select id into v_definition_id from public.clinical_measurement_definitions_v3
+   where target_id=v_target_id and definition_key='shadow_aba_v3_primary_independence';
+  if v_definition_id is null then
+    insert into public.clinical_measurement_definitions_v3(organization_id,patient_id,target_id,definition_key,semantic_family,status,archived_at,created_by)
+    values(p_organization_id,p_patient_id,v_target_id,'shadow_aba_v3_primary_independence','PROPORTION','ARCHIVED',clock_timestamp(),'CMV3_SHADOW_MIRROR') returning id into v_definition_id;
+  end if;
+
+  select id into v_definition_version_id from public.clinical_measurement_definition_versions_v3
+   where definition_id=v_definition_id and (content->>'source_collection_definition_version_id')=v_source_definition_id::text limit 1;
+  if v_definition_version_id is null then
+    insert into public.clinical_measurement_definition_versions_v3(organization_id,patient_id,target_id,definition_id,version,unit_code,unit_label,directionality,content,aggregation_policy,definition_hash,status,published_at,deprecated_at,created_by)
+    values(p_organization_id,p_patient_id,v_target_id,v_definition_id,v_source_definition_version,'PERCENT','% Independência','INCREASE_IS_BETTER',
+      jsonb_build_object('kind','PROPORTION','shadow_mirror',true,'source_engine','ABA_V3','source_collection_definition_version_id',v_source_definition_id,'semantic_basis','EXPLICIT_STEP_OPPORTUNITY_ROLE_CURRENT_TRUTH'),
+      jsonb_build_object('across_sessions','FORBIDDEN','across_phases','FORBIDDEN'),repeat('0',64),'ARCHIVED',clock_timestamp(),clock_timestamp(),'CMV3_SHADOW_MIRROR')
+    returning id into v_definition_version_id;
+  end if;
+
+  select id into v_activation_id from public.clinical_measurement_definition_activations_v3
+   where definition_id=v_definition_id and definition_version_id=v_definition_version_id and reason='CMV3_SHADOW_MIRROR' and superseded_at is null limit 1;
+  if v_activation_id is null then
+    insert into public.clinical_measurement_definition_activations_v3(organization_id,patient_id,target_id,definition_id,definition_version_id,effective_from,activation_mode,reason,created_by)
+    values(p_organization_id,p_patient_id,v_target_id,v_definition_id,v_definition_version_id,clock_timestamp(),'PROSPECTIVE','CMV3_SHADOW_MIRROR','CMV3_SHADOW_MIRROR') returning id into v_activation_id;
+  end if;
+
+  -- Optional categorical prompt hierarchy derived only from effective raw prompt keys.
+  if exists(select 1 from public.aba_trial_steps_v3 st join cmv3_shadow_source src on src.id=st.trial_id where st.prompt_key is not null) then
+    select id into v_prompt_hierarchy_id from public.clinical_aba_prompt_hierarchies_v3 where definition_id=v_definition_id and hierarchy_key='shadow_aba_v3_prompts';
+    if v_prompt_hierarchy_id is null then
+      insert into public.clinical_aba_prompt_hierarchies_v3(organization_id,patient_id,target_id,definition_id,hierarchy_key,created_by)
+      values(p_organization_id,p_patient_id,v_target_id,v_definition_id,'shadow_aba_v3_prompts','CMV3_SHADOW_MIRROR') returning id into v_prompt_hierarchy_id;
+    end if;
+    select id into v_prompt_version_id from public.clinical_aba_prompt_hierarchy_versions_v3 where hierarchy_id=v_prompt_hierarchy_id and version=1 and status='PUBLISHED';
+    if v_prompt_version_id is null then
+      insert into public.clinical_aba_prompt_hierarchy_versions_v3(organization_id,patient_id,target_id,definition_id,hierarchy_id,version,strategy,status,created_by)
+      values(p_organization_id,p_patient_id,v_target_id,v_definition_id,v_prompt_hierarchy_id,1,'CUSTOM','DRAFT','CMV3_SHADOW_MIRROR') returning id into v_prompt_version_id;
+      insert into public.clinical_aba_prompt_hierarchy_levels_v3(organization_id,patient_id,target_id,definition_id,hierarchy_version_id,sequence_no,prompt_key,label,category,is_independent)
+      values(p_organization_id,p_patient_id,v_target_id,v_definition_id,v_prompt_version_id,1,'__INDEPENDENT__','Independente','INDEPENDENT',true);
+      insert into public.clinical_aba_prompt_hierarchy_levels_v3(organization_id,patient_id,target_id,definition_id,hierarchy_version_id,sequence_no,prompt_key,label,category,is_independent,legacy_prompt_type_id)
+      select p_organization_id,p_patient_id,v_target_id,v_definition_id,v_prompt_version_id,
+        row_number() over(order by coalesce(pt.intrusiveness_order,9999),st.prompt_key)::integer+1,
+        st.prompt_key,coalesce(pt.name,st.prompt_key),coalesce(pt.category,'SHADOW_SOURCE'),false,pt.id
+      from (select distinct s.prompt_key from public.aba_trial_steps_v3 s join cmv3_shadow_source src on src.id=s.trial_id where s.prompt_key is not null) st
+      left join lateral (
+        select p.id,p.name,p.category,p.intrusiveness_order from public.aba_prompt_types p
+        where p.organization_id=p_organization_id and p.key=st.prompt_key
+        order by p.active desc,p.updated_at desc,p.id limit 1
+      ) pt on true;
+      perform public.publish_clinical_aba_prompt_hierarchy_version_v3(v_prompt_version_id);
+    end if;
+  end if;
+
+  create temporary table cmv3_shadow_protocol_map on commit drop as
+  select distinct observed_opportunity_mode,actor_membership_id from cmv3_shadow_source;
+  alter table cmv3_shadow_protocol_map add column protocol_snapshot_id uuid;
+
+  -- Reuse any prior identical shadow snapshot; insert only missing groups.
+  update cmv3_shadow_protocol_map m set protocol_snapshot_id=sp.id
+  from public.clinical_collection_protocol_snapshots_v3 sp
+  where sp.organization_id=p_organization_id and sp.patient_id=p_patient_id and sp.target_id=v_target_id
+    and sp.definition_version_id=v_definition_version_id
+    and sp.snapshot->>'shadow_mirror'='true'
+    and sp.snapshot->>'source_collection_definition_version_id'=v_source_definition_id::text
+    and sp.snapshot->>'source_target_phase_assignment_id'=v_source_phase_id::text
+    and sp.snapshot->>'observed_opportunity_mode'=m.observed_opportunity_mode
+    and sp.snapshot->>'observer_membership_id'=m.actor_membership_id::text;
+
+  insert into public.clinical_collection_protocol_snapshots_v3(organization_id,patient_id,target_id,definition_activation_id,definition_version_id,snapshot,snapshot_hash,created_by)
+  select p_organization_id,p_patient_id,v_target_id,v_activation_id,v_definition_version_id,
+    jsonb_build_object('shadow_mirror',true,'source_engine','ABA_V3','source_collection_definition_version_id',v_source_definition_id,
+      'source_target_phase_assignment_id',v_source_phase_id,'observed_opportunity_mode',m.observed_opportunity_mode,
+      'observer_membership_id',m.actor_membership_id,'semantic_basis','EXPLICIT_STEP_OPPORTUNITY_ROLE_CURRENT_TRUTH','historical_protocol_intent_inferred',false),
+    repeat('0',64),'CMV3_SHADOW_MIRROR'
+  from cmv3_shadow_protocol_map m where m.protocol_snapshot_id is null;
+
+  update cmv3_shadow_protocol_map m set protocol_snapshot_id=sp.id
+  from public.clinical_collection_protocol_snapshots_v3 sp
+  where m.protocol_snapshot_id is null and sp.organization_id=p_organization_id and sp.patient_id=p_patient_id and sp.target_id=v_target_id
+    and sp.definition_version_id=v_definition_version_id and sp.snapshot->>'shadow_mirror'='true'
+    and sp.snapshot->>'source_collection_definition_version_id'=v_source_definition_id::text
+    and sp.snapshot->>'source_target_phase_assignment_id'=v_source_phase_id::text
+    and sp.snapshot->>'observed_opportunity_mode'=m.observed_opportunity_mode and sp.snapshot->>'observer_membership_id'=m.actor_membership_id::text;
+
+  insert into public.clinical_aba_protocol_bindings_v3(protocol_snapshot_id,organization_id,patient_id,target_id,definition_version_id,prompt_hierarchy_version_id,initial_opportunity_mode)
+  select protocol_snapshot_id,p_organization_id,p_patient_id,v_target_id,v_definition_version_id,v_prompt_version_id,observed_opportunity_mode
+  from cmv3_shadow_protocol_map on conflict(protocol_snapshot_id) do nothing;
+
+  -- Sessions remain hidden shadow identities. Their clinical date is server-derived
+  -- from the observer timezone and was preflighted against legacy reference_date.
+  insert into public.clinical_measurement_sessions_v3(organization_id,patient_id,session_key,source_kind,aba_session_id,status,started_at,clinical_date,timezone_snapshot,timezone_offset_minutes,created_by)
+  select distinct p_organization_id,p_patient_id,left('shadow:aba-v3:'||src.session_id,180),'ABA_SESSION',src.session_id,'PREPARING',src.session_started_at,
+    coalesce(src.reference_date,timezone(src.actor_timezone,src.session_started_at)::date),src.actor_timezone,0,'CMV3_SHADOW_MIRROR'
+  from cmv3_shadow_source src
+  where not exists(select 1 from public.clinical_measurement_sessions_v3 s where s.organization_id=p_organization_id and s.aba_session_id=src.session_id);
+
+  insert into public.clinical_measurement_session_expectations_v3(organization_id,patient_id,session_id,target_id,protocol_snapshot_id,expectation_key,created_by)
+  select distinct p_organization_id,p_patient_id,s.id,v_target_id,m.protocol_snapshot_id,
+    left('shadow:'||src.observed_opportunity_mode||':'||src.actor_membership_id::text,180),'CMV3_SHADOW_MIRROR'
+  from cmv3_shadow_source src
+  join public.clinical_measurement_sessions_v3 s on s.organization_id=p_organization_id and s.aba_session_id=src.session_id
+  join cmv3_shadow_protocol_map m on m.observed_opportunity_mode=src.observed_opportunity_mode and m.actor_membership_id=src.actor_membership_id
+  where s.status='PREPARING'
+    and not exists(select 1 from public.clinical_measurement_session_expectations_v3 e where e.session_id=s.id and e.protocol_snapshot_id=m.protocol_snapshot_id);
+
+  update public.clinical_measurement_sessions_v3 s set status='OPEN'
+  where s.organization_id=p_organization_id and s.patient_id=p_patient_id and s.status='PREPARING'
+    and s.aba_session_id in (select distinct session_id from cmv3_shadow_source);
+
+  insert into public.clinical_measurement_collection_streams_v3(organization_id,patient_id,session_id,expectation_id,target_id,stream_key,stream_role,observer_membership_id,status,created_by)
+  select p_organization_id,p_patient_id,e.session_id,e.id,v_target_id,'shadow-primary','PRIMARY',src.actor_membership_id,'OPEN','CMV3_SHADOW_MIRROR'
+  from (select distinct session_id,observed_opportunity_mode,actor_membership_id from cmv3_shadow_source) src
+  join public.clinical_measurement_sessions_v3 s on s.organization_id=p_organization_id and s.aba_session_id=src.session_id
+  join cmv3_shadow_protocol_map m on m.observed_opportunity_mode=src.observed_opportunity_mode and m.actor_membership_id=src.actor_membership_id
+  join public.clinical_measurement_session_expectations_v3 e on e.session_id=s.id and e.protocol_snapshot_id=m.protocol_snapshot_id
+  where not exists(select 1 from public.clinical_measurement_collection_streams_v3 st where st.expectation_id=e.id and st.stream_role='PRIMARY');
+
+  insert into public.clinical_measurement_raw_events_v3(stream_id,client_event_id,event_kind,ingestion_mode,occurred_at_utc,actor_membership_id,payload_hash)
+  select st.id,'shadow:aba-v3:'||src.id::text,'FACT','SHADOW_MIRROR',src.occurred_at,src.actor_membership_id,
+    encode(digest(convert_to(jsonb_build_object('source_trial_id',src.id,'payload_hash',src.payload_hash,'mode',src.observed_opportunity_mode)::text,'UTF8'),'sha256'),'hex')
+  from cmv3_shadow_source src
+  join public.clinical_measurement_sessions_v3 s on s.organization_id=p_organization_id and s.aba_session_id=src.session_id
+  join cmv3_shadow_protocol_map m on m.observed_opportunity_mode=src.observed_opportunity_mode and m.actor_membership_id=src.actor_membership_id
+  join public.clinical_measurement_session_expectations_v3 e on e.session_id=s.id and e.protocol_snapshot_id=m.protocol_snapshot_id
+  join public.clinical_measurement_collection_streams_v3 st on st.expectation_id=e.id and st.stream_role='PRIMARY'
+  where not exists(select 1 from public.clinical_measurement_raw_events_v3 re where re.organization_id=p_organization_id and re.client_event_id='shadow:aba-v3:'||src.id::text);
+
+  insert into public.clinical_measurement_aba_trials_v3(event_id,organization_id,patient_id,session_id,expectation_id,target_id,stream_id,protocol_snapshot_id,definition_version_id,trial_type,started_at,completed_at,created_at)
+  select re.id,re.organization_id,re.patient_id,re.session_id,re.expectation_id,re.target_id,re.stream_id,re.protocol_snapshot_id,re.definition_version_id,src.trial_type,src.started_at,src.completed_at,re.recorded_at
+  from cmv3_shadow_source src join public.clinical_measurement_raw_events_v3 re on re.organization_id=p_organization_id and re.client_event_id='shadow:aba-v3:'||src.id::text
+  where not exists(select 1 from public.clinical_measurement_aba_trials_v3 t where t.event_id=re.id);
+
+  -- RESPONSE steps map 1:1. Non-response legacy steps carry an outcome in the old
+  -- schema, so the mirror expands them into action + SUPPORT response; this
+  -- preserves final outcome without manufacturing an independent opportunity.
+  insert into public.clinical_measurement_aba_trial_steps_v3(trial_event_id,sequence_no,client_step_id,step_kind,outcome,prompt_level_id,latency_ms,occurred_at)
+  select re.id,st.sequence_no*2-1,'shadow:'||st.id::text||':a',st.step_type,
+    case when st.step_type='RESPONSE' then st.outcome else null end,
+    case when st.step_type='PROMPT' then pl.id else null end,
+    st.latency_ms,coalesce(st.occurred_at,src.occurred_at)
+  from public.aba_trial_steps_v3 st
+  join cmv3_shadow_source src on src.id=st.trial_id
+  join public.clinical_measurement_raw_events_v3 re on re.organization_id=p_organization_id and re.client_event_id='shadow:aba-v3:'||src.id::text
+  left join public.clinical_aba_prompt_hierarchy_levels_v3 pl on pl.hierarchy_version_id=v_prompt_version_id and pl.prompt_key=st.prompt_key
+  where not exists(select 1 from public.clinical_measurement_aba_trial_steps_v3 x where x.trial_event_id=re.id and x.client_step_id='shadow:'||st.id::text||':a');
+
+  insert into public.clinical_measurement_aba_trial_steps_v3(trial_event_id,sequence_no,client_step_id,step_kind,outcome,latency_ms,occurred_at)
+  select re.id,st.sequence_no*2,'shadow:'||st.id::text||':r','RESPONSE',st.outcome,null,coalesce(st.occurred_at,src.occurred_at)
+  from public.aba_trial_steps_v3 st
+  join cmv3_shadow_source src on src.id=st.trial_id
+  join public.clinical_measurement_raw_events_v3 re on re.organization_id=p_organization_id and re.client_event_id='shadow:aba-v3:'||src.id::text
+  where st.step_type<>'RESPONSE' and st.outcome is not null
+    and not exists(select 1 from public.clinical_measurement_aba_trial_steps_v3 x where x.trial_event_id=re.id and x.client_step_id='shadow:'||st.id::text||':r');
+
+  insert into public.clinical_measurement_shadow_mirror_links_v3(source_trial_id,organization_id,patient_id,source_session_id,source_target_id,source_collection_definition_version_id,source_target_phase_assignment_id,observed_opportunity_mode,universal_target_id,universal_definition_id,universal_session_id,universal_expectation_id,universal_event_id,source_latest_revision_id,source_latest_revision_at,source_step_hash)
+  select src.id,p_organization_id,p_patient_id,src.session_id,p_aba_target_id,src.collection_definition_version_id,src.target_phase_assignment_id,src.observed_opportunity_mode,v_target_id,v_definition_id,re.session_id,re.expectation_id,re.id,src.source_latest_revision_id,src.source_latest_revision_at,
+    encode(digest(convert_to(coalesce((select jsonb_agg(jsonb_build_object('sequence_no',st.sequence_no,'step_type',st.step_type,'opportunity_role',st.opportunity_role,'outcome',st.outcome,'prompt_key',st.prompt_key) order by st.sequence_no) from public.aba_trial_steps_v3 st where st.trial_id=src.id),'[]'::jsonb)::text,'UTF8'),'sha256'),'hex')
+  from cmv3_shadow_source src join public.clinical_measurement_raw_events_v3 re on re.organization_id=p_organization_id and re.client_event_id='shadow:aba-v3:'||src.id::text
+  where not exists(select 1 from public.clinical_measurement_shadow_mirror_links_v3 l where l.source_trial_id=src.id);
+
+  update public.clinical_measurement_collection_streams_v3 st set status='CLOSED'
+  where st.organization_id=p_organization_id and st.status='OPEN' and st.expectation_id in (
+    select e.id from public.clinical_measurement_session_expectations_v3 e join public.clinical_measurement_sessions_v3 s on s.id=e.session_id
+    where s.aba_session_id in(select distinct session_id from cmv3_shadow_source) and e.target_id=v_target_id
+  );
+
+  update public.clinical_measurement_sessions_v3 s set status='FINALIZED',ended_at=src.ended_at
+  from (select session_id,max(session_ended_at) ended_at from cmv3_shadow_source group by session_id) src
+  where s.organization_id=p_organization_id and s.aba_session_id=src.session_id and s.status='OPEN';
+
+  select array_agg(e.id) into v_expectation_ids
+  from public.clinical_measurement_session_expectations_v3 e join public.clinical_measurement_sessions_v3 s on s.id=e.session_id
+  where s.organization_id=p_organization_id and s.patient_id=p_patient_id and s.aba_session_id in(select distinct session_id from cmv3_shadow_source)
+    and e.target_id=v_target_id;
+  perform public.recompute_clinical_measurement_projection_batch_v3(v_expectation_ids,'SHADOW_MIRROR');
+
+  v_compare:=public.get_clinical_measurement_v3_shadow_comparison(p_organization_id,p_patient_id,v_target_id,v_definition_id,p_period_start,p_period_end);
+  if coalesce((v_compare#>>'{canonical_comparison,parity_clean}')::boolean,false) is not true then
+    raise exception 'CMV3_SHADOW_MIRROR_PARITY_FAILED: %',left(v_compare::text,3000);
+  end if;
+
+  return jsonb_build_object('gate','PASS','source_engine','ABA_V3_EFFECTIVE_RAW','source_trial_count',v_source_count,
+    'universal_target_id',v_target_id,'universal_definition_id',v_definition_id,'expectation_count',coalesce(array_length(v_expectation_ids,1),0),
+    'comparison',v_compare,'mirrored_at',clock_timestamp());
+end;$function$;
+
+revoke all on function public.run_clinical_measurement_v3_aba_shadow_mirror(uuid,uuid,text,date,date) from public,anon,authenticated;
+grant execute on function public.run_clinical_measurement_v3_aba_shadow_mirror(uuid,uuid,text,date,date) to service_role;
+revoke all on function public.guard_clinical_measurement_shadow_mirror_link_v3() from public,anon,authenticated;
+
+commit;

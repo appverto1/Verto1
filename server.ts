@@ -73533,8 +73533,14 @@ async function startServer() {
     if (hasMissingFinancialSchema(error) || /get_aba_v3_pilot_readiness|get_aba_v3_preflight_scope_snapshot|get_aba_v3_rollout_drain_status|set_aba_measurement_rollout_state_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema operacional ABA V3 ainda não aplicado.' });
     }
-    if (/ABA_V3_ROLLOUT_STATE_VERSION_CONFLICT/i.test(message)) {
+    if (/ABA_V3_(ROLLOUT_STATE_VERSION_CONFLICT|COHORT_STATE_VERSION_CONFLICT)/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_ROLLOUT_STATE_VERSION_CONFLICT', error: 'O rollout mudou desde a última leitura. Atualize antes de tentar novamente.' });
+    }
+    if (/ABA_V3_COHORT_PREFLIGHT_BLOCKED/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'ABA_V3_COHORT_PREFLIGHT_BLOCKED', error: 'O alvo ainda não está pronto para ativação V3 ou existe uma sessão ABA aberta.' });
+    }
+    if (/ABA_V3_COHORT_(SCOPE_REQUIRED|TARGET_SCOPE_INVALID|EXPECTED_VERSIONS_REQUIRED|REASON_INVALID)/i.test(message)) {
+      return res.status(422).json({ success: false, code: 'ABA_V3_COHORT_INVALID', error: 'Escopo operacional ABA V3 inválido. Atualize os dados e tente novamente.' });
     }
     if (/ABA_V3_ROLLOUT_DRAIN_REQUIRED/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_ROLLOUT_DRAIN_REQUIRED', error: 'Ainda existem dados V3 em trânsito. Interrompa novas sessões e conclua a drenagem antes de desligar o sync.' });
@@ -73667,6 +73673,204 @@ async function startServer() {
         if (error) return handleAbaV3RolloutRpcError(res, error);
         res.setHeader('Cache-Control', 'private, no-store');
         return res.json({ success: true, data: data || null });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/admin/cohort-catalog',
+    requireAbaV3PreflightFeature,
+    checkAuth,
+    checkPlatformAdmin,
+    async (req: any, res) => {
+      try {
+        const stage = sanitizeString(req.query?.stage || 'clinics', 20).toLowerCase();
+        const query = sanitizeString(req.query?.q, 80).replace(/[%_]/g, '').trim();
+        const organizationId = sanitizeString(req.query?.organizationId || req.query?.organization_id, 120);
+        const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+
+        if (stage === 'clinics') {
+          let clinicQuery: any = supabase
+            .from('clinics')
+            .select('id,name')
+            .order('name', { ascending: true })
+            .limit(30);
+          if (query) clinicQuery = clinicQuery.ilike('name', `%${query}%`);
+          const { data, error } = await clinicQuery;
+          if (error) throw error;
+          res.setHeader('Cache-Control', 'private, no-store');
+          return res.json({ success: true, data: { stage, items: data || [] } });
+        }
+
+        if (!isUuid(organizationId)) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_CATALOG_SCOPE_INVALID', error: 'Clínica inválida para o catálogo ABA V3.' });
+        }
+
+        if (stage === 'patients') {
+          let patientQuery: any = supabase
+            .from('patients')
+            .select('id,name,clinic_id')
+            .eq('clinic_id', organizationId)
+            .order('name', { ascending: true })
+            .limit(50);
+          if (query) patientQuery = patientQuery.ilike('name', `%${query}%`);
+          const { data, error } = await patientQuery;
+          if (error) throw error;
+          res.setHeader('Cache-Control', 'private, no-store');
+          return res.json({ success: true, data: { stage, organizationId, items: data || [] } });
+        }
+
+        if (stage === 'targets') {
+          if (!isUuid(patientId)) {
+            return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_CATALOG_SCOPE_INVALID', error: 'Paciente inválido para o catálogo ABA V3.' });
+          }
+          const patientScope = await supabase
+            .from('patients')
+            .select('id,name,clinic_id')
+            .eq('id', patientId)
+            .eq('clinic_id', organizationId)
+            .limit(1)
+            .maybeSingle();
+          if (patientScope.error) throw patientScope.error;
+          if (!patientScope.data) {
+            return res.status(404).json({ success: false, code: 'ABA_V3_COHORT_PATIENT_NOT_FOUND', error: 'Paciente não encontrado nesta clínica.' });
+          }
+
+          const [programsResult, targetsResult] = await Promise.all([
+            supabase
+              .from('aba_programs')
+              .select('id,name,status,patient_id,clinic_id')
+              .eq('patient_id', patientId)
+              .eq('clinic_id', organizationId)
+              .order('created_at', { ascending: false })
+              .limit(100),
+            supabase
+              .from('aba_targets')
+              .select('id,name,program_id,target_type,phase,patient_id,clinic_id')
+              .eq('patient_id', patientId)
+              .eq('clinic_id', organizationId)
+              .order('created_at', { ascending: false })
+              .limit(200)
+          ]);
+          if (programsResult.error) throw programsResult.error;
+          if (targetsResult.error) throw targetsResult.error;
+          const programs = programsResult.data || [];
+          const targets = (targetsResult.data || []).filter((target: any) => {
+            if (!query) return true;
+            const program = programs.find((item: any) => sanitizeString(item?.id, 180) === sanitizeString(target?.program_id, 180));
+            return `${sanitizeString(target?.name, 240)} ${sanitizeString(program?.name, 240)}`.toLowerCase().includes(query.toLowerCase());
+          });
+          res.setHeader('Cache-Control', 'private, no-store');
+          return res.json({
+            success: true,
+            data: {
+              stage,
+              organizationId,
+              patient: patientScope.data,
+              programs,
+              targets
+            }
+          });
+        }
+
+        return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_CATALOG_STAGE_INVALID', error: 'Etapa de catálogo ABA V3 inválida.' });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/admin/cohort-snapshot',
+    requireAbaV3PreflightFeature,
+    checkAuth,
+    checkPlatformAdmin,
+    async (req: any, res) => {
+      try {
+        const organizationId = sanitizeString(req.query?.organizationId || req.query?.organization_id, 120);
+        const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+        const programId = sanitizeString(req.query?.programId || req.query?.program_id, 180);
+        const targetId = sanitizeString(req.query?.targetId || req.query?.target_id, 180);
+        if (!isUuid(organizationId) || !isUuid(patientId) || !programId || !targetId) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_SCOPE_INVALID', error: 'Escopo do cohort ABA V3 inválido.' });
+        }
+        const { data, error } = await supabase.rpc('get_aba_v3_exact_target_cohort_snapshot_v1', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_program_id: programId,
+          p_target_id: targetId
+        });
+        if (error) return handleAbaV3RolloutRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({
+          success: true,
+          data: {
+            ...(data || {}),
+            runtime: {
+              readApiEnabled: isAbaV3ReadApiEnabled(),
+              preflightApiEnabled: isAbaV3PreflightApiEnabled(),
+              collectionApiEnabled: isAbaV3CollectionApiEnabled(),
+              rolloutAdminEnabled: isAbaV3RolloutAdminEnabled(),
+              uiBuildFlagEnabled: normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false)
+            }
+          }
+        });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/aba/v3/admin/cohort-control',
+    requireAbaV3RolloutAdminFeature,
+    checkAuth,
+    checkPlatformAdmin,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 12 * 1024, 'Cohort ABA V3')) return;
+        const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId, 120);
+        const patientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
+        const programId = sanitizeString(req.body?.program_id || req.body?.programId, 180);
+        const targetId = sanitizeString(req.body?.target_id || req.body?.targetId, 180);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const enabled = req.body?.enabled;
+        const reason = sanitizeTextField(req.body?.reason, 500);
+        const expected = req.body?.expected_state_versions || req.body?.expectedStateVersions || {};
+        const clinicVersion = Number(expected?.clinic);
+        const patientVersion = Number(expected?.patient);
+        const targetVersion = Number(expected?.target);
+
+        if (!isUuid(organizationId) || !isUuid(patientId) || !isUuid(actorId) || !programId || !targetId || typeof enabled !== 'boolean') {
+          return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_INVALID', error: 'Escopo operacional ABA V3 inválido.' });
+        }
+        if (reason.trim().length < 10) {
+          return res.status(422).json({ success: false, code: 'ABA_V3_COHORT_REASON_REQUIRED', error: 'Informe uma justificativa operacional com pelo menos 10 caracteres.' });
+        }
+        if (![clinicVersion, patientVersion, targetVersion].every((value) => Number.isInteger(value) && value >= 0)) {
+          return res.status(422).json({ success: false, code: 'ABA_V3_COHORT_VERSION_INVALID', error: 'Atualize o snapshot do cohort antes de aplicar a alteração.' });
+        }
+        if (enabled && (!isAbaV3ReadApiEnabled() || !isAbaV3CollectionApiEnabled() || !normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false))) {
+          return res.status(409).json({ success: false, code: 'ABA_V3_RUNTIME_NOT_READY', error: 'Leitura, coleta e UI V3 precisam estar validadas no runtime antes da ativação.' });
+        }
+
+        const { data, error } = await supabase.rpc('set_aba_v3_exact_target_cohort_v1', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_program_id: programId,
+          p_target_id: targetId,
+          p_enable: enabled,
+          p_reason: reason,
+          p_actor_id: actorId,
+          p_expected_clinic_version: clinicVersion,
+          p_expected_patient_version: patientVersion,
+          p_expected_target_version: targetVersion
+        });
+        if (error) return handleAbaV3RolloutRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data });
       } catch (error: any) {
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }

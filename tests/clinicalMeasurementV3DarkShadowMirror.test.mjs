@@ -1,0 +1,14 @@
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const sql=fs.readFileSync(new URL('../supabase/migrations/20260821001000_clinical_measurement_v3_dark_aba_shadow_mirror.sql', import.meta.url),'utf8');
+assert.match(sql,/SHADOW_MIRROR/);
+assert.match(sql,/aba_effective_trials_v3/);
+assert.match(sql,/historical_protocol_intent_inferred',false/);
+assert.match(sql,/ERRORLESS_NO_INDEPENDENT/);
+assert.match(sql,/INDEPENDENT_ELIGIBLE/);
+assert.match(sql,/recompute_clinical_measurement_projection_batch_v3/);
+assert.match(sql,/CMV3_SHADOW_MIRROR_PARITY_FAILED/);
+assert.match(sql,/revoke all on function public\.run_clinical_measurement_v3_aba_shadow_mirror/);
+assert.doesNotMatch(sql,/update\s+public\.aba_trials_v3/i);
+assert.doesNotMatch(sql,/delete\s+from\s+public\.aba_/i);
+console.log('clinicalMeasurementV3DarkShadowMirror.test: ok');
