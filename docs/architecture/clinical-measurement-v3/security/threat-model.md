@@ -36,6 +36,9 @@ This document lists concrete ways the V3 engine may be attacked, corrupted or ma
 | TM-023 | Client attempts destructive raw update | No destructive raw mutation API | Method unavailable/denied |
 | TM-024 | Duplicate duration from overlapping devices | Stream identity + non-overlap | Denominator cannot double-count |
 | TM-025 | Browser computes daily average from session points | API grain contract | Canonical UI adapter has no aggregation path |
+| TM-026 | `SECURITY DEFINER` helper inherits `PUBLIC EXECUTE` | Global function deny-by-default + explicit service-role grants | Browser roles cannot invoke privileged helper |
+| TM-027 | Route authorizes resolved patient but queries raw patient alias | Use middleware-resolved canonical patient ID + clinic scope check | Alias cannot bypass or desynchronize authorization/query scope |
+| TM-028 | Legacy V2 difference is treated as canonical V3 regression | Shadow comparison separates canonical ABA V3 parity from Legacy V2 observational signal | Legacy approximation never becomes a release blocker by itself |
 
 ## Attack principles
 
