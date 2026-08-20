@@ -31,9 +31,11 @@ export function registerClinicalMeasurementV3Routes(app: Express, deps: Deps) {
     noStoreDynamicResponse,checkAuth,requireClinicCapability('clinical.history.view'),checkPatientAccess,
     async (req:any,res:any)=>{
       try {
-        const patientId=sanitizeString(req.params.patientId,120);
+        const patientId=sanitizeString(req.resolvedPatientId||req.params.patientId,120);
         const clinicId=sanitizeString(currentClinicId(req.session?.user||{}),120);
+        const patientClinicId=sanitizeString(req.resolvedPatientClinicId,120);
         if(!patientId||!clinicId) return res.status(400).json({success:false,error:'CMV3_SCOPE_REQUIRED'});
+        if(patientClinicId&&patientClinicId!==clinicId) return res.status(404).json({success:false,error:'CMV3_PATIENT_SCOPE_MISMATCH'});
 
         const targets=await supabase.from('clinical_measurement_targets_v3')
           .select('id,target_key,specialty,status,created_at')
@@ -71,9 +73,11 @@ export function registerClinicalMeasurementV3Routes(app: Express, deps: Deps) {
     noStoreDynamicResponse,checkAuth,requireClinicCapability('clinical.history.view'),checkPatientAccess,
     async (req:any,res:any)=>{
       try {
-        const patientId=sanitizeString(req.params.patientId,120); const targetId=sanitizeString(req.params.targetId,120);
+        const patientId=sanitizeString(req.resolvedPatientId||req.params.patientId,120); const targetId=sanitizeString(req.params.targetId,120);
         const clinicId=sanitizeString(currentClinicId(req.session?.user||{}),120);
+        const patientClinicId=sanitizeString(req.resolvedPatientClinicId,120);
         if(!patientId||!targetId||!clinicId) return res.status(400).json({success:false,error:'CMV3_SCOPE_REQUIRED'});
+        if(patientClinicId&&patientClinicId!==clinicId) return res.status(404).json({success:false,error:'CMV3_PATIENT_SCOPE_MISMATCH'});
         const now=new Date(); const periodEnd=isoOr(req.query?.periodEnd,now); const defaultStart=new Date(periodEnd.getTime()-90*86400000);
         const periodStart=isoOr(req.query?.periodStart,defaultStart);
         if(periodStart>periodEnd || periodEnd.getTime()-periodStart.getTime()>366*86400000) return res.status(422).json({success:false,error:'CMV3_PERIOD_INVALID'});

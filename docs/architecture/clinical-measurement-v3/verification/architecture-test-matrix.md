@@ -37,6 +37,9 @@ Trace architecture invariants and threat-model entries to executable tests. Test
 | TEST-PERF-002 | ADR-0004 | Open Tier-1 view without drilldown | Tier-3 dimensional payload is not loaded |
 | TEST-SCHEMA-001 | TM-021 | Unsupported contract/schema capability | Single deterministic compatibility path; no repeated fallbacks |
 | TEST-SNAP-001 | TM-022 | Offline event references stale snapshot | Server follows defined compatibility policy; client cannot self-upgrade semantics |
+| TEST-SEC-001 | TM-026 | Authenticated role attempts to execute CMV3 `SECURITY DEFINER` helper | EXECUTE denied; only explicit service entrypoints remain callable |
+| TEST-AUTH-004 | TM-027 | Patient alias resolves to canonical ID different from route parameter | Query uses resolved canonical patient ID and clinic scope; no raw-alias lookup |
+| TEST-SHADOW-001 | TM-028 | Compare mapped ABA target across Universal V3, canonical ABA V3 and Legacy V2 | Canonical V3 parity is release signal; V2 is labelled observational-only |
 
 ## Completion rule
 
