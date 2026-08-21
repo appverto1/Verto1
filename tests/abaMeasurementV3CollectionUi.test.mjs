@@ -101,7 +101,7 @@ const bindingResolverStart = dataService.indexOf('async resolveAbaV3SessionTarge
 const bindingResolverEnd = dataService.indexOf('async saveAbaV3TrialAction', bindingResolverStart);
 const v3TrialWriterEnd = dataService.indexOf('async getAbaV3BehaviorCatalog', bindingResolverEnd);
 const sessionPlanStart = dataService.indexOf('async getAbaV3SessionCollectionPlan');
-const sessionPlanEnd = dataService.indexOf('async getAbaV3ChartCatalog', sessionPlanStart);
+const sessionPlanEnd = dataService.indexOf('async getClinicalMeasurementV3Catalog', sessionPlanStart);
 assert.ok(bindingResolverStart >= 0 && bindingResolverEnd > bindingResolverStart && v3TrialWriterEnd > bindingResolverEnd);
 assert.doesNotMatch(dataService.slice(bindingResolverStart, v3TrialWriterEnd), /if \(!isAbaV3UiEnabled\(\)\)/);
 assert.ok(sessionPlanStart >= 0 && sessionPlanEnd > sessionPlanStart);
