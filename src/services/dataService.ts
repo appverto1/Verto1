@@ -6434,6 +6434,45 @@ export const dataService = {
     }
   },
 
+  async getClinicalPlanOutcomesV3(patientId: string, options: { days?: number; planId?: string } = {}) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente não identificado.', data: { rows: [] } };
+    const endpoint = endpointWithQuery(`/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/plan-outcomes`, {
+      days: Math.max(7, Math.min(Number(options.days || 90), 730)),
+      planId: String(options.planId || '').trim() || undefined,
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+      }, {
+        helperName: 'getClinicalPlanOutcomesV3',
+        operation: 'list',
+        table: 'read_clinical_plan_outcomes_v3',
+        hasExplicitColumns: true,
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return {
+          success: false,
+          status: response.status,
+          code: result?.error,
+          error: result?.message || result?.error || 'Não foi possível carregar as séries clínicas V3.',
+          data: { rows: [] },
+        };
+      }
+      return { ...result, success: true };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error?.message || 'Não foi possível carregar as séries clínicas V3.',
+        data: { rows: [] },
+      };
+    }
+  },
+
+
   async getClinicalMeasurementV3Catalog(patientId: string) {
     if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'Clinical Measurement V3 UI desabilitada.', data: { targets: [] } };
     const safePatientId = String(patientId || '').trim();

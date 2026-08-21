@@ -91096,7 +91096,9 @@ async function startServer() {
     sanitizeString,
     currentClinicId,
     enforcePayloadLimit,
-    canEditTherapeuticPlanScope
+    canEditTherapeuticPlanScope,
+    filterTherapeuticPlanScopesForActor,
+    filterTherapeuticPlanProgramsForActor
   });
 
   registerClinicAppointmentPolicyRoutes(app, {

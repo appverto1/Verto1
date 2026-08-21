@@ -43,7 +43,7 @@ assert.match(lower, /grant execute on function public\.get_clinical_measurement_
 
 // Read routes consume the patient ID already authorized/canonicalized by middleware.
 const resolvedUses = routes.match(/req\.resolvedPatientId\|\|req\.params\.patientId/g) || [];
-assert.equal(resolvedUses.length, 2, 'both CMV3 read routes must use the middleware-resolved patient id');
+assert.equal(resolvedUses.length, 4, 'all current CMV3 patient routes must use the middleware-resolved patient id');
 assert.match(routes, /req\.resolvedPatientClinicId/);
 assert.match(routes, /CMV3_PATIENT_SCOPE_MISMATCH/);
 
