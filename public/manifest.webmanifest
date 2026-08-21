@@ -3,7 +3,7 @@
   "short_name": "Verto",
   "description": "Verto - Plataforma clinica",
   "id": "/",
-  "start_url": "/",
+  "start_url": "/entrar",
   "scope": "/",
   "display": "standalone",
   "background_color": "#ffffff",

@@ -91054,7 +91054,7 @@ async function startServer() {
           res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, no-transform');
           return;
         }
-        if (normalizedPath.endsWith('/manifest.webmanifest')) {
+        if (normalizedPath.endsWith('.webmanifest')) {
           res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
           res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, no-transform');
           return;

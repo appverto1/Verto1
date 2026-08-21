@@ -70,7 +70,7 @@ const centralAbaShowcase = [
 
 const CENTRAL_ABA_SHOWCASE_ASPECT_RATIO = '1142 / 576';
 
-export const LandingPage = ({ onLogin, setUser }: any) => {
+export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
   const [showLogin, setShowLogin] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
   const [loginType, setLoginType] = useState<'professional' | 'patient' | 'coordinator' | null>(null);
@@ -755,6 +755,66 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
 
   return (
     <div className="min-h-screen bg-white font-sans text-gray-900 overflow-x-hidden">
+      {accessOnly ? (
+        <main
+          className="flex min-h-[100dvh] items-center justify-center bg-[#f7f5ff] px-5 py-8"
+          style={{
+            paddingTop: 'max(2rem, env(safe-area-inset-top))',
+            paddingBottom: 'max(2rem, env(safe-area-inset-bottom))',
+          }}
+        >
+          <section className="w-full max-w-sm rounded-[32px] border border-purple-100 bg-white p-6 shadow-[0_24px_70px_rgba(67,45,122,0.10)] sm:p-7">
+            <div className="flex justify-center">
+              <LogoVerto size={44} showText={true} />
+            </div>
+            <div className="mt-8 text-center">
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Acesse sua área</h1>
+              <p className="mt-2 text-sm font-normal leading-6 text-slate-500">Escolha como deseja entrar na Verto.</p>
+            </div>
+
+            <div className="mt-7 space-y-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginType('professional');
+                  setLoginStep('email');
+                  setShowLogin(true);
+                }}
+                className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-purple-100 bg-purple-50/60 px-4 py-4 text-left transition hover:border-[#7a32fc]/40 hover:bg-purple-50 active:scale-[0.99]"
+              >
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-[#7a32fc] shadow-sm">
+                  <Stethoscope size={21} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-slate-900">Área do profissional</span>
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Clínica, coordenação e atendimento</span>
+                </span>
+                <ArrowRight size={18} className="ml-auto shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginType('patient');
+                  setLoginStep('email');
+                  setShowLogin(true);
+                }}
+                className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-pink-100 bg-pink-50/60 px-4 py-4 text-left transition hover:border-pink-300 hover:bg-pink-50 active:scale-[0.99]"
+              >
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-pink-500 shadow-sm">
+                  <Heart size={21} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-slate-900">Área do paciente</span>
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Portal, atividades e acompanhamento</span>
+                </span>
+                <ArrowRight size={18} className="ml-auto shrink-0 text-slate-400" />
+              </button>
+            </div>
+          </section>
+        </main>
+      ) : (
+        <>
       <nav className="fixed top-0 left-0 right-0 z-50 border-b border-gray-100 bg-white/90 backdrop-blur-md">
         <div className="mx-auto flex h-20 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
           <LogoVerto size={40} showText={true} />
@@ -1277,6 +1337,8 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           </div>
         </div>
       </section>
+        </>
+      )}
 
       {/* 2FA Setup Modal */}
       {show2FASetup && (
@@ -1900,6 +1962,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
       )}
 
       {/* Footer */}
+      {!accessOnly && (
       <footer className="bg-[#1d1f1c] py-20 border-t border-white/10">
         <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-12">
           <div className="col-span-1 md:col-span-2">
@@ -1930,6 +1993,7 @@ export const LandingPage = ({ onLogin, setUser }: any) => {
           © 2026 Verto Health Technologies. Todos os direitos reservados.
         </div>
       </footer>
+      )}
     </div>
   );
 };
