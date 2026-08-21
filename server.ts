@@ -24808,6 +24808,8 @@ async function startServer() {
       "/auth/password/recovery/bootstrap",
       "/auth/password/recovery/email/request",
       "/auth/password/recovery/verify",
+      "/portal/auth/request-code",
+      "/portal/auth/verify-code",
       "/stripe/create-checkout-registration",
       "/public/sales-leads",
     ]);
@@ -26135,6 +26137,41 @@ async function startServer() {
       await consumeOtpChallenge(key);
       req.session.user = await hydrateSessionUserWithOnboardingContext(userData);
       req.session.cookie.maxAge = patientPortalSessionMaxAgeDays * 24 * 60 * 60 * 1000;
+      try {
+        await saveExpressSession(req);
+      } catch (firstSessionSaveError: any) {
+        console.warn(
+          '[PortalAuth] primeira persistência da sessão falhou; tentando novamente:',
+          sanitizeString(firstSessionSaveError?.message || String(firstSessionSaveError), 220)
+        );
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          await saveExpressSession(req);
+        } catch (sessionSaveError: any) {
+          console.error(
+            '[PortalAuth] não foi possível persistir a sessão do portal:',
+            sanitizeString(sessionSaveError?.message || String(sessionSaveError), 220)
+          );
+          try {
+            await invalidateActiveSession(
+              sanitizeString(authUser.id, 120),
+              sanitizeString(userData.sessionToken, 200)
+            );
+          } catch (cleanupError: any) {
+            console.error(
+              '[PortalAuth] falha ao invalidar token após erro de sessão:',
+              sanitizeString(cleanupError?.message || String(cleanupError), 220)
+            );
+          }
+          req.session.destroy(() => {});
+          res.clearCookie('verto-session');
+          return res.status(503).json({
+            success: false,
+            error: 'PORTAL_SESSION_UNAVAILABLE',
+            message: 'Não foi possível iniciar sua sessão segura agora. Solicite um novo código e tente novamente.'
+          });
+        }
+      }
       await persistIdentityAuditLog({
         title: 'OTP do portal verificado',
         content: `Login por código do portal concluído para ${maskEmail(email)}.`,
@@ -26144,7 +26181,7 @@ async function startServer() {
         request: req,
         status: 'verified'
       });
-      return res.json({ success: true, user: userData });
+      return res.json({ success: true, user: req.session.user });
     } catch (error: any) {
       console.warn('[PortalAuth] verify-code warning:', error?.message || String(error));
       return res.status(400).json(genericError);
@@ -35893,6 +35930,8 @@ async function startServer() {
   };
 
   app.get('/api/portal/relationship-confirmations/:token', portalActionLimiter, async (req: any, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Pragma', 'no-cache');
     try {
       const fetched: any = await fetchRelationshipConfirmationByToken(req.params.token);
       if (!fetched.ok) return res.status(fetched.status).json({ success: false, error: fetched.error });

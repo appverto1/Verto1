@@ -2207,8 +2207,9 @@ export const dataService = {
   async getRelationshipConfirmation(token: string) {
     try {
       const response = await fetch(`/api/portal/relationship-confirmations/${encodeURIComponent(token)}`, {
-        headers: await getAuthHeaders(),
-        credentials: 'include'
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
       });
       return await safeJson(response);
     } catch (error) {
