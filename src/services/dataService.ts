@@ -6414,6 +6414,26 @@ export const dataService = {
     }
   },
 
+  async saveClinicalPlanMeasurementV3(patientId: string, payload: any = {}) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente não identificado.', data: null };
+    try {
+      const response = await fetchWithAuthRetry(`/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/plan-measurements`, {
+        method: 'POST',
+        headers: { ...(await getNoStoreAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return { success: false, status: response.status, code: result?.error, error: result?.message || result?.error || 'Não foi possível registrar a medição clínica V3.', data: null };
+      }
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível registrar a medição clínica V3.', data: null };
+    }
+  },
+
   async getClinicalMeasurementV3Catalog(patientId: string) {
     if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'Clinical Measurement V3 UI desabilitada.', data: { targets: [] } };
     const safePatientId = String(patientId || '').trim();

@@ -91094,7 +91094,9 @@ async function startServer() {
     checkPatientAccess,
     requireClinicCapability,
     sanitizeString,
-    currentClinicId
+    currentClinicId,
+    enforcePayloadLimit,
+    canEditTherapeuticPlanScope
   });
 
   registerClinicAppointmentPolicyRoutes(app, {
