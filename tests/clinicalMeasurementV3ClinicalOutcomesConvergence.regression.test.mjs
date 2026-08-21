@@ -25,6 +25,10 @@ assert.match(server, /ABA_V3_TARGET_CHART_READ_MODEL/, 'dashboard normalizer mus
 assert.match(route, /sourceAuthority:\s*'legacy'/);
 assert.match(route, /mergeClinicalOutcomeRowsV3First\(v3PlanOutcomeRows, legacyOutcomeRows\)/, 'V3 must have precedence over an exact duplicate legacy point');
 assert.match(server, /canonicalFingerprints/, 'dedupe must compare legacy rows against canonical V3 rows');
+assert.match(server, /canonicalAbaSessionTargets/, 'an ABA V3 session-target must own its derived legacy snapshot equivalents');
+assert.match(server, /sourceRecordType === 'aba_snapshot'/, 'legacy ABA snapshots must be suppressed only when canonical V3 owns the same session-target');
+assert.match(server, /row\?\.value_details\?\.series_key/, 'ABA V3 dashboard item identity must remain stable across phase changes');
+assert.match(server, /metric_value === null \|\| row\?\.metric_value === undefined/, 'legacy snapshot nulls must remain null instead of collapsing to zero');
 assert.match(route, /legacyFallbackPreserved:\s*true/);
 assert.match(route, /rawEventsRead:\s*false/);
 assert.doesNotMatch(route, /clinical_measurement_raw|clinical_measurement_events_v3/i, 'dashboard hot path must never read raw V3 events');
@@ -36,9 +40,12 @@ assert.match(analytics, /valueText\?: string \| null/);
 assert.match(analytics, /value === null \|\| value === undefined \|\| value === ''/);
 assert.doesNotMatch(analytics.match(/clinicalOutcomeSeriesKey[\s\S]*?\.join\('::'\);/)?.[0] || '', /observation\.source|observation\.context/, 'legacy → V3 source changes must not split an otherwise comparable series');
 assert.match(analytics, /Boolean\(latest\.projectionStale\)/);
+assert.match(analytics, /instrumentId === 'ABA_V3_PHASE'/, 'phase snapshots must not split one ABA metric into multiple dashboard cards');
 assert.match(analytics, /no_directional_judgment/);
 
 assert.match(dashboard, /categoricalMode/);
+assert.match(dashboard, /isSegmentBoundary/, 'phase changes must break the line inside the same card instead of creating duplicate cards');
+assert.match(dashboard, /series\.itemLabel \|\| series\.metricLabel/, 'clinical cards should lead with the target/item label when available');
 assert.match(dashboard, /tickFormatter=\{categoricalMode/);
 assert.match(dashboard, /V3 canônico/);
 assert.match(dashboard, /verto:clinical-outcomes-changed/);

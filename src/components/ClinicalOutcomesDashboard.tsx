@@ -133,9 +133,9 @@ function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutc
   ));
   const categoricalMode = categoricalLabels.length > 0 && !series.observations.some((observation) => observation.value !== null && observation.value !== undefined && Number.isFinite(Number(observation.value)));
   const categoryIndex = new Map(categoricalLabels.map((label, index) => [label, index]));
-  const rows = series.observations.map((observation) => {
+  const rows = series.observations.flatMap((observation, index, observations) => {
     const categoricalValue = clean(observation.valueText);
-    return {
+    const row = {
       observedAt: observation.observedAt,
       date: dateLabel(observation.observedAt),
       value: observation.missingReason
@@ -146,7 +146,22 @@ function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutc
       valueText: categoricalValue,
       display: formatClinicalOutcomeValue(observation),
       missingReason: observation.missingReason,
+      isSegmentBoundary: false,
     };
+    if (index === 0) return [row];
+    const previous = observations[index - 1];
+    const previousPhase = clean(previous?.metadata?.phaseAssignmentId || (previous?.instrumentId === 'ABA_V3_PHASE' ? previous?.instrumentVersion : ''));
+    const currentPhase = clean(observation?.metadata?.phaseAssignmentId || (observation?.instrumentId === 'ABA_V3_PHASE' ? observation?.instrumentVersion : ''));
+    if (!previousPhase || !currentPhase || previousPhase === currentPhase) return [row];
+    return [{
+      observedAt: observation.observedAt,
+      date: dateLabel(observation.observedAt),
+      value: null,
+      valueText: '',
+      display: 'Mudança de fase',
+      missingReason: null,
+      isSegmentBoundary: true,
+    }, row];
   });
   const target = categoricalMode ? Number.NaN : Number(series.observations.find((row: any) => Number.isFinite(Number(row?.metadata?.targetValue)))?.metadata?.targetValue);
   return (
@@ -177,7 +192,7 @@ function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutc
           <Tooltip
             content={({ active, payload }) => {
               const row: any = payload?.[0]?.payload;
-              if (!active || !row) return null;
+              if (!active || !row || row.isSegmentBoundary) return null;
               return (
                 <div className={`max-w-xs rounded-xl border px-3 py-2 text-xs shadow-lg ${isDark ? 'border-slate-700 bg-slate-950 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}>
                   <p>{row.date}</p>
@@ -371,7 +386,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                     <div key={`${goal.id}-${contribution.specialty}`} className={`rounded-2xl border p-4 ${inset}`}>
                       <div className="flex items-start justify-between gap-3"><div><p className={`text-sm font-semibold ${text}`}>{contribution.specialty}</p><p className={`mt-1 text-xs ${muted}`}>{contribution.link ? 'Contribuição vinculada ao PTS' : 'Contribuição esperada, ainda sem vínculo explícito'}</p></div>{contribution.link?.contribution_type === 'required' && <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-1 text-[11px] text-violet-700">Obrigatória</span>}</div>
                       {contribution.series.length > 0 ? contribution.series.slice(0, 2).map((series) => (
-                        <div key={series.key} className="mt-3 rounded-xl border border-slate-200/70 bg-white/60 p-3 dark:border-slate-700 dark:bg-slate-950/30"><div className="flex items-center justify-between gap-2"><p className={`truncate text-xs ${text}`}>{series.metricLabel}</p><span className={`rounded-full border px-2 py-1 text-[10px] ${evidenceTone(series, isPanelDark)}`}>{series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}</span></div><SeriesChart series={series} isDark={isPanelDark} compact /><p className={`mt-1 text-xs ${muted}`}>{formatClinicalOutcomeValue(series.latestObservation)}</p></div>
+                        <div key={series.key} className="mt-3 rounded-xl border border-slate-200/70 bg-white/60 p-3 dark:border-slate-700 dark:bg-slate-950/30"><div className="flex items-center justify-between gap-2"><p className={`truncate text-xs ${text}`}>{series.itemLabel || series.metricLabel}</p><span className={`rounded-full border px-2 py-1 text-[10px] ${evidenceTone(series, isPanelDark)}`}>{series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}</span></div><SeriesChart series={series} isDark={isPanelDark} compact /><p className={`mt-1 text-xs ${muted}`}>{formatClinicalOutcomeValue(series.latestObservation)}</p></div>
                       )) : <div className={`mt-3 rounded-xl border border-dashed p-4 text-xs leading-5 ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Sem evidência estruturada vinculada a esta contribuição. Isso não significa ausência de progresso.</div>}
                     </div>
                   ))}
@@ -392,7 +407,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
           ) : selectedPlanSeries.map((series) => (
             <article key={series.key} className={`rounded-3xl border p-5 ${panel}`}>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div><div className="flex flex-wrap items-center gap-2"><h3 className={`text-base font-semibold ${text}`}>{series.metricLabel}</h3><span className={`rounded-full border px-2.5 py-1 text-xs ${evidenceTone(series, isPanelDark)}`}>{series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}</span></div><p className={`mt-2 text-xs ${muted}`}>{series.context} · {series.source} · {clinicalOutcomeDirectionLabel(series.direction)}</p></div>
+                <div><div className="flex flex-wrap items-center gap-2"><h3 className={`text-base font-semibold ${text}`}>{series.itemLabel || series.metricLabel}</h3><span className={`rounded-full border px-2.5 py-1 text-xs ${evidenceTone(series, isPanelDark)}`}>{series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}</span></div>{series.itemLabel && series.itemLabel !== series.metricLabel && <p className={`mt-1 text-xs ${text}`}>{series.metricLabel}</p>}<p className={`mt-2 text-xs ${muted}`}>{series.context} · {series.source} · {clinicalOutcomeDirectionLabel(series.direction)}</p></div>
                 <div className={`rounded-2xl border px-4 py-3 text-xs ${inset}`}><p className={muted}>Última evidência</p><p className={`mt-1 text-sm ${text}`}>{formatClinicalOutcomeValue(series.latestObservation)}</p><p className={`mt-1 ${muted}`}>{series.latestObservation ? dateLabel(series.latestObservation.observedAt) : '-'}</p></div>
               </div>
               <div className="mt-4"><SeriesChart series={series} isDark={isPanelDark} /></div>

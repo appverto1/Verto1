@@ -52,6 +52,19 @@ const mergedSources = summarizeClinicalOutcomeSeries([
 assert.equal(mergedSources.length, 1, 'mudança da fonte legado → V3 não pode quebrar a continuidade da mesma série clínica');
 assert.equal(mergedSources[0].source, 'V3 + histórico');
 
+const abaPhaseRows = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'phase-a', itemId: 'dtt:target-1', itemLabel: 'Canário V3 Default-On', metricKey: 'PRIMARY_INDEPENDENCE_PERCENT', metricLabel: 'Independência primária', instrumentId: 'ABA_V3_PHASE', instrumentVersion: 'phase-1', observedAt: '2026-07-01T10:00:00.000Z', value: 50 },
+  { ...base, id: 'phase-b', itemId: 'dtt:target-1', itemLabel: 'Canário V3 Default-On', metricKey: 'PRIMARY_INDEPENDENCE_PERCENT', metricLabel: 'Independência primária', instrumentId: 'ABA_V3_PHASE', instrumentVersion: 'phase-2', observedAt: '2026-07-08T10:00:00.000Z', value: 60 },
+], new Date('2026-07-09T00:00:00.000Z'));
+assert.equal(abaPhaseRows.length, 1, 'mudança de fase ABA V3 deve quebrar a linha, não criar outro card');
+assert.equal(abaPhaseRows[0].itemLabel, 'Canário V3 Default-On');
+
+const realInstrumentVersionRows = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'instrument-a', instrumentId: 'scale-x', instrumentVersion: '1', observedAt: '2026-07-01T10:00:00.000Z', value: 1 },
+  { ...base, id: 'instrument-b', instrumentId: 'scale-x', instrumentVersion: '2', observedAt: '2026-07-08T10:00:00.000Z', value: 2 },
+], new Date('2026-07-09T00:00:00.000Z'));
+assert.equal(realInstrumentVersionRows.length, 2, 'versões clínicas reais de instrumento continuam semanticamente separadas');
+
 const dashboard = fs.readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
 assert.match(dashboard, /sem calcular média entre métricas incompatíveis/i);
 assert.match(dashboard, /Ausência de dados não é tratada como zero/);
@@ -63,6 +76,8 @@ assert.match(dashboard, /tickMargin=\{compact \? 6 : 8\}/, 'o eixo X deve reserv
 assert.match(dashboard, /V3 canônico/);
 assert.match(dashboard, /verto:clinical-outcomes-changed/);
 assert.match(dashboard, /categoricalMode/);
+assert.match(dashboard, /isSegmentBoundary/);
+assert.match(dashboard, /series\.itemLabel \|\| series\.metricLabel/);
 
 const server = fs.readFileSync('server.ts', 'utf8');
 assert.match(server, /clinical-outcomes-dashboard/);
@@ -70,6 +85,8 @@ assert.match(server, /doesNotAverageSpecialties: true/);
 assert.match(server, /supabase\.rpc\('read_clinical_outcomes_converged_v3'/, 'dashboard deve usar uma única leitura bulk V3 convergente');
 assert.match(server, /canonicalSource: 'CMV3_PLAN_PROJECTIONS_PLUS_ABA_V3_READ_MODEL'/);
 assert.match(server, /mergeClinicalOutcomeRowsV3First/);
+assert.match(server, /canonicalAbaSessionTargets/);
+assert.match(server, /metric_value === null \|\| row\?\.metric_value === undefined/);
 assert.match(server, /legacyFallbackPreserved: true/);
 assert.match(server, /rawEventsRead: false/);
 assert.match(server, /clinical-observations/);

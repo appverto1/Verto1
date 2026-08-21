@@ -46717,7 +46717,9 @@ async function startServer() {
     behaviorId: row?.behavior_id,
     metricType: row?.metric_type,
     metricLabel: row?.metric_label,
-    value: Number(row?.metric_value ?? 0),
+    value: row?.metric_value === null || row?.metric_value === undefined
+      ? null
+      : Number(row.metric_value),
     previousValue: row?.previous_value === null || row?.previous_value === undefined ? null : Number(row.previous_value),
     deltaValue: row?.delta_value === null || row?.delta_value === undefined ? null : Number(row.delta_value),
     deltaPercent: row?.delta_percent === null || row?.delta_percent === undefined ? null : Number(row.delta_percent),
@@ -78126,7 +78128,9 @@ async function startServer() {
           sessionId: sanitizeString(row?.session_id, 180) || null,
           professionalId: null,
           specialty: sanitizeTextField(row?.specialty || plan?.specialty, 120) || null,
-          itemId: sanitizeString(row?.item_id || row?.target_id, 260) || null,
+          itemId: sourceKind === 'ABA_TARGET'
+            ? sanitizeString(row?.value_details?.series_key || row?.item_id || row?.target_id, 260) || null
+            : sanitizeString(row?.item_id || row?.target_id, 260) || null,
           itemLabel: sanitizeTextField(row?.item_label || row?.metric_label, 220) || null,
           metricKey: sanitizeString(row?.metric_key, 120) || sanitizeString(row?.definition_id, 120),
           metricLabel: sanitizeTextField(row?.metric_label, 180) || sanitizeString(row?.metric_key, 120) || 'Métrica clínica',
@@ -78200,9 +78204,25 @@ async function startServer() {
     const canonical = Array.isArray(canonicalRows) ? canonicalRows : [];
     const legacy = Array.isArray(legacyRows) ? legacyRows : [];
     const canonicalFingerprints = new Set(canonical.map(clinicalOutcomeCrossSourceFingerprint));
+    const canonicalAbaSessionTargets = new Set(
+      canonical
+        .filter((row) => sanitizeString(row?.metadata?.readModelSource, 120) === 'ABA_V3_TARGET_CHART_READ_MODEL')
+        .map((row) => {
+          const sessionId = sanitizeString(row?.sessionId, 180);
+          const targetId = sanitizeString(row?.metadata?.abaTargetId, 180);
+          return sessionId && targetId ? `${sessionId}::${targetId}` : '';
+        })
+        .filter(Boolean)
+    );
     let deduplicatedLegacyCount = 0;
     const preservedLegacy = legacy.filter((row) => {
-      if (!canonicalFingerprints.has(clinicalOutcomeCrossSourceFingerprint(row))) return true;
+      const legacySessionId = sanitizeString(row?.sessionId, 180);
+      const legacyTargetId = sanitizeString(row?.itemId, 180);
+      const canonicalOwnsSessionTarget = row?.sourceRecordType === 'aba_snapshot'
+        && legacySessionId
+        && legacyTargetId
+        && canonicalAbaSessionTargets.has(`${legacySessionId}::${legacyTargetId}`);
+      if (!canonicalOwnsSessionTarget && !canonicalFingerprints.has(clinicalOutcomeCrossSourceFingerprint(row))) return true;
       deduplicatedLegacyCount += 1;
       return false;
     });
@@ -78425,7 +78445,9 @@ async function startServer() {
           metricType: point.metricType,
           unit: abaMetricUnit(String(point.metricType || '')).trim(),
           direction: String(point.metricDirection || '').toLowerCase() === 'lower_is_better' ? 'lower_is_better' : 'higher_is_better',
-          value: Number.isFinite(Number(point.value)) ? Number(point.value) : null,
+          value: point.value === null || point.value === undefined
+            ? null
+            : Number.isFinite(Number(point.value)) ? Number(point.value) : null,
           numerator: null,
           denominator: point.attemptsCount || null,
           observedAt: point.changedAt,

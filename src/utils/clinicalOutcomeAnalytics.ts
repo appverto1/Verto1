@@ -28,6 +28,7 @@ export type ClinicalOutcomeObservation = {
   itemLabel?: string | null;
   metricKey: string;
   metricLabel: string;
+  itemLabel: string;
   metricType?: string | null;
   unit?: string | null;
   direction?: ClinicalOutcomeDirection | string | null;
@@ -54,6 +55,7 @@ export type ClinicalOutcomeSeriesSummary = {
   key: string;
   metricKey: string;
   metricLabel: string;
+  itemLabel: string;
   unit: string;
   direction: ClinicalOutcomeDirection;
   specialty: string;
@@ -83,19 +85,25 @@ export const normalizeClinicalOutcomeDirection = (value: unknown): ClinicalOutco
   return 'higher_is_better';
 };
 
-export const clinicalOutcomeSeriesKey = (observation: ClinicalOutcomeObservation) => [
-  text(observation.planId),
-  text(observation.goalId),
-  text(observation.programId),
-  text(observation.itemId),
-  text(observation.metricKey),
-  text(observation.unit),
-  normalizeClinicalOutcomeDirection(observation.direction),
-  text(observation.instrumentId),
-  text(observation.instrumentVersion),
-  String(Number(observation.definitionVersion || 1)),
-  text(observation.specialty),
-].join('::');
+export const clinicalOutcomeSeriesKey = (observation: ClinicalOutcomeObservation) => {
+  const instrumentId = text(observation.instrumentId);
+  const groupingInstrumentVersion = instrumentId === 'ABA_V3_PHASE'
+    ? ''
+    : text(observation.instrumentVersion);
+  return [
+    text(observation.planId),
+    text(observation.goalId),
+    text(observation.programId),
+    text(observation.itemId),
+    text(observation.metricKey),
+    text(observation.unit),
+    normalizeClinicalOutcomeDirection(observation.direction),
+    instrumentId,
+    groupingInstrumentVersion,
+    String(Number(observation.definitionVersion || 1)),
+    text(observation.specialty),
+  ].join('::');
+};
 
 export const canCombineClinicalOutcomeSeries = (
   left: Pick<ClinicalOutcomeObservation, 'metricKey' | 'unit' | 'direction' | 'instrumentId' | 'instrumentVersion' | 'definitionVersion'>,
@@ -171,6 +179,7 @@ export const summarizeClinicalOutcomeSeries = (
       key,
       metricKey: text(sample.metricKey),
       metricLabel: text(sample.metricLabel) || text(sample.metricKey) || 'Métrica clínica',
+      itemLabel: text(sample.itemLabel),
       unit: text(sample.unit),
       direction: normalizeClinicalOutcomeDirection(sample.direction),
       specialty: text(sample.specialty) || 'Sem especialidade',
