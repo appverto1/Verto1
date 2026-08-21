@@ -1996,11 +1996,18 @@ export const dataService = {
           details: null
         };
       }
+      const responseErrorCode =
+        result?.code ||
+        result?.error_code ||
+        (typeof result?.error === 'string' && /^[A-Z0-9_]+$/.test(result.error) ? result.error : undefined);
       return {
         success: false,
         status: response.status,
-        code: result?.code || result?.error_code || undefined,
-        error: normalizeApiErrorMessage(result?.error || result?.message || 'Não foi possível criar o acesso do paciente'),
+        code: responseErrorCode,
+        requiresReauthentication:
+          response.status === 401 &&
+          ['SERVER_SESSION_REQUIRED', 'SESSION_REVOKED'].includes(String(responseErrorCode || '')),
+        error: normalizeApiErrorMessage(result?.message || result?.error || 'Não foi possível criar o acesso do paciente'),
         details: result
       };
     } catch (error) {

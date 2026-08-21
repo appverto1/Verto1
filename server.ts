@@ -27289,10 +27289,52 @@ async function startServer() {
       }
       const loginResponse = { success: true, user: sessionUser, isFirstLogin: Boolean(req.session.isFirstLogin) };
       console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
-      req.session.save((err) => {
+      req.session.save(async (err) => {
         if (err) {
           console.error("Session save error in login:", err);
           if (!res.headersSent) {
+            if (requiresDistributedRuntimeState()) {
+              logRouteDbError('/api/auth/login', err, {
+                requestId,
+                userId: sanitizeString(user.id, 120),
+                email: maskEmail(safeAuthEmail || credentialEmail),
+                stage: 'session_save_retry',
+                errorKind: 'session_persistence'
+              });
+              try {
+                await new Promise((resolve) => setTimeout(resolve, 120));
+                await saveExpressSession(req);
+                res.json(loginResponse);
+                delete req.session.isFirstLogin;
+                return;
+              } catch (sessionRetryError: any) {
+                logRouteDbError('/api/auth/login', sessionRetryError, {
+                  requestId,
+                  userId: sanitizeString(user.id, 120),
+                  email: maskEmail(safeAuthEmail || credentialEmail),
+                  stage: 'session_save_required',
+                  errorKind: 'session_persistence'
+                });
+              }
+              try {
+                await invalidateActiveSession(
+                  sanitizeString(user.id, 120),
+                  sanitizeString(sessionUser?.sessionToken, 200)
+                );
+              } catch (sessionCleanupError: any) {
+                console.error(
+                  '[Auth] Falha ao limpar sessao ativa apos erro de persistencia:',
+                  sanitizeString(sessionCleanupError?.message || String(sessionCleanupError), 220)
+                );
+              }
+              req.session.destroy(() => {});
+              res.clearCookie('verto-session');
+              return res.status(503).json({
+                success: false,
+                error: 'SERVER_SESSION_PERSISTENCE_REQUIRED',
+                message: 'Não foi possível iniciar sua sessão segura. Tente entrar novamente em instantes.'
+              });
+            }
             if (isRecoverableSessionSaveError(err)) {
               logRouteDbError('/api/auth/login', err, {
                 requestId,
