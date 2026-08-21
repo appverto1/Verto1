@@ -183,21 +183,23 @@ export function registerClinicalMeasurementV3Routes(app: Express, deps: Deps) {
         const visiblePlanIdSet=new Set(visiblePlanIds);
         const visiblePrograms=filterTherapeuticPlanProgramsForActor(programResult.data||[],allPlans,accessContext)
           .filter((program:any)=>visiblePlanIdSet.has(String(program?.therapeutic_plan_id||'')));
+        const visibleProgramIds=Array.from(new Set(visiblePrograms.map((program:any)=>sanitizeString(program?.id,180)).filter(Boolean)));
         const visibleObjectiveIds=Array.from(new Set(
           visiblePrograms.map((program:any)=>sanitizeString(program?.therapeutic_objective_id,120)).filter(isUuid)
         ));
 
-        if(!visiblePlanIds.length&&!visibleObjectiveIds.length) {
-          return res.json({success:true,data:{rows:[]},meta:{queryCount:3,rpcCount:0,batched:true,periodDays:requestedDays,dateFrom:dateFrom.toISOString(),dateTo:dateTo.toISOString(),source:'CMV3_TYPED_SESSION_PROJECTIONS'}});
+        if(!visiblePlanIds.length&&!visibleObjectiveIds.length&&!visibleProgramIds.length) {
+          return res.json({success:true,data:{rows:[]},meta:{queryCount:3,rpcCount:0,batched:true,periodDays:requestedDays,dateFrom:dateFrom.toISOString(),dateTo:dateTo.toISOString(),source:'CMV3_PLAN_PROJECTIONS_PLUS_ABA_V3_READ_MODEL'}});
         }
 
-        const rpc=await supabase.rpc('read_clinical_plan_outcomes_v3',{
+        const rpc=await supabase.rpc('read_clinical_outcomes_converged_v3',{
           p_organization_id:clinicId,
           p_patient_id:patientId,
           p_date_from:dateFrom.toISOString().slice(0,10),
           p_date_to:dateTo.toISOString().slice(0,10),
           p_plan_ids:visiblePlanIds,
           p_therapeutic_objective_ids:visibleObjectiveIds,
+          p_program_ids:visibleProgramIds,
           p_limit:5000
         });
         if(rpc.error) throw rpc.error;
@@ -212,10 +214,11 @@ export function registerClinicalMeasurementV3Routes(app: Express, deps: Deps) {
             periodDays:requestedDays,
             dateFrom:dateFrom.toISOString(),
             dateTo:dateTo.toISOString(),
-            source:'CMV3_TYPED_SESSION_PROJECTIONS',
+            source:'CMV3_PLAN_PROJECTIONS_PLUS_ABA_V3_READ_MODEL',
             rawEventsRead:false,
             legacyClinicalRowsRead:false,
             visiblePlanCount:visiblePlanIds.length,
+            visibleProgramCount:visibleProgramIds.length,
             visibleTherapeuticObjectiveCount:visibleObjectiveIds.length
           }
         });

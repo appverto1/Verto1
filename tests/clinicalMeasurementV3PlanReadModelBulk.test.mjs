@@ -69,15 +69,16 @@ assert.match(routes, /filterTherapeuticPlanProgramsForActor/);
 assert.match(routes, /patient_professional_links/);
 assert.match(routes, /visiblePlanIds/);
 assert.match(routes, /visibleObjectiveIds/);
-assert.match(routes, /supabase\.rpc\('read_clinical_plan_outcomes_v3'/);
+assert.match(routes, /supabase\.rpc\('read_clinical_outcomes_converged_v3'/);
 assert.match(routes, /p_plan_ids:visiblePlanIds/);
 assert.match(routes, /p_therapeutic_objective_ids:visibleObjectiveIds/);
+assert.match(routes, /p_program_ids:visibleProgramIds/);
 assert.match(routes, /rpcCount:1/);
-assert.doesNotMatch(routes, /for\s*\([^)]*target[^)]*\)[\s\S]{0,300}read_clinical_plan_outcomes_v3/i);
+assert.doesNotMatch(routes, /for\s*\([^)]*target[^)]*\)[\s\S]{0,300}read_clinical_outcomes_converged_v3/i);
 
 assert.match(dataService, /getClinicalPlanOutcomesV3/);
 assert.match(dataService, /plan-outcomes/);
-assert.match(dataService, /read_clinical_plan_outcomes_v3/);
+assert.match(dataService, /read_clinical_outcomes_converged_v3/);
 assert.match(server, /registerClinicalMeasurementV3Routes\(app,[\s\S]{0,700}filterTherapeuticPlanScopesForActor,[\s\S]{0,200}filterTherapeuticPlanProgramsForActor/);
 
 console.log('clinicalMeasurementV3PlanReadModelBulk.test.mjs: ok');

@@ -603,6 +603,15 @@ function normalizeClinicalMutationResult(result: any, fallback: string) {
   return result;
 }
 
+function notifyClinicalOutcomesChanged(patientId: string) {
+  if (typeof window === 'undefined') return;
+  const safePatientId = String(patientId || '').trim();
+  if (!safePatientId) return;
+  window.dispatchEvent(new CustomEvent('verto:clinical-outcomes-changed', {
+    detail: { patientId: safePatientId },
+  }));
+}
+
 const abaDecisionIdempotencyKeys = new Map<string, string>();
 
 function stableClinicalMutationPayload(value: any): string {
@@ -5919,7 +5928,9 @@ export const dataService = {
         table: 'clinical_observations,patient_therapeutic_plans,patient_professional_links',
         hasExplicitColumns: true,
       });
-      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível registrar a evidência clínica.');
+      const result = normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível registrar a evidência clínica.');
+      if (result?.success !== false) notifyClinicalOutcomesChanged(patientId);
+      return result;
     } catch (error) {
       const message = getApiErrorMessage(error, 'Não foi possível registrar a evidência clínica.');
       return { success: false, error: message, message };
@@ -5933,12 +5944,13 @@ export const dataService = {
     });
     try {
       const response = await fetchClinical(endpoint, {
-        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include',
+        cache: 'no-store',
       }, {
         helperName: 'getClinicalOutcomesDashboard',
         operation: 'list',
-        table: 'patient_therapeutic_plans,clinical_measure_definitions,clinical_observations,clinical_goal_contributions,clinical_plan_phases,aba_session_metric_snapshots',
+        table: 'patient_therapeutic_plans,read_clinical_outcomes_converged_v3,clinical_measure_definitions,clinical_observations,clinical_goal_contributions,clinical_plan_phases,aba_session_metric_snapshots',
         hasExplicitColumns: true,
       });
       return await safeJson(response);
@@ -6428,7 +6440,9 @@ export const dataService = {
       if (!response.ok || result?.success === false) {
         return { success: false, status: response.status, code: result?.error, error: result?.message || result?.error || 'Não foi possível registrar a medição clínica V3.', data: null };
       }
-      return { ...result, success: true };
+      const successResult = { ...result, success: true };
+      notifyClinicalOutcomesChanged(safePatientId);
+      return successResult;
     } catch (error: any) {
       return { success: false, error: error?.message || 'Não foi possível registrar a medição clínica V3.', data: null };
     }
@@ -6449,7 +6463,7 @@ export const dataService = {
       }, {
         helperName: 'getClinicalPlanOutcomesV3',
         operation: 'list',
-        table: 'read_clinical_plan_outcomes_v3',
+        table: 'read_clinical_outcomes_converged_v3',
         hasExplicitColumns: true,
       });
       const result = await safeJson(response);

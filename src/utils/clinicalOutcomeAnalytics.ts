@@ -3,7 +3,8 @@ export type ClinicalOutcomeDirection =
   | 'lower_is_better'
   | 'target_value'
   | 'target_range'
-  | 'event';
+  | 'event'
+  | 'no_directional_judgment';
 
 export type ClinicalOutcomeEvidenceState =
   | 'no_data'
@@ -31,6 +32,7 @@ export type ClinicalOutcomeObservation = {
   unit?: string | null;
   direction?: ClinicalOutcomeDirection | string | null;
   value?: number | null;
+  valueText?: string | null;
   numerator?: number | null;
   denominator?: number | null;
   observedAt: string;
@@ -44,6 +46,8 @@ export type ClinicalOutcomeObservation = {
   recencyWindowDays?: number | null;
   minimumDataPoints?: number | null;
   metadata?: Record<string, any>;
+  projectionStale?: boolean;
+  sourceAuthority?: 'canonical' | 'legacy' | string | null;
 };
 
 export type ClinicalOutcomeSeriesSummary = {
@@ -75,6 +79,7 @@ export const normalizeClinicalOutcomeDirection = (value: unknown): ClinicalOutco
   if (['target_value', 'target-value', 'target'].includes(normalized)) return 'target_value';
   if (['target_range', 'target-range', 'range'].includes(normalized)) return 'target_range';
   if (['event', 'milestone', 'binary'].includes(normalized)) return 'event';
+  if (['no_directional_judgment', 'no-directional-judgment', 'neutral', 'none'].includes(normalized)) return 'no_directional_judgment';
   return 'higher_is_better';
 };
 
@@ -90,8 +95,6 @@ export const clinicalOutcomeSeriesKey = (observation: ClinicalOutcomeObservation
   text(observation.instrumentVersion),
   String(Number(observation.definitionVersion || 1)),
   text(observation.specialty),
-  text(observation.context),
-  text(observation.source),
 ].join('::');
 
 export const canCombineClinicalOutcomeSeries = (
@@ -107,6 +110,7 @@ export const canCombineClinicalOutcomeSeries = (
 );
 
 const finiteValue = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
 };
@@ -146,7 +150,10 @@ export const summarizeClinicalOutcomeSeries = (
 
   return Array.from(groups.entries()).map(([key, rows]) => {
     const ordered = rows.slice().sort((left, right) => new Date(left.observedAt).getTime() - new Date(right.observedAt).getTime());
-    const valid = ordered.filter((row) => !row.missingReason && finiteValue(row.value) !== null);
+    const valid = ordered.filter((row) => (
+      !row.missingReason
+      && (finiteValue(row.value) !== null || Boolean(text(row.valueText)))
+    ));
     const minimumDataPoints = Math.max(4, Number(ordered.find((row) => Number(row.minimumDataPoints) > 0)?.minimumDataPoints || 4));
     const recencyWindowDays = Math.max(1, Number(ordered.find((row) => Number(row.recencyWindowDays) > 0)?.recencyWindowDays || 30));
     const evidenceState: ClinicalOutcomeEvidenceState = valid.length === 0
@@ -158,6 +165,8 @@ export const summarizeClinicalOutcomeSeries = (
           : 'sufficient';
     const latest = valid.length ? valid[valid.length - 1] : null;
     const sample = ordered[0];
+    const contexts = Array.from(new Set(ordered.map((row) => text(row.context)).filter(Boolean)));
+    const sources = Array.from(new Set(ordered.map((row) => text(row.source)).filter(Boolean)));
     return {
       key,
       metricKey: text(sample.metricKey),
@@ -165,8 +174,8 @@ export const summarizeClinicalOutcomeSeries = (
       unit: text(sample.unit),
       direction: normalizeClinicalOutcomeDirection(sample.direction),
       specialty: text(sample.specialty) || 'Sem especialidade',
-      context: text(sample.context) || 'Contexto não informado',
-      source: text(sample.source) || 'Registro clínico',
+      context: contexts.length === 1 ? contexts[0] : contexts.length > 1 ? 'Múltiplos contextos' : 'Contexto não informado',
+      source: sources.length === 1 ? sources[0] : sources.length > 1 ? 'V3 + histórico' : 'Registro clínico',
       observations: ordered,
       validObservations: valid,
       evidenceState,
@@ -174,7 +183,7 @@ export const summarizeClinicalOutcomeSeries = (
       latestObservation: latest,
       firstObservation: valid.length ? valid[0] : null,
       missingCount: ordered.length - valid.length,
-      stale: latest ? dayDifference(latest.observedAt, now) > recencyWindowDays : true,
+      stale: latest ? Boolean(latest.projectionStale) || dayDifference(latest.observedAt, now) > recencyWindowDays : true,
       recencyWindowDays,
       minimumDataPoints,
     };
@@ -189,18 +198,20 @@ export const formatClinicalOutcomeValue = (observation: ClinicalOutcomeObservati
   if (!observation) return 'Sem evidência';
   if (observation.missingReason) return 'Dado não coletado';
   const value = finiteValue(observation.value);
-  if (value === null) return 'Sem evidência';
+  const categoricalValue = text(observation.valueText);
+  if (value === null) return categoricalValue || 'Sem evidência';
   const unit = text(observation.unit);
+  const unitSuffix = unit ? (/^[%°]/.test(unit) ? unit : ` ${unit}`) : '';
   const rounded = Math.round(value * 10) / 10;
   const numerator = finiteValue(observation.numerator);
   const denominator = finiteValue(observation.denominator);
   if (numerator !== null && denominator !== null && denominator > 0) {
-    return `${numerator} de ${denominator} — ${rounded}${unit}`;
+    return `${numerator} de ${denominator} — ${rounded}${unitSuffix}`;
   }
   if (denominator !== null && denominator > 0) {
-    return `${rounded}${unit} · ${denominator} oportunidade(s)`;
+    return `${rounded}${unitSuffix} · ${denominator} oportunidade(s)`;
   }
-  return `${rounded}${unit}`;
+  return `${rounded}${unitSuffix}`;
 };
 
 export const clinicalOutcomeEvidenceLabel = (state: ClinicalOutcomeEvidenceState) => {
@@ -215,5 +226,6 @@ export const clinicalOutcomeDirectionLabel = (direction: ClinicalOutcomeDirectio
   if (direction === 'target_value') return 'Aproximar-se do valor-alvo';
   if (direction === 'target_range') return 'Permanecer na faixa-alvo';
   if (direction === 'event') return 'Atingir o evento definido';
+  if (direction === 'no_directional_judgment') return 'Sem direção clínica automática';
   return 'Maior valor é desejável';
 };

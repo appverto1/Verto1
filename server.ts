@@ -78052,7 +78052,174 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/clinical-outcomes-dashboard', checkAuth, requireClinicCapability('reports.clinical.indicators'), checkPatientAccess, async (req: any, res) => {
+  const finiteClinicalOutcomeNumber = (value: any) => {
+    if (value === null || value === undefined || value === '') return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
+  const normalizeClinicalOutcomeDirectionFromV3 = (value: any) => {
+    const normalized = sanitizeString(value, 80).toUpperCase();
+    if (normalized === 'DECREASE_IS_BETTER') return 'lower_is_better';
+    if (normalized === 'TARGET_RANGE_IS_BETTER') return 'target_range';
+    if (normalized === 'NO_DIRECTIONAL_JUDGMENT') return 'no_directional_judgment';
+    return 'higher_is_better';
+  };
+
+  const normalizeClinicalOutcomeValueFromV3 = (row: any) => {
+    const canonicalUnit = sanitizeString(row?.canonical_value_unit, 80).toUpperCase();
+    const preferredUnitCode = sanitizeString(row?.unit_code, 80);
+    const preferredUnitLabel = sanitizeString(row?.unit_label, 120);
+    const finiteValue = finiteClinicalOutcomeNumber(row?.value_number);
+
+    if (canonicalUnit === 'CATEGORY') {
+      return { value: null, valueText: sanitizeString(row?.value_text, 180) || null, unit: '' };
+    }
+    if (canonicalUnit === 'EVENTS_PER_HOUR') {
+      return { value: finiteValue, valueText: null, unit: 'eventos/h' };
+    }
+    if (canonicalUnit === 'MILLISECOND') {
+      if (finiteValue === null) return { value: null, valueText: null, unit: 'ms' };
+      const requested = `${preferredUnitCode} ${preferredUnitLabel}`.trim().toLowerCase();
+      if (/\b(hour|hours|hora|horas|h)\b/.test(requested)) return { value: finiteValue / 3_600_000, valueText: null, unit: preferredUnitLabel || 'h' };
+      if (/\b(minute|minutes|minuto|minutos|min)\b/.test(requested)) return { value: finiteValue / 60_000, valueText: null, unit: preferredUnitLabel || 'min' };
+      if (/\b(second|seconds|segundo|segundos|sec|s)\b/.test(requested) && !/milli|mili/.test(requested)) return { value: finiteValue / 1_000, valueText: null, unit: preferredUnitLabel || 's' };
+      return { value: finiteValue, valueText: null, unit: preferredUnitLabel || preferredUnitCode || 'ms' };
+    }
+    if (canonicalUnit === 'COUNT') {
+      return { value: finiteValue, valueText: null, unit: preferredUnitLabel || preferredUnitCode || 'contagem' };
+    }
+    return {
+      value: finiteValue,
+      valueText: sanitizeString(row?.value_text, 180) || null,
+      unit: preferredUnitLabel || preferredUnitCode || sanitizeString(row?.canonical_value_unit, 80),
+    };
+  };
+
+  const normalizeClinicalPlanOutcomesV3ForDashboard = (
+    rows: any[],
+    visiblePlanMap: Map<string, any>,
+    objectivePlanMap: Map<string, Set<string>>,
+  ) => {
+    const normalized: any[] = [];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const sourceKind = sanitizeString(row?.source_kind, 40).toUpperCase();
+      const objectiveId = sanitizeString(row?.therapeutic_objective_id, 120);
+      const directPlanId = sanitizeString(row?.plan_id, 120);
+      const planIds = sourceKind === 'PLAN_GOAL' || sourceKind === 'ABA_TARGET'
+        ? (visiblePlanMap.has(directPlanId) ? [directPlanId] : [])
+        : Array.from(objectivePlanMap.get(objectiveId) || []);
+      if (!planIds.length) continue;
+
+      const normalizedValue = normalizeClinicalOutcomeValueFromV3(row);
+      const observedAt = sanitizeString(row?.observed_at, 80) || `${sanitizeString(row?.clinical_date, 20)}T00:00:00.000Z`;
+      const coverageStatus = sanitizeString(row?.coverage_status, 80).toUpperCase();
+      const missingReason = coverageStatus && coverageStatus !== 'OBSERVED' ? coverageStatus.toLowerCase() : null;
+      for (const planId of planIds) {
+        const plan = visiblePlanMap.get(planId) || {};
+        normalized.push({
+          id: `cmv3:${sanitizeString(row?.expectation_id, 120)}:${planId}`,
+          planId,
+          planVersion: Number(plan?.edit_version || 1),
+          goalId: sanitizeString(row?.goal_id, 120) || objectiveId || null,
+          programId: sanitizeString(row?.program_id, 180) || null,
+          sessionId: sanitizeString(row?.session_id, 180) || null,
+          professionalId: null,
+          specialty: sanitizeTextField(row?.specialty || plan?.specialty, 120) || null,
+          itemId: sanitizeString(row?.item_id || row?.target_id, 260) || null,
+          itemLabel: sanitizeTextField(row?.item_label || row?.metric_label, 220) || null,
+          metricKey: sanitizeString(row?.metric_key, 120) || sanitizeString(row?.definition_id, 120),
+          metricLabel: sanitizeTextField(row?.metric_label, 180) || sanitizeString(row?.metric_key, 120) || 'Métrica clínica',
+          metricType: sanitizeString(row?.semantic_family, 40).toLowerCase(),
+          unit: normalizedValue.unit,
+          direction: normalizeClinicalOutcomeDirectionFromV3(row?.directionality),
+          value: normalizedValue.value,
+          valueText: normalizedValue.valueText,
+          numerator: finiteClinicalOutcomeNumber(row?.numerator),
+          denominator: finiteClinicalOutcomeNumber(row?.denominator),
+          observedAt,
+          context: 'clinic',
+          source: sanitizeString(row?.read_model_source, 120) === 'ABA_V3_TARGET_CHART_READ_MODEL' ? 'ABA V3 canônico' : 'V3 canônico',
+          instrumentId: sanitizeString(row?.read_model_source, 120) === 'ABA_V3_TARGET_CHART_READ_MODEL' ? 'ABA_V3_PHASE' : null,
+          instrumentVersion: sanitizeString(row?.value_details?.phase_assignment_id, 180) || null,
+          definitionVersion: Math.max(1, Number(row?.definition_version || 1)),
+          missingReason,
+          projectionStale: row?.projection_stale === true,
+          sourceAuthority: 'canonical',
+          metadata: {
+            cmv3: true,
+            sourceKind,
+            targetId: row?.target_id || null,
+            definitionId: row?.definition_id || null,
+            definitionVersionId: row?.definition_version_id || null,
+            expectationId: row?.expectation_id || null,
+            coverageStatus: row?.coverage_status || null,
+            canonicalValueUnit: row?.canonical_value_unit || null,
+            valueDetails: row?.value_details || {},
+            projectionQueueStatus: row?.projection_queue_status || null,
+            sourceLatestRecordedAt: row?.source_latest_recorded_at || null,
+            computedAt: row?.computed_at || null,
+            readModelSource: row?.read_model_source || null,
+            abaTargetId: row?.value_details?.aba_target_id || null,
+            sourceFamily: row?.value_details?.source_family || null,
+            requiresReview: row?.value_details?.requires_review === true,
+            phaseAssignmentId: row?.value_details?.phase_assignment_id || null,
+            phaseType: row?.value_details?.phase_type || null,
+            phaseLabel: row?.value_details?.phase_label || null,
+          },
+          minimumDataPoints: 4,
+          recencyWindowDays: 30,
+          sourceRecordType: 'cmv3_projection',
+        });
+      }
+    }
+    return normalized;
+  };
+
+  const clinicalOutcomeCrossSourceFingerprint = (row: any) => {
+    const observed = new Date(String(row?.observedAt || ''));
+    const observedSecond = Number.isFinite(observed.getTime()) ? Math.floor(observed.getTime() / 1000) : String(row?.observedAt || '');
+    const numeric = finiteClinicalOutcomeNumber(row?.value);
+    const numerator = finiteClinicalOutcomeNumber(row?.numerator);
+    const denominator = finiteClinicalOutcomeNumber(row?.denominator);
+    return [
+      sanitizeString(row?.planId, 120),
+      sanitizeString(row?.goalId, 120),
+      sanitizeString(row?.metricKey, 120).toLowerCase(),
+      sanitizeString(row?.unit, 80).toLowerCase(),
+      sanitizeString(row?.direction, 80).toLowerCase(),
+      sanitizeTextField(row?.specialty, 120).toLowerCase(),
+      observedSecond,
+      numeric !== null ? String(Math.round(numeric * 1_000_000) / 1_000_000) : sanitizeString(row?.valueText, 180),
+      numerator !== null ? String(numerator) : '',
+      denominator !== null ? String(denominator) : '',
+    ].join('::');
+  };
+
+  const mergeClinicalOutcomeRowsV3First = (canonicalRows: any[], legacyRows: any[]) => {
+    const canonical = Array.isArray(canonicalRows) ? canonicalRows : [];
+    const legacy = Array.isArray(legacyRows) ? legacyRows : [];
+    const canonicalFingerprints = new Set(canonical.map(clinicalOutcomeCrossSourceFingerprint));
+    let deduplicatedLegacyCount = 0;
+    const preservedLegacy = legacy.filter((row) => {
+      if (!canonicalFingerprints.has(clinicalOutcomeCrossSourceFingerprint(row))) return true;
+      deduplicatedLegacyCount += 1;
+      return false;
+    });
+    const rows = [...canonical, ...preservedLegacy];
+    rows.sort((left, right) => new Date(String(left?.observedAt || 0)).getTime() - new Date(String(right?.observedAt || 0)).getTime());
+    return { rows, deduplicatedLegacyCount };
+  };
+
+  const isClinicalPlanV3ReaderUnavailable = (error: any) => {
+    const code = sanitizeString(error?.code, 80).toUpperCase();
+    const message = sanitizeString(error?.message || error?.details || error, 400).toLowerCase();
+    return code === 'PGRST202'
+      || ((message.includes('read_clinical_outcomes_converged_v3') || message.includes('read_clinical_plan_outcomes_v3'))
+        && (message.includes('does not exist') || message.includes('schema cache') || message.includes('could not find')));
+  };
+
+  app.get('/api/patients/:patientId/clinical-outcomes-dashboard', noStoreDynamicResponse, checkAuth, requireClinicCapability('reports.clinical.indicators'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -78156,9 +78323,48 @@ async function startServer() {
       const visiblePlanIds = new Set(visiblePlans.map((plan: any) => String(plan.id)));
       const visiblePrograms = filterTherapeuticPlanProgramsForActor(programResult.data || [], allPlans, accessContext);
       const visibleProgramIds = new Set(visiblePrograms.map((program: any) => String(program.id)));
+      const visibleProgramIdList = Array.from(visibleProgramIds).map((programId) => sanitizeString(programId, 180)).filter(Boolean);
       const programById = new Map(visiblePrograms.map((program: any) => [String(program.id), program]));
       const targetById = new Map((targetResult.data || []).filter((target: any) => visibleProgramIds.has(String(target.program_id))).map((target: any) => [String(target.id), target]));
       const definitionById = new Map((definitionResult.error ? [] : definitionResult.data || []).filter((definition: any) => visiblePlanIds.has(String(definition.plan_id))).map((definition: any) => [String(definition.id), definition]));
+
+      const visiblePlanMap = new Map(visiblePlans.map((plan: any) => [String(plan.id), plan]));
+      const visiblePlanIdList = Array.from(visiblePlanIds).filter((planId: string) => isUuid(planId));
+      const objectivePlanMap = new Map<string, Set<string>>();
+      for (const program of visiblePrograms) {
+        const objectiveId = sanitizeString(program?.therapeutic_objective_id, 120);
+        const planId = sanitizeString(program?.therapeutic_plan_id, 120);
+        if (!isUuid(objectiveId) || !visiblePlanIds.has(planId)) continue;
+        const current = objectivePlanMap.get(objectiveId) || new Set<string>();
+        current.add(planId);
+        objectivePlanMap.set(objectiveId, current);
+      }
+      const visibleObjectiveIds = Array.from(objectivePlanMap.keys());
+      let v3ReadModelAvailable = isUuid(clinicId);
+      let v3PlanOutcomeRows: any[] = [];
+      let v3RpcCount = 0;
+      if (isUuid(clinicId) && (visiblePlanIdList.length > 0 || visibleObjectiveIds.length > 0)) {
+        const v3Result = await supabase.rpc('read_clinical_outcomes_converged_v3', {
+          p_organization_id: clinicId,
+          p_patient_id: patientId,
+          p_date_from: dateFromIso.slice(0, 10),
+          p_date_to: dateToIso.slice(0, 10),
+          p_plan_ids: visiblePlanIdList,
+          p_therapeutic_objective_ids: visibleObjectiveIds,
+          p_program_ids: visibleProgramIdList,
+          p_limit: 5000,
+        });
+        v3RpcCount = 1;
+        if (v3Result.error) {
+          if (isClinicalPlanV3ReaderUnavailable(v3Result.error)) {
+            v3ReadModelAvailable = false;
+          } else {
+            throw v3Result.error;
+          }
+        } else {
+          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap);
+        }
+      }
 
       const structuredObservations = (observationResult.error ? [] : observationResult.data || [])
         .filter((row: any) => visiblePlanIds.has(String(row.plan_id)))
@@ -78191,7 +78397,9 @@ async function startServer() {
             metadata: row.metadata || {},
             minimumDataPoints: Number(definition.minimum_data_points || 4),
             recencyWindowDays: Number(definition.recency_window_days || 30),
-            sourceRecordType: 'clinical_observation'
+            sourceRecordType: 'clinical_observation',
+            sourceAuthority: 'legacy',
+            projectionStale: false
           };
         });
 
@@ -78230,7 +78438,9 @@ async function startServer() {
           metadata: { changeStatus: point.changeStatus, statusLabel: point.statusLabel, specialtySource: point.specialtySource },
           minimumDataPoints: 4,
           recencyWindowDays: 30,
-          sourceRecordType: 'aba_snapshot'
+          sourceRecordType: 'aba_snapshot',
+          sourceAuthority: 'legacy',
+          projectionStale: false
         };
       }).filter(Boolean);
 
@@ -78238,10 +78448,12 @@ async function startServer() {
         visiblePlanIds.has(String(row.pts_plan_id)) && visiblePlanIds.has(String(row.specialty_plan_id))
       ));
       const visiblePhases = (phaseResult.error ? [] : phaseResult.data || []).filter((row: any) => visiblePlanIds.has(String(row.plan_id)));
+      const legacyOutcomeRows = [...structuredObservations, ...abaObservations];
+      const mergedOutcomes = mergeClinicalOutcomeRowsV3First(v3PlanOutcomeRows, legacyOutcomeRows);
+      const legacyObservationCount = mergedOutcomes.rows.filter((row: any) => row?.sourceAuthority !== 'canonical').length;
       const specialties = Array.from(new Set([
         ...visiblePlans.map((plan: any) => sanitizeTextField(plan.specialty, 120)),
-        ...structuredObservations.map((row: any) => sanitizeTextField(row.specialty, 120)),
-        ...abaObservations.map((row: any) => sanitizeTextField(row?.specialty, 120))
+        ...mergedOutcomes.rows.map((row: any) => sanitizeTextField(row?.specialty, 120))
       ].filter(Boolean))).sort((left, right) => left.localeCompare(right, 'pt-BR'));
 
       return res.json({
@@ -78256,19 +78468,29 @@ async function startServer() {
             therapeuticObjectiveId: program.therapeutic_objective_id || null,
             measurementType: program.measurement_type || null
           })),
-          observations: [...structuredObservations, ...abaObservations],
+          observations: mergedOutcomes.rows,
           contributions: visibleContributions,
           phases: visiblePhases,
           specialties,
-          schemaAvailable: clinicalSchemaAvailable
+          schemaAvailable: clinicalSchemaAvailable || v3ReadModelAvailable,
+          v3Available: v3ReadModelAvailable,
+          v3ObservationCount: v3PlanOutcomeRows.length,
+          legacyObservationCount
         },
         meta: {
-          queryCount: 9,
+          queryCount: 9 + v3RpcCount,
+          rpcCount: v3RpcCount,
           batched: true,
           periodDays: requestedDays,
           dateFrom: dateFromIso,
           dateTo: dateToIso,
-          doesNotAverageSpecialties: true
+          doesNotAverageSpecialties: true,
+          canonicalSource: 'CMV3_PLAN_PROJECTIONS_PLUS_ABA_V3_READ_MODEL',
+          v3ObservationCount: v3PlanOutcomeRows.length,
+          legacyObservationCount,
+          deduplicatedLegacyCount: mergedOutcomes.deduplicatedLegacyCount,
+          rawEventsRead: false,
+          legacyFallbackPreserved: true
         }
       });
     } catch (error: any) {

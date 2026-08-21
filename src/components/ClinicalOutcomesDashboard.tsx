@@ -44,6 +44,9 @@ type DashboardData = {
   phases: any[];
   specialties: string[];
   schemaAvailable: boolean;
+  v3Available: boolean;
+  v3ObservationCount: number;
+  legacyObservationCount: number;
 };
 
 const EMPTY_DATA: DashboardData = {
@@ -54,6 +57,9 @@ const EMPTY_DATA: DashboardData = {
   phases: [],
   specialties: [],
   schemaAvailable: false,
+  v3Available: false,
+  v3ObservationCount: 0,
+  legacyObservationCount: 0,
 };
 
 const PLAN_STATUS_LABELS: Record<string, string> = {
@@ -119,14 +125,30 @@ const evidenceTone = (series: ClinicalOutcomeSeriesSummary, dark: boolean) => {
 };
 
 function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutcomeSeriesSummary; isDark: boolean; compact?: boolean }) {
-  const rows = series.observations.map((observation) => ({
-    observedAt: observation.observedAt,
-    date: dateLabel(observation.observedAt),
-    value: observation.missingReason ? null : observation.value,
-    display: formatClinicalOutcomeValue(observation),
-    missingReason: observation.missingReason,
-  }));
-  const target = Number(series.observations.find((row: any) => Number.isFinite(Number(row?.metadata?.targetValue)))?.metadata?.targetValue);
+  const categoricalLabels = Array.from(new Set(
+    series.observations
+      .filter((observation) => !observation.missingReason && (observation.value === null || observation.value === undefined || !Number.isFinite(Number(observation.value))))
+      .map((observation) => clean(observation.valueText))
+      .filter(Boolean),
+  ));
+  const categoricalMode = categoricalLabels.length > 0 && !series.observations.some((observation) => observation.value !== null && observation.value !== undefined && Number.isFinite(Number(observation.value)));
+  const categoryIndex = new Map(categoricalLabels.map((label, index) => [label, index]));
+  const rows = series.observations.map((observation) => {
+    const categoricalValue = clean(observation.valueText);
+    return {
+      observedAt: observation.observedAt,
+      date: dateLabel(observation.observedAt),
+      value: observation.missingReason
+        ? null
+        : categoricalMode
+          ? categoryIndex.get(categoricalValue) ?? null
+          : observation.value,
+      valueText: categoricalValue,
+      display: formatClinicalOutcomeValue(observation),
+      missingReason: observation.missingReason,
+    };
+  });
+  const target = categoricalMode ? Number.NaN : Number(series.observations.find((row: any) => Number.isFinite(Number(row?.metadata?.targetValue)))?.metadata?.targetValue);
   return (
     <div className={compact ? 'h-28' : 'h-52'}>
       <SafeResponsiveContainer
@@ -144,7 +166,14 @@ function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutc
             minTickGap={20}
             stroke={isDark ? '#94A3B8' : '#64748B'}
           />
-          <YAxis tick={{ fontSize: compact ? 9 : 11 }} width={compact ? 32 : 48} stroke={isDark ? '#94A3B8' : '#64748B'} />
+          <YAxis
+            tick={{ fontSize: compact ? 9 : 11 }}
+            width={categoricalMode ? (compact ? 68 : 92) : (compact ? 32 : 48)}
+            stroke={isDark ? '#94A3B8' : '#64748B'}
+            domain={categoricalMode ? [0, Math.max(0, categoricalLabels.length - 1)] : undefined}
+            ticks={categoricalMode ? categoricalLabels.map((_, index) => index) : undefined}
+            tickFormatter={categoricalMode ? (value) => categoricalLabels[Number(value)] || '' : undefined}
+          />
           <Tooltip
             content={({ active, payload }) => {
               const row: any = payload?.[0]?.payload;
@@ -157,7 +186,7 @@ function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutc
               );
             }}
           />
-          {Number.isFinite(target) && <ReferenceLine y={target} strokeDasharray="5 4" label={{ value: 'Alvo', fontSize: 10 }} />}
+          {!categoricalMode && Number.isFinite(target) && <ReferenceLine y={target} strokeDasharray="5 4" label={{ value: 'Alvo', fontSize: 10 }} />}
           <Line type="linear" dataKey="value" strokeWidth={2.5} dot={{ r: compact ? 2.5 : 3.5 }} activeDot={{ r: 5 }} connectNulls={false} />
         </LineChart>
       </SafeResponsiveContainer>
@@ -173,6 +202,19 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
   const [scopeId, setScopeId] = useState('pts');
   const [contextFilter, setContextFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [refreshRevision, setRefreshRevision] = useState(0);
+
+
+  useEffect(() => {
+    const handleClinicalOutcomeChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ patientId?: string }>).detail;
+      if (!detail?.patientId || String(detail.patientId) === String(patientId)) {
+        setRefreshRevision((current) => current + 1);
+      }
+    };
+    window.addEventListener('verto:clinical-outcomes-changed', handleClinicalOutcomeChange as EventListener);
+    return () => window.removeEventListener('verto:clinical-outcomes-changed', handleClinicalOutcomeChange as EventListener);
+  }, [patientId]);
 
   useEffect(() => {
     let active = true;
@@ -191,7 +233,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
     };
     void load();
     return () => { active = false; };
-  }, [days, patientId]);
+  }, [days, patientId, refreshRevision]);
 
   const plans = useMemo(() => (Array.isArray(data.plans) ? data.plans.slice().sort(latestPlanFirst) : []), [data.plans]);
   const ptsPlans = useMemo(() => plans.filter((plan) => plan.mode === 'interdisciplinary'), [plans]);
@@ -263,7 +305,10 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-600">Evolução clínica por planos</p>
-            <h2 className={`mt-1 text-xl font-semibold ${text}`}>PTS e planos por especialidade</h2>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h2 className={`text-xl font-semibold ${text}`}>PTS e planos por especialidade</h2>
+              {data.v3Available && <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] text-emerald-700">V3 canônico</span>}
+            </div>
             <p className={`mt-2 max-w-3xl text-sm leading-6 ${muted}`}>Cada especialidade preserva sua unidade e sua série técnica. A visão do PTS reúne contribuições explicáveis, sem calcular média entre métricas incompatíveis.</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
@@ -292,7 +337,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
       {!data.schemaAvailable && (
         <div className={`flex items-start gap-3 rounded-2xl border p-4 ${isPanelDark ? 'border-amber-500/30 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
           <Database size={20} className="mt-0.5 shrink-0" />
-          <div><p className="text-sm font-medium">Estrutura de resultados multidisciplinares ainda não aplicada</p><p className="mt-1 text-xs leading-5">Os registros ABA existentes continuam disponíveis. As demais especialidades aparecerão quando a migration de observações clínicas for aplicada e seus dados forem vinculados aos planos.</p></div>
+          <div><p className="text-sm font-medium">Estrutura de resultados multidisciplinares ainda não disponível</p><p className="mt-1 text-xs leading-5">Os registros históricos continuam preservados. As séries por especialidade aparecem quando existe uma fonte clínica estruturada e autorizada para o plano.</p></div>
         </div>
       )}
 
@@ -301,6 +346,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
         <label className={`min-w-[180px] flex-1 text-xs ${muted}`}>Contexto<select value={contextFilter} onChange={(event) => setContextFilter(event.target.value)} className={`mt-1.5 h-10 w-full rounded-xl border px-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}><option value="all">Todos os contextos</option>{contexts.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
         <label className={`min-w-[220px] flex-1 text-xs ${muted}`}>Fonte<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className={`mt-1.5 h-10 w-full rounded-xl border px-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}><option value="all">Todas as fontes</option>{sources.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
         <div className={`flex min-h-10 items-center gap-2 rounded-xl border px-3 text-xs ${inset}`}><ShieldCheck size={16} className="text-emerald-500" /> Ausência de dados não é tratada como zero</div>
+        {data.v3Available && <div className={`flex min-h-10 items-center rounded-xl border px-3 text-xs ${inset}`}>{data.v3ObservationCount} ponto(s) V3 · {data.legacyObservationCount} histórico(s)</div>}
       </div>
 
       {scopeId === 'pts' ? (
