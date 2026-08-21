@@ -45,6 +45,7 @@ import { debugEligibleRowsRender, debugFallbackTriggered } from '../utils/debugP
 import {
   buildAppointmentDateTime,
   calculateAppointmentEnd,
+  formatDateInAppointmentTimezone,
   getAppointmentDurationMinutes,
 } from '../utils/scheduling';
 import {
@@ -2157,7 +2158,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       location_type: scheduledSessionForPatient?.locationType || scheduledSessionForPatient?.location_type || scheduledSessionForPatient?.location || null,
       startedAt: startedAt.toISOString(),
       endsAt: endsAt.toISOString(),
-      referenceDate: startedAt.toISOString().slice(0, 10),
+      referenceDate: formatDateInAppointmentTimezone(startedAt) || startedAt.toISOString().slice(0, 10),
       recordCount: 0
     };
     persistActiveSession(nextSession);
@@ -2288,18 +2289,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         return;
       }
       const savedSession = saveResult?.session || saveResult?.data;
-      if (saveResult?.success && savedSession?.id && String(savedSession.id) !== String(nextSession.id)) {
+      if (saveResult?.success && savedSession?.id) {
+        const serverReferenceDate = savedSession.reference_date || savedSession.referenceDate || nextSession.referenceDate;
         persistActiveSession({
           ...nextSession,
           id: String(savedSession.id),
           status: savedSession.status || nextSession.status,
           startedAt: savedSession.actual_start_at || savedSession.started_at || nextSession.startedAt,
+          referenceDate: serverReferenceDate,
+          reference_date: serverReferenceDate,
           appointmentId: savedSession.appointment_id || nextSession.appointmentId,
           appointment_id: savedSession.appointment_id || nextSession.appointment_id,
           scheduledStart: savedSession.scheduled_start_at || nextSession.scheduledStart,
           scheduled_start: savedSession.scheduled_start_at || nextSession.scheduled_start,
           scheduledEnd: savedSession.scheduled_end_at || nextSession.scheduledEnd,
-          scheduled_end: savedSession.scheduled_end_at || nextSession.scheduled_end
+          scheduled_end: savedSession.scheduled_end_at || nextSession.scheduled_end,
+          locationContextSnapshot: savedSession.location_context_snapshot || nextSession.locationContextSnapshot,
+          location_context_snapshot: savedSession.location_context_snapshot || nextSession.location_context_snapshot
         });
       }
     }
@@ -2618,12 +2624,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         }).then((saveResult: any) => {
           const savedSession = saveResult?.session || saveResult?.data;
           if (saveResult?.success && savedSession?.id) {
+            const serverReferenceDate = savedSession.reference_date || savedSession.referenceDate || linkedSession.referenceDate;
             persistActiveSession({
               ...linkedSession,
               id: String(savedSession.id),
               status: savedSession.status || linkedSession.status,
+              referenceDate: serverReferenceDate,
+              reference_date: serverReferenceDate,
               appointmentId: savedSession.appointment_id || scheduledAppointmentId,
-              appointment_id: savedSession.appointment_id || scheduledAppointmentId
+              appointment_id: savedSession.appointment_id || scheduledAppointmentId,
+              locationContextSnapshot: savedSession.location_context_snapshot || linkedSession.locationContextSnapshot,
+              location_context_snapshot: savedSession.location_context_snapshot || linkedSession.location_context_snapshot
             });
           }
         }).catch((error: any) => {
@@ -11999,7 +12010,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} showAbaV3Details={isKidsProfile && abaV3UiEnabled} />
+          <ClinicalChartsWorkspace patientId={String(patient.id)} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} showAbaV3Details={isKidsProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} />
         ) : activeTab === 'session' && isKidsProfile ? (
           null
         ) : activeTab === 'school' ? (

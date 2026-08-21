@@ -77,11 +77,11 @@ with scope_rows as (
 ), stats as (
   select
     (select count(*) from selected_scope)::integer as selected_scope_count,
-    (select min(organization_id) from selected_scope) as organization_id,
-    (select min(patient_id) from selected_scope) as patient_id,
-    (select min(source_target_id) from selected_scope) as source_target_id,
-    (select min(universal_target_id) from selected_scope) as universal_target_id,
-    (select min(universal_definition_id) from selected_scope) as universal_definition_id,
+    (select organization_id from selected_scope order by organization_id::text limit 1) as organization_id,
+    (select patient_id from selected_scope order by patient_id::text limit 1) as patient_id,
+    (select source_target_id from selected_scope order by source_target_id::text limit 1) as source_target_id,
+    (select universal_target_id from selected_scope order by universal_target_id::text limit 1) as universal_target_id,
+    (select universal_definition_id from selected_scope order by universal_definition_id::text limit 1) as universal_definition_id,
     (select min(last_mirrored_at) from selected_scope) as last_mirrored_at,
     (select min(existing_link_count) from selected_scope) as existing_link_count,
     count(*)::integer as candidate_count,
@@ -143,14 +143,20 @@ select
       and link.source_target_id=exec.source_target_id
       and trial.received_at>exec.last_mirrored_at
   ) as post_new_link_count,
-  public.get_clinical_measurement_v3_shadow_comparison(
-    exec.organization_id,
-    exec.patient_id,
-    exec.universal_target_id,
-    exec.universal_definition_id,
-    exec.period_start,
-    exec.period_end
-  ) as post_comparison
+  case
+    when exec.mirror_result->>'gate'='PASS'
+      and exec.period_start is not null
+      and exec.period_end is not null
+    then public.get_clinical_measurement_v3_shadow_comparison(
+      exec.organization_id,
+      exec.patient_id,
+      exec.universal_target_id,
+      exec.universal_definition_id,
+      exec.period_start,
+      exec.period_end
+    )
+    else null
+  end as post_comparison
 from cmv3_dark_pilot_canary_execution exec;
 
 -- If the mirror ran, failure to preserve every clean canary fact or any canonical

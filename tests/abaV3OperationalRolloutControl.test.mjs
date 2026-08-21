@@ -23,6 +23,9 @@ assert.match(control, /Sessões já abertas nunca mudam de modelo/);
 
 assert.match(migration, /create or replace function public\.get_aba_v3_exact_target_cohort_snapshot_v1/);
 assert.match(migration, /create or replace function public\.set_aba_v3_exact_target_cohort_v1/);
+
+assert.match(migration, /get_aba_v3_exact_target_cohort_snapshot_v1[\s\S]*language plpgsql\s+volatile/);
+assert.match(migration, /resolve_aba_measurement_rollout_snapshot_v3\([\s\S]*clock_timestamp\(\)/);
 assert.match(migration, /ABA_V3_COHORT_STATE_VERSION_CONFLICT/);
 assert.match(migration, /get_aba_v3_pilot_readiness/);
 assert.match(migration, /get_aba_v3_rollout_drain_status/);

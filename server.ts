@@ -32,6 +32,7 @@ import {
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
+import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
 import { startAppointmentNoShowCron } from './services/appointmentNoShowService';
 import {
   classifyReservationSchemaProbe,
@@ -89,6 +90,7 @@ import {
   resolveUniqueTissServiceCatalogOptionByCode
 } from './src/utils/tissServiceCatalogResolution';
 import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from './src/constants/vertoBranding';
+import { isKnownNewFeatureKey, type NewFeatureKey } from './src/constants/featureMetadata';
 import {
   resolveAppointmentConfirmationSnapshot
 } from './src/utils/appointmentConfirmationState';
@@ -27908,6 +27910,97 @@ async function startServer() {
       return sendRouteDbError(res, '/api/clinic/authorization/me [GET]', error, {
         clinicId: sanitizeString(currentClinicId(req.session?.user), 120),
         userId: sanitizeString(req.session?.user?.id, 120)
+      });
+    }
+  });
+
+  const canAccessTrackedNewFeature = (
+    context: ResolvedClinicCapabilityContext | null,
+    featureKey: NewFeatureKey,
+  ): boolean => {
+    if (!context) return false;
+    if (featureKey === 'clinic_notices') {
+      return context.modules.has('appointments_communication') &&
+        context.capabilities.has('communication.clinic_notifications.manage');
+    }
+    return false;
+  };
+
+  app.get('/api/user/feature-access', checkAuth, async (req: any, res) => {
+    try {
+      const userId = sanitizeString(req.session?.user?.id, 120);
+      if (!isUuid(userId)) {
+        return res.status(401).json({ success: false, error: 'FEATURE_DISCOVERY_USER_INVALID' });
+      }
+
+      const requestedKeys = Array.from(new Set(
+        sanitizeString(req.query?.keys, 1000)
+          .split(',')
+          .map((value) => value.trim())
+          .filter(isKnownNewFeatureKey),
+      )).slice(0, 20) as NewFeatureKey[];
+      if (!requestedKeys.length) return res.json({ success: true, data: [] });
+
+      const context = await resolveClinicCapabilityContext(req.session?.user);
+      const allowedKeys = requestedKeys.filter((featureKey) => canAccessTrackedNewFeature(context, featureKey));
+      if (!allowedKeys.length) return res.json({ success: true, data: [] });
+
+      const { data, error } = await supabase
+        .from('user_feature_access')
+        .select('feature_key,first_accessed_at')
+        .eq('user_id', userId)
+        .in('feature_key', allowedKeys)
+        .limit(20);
+      if (error) throw error;
+
+      return res.json({
+        success: true,
+        data: (Array.isArray(data) ? data : []).map((row: any) => ({
+          feature_key: sanitizeString(row?.feature_key, 80),
+          first_accessed_at: sanitizeString(row?.first_accessed_at, 80) || null,
+        })),
+      });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/user/feature-access [GET]', error, {
+        userId: sanitizeString(req.session?.user?.id, 120),
+      });
+    }
+  });
+
+  app.post('/api/user/feature-access/:featureKey', checkAuth, async (req: any, res) => {
+    try {
+      const userId = sanitizeString(req.session?.user?.id, 120);
+      const featureKeyRaw = sanitizeString(req.params?.featureKey, 80);
+      if (!isUuid(userId)) {
+        return res.status(401).json({ success: false, error: 'FEATURE_DISCOVERY_USER_INVALID' });
+      }
+      if (!isKnownNewFeatureKey(featureKeyRaw)) {
+        return res.status(400).json({ success: false, error: 'FEATURE_DISCOVERY_KEY_INVALID' });
+      }
+
+      const context = await resolveClinicCapabilityContext(req.session?.user);
+      if (!canAccessTrackedNewFeature(context, featureKeyRaw)) {
+        return res.status(403).json({ success: false, error: 'FEATURE_DISCOVERY_ACCESS_DENIED' });
+      }
+
+      const { data, error } = await supabase.rpc('mark_user_feature_accessed_v1', {
+        p_user_id: userId,
+        p_feature_key: featureKeyRaw,
+      });
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+
+      return res.json({
+        success: true,
+        data: {
+          feature_key: featureKeyRaw,
+          first_accessed_at: sanitizeString((row as any)?.first_accessed_at, 80) || new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/user/feature-access/:featureKey [POST]', error, {
+        userId: sanitizeString(req.session?.user?.id, 120),
+        featureKey: sanitizeString(req.params?.featureKey, 80),
       });
     }
   });
@@ -79553,6 +79646,23 @@ async function startServer() {
         appointmentClaimNeedsRelease = claimResult.data?.claimedNow === true;
       }
 
+      const persistedSessionStartedAt = existingInProgressSession?.started_at || startedAt;
+      const existingLocationContext = parseStoredJsonObject(existingInProgressSession?.location_context_snapshot);
+      const sessionLocationTimezone = sanitizeString(
+        existingLocationContext?.locationTimezone ||
+          existingLocationContext?.location_timezone ||
+          linkedAppointment?.location_timezone ||
+          req.body?.location_timezone ||
+          req.body?.locationTimezone ||
+          req.body?.location_context_snapshot?.locationTimezone ||
+          req.body?.locationContextSnapshot?.locationTimezone,
+        120
+      ) || 'America/Sao_Paulo';
+      const serverReferenceDate =
+        sanitizeDate(existingInProgressSession?.reference_date) ||
+        formatDateInAppointmentTimezone(persistedSessionStartedAt, sessionLocationTimezone) ||
+        persistedSessionStartedAt.slice(0, 10);
+
       const payload = cleanObject({
         id: sessionId,
         organization_id: sanitizeString(linkedAppointment?.organization_id || linkedAppointment?.clinic_id || clinicId, 120),
@@ -79607,11 +79717,11 @@ async function startServer() {
           locationName: linkedAppointment?.location_name_snapshot || linkedAppointment?.room_name || null,
           locationAddress: linkedAppointment?.location_address_snapshot || null,
           locationSource: linkedAppointment?.location_source || null,
-          locationTimezone: linkedAppointment?.location_timezone || 'America/Sao_Paulo',
+          locationTimezone: sessionLocationTimezone,
           locationSnapshot: parseStoredJsonObject(linkedAppointment?.location_snapshot),
         }),
         service_type: sanitizeString(req.body?.service_type || req.body?.serviceType || linkedAppointment?.service_type || linkedAppointment?.approach, 120) || null,
-        started_at: existingInProgressSession?.started_at || startedAt,
+        started_at: persistedSessionStartedAt,
         ended_at: req.body?.ended_at || req.body?.endedAt ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, startedAt) : resolvedActualEndAt,
         duration_seconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
           ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
@@ -79619,7 +79729,7 @@ async function startServer() {
         duration_minutes: req.body?.duration_minutes !== undefined || req.body?.durationMinutes !== undefined
           ? asSafeNumber(req.body?.duration_minutes ?? req.body?.durationMinutes, 0, 1440)
           : calculateAbaSessionDurationMinutes(resolvedActualStartAt, resolvedActualEndAt),
-        reference_date: sanitizeDate(req.body?.reference_date || req.body?.referenceDate) || startedAt.slice(0, 10),
+        reference_date: serverReferenceDate,
         record_count: existingInProgressSession?.record_count ?? (asSafeNumber(req.body?.record_count ?? req.body?.recordCount, 0, 100000) || 0),
         sync_status: 'synced',
         notes: sanitizeTextField(req.body?.notes, 2000),
@@ -90892,6 +91002,16 @@ async function startServer() {
     requireClinicCapability,
     resolvePatientListScopedPatientIds,
     portalActionLimiter,
+    sanitizeString,
+    currentClinicId
+  });
+
+  registerClinicalMeasurementV3Routes(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    checkPatientAccess,
+    requireClinicCapability,
     sanitizeString,
     currentClinicId
   });
