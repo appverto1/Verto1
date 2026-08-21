@@ -69,7 +69,7 @@ assert.match(routes, /filterTherapeuticPlanProgramsForActor/);
 assert.match(routes, /patient_professional_links/);
 assert.match(routes, /visiblePlanIds/);
 assert.match(routes, /visibleObjectiveIds/);
-assert.match(routes, /supabase\.rpc\('read_clinical_outcomes_converged_v3'/);
+assert.match(routes, /supabase\.rpc\('read_clinical_outcomes_converged_v3'/, 'Marco 4 deve reutilizar o reader convergente sem reintroduzir leitura por target');
 assert.match(routes, /p_plan_ids:visiblePlanIds/);
 assert.match(routes, /p_therapeutic_objective_ids:visibleObjectiveIds/);
 assert.match(routes, /p_program_ids:visibleProgramIds/);

@@ -78102,6 +78102,7 @@ async function startServer() {
     rows: any[],
     visiblePlanMap: Map<string, any>,
     objectivePlanMap: Map<string, Set<string>>,
+    targetById: Map<string, any>,
   ) => {
     const normalized: any[] = [];
     for (const row of Array.isArray(rows) ? rows : []) {
@@ -78117,6 +78118,8 @@ async function startServer() {
       const observedAt = sanitizeString(row?.observed_at, 80) || `${sanitizeString(row?.clinical_date, 20)}T00:00:00.000Z`;
       const coverageStatus = sanitizeString(row?.coverage_status, 80).toUpperCase();
       const missingReason = coverageStatus && coverageStatus !== 'OBSERVED' ? coverageStatus.toLowerCase() : null;
+      const abaTargetId = sanitizeString(row?.value_details?.aba_target_id || row?.target_id, 180);
+      const abaTarget = sourceKind === 'ABA_TARGET' ? targetById.get(abaTargetId) || null : null;
       for (const planId of planIds) {
         const plan = visiblePlanMap.get(planId) || {};
         normalized.push({
@@ -78165,6 +78168,10 @@ async function startServer() {
             computedAt: row?.computed_at || null,
             readModelSource: row?.read_model_source || null,
             abaTargetId: row?.value_details?.aba_target_id || null,
+            targetDescription: abaTarget?.description || null,
+            masteryCriteria: abaTarget?.mastery_criteria || null,
+            targetType: abaTarget?.target_type || null,
+            targetPhase: abaTarget?.phase || null,
             sourceFamily: row?.value_details?.source_family || null,
             requiresReview: row?.value_details?.requires_review === true,
             phaseAssignmentId: row?.value_details?.phase_assignment_id || null,
@@ -78248,9 +78255,27 @@ async function startServer() {
       if (!isUuid(patientId)) {
         return res.json({ success: true, data: { plans: [], observations: [], contributions: [], phases: [], specialties: [] } });
       }
-      const requestedDays = Math.max(7, Math.min(730, Number(req.query?.days || 90) || 90));
-      const dateTo = new Date();
-      const dateFrom = new Date(dateTo.getTime() - requestedDays * 86_400_000);
+      const requestedDateFrom = sanitizeString(req.query?.dateFrom, 10);
+      const requestedDateTo = sanitizeString(req.query?.dateTo, 10);
+      const hasExplicitRange = Boolean(requestedDateFrom || requestedDateTo);
+      if (hasExplicitRange && (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(requestedDateTo))) {
+        return res.status(400).json({ success: false, error: 'CLINICAL_OUTCOMES_PERIOD_INVALID', message: 'Informe o período clínico com data inicial e final válidas.' });
+      }
+
+      const requestedDaysFallback = Math.max(7, Math.min(730, Number(req.query?.days || 90) || 90));
+      const dateTo = hasExplicitRange
+        ? new Date(`${requestedDateTo}T23:59:59.999Z`)
+        : new Date();
+      const dateFrom = hasExplicitRange
+        ? new Date(`${requestedDateFrom}T00:00:00.000Z`)
+        : new Date(dateTo.getTime() - requestedDaysFallback * 86_400_000);
+      if (Number.isNaN(dateFrom.getTime()) || Number.isNaN(dateTo.getTime()) || dateTo < dateFrom) {
+        return res.status(400).json({ success: false, error: 'CLINICAL_OUTCOMES_PERIOD_INVALID', message: 'O período clínico informado é inválido.' });
+      }
+      const requestedDays = Math.max(1, Math.ceil((dateTo.getTime() - dateFrom.getTime()) / 86_400_000));
+      if (requestedDays > 730) {
+        return res.status(400).json({ success: false, error: 'CLINICAL_OUTCOMES_PERIOD_TOO_LARGE', message: 'O período máximo para os gráficos clínicos é de 730 dias.' });
+      }
       const dateFromIso = dateFrom.toISOString();
       const dateToIso = dateTo.toISOString();
 
@@ -78277,7 +78302,7 @@ async function startServer() {
           .limit(300),
         supabase
           .from('aba_targets')
-          .select('id,program_id,name,measurement_type,phase')
+          .select('id,program_id,name,description,target_type,measurement_type,phase,clinical_status,mastery_criteria')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .limit(1000),
@@ -78382,7 +78407,7 @@ async function startServer() {
             throw v3Result.error;
           }
         } else {
-          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap);
+          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById);
         }
       }
 
@@ -78414,7 +78439,13 @@ async function startServer() {
             instrumentVersion: row.instrument_version || definition.instrument_version || null,
             definitionVersion: Number(row.definition_version || definition.definition_version || 1),
             missingReason: row.missing_reason || null,
-            metadata: row.metadata || {},
+            metadata: {
+              ...(row.metadata || {}),
+              targetType: definition.target_type || null,
+              targetValue: finiteClinicalOutcomeNumber(definition.target_value),
+              targetMin: finiteClinicalOutcomeNumber(definition.target_min),
+              targetMax: finiteClinicalOutcomeNumber(definition.target_max),
+            },
             minimumDataPoints: Number(definition.minimum_data_points || 4),
             recencyWindowDays: Number(definition.recency_window_days || 30),
             sourceRecordType: 'clinical_observation',
@@ -78457,7 +78488,15 @@ async function startServer() {
           instrumentVersion: null,
           definitionVersion: 1,
           missingReason: null,
-          metadata: { changeStatus: point.changeStatus, statusLabel: point.statusLabel, specialtySource: point.specialtySource },
+          metadata: {
+            changeStatus: point.changeStatus,
+            statusLabel: point.statusLabel,
+            specialtySource: point.specialtySource,
+            targetDescription: target?.description || null,
+            masteryCriteria: target?.mastery_criteria || null,
+            targetType: target?.target_type || null,
+            targetPhase: target?.phase || null,
+          },
           minimumDataPoints: 4,
           recencyWindowDays: 30,
           sourceRecordType: 'aba_snapshot',

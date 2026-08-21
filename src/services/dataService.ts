@@ -5940,6 +5940,8 @@ export const dataService = {
   async getClinicalOutcomesDashboard(patientId: string, options: any = {}) {
     const endpoint = endpointWithQuery(`/api/patients/${encodeURIComponent(String(patientId))}/clinical-outcomes-dashboard`, {
       days: options.days,
+      dateFrom: options.dateFrom,
+      dateTo: options.dateTo,
       planId: options.planId,
     });
     try {
