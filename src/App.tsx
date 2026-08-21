@@ -57,7 +57,7 @@ import { persistPushRenewalContext } from './services/pushSubscriptionRenewal';
 import { SALES_CONTACT_REQUIRED_ERROR } from './constants/salesCommercial';
 import { decodeClinicalTextEntities } from './utils/clinicalText';
 import { patientMatchesProfessionalFilter } from './utils/patientList';
-import { buildPatientPortalViewportContent, resolvePatientPortalViewportWidth } from './utils/patientPortalViewport';
+import { buildPatientPortalViewportContent, resolvePatientPortalViewportWidth, VERTO_FIXED_VIEWPORT_CONTENT } from './utils/patientPortalViewport';
 import { resolvePatientNoteAudience, toStoredPatientNoteVisibility } from './utils/patientNoteVisibility';
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from './constants/organizationModules';
 
@@ -516,12 +516,11 @@ export default function App() {
     );
     const screenWidth = Number(window.screen?.width || 0);
     const stableViewport = buildPatientPortalViewportContent({ screenWidth, touchCapable });
-    const defaultViewport = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover';
+    const defaultViewport = VERTO_FIXED_VIEWPORT_CONTENT;
 
     const normalizeViewport = () => {
-      // The parser-level bootstrap owns the initial mobile scale. React only keeps the same
-      // numeric-width contract after orientation/pageshow; it never applies CSS zoom or
-      // toggles user-scalable at runtime.
+      // Keep the portal on the same device-width/100% viewport contract established at parse time.
+      // Never synthesize a wider layout viewport from screen.width and never apply CSS zoom.
       root.style.width = '100%';
       root.style.maxWidth = '100%';
       root.style.removeProperty('zoom');

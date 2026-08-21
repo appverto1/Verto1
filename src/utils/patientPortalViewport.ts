@@ -12,11 +12,10 @@ export const resolvePatientPortalViewportWidth = (params: {
   return screenWidth;
 };
 
-export const buildPatientPortalViewportContent = (params: {
+export const VERTO_FIXED_VIEWPORT_CONTENT =
+  'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover';
+
+export const buildPatientPortalViewportContent = (_params: {
   screenWidth: number;
   touchCapable: boolean;
-}) => {
-  const mobileWidth = resolvePatientPortalViewportWidth(params);
-  const width = mobileWidth ? String(mobileWidth) : 'device-width';
-  return `width=${width}, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover`;
-};
+}) => VERTO_FIXED_VIEWPORT_CONTENT;

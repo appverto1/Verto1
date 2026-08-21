@@ -40,6 +40,8 @@ assert.match(dashboard, /Ausência de dados não é tratada como zero/);
 assert.match(dashboard, /Dados ainda insuficientes para interpretar tendência/);
 assert.match(dashboard, /Contribuição esperada, ainda sem vínculo explícito/);
 assert.match(dashboard, /connectNulls=\{false\}/);
+assert.match(dashboard, /minHeight=\{compact \? 112 : 208\}/, 'o container do gráfico deve respeitar a altura visual para não invadir o rodapé');
+assert.match(dashboard, /tickMargin=\{compact \? 6 : 8\}/, 'o eixo X deve reservar distância visual da série');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 assert.match(server, /clinical-outcomes-dashboard/);

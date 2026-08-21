@@ -11,10 +11,10 @@
     if (!viewport) return;
     viewport.setAttribute(
       'content',
-      `width=${screenWidth}, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover`,
+      'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover',
     );
     window.__VERTO_PATIENT_VIEWPORT_BOOTSTRAPPED__ = screenWidth;
-    document.documentElement.dataset.vertoPatientViewportWidth = String(screenWidth);
+    document.documentElement.dataset.vertoPatientViewportWidth = 'device-width';
   } catch {
     // Local storage or media queries can be restricted. The standard viewport remains valid.
   }

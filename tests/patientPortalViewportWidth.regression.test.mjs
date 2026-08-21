@@ -20,16 +20,20 @@ assert.match(viewportEffect, /root\.style\.maxWidth = '100%'/);
 assert.match(viewportEffect, /root\.style\.removeProperty\('zoom'\)/);
 assert.doesNotMatch(viewportEffect, /root\.style\.transform/);
 assert.doesNotMatch(viewportEffect, /layoutWidth\s*\/\s*screenWidth/);
+assert.match(viewportEffect, /body\.style\.touchAction = 'pan-y pinch-zoom'/);
+assert.match(viewportEffect, /const defaultViewport = VERTO_FIXED_VIEWPORT_CONTENT/);
 
 assert.match(viewportUtil, /screenWidth < MOBILE_VIEWPORT_MIN_WIDTH/);
 assert.match(viewportUtil, /screenWidth > MOBILE_VIEWPORT_MAX_WIDTH/);
-assert.match(viewportUtil, /width=\$\{width\}, initial-scale=1/);
-assert.match(viewportUtil, /maximum-scale=5, user-scalable=yes/);
+assert.match(viewportUtil, /width=device-width, initial-scale=1/);
+assert.match(viewportUtil, /minimum-scale=1, maximum-scale=5, user-scalable=yes/);
+assert.doesNotMatch(viewportUtil, /width=\$\{width\}/);
 
 assert.match(viewportBootstrap, /verto\.patient-portal-session-hint\.v1/);
 assert.match(viewportBootstrap, /window\.screen\?\.width/);
-assert.match(viewportBootstrap, /`width=\$\{screenWidth\}, initial-scale=1/);
-assert.match(html, /<script src="\/patient-viewport-bootstrap\.js\?v=20260819-2"><\/script>/);
+assert.match(viewportBootstrap, /width=device-width, initial-scale=1/);
+assert.doesNotMatch(viewportBootstrap, /`width=\$\{screenWidth\}, initial-scale=1/);
+assert.match(html, /<script src="\/patient-viewport-bootstrap\.js\?v=20260821-1"><\/script>/);
 assert.match(html, /width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes/);
 
 
@@ -52,8 +56,8 @@ vm.runInNewContext(viewportBootstrap, {
   Math,
   Boolean,
 });
-assert.match(bootstrapViewportContent, /^width=344, initial-scale=1/);
-assert.match(bootstrapViewportContent, /maximum-scale=5, user-scalable=yes/);
+assert.match(bootstrapViewportContent, /^width=device-width, initial-scale=1/);
+assert.match(bootstrapViewportContent, /minimum-scale=1, maximum-scale=5, user-scalable=yes/);
 assert.match(viewportBootstrap, /__VERTO_PATIENT_VIEWPORT_BOOTSTRAPPED__/);
 assert.match(app, /PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY/);
 assert.match(app, /window\.location\.replace\(window\.location\.href\)/);

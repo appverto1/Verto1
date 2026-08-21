@@ -129,10 +129,21 @@ function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutc
   const target = Number(series.observations.find((row: any) => Number.isFinite(Number(row?.metadata?.targetValue)))?.metadata?.targetValue);
   return (
     <div className={compact ? 'h-28' : 'h-52'}>
-      <SafeResponsiveContainer width="100%" height="100%">
-        <LineChart data={rows} margin={{ top: 12, right: 10, left: compact ? -24 : -8, bottom: 4 }}>
+      <SafeResponsiveContainer
+        width="100%"
+        height="100%"
+        minHeight={compact ? 112 : 208}
+      >
+        <LineChart data={rows} margin={{ top: 12, right: 10, left: compact ? -24 : -8, bottom: compact ? 8 : 12 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#334155' : '#E2E8F0'} />
-          <XAxis dataKey="date" tick={{ fontSize: compact ? 9 : 11 }} minTickGap={20} stroke={isDark ? '#94A3B8' : '#64748B'} />
+          <XAxis
+            dataKey="date"
+            height={compact ? 24 : 30}
+            tick={{ fontSize: compact ? 9 : 11 }}
+            tickMargin={compact ? 6 : 8}
+            minTickGap={20}
+            stroke={isDark ? '#94A3B8' : '#64748B'}
+          />
           <YAxis tick={{ fontSize: compact ? 9 : 11 }} width={compact ? 32 : 48} stroke={isDark ? '#94A3B8' : '#64748B'} />
           <Tooltip
             content={({ active, payload }) => {
