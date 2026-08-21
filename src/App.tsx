@@ -491,9 +491,26 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    const role = String(user?.role || '').trim().toLowerCase();
-    const patientPortalViewportActive = patientSessionRestorePending || ['patient', 'responsible', 'responsavel', 'guardian'].includes(role);
-    if (!patientPortalViewportActive) return;
+
+    const touchCapable = Boolean(
+      Number(navigator.maxTouchPoints || 0) > 0 ||
+      window.matchMedia?.('(pointer: coarse)')?.matches
+    );
+    const screenWidth = Number(window.screen?.width || 0);
+    const screenHeight = Number(window.screen?.height || 0);
+    const availableWidth = Number(window.screen?.availWidth || 0);
+    const availableHeight = Number(window.screen?.availHeight || 0);
+    const mobileAppViewportWidth = resolvePatientPortalViewportWidth({
+      screenWidth,
+      screenHeight,
+      availableWidth,
+      availableHeight,
+      touchCapable,
+    });
+
+    // On a physical phone, Verto must stay in the mobile app shell for every authenticated role.
+    // Do not let a desktop-like browser layout viewport activate tablet/desktop breakpoints.
+    if (!mobileAppViewportWidth) return;
 
     const viewport = document.querySelector('meta[name="viewport"]');
     const root = document.getElementById('root');
@@ -510,17 +527,18 @@ export default function App() {
     const previousHtmlOverscrollX = html.style.overscrollBehaviorX;
     const previousBodyOverscrollX = body.style.overscrollBehaviorX;
 
-    const touchCapable = Boolean(
-      Number(navigator.maxTouchPoints || 0) > 0 ||
-      window.matchMedia?.('(pointer: coarse)')?.matches
-    );
-    const screenWidth = Number(window.screen?.width || 0);
-    const stableViewport = buildPatientPortalViewportContent({ screenWidth, touchCapable });
+    const stableViewport = buildPatientPortalViewportContent({
+      screenWidth,
+      screenHeight,
+      availableWidth,
+      availableHeight,
+      touchCapable,
+    });
     const defaultViewport = VERTO_FIXED_VIEWPORT_CONTENT;
 
     const normalizeViewport = () => {
-      // Keep the portal on the same device-width/100% viewport contract established at parse time.
-      // Never synthesize a wider layout viewport from screen.width and never apply CSS zoom.
+      // Keep the same phone-sized app viewport established before React paints.
+      // Never use CSS zoom/transform: responsive breakpoints must see the real phone app width.
       root.style.width = '100%';
       root.style.maxWidth = '100%';
       root.style.removeProperty('zoom');
@@ -552,7 +570,7 @@ export default function App() {
       html.style.overscrollBehaviorX = previousHtmlOverscrollX;
       body.style.overscrollBehaviorX = previousBodyOverscrollX;
     };
-  }, [patientSessionRestorePending, user?.role, user?.id]);
+  }, []);
 
   const getLastActiveAccessContextId = (userId?: string | null) => {
     const safeUserId = String(userId || '').trim();
@@ -1228,15 +1246,23 @@ export default function App() {
         if (isPatientPortalSession) {
           window.localStorage.setItem(PATIENT_SESSION_HINT_KEY, String(Date.now()));
 
-          // On the very first patient login the parser-level viewport bootstrap could not run,
-          // because the session hint did not exist yet. Reload exactly once on touch/mobile so
-          // the next document parses with the physical screen width before React paints.
+          // Legacy guard: if a stale cached document missed the parser-level mobile bootstrap,
+          // reload at most once so the patient portal receives the same app viewport contract.
           const touchCapable = Boolean(
             Number(navigator.maxTouchPoints || 0) > 0 ||
             window.matchMedia?.('(pointer: coarse)')?.matches
           );
           const screenWidth = Number(window.screen?.width || 0);
-          const mobileWidth = resolvePatientPortalViewportWidth({ screenWidth, touchCapable });
+          const screenHeight = Number(window.screen?.height || 0);
+          const availableWidth = Number(window.screen?.availWidth || 0);
+          const availableHeight = Number(window.screen?.availHeight || 0);
+          const mobileWidth = resolvePatientPortalViewportWidth({
+            screenWidth,
+            screenHeight,
+            availableWidth,
+            availableHeight,
+            touchCapable,
+          });
           const bootstrappedWidth = Number((window as any).__VERTO_PATIENT_VIEWPORT_BOOTSTRAPPED__ || 0);
           const reloadGuard = String(window.sessionStorage.getItem(PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY) || '');
           const userId = String(nextUser?.id || 'patient');

@@ -1,21 +1,40 @@
 (() => {
   try {
-    const hasPatientSessionHint = Boolean(localStorage.getItem('verto.patient-portal-session-hint.v1'));
-    if (!hasPatientSessionHint) return;
-
     const touchCapable = Number(navigator.maxTouchPoints || 0) > 0 || window.matchMedia?.('(pointer: coarse)')?.matches;
-    const screenWidth = Math.round(Number(window.screen?.width || 0));
-    if (!touchCapable || screenWidth < 280 || screenWidth > 768) return;
+    if (!touchCapable) return;
+
+    const minWidth = 280;
+    const maxWidth = 768;
+    const normalizeDimension = (value) => {
+      const dimension = Math.round(Number(value || 0));
+      return Number.isFinite(dimension) && dimension >= minWidth && dimension <= maxWidth ? dimension : null;
+    };
+
+    const phoneEdges = [
+      window.screen?.width,
+      window.screen?.height,
+      window.screen?.availWidth,
+      window.screen?.availHeight,
+    ]
+      .map(normalizeDimension)
+      .filter(Boolean);
+    const mobileAppWidth = phoneEdges.length > 0 ? Math.min(...phoneEdges) : null;
+    if (!mobileAppWidth) return;
 
     const viewport = document.querySelector('meta[name="viewport"]');
     if (!viewport) return;
+
     viewport.setAttribute(
       'content',
-      'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover',
+      `width=${mobileAppWidth}, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover`,
     );
-    window.__VERTO_PATIENT_VIEWPORT_BOOTSTRAPPED__ = screenWidth;
-    document.documentElement.dataset.vertoPatientViewportWidth = 'device-width';
+
+    // Preserve the old patient marker because the authenticated patient bootstrap guard still reads it.
+    window.__VERTO_PATIENT_VIEWPORT_BOOTSTRAPPED__ = mobileAppWidth;
+    window.__VERTO_MOBILE_APP_VIEWPORT_WIDTH__ = mobileAppWidth;
+    document.documentElement.dataset.vertoMobileApp = 'true';
+    document.documentElement.dataset.vertoMobileAppWidth = String(mobileAppWidth);
   } catch {
-    // Local storage or media queries can be restricted. The standard viewport remains valid.
+    // The standard device-width viewport from index.html remains the safe fallback.
   }
 })();
