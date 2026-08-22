@@ -678,6 +678,10 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
 
   const panel = isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white';
   const inset = isPanelDark ? 'border-slate-700 bg-slate-950/40' : 'border-slate-200 bg-slate-50/70';
+  const brandPanel = isPanelDark
+    ? 'border-violet-500/25 bg-gradient-to-br from-violet-500/10 via-[#101b2e] to-cyan-500/5'
+    : 'border-violet-200/80 bg-gradient-to-br from-violet-50/90 via-white to-cyan-50/55';
+  const structuralAccent = isPanelDark ? 'bg-violet-400/80' : 'bg-violet-600';
   const text = isPanelDark ? 'text-slate-100' : 'text-slate-900';
   const muted = isPanelDark ? 'text-slate-400' : 'text-slate-500';
 
@@ -687,11 +691,13 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
 
   return (
     <section className="space-y-4" data-testid="clinical-outcomes-dashboard">
-      <header className={`rounded-3xl border p-5 lg:p-6 ${panel}`}>
-        <div className="flex flex-col gap-5">
+      <header className={`relative overflow-hidden rounded-3xl border p-5 lg:p-6 ${brandPanel}`}>
+        <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-1 ${structuralAccent}`} />
+        <div aria-hidden="true" className={`absolute -right-16 -top-20 h-48 w-48 rounded-full blur-3xl ${isPanelDark ? 'bg-violet-500/10' : 'bg-violet-200/35'}`} />
+        <div className="relative flex flex-col gap-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-violet-600">Evidências clínicas</p>
+              <p className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${isPanelDark ? 'border-violet-500/30 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-white/80 text-violet-700'}`}>Evidências clínicas</p>
               <h2 className={`mt-1 text-2xl font-semibold tracking-tight ${text}`}>
                 {selectedPlan ? (clean(selectedPlan.specialty) || 'Plano por especialidade') : 'Plano Terapêutico Singular'}
               </h2>
@@ -774,7 +780,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
         </div>
       )}
 
-      <details className={`group rounded-2xl border ${panel}`}>
+      <details className={`group rounded-2xl border ${isPanelDark ? 'border-violet-500/20 bg-violet-500/5' : 'border-violet-100 bg-violet-50/55'}`}>
         <summary className={`flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm ${text}`}>
           <span className="flex items-center gap-2"><SlidersHorizontal size={16} className="text-violet-500" /> Filtros avançados</span>
           <ChevronDown size={16} className="transition group-open:rotate-180" />
@@ -856,11 +862,12 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                   return (
                     <article
                       key={group.key}
-                      className={`flex min-h-[230px] flex-col rounded-2xl border p-4 transition ${isExpanded
-                        ? isPanelDark ? 'border-violet-500/60 bg-violet-500/5 ring-1 ring-violet-500/20' : 'border-violet-300 bg-violet-50/30 ring-1 ring-violet-100'
-                        : panel}`}
+                      className={`relative flex min-h-[230px] flex-col overflow-hidden rounded-2xl border p-4 transition ${isExpanded
+                        ? isPanelDark ? 'border-violet-400/70 bg-gradient-to-br from-violet-500/12 via-slate-900/75 to-cyan-500/8 ring-1 ring-violet-500/25' : 'border-violet-300 bg-gradient-to-br from-violet-50 via-white to-cyan-50/60 ring-1 ring-violet-100'
+                        : isPanelDark ? 'border-slate-700 bg-gradient-to-br from-slate-900 via-slate-900 to-violet-500/5 hover:border-violet-500/45' : 'border-slate-200 bg-gradient-to-br from-white via-white to-violet-50/45 hover:border-violet-300 hover:shadow-sm'}`}
                       data-testid="clinical-target-card"
                     >
+                      <div aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${series.evidenceState === 'sufficient' ? 'bg-emerald-400' : series.evidenceState === 'preliminary' || series.evidenceState === 'baseline_only' ? 'bg-amber-400' : 'bg-violet-400'}`} />
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <h3 className={`truncate text-base font-semibold ${text}`}>{group.title}</h3>
@@ -909,7 +916,8 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                   ? expandedTarget.historicalSeries
                   : [];
                 return (
-                  <article id="clinical-target-detail" className={`scroll-mt-4 rounded-3xl border p-5 lg:p-6 ${panel}`} data-testid="clinical-target-detail">
+                  <article id="clinical-target-detail" className={`relative scroll-mt-4 overflow-hidden rounded-3xl border p-5 lg:p-6 ${isPanelDark ? 'border-violet-500/30 bg-gradient-to-br from-violet-500/8 via-[#101b2e] to-cyan-500/5' : 'border-violet-200/80 bg-gradient-to-br from-violet-50/70 via-white to-cyan-50/45'}`} data-testid="clinical-target-detail">
+                    <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-1 ${structuralAccent}`} />
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
@@ -964,7 +972,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                       </div>
 
                       {comparison && (
-                        <div className={`grid min-w-[330px] grid-cols-3 divide-x rounded-2xl border ${inset} ${isPanelDark ? 'divide-slate-700' : 'divide-slate-200'}`}>
+                        <div className={`grid min-w-[330px] grid-cols-3 divide-x rounded-2xl border ${isPanelDark ? 'border-violet-500/20 bg-violet-500/5 divide-slate-700' : 'border-violet-100 bg-gradient-to-r from-violet-50/70 via-white to-cyan-50/60 divide-violet-100'}`}>
                           <div className="px-4 py-3"><p className={`text-[11px] ${muted}`}>Atual</p><p className={`mt-1 text-lg font-semibold ${text}`}>{formatSeriesAggregateValue(expandedSeries, comparison.current.meanValue)}</p></div>
                           <div className="px-4 py-3"><p className={`text-[11px] ${muted}`}>Anterior</p><p className={`mt-1 text-lg font-semibold ${text}`}>{formatSeriesAggregateValue(expandedSeries, comparison.previous.meanValue)}</p></div>
                           <div className="px-4 py-3"><p className={`text-[11px] ${muted}`}>Variação</p><p className={`mt-1 text-lg font-semibold ${comparison.movement === 'favorable' ? 'text-emerald-600 dark:text-emerald-300' : comparison.movement === 'unfavorable' ? 'text-rose-600 dark:text-rose-300' : text}`}>{comparison.deltaLabel}</p></div>
@@ -976,9 +984,9 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
 
                     {(baseline !== null || reference.targetValue !== null || reference.targetMin !== null || reference.targetMax !== null) && (
                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                        {baseline !== null && <span className={`rounded-xl border px-3 py-2 ${inset}`}>Linha de base <strong className={text}>{formatSeriesAggregateValue(expandedSeries, baseline)}</strong></span>}
-                        {reference.targetValue !== null && <span className={`rounded-xl border px-3 py-2 ${inset}`}>Meta <strong className={text}>{reference.criterionLabel || formatSeriesAggregateValue(expandedSeries, reference.targetValue)}</strong></span>}
-                        {reference.targetValue === null && reference.targetMin !== null && reference.targetMax !== null && <span className={`rounded-xl border px-3 py-2 ${inset}`}>Faixa-alvo <strong className={text}>{formatSeriesAggregateValue(expandedSeries, reference.targetMin)} a {formatSeriesAggregateValue(expandedSeries, reference.targetMax)}</strong></span>}
+                        {baseline !== null && <span className={`rounded-xl border px-3 py-2 ${isPanelDark ? 'border-slate-600 bg-slate-800/70 text-slate-200' : 'border-slate-200 bg-slate-100/80 text-slate-700'}`}>Linha de base <strong className={text}>{formatSeriesAggregateValue(expandedSeries, baseline)}</strong></span>}
+                        {reference.targetValue !== null && <span className={`rounded-xl border px-3 py-2 ${isPanelDark ? 'border-violet-500/35 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-800'}`}>Meta <strong className={text}>{reference.criterionLabel || formatSeriesAggregateValue(expandedSeries, reference.targetValue)}</strong></span>}
+                        {reference.targetValue === null && reference.targetMin !== null && reference.targetMax !== null && <span className={`rounded-xl border px-3 py-2 ${isPanelDark ? 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200' : 'border-cyan-200 bg-cyan-50 text-cyan-800'}`}>Faixa-alvo <strong className={text}>{formatSeriesAggregateValue(expandedSeries, reference.targetMin)} a {formatSeriesAggregateValue(expandedSeries, reference.targetMax)}</strong></span>}
                       </div>
                     )}
 
