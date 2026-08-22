@@ -66,6 +66,7 @@ import {
   checkDistributedRuntimeState,
   issueDistributedSessionToken,
   releaseDistributedJobLease,
+  revokeAllDistributedSessionTokens,
   revokeDistributedSessionToken,
   tryAcquireDistributedJobLease,
   validateDistributedSessionToken
@@ -4824,23 +4825,55 @@ async function isActiveSessionToken(userId?: unknown, token?: unknown): Promise<
   return !current || current === safeToken;
 }
 
-async function invalidateActiveSession(userId?: unknown, expectedToken?: unknown): Promise<void> {
+async function invalidateCurrentSession(userId?: unknown, expectedToken?: unknown): Promise<void> {
   const safeUserId = sanitizeString(userId, 120);
-  if (!safeUserId) return;
   const safeExpectedToken = sanitizeString(expectedToken, 200);
+  if (!safeUserId || !safeExpectedToken) return;
   if (requiresDistributedRuntimeState()) {
     if (!supabase) throw new Error('DISTRIBUTED_RUNTIME_STATE_UNAVAILABLE');
-    await revokeDistributedSessionToken({
-      supabase,
-      userId: safeUserId,
-      expectedToken: safeExpectedToken || null
-    });
-    return;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await revokeDistributedSessionToken({
+          supabase,
+          userId: safeUserId,
+          expectedToken: safeExpectedToken
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+    }
+    throw lastError;
   }
   const current = activeSessionByUserId.get(safeUserId);
-  if (!safeExpectedToken || current === safeExpectedToken) {
+  if (current === safeExpectedToken) {
     activeSessionByUserId.delete(safeUserId);
   }
+}
+
+async function invalidateAllActiveSessions(userId?: unknown): Promise<void> {
+  const safeUserId = sanitizeString(userId, 120);
+  if (!safeUserId) return;
+  if (requiresDistributedRuntimeState()) {
+    if (!supabase) throw new Error('DISTRIBUTED_RUNTIME_STATE_UNAVAILABLE');
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await revokeAllDistributedSessionTokens({
+          supabase,
+          userId: safeUserId
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+    }
+    throw lastError;
+  }
+  activeSessionByUserId.delete(safeUserId);
 }
 
 function markOtpTableAvailability(available: boolean): void {
@@ -21506,7 +21539,7 @@ async function startServer() {
       if (req.session.user?.authPolicyVersion !== OWNER_MFA_POLICY_VERSION) {
         const legacySecurityProfile = await fetchMfaSecurityProfile(sessionUserId);
         if (legacySecurityProfile.error || !legacySecurityProfile.data) {
-          await invalidateActiveSession(sessionUserId, sessionToken);
+          await invalidateCurrentSession(sessionUserId, sessionToken);
           req.session.destroy(() => {});
           return res.status(503).json({
             error: 'OWNER_MFA_SCHEMA_UNAVAILABLE',
@@ -21517,7 +21550,7 @@ async function startServer() {
           sanitizeString(legacySecurityProfile.data.role, 40).toLowerCase() === 'owner' &&
           !hasVerifiedOwnerMfaSession({ ...req.session.user, role: 'owner' })
         ) {
-          await invalidateActiveSession(sessionUserId, sessionToken);
+          await invalidateCurrentSession(sessionUserId, sessionToken);
           req.session.destroy(() => {});
           return res.status(401).json({
             error: 'OWNER_MFA_REQUIRED',
@@ -21527,7 +21560,7 @@ async function startServer() {
         req.session.user.authPolicyVersion = OWNER_MFA_POLICY_VERSION;
       }
       if (!hasVerifiedOwnerMfaSession(req.session.user)) {
-        await invalidateActiveSession(sessionUserId, sessionToken);
+        await invalidateCurrentSession(sessionUserId, sessionToken);
         req.session.destroy(() => {});
         return res.status(401).json({
           error: 'OWNER_MFA_REQUIRED',
@@ -25093,6 +25126,8 @@ async function startServer() {
       return res.status(400).json({ error: 'MFA_CHALLENGE_INVALID' });
     }
 
+    let issuedSessionToken = '';
+    let issuedSessionUserId = '';
     try {
       const challengeHash = hashAuthMfaChallenge(challengeId);
       const boundHash = sanitizeString(req.session?.mfaChallengeHash, 128);
@@ -25238,7 +25273,6 @@ async function startServer() {
         role: roleForSession,
         isPlatformAdmin: isPlatformAdminLogin,
         name: profile.name,
-        sessionToken: await issueSessionToken(boundUserId),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -25270,10 +25304,23 @@ async function startServer() {
       });
 
       await regenerateExpressSession(req);
+      issuedSessionUserId = boundUserId;
+      issuedSessionToken = await issueSessionToken(boundUserId);
+      userData.sessionToken = issuedSessionToken;
       req.session.user = userData;
       await saveExpressSession(req);
+      issuedSessionToken = '';
       return res.json({ success: true, user: userData });
     } catch (error: any) {
+      if (issuedSessionToken && issuedSessionUserId) {
+        try {
+          await invalidateCurrentSession(issuedSessionUserId, issuedSessionToken);
+        } catch (cleanupError: any) {
+          console.error('[MFA] failed to clean issued session token:', sanitizeString(cleanupError?.message || String(cleanupError), 220));
+        }
+        req.session.destroy(() => {});
+        res.clearCookie('verto-session');
+      }
       console.error('[MFA] login failed:', sanitizeString(error?.message, 200));
       return res.status(500).json({ error: 'MFA_LOGIN_FAILED' });
     }
@@ -26048,6 +26095,8 @@ async function startServer() {
     const email = sanitizeEmail(req.body?.email);
     const code = sanitizeString(req.body?.code, 12).replace(/\D/g, '');
     const genericError = { success: false, error: 'INVALID_CODE', message: 'Código inválido ou expirado.' };
+    let issuedSessionToken = '';
+    let issuedSessionUserId = '';
 
     try {
       if (!email || !/^\d{6}$/.test(code)) return res.status(400).json(genericError);
@@ -26108,7 +26157,6 @@ async function startServer() {
         email: authUser.email || email,
         role: roleForSession,
         name: profile.name || authUser.user_metadata?.full_name || email.split('@')[0],
-        sessionToken: await issueSessionToken(sanitizeString(authUser.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -26134,11 +26182,17 @@ async function startServer() {
         firstLoginCompleted: (profile.first_login_completed ?? authUser.user_metadata?.first_login_completed) ?? null,
         workspaces
       };
-      await consumeOtpChallenge(key);
-      req.session.user = await hydrateSessionUserWithOnboardingContext(userData);
+      const sessionUser = await hydrateSessionUserWithOnboardingContext(userData);
+      const challengeConsumed = await consumeOtpChallenge(key);
+      if (!challengeConsumed) return res.status(400).json(genericError);
+      issuedSessionUserId = sanitizeString(authUser.id, 120);
+      issuedSessionToken = await issueSessionToken(issuedSessionUserId);
+      sessionUser.sessionToken = issuedSessionToken;
+      req.session.user = sessionUser;
       req.session.cookie.maxAge = patientPortalSessionMaxAgeDays * 24 * 60 * 60 * 1000;
       try {
         await saveExpressSession(req);
+        issuedSessionToken = '';
       } catch (firstSessionSaveError: any) {
         console.warn(
           '[PortalAuth] primeira persistência da sessão falhou; tentando novamente:',
@@ -26147,16 +26201,18 @@ async function startServer() {
         try {
           await new Promise((resolve) => setTimeout(resolve, 120));
           await saveExpressSession(req);
+          issuedSessionToken = '';
         } catch (sessionSaveError: any) {
           console.error(
             '[PortalAuth] não foi possível persistir a sessão do portal:',
             sanitizeString(sessionSaveError?.message || String(sessionSaveError), 220)
           );
           try {
-            await invalidateActiveSession(
+            await invalidateCurrentSession(
               sanitizeString(authUser.id, 120),
-              sanitizeString(userData.sessionToken, 200)
+              issuedSessionToken
             );
+            issuedSessionToken = '';
           } catch (cleanupError: any) {
             console.error(
               '[PortalAuth] falha ao invalidar token após erro de sessão:',
@@ -26183,6 +26239,15 @@ async function startServer() {
       });
       return res.json({ success: true, user: req.session.user });
     } catch (error: any) {
+      if (issuedSessionToken && issuedSessionUserId) {
+        try {
+          await invalidateCurrentSession(issuedSessionUserId, issuedSessionToken);
+        } catch (cleanupError: any) {
+          console.error('[PortalAuth] falha ao limpar token emitido após erro:', sanitizeString(cleanupError?.message || String(cleanupError), 220));
+        }
+        req.session.destroy(() => {});
+        res.clearCookie('verto-session');
+      }
       console.warn('[PortalAuth] verify-code warning:', error?.message || String(error));
       return res.status(400).json(genericError);
     }
@@ -26361,11 +26426,15 @@ async function startServer() {
         return res.status(400).json(genericError);
       }
 
+      // Security barrier: do not rotate the Auth password unless the current Verto
+      // session has already been revoked. Revoke again after the external Auth write
+      // to close the small concurrent-login window between the two systems.
+      await invalidateAllActiveSessions(challenge.userId);
       const { error: updateError } = await supabase.auth.admin.updateUserById(challenge.userId, {
         password: newPassword
       });
       if (updateError) throw updateError;
-      await invalidateActiveSession(challenge.userId);
+      await invalidateAllActiveSessions(challenge.userId);
 
       await persistIdentityAuditLog({
         title: 'Senha redefinida por recuperação',
@@ -26419,6 +26488,8 @@ async function startServer() {
     const credentialEmail = sanitizeEmail(req.body?.email);
     const credentialPassword = typeof req.body?.password === 'string' ? req.body.password : '';
     const hasCredentials = Boolean(credentialEmail && credentialPassword);
+    let issuedSessionToken = '';
+    let issuedSessionUserId = '';
     console.log('Login attempt auth header present:', !!accessToken, 'intendedRole:', intendedRole, 'hasCredentials:', hasCredentials);
 
     try {
@@ -27277,7 +27348,6 @@ async function startServer() {
         role: roleForSession,
         isPlatformAdmin: isPlatformAdminLogin,
         name: profile.name,
-        sessionToken: await issueSessionToken(sanitizeString(user.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -27320,6 +27390,9 @@ async function startServer() {
       };
 
       const sessionUser = await hydrateSessionUserWithOnboardingContext(userData);
+      issuedSessionUserId = sanitizeString(user.id, 120);
+      issuedSessionToken = await issueSessionToken(issuedSessionUserId);
+      sessionUser.sessionToken = issuedSessionToken;
       req.session.user = sessionUser;
       if (['patient','responsible','responsavel','guardian'].includes(String(sessionUser?.role || '').trim().toLowerCase())) {
         req.session.cookie.maxAge = patientPortalSessionMaxAgeDays * 24 * 60 * 60 * 1000;
@@ -27341,6 +27414,7 @@ async function startServer() {
               try {
                 await new Promise((resolve) => setTimeout(resolve, 120));
                 await saveExpressSession(req);
+                issuedSessionToken = '';
                 res.json(loginResponse);
                 delete req.session.isFirstLogin;
                 return;
@@ -27354,10 +27428,11 @@ async function startServer() {
                 });
               }
               try {
-                await invalidateActiveSession(
+                await invalidateCurrentSession(
                   sanitizeString(user.id, 120),
                   sanitizeString(sessionUser?.sessionToken, 200)
                 );
+                issuedSessionToken = '';
               } catch (sessionCleanupError: any) {
                 console.error(
                   '[Auth] Falha ao limpar sessao ativa apos erro de persistencia:',
@@ -27395,10 +27470,23 @@ async function startServer() {
           }
           return;
         }
+        issuedSessionToken = '';
         res.json(loginResponse);
         delete req.session.isFirstLogin;
       });
     } catch (error) {
+      if (issuedSessionToken && issuedSessionUserId) {
+        try {
+          await invalidateCurrentSession(issuedSessionUserId, issuedSessionToken);
+        } catch (sessionCleanupError: any) {
+          console.error(
+            '[Auth] Falha ao limpar token emitido após erro de login:',
+            sanitizeString(sessionCleanupError?.message || String(sessionCleanupError), 220)
+          );
+        }
+        req.session.destroy(() => {});
+        res.clearCookie('verto-session');
+      }
       console.error("Login verification error:", error);
       return sendAuthRouteError(res, '/api/auth/login', 'login', error, {
         requestId,
@@ -27409,7 +27497,7 @@ async function startServer() {
 
   app.post('/api/auth/logout', async (req, res) => {
     try {
-      await invalidateActiveSession(req.session?.user?.id, req.session?.user?.sessionToken);
+      await invalidateCurrentSession(req.session?.user?.id, req.session?.user?.sessionToken);
     } catch (sessionStateError: any) {
       console.error('[Auth] Falha ao revogar sessão distribuída no logout:', sanitizeString(sessionStateError?.message || String(sessionStateError), 240));
     }
@@ -27446,7 +27534,7 @@ async function startServer() {
         return res.status(503).json({ user: null, error: 'PLATFORM_ADMIN_AUTHORITY_UNAVAILABLE' });
       }
       if (!hasVerifiedOwnerMfaSession(req.session.user)) {
-        await invalidateActiveSession(req.session.user?.id, req.session.user?.sessionToken);
+        await invalidateCurrentSession(req.session.user?.id, req.session.user?.sessionToken);
         req.session.destroy(() => {});
         res.clearCookie('verto-session');
         return res.status(401).json({ user: null, error: 'PRIVILEGED_MFA_REQUIRED' });

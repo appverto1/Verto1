@@ -10,7 +10,7 @@ const rpcs = fs.readFileSync(new URL('../supabase/migrations/20260804111500_dist
 assert.match(server, /new SupabaseRateLimitStore\(\{ supabase, scope, windowMs \}\)/);
 assert.ok((server.match(/store: distributedRateLimitStore\(/g) || []).length >= 17);
 assert.match(server, /await isActiveSessionToken\(sessionUserId, sessionToken\)/);
-assert.match(server, /await invalidateActiveSession\(challenge\.userId\)/);
+assert.match(server, /await invalidateAllActiveSessions\(challenge\.userId\)/);
 assert.match(server, /distributedRuntimeState: !requiresDistributedRuntimeState\(\)/);
 assert.match(server, /runWithDistributedJobLease\('active-patient-retry-drain'/);
 assert.match(server, /requireDistributedLease: requiresDistributedRuntimeState\(\)/);

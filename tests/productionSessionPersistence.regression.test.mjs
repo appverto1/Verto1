@@ -9,7 +9,7 @@ assert.ok(sessionSaveBlock, 'login session-save block must exist');
 assert.match(sessionSaveBlock, /if \(requiresDistributedRuntimeState\(\)\) \{/);
 assert.match(sessionSaveBlock, /error: 'SERVER_SESSION_PERSISTENCE_REQUIRED'/);
 assert.match(sessionSaveBlock, /saveExpressSession\(req\)/);
-assert.match(sessionSaveBlock, /invalidateActiveSession\(/);
+assert.match(sessionSaveBlock, /invalidateCurrentSession\(/);
 assert.match(sessionSaveBlock, /res\.clearCookie\('verto-session'\)/);
 assert.ok(
   sessionSaveBlock.indexOf("error: 'SERVER_SESSION_PERSISTENCE_REQUIRED'") < sessionSaveBlock.indexOf("sessionPersistence: 'bearer_fallback'"),

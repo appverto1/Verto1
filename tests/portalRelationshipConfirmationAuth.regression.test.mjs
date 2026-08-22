@@ -24,7 +24,7 @@ const portalVerifyEnd = server.indexOf("app.post('/api/auth/password/recovery/ve
 assert.ok(portalVerifyStart >= 0 && portalVerifyEnd > portalVerifyStart, 'portal verify-code route must exist');
 const portalVerify = server.slice(portalVerifyStart, portalVerifyEnd);
 assert.match(portalVerify, /await saveExpressSession\(req\)/);
-assert.match(portalVerify, /invalidateActiveSession\(/);
+assert.match(portalVerify, /invalidateCurrentSession\(/);
 assert.match(portalVerify, /PORTAL_SESSION_UNAVAILABLE/);
 
 assert.match(component, /const \[requiresAuth, setRequiresAuth\] = useState\(true\)/);
