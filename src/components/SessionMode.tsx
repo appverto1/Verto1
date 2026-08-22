@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   Activity,
+  ArrowRight,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -1425,6 +1426,10 @@ export const SessionMode = ({
   const sessionScrollRef = useRef<HTMLDivElement | null>(null);
   const postClosureScrollRef = useRef<HTMLDivElement | null>(null);
   const sessionSummaryScrollRef = useRef<HTMLDivElement | null>(null);
+  const closureAttendanceRef = useRef<HTMLDivElement | null>(null);
+  const closureNoteRef = useRef<HTMLDivElement | null>(null);
+  const closureDurationResolutionRef = useRef<HTMLDivElement | null>(null);
+  const closureIntervalResolutionRef = useRef<HTMLDivElement | null>(null);
   const clinicalDockRef = useRef<HTMLDivElement | null>(null);
   const intervalPausedControlsRef = useRef<HTMLDivElement | null>(null);
 
@@ -5988,6 +5993,93 @@ export const SessionMode = ({
         targetCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 0);
     }
+  };
+
+  const scrollClosureRefIntoView = (ref: React.RefObject<HTMLDivElement | null>) => {
+    if (typeof window === 'undefined') return;
+    window.setTimeout(() => {
+      ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const focusable = ref.current?.querySelector<HTMLElement>('textarea, input, select, button:not([disabled])');
+      focusable?.focus({ preventScroll: true });
+    }, 0);
+  };
+
+  const focusSessionHistoryRecord = (recordId: string) => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    window.setTimeout(() => {
+      const target = Array.from(document.querySelectorAll<HTMLElement>('[data-aba-session-record-id]'))
+        .find((element) => element.getAttribute('data-aba-session-record-id') === recordId);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target?.focus({ preventScroll: true });
+    }, 50);
+  };
+
+  const resolveClosureBlocker = (item: SessionSummaryPendingItem) => {
+    if (endingSession) return;
+
+    if (item.key === 'open_duration') {
+      scrollClosureRefIntoView(closureDurationResolutionRef);
+      return;
+    }
+    if (item.key === 'open_interval_collection') {
+      scrollClosureRefIntoView(closureIntervalResolutionRef);
+      return;
+    }
+    if (item.key === 'absence_with_clinical_records') {
+      scrollClosureRefIntoView(closureAttendanceRef);
+      return;
+    }
+    if (item.key === 'absence_reason_required') {
+      scrollClosureRefIntoView(closureNoteRef);
+      return;
+    }
+
+    if (item.key === 'required_abc_missing') {
+      const missingRecord = records.find((record) => (
+        record.kind === 'behavior' &&
+        !record.intervalAggregate &&
+        !isCancelledIntervalClinicalRecord(record) &&
+        inferRecordMeasurementType(record) !== 'abc' &&
+        !record.antecedent &&
+        !record.consequence &&
+        getRecordAbcRequirement(record) === 'REQUIRED'
+      ));
+      if (missingRecord) {
+        startEditingRecord(missingRecord);
+        setSessionHistoryOpen(true);
+        returnToActiveSession();
+        focusSessionHistoryRecord(missingRecord.id);
+        return;
+      }
+    }
+
+    if (item.key === 'v3_failed_trials_require_resolution' || item.key === 'server_sync_required' || item.key === 'unsaved_local_records') {
+      const unsyncedRecord = records.find((record) => (
+        record.syncStatus === 'error' || record.syncStatus === 'local' || record.syncStatus === 'syncing'
+      ));
+      if (unsyncedRecord) {
+        setSessionHistoryOpen(true);
+        returnToActiveSession();
+        focusSessionHistoryRecord(unsyncedRecord.id);
+        return;
+      }
+    }
+
+    if (item.key === 'therapeutic_measurement_timer_open') {
+      const timer = Object.values(therapeuticTimers)[0];
+      returnToActiveSession();
+      if (timer && typeof window !== 'undefined') {
+        window.setTimeout(() => focusTherapeuticTimerGoal(timer), 50);
+      }
+      return;
+    }
+
+    if (item.key === 'incomplete_trial') {
+      returnToActiveSession();
+      return;
+    }
+
+    returnToActiveSession();
   };
   const abaV3SessionPlanTargetIds = useMemo(() => Array.from(new Set(
     sessionGoals.map((goal: any) => goalTargetId(goal)).filter(Boolean)
@@ -10573,7 +10665,7 @@ export const SessionMode = ({
             ) : visibleHistoryRecords.map((record) => {
               const lockedIntervalRecord = isIntervalHistoryRecord(record);
               return (
-              <div key={record.id} className="rounded-2xl border border-gray-100 bg-[#F8FAFF] p-3 sm:p-4">
+              <div key={record.id} data-aba-session-record-id={record.id} tabIndex={-1} className="rounded-2xl border border-gray-100 bg-[#F8FAFF] p-3 sm:p-4 outline-none focus:ring-2 focus:ring-[#7a32fc]/25">
                 {editingRecordId === record.id ? (
                   <div className="space-y-3">
                     <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{record.kind === 'trial' ? 'Tentativa' : 'Comportamento'}</p>
@@ -11206,6 +11298,7 @@ export const SessionMode = ({
               </button>
             </div>
 
+            <div ref={closureAttendanceRef}>
             <SessionSummaryDisclosure title="Presença no atendimento" meta={SESSION_ATTENDANCE_OPTIONS.find((option) => option.value === attendanceStatus)?.label || 'Selecione'}>
 <section className="rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-semibold text-gray-900">Presença no atendimento</h4>
@@ -11240,6 +11333,7 @@ export const SessionMode = ({
               )}
             </section>
             </SessionSummaryDisclosure>
+            </div>
 
             <SessionSummaryDisclosure title="Resumo geral" meta={`${formatSessionDuration(sessionClosureSummary.durationSeconds)} · ${sessionClosureSummary.totalTrials} tentativa(s) · ${sessionClosureSummary.totalBehaviorEvents} registro(s)`}>
 <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
@@ -11385,13 +11479,23 @@ export const SessionMode = ({
                 {closureBlockers.length === 0 ? (
                   <p className="rounded-2xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-sm font-semibold text-emerald-700">Nenhum bloqueio. O encerramento está liberado.</p>
                 ) : closureBlockers.map((item) => (
-                  <div key={item.key} className="rounded-2xl bg-red-50 border border-red-100 px-4 py-3 text-sm font-semibold text-red-700">
-                    {item.label}
-                  </div>
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => resolveClosureBlocker(item)}
+                    disabled={endingSession}
+                    className="group flex w-full items-center justify-between gap-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-700 transition hover:border-red-200 hover:bg-red-100/70 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    aria-label={`Resolver bloqueio: ${item.label}`}
+                  >
+                    <span className="min-w-0 flex-1">{item.label}</span>
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-red-600 shadow-sm">
+                      Resolver <ArrowRight size={12} className="transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                    </span>
+                  </button>
                 ))}
               </div>
               {openDurations.length > 0 && (
-                <div className="mt-4 space-y-3">
+                <div ref={closureDurationResolutionRef} className="mt-4 space-y-3">
                   {openDurations.map((event) => (
                     <div key={event.id} className="rounded-2xl bg-white border border-red-100 p-4">
                       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -11411,7 +11515,7 @@ export const SessionMode = ({
                 </div>
               )}
               {intervalRun && (
-                <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-4">
+                <div ref={closureIntervalResolutionRef} className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-4">
                   <p className="font-bold text-red-700">Há uma coleta por intervalo em andamento</p>
                   <p className="mt-1 text-sm text-red-700">{intervalRun.behaviorName} - {getMeasurementLabel(intervalRun.measurementType)} - intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</p>
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -11445,6 +11549,7 @@ export const SessionMode = ({
             </section>
             </SessionSummaryDisclosure>
 
+            <div ref={closureNoteRef}>
             <SessionSummaryDisclosure
               title={NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Motivo da falta ou do cancelamento' : 'Observação do atendimento'}
               meta={sessionNote.trim() ? 'preenchida' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'toque para informar' : 'opcional'}
@@ -11466,6 +11571,7 @@ export const SessionMode = ({
               </label>
             </section>
             </SessionSummaryDisclosure>
+            </div>
 
             {sessionEndError && (
               <div role="alert" className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
