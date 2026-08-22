@@ -409,6 +409,15 @@ function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutc
     }, row];
   });
 
+  const renderedPointCount = rows.filter((row) => row.value !== null && row.value !== undefined).length;
+  const chartHeight = compact
+    ? 128
+    : renderedPointCount <= 3
+      ? 176
+      : renderedPointCount <= 6
+        ? 200
+        : 228;
+
   const phaseMarkers: Array<{ date: string; label: string }> = [];
   let previousPhaseKey = '';
   for (const observation of series.observations) {
@@ -420,13 +429,13 @@ function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutc
   }
 
   return (
-    <div className={compact ? 'h-32' : 'h-64'}>
+    <div style={{ height: chartHeight }}>
       <SafeResponsiveContainer
         width="100%"
         height="100%"
-        minHeight={compact ? 128 : 256}
+        minHeight={chartHeight}
       >
-        <LineChart data={rows} margin={{ top: compact ? 12 : 26, right: 12, left: compact ? -12 : 10, bottom: compact ? 8 : 16 }}>
+        <LineChart data={rows} margin={{ top: compact ? 12 : 18, right: 12, left: compact ? -12 : 10, bottom: compact ? 8 : 12 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#334155' : '#E2E8F0'} />
           <XAxis
             dataKey="date"
@@ -862,7 +871,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                   return (
                     <article
                       key={group.key}
-                      className={`relative flex min-h-[230px] flex-col overflow-hidden rounded-2xl border p-4 transition ${isExpanded
+                      className={`relative flex min-h-[205px] flex-col overflow-hidden rounded-2xl border p-4 transition ${isExpanded
                         ? isPanelDark ? 'border-violet-400/70 bg-gradient-to-br from-violet-500/12 via-slate-900/75 to-cyan-500/8 ring-1 ring-violet-500/25' : 'border-violet-300 bg-gradient-to-br from-violet-50 via-white to-cyan-50/60 ring-1 ring-violet-100'
                         : isPanelDark ? 'border-slate-700 bg-gradient-to-br from-slate-900 via-slate-900 to-violet-500/5 hover:border-violet-500/45' : 'border-slate-200 bg-gradient-to-br from-white via-white to-violet-50/45 hover:border-violet-300 hover:shadow-sm'}`}
                       data-testid="clinical-target-card"
@@ -871,7 +880,17 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <h3 className={`truncate text-base font-semibold ${text}`}>{group.title}</h3>
-                          <p className={`mt-0.5 text-xs ${muted}`}>{group.phase}</p>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                            <p className={`text-xs ${muted}`}>{group.phase}</p>
+                            {group.historicalSeries.length > 0 && group.series.some((item) => !isHistoricalOnlySeries(item) && !isCollectionVolumeSeries(item)) && (
+                              <span
+                                title="Histórico anterior disponível"
+                                className={`inline-flex items-center gap-1 text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}
+                              >
+                                <History size={11} /> Histórico
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] ${evidenceTone(series, isPanelDark)}`}>
                           {series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}
@@ -886,10 +905,6 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                         )}
                       </div>
                       <p className={`mt-1.5 text-xs ${text}`}>{periodEvidenceLabel(series)}</p>
-
-                      {group.historicalSeries.length > 0 && group.series.some((item) => !isHistoricalOnlySeries(item) && !isCollectionVolumeSeries(item)) && (
-                        <p className={`mt-2 inline-flex items-center gap-1 text-[11px] ${muted}`}><History size={13} /> Histórico anterior preservado</p>
-                      )}
 
                       <button
                         type="button"
@@ -916,15 +931,18 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                   ? expandedTarget.historicalSeries
                   : [];
                 return (
-                  <article id="clinical-target-detail" className={`relative scroll-mt-4 overflow-hidden rounded-3xl border p-5 lg:p-6 ${isPanelDark ? 'border-violet-500/30 bg-gradient-to-br from-violet-500/8 via-[#101b2e] to-cyan-500/5' : 'border-violet-200/80 bg-gradient-to-br from-violet-50/70 via-white to-cyan-50/45'}`} data-testid="clinical-target-detail">
+                  <article id="clinical-target-detail" className={`relative -mt-1 scroll-mt-4 overflow-hidden rounded-3xl border p-4 lg:p-5 ${isPanelDark ? 'border-violet-500/30 bg-gradient-to-br from-violet-500/8 via-[#101b2e] to-cyan-500/5' : 'border-violet-200/80 bg-gradient-to-br from-violet-50/70 via-white to-cyan-50/45'}`} data-testid="clinical-target-detail">
                     <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-1 ${structuralAccent}`} />
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className={`text-xl font-semibold tracking-tight ${text}`}>{expandedTarget.title}</h3>
-                          <span className={`rounded-full border px-2.5 py-1 text-xs ${inset}`}>{expandedTarget.phase}</span>
+                          <span className={`inline-flex items-center gap-1.5 text-sm font-semibold ${isPanelDark ? 'text-violet-200' : 'text-violet-700'}`}>
+                            <ChevronDown size={15} /> Evidência aberta
+                          </span>
+                          <span className={`text-sm font-medium ${text}`}>· {expandedTarget.title}</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[11px] ${inset}`}>{expandedTarget.phase}</span>
                         </div>
-                        <p className={`mt-2 max-w-3xl text-sm leading-6 ${muted}`}>{expandedTarget.description || seriesDescription(expandedSeries)}</p>
+                        <p className={`mt-1.5 max-w-3xl text-sm leading-5 ${muted}`}>{expandedTarget.description || seriesDescription(expandedSeries)}</p>
                       </div>
                       <button
                         type="button"
@@ -936,7 +954,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                     </div>
 
                     {expandedTarget.clinicalSeries.length > 1 && (
-                      <div className={`mt-5 border-b ${isPanelDark ? 'border-slate-800' : 'border-slate-200'}`}>
+                      <div className={`mt-4 border-b ${isPanelDark ? 'border-slate-800' : 'border-slate-200'}`}>
                         <div className="flex flex-wrap gap-1" role="tablist" aria-label="Métricas clínicas do alvo">
                           {expandedTarget.clinicalSeries.map((series) => (
                             <button
@@ -956,7 +974,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                       </div>
                     )}
 
-                    <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
+                    <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
                       <div className="min-w-0">
                         <p className={`text-xs font-medium uppercase tracking-[0.12em] ${muted}`}>{expandedSeries.metricLabel}</p>
                         <div className="mt-1 flex flex-wrap items-center gap-3">
@@ -980,7 +998,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                       )}
                     </div>
 
-                    <div className="mt-4"><SeriesChart series={expandedSeries} isDark={isPanelDark} /></div>
+                    <div className="mt-3"><SeriesChart series={expandedSeries} isDark={isPanelDark} /></div>
 
                     {(baseline !== null || reference.targetValue !== null || reference.targetMin !== null || reference.targetMax !== null) && (
                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
@@ -990,14 +1008,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                       </div>
                     )}
 
-                    {expandedSeries.evidenceState !== 'sufficient' && (
-                      <div className={`mt-3 flex items-start gap-2 rounded-xl border p-3 text-xs ${isPanelDark ? 'border-amber-400/25 bg-amber-400/5 text-amber-100' : 'border-amber-200 bg-amber-50/70 text-amber-900'}`}>
-                        <CircleHelp size={16} className="mt-0.5 shrink-0" />
-                        <span><strong>Evidência preliminar.</strong> O resultado está disponível, mas ainda se apoia em poucas observações comparáveis. A decisão clínica permanece humana.</span>
-                      </div>
-                    )}
-
-                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
                       <button
                         type="button"
                         aria-expanded={showEvidenceDetails}
@@ -1015,6 +1026,12 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                         <div><p className={`text-[11px] ${muted}`}>Direção clínica</p><p className={`mt-1 text-sm ${text}`}>{clinicalOutcomeDirectionLabel(expandedSeries.direction)}</p></div>
                         <div><p className={`text-[11px] ${muted}`}>Registros comparáveis</p><p className={`mt-1 text-sm ${text}`}>{currentStats.observationCount}</p></div>
                         <div><p className={`text-[11px] ${muted}`}>Ausências registradas</p><p className={`mt-1 text-sm ${text}`}>{expandedSeries.missingCount}</p></div>
+                        {expandedSeries.evidenceState !== 'sufficient' && (
+                          <div className={`flex items-start gap-2 rounded-xl border p-3 text-xs sm:col-span-2 xl:col-span-4 ${isPanelDark ? 'border-amber-400/20 bg-amber-400/5 text-amber-100' : 'border-amber-200 bg-amber-50/60 text-amber-900'}`}>
+                            <CircleHelp size={15} className="mt-0.5 shrink-0" />
+                            <span><strong>Qualidade da evidência:</strong> ainda há poucas observações comparáveis para interpretar tendência com segurança. O resultado permanece disponível para acompanhamento clínico.</span>
+                          </div>
+                        )}
                         {expandedTarget.volumeSeries.length > 0 && (
                           <div className="sm:col-span-2 xl:col-span-4">
                             <p className={`text-[11px] ${muted}`}>Volume de coleta</p>
