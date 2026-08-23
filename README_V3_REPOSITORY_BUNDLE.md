@@ -69,3 +69,18 @@ A migration `20260823184500_aba_v3_analytical_metric_expansion.sql` completa o r
 A camada de apresentação agrupa percentuais, taxa/h e duração média usando numerador/denominador canônicos. Assim, duas sessões no mesmo dia não são combinadas por média simples quando possuem exposições diferentes.
 
 O check read-only correspondente é `supabase/verification/20260823184600_aba_v3_analytical_metric_expansion_checks.sql`. O PASS esperado é `PASS_ABA_V3_ANALYTICAL_METRIC_EXPANSION`.
+
+## Fechamento da baseline de Produção — Blocos 4 a 7
+
+A baseline atual também inclui:
+
+- `20260823192500_aba_v3_chart_series_bundle.sql`: leitura analítica bounded de até 3 alvos, sem N+1 e sem unir fases/modelos incompatíveis;
+- `20260823200000_clinical_measurement_v3_plan_writer_ui_convergence.sql`: writer universal Planos/PTS com `PROPORTION` canônica e fail-closed contra dual-write;
+- `20260823200500_clinical_measurement_v3_plan_read_model_proportion.sql`: read model Planos/PTS com numerador/denominador de proporção;
+- cache clínico patient-scoped em memória, deduplicação in-flight, atomic swap de escopo e invalidação cross-tab opaca, sem persistir PHI no canal;
+- `20260823213000_aba_v3_production_health_snapshot.sql`: snapshot read-only de saúde operacional, service-role only;
+- `docs/operations/ABA_V3_PRODUCTION_RUNBOOK.md`: runbook atual de Produção Default-On. O runbook de piloto permanece apenas como histórico.
+
+O fluxo operacional validado em 2026-08-23 atingiu `PASS_PURE_DEFAULT_ON_FRESH_SESSION_BINDING`, `PASS_ABA_V3_SIMPLIFIED_ANALYTICS_READS` e `PASS_CMV3_PLAN_WRITER_UI_CONVERGENCE`. O snapshot de saúde do Bloco 7 deve ser validado após a migration correspondente; seu gate estrutural esperado é `PASS_ABA_V3_PRODUCTION_OBSERVABILITY`.
+
+A suíte V3 do bundle deve permanecer integralmente verde. Não altere runtime clínico para satisfazer testes que estejam acoplados a migrations históricas ou copy de UI; corrija o teste para validar o contrato efetivo quando esse for o problema.

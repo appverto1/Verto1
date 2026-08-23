@@ -1,7 +1,7 @@
 # Production restore package
 
 This package is a COMPLETE repository snapshot, not a changes-only bundle.
-It is based on the latest full repository used for the ABA V3 clinical-date/timezone hotfix and includes the latest V3 SQL/docs/test artifacts through the pure-inherit attestation v2, with 06810 as the canonical Default-On override lifecycle migration, 06811 retained only as historical production operation, 06812 preserved as the first read-only attestation, and 20260823182500 as the corrected final gate that detects a missing binding on the newest session.
+It is based on the latest full repository used for the ABA V3 clinical-date/timezone hotfix and includes the consolidated V3 production baseline through Blocks 1–7: Default-On pure-inherit binding, canonical analytical metric expansion, bounded multi-target analytics, Plan/PTS canonical writer convergence, patient-scoped cache consistency and the service-role production health snapshot. 06810 remains the canonical Default-On override lifecycle migration, 06811 remains historical production operation only, and the pilot runbook is superseded operationally by docs/operations/ABA_V3_PRODUCTION_RUNBOOK.md.
 
 Use this package to restore the repository tree after the prior merge-only bundle caused missing local modules at runtime.
 

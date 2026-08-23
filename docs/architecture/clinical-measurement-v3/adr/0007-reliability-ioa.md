@@ -1,13 +1,13 @@
 # ADR-0007 — Reliability and Interobserver Agreement
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-08-20  
 **Decision owners:** Clinical Measurement Architecture  
 **Scope:** Clinical Measurement Engine V3  
 **Related ADRs:** ADR-0001, ADR-0003, ADR-0006, ADR-0008  
 **Supersedes:** —  
 **Superseded by:** —  
-**Implementation status:** Not started  
+**Implementation status:** Partially implemented — canonical ABA reliability/IOA and paired reliability streams are live; broader multidisciplinary Reliability Profile remains an extension  
 
 ## Context
 

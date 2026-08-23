@@ -1,6 +1,6 @@
 # SemanticMeasurementResponse V3 — Contract Baseline
 
-**Status:** Proposed  
+**Status:** Accepted — production baseline 2026-08-23  
 **Contract family:** `3.x`  
 **Architecture:** ADR-0008  
 

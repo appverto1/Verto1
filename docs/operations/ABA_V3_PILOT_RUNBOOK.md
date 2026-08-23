@@ -1,5 +1,7 @@
 # ABA V3 — Runbook do primeiro piloto
 
+> **Documento histórico.** Este runbook descreve o primeiro piloto e o modelo de enrollment positivo usado antes do Default-On. A operação atual é definida em [`ABA_V3_PRODUCTION_RUNBOOK.md`](./ABA_V3_PRODUCTION_RUNBOOK.md). Não use as etapas de abertura de cohort abaixo como rotina de Produção atual.
+
 ## Objetivo
 
 Ativar um único cohort de forma auditável, reversível e sem mudar o comportamento das sessões Legacy V2 fora do escopo escolhido.

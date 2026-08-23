@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
   CheckCircle2,
   ChevronRight,
@@ -88,9 +89,25 @@ export const AbaV3RolloutControlCenter = () => {
   const [catalogLoading, setCatalogLoading] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<any | null>(null);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
+  const [productionHealth, setProductionHealth] = useState<any | null>(null);
+  const [productionHealthLoading, setProductionHealthLoading] = useState(false);
   const [reason, setReason] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+
+  const refreshProductionHealth = async () => {
+    setProductionHealthLoading(true);
+    try {
+      const params = new URLSearchParams({ windowDays: '7' });
+      const data = await requestJson(`/api/aba/v3/admin/production-health?${params.toString()}`);
+      setProductionHealth(data || null);
+    } catch (error: any) {
+      setProductionHealth(null);
+      setFeedback(error?.message || 'Não foi possível carregar a saúde operacional ABA V3.');
+    } finally {
+      setProductionHealthLoading(false);
+    }
+  };
 
   const loadClinics = async () => {
     setCatalogLoading('clinics');
@@ -166,7 +183,8 @@ export const AbaV3RolloutControlCenter = () => {
 
   useEffect(() => {
     void loadClinics();
-    // Initial bounded clinic catalog only; further reads are explicit and scoped.
+    void refreshProductionHealth();
+    // Initial bounded reads only; further cohort reads are explicit and scoped.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -267,6 +285,19 @@ export const AbaV3RolloutControlCenter = () => {
     && runtime?.uiBuildFlagEnabled === true;
   const canEnable = snapshot?.can_enable === true && runtimeReady && writerEnabled && !effectiveEnabled;
   const canDisable = snapshot?.can_disable_new_sessions === true && writerEnabled;
+  const healthBindings = productionHealth?.bindings || {};
+  const healthQuarantine = productionHealth?.sync_quarantine || {};
+  const healthProjectionQueue = productionHealth?.projection_queue || {};
+  const healthIntegrity = productionHealth?.integrity || {};
+  const healthControlPlane = productionHealth?.control_plane || {};
+  const healthStateLabel = productionHealth?.health_state === 'HEALTHY'
+    ? 'Saudável'
+    : productionHealth?.health_state === 'DEGRADED'
+      ? 'Atenção'
+      : productionHealth?.health_state === 'BLOCKED'
+        ? 'Bloqueado'
+        : 'Não verificado';
+  const healthStateTone: 'neutral' | 'good' | 'warn' = productionHealth?.health_state === 'HEALTHY' ? 'good' : productionHealth ? 'warn' : 'neutral';
 
   return (
     <div className="space-y-6">
@@ -287,6 +318,81 @@ export const AbaV3RolloutControlCenter = () => {
           </div>
         </div>
       </div>
+
+      <section className="rounded-3xl border border-slate-200 bg-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-slate-800">
+              <Activity size={18} />
+              <h3 className="text-base font-semibold">Saúde da V3 em produção</h3>
+            </div>
+            <p className="mt-1 text-sm text-slate-500">Bindings usam uma janela de 7 dias; filas e control plane mostram o estado atual. É somente leitura e não exige rotina diária.</p>
+          </div>
+          <button
+            onClick={() => void refreshProductionHealth()}
+            disabled={productionHealthLoading}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {productionHealthLoading ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+            Atualizar saúde
+          </button>
+        </div>
+
+        {productionHealthLoading && !productionHealth ? (
+          <div className="mt-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 size={16} className="animate-spin" /> Lendo telemetria V3...</div>
+        ) : productionHealth ? (
+          <div className="mt-4 space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6">
+              <StatusCard title="Estado" value={healthStateLabel} tone={healthStateTone} />
+              <StatusCard
+                title="Bindings V3 · 7d"
+                value={`${healthBindings.v3_recent ?? 0}/${healthBindings.total_recent ?? 0}${healthBindings.v3_ratio_percent == null ? '' : ` · ${healthBindings.v3_ratio_percent}%`}`}
+                tone={Number(healthBindings.legacy_v2_recent || 0) + Number(healthBindings.emergency_bridge_recent || 0) === 0 ? 'good' : 'neutral'}
+              />
+              <StatusCard
+                title="Fallback V2 · 7d"
+                value={String(Number(healthBindings.legacy_v2_recent || 0) + Number(healthBindings.emergency_bridge_recent || 0))}
+                tone={Number(healthBindings.emergency_bridge_recent || 0) > 0 ? 'warn' : Number(healthBindings.legacy_v2_recent || 0) === 0 ? 'good' : 'neutral'}
+              />
+              <StatusCard
+                title="Quarentena"
+                value={String(Number(healthQuarantine.open || 0) + Number(healthQuarantine.ready_for_retry || 0))}
+                tone={Number(healthQuarantine.open || 0) + Number(healthQuarantine.ready_for_retry || 0) === 0 ? 'good' : 'warn'}
+              />
+              <StatusCard
+                title="Projeções com falha"
+                value={String(healthProjectionQueue.failed ?? 0)}
+                tone={Number(healthProjectionQueue.failed || 0) === 0 ? 'good' : 'warn'}
+              />
+              <StatusCard
+                title="Autoridade mista"
+                value={String(healthIntegrity.mixed_authority_session_targets_recent ?? 0)}
+                tone={Number(healthIntegrity.mixed_authority_session_targets_recent || 0) === 0 ? 'good' : 'warn'}
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2 text-xs text-slate-500">
+              <span className="rounded-lg bg-slate-50 px-2.5 py-1">Overrides positivos ativos: {healthControlPlane.active_positive_overrides ?? 0}</span>
+              <span className="rounded-lg bg-slate-50 px-2.5 py-1">Kill switches ativos: {healthControlPlane.active_kill_switches ?? 0}</span>
+              <span className="rounded-lg bg-slate-50 px-2.5 py-1">Fila pendente: {healthProjectionQueue.pending ?? 0}</span>
+              <span className="rounded-lg bg-slate-50 px-2.5 py-1">Fila processando: {healthProjectionQueue.processing ?? 0}</span>
+            </div>
+
+            {Array.isArray(productionHealth.warnings) && productionHealth.warnings.length > 0 && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3">
+                <div className="flex items-center gap-2 text-sm font-semibold text-amber-800"><AlertTriangle size={15} /> Pontos para acompanhar</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {productionHealth.warnings.map((warning: string) => (
+                    <span key={warning} className="rounded-lg bg-white px-2.5 py-1 text-xs text-amber-700">{warning}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="mt-4 text-sm text-slate-400">Saúde operacional ainda não carregada.</p>
+        )}
+      </section>
 
       {feedback && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
