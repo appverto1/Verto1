@@ -535,7 +535,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [primaryProfessionalError, setPrimaryProfessionalError] = useState('');
   const [caseTeamRefreshKey, setCaseTeamRefreshKey] = useState(0);
   const [caseTeamManagementAllowed, setCaseTeamManagementAllowed] = useState(false);
+  const [caseTeamLinksSnapshot, setCaseTeamLinksSnapshot] = useState<any[]>([]);
+  const [showChartsCaseTeam, setShowChartsCaseTeam] = useState(false);
   const primaryProfessionalOverrideRef = React.useRef<string | null | undefined>(undefined);
+
+  const activeCaseTeamLinks = useMemo(
+    () => caseTeamLinksSnapshot.filter((link: any) => String(link?.status || '').toLowerCase() === 'active'),
+    [caseTeamLinksSnapshot],
+  );
+  const caseTeamIntegrityPendingCount = useMemo(
+    () => activeCaseTeamLinks.filter((link: any) => Boolean(link?.integrityStatus) || link?.accessEnabled === false).length,
+    [activeCaseTeamLinks],
+  );
+
+  useEffect(() => {
+    setShowChartsCaseTeam(false);
+    setCaseTeamLinksSnapshot([]);
+  }, [patient?.id]);
 
   const historyRange = useMemo(
     () => resolvePatientHistoryRange(historyPeriod, historyCustomFrom, historyCustomTo),
@@ -1195,7 +1211,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const handleCaseTeamLinksChanged = (links: any[]) => {
-    const primaryLink = (Array.isArray(links) ? links : []).find((link: any) =>
+    const normalizedLinks = Array.isArray(links) ? links : [];
+    setCaseTeamLinksSnapshot(normalizedLinks);
+    const primaryLink = normalizedLinks.find((link: any) =>
       String(link?.status || '').toLowerCase() === 'active'
       && String(link?.relationship_type || '').toLowerCase() === 'primary'
     );
@@ -10123,6 +10141,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       </span>
                     )}
                   </div>
+                  {activeTab === 'aba-charts' && patient?.id && (
+                    <button
+                      type="button"
+                      aria-expanded={showChartsCaseTeam}
+                      aria-controls="patient-care-context"
+                      onClick={() => setShowChartsCaseTeam((current) => !current)}
+                      className={`mt-1.5 inline-flex min-h-9 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors ${isPanelDark
+                        ? 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-violet-500/50'
+                        : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-violet-200 hover:bg-violet-50'}`}
+                    >
+                      <span>Equipe · {activeCaseTeamLinks.length}</span>
+                      {caseTeamIntegrityPendingCount > 0 && (
+                        <span className={isPanelDark ? 'text-amber-300' : 'text-amber-700'}>· ⚠ {caseTeamIntegrityPendingCount}</span>
+                      )}
+                      <ChevronDown size={13} className={`transition-transform ${showChartsCaseTeam ? 'rotate-180' : ''}`} aria-hidden="true" />
+                    </button>
+                  )}
                   {patientPhotoError && (
                     <p role="alert" className="mt-1 text-[11px] font-medium text-rose-600">{patientPhotoError}</p>
                   )}
@@ -10217,7 +10252,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
           <div
             id="patient-care-context"
-            className={`mt-6 grid min-w-0 items-start gap-5 ${
+            className={`${activeTab === 'aba-charts' && !showChartsCaseTeam ? 'hidden' : 'mt-6 grid'} min-w-0 items-start gap-5 ${
               canManagePrimaryProfessionalForPatient
                 ? 'lg:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]'
                 : ''

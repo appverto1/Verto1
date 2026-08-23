@@ -18,8 +18,13 @@ assert.match(sessionMode, /item\.key === 'open_interval_collection'[\s\S]*scroll
 assert.match(sessionMode, /item\.key === 'absence_with_clinical_records'[\s\S]*scrollClosureRefIntoView\(closureAttendanceRef\)/);
 assert.match(sessionMode, /item\.key === 'absence_reason_required'[\s\S]*scrollClosureRefIntoView\(closureNoteRef\)/);
 
-// ABC and sync blockers return to the active session and focus the exact offending record.
-assert.match(sessionMode, /item\.key === 'required_abc_missing'[\s\S]*startEditingRecord\(missingRecord\)[\s\S]*setSessionHistoryOpen\(true\)[\s\S]*focusSessionHistoryRecord\(missingRecord\.id\)/);
+// ABC is an optional complement and never blocks session closure merely because fields are absent.
+assert.doesNotMatch(sessionMode, /required_abc_missing/);
+assert.doesNotMatch(sessionMode, /ABC obrigatório pendente/);
+assert.doesNotMatch(sessionMode, /abcMissingCounts/);
+assert.doesNotMatch(sessionMode, /abcRequirement: 'REQUIRED'/);
+
+// Sync blockers still return to the active session and focus the exact offending record.
 assert.match(sessionMode, /v3_failed_trials_require_resolution'[\s\S]*server_sync_required'[\s\S]*unsaved_local_records'[\s\S]*setSessionHistoryOpen\(true\)[\s\S]*focusSessionHistoryRecord\(unsyncedRecord\.id\)/);
 assert.match(sessionMode, /data-aba-session-record-id=\{record\.id\}/);
 

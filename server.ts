@@ -80690,8 +80690,23 @@ async function startServer() {
       if (/SESSION_COMPLETION_ABSENCE_HAS_CLINICAL_RECORDS/i.test(message)) {
         return res.status(409).json({ success: false, code: 'ABSENCE_HAS_CLINICAL_RECORDS', error: 'Não é possível registrar falta ou cancelamento porque esta sessão já possui registros clínicos.' });
       }
-      if (/SESSION_COMPLETION_SESSION_NOT_FOUND|SESSION_COMPLETION_APPOINTMENT_NOT_FOUND/i.test(message)) {
-        return res.status(404).json({ success: false, code: 'SESSION_COMPLETION_NOT_FOUND', error: 'Sessão ou agendamento não encontrado.' });
+      if (/SESSION_COMPLETION_SESSION_NOT_FOUND/i.test(message)) {
+        return res.status(404).json({
+          success: false,
+          code: 'SESSION_COMPLETION_NOT_FOUND',
+          missingResource: 'session',
+          recoverable: true,
+          error: 'Sessão não encontrada no servidor.'
+        });
+      }
+      if (/SESSION_COMPLETION_APPOINTMENT_NOT_FOUND/i.test(message)) {
+        return res.status(404).json({
+          success: false,
+          code: 'SESSION_COMPLETION_NOT_FOUND',
+          missingResource: 'appointment',
+          recoverable: false,
+          error: 'Agendamento vinculado à sessão não encontrado.'
+        });
       }
       if (/SESSION_COMPLETION_ACCESS_DENIED|SESSION_COMPLETION_ACTOR_MISMATCH/i.test(message)) {
         return res.status(403).json({ success: false, code: 'SESSION_COMPLETION_ACCESS_DENIED', error: 'Você não possui permissão para encerrar esta sessão.' });

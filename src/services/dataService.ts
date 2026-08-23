@@ -2599,24 +2599,104 @@ export const dataService = {
 
   async completeAbaSession(sessionId: string, payload: any) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ id: String(sessionId), ...(payload || {}) });
-    const response = await fetchClinical(
-      `/api/aba/sessions/${encodeURIComponent(String(sessionId))}/complete`,
-      {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {})
-      },
-      {
-        helperName: 'completeAbaSession',
-        operation: 'write',
-        table: 'aba_sessions,aba_session_summaries,appointments,appointment_attendance_audit_events,appointment_closure_checks',
-        hasExplicitColumns: true,
-        requiresPatientOrSession: true
+    const safeSessionId = String(sessionId || '').trim();
+    const completionEndpoint = `/api/aba/sessions/${encodeURIComponent(safeSessionId)}/complete`;
+    const requestCompletion = async () => {
+      const response = await fetchClinical(
+        completionEndpoint,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload || {})
+        },
+        {
+          helperName: 'completeAbaSession',
+          operation: 'write',
+          table: 'aba_sessions,aba_session_summaries,appointments,appointment_attendance_audit_events,appointment_closure_checks',
+          hasExplicitColumns: true,
+          requiresPatientOrSession: true
+        }
+      );
+      const result = await response.json().catch(() => ({}));
+      return { response, result };
+    };
+
+    let completionAttempt = await requestCompletion();
+    const missingServerSession =
+      completionAttempt.response.status === 404 &&
+      completionAttempt.result?.code === 'SESSION_COMPLETION_NOT_FOUND' &&
+      completionAttempt.result?.missingResource === 'session' &&
+      completionAttempt.result?.recoverable === true;
+
+    if (missingServerSession) {
+      const recoveryStartedAt = String(
+        payload?.started_at ||
+        payload?.startedAt ||
+        payload?.summary?.startedAt ||
+        ''
+      ).trim();
+      if (!recoveryStartedAt) {
+        return {
+          success: false,
+          status: 409,
+          code: 'SESSION_COMPLETION_SESSION_RECOVERY_CONTEXT_MISSING',
+          error: 'A sessão não foi encontrada no servidor e o horário de início não está disponível para uma recuperação segura.'
+        };
       }
-    );
-    const result = await response.json().catch(() => ({}));
-    return response.ok ? result : { success: false, status: response.status, ...result };
+
+      const recoveryAppointmentId = payload?.appointment_id || payload?.appointmentId || undefined;
+      const recoveryTherapistId = payload?.therapist_id || payload?.therapistId || undefined;
+      const recoveryResult = await dataService.saveAbaSession({
+        id: safeSessionId,
+        patient_id: payload?.patient_id || payload?.patientId,
+        patientId: payload?.patientId || payload?.patient_id,
+        clinic_id: payload?.clinic_id || payload?.clinicId,
+        clinicId: payload?.clinicId || payload?.clinic_id,
+        appointment_id: recoveryAppointmentId,
+        appointmentId: recoveryAppointmentId,
+        therapist_id: recoveryTherapistId,
+        therapistId: recoveryTherapistId,
+        professional_id: recoveryTherapistId,
+        professionalId: recoveryTherapistId,
+        scheduled_start: payload?.scheduled_start || payload?.scheduledStart || payload?.scheduled_start_at || payload?.scheduledStartAt,
+        scheduled_start_at: payload?.scheduled_start_at || payload?.scheduledStartAt || payload?.scheduled_start || payload?.scheduledStart,
+        scheduled_end: payload?.scheduled_end || payload?.scheduledEnd || payload?.scheduled_end_at || payload?.scheduledEndAt,
+        scheduled_end_at: payload?.scheduled_end_at || payload?.scheduledEndAt || payload?.scheduled_end || payload?.scheduledEnd,
+        scheduled_duration_minutes: payload?.scheduled_duration_minutes || payload?.scheduledDurationMinutes,
+        actual_start: recoveryStartedAt,
+        actual_start_at: recoveryStartedAt,
+        started_at: recoveryStartedAt,
+        startedAt: recoveryStartedAt,
+        reference_date: payload?.reference_date || payload?.referenceDate,
+        referenceDate: payload?.referenceDate || payload?.reference_date,
+        status: 'active',
+        source: recoveryAppointmentId ? 'appointment' : 'verto_web',
+        clientSource: recoveryAppointmentId ? 'appointment' : 'verto_web'
+      });
+
+      const recoveryConfirmed =
+        recoveryResult?.success === true &&
+        recoveryResult?.pending !== true &&
+        recoveryResult?.offline !== true;
+      if (!recoveryConfirmed) {
+        return {
+          success: false,
+          status: recoveryResult?.status || 503,
+          code: recoveryResult?.code || 'SESSION_COMPLETION_SESSION_RECOVERY_PENDING',
+          retryable: Boolean(recoveryResult?.pending || recoveryResult?.offline),
+          error: recoveryResult?.error || 'A sessão ainda está sendo sincronizada com o servidor. Tente encerrar novamente em instantes.'
+        };
+      }
+
+      // Retry exactly once, only after the canonical session-start contract confirms
+      // the same session id on the server. Appointment-not-found errors are never healed here.
+      completionAttempt = await requestCompletion();
+    }
+
+    return completionAttempt.response.ok
+      ? completionAttempt.result
+      : { success: false, status: completionAttempt.response.status, ...completionAttempt.result };
   },
 
   async reopenAppointmentNoShow(appointmentId: string, payload: any) {

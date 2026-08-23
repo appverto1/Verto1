@@ -526,9 +526,10 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
   const [contextFilter, setContextFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [refreshRevision, setRefreshRevision] = useState(0);
-  const [expandedTargetKey, setExpandedTargetKey] = useState('');
-  const [activeSeriesKey, setActiveSeriesKey] = useState('');
-  const [showEvidenceDetails, setShowEvidenceDetails] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [expandedTargetKeys, setExpandedTargetKeys] = useState<string[]>([]);
+  const [activeSeriesKeys, setActiveSeriesKeys] = useState<Record<string, string>>({});
+  const [evidenceDetailsOpen, setEvidenceDetailsOpen] = useState<Record<string, boolean>>({});
 
   const periodRange = useMemo(() => {
     const presetDays = periodPreset === 'custom' ? 0 : Number(periodPreset);
@@ -626,34 +627,34 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
   const allSelectedTargetGroups = useMemo(() => buildClinicalTargetGroups(selectedPlanSeries), [selectedPlanSeries]);
   const selectedTargetGroups = useMemo(() => allSelectedTargetGroups.filter((group) => group.clinicalSeries.length > 0), [allSelectedTargetGroups]);
   const volumeOnlyTargetGroups = useMemo(() => allSelectedTargetGroups.filter((group) => group.clinicalSeries.length === 0 && group.volumeSeries.length > 0), [allSelectedTargetGroups]);
-  const expandedTarget = useMemo(() => selectedTargetGroups.find((group) => group.key === expandedTargetKey) || null, [expandedTargetKey, selectedTargetGroups]);
-  const expandedSeries = useMemo(() => {
-    if (!expandedTarget) return null;
-    return expandedTarget.clinicalSeries.find((series) => series.key === activeSeriesKey)
-      || expandedTarget.primarySeries
-      || null;
-  }, [activeSeriesKey, expandedTarget]);
   useEffect(() => {
-    if (!expandedTargetKey) return;
-    const group = selectedTargetGroups.find((item) => item.key === expandedTargetKey);
-    if (!group) {
-      setExpandedTargetKey('');
-      setActiveSeriesKey('');
-      setShowEvidenceDetails(false);
-      return;
-    }
-    if (!group.clinicalSeries.some((series) => series.key === activeSeriesKey)) {
-      setActiveSeriesKey(group.primarySeries.key);
-    }
-  }, [activeSeriesKey, expandedTargetKey, selectedTargetGroups]);
-
-  const openTarget = (group: ClinicalTargetGroup) => {
-    setExpandedTargetKey(group.key);
-    setActiveSeriesKey(group.primarySeries.key);
-    setShowEvidenceDetails(false);
-    window.requestAnimationFrame(() => {
-      document.getElementById('clinical-target-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const validKeys = new Set(selectedTargetGroups.map((group) => group.key));
+    setExpandedTargetKeys((current) => current.filter((key) => validKeys.has(key)).slice(-2));
+    setActiveSeriesKeys((current) => {
+      const next: Record<string, string> = {};
+      for (const group of selectedTargetGroups) {
+        const currentSeriesKey = current[group.key];
+        next[group.key] = group.clinicalSeries.some((series) => series.key === currentSeriesKey)
+          ? currentSeriesKey
+          : group.primarySeries.key;
+      }
+      return next;
     });
+    setEvidenceDetailsOpen((current) => Object.fromEntries(
+      Object.entries(current).filter(([key]) => validKeys.has(key)),
+    ));
+  }, [selectedTargetGroups]);
+
+  const toggleTarget = (group: ClinicalTargetGroup) => {
+    setExpandedTargetKeys((current) => {
+      if (current.includes(group.key)) return current.filter((key) => key !== group.key);
+      return [...current, group.key].slice(-2);
+    });
+    setActiveSeriesKeys((current) => ({
+      ...current,
+      [group.key]: current[group.key] || group.primarySeries.key,
+    }));
+    setEvidenceDetailsOpen((current) => ({ ...current, [group.key]: false }));
   };
 
   const ptsPayload = useMemo(() => activePts ? hydratePtsClinicalPayloadFromPlan(activePts) : null, [activePts]);
@@ -693,6 +694,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
   const structuralAccent = isPanelDark ? 'bg-violet-400/80' : 'bg-violet-600';
   const text = isPanelDark ? 'text-slate-100' : 'text-slate-900';
   const muted = isPanelDark ? 'text-slate-400' : 'text-slate-500';
+  const activeFilterCount = Number(contextFilter !== 'all') + Number(sourceFilter !== 'all');
 
   if (loading) {
     return <div className={`flex min-h-[420px] items-center justify-center rounded-3xl border ${panel}`}><RefreshCw className="animate-spin text-violet-500" size={26} /></div>;
@@ -700,84 +702,127 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
 
   return (
     <section className="space-y-4" data-testid="clinical-outcomes-dashboard">
-      <header className={`relative overflow-hidden rounded-3xl border p-5 lg:p-6 ${brandPanel}`}>
-        <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-1 ${structuralAccent}`} />
-        <div aria-hidden="true" className={`absolute -right-16 -top-20 h-48 w-48 rounded-full blur-3xl ${isPanelDark ? 'bg-violet-500/10' : 'bg-violet-200/35'}`} />
-        <div className="relative flex flex-col gap-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <p className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${isPanelDark ? 'border-violet-500/30 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-white/80 text-violet-700'}`}>Evidências clínicas</p>
-              <h2 className={`mt-1 text-2xl font-semibold tracking-tight ${text}`}>
-                {selectedPlan ? (clean(selectedPlan.specialty) || 'Plano por especialidade') : 'Plano Terapêutico Singular'}
-              </h2>
-              <p className={`mt-1.5 max-w-2xl text-sm ${muted}`}>
-                {selectedPlan
-                  ? 'Acompanhamento da evolução clínica por alvo, com resultado, tamanho da evidência, meta e evolução temporal no mesmo contexto.'
-                  : 'Contribuições multidisciplinares explicáveis, sem calcular média entre métricas incompatíveis.'}
-              </p>
+      <header className={`relative overflow-hidden rounded-2xl border p-3 sm:p-4 ${brandPanel}`}>
+        <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${structuralAccent}`} />
+        <div className="relative flex flex-col gap-3">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="min-w-0 flex-1">
+              <p className={`text-[10px] font-medium uppercase tracking-[0.14em] ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>Evidências clínicas</p>
+              <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                <label className="min-w-0 flex-1 sm:max-w-sm">
+                  <span className="sr-only">Visão clínica</span>
+                  <select
+                    value={scopeId}
+                    onChange={(event) => setScopeId(event.target.value)}
+                    className={`h-11 w-full rounded-xl border px-3 text-sm font-semibold sm:h-10 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}
+                  >
+                    {activePts && <option value="pts">Visão do PTS</option>}
+                    {specialtyPlans.map((plan) => <option key={plan.id} value={String(plan.id)}>{clean(plan.specialty) || 'Plano da especialidade'} · v{plan.edit_version || 1}</option>)}
+                  </select>
+                </label>
+                <p className={`hidden max-w-2xl text-xs xl:block ${muted}`}>
+                  {selectedPlan
+                    ? 'Evolução por alvo, mantendo resultado, tamanho da evidência e tempo no mesmo contexto.'
+                    : 'Contribuições multidisciplinares explicáveis, sem calcular média entre métricas incompatíveis.'}
+                </p>
+              </div>
             </div>
-            <label className={`w-full text-xs lg:w-auto ${muted}`}>
-              Visão
-              <select
-                value={scopeId}
-                onChange={(event) => setScopeId(event.target.value)}
-                className={`mt-1.5 h-10 w-full min-w-[240px] rounded-xl border px-3 text-sm lg:w-auto ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}
-              >
-                {activePts && <option value="pts">Visão do PTS</option>}
-                {specialtyPlans.map((plan) => <option key={plan.id} value={String(plan.id)}>{clean(plan.specialty) || 'Plano da especialidade'} · v{plan.edit_version || 1}</option>)}
-              </select>
-            </label>
-          </div>
 
-          <div className={`flex flex-col gap-3 border-t pt-4 lg:flex-row lg:items-center lg:justify-between ${isPanelDark ? 'border-slate-800' : 'border-slate-100'}`}>
-            <div className="flex flex-wrap items-center gap-2" aria-label="Período clínico">
-              {[
-                ['7', '7d'],
-                ['30', '30d'],
-                ['90', '90d'],
-                ['180', '6m'],
-                ['365', '1a'],
-                ['custom', 'Personalizado'],
-              ].map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={periodPreset === value}
-                  onClick={() => setPeriodPreset(value)}
-                  className={`h-9 rounded-xl border px-3 text-xs font-medium transition ${periodPreset === value
-                    ? 'border-violet-500 bg-violet-600 text-white shadow-sm'
-                    : isPanelDark
-                      ? 'border-slate-700 bg-slate-900 text-slate-300 hover:border-violet-500/60'
-                      : 'border-slate-200 bg-white text-slate-600 hover:border-violet-300 hover:text-violet-700'}`}
+            <div className="flex flex-wrap items-center gap-2 xl:justify-end" aria-label="Controles da visão clínica">
+              <label className="sm:hidden">
+                <span className="sr-only">Período clínico</span>
+                <select
+                  value={periodPreset}
+                  onChange={(event) => setPeriodPreset(event.target.value)}
+                  className={`h-11 min-w-[84px] rounded-xl border px-3 text-sm font-medium ${periodPreset !== 'custom'
+                    ? isPanelDark ? 'border-violet-400/60 bg-violet-500/10 text-violet-200' : 'border-teal-300 bg-teal-50 text-teal-800'
+                    : isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-700'}`}
                 >
-                  {label}
-                </button>
-              ))}
+                  <option value="7">7d</option>
+                  <option value="30">30d</option>
+                  <option value="90">90d</option>
+                  <option value="180">6m</option>
+                  <option value="365">1a</option>
+                  <option value="custom">Personalizado</option>
+                </select>
+              </label>
+
+              <div className="hidden flex-wrap items-center gap-1.5 sm:flex" aria-label="Período clínico">
+                {[
+                  ['7', '7d'],
+                  ['30', '30d'],
+                  ['90', '90d'],
+                  ['180', '6m'],
+                  ['365', '1a'],
+                  ['custom', 'Personalizado'],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-pressed={periodPreset === value}
+                    onClick={() => setPeriodPreset(value)}
+                    className={`min-h-10 rounded-xl border px-3 text-xs font-medium transition ${periodPreset === value
+                      ? isPanelDark ? 'border-violet-400/60 bg-violet-500/12 text-violet-200' : 'border-teal-300 bg-teal-50 text-teal-800'
+                      : isPanelDark
+                        ? 'border-slate-700 bg-slate-900 text-slate-300 hover:border-violet-500/60'
+                        : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:text-teal-700'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                aria-pressed={comparePrevious}
+                onClick={() => setComparePrevious((current) => !current)}
+                className={`inline-flex min-h-11 items-center justify-center rounded-xl border px-3 text-sm font-medium transition sm:min-h-10 ${comparePrevious
+                  ? 'border-violet-500 bg-violet-600 text-white shadow-sm'
+                  : isPanelDark
+                    ? 'border-slate-700 bg-slate-900 text-slate-300'
+                    : 'border-slate-200 bg-white text-slate-700'}`}
+              >
+                <span className="sm:hidden">{comparePrevious ? '✓ Comparando' : 'Comparar'}</span>
+                <span className="hidden sm:inline">{comparePrevious ? '✓ Comparando período anterior' : 'Comparar período anterior'}</span>
+              </button>
+
+              <button
+                type="button"
+                aria-expanded={filtersOpen}
+                onClick={() => setFiltersOpen((current) => !current)}
+                className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border px-3 text-sm font-medium transition sm:min-h-10 ${filtersOpen || activeFilterCount > 0
+                  ? isPanelDark ? 'border-violet-500/45 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-800'
+                  : isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-200 bg-white text-slate-700'}`}
+              >
+                <SlidersHorizontal size={15} aria-hidden="true" />
+                Filtros{activeFilterCount > 0 ? ` · ${activeFilterCount}` : ''}
+              </button>
             </div>
-            <button
-              type="button"
-              aria-pressed={comparePrevious}
-              onClick={() => setComparePrevious((current) => !current)}
-              className={`inline-flex h-10 items-center justify-between gap-3 rounded-xl border px-3 text-sm transition ${comparePrevious
-                ? 'border-violet-300 bg-violet-50 text-violet-800 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-200'
-                : isPanelDark
-                  ? 'border-slate-700 bg-slate-900 text-slate-300'
-                  : 'border-slate-200 bg-white text-slate-600'}`}
-            >
-              <span>Comparar período anterior</span>
-              <span className={`relative h-5 w-9 rounded-full transition ${comparePrevious ? 'bg-violet-600' : isPanelDark ? 'bg-slate-700' : 'bg-slate-200'}`}>
-                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-all ${comparePrevious ? 'left-[18px]' : 'left-0.5'}`} />
-              </span>
-            </button>
           </div>
 
           {periodPreset === 'custom' && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className={`text-xs ${muted}`}>Data inicial<input type="date" value={customDateFrom} max={customDateTo || today} onChange={(event) => setCustomDateFrom(event.target.value)} className={`mt-1.5 h-10 w-full rounded-xl border px-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`} /></label>
-              <label className={`text-xs ${muted}`}>Data final<input type="date" value={customDateTo} min={customDateFrom} max={today} onChange={(event) => setCustomDateTo(event.target.value)} className={`mt-1.5 h-10 w-full rounded-xl border px-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`} /></label>
+            <div className="grid gap-3 border-t pt-3 sm:grid-cols-2">
+              <label className={`text-xs ${muted}`}>Data inicial<input type="date" value={customDateFrom} max={customDateTo || today} onChange={(event) => setCustomDateFrom(event.target.value)} className={`mt-1.5 h-11 w-full rounded-xl border px-3 text-sm sm:h-10 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`} /></label>
+              <label className={`text-xs ${muted}`}>Data final<input type="date" value={customDateTo} min={customDateFrom} max={today} onChange={(event) => setCustomDateTo(event.target.value)} className={`mt-1.5 h-11 w-full rounded-xl border px-3 text-sm sm:h-10 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`} /></label>
             </div>
           )}
-          <p className={`text-xs ${muted}`}>Período atual: {dateLabel(periodRange.currentFrom)} a {dateLabel(periodRange.currentTo)}{comparePrevious ? ` · período anterior: ${dateLabel(periodRange.previousFrom)} a ${dateLabel(periodRange.previousTo)}` : ''}</p>
+
+          {(contextFilter !== 'all' || sourceFilter !== 'all') && (
+            <div className="flex flex-wrap gap-2" aria-label="Filtros clínicos ativos">
+              {contextFilter !== 'all' && (
+                <button type="button" onClick={() => setFiltersOpen(true)} className={`inline-flex min-h-10 items-center rounded-xl border px-3 text-xs ${inset}`}>
+                  Contexto: {clinicalOutcomeContextLabel(contextFilter)}
+                </button>
+              )}
+              {sourceFilter !== 'all' && (
+                <button type="button" onClick={() => setFiltersOpen(true)} className={`inline-flex min-h-10 items-center rounded-xl border px-3 text-xs ${inset}`}>
+                  Origem: {clinicalOutcomeSourceLabel(sourceFilter)}
+                </button>
+              )}
+            </div>
+          )}
+
+          <p className={`text-[11px] ${muted}`}>Período atual: {dateLabel(periodRange.currentFrom)} a {dateLabel(periodRange.currentTo)}{comparePrevious ? ` · período anterior: ${dateLabel(periodRange.previousFrom)} a ${dateLabel(periodRange.previousTo)}` : ''}</p>
         </div>
       </header>
 
@@ -789,22 +834,20 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
         </div>
       )}
 
-      <details className={`group rounded-2xl border ${isPanelDark ? 'border-violet-500/20 bg-violet-500/5' : 'border-violet-100 bg-violet-50/55'}`}>
-        <summary className={`flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm ${text}`}>
-          <span className="flex items-center gap-2"><SlidersHorizontal size={16} className="text-violet-500" /> Filtros avançados</span>
-          <ChevronDown size={16} className="transition group-open:rotate-180" />
-        </summary>
-        <div className={`grid gap-3 border-t p-4 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_auto] ${isPanelDark ? 'border-slate-800' : 'border-slate-100'}`}>
-          <label className={`text-xs ${muted}`}>Contexto<select value={contextFilter} onChange={(event) => setContextFilter(event.target.value)} className={`mt-1.5 h-10 w-full rounded-xl border px-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}><option value="all">Todos os contextos</option>{contexts.map((item) => <option key={item} value={item}>{clinicalOutcomeContextLabel(item)}</option>)}</select></label>
-          <label className={`text-xs ${muted}`}>Origem da evidência<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className={`mt-1.5 h-10 w-full rounded-xl border px-3 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}><option value="all">Todas as origens</option>{sources.map((item) => <option key={item} value={item}>{clinicalOutcomeSourceLabel(item)}</option>)}</select></label>
-          <div className={`flex min-h-10 items-center gap-2 self-end rounded-xl border px-3 text-xs ${inset}`}><ShieldCheck size={16} className="text-emerald-500" /> Ausência de dados nunca vira zero</div>
-          {selectedPlan && volumeOnlyTargetGroups.length > 0 && (
-            <div className={`sm:col-span-2 lg:col-span-3 rounded-xl border px-3 py-2.5 text-xs ${inset}`}>
-              {volumeOnlyTargetGroups.length} alvo(s) possuem apenas volume de coleta neste período. Tentativas e oportunidades ficam preservadas, mas não são apresentadas como resultado clínico.
-            </div>
-          )}
-        </div>
-      </details>
+      {filtersOpen && (
+        <section className={`rounded-2xl border p-4 ${isPanelDark ? 'border-violet-500/20 bg-violet-500/5' : 'border-violet-100 bg-violet-50/55'}`} aria-label="Filtros avançados">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_auto]">
+            <label className={`text-xs ${muted}`}>Contexto<select value={contextFilter} onChange={(event) => setContextFilter(event.target.value)} className={`mt-1.5 h-11 w-full rounded-xl border px-3 text-sm sm:h-10 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}><option value="all">Todos os contextos</option>{contexts.map((item) => <option key={item} value={item}>{clinicalOutcomeContextLabel(item)}</option>)}</select></label>
+            <label className={`text-xs ${muted}`}>Origem da evidência<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className={`mt-1.5 h-11 w-full rounded-xl border px-3 text-sm sm:h-10 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}><option value="all">Todas as origens</option>{sources.map((item) => <option key={item} value={item}>{clinicalOutcomeSourceLabel(item)}</option>)}</select></label>
+            <div className={`flex min-h-11 items-center gap-2 self-end rounded-xl border px-3 text-xs sm:min-h-10 ${inset}`}><ShieldCheck size={16} className="text-emerald-500" /> Ausência de dados nunca vira zero</div>
+            {selectedPlan && volumeOnlyTargetGroups.length > 0 && (
+              <div className={`sm:col-span-2 lg:col-span-3 rounded-xl border px-3 py-2.5 text-xs ${inset}`}>
+                {volumeOnlyTargetGroups.length} alvo(s) possuem apenas volume de coleta neste período. Tentativas e oportunidades ficam preservadas, mas não são apresentadas como resultado clínico.
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {scopeId === 'pts' ? (
         <div className="space-y-4">
@@ -862,214 +905,192 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
               <p className={`mx-auto mt-2 max-w-xl text-xs leading-5 ${muted}`}>As evidências permanecem separadas por métrica e unidade. Registros de outras especialidades não são misturados.</p>
             </div>
           ) : (
-            <>
-              <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3" data-testid="clinical-target-list">
-                {selectedTargetGroups.map((group) => {
-                  const series = group.primarySeries;
-                  const comparison = comparePrevious ? compareClinicalOutcomePeriods(series, previousSummaryByKey.get(series.key)) : null;
-                  const isExpanded = expandedTargetKey === group.key;
-                  return (
-                    <article
-                      key={group.key}
-                      className={`relative flex min-h-[205px] flex-col overflow-hidden rounded-2xl border p-4 transition ${isExpanded
-                        ? isPanelDark ? 'border-violet-400/70 bg-gradient-to-br from-violet-500/12 via-slate-900/75 to-cyan-500/8 ring-1 ring-violet-500/25' : 'border-violet-300 bg-gradient-to-br from-violet-50 via-white to-cyan-50/60 ring-1 ring-violet-100'
-                        : isPanelDark ? 'border-slate-700 bg-gradient-to-br from-slate-900 via-slate-900 to-violet-500/5 hover:border-violet-500/45' : 'border-slate-200 bg-gradient-to-br from-white via-white to-violet-50/45 hover:border-violet-300 hover:shadow-sm'}`}
-                      data-testid="clinical-target-card"
+            <div className="space-y-3" data-testid="clinical-target-list">
+              {selectedTargetGroups.map((group) => {
+                const isExpanded = expandedTargetKeys.includes(group.key);
+                const activeSeriesKey = activeSeriesKeys[group.key];
+                const series = isExpanded
+                  ? group.clinicalSeries.find((item) => item.key === activeSeriesKey) || group.primarySeries
+                  : group.primarySeries;
+                const comparison = comparePrevious ? compareClinicalOutcomePeriods(series, previousSummaryByKey.get(series.key)) : null;
+                const reference = isExpanded ? clinicalOutcomeTargetReference(series) : null;
+                const baseline = isExpanded ? clinicalOutcomeBaselineValue(series) : null;
+                const yAxisTitle = isExpanded
+                  ? clinicalOutcomeUnitLabel(series.unit, series.metricKey, series.validObservations.map((row) => row.value))
+                  : '';
+                const currentStats = isExpanded ? summarizeClinicalOutcomePeriod(series) : null;
+                const previousStats = comparison?.previous || null;
+                const legacyRows = isExpanded && group.series.some((item) => !isHistoricalOnlySeries(item) && !isCollectionVolumeSeries(item))
+                  ? group.historicalSeries
+                  : [];
+                const detailsOpen = evidenceDetailsOpen[group.key] === true;
+
+                return (
+                  <article
+                    key={group.key}
+                    className={`relative overflow-hidden rounded-2xl border transition ${isExpanded
+                      ? isPanelDark
+                        ? 'border-violet-400/55 bg-gradient-to-br from-violet-500/8 via-slate-900/80 to-cyan-500/5 ring-1 ring-violet-500/20'
+                        : 'border-violet-200 bg-gradient-to-br from-violet-50/55 via-white to-cyan-50/35 ring-1 ring-violet-100'
+                      : isPanelDark
+                        ? 'border-slate-700 bg-slate-900/85 hover:border-violet-500/45'
+                        : 'border-slate-200 bg-white hover:border-violet-200 hover:shadow-sm'}`}
+                    data-testid="clinical-target-card"
+                  >
+                    <div aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${series.evidenceState === 'sufficient' ? 'bg-emerald-400' : series.evidenceState === 'preliminary' || series.evidenceState === 'baseline_only' ? 'bg-amber-400' : 'bg-violet-400'}`} />
+
+                    <button
+                      type="button"
+                      onClick={() => toggleTarget(group)}
+                      aria-expanded={isExpanded}
+                      aria-controls={`clinical-target-detail-${group.key}`}
+                      className="flex min-h-16 w-full items-start justify-between gap-3 px-4 py-4 pl-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/40 sm:items-center"
                     >
-                      <div aria-hidden="true" className={`absolute inset-y-0 left-0 w-1 ${series.evidenceState === 'sufficient' ? 'bg-emerald-400' : series.evidenceState === 'preliminary' || series.evidenceState === 'baseline_only' ? 'bg-amber-400' : 'bg-violet-400'}`} />
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <h3 className={`truncate text-base font-semibold ${text}`}>{group.title}</h3>
-                          <div className="mt-0.5 flex flex-wrap items-center gap-2">
-                            <p className={`text-xs ${muted}`}>{group.phase}</p>
-                            {group.historicalSeries.length > 0 && group.series.some((item) => !isHistoricalOnlySeries(item) && !isCollectionVolumeSeries(item)) && (
-                              <span
-                                title="Histórico anterior disponível"
-                                className={`inline-flex items-center gap-1 text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}
-                              >
-                                <History size={11} /> Histórico
-                              </span>
-                            )}
-                          </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className={`text-base font-semibold ${text}`}>{group.title}</h3>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] ${evidenceTone(series, isPanelDark)}`}>
+                            {series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}
+                          </span>
+                          {group.historicalSeries.length > 0 && group.series.some((item) => !isHistoricalOnlySeries(item) && !isCollectionVolumeSeries(item)) && (
+                            <span title="Histórico anterior disponível" className={`inline-flex items-center gap-1 text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                              <History size={11} /> Histórico
+                            </span>
+                          )}
                         </div>
-                        <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] ${evidenceTone(series, isPanelDark)}`}>
-                          {series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className={`text-xs ${muted}`}>{series.metricLabel}</span>
+                          <span className={`text-xs ${muted}`}>· {periodEvidenceLabel(series)}</span>
+                          <span className={`text-xs ${muted}`}>· {group.phase}</span>
+                        </div>
+                        <span className={`mt-2 inline-flex items-center gap-1 text-xs font-medium ${isPanelDark ? 'text-violet-300' : 'text-violet-700'}`}>
+                          {isExpanded ? <>Recolher <ChevronUp size={14} /></> : <>Ver evidência <ChevronDown size={14} /></>}
                         </span>
                       </div>
 
-                      <p className={`mt-4 text-xs font-medium ${muted}`}>{series.metricLabel}</p>
-                      <div className="mt-1 flex flex-wrap items-end gap-x-3 gap-y-1">
-                        <p className={`text-3xl font-semibold tracking-tight ${text}`}>{periodResultLabel(series)}</p>
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <span className={`text-3xl font-semibold tracking-tight ${text}`}>{periodResultLabel(series)}</span>
                         {comparison && comparison.delta !== null && (
-                          <span className={`mb-1 rounded-full border px-2 py-1 text-[11px] font-medium ${comparisonTone(comparison, isPanelDark)}`}>{comparison.deltaLabel} vs período anterior</span>
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium ${comparisonTone(comparison, isPanelDark)}`}>{comparison.deltaLabel}</span>
                         )}
                       </div>
-                      <p className={`mt-1.5 text-xs ${text}`}>{periodEvidenceLabel(series)}</p>
+                    </button>
 
-                      <button
-                        type="button"
-                        onClick={() => isExpanded ? setExpandedTargetKey('') : openTarget(group)}
-                        className={`mt-auto inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-3 text-sm font-medium transition ${isExpanded
-                          ? isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-700'
-                          : 'border-violet-500 bg-violet-600 text-white hover:bg-violet-700'}`}
+                    {isExpanded && (
+                      <div
+                        id={`clinical-target-detail-${group.key}`}
+                        data-testid="clinical-target-detail"
+                        className={`border-t px-4 pb-4 pt-3 sm:px-5 sm:pb-5 ${isPanelDark ? 'border-slate-800' : 'border-slate-100'}`}
                       >
-                        {isExpanded ? <>Recolher evidência <ChevronUp size={16} /></> : <>Ver evidência <ChevronDown size={16} /></>}
-                      </button>
-                    </article>
-                  );
-                })}
-              </div>
+                        <span className="sr-only">Evidência aberta</span>
+                        {group.description && <p className={`mb-3 text-sm leading-5 ${muted}`}>{group.description}</p>}
 
-              {expandedTarget && expandedSeries && (() => {
-                const comparison = comparePrevious ? compareClinicalOutcomePeriods(expandedSeries, previousSummaryByKey.get(expandedSeries.key)) : null;
-                const reference = clinicalOutcomeTargetReference(expandedSeries);
-                const baseline = clinicalOutcomeBaselineValue(expandedSeries);
-                const yAxisTitle = clinicalOutcomeUnitLabel(expandedSeries.unit, expandedSeries.metricKey, expandedSeries.validObservations.map((row) => row.value));
-                const currentStats = summarizeClinicalOutcomePeriod(expandedSeries);
-                const previousStats = comparison?.previous || null;
-                const legacyRows = expandedTarget.series.some((item) => !isHistoricalOnlySeries(item) && !isCollectionVolumeSeries(item))
-                  ? expandedTarget.historicalSeries
-                  : [];
-                return (
-                  <article id="clinical-target-detail" className={`relative -mt-1 scroll-mt-4 overflow-hidden rounded-3xl border p-4 lg:p-5 ${isPanelDark ? 'border-violet-500/30 bg-gradient-to-br from-violet-500/8 via-[#101b2e] to-cyan-500/5' : 'border-violet-200/80 bg-gradient-to-br from-violet-50/70 via-white to-cyan-50/45'}`} data-testid="clinical-target-detail">
-                    <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-1 ${structuralAccent}`} />
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className={`inline-flex items-center gap-1.5 text-sm font-semibold ${isPanelDark ? 'text-violet-200' : 'text-violet-700'}`}>
-                            <ChevronDown size={15} /> Evidência aberta
-                          </span>
-                          <span className={`text-sm font-medium ${text}`}>· {expandedTarget.title}</span>
-                          <span className={`rounded-full border px-2 py-0.5 text-[11px] ${inset}`}>{expandedTarget.phase}</span>
-                        </div>
-                        <p className={`mt-1.5 max-w-3xl text-sm leading-5 ${muted}`}>{expandedTarget.description || seriesDescription(expandedSeries)}</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setExpandedTargetKey('')}
-                        className={`inline-flex h-9 items-center gap-1 rounded-xl border px-3 text-xs ${inset}`}
-                      >
-                        Recolher <ChevronUp size={15} />
-                      </button>
-                    </div>
-
-                    {expandedTarget.clinicalSeries.length > 1 && (
-                      <div className={`mt-4 border-b ${isPanelDark ? 'border-slate-800' : 'border-slate-200'}`}>
-                        <div className="flex flex-wrap gap-1" role="tablist" aria-label="Métricas clínicas do alvo">
-                          {expandedTarget.clinicalSeries.map((series) => (
-                            <button
-                              key={series.key}
-                              type="button"
-                              role="tab"
-                              aria-selected={series.key === expandedSeries.key}
-                              onClick={() => { setActiveSeriesKey(series.key); setShowEvidenceDetails(false); }}
-                              className={`border-b-2 px-3 py-2 text-sm font-medium transition ${series.key === expandedSeries.key
-                                ? 'border-violet-600 text-violet-700 dark:text-violet-300'
-                                : `border-transparent ${muted} hover:text-violet-600`}`}
-                            >
-                              {series.metricLabel}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
-                      <div className="min-w-0">
-                        <p className={`text-xs font-medium uppercase tracking-[0.12em] ${muted}`}>{expandedSeries.metricLabel}</p>
-                        <div className="mt-1 flex flex-wrap items-center gap-3">
-                          <span className={`text-4xl font-semibold tracking-tight ${text}`}>{periodResultLabel(expandedSeries)}</span>
-                          <span className={`rounded-full border px-2.5 py-1 text-xs ${evidenceTone(expandedSeries, isPanelDark)}`}>
-                            {expandedSeries.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(expandedSeries.evidenceState)}
-                          </span>
-                          {comparison && comparison.delta !== null && (
-                            <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${comparisonTone(comparison, isPanelDark)}`}>{comparison.deltaLabel}</span>
-                          )}
-                        </div>
-                        <p className={`mt-1.5 text-sm ${text}`}>{periodEvidenceLabel(expandedSeries)}</p>
-                      </div>
-
-                      {comparison && (
-                        <div className={`grid min-w-[330px] grid-cols-3 divide-x rounded-2xl border ${isPanelDark ? 'border-violet-500/20 bg-violet-500/5 divide-slate-700' : 'border-violet-100 bg-gradient-to-r from-violet-50/70 via-white to-cyan-50/60 divide-violet-100'}`}>
-                          <div className="px-4 py-3"><p className={`text-[11px] ${muted}`}>Atual</p><p className={`mt-1 text-lg font-semibold ${text}`}>{formatSeriesAggregateValue(expandedSeries, comparison.current.meanValue)}</p></div>
-                          <div className="px-4 py-3"><p className={`text-[11px] ${muted}`}>Anterior</p><p className={`mt-1 text-lg font-semibold ${text}`}>{formatSeriesAggregateValue(expandedSeries, comparison.previous.meanValue)}</p></div>
-                          <div className="px-4 py-3"><p className={`text-[11px] ${muted}`}>Variação</p><p className={`mt-1 text-lg font-semibold ${comparison.movement === 'favorable' ? 'text-emerald-600 dark:text-emerald-300' : comparison.movement === 'unfavorable' ? 'text-rose-600 dark:text-rose-300' : text}`}>{comparison.deltaLabel}</p></div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="mt-3"><SeriesChart series={expandedSeries} isDark={isPanelDark} /></div>
-
-                    {(baseline !== null || reference.targetValue !== null || reference.targetMin !== null || reference.targetMax !== null) && (
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                        {baseline !== null && <span className={`rounded-xl border px-3 py-2 ${isPanelDark ? 'border-slate-600 bg-slate-800/70 text-slate-200' : 'border-slate-200 bg-slate-100/80 text-slate-700'}`}>Linha de base <strong className={text}>{formatSeriesAggregateValue(expandedSeries, baseline)}</strong></span>}
-                        {reference.targetValue !== null && <span className={`rounded-xl border px-3 py-2 ${isPanelDark ? 'border-violet-500/35 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-800'}`}>Meta <strong className={text}>{reference.criterionLabel || formatSeriesAggregateValue(expandedSeries, reference.targetValue)}</strong></span>}
-                        {reference.targetValue === null && reference.targetMin !== null && reference.targetMax !== null && <span className={`rounded-xl border px-3 py-2 ${isPanelDark ? 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200' : 'border-cyan-200 bg-cyan-50 text-cyan-800'}`}>Faixa-alvo <strong className={text}>{formatSeriesAggregateValue(expandedSeries, reference.targetMin)} a {formatSeriesAggregateValue(expandedSeries, reference.targetMax)}</strong></span>}
-                      </div>
-                    )}
-
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        aria-expanded={showEvidenceDetails}
-                        onClick={() => setShowEvidenceDetails((current) => !current)}
-                        className={`inline-flex h-9 items-center gap-2 rounded-xl border px-3 text-xs font-medium ${inset}`}
-                      >
-                        <SlidersHorizontal size={14} /> {showEvidenceDetails ? 'Ocultar detalhes da evidência' : 'Ver detalhes da evidência'}
-                      </button>
-                      {expandedTarget.volumeSeries.length > 0 && <span className={`text-xs ${muted}`}>{expandedTarget.volumeSeries.length} série(s) de volume de coleta preservada(s) separadamente</span>}
-                    </div>
-
-                    {showEvidenceDetails && (
-                      <div className={`mt-3 grid gap-3 rounded-2xl border p-4 sm:grid-cols-2 xl:grid-cols-4 ${inset}`}>
-                        <div><p className={`text-[11px] ${muted}`}>Unidade</p><p className={`mt-1 text-sm ${text}`}>{yAxisTitle}</p></div>
-                        <div><p className={`text-[11px] ${muted}`}>Direção clínica</p><p className={`mt-1 text-sm ${text}`}>{clinicalOutcomeDirectionLabel(expandedSeries.direction)}</p></div>
-                        <div><p className={`text-[11px] ${muted}`}>Registros comparáveis</p><p className={`mt-1 text-sm ${text}`}>{currentStats.observationCount}</p></div>
-                        <div><p className={`text-[11px] ${muted}`}>Ausências registradas</p><p className={`mt-1 text-sm ${text}`}>{expandedSeries.missingCount}</p></div>
-                        {expandedSeries.evidenceState !== 'sufficient' && (
-                          <div className={`flex items-start gap-2 rounded-xl border p-3 text-xs sm:col-span-2 xl:col-span-4 ${isPanelDark ? 'border-amber-400/20 bg-amber-400/5 text-amber-100' : 'border-amber-200 bg-amber-50/60 text-amber-900'}`}>
-                            <CircleHelp size={15} className="mt-0.5 shrink-0" />
-                            <span><strong>Qualidade da evidência:</strong> ainda há poucas observações comparáveis para interpretar tendência com segurança. O resultado permanece disponível para acompanhamento clínico.</span>
-                          </div>
-                        )}
-                        {expandedTarget.volumeSeries.length > 0 && (
-                          <div className="sm:col-span-2 xl:col-span-4">
-                            <p className={`text-[11px] ${muted}`}>Volume de coleta</p>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {expandedTarget.volumeSeries.map((series) => <span key={series.key} className={`rounded-xl border px-3 py-2 text-xs ${panel}`}>{series.metricLabel}: <strong>{periodResultLabel(series)}</strong> · {periodEvidenceLabel(series)}</span>)}
+                        {group.clinicalSeries.length > 1 && (
+                          <div className={`mb-3 border-b ${isPanelDark ? 'border-slate-800' : 'border-slate-200'}`}>
+                            <div className="flex flex-wrap gap-1" role="tablist" aria-label="Métricas clínicas do alvo">
+                              {group.clinicalSeries.map((item) => (
+                                <button
+                                  key={item.key}
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={item.key === series.key}
+                                  onClick={() => {
+                                    setActiveSeriesKeys((current) => ({ ...current, [group.key]: item.key }));
+                                    setEvidenceDetailsOpen((current) => ({ ...current, [group.key]: false }));
+                                  }}
+                                  className={`min-h-10 border-b-2 px-3 py-2 text-sm font-medium transition ${item.key === series.key
+                                    ? 'border-violet-600 text-violet-700 dark:text-violet-300'
+                                    : `border-transparent ${muted} hover:text-violet-600`}`}
+                                >
+                                  {item.metricLabel}
+                                </button>
+                              ))}
                             </div>
                           </div>
                         )}
-                      </div>
-                    )}
 
-                    {legacyRows.length > 0 && (
-                      <details className={`mt-4 rounded-2xl border ${inset}`}>
-                        <summary className={`flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm ${text}`}>
-                          <span className="flex items-center gap-2"><History size={16} className="text-slate-400" /> Histórico anterior disponível <span className={muted}>· {legacyRows.length} série(s)</span></span>
-                          <ChevronDown size={16} className="transition [details[open]_&]:rotate-180" />
-                        </summary>
-                        <div className={`border-t p-4 ${isPanelDark ? 'border-slate-700' : 'border-slate-200'}`}>
-                          <p className={`text-xs leading-5 ${muted}`}>Esses registros foram coletados pelo modelo anterior de mensuração. Eles são preservados para contexto histórico e podem não ser diretamente comparáveis às métricas atuais.</p>
-                          <div className="mt-3 grid gap-2 lg:grid-cols-2">
-                            {legacyRows.map((series) => (
-                              <div key={series.key} className={`rounded-xl border p-3 text-xs ${panel}`}>
-                                <p className={`font-medium ${text}`}>{series.metricLabel}</p>
-                                <p className={`mt-1 ${muted}`}>{periodResultLabel(series)} · {periodEvidenceLabel(series)}</p>
-                              </div>
-                            ))}
+                        {comparison && (
+                          <div className={`mb-3 grid grid-cols-3 divide-x rounded-2xl border ${isPanelDark ? 'divide-slate-700 border-violet-500/20 bg-violet-500/5' : 'divide-violet-100 border-violet-100 bg-gradient-to-r from-violet-50/60 via-white to-cyan-50/45'}`}>
+                            <div className="min-w-0 px-2 py-3 sm:px-4"><p className={`text-[10px] sm:text-[11px] ${muted}`}>Atual</p><p className={`mt-1 truncate text-sm font-semibold sm:text-lg ${text}`}>{formatSeriesAggregateValue(series, comparison.current.meanValue)}</p></div>
+                            <div className="min-w-0 px-2 py-3 sm:px-4"><p className={`text-[10px] sm:text-[11px] ${muted}`}>Anterior</p><p className={`mt-1 truncate text-sm font-semibold sm:text-lg ${text}`}>{formatSeriesAggregateValue(series, comparison.previous.meanValue)}</p></div>
+                            <div className="min-w-0 px-2 py-3 sm:px-4"><p className={`text-[10px] sm:text-[11px] ${muted}`}>Variação</p><p className={`mt-1 truncate text-sm font-semibold sm:text-lg ${comparison.movement === 'favorable' ? 'text-emerald-600 dark:text-emerald-300' : comparison.movement === 'unfavorable' ? 'text-rose-600 dark:text-rose-300' : text}`}>{comparison.deltaLabel}</p></div>
                           </div>
-                        </div>
-                      </details>
-                    )}
+                        )}
 
-                    {comparePrevious && comparison && previousStats && comparison.delta === null && (
-                      <p className={`mt-3 text-xs ${muted}`}>Não há período anterior comparável para esta métrica.</p>
+                        <SeriesChart series={series} isDark={isPanelDark} />
+
+                        {reference && (baseline !== null || reference.targetValue !== null || reference.targetMin !== null || reference.targetMax !== null) && (
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                            {baseline !== null && <span className={`rounded-xl border px-3 py-2 ${isPanelDark ? 'border-slate-600 bg-slate-800/70 text-slate-200' : 'border-slate-200 bg-slate-100/80 text-slate-700'}`}>Linha de base <strong className={text}>{formatSeriesAggregateValue(series, baseline)}</strong></span>}
+                            {reference.targetValue !== null && <span className={`rounded-xl border px-3 py-2 ${isPanelDark ? 'border-violet-500/35 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-800'}`}>Meta <strong className={text}>{reference.criterionLabel || formatSeriesAggregateValue(series, reference.targetValue)}</strong></span>}
+                            {reference.targetValue === null && reference.targetMin !== null && reference.targetMax !== null && <span className={`rounded-xl border px-3 py-2 ${isPanelDark ? 'border-cyan-500/35 bg-cyan-500/10 text-cyan-200' : 'border-cyan-200 bg-cyan-50 text-cyan-800'}`}>Faixa-alvo <strong className={text}>{formatSeriesAggregateValue(series, reference.targetMin)} a {formatSeriesAggregateValue(series, reference.targetMax)}</strong></span>}
+                          </div>
+                        )}
+
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            aria-expanded={detailsOpen}
+                            onClick={() => setEvidenceDetailsOpen((current) => ({ ...current, [group.key]: !detailsOpen }))}
+                            className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 text-xs font-medium ${inset}`}
+                          >
+                            <SlidersHorizontal size={14} /> {detailsOpen ? 'Ocultar detalhes da evidência' : 'Ver detalhes da evidência'}
+                          </button>
+                          {group.volumeSeries.length > 0 && <span className={`text-xs ${muted}`}>{group.volumeSeries.length} série(s) de volume de coleta preservada(s) separadamente</span>}
+                        </div>
+
+                        {detailsOpen && currentStats && (
+                          <div className={`mt-3 grid gap-3 rounded-2xl border p-4 sm:grid-cols-2 xl:grid-cols-4 ${inset}`}>
+                            <div><p className={`text-[11px] ${muted}`}>Unidade</p><p className={`mt-1 text-sm ${text}`}>{yAxisTitle}</p></div>
+                            <div><p className={`text-[11px] ${muted}`}>Direção clínica</p><p className={`mt-1 text-sm ${text}`}>{clinicalOutcomeDirectionLabel(series.direction)}</p></div>
+                            <div><p className={`text-[11px] ${muted}`}>Registros comparáveis</p><p className={`mt-1 text-sm ${text}`}>{currentStats.observationCount}</p></div>
+                            <div><p className={`text-[11px] ${muted}`}>Ausências registradas</p><p className={`mt-1 text-sm ${text}`}>{series.missingCount}</p></div>
+                            {series.evidenceState !== 'sufficient' && (
+                              <div className={`flex items-start gap-2 rounded-xl border p-3 text-xs sm:col-span-2 xl:col-span-4 ${isPanelDark ? 'border-amber-400/20 bg-amber-400/5 text-amber-100' : 'border-amber-200 bg-amber-50/60 text-amber-900'}`}>
+                                <CircleHelp size={15} className="mt-0.5 shrink-0" />
+                                <span><strong>Qualidade da evidência:</strong> ainda há poucas observações comparáveis para interpretar tendência com segurança. O resultado permanece disponível para acompanhamento clínico.</span>
+                              </div>
+                            )}
+                            {group.volumeSeries.length > 0 && (
+                              <div className="sm:col-span-2 xl:col-span-4">
+                                <p className={`text-[11px] ${muted}`}>Volume de coleta</p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {group.volumeSeries.map((item) => <span key={item.key} className={`rounded-xl border px-3 py-2 text-xs ${panel}`}>{item.metricLabel}: <strong>{periodResultLabel(item)}</strong> · {periodEvidenceLabel(item)}</span>)}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {legacyRows.length > 0 && (
+                          <details className={`mt-4 rounded-2xl border ${inset}`}>
+                            <summary className={`flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm ${text}`}>
+                              <span className="flex items-center gap-2"><History size={16} className="text-slate-400" /> Histórico anterior disponível <span className={muted}>· {legacyRows.length} série(s)</span></span>
+                              <ChevronDown size={16} className="transition [details[open]_&]:rotate-180" />
+                            </summary>
+                            <div className={`border-t p-4 ${isPanelDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                              <p className={`text-xs leading-5 ${muted}`}>Esses registros foram coletados pelo modelo anterior de mensuração. Eles são preservados para contexto histórico e não são combinados matematicamente com a evidência atual.</p>
+                              <div className="mt-3 grid gap-2 lg:grid-cols-2">
+                                {legacyRows.map((item) => (
+                                  <div key={item.key} className={`rounded-xl border p-3 text-xs ${panel}`}>
+                                    <p className={`font-medium ${text}`}>{item.metricLabel}</p>
+                                    <p className={`mt-1 ${muted}`}>{periodResultLabel(item)} · {periodEvidenceLabel(item)}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </details>
+                        )}
+
+                        {comparePrevious && comparison && previousStats && comparison.delta === null && (
+                          <p className={`mt-3 text-xs ${muted}`}>Não há período anterior comparável para esta métrica.</p>
+                        )}
+                      </div>
                     )}
                   </article>
                 );
-              })()}
-            </>
+              })}
+            </div>
           )}
         </div>
       ) : (

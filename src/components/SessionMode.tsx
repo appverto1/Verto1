@@ -327,11 +327,11 @@ const behaviorMeasurementOptions = [
 ];
 
 const behaviorPresets = [
-  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
-  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-amber-50 text-amber-700 border-amber-100' },
-  { id: 'aggression', name: 'Agressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'REQUIRED' as AbcRequirement, tone: 'bg-red-50 text-red-700 border-red-100' },
-  { id: 'self_injury', name: 'Autoagressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'REQUIRED' as AbcRequirement, tone: 'bg-rose-50 text-rose-700 border-rose-100' },
-  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-violet-50 text-violet-700 border-violet-100' },
+  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
+  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-amber-50 text-amber-700 border-amber-100' },
+  { id: 'aggression', name: 'Agressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-red-50 text-red-700 border-red-100' },
+  { id: 'self_injury', name: 'Autoagressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-rose-50 text-rose-700 border-rose-100' },
+  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-violet-50 text-violet-700 border-violet-100' },
   { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'whole_interval', 'momentary_time_sampling', 'duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
 ];
 
@@ -5643,22 +5643,8 @@ export const SessionMode = ({
   };
 
   const buildSessionClosureIssues = (): { blockers: SessionSummaryPendingItem[]; warnings: SessionSummaryPendingItem[] } => {
-    const behaviorRecords = records.filter((record) => record.kind === 'behavior' && !record.intervalAggregate && !isCancelledIntervalClinicalRecord(record));
     const savingLocally = records.filter((record) => record.syncStatus === 'syncing');
     const notSyncedWithServer = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'error');
-    const abcMissingCounts: Record<AbcRequirement, number> = {
-      REQUIRED: 0,
-      RECOMMENDED: 0,
-      OPTIONAL: 0,
-      DISABLED: 0
-    };
-    behaviorRecords.filter((record) => (
-      inferRecordMeasurementType(record) !== 'abc' &&
-      !record.antecedent &&
-      !record.consequence
-    )).forEach((record) => {
-      abcMissingCounts[getRecordAbcRequirement(record)] += 1;
-    });
 
     const closure = canCloseAbaSession({
       openDurations,
@@ -5720,11 +5706,8 @@ export const SessionMode = ({
     }
 
     if (!isNonAttendance) {
-      if (abcMissingCounts.REQUIRED > 0) {
-        blockers.push({ key: 'required_abc_missing', label: `ABC obrigatório pendente em ${abcMissingCounts.REQUIRED} evento(s)`, category: 'blocker', blocking: true, count: abcMissingCounts.REQUIRED });
-      }
-      if (abcMissingCounts.RECOMMENDED > 0) warnings.push({ key: 'recommended_abc_missing', label: `ABC recomendado pendente em ${abcMissingCounts.RECOMMENDED} evento(s)`, category: 'warning', count: abcMissingCounts.RECOMMENDED });
-      if (abcMissingCounts.OPTIONAL > 0) warnings.push({ key: 'optional_abc_missing', label: `ABC opcional ausente em ${abcMissingCounts.OPTIONAL} evento(s)`, category: 'warning', count: abcMissingCounts.OPTIONAL });
+      // ABC remains available as an optional clinical complement. Missing ABC fields
+      // never block or warn during session closure; the behavior record itself is valid.
       warnings.push({ key: 'guardian_signature_pending', label: 'Assinatura do responsável pendente', category: 'warning', count: 1 });
       if (!sessionNote.trim()) warnings.push({ key: 'session_note_pending', label: 'Observação da sessão pendente', category: 'warning', count: 1 });
     }
@@ -5792,6 +5775,16 @@ export const SessionMode = ({
         appointmentId: activeAppointmentId || undefined,
         therapist_id: resolvedTherapistId || undefined,
         therapistId: resolvedTherapistId || undefined,
+        started_at: activeSession?.actualStartAt || activeSession?.actual_start_at || activeSession?.startedAt || activeSession?.started_at || finalSummary.startedAt,
+        startedAt: activeSession?.actualStartAt || activeSession?.actual_start_at || activeSession?.startedAt || activeSession?.started_at || finalSummary.startedAt,
+        scheduled_start: activeSession?.scheduledStart || activeSession?.scheduled_start || activeSession?.scheduledStartAt || activeSession?.scheduled_start_at || undefined,
+        scheduledStart: activeSession?.scheduledStart || activeSession?.scheduled_start || activeSession?.scheduledStartAt || activeSession?.scheduled_start_at || undefined,
+        scheduled_end: activeSession?.scheduledEnd || activeSession?.scheduled_end || activeSession?.scheduledEndAt || activeSession?.scheduled_end_at || undefined,
+        scheduledEnd: activeSession?.scheduledEnd || activeSession?.scheduled_end || activeSession?.scheduledEndAt || activeSession?.scheduled_end_at || undefined,
+        scheduled_duration_minutes: activeSession?.scheduledDurationMinutes || activeSession?.scheduled_duration_minutes || undefined,
+        scheduledDurationMinutes: activeSession?.scheduledDurationMinutes || activeSession?.scheduled_duration_minutes || undefined,
+        reference_date: activeSession?.referenceDate || activeSession?.reference_date || sessionClinicalDate || undefined,
+        referenceDate: activeSession?.referenceDate || activeSession?.reference_date || sessionClinicalDate || undefined,
         attendance_status: attendanceStatus,
         attendanceStatus,
         ended_at: endedAt,
@@ -6032,25 +6025,6 @@ export const SessionMode = ({
     if (item.key === 'absence_reason_required') {
       scrollClosureRefIntoView(closureNoteRef);
       return;
-    }
-
-    if (item.key === 'required_abc_missing') {
-      const missingRecord = records.find((record) => (
-        record.kind === 'behavior' &&
-        !record.intervalAggregate &&
-        !isCancelledIntervalClinicalRecord(record) &&
-        inferRecordMeasurementType(record) !== 'abc' &&
-        !record.antecedent &&
-        !record.consequence &&
-        getRecordAbcRequirement(record) === 'REQUIRED'
-      ));
-      if (missingRecord) {
-        startEditingRecord(missingRecord);
-        setSessionHistoryOpen(true);
-        returnToActiveSession();
-        focusSessionHistoryRecord(missingRecord.id);
-        return;
-      }
     }
 
     if (item.key === 'v3_failed_trials_require_resolution' || item.key === 'server_sync_required' || item.key === 'unsaved_local_records') {
