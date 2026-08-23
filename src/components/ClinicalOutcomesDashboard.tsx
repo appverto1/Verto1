@@ -42,6 +42,7 @@ import {
   type ClinicalOutcomeSeriesSummary,
 } from '../utils/clinicalOutcomeAnalytics';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
+import { ClinicalPlanAnalyticsShell } from './ClinicalPlanAnalyticsShell';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
 type ClinicalOutcomesDashboardProps = {
@@ -686,6 +687,24 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
     });
   }, [activePts, data.contributions, ptsPayload, specialtyPlans, summaries]);
 
+  const ptsAnalyticsSeries = useMemo(() => {
+    const unique = new Map<string, ClinicalOutcomeSeriesSummary>();
+    for (const row of ptsGoalRows) {
+      for (const contribution of row.contributions) {
+        for (const series of contribution.series) {
+          if (!isHistoricalOnlySeries(series)) unique.set(series.key, series);
+        }
+      }
+    }
+    return Array.from(unique.values());
+  }, [ptsGoalRows]);
+  const analyticsSeries = scopeId === 'pts'
+    ? ptsAnalyticsSeries
+    : selectedPlanSeries.filter((series) => !isHistoricalOnlySeries(series));
+  const analyticsScopeLabel = scopeId === 'pts'
+    ? 'PTS · visão multidisciplinar'
+    : `${clean(selectedPlan?.specialty) || 'Plano da especialidade'} · v${selectedPlan?.edit_version || 1}`;
+
   const panel = isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white';
   const inset = isPanelDark ? 'border-slate-700 bg-slate-950/40' : 'border-slate-200 bg-slate-50/70';
   const brandPanel = isPanelDark
@@ -849,6 +868,17 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
         </section>
       )}
 
+      {analyticsSeries.length > 0 && (
+        <ClinicalPlanAnalyticsShell
+          key={`${patientId}:${scopeId}`}
+          scopeLabel={analyticsScopeLabel}
+          series={analyticsSeries}
+          previousSeriesByKey={previousSummaryByKey}
+          comparePrevious={comparePrevious}
+          isDark={isPanelDark}
+        />
+      )}
+
       {scopeId === 'pts' ? (
         <div className="space-y-4">
           {!activePts ? (
@@ -884,8 +914,7 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
                         return (
                           <div key={series.key} className="mt-3 rounded-xl border border-slate-200/70 bg-white/60 p-3 dark:border-slate-700 dark:bg-slate-950/30">
                             <div className="flex items-start justify-between gap-2"><div className="min-w-0"><p className={`truncate text-xs font-semibold ${text}`}>{series.itemLabel || series.metricLabel}</p>{series.itemLabel && series.itemLabel !== series.metricLabel && <p className={`mt-0.5 text-[11px] ${muted}`}>{series.metricLabel} · {clinicalOutcomeUnitLabel(series.unit, series.metricKey, series.validObservations.map((row) => row.value))}</p>}<p className={`mt-1 text-[11px] ${muted}`}>{clinicalOutcomeEvidenceSampleLabel(series)}</p></div><span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] ${evidenceTone(series, isPanelDark)}`}>{series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}</span></div>
-                            <SeriesChart series={series} isDark={isPanelDark} compact />
-                            <div className={`mt-2 grid gap-1 text-xs ${muted}`}><p>Atual: <span className={text}>{formatClinicalOutcomeValue(series.latestObservation)}</span></p>{comparison && <p>Comparação: <span className={text}>{comparison.deltaLabel}</span> · {movementLabel(comparison)}</p>}</div>
+                            <div className={`mt-3 grid gap-1 text-xs ${muted}`}><p>Atual: <span className={text}>{formatClinicalOutcomeValue(series.latestObservation)}</span></p><p>Leitura comparativa disponível no gráfico acima.</p>{comparison && <p>Comparação: <span className={text}>{comparison.deltaLabel}</span> · {movementLabel(comparison)}</p>}</div>
                           </div>
                         );
                       }) : <div className={`mt-3 rounded-xl border border-dashed p-4 text-xs leading-5 ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Sem evidência estruturada vinculada a esta contribuição. Isso não significa ausência de progresso.</div>}

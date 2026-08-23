@@ -194,10 +194,21 @@ export const clinicalOutcomeMetricDisplayLabel = (metricKey: unknown, metricLabe
     BEHAVIOR_RATE_PER_HOUR: 'Taxa por hora',
     BEHAVIOR_DURATION_SECONDS: 'Duração total',
     BEHAVIOR_FREQUENCY: 'Frequência',
+    BEHAVIOR_DURATION_EPISODES: 'Episódios de duração',
     BEHAVIOR_DURATION_TOTAL: 'Duração total',
     BEHAVIOR_DURATION_AVG: 'Duração média',
     BEHAVIOR_DURATION_MAX: 'Duração máxima',
     BEHAVIOR_INTERVAL_OCCURRENCE: 'Ocorrência por intervalos',
+    MASTERY_STATUS: 'Status de maestria',
+    MASTERY_CONSECUTIVE_DAYS: 'Dias consecutivos',
+    MASTERY_VALID_ATTEMPTS: 'Tentativas válidas',
+    MASTERY_READY_FOR_REVIEW: 'Pronto para revisão',
+    MAINTENANCE_STATUS: 'Status de manutenção',
+    MAINTENANCE_ACCURACY: 'Acurácia de manutenção',
+    MAINTENANCE_INDEPENDENCE: 'Independência de manutenção',
+    MAINTENANCE_FAILURES: 'Falhas consecutivas',
+    MAINTENANCE_DAYS_SINCE_PROBE: 'Dias desde última sondagem',
+    REGRESSION_RISK: 'Risco de regressão',
   };
   if (known[key]) return known[key];
   if (provided && provided.toLocaleLowerCase('pt-BR') !== item.toLocaleLowerCase('pt-BR')) return provided;
