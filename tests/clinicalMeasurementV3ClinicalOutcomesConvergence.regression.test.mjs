@@ -47,7 +47,8 @@ assert.match(dashboard, /categoricalMode/);
 assert.match(dashboard, /isSegmentBoundary/, 'phase changes must break the line inside the same card instead of creating duplicate cards');
 assert.match(dashboard, /series\.itemLabel \|\| series\.metricLabel/, 'clinical cards should lead with the target/item label when available');
 assert.match(dashboard, /tickFormatter=\{categoricalMode/);
-assert.match(dashboard, /V3 canônico/);
+assert.match(dashboard, /clinicalOutcomeSourceLabel/, 'dashboard must render provenance through the centralized semantic source-label formatter instead of hard-coding V3 copy');
+assert.match(analytics, /ABA V3 canônico/, 'the centralized source-label contract must still identify canonical ABA V3 evidence');
 assert.match(dashboard, /verto:clinical-outcomes-changed/);
 assert.match(dashboard, /v3ObservationCount/);
 
