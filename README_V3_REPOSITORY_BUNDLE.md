@@ -13,6 +13,7 @@ Exemplos importantes:
 - `20260821006802_aba_v3_target_protocol_autobootstrap.sql` permanece como migration original executada.
 - `20260821006805_aba_v3_target_protocol_pgcrypto_schema_hotfix.sql` corrige a qualificação de `extensions.digest(...)` depois dela.
 - `20260821006806_aba_v3_default_on_session_collection_plan_alignment.sql` alinha o preview/collection-plan à política default-on.
+- `20260821006810_aba_v3_default_on_override_lifecycle.sql` formaliza `DEFAULT_INHERIT`, mantendo `false` como kill switch explícito e preservando a linhagem histórica dos overrides.
 
 Em um ambiente novo, aplique as migrations em ordem cronológica. Em Produção, não reaplique manualmente migrations já executadas apenas porque elas estão neste pacote.
 
@@ -24,6 +25,19 @@ Em um ambiente novo, aplique as migrations em ordem cronológica. Em Produção,
 - `docs/operations/`: runbook do Control Center.
 - `tests/`: regressões específicas desta etapa.
 - `server.ts` e `src/components/...`: arquivos de código mais recentes desta etapa, incluindo o hotfix de `clinical_date` por timezone congelado.
+
+
+## Fechamento operacional Default-On
+
+Os artefatos finais do rollout ficam separados por responsabilidade:
+
+- `supabase/migrations/20260821006810_aba_v3_default_on_override_lifecycle.sql`: schema/contrato estrutural reutilizável em qualquer ambiente.
+- `supabase/verification/20260821006808_aba_v3_default_on_selected_session_attestation.sql`: attestation end-to-end da sessão selecionada.
+- `supabase/operations/history/production-canary/20260821006811_aba_v3_retire_legacy_positive_canary_overrides.sql`: transição operacional histórica e específica dos dois overrides do canário; nunca deve rodar automaticamente em ambiente novo.
+- `supabase/verification/20260821006812_aba_v3_default_on_pure_inherit_ui_binding_attestation.sql`: primeira versão read-only da atestação pure-inherit; preservada por histórico.
+- `supabase/verification/20260823182500_aba_v3_default_on_pure_inherit_ui_binding_attestation_v2.sql`: gate read-only atual. Seleciona primeiro a sessão pós-retirement mais recente e depois verifica seu binding, evitando mascarar uma sessão nova sem binding com uma sessão antiga já vinculada.
+
+O gate final esperado da versão `v2` é `PASS_PURE_DEFAULT_ON_FRESH_SESSION_BINDING`. A presença do arquivo no repositório não prova que o gate foi executado em Produção; o resultado operacional deve ser registrado separadamente.
 
 ## SQLs propositalmente não recuperados como canônicos
 

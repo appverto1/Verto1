@@ -33,6 +33,7 @@
 - `20260821006802_aba_v3_target_protocol_autobootstrap.sql`
 - `20260821006805_aba_v3_target_protocol_pgcrypto_schema_hotfix.sql`
 - `20260821006806_aba_v3_default_on_session_collection_plan_alignment.sql`
+- `20260821006810_aba_v3_default_on_override_lifecycle.sql`
 
 ## Verification
 - `20260815123000_aba_measurement_v3_dark_foundation_checks.sql`
@@ -71,6 +72,9 @@
 - `20260821006804_therapeutic_plan_production_schema_diagnostic.sql`
 - `20260821006805_aba_v3_target_protocol_pgcrypto_schema_diagnostic.sql`
 - `20260821006807_aba_v3_default_on_end_to_end_final_attestation.sql`
+- `20260821006808_aba_v3_default_on_selected_session_attestation.sql`
+- `20260821006812_aba_v3_default_on_pure_inherit_ui_binding_attestation.sql`
+- `20260823182500_aba_v3_default_on_pure_inherit_ui_binding_attestation_v2.sql`
 
 ## Historical production-canary operations
 - `20260821005500_aba_v3_live_canary_rollout_enable.sql`
@@ -82,3 +86,4 @@
 - `20260821006501_aba_v3_exact_production_canary_emergency_disable_new_sessions.sql`
 - `20260821006502_aba_v3_exact_production_canary_rollout_enable.sql`
 - `20260821006503_aba_v3_exact_production_canary_rollout_reenable_after_runtime_fix.sql`
+- `20260821006811_aba_v3_retire_legacy_positive_canary_overrides.sql`

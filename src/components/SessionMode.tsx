@@ -1247,6 +1247,7 @@ export const SessionMode = ({
   const [promptWarning, setPromptWarning] = useState('');
   const [abaV3ErrorSelection, setAbaV3ErrorSelection] = useState<AbaV3ErrorSelection | null>(null);
   const abaV3BindingCacheRef = useRef<Map<string, AbaV3BindingDecision>>(new Map());
+  const abaV3BindingInflightRef = useRef<Map<string, Promise<AbaV3BindingDecision | null>>>(new Map());
   const abaV3BehaviorBindingCacheRef = useRef<Map<string, AbaV3BehaviorDecision>>(new Map());
   const [abaV3SessionPlan, setAbaV3SessionPlan] = useState<AbaV3SessionCollectionPlan>({ targets: [], v3_behavior_ids: [], complete: false });
   const [abaV3SessionPlanStatus, setAbaV3SessionPlanStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -3307,17 +3308,40 @@ export const SessionMode = ({
     const cacheKey = `${sessionId}:${targetId}`;
     const cached = abaV3BindingCacheRef.current.get(cacheKey);
     if (cached) return cached;
-    const result = await dataService.resolveAbaV3SessionTargetBinding({
-      patientId,
-      sessionId,
-      targetId
-    });
-    if (!result?.success || !result?.data?.measurementModelVersion) {
-      throw new Error(result?.error || 'Não foi possível determinar o modelo de coleta deste target.');
+    const pending = abaV3BindingInflightRef.current.get(cacheKey);
+    if (pending) return pending;
+
+    const request = (async (): Promise<AbaV3BindingDecision | null> => {
+      const result = await dataService.resolveAbaV3SessionTargetBinding({
+        patientId,
+        sessionId,
+        targetId
+      });
+      if (!result?.success || !result?.data?.measurementModelVersion) {
+        throw new Error(result?.error || 'Não foi possível determinar o modelo de coleta deste target.');
+      }
+      const binding = result.data as AbaV3BindingDecision;
+      abaV3BindingCacheRef.current.set(cacheKey, binding);
+      return binding;
+    })();
+
+    abaV3BindingInflightRef.current.set(cacheKey, request);
+    try {
+      return await request;
+    } finally {
+      if (abaV3BindingInflightRef.current.get(cacheKey) === request) {
+        abaV3BindingInflightRef.current.delete(cacheKey);
+      }
     }
-    const binding = result.data as AbaV3BindingDecision;
-    abaV3BindingCacheRef.current.set(cacheKey, binding);
-    return binding;
+  };
+
+  const primeAbaV3BindingForGoal = (goal: any) => {
+    if (!goal || !patientId || !sessionId || sessionId.startsWith('draft-') || abaV3SessionPlanStatus !== 'ready') return;
+    if (abaV3PlannedModelForGoal(goal) !== 'V3') return;
+    void resolveAbaV3BindingForGoal(goal).catch((error: any) => {
+      console.warn('[ABA V3] Não foi possível preparar o binding do alvo selecionado:', error?.message || String(error));
+      setSessionWarning(error?.message || 'Não foi possível preparar a coleta V3 deste target.');
+    });
   };
 
   const resolveAbaV3BehaviorForAction = async (behavior: any): Promise<AbaV3BehaviorDecision | null> => {
@@ -6062,6 +6086,7 @@ export const SessionMode = ({
 
   useEffect(() => {
     abaV3BindingCacheRef.current.clear();
+    abaV3BindingInflightRef.current.clear();
     abaV3BehaviorBindingCacheRef.current.clear();
     if (!patientId || !sessionId || sessionId.startsWith('draft-')) {
       setAbaV3SessionPlan({ targets: [], v3_behavior_ids: [], complete: false });
@@ -6096,6 +6121,16 @@ export const SessionMode = ({
       });
     return () => { cancelled = true; };
   }, [abaV3SessionPlanTargetSignature, abaV3UiEnabled, patientId, sessionId]);
+
+  useEffect(() => {
+    if (abaV3SessionPlanStatus !== 'ready' || !mobileSelectedGoalKey) return;
+    const selectedGoal = sessionGoals.find((goal: any) => (
+      String(goal?.id || goal?.target_id || goal?.targetId || goal?.name || 'goal') === mobileSelectedGoalKey
+    ));
+    if (!selectedGoal) return;
+    primeAbaV3BindingForGoal(selectedGoal);
+  }, [abaV3SessionPlanStatus, mobileSelectedGoalKey, sessionGoals]);
+
   const planningTargetNameById = useMemo(() => {
     const names = new Map<string, string>();
     for (const goal of sessionGoals) {
@@ -10234,6 +10269,7 @@ export const SessionMode = ({
                   onClick={() => {
                     setMobileSelectedGoalKey(goalKey);
                     syncTrialTypeForGoal(goal);
+                    primeAbaV3BindingForGoal(goal);
                   }}
                   className={`min-w-0 overflow-hidden rounded-[18px] border bg-white px-3 py-3 shadow-sm transition-all ${selected ? 'border-[#7a32fc] ring-2 ring-[#7a32fc]/15' : 'border-blue-100'}`}
                 >
@@ -10429,7 +10465,7 @@ export const SessionMode = ({
               const instruction = String(goal.instruction || goal.antecedent || goal?.advanced_settings?.antecedent || '').trim();
               const expectedResponse = String(goal.expectedResponse || goal.expected_response || goal?.advanced_settings?.expectedResponse || '').trim();
               return (
-                <div key={goal.id} onPointerDown={() => syncTrialTypeForGoal(goal)} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
+                <div key={goal.id} onPointerDown={() => { syncTrialTypeForGoal(goal); primeAbaV3BindingForGoal(goal); }} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
                   <div className="flex flex-col gap-4 mb-5 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
                       <div className="mb-3 flex flex-wrap gap-2">
