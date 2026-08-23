@@ -10252,7 +10252,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
           <div
             id="patient-care-context"
-            className={`${activeTab === 'aba-charts' && !showChartsCaseTeam ? 'hidden' : 'mt-6 grid'} min-w-0 items-start gap-5 ${
+            className={`${activeTab === 'aba-charts' && !showChartsCaseTeam ? 'hidden' : 'mt-3 grid'} min-w-0 items-start gap-3 ${
               canManagePrimaryProfessionalForPatient
                 ? 'lg:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]'
                 : ''

@@ -71,8 +71,13 @@ assert.doesNotMatch(
 );
 assert.match(
   teamPanel,
-  /aria-label="Equipe do caso"[\s\S]*xl:grid-cols-3/,
-  'vínculos devem aproveitar a largura disponível sem criar espaço morto',
+  /aria-label="Equipe do caso"[\s\S]*Gerenciar equipe[\s\S]*case-team-manager-title/,
+  'a equipe do caso deve permanecer compacta no prontuário e mover os detalhes para gerenciamento secundário',
+);
+assert.match(
+  teamPanel,
+  /max-h-\[88vh\][\s\S]*sm:max-w-\[34rem\]/,
+  'o gerenciamento da equipe deve usar bottom sheet no mobile e drawer lateral no desktop',
 );
 assert.match(
   teamPanel,
