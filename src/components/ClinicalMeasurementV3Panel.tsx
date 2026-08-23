@@ -14,9 +14,11 @@ import {
   YAxis,
 } from 'recharts';
 import { dataService } from '../services/dataService';
+import { useClinicalAnalyticsQuery } from '../services/clinicalAnalyticsQueryCache';
 
 type Props = {
   patientId: string;
+  organizationId?: string | null;
   isPanelDark?: boolean;
 };
 
@@ -341,33 +343,32 @@ function TaskAnalysisMatrix({ payload, isPanelDark }: { payload: any; isPanelDar
   );
 }
 
-export function ClinicalMeasurementV3Panel({ patientId, isPanelDark = false }: Props) {
-  const [targets, setTargets] = useState<CatalogTarget[]>([]);
+export function ClinicalMeasurementV3Panel({ patientId, organizationId = null, isPanelDark = false }: Props) {
   const [targetId, setTargetId] = useState('');
   const [definitionId, setDefinitionId] = useState('');
   const [days, setDays] = useState(90);
-  const [payload, setPayload] = useState<any>(null);
-  const [loadingCatalog, setLoadingCatalog] = useState(false);
-  const [loadingView, setLoadingView] = useState(false);
-  const [error, setError] = useState('');
+
+  const catalogQuery = useClinicalAnalyticsQuery<any>({
+    organizationId,
+    patientId,
+    family: 'clinical-measurement-v3-catalog',
+  }, async () => {
+    const result = await dataService.getClinicalMeasurementV3Catalog(patientId);
+    if (result?.success === false && result?.code !== 'feature_disabled') throw new Error(result?.error || 'Não foi possível carregar as métricas clínicas V3.');
+    return result;
+  }, { staleMs: 30_000, keepPreviousData: true });
+  const targets: CatalogTarget[] = Array.isArray(catalogQuery.data?.data?.targets) ? catalogQuery.data.data.targets : [];
 
   useEffect(() => {
-    let cancelled = false;
-    setLoadingCatalog(true);
-    setError('');
-    void dataService.getClinicalMeasurementV3Catalog(patientId).then((result: any) => {
-      if (cancelled) return;
-      const nextTargets = Array.isArray(result?.data?.targets) ? result.data.targets : [];
-      setTargets(nextTargets);
-      const nextTarget = String(nextTargets[0]?.target_id || '');
-      const nextDefinition = String(nextTargets[0]?.definitions?.[0]?.definition_id || '');
-      setTargetId(nextTarget);
-      setDefinitionId(nextDefinition);
-      if (result?.success === false && result?.code !== 'feature_disabled') setError(result?.error || 'Não foi possível carregar as métricas clínicas V3.');
-      setLoadingCatalog(false);
-    });
-    return () => { cancelled = true; };
-  }, [patientId]);
+    const allowed = new Set(targets.map((target) => String(target.target_id || '')));
+    const nextTarget = allowed.has(targetId) ? targetId : String(targets[0]?.target_id || '');
+    const nextDefinitions = targets.find((target) => target.target_id === nextTarget)?.definitions || [];
+    const nextDefinition = nextDefinitions.some((definition) => definition.definition_id === definitionId)
+      ? definitionId
+      : String(nextDefinitions[0]?.definition_id || '');
+    if (nextTarget !== targetId) setTargetId(nextTarget);
+    if (nextDefinition !== definitionId) setDefinitionId(nextDefinition);
+  }, [patientId, targets.map((target) => String(target.target_id || '')).join('|'), targetId, definitionId]);
 
   const selectedTarget = targets.find((target) => target.target_id === targetId) || null;
   const definitions = selectedTarget?.definitions || [];
@@ -379,26 +380,20 @@ export function ClinicalMeasurementV3Panel({ patientId, isPanelDark = false }: P
     }
   }, [targetId, definitionId, definitions]);
 
-  useEffect(() => {
-    if (!patientId || !targetId || !definitionId) {
-      setPayload(null);
-      return;
-    }
-    let cancelled = false;
-    setLoadingView(true);
-    setError('');
-    void dataService.getClinicalMeasurementV3View(patientId, targetId, { definitionId, days }).then((result: any) => {
-      if (cancelled) return;
-      if (result?.success === false) {
-        setPayload(null);
-        setError(result?.error || 'Não foi possível carregar a visão clínica V3.');
-      } else {
-        setPayload(result?.data || null);
-      }
-      setLoadingView(false);
-    });
-    return () => { cancelled = true; };
-  }, [patientId, targetId, definitionId, days]);
+  const viewQuery = useClinicalAnalyticsQuery<any>({
+    organizationId,
+    patientId,
+    family: 'clinical-measurement-v3-view',
+    params: { targetId, definitionId, days },
+  }, async () => {
+    const result = await dataService.getClinicalMeasurementV3View(patientId, targetId, { definitionId, days });
+    if (result?.success === false) throw new Error(result?.error || 'Não foi possível carregar a visão clínica V3.');
+    return result;
+  }, { enabled: Boolean(patientId && targetId && definitionId), staleMs: 30_000, keepPreviousData: true });
+  const payload = viewQuery.data?.data || null;
+  const loadingCatalog = catalogQuery.isLoading;
+  const loadingView = viewQuery.isLoading || viewQuery.isRefreshing || viewQuery.isPreviousData;
+  const error = catalogQuery.error || viewQuery.error;
 
   const family = String(payload?.identity?.semantic_family || definitions.find((definition) => definition.definition_id === definitionId)?.semantic_family || '');
   const isScalar = ['COUNT', 'RATE', 'PROPORTION', 'DURATION', 'LATENCY', 'IRT', 'CONTINUOUS'].includes(family);
@@ -418,6 +413,7 @@ export function ClinicalMeasurementV3Panel({ patientId, isPanelDark = false }: P
             <h3 className="text-lg font-semibold">Evolução clínica V3</h3>
             {payload?.authority?.level && <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs text-emerald-700">{payload.authority.level}</span>}
             {payload?.provenance?.is_stale && <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs text-amber-700">Atualizando</span>}
+            {loadingView && payload && <span className="rounded-full bg-violet-100 px-2.5 py-1 text-xs text-violet-700">Sincronizando</span>}
           </div>
           <p className={`mt-1 max-w-3xl text-sm ${muted}`}>A linha respeita fases e famílias matemáticas. A interface não calcula média, maestria, elegibilidade, IOA ou agregação clínica.</p>
         </div>
@@ -456,7 +452,7 @@ export function ClinicalMeasurementV3Panel({ patientId, isPanelDark = false }: P
 
       {error ? (
         <div className="mt-5 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800"><AlertTriangle className="mt-0.5 shrink-0" size={18} /><span>{error}</span></div>
-      ) : loadingCatalog || loadingView ? (
+      ) : (loadingCatalog || loadingView) && !payload ? (
         <div className={`mt-5 h-[360px] animate-pulse rounded-2xl ${isPanelDark ? 'bg-slate-800' : 'bg-slate-100'}`} />
       ) : !payload ? (
         <div className={`mt-5 flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-dashed p-6 text-center ${isPanelDark ? 'border-slate-700' : 'border-slate-200'}`}>

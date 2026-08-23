@@ -7,13 +7,14 @@ import { ClinicalOutcomesDashboard } from './ClinicalOutcomesDashboard';
 
 type ClinicalChartsWorkspaceProps = {
   patientId: string;
+  organizationId?: string | null;
   isPanelDark?: boolean;
   showAbaDetails?: boolean;
   showAbaV3Details?: boolean;
   showClinicalMeasurementV3Details?: boolean;
 };
 
-export function ClinicalChartsWorkspace({ patientId, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false }: ClinicalChartsWorkspaceProps) {
+export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false }: ClinicalChartsWorkspaceProps) {
   const [view, setView] = useState<'plans' | 'aba' | 'aba-v3' | 'clinical-v3'>('plans');
   return (
     <div className="space-y-4" data-testid="clinical-charts-workspace">
@@ -28,10 +29,10 @@ export function ClinicalChartsWorkspace({ patientId, isPanelDark = false, showAb
       {view === 'aba' && showAbaDetails
         ? <AbaClinicalChartsPanel patientId={patientId} isPanelDark={isPanelDark} />
         : view === 'aba-v3' && showAbaV3Details
-          ? <AbaV3ClinicalChartPanel patientId={patientId} isPanelDark={isPanelDark} />
+          ? <AbaV3ClinicalChartPanel patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} />
           : view === 'clinical-v3' && showClinicalMeasurementV3Details
-            ? <ClinicalMeasurementV3Panel patientId={patientId} isPanelDark={isPanelDark} />
-            : <ClinicalOutcomesDashboard patientId={patientId} isPanelDark={isPanelDark} />}
+            ? <ClinicalMeasurementV3Panel patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} />
+            : <ClinicalOutcomesDashboard patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} />}
     </div>
   );
 }

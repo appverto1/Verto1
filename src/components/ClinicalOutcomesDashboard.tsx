@@ -24,6 +24,7 @@ import {
   YAxis,
 } from 'recharts';
 import { dataService } from '../services/dataService';
+import { invalidateClinicalAnalyticsPatient, useClinicalAnalyticsQuery } from '../services/clinicalAnalyticsQueryCache';
 import {
   clinicalOutcomeBaselineValue,
   clinicalOutcomeContextLabel,
@@ -47,6 +48,7 @@ import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
 type ClinicalOutcomesDashboardProps = {
   patientId: string;
+  organizationId?: string | null;
   isPanelDark?: boolean;
 };
 
@@ -514,19 +516,15 @@ function SeriesChart({ series, isDark, compact = false }: { series: ClinicalOutc
   );
 }
 
-export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: ClinicalOutcomesDashboardProps) {
+export function ClinicalOutcomesDashboard({ patientId, organizationId = null, isPanelDark = false }: ClinicalOutcomesDashboardProps) {
   const today = useMemo(() => localDateKey(new Date()), []);
   const [periodPreset, setPeriodPreset] = useState('90');
   const [customDateFrom, setCustomDateFrom] = useState(() => shiftDateKey(today, -89));
   const [customDateTo, setCustomDateTo] = useState(today);
   const [comparePrevious, setComparePrevious] = useState(false);
-  const [data, setData] = useState<DashboardData>(EMPTY_DATA);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [scopeId, setScopeId] = useState('pts');
   const [contextFilter, setContextFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
-  const [refreshRevision, setRefreshRevision] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [expandedTargetKeys, setExpandedTargetKeys] = useState<string[]>([]);
   const [activeSeriesKeys, setActiveSeriesKeys] = useState<Record<string, string>>({});
@@ -560,40 +558,45 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
     const handleClinicalOutcomeChange = (event: Event) => {
       const detail = (event as CustomEvent<{ patientId?: string }>).detail;
       if (!detail?.patientId || String(detail.patientId) === String(patientId)) {
-        setRefreshRevision((current) => current + 1);
+        invalidateClinicalAnalyticsPatient(patientId, 'all');
       }
     };
     window.addEventListener('verto:clinical-outcomes-changed', handleClinicalOutcomeChange as EventListener);
     return () => window.removeEventListener('verto:clinical-outcomes-changed', handleClinicalOutcomeChange as EventListener);
   }, [patientId]);
 
+  const dashboardQuery = useClinicalAnalyticsQuery<any>({
+    organizationId,
+    patientId,
+    family: 'clinical-outcomes-dashboard',
+    params: {
+      dateFrom: periodRange.loadFrom,
+      dateTo: periodRange.loadTo,
+      days: periodRange.totalDays,
+    },
+  }, async () => {
+    const response = await dataService.getClinicalOutcomesDashboard(patientId, {
+      dateFrom: periodRange.loadFrom,
+      dateTo: periodRange.loadTo,
+      days: periodRange.totalDays,
+    });
+    if (!response?.success) throw new Error(response?.message || response?.error || 'Não foi possível carregar os gráficos clínicos.');
+    return response;
+  }, { enabled: periodRange.valid, staleMs: 30_000, keepPreviousData: true });
+
+  const [committedPeriodRange, setCommittedPeriodRange] = useState(periodRange);
   useEffect(() => {
-    let active = true;
-    if (!periodRange.valid) {
-      setLoading(false);
-      setError('Escolha um período válido. Com comparação, a janela total não pode ultrapassar 730 dias.');
-      return () => { active = false; };
-    }
-    const load = async () => {
-      setLoading(true);
-      setError('');
-      const response = await dataService.getClinicalOutcomesDashboard(patientId, {
-        dateFrom: periodRange.loadFrom,
-        dateTo: periodRange.loadTo,
-        days: periodRange.totalDays,
-      });
-      if (!active) return;
-      if (!response?.success) {
-        setData(EMPTY_DATA);
-        setError(response?.message || response?.error || 'Não foi possível carregar os gráficos clínicos.');
-      } else {
-        setData({ ...EMPTY_DATA, ...(response.data || {}) });
-      }
-      setLoading(false);
-    };
-    void load();
-    return () => { active = false; };
-  }, [patientId, periodRange.loadFrom, periodRange.loadTo, periodRange.totalDays, periodRange.valid, refreshRevision]);
+    if (dashboardQuery.data && !dashboardQuery.isPreviousData) setCommittedPeriodRange(periodRange);
+  }, [dashboardQuery.data, dashboardQuery.isPreviousData, periodRange]);
+  const effectivePeriodRange = dashboardQuery.isPreviousData ? committedPeriodRange : periodRange;
+  const data: DashboardData = dashboardQuery.data?.success
+    ? { ...EMPTY_DATA, ...(dashboardQuery.data.data || {}) }
+    : EMPTY_DATA;
+  const loading = dashboardQuery.isLoading;
+  const refreshing = dashboardQuery.isRefreshing || dashboardQuery.isPreviousData;
+  const error = !periodRange.valid
+    ? 'Escolha um período válido. Com comparação, a janela total não pode ultrapassar 730 dias.'
+    : dashboardQuery.error;
 
   const plans = useMemo(() => (Array.isArray(data.plans) ? data.plans.slice().sort(latestPlanFirst) : []), [data.plans]);
   const ptsPlans = useMemo(() => plans.filter((plan) => plan.mode === 'interdisciplinary'), [plans]);
@@ -613,11 +616,11 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
     && (sourceFilter === 'all' || clean(row.source) === sourceFilter)
   )), [contextFilter, data.observations, sourceFilter]);
   const currentObservations = useMemo(() => filteredObservations.filter((row) => (
-    isObservationWithin(row, periodRange.currentFrom, periodRange.currentTo)
-  )), [filteredObservations, periodRange.currentFrom, periodRange.currentTo]);
+    isObservationWithin(row, effectivePeriodRange.currentFrom, effectivePeriodRange.currentTo)
+  )), [filteredObservations, effectivePeriodRange.currentFrom, effectivePeriodRange.currentTo]);
   const previousObservations = useMemo(() => comparePrevious
-    ? filteredObservations.filter((row) => isObservationWithin(row, periodRange.previousFrom, periodRange.previousTo))
-    : [], [comparePrevious, filteredObservations, periodRange.previousFrom, periodRange.previousTo]);
+    ? filteredObservations.filter((row) => isObservationWithin(row, effectivePeriodRange.previousFrom, effectivePeriodRange.previousTo))
+    : [], [comparePrevious, filteredObservations, effectivePeriodRange.previousFrom, effectivePeriodRange.previousTo]);
   const summaries = useMemo(() => summarizeClinicalOutcomeSeries(currentObservations), [currentObservations]);
   const previousSummaries = useMemo(() => summarizeClinicalOutcomeSeries(previousObservations), [previousObservations]);
   const previousSummaryByKey = useMemo(() => new Map(previousSummaries.map((series) => [series.key, series])), [previousSummaries]);
@@ -720,13 +723,14 @@ export function ClinicalOutcomesDashboard({ patientId, isPanelDark = false }: Cl
   }
 
   return (
-    <section className="space-y-4" data-testid="clinical-outcomes-dashboard">
+    <section className="space-y-4" data-testid="clinical-outcomes-dashboard" data-query-refreshing={refreshing ? 'true' : 'false'}>
       <header className={`relative overflow-hidden rounded-2xl border p-3 sm:p-4 ${brandPanel}`}>
         <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${structuralAccent}`} />
         <div className="relative flex flex-col gap-3">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0 flex-1">
               <p className={`text-[10px] font-medium uppercase tracking-[0.14em] ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>Evidências clínicas</p>
+              {refreshing && <p className={`mt-1 text-[10px] ${muted}`}>Atualizando em segundo plano sem remover a evidência já carregada…</p>}
               <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                 <label className="min-w-0 flex-1 sm:max-w-sm">
                   <span className="sr-only">Visão clínica</span>

@@ -188,6 +188,8 @@ export const clinicalOutcomeMetricDisplayLabel = (metricKey: unknown, metricLabe
     TARGET_INDEPENDENCE: 'Independência',
     TARGET_TRIAL_COUNT: 'Tentativas registradas',
     PRIMARY_INDEPENDENCE_PERCENT: 'Independência primária',
+    FINAL_COMPLETION_ACCURACY_PERCENT: 'Acurácia final',
+    EFFECTIVE_TRIAL_COUNT: 'Tentativas registradas',
     TASK_INDEPENDENT_STEPS_PERCENT: 'Passos independentes',
     MAINTENANCE_PRIMARY_INDEPENDENCE_PERCENT: 'Independência em manutenção',
     BEHAVIOR_FREQUENCY_COUNT: 'Frequência',
@@ -225,10 +227,15 @@ export const clinicalOutcomeUnitLabel = (
   const metric = text(metricKey).toLowerCase();
   if (raw === '%' || normalized.includes('percent')) return 'Percentual (%)';
   if (['eventos/h', 'events_per_hour', 'rate_per_hour'].includes(normalized) || metric.includes('rate')) return 'Taxa (eventos/h)';
+  if (
+    ['count', 'contagem', 'tentativas', 'tentativa', 'ocorrências', 'ocorrencias', 'ocorrência', 'ocorrencia'].includes(normalized)
+    || metric.includes('count')
+    || metric.includes('trial_count')
+    || metric.includes('attempt')
+  ) return raw && raw !== 'count' ? raw : 'Contagem';
   if (['s', 'sec', 'seg', 'segundos', 'second', 'seconds'].includes(normalized) || metric.includes('duration') || metric.includes('latency')) return 'Tempo (s)';
   if (['ms', 'millisecond', 'milliseconds'].includes(normalized)) return 'Tempo (ms)';
   if (['min', 'minuto', 'minutos', 'minute', 'minutes'].includes(normalized)) return 'Tempo (min)';
-  if (normalized.includes('contagem') || normalized.includes('tentativa') || normalized.includes('ocorrência') || normalized.includes('ocorrencia') || metric.includes('count')) return raw || 'Contagem';
   if (raw) return raw;
   const finite = values.filter((value): value is number => Number.isFinite(Number(value))).map(Number);
   if (finite.length && finite.every((value) => value >= 0 && value <= 1)) return 'Pontuação (0–1)';
@@ -268,15 +275,25 @@ export const summarizeClinicalOutcomePeriod = (series: ClinicalOutcomeSeriesSumm
       hasDenominator = true;
     }
   }
+  const unit = text(series?.unit).toLowerCase();
+  const metricKey = text(series?.metricKey).toUpperCase();
+  let meanValue = meanClinicalOutcomeValue(rows);
+  if (hasNumerator && hasDenominator && denominatorTotal > 0) {
+    if (unit === '%' || unit.includes('percent')) {
+      meanValue = (numeratorTotal / denominatorTotal) * 100;
+    } else if (metricKey.includes('RATE') || ['eventos/h', 'events_per_hour', 'rate_per_hour'].includes(unit)) {
+      meanValue = (numeratorTotal * 3600) / denominatorTotal;
+    } else if (metricKey.includes('DURATION_AVG')) {
+      meanValue = numeratorTotal / denominatorTotal;
+    }
+  }
   return {
     observationCount: rows.length,
     sessionCount: sessionIds.length,
     opportunityCount: hasDenominator ? denominatorTotal : 0,
     numeratorTotal: hasNumerator ? numeratorTotal : null,
     denominatorTotal: hasDenominator ? denominatorTotal : null,
-    meanValue: text(series?.unit) === '%' && hasNumerator && hasDenominator && denominatorTotal > 0
-      ? (numeratorTotal / denominatorTotal) * 100
-      : meanClinicalOutcomeValue(rows),
+    meanValue,
   };
 };
 

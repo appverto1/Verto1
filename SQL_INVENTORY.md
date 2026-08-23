@@ -34,6 +34,8 @@
 - `20260821006805_aba_v3_target_protocol_pgcrypto_schema_hotfix.sql`
 - `20260821006806_aba_v3_default_on_session_collection_plan_alignment.sql`
 - `20260821006810_aba_v3_default_on_override_lifecycle.sql`
+- `20260823184500_aba_v3_analytical_metric_expansion.sql`
+- `20260823192500_aba_v3_chart_series_bundle.sql`
 
 ## Verification
 - `20260815123000_aba_measurement_v3_dark_foundation_checks.sql`
@@ -75,6 +77,8 @@
 - `20260821006808_aba_v3_default_on_selected_session_attestation.sql`
 - `20260821006812_aba_v3_default_on_pure_inherit_ui_binding_attestation.sql`
 - `20260823182500_aba_v3_default_on_pure_inherit_ui_binding_attestation_v2.sql`
+- `20260823184600_aba_v3_analytical_metric_expansion_checks.sql`
+- `20260823192600_aba_v3_chart_series_bundle_checks.sql`
 
 ## Historical production-canary operations
 - `20260821005500_aba_v3_live_canary_rollout_enable.sql`

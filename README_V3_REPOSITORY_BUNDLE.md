@@ -55,3 +55,17 @@ Versões quebradas/superseded do caminho de validação (por exemplo 06300, 0640
 ## Observação sobre o último teste
 
 O attestation `06807` revelou um bug de `clinical_date`/timezone no código da aplicação, não uma migration faltante. A correção está nos arquivos de código e no regression test incluídos neste bundle. Não há migration SQL para esse hotfix.
+
+## Expansão analítica canônica — Bloco 3
+
+A migration `20260823184500_aba_v3_analytical_metric_expansion.sql` completa o read model analítico sem alterar fatos clínicos. Ela adiciona:
+
+- habilidades: `FINAL_COMPLETION_ACCURACY_PERCENT` e `EFFECTIVE_TRIAL_COUNT`, preservando `PRIMARY_INDEPENDENCE_PERCENT`;
+- comportamentos: `BEHAVIOR_DURATION_EPISODES` e `BEHAVIOR_DURATION_AVG`, preservando frequência, taxa/h, duração total e intervalos;
+- `EFFECTIVE_TRIAL_COUNT` com direção `NO_DIRECTIONAL_JUDGMENT`, porque volume de coleta não é melhora clínica;
+- média de duração calculada somente sobre episódios concluídos; episódios censurados/abertos não entram no denominador e sinalizam revisão na duração total/média;
+- ordem semântica das métricas no RPC canônico.
+
+A camada de apresentação agrupa percentuais, taxa/h e duração média usando numerador/denominador canônicos. Assim, duas sessões no mesmo dia não são combinadas por média simples quando possuem exposições diferentes.
+
+O check read-only correspondente é `supabase/verification/20260823184600_aba_v3_analytical_metric_expansion_checks.sql`. O PASS esperado é `PASS_ABA_V3_ANALYTICAL_METRIC_EXPANSION`.

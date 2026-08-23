@@ -73574,7 +73574,7 @@ async function startServer() {
 
   const handleAbaV3ReadRpcError = (res: any, error: any) => {
     const message = sanitizeString(error?.message || '', 500);
-    if (hasMissingFinancialSchema(error) || /get_aba_v3_session_collection_plan|get_aba_patient_chart_catalog_v3|get_aba_target_chart_series_v3|get_aba_target_history_v3|get_aba_patient_overview_v3|get_aba_session_read_bundle_v3|PGRST202|42883|42P01/i.test(message)) {
+    if (hasMissingFinancialSchema(error) || /get_aba_v3_session_collection_plan|get_aba_patient_chart_catalog_v3|get_aba_chart_series_bundle_v3|get_aba_target_chart_series_v3|get_aba_target_history_v3|get_aba_patient_overview_v3|get_aba_session_read_bundle_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema ABA V3 ainda não aplicado.' });
     }
     if (message.includes('ABA_V3_READ_WINDOW_')) {
@@ -73582,6 +73582,9 @@ async function startServer() {
     }
     if (/ABA_V3_SESSION_PLAN_TARGET_LIMIT/i.test(message)) {
       return res.status(422).json({ success: false, code: 'ABA_V3_SESSION_PLAN_TARGET_LIMIT', error: 'O plano de coleta aceita no máximo 200 targets por sessão.' });
+    }
+    if (/ABA_V3_CHART_BUNDLE_TARGET_COUNT_INVALID/i.test(message)) {
+      return res.status(422).json({ success: false, code: 'ABA_V3_CHART_BUNDLE_TARGET_COUNT_INVALID', error: 'Selecione entre 1 e 3 alvos para comparação ABA V3.' });
     }
     if (/ABA_V3_SESSION_PLAN_(SCOPE_REQUIRED|SESSION_SCOPE_INVALID)/i.test(message)) {
       return res.status(403).json({ success: false, code: 'ABA_V3_SESSION_PLAN_SCOPE_DENIED', error: 'Acesso negado ao plano de coleta ABA V3.' });
@@ -73745,6 +73748,51 @@ async function startServer() {
         if (error) return handleAbaV3ReadRpcError(res, error);
         res.setHeader('Cache-Control', 'private, no-store');
         return res.json({ success: true, data: data || { targets: [] } });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/patients/:patientId/chart-series-bundle',
+    requireAbaV3ReadFeature,
+    checkAuth,
+    requireClinicCapability('aba.analytics.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const rawTargetIds = String(req.query?.targetIds || req.query?.target_ids || '')
+          .split(',')
+          .map((value) => sanitizeString(value, 180))
+          .filter(Boolean);
+        const targetIds = Array.from(new Set(rawTargetIds)).slice(0, 4);
+        if (!isUuid(patientId) || !isUuid(organizationId) || targetIds.length < 1 || targetIds.length > 3 || rawTargetIds.length > 3) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_CHART_BUNDLE_SCOPE_INVALID', error: 'Selecione entre 1 e 3 alvos ABA V3 válidos.' });
+        }
+        const chart = parseAbaChartParams(req.query || {});
+        const { data, error } = await supabase.rpc('get_aba_chart_series_bundle_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_target_ids: targetIds,
+          p_from: chart.dateFromIso,
+          p_to: chart.dateToIso,
+          p_limit: chart.limit
+        });
+        if (error) return handleAbaV3ReadRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({
+          success: true,
+          data: data || {
+            target_ids: targetIds,
+            continuity_policy: 'BREAK_ON_PHASE_OR_MODEL_CHANGE',
+            legacy_history_separate: true,
+            available_metrics: [],
+            segments: []
+          }
+        });
       } catch (error: any) {
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }

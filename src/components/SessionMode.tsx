@@ -2273,7 +2273,44 @@ export const SessionMode = ({
   const goalTargetId = (goal: any) => String(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || '').trim();
   const goalTargetName = (goal: any) => String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
   const goalTargetType = (goal: any) => String(goal?.target_type || goal?.targetType || '').trim().toLowerCase();
+  const goalTherapeuticObjectiveId = (goal: any) => String(goal?.therapeutic_objective_id || goal?.therapeuticObjectiveId || '').trim();
+  const goalTherapeuticPlanId = (goal: any) => String(goal?.therapeutic_plan_id || goal?.therapeuticPlanId || '').trim();
   const therapeuticGoalKey = (goal: any) => goalTargetId(goal) || goalTargetName(goal) || String(goal?.id || '').trim();
+  const CMV3_PLAN_SUPPORTED_MEASUREMENTS = new Set(['correct_incorrect', 'frequency', 'duration', 'latency', 'percentage']);
+  const clinicalPlanMetricDirection = (goal: any, measurementType: string) => {
+    const criteria = goal?.masteryCriteria || goal?.mastery_criteria || {};
+    const operator = String(criteria?.operator || '').trim().toLowerCase();
+    if (['lte', 'lt', 'less_than', 'less_than_or_equal'].includes(operator)) return 'lower_is_better';
+    if (['gte', 'gt', 'greater_than', 'greater_than_or_equal'].includes(operator)) return 'higher_is_better';
+    if (measurementType === 'correct_incorrect' || measurementType === 'percentage') return 'higher_is_better';
+    if (measurementType === 'latency') return 'lower_is_better';
+    return 'no_directional_judgment';
+  };
+  const buildClinicalPlanMeasurementV3Payload = ({ goal, measurementType, numericValue, measurementUnit, timestamp, startedAt, endedAt, trialId }: any) => {
+    const therapeuticObjectiveId = goalTherapeuticObjectiveId(goal);
+    const targetId = goalTargetId(goal);
+    const targetName = goalTargetName(goal) || 'Alvo terapêutico';
+    if (!therapeuticObjectiveId || !CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(measurementType)) return null;
+    const metricKey = `program_target:${targetId || therapeuticObjectiveId}:${measurementType}`.slice(0, 120);
+    const metricLabel = `${targetName} · ${measurementType === 'correct_incorrect' ? 'Acurácia' : measurementType === 'frequency' ? 'Frequência' : measurementType === 'duration' ? 'Duração' : measurementType === 'latency' ? 'Latência' : 'Percentual'}`.slice(0, 180);
+    const payload: any = {
+      sourceKind: 'THERAPEUTIC_OBJECTIVE',
+      therapeuticObjectiveId,
+      metricKey,
+      metricLabel,
+      metricType: measurementType,
+      unit: measurementType === 'correct_incorrect' ? 'percent' : measurementUnit || null,
+      direction: clinicalPlanMetricDirection(goal, measurementType),
+      observedAt: timestamp,
+      idempotencyKey: trialId,
+      numericValue,
+    };
+    if (measurementType === 'duration' || measurementType === 'latency') {
+      payload.startedAt = startedAt;
+      payload.endedAt = endedAt || timestamp;
+    }
+    return payload;
+  };
   const therapeuticTimerElapsedMs = (timer: TherapeuticTimerState | null | undefined) => {
     if (!timer) return 0;
     const runningDelta = timer.runningSince ? Math.max(0, nowMs - new Date(timer.runningSince).getTime()) : 0;
@@ -2356,28 +2393,49 @@ export const SessionMode = ({
     addRecord(localRecord, 'local');
     window.setTimeout(() => updateRecordStatus(trialId, 'syncing'), 30);
     try {
-      const result = await dataService.saveAbaTrial({
-        id: trialId,
-        clinic_id: resolvedClinicId || undefined,
-        patient_id: patientId,
-        session_id: sessionId,
-        target_id: targetId || undefined,
-        target_name: targetName,
-        program_id: programId || undefined,
-        collection_type: normalizedCollectionType,
-        trial_type: normalizedCollectionType,
-        ...(isCorrectIncorrect ? { response_score: numericValue, max_score: 1, correct } : {}),
-        independent: false,
-        latency_ms: normalizedMeasurementType === 'latency' ? (latencyMs ?? Math.round(numericValue * 1000)) : undefined,
-        occurred_at: timestamp,
-        therapist_id: resolvedTherapistId || undefined,
-        source: 'therapeutic_program_measurement',
-        raw_payload: rawPayload
+      const cmv3Payload = buildClinicalPlanMeasurementV3Payload({
+        goal,
+        measurementType: normalizedMeasurementType,
+        numericValue,
+        measurementUnit,
+        timestamp,
+        startedAt: startedAt || timestamp,
+        endedAt: timestamp,
+        trialId,
       });
+      const useCanonicalPlanWriter = Boolean(cmv3Payload);
+      const result = useCanonicalPlanWriter
+        ? await dataService.saveClinicalPlanMeasurementV3(patientId, cmv3Payload)
+        : await dataService.saveAbaTrial({
+            id: trialId,
+            clinic_id: resolvedClinicId || undefined,
+            patient_id: patientId,
+            session_id: sessionId,
+            target_id: targetId || undefined,
+            target_name: targetName,
+            program_id: programId || undefined,
+            collection_type: normalizedCollectionType,
+            trial_type: normalizedCollectionType,
+            ...(isCorrectIncorrect ? { response_score: numericValue, max_score: 1, correct } : {}),
+            independent: false,
+            latency_ms: normalizedMeasurementType === 'latency' ? (latencyMs ?? Math.round(numericValue * 1000)) : undefined,
+            occurred_at: timestamp,
+            therapist_id: resolvedTherapistId || undefined,
+            source: 'therapeutic_program_measurement_legacy_fallback',
+            raw_payload: {
+              ...rawPayload,
+              canonicalPlanWriterFallback: true,
+              fallbackReason: !CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(normalizedMeasurementType)
+                ? 'SEMANTIC_FAMILY_NOT_SUPPORTED_BY_PLAN_WRITER'
+                : 'THERAPEUTIC_OBJECTIVE_IDENTITY_UNAVAILABLE',
+              therapeuticPlanId: goalTherapeuticPlanId(goal) || null,
+              therapeuticObjectiveId: goalTherapeuticObjectiveId(goal) || null,
+            }
+          });
       if (result?.success === false) {
         updateRecordStatus(trialId, result?.durable ? 'local' : 'error');
         if (!result?.durable) {
-          setSessionWarning(result?.error || 'Não foi possível salvar esta medida clínica.');
+          setSessionWarning(result?.error || (useCanonicalPlanWriter ? 'Não foi possível salvar esta medida no registro clínico V3. Nenhum registro Legacy foi criado.' : 'Não foi possível salvar esta medida clínica.'));
           showClinicalToast(buildClinicalSaveErrorToast(), 'error');
           return false;
         }

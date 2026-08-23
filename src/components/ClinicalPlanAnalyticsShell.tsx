@@ -184,20 +184,32 @@ const bucketAggregation = (series: ClinicalOutcomeSeriesSummary, rows: ClinicalO
   if (!numeric.length) return null;
   const unit = clean(series.unit);
   const key = clean(series.metricKey).toUpperCase();
-  if (unit === '%') {
+  const ratioTotals = () => {
     let numerator = 0;
     let denominator = 0;
-    let hasDenominator = false;
+    let hasRatio = false;
     for (const row of rows) {
       const rowNumerator = Number(row.numerator);
       const rowDenominator = Number(row.denominator);
       if (Number.isFinite(rowNumerator) && Number.isFinite(rowDenominator) && rowDenominator > 0) {
         numerator += rowNumerator;
         denominator += rowDenominator;
-        hasDenominator = true;
+        hasRatio = true;
       }
     }
-    if (hasDenominator && denominator > 0) return (numerator / denominator) * 100;
+    return hasRatio && denominator > 0 ? { numerator, denominator } : null;
+  };
+  if (unit === '%') {
+    const ratio = ratioTotals();
+    if (ratio) return (ratio.numerator / ratio.denominator) * 100;
+  }
+  if (key.includes('RATE') || unit === 'eventos/h') {
+    const ratio = ratioTotals();
+    if (ratio) return (ratio.numerator * 3600) / ratio.denominator;
+  }
+  if (key.includes('DURATION_AVG')) {
+    const ratio = ratioTotals();
+    if (ratio) return ratio.numerator / ratio.denominator;
   }
   if (key.includes('_MAX')) return Math.max(...numeric);
   if (

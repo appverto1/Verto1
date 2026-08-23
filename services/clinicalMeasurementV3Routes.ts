@@ -75,7 +75,10 @@ export function registerClinicalMeasurementV3Routes(app: Express, deps: Deps) {
 
         let semanticFamily=''; let measurement:any={};
         const numericValue=Number(req.body?.numericValue??req.body?.numeric_value??req.body?.value);
-        if(['numeric','percentage','scale'].includes(metricType)) {
+        if(metricType==='correct_incorrect') {
+          if(!Number.isFinite(numericValue)||![0,1].includes(numericValue)) return res.status(422).json({success:false,error:'CMV3_PLAN_WRITE_PROPORTION_VALUE_INVALID',message:'Informe acerto ou erro válido.'});
+          semanticFamily='PROPORTION'; measurement={category_key:numericValue===1?'correct':'incorrect'};
+        } else if(['numeric','percentage','scale'].includes(metricType)) {
           if(!Number.isFinite(numericValue)) return res.status(422).json({success:false,error:'CMV3_PLAN_WRITE_CONTINUOUS_VALUE_INVALID',message:'Informe um valor numérico válido.'});
           semanticFamily='CONTINUOUS'; measurement={numeric_value:numericValue};
         } else if(metricType==='frequency') {

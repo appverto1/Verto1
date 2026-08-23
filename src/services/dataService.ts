@@ -31,6 +31,7 @@ import {
   PATIENT_LIST_INVALID_RESPONSE_CODE,
 } from '../utils/patientList';
 import type { NewFeatureKey } from '../constants/featureMetadata';
+import { invalidateClinicalAnalyticsPatient } from './clinicalAnalyticsQueryCache';
 
 enum OperationType {
   CREATE = 'create',
@@ -604,9 +605,10 @@ function normalizeClinicalMutationResult(result: any, fallback: string) {
 }
 
 function notifyClinicalOutcomesChanged(patientId: string) {
-  if (typeof window === 'undefined') return;
   const safePatientId = String(patientId || '').trim();
   if (!safePatientId) return;
+  invalidateClinicalAnalyticsPatient(safePatientId, 'all');
+  if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent('verto:clinical-outcomes-changed', {
     detail: { patientId: safePatientId },
   }));
@@ -6292,7 +6294,9 @@ export const dataService = {
       maintenance_schedule_id: trial?.maintenance_schedule_id || trial?.maintenanceScheduleId || undefined,
       client_metadata: trial?.client_metadata || trial?.clientMetadata || {}
     };
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/trials', 'POST');
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/trials', 'POST');
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async saveAbaV3TrialRevision(input: any) {
@@ -6316,7 +6320,7 @@ export const dataService = {
       client_metadata: input?.client_metadata || input?.clientMetadata || {}
     };
     const queueEntityId = originalTrialId || originalClientEventId || clientRevisionEventId;
-    return await saveOfflineFirst(
+    const result = await saveOfflineFirst(
       clientRevisionEventId,
       data,
       'aba_v3',
@@ -6324,6 +6328,8 @@ export const dataService = {
       'POST',
       { queueEntityId }
     );
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async discardAbaV3FailedTrial(clientEventId: string) {
@@ -6387,7 +6393,9 @@ export const dataService = {
       metadata: action?.metadata || action?.client_metadata || action?.clientMetadata || {}
     };
     const queueEntityId = String(action?.causal_entity_id || action?.causalEntityId || action?.episode_event_id || action?.episodeEventId || clientEventId).trim() || clientEventId;
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/behavior-actions', 'POST', { queueEntityId });
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/behavior-actions', 'POST', { queueEntityId });
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async startAbaV3IntervalRun(input: any) {
@@ -6431,7 +6439,9 @@ export const dataService = {
       client_event_id: clientEventId,
       metadata: input?.metadata || {}
     };
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/observations`, 'POST', { queueEntityId: runId });
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/observations`, 'POST', { queueEntityId: runId });
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async finalizeAbaV3IntervalRun(input: any) {
@@ -6446,7 +6456,9 @@ export const dataService = {
       close_reason: input?.close_reason || input?.closeReason || 'CLIENT_COMPLETE',
       client_event_id: clientEventId
     };
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/finalize`, 'POST', { queueEntityId: runId });
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/finalize`, 'POST', { queueEntityId: runId });
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async getAbaV3TaskAnalysisDefinition(input: { patientId: string; sessionId: string; targetId: string }) {
@@ -6480,7 +6492,9 @@ export const dataService = {
       results: Array.isArray(input?.results) ? input.results : [],
       metadata: input?.metadata || {}
     };
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/task-analysis-runs', 'POST');
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/task-analysis-runs', 'POST');
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async getAbaV3SessionCollectionPlan(input: { patientId: string; sessionId: string; targetIds?: string[] }) {
@@ -6630,6 +6644,48 @@ export const dataService = {
       return { ...result, success: true };
     } catch (error: any) {
       return { success: false, error: error?.message || 'Não foi possível carregar o catálogo de gráficos ABA V3.', data: { targets: [] } };
+    }
+  },
+
+  async getAbaV3PatientOverview(patientId: string) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { targets: [], review_counts: { maintenance_probes: 0, ioa: 0 } } };
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente ABA V3 não identificado.', data: { targets: [], review_counts: { maintenance_probes: 0, ioa: 0 } } };
+    try {
+      const response = await fetchWithAuthRetry(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/overview`, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar o estado clínico ABA V3.', data: { targets: [], review_counts: { maintenance_probes: 0, ioa: 0 } } };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar o estado clínico ABA V3.', data: { targets: [], review_counts: { maintenance_probes: 0, ioa: 0 } } };
+    }
+  },
+
+  async getAbaV3ChartSeriesBundle(patientId: string, targetIds: string[], options: { days?: number; limit?: number } = {}) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { segments: [], available_metrics: [] } };
+    const safePatientId = String(patientId || '').trim();
+    const safeTargetIds = Array.from(new Set((Array.isArray(targetIds) ? targetIds : []).map((value) => String(value || '').trim()).filter(Boolean))).slice(0, 4);
+    if (!safePatientId || safeTargetIds.length < 1 || safeTargetIds.length > 3) return { success: false, error: 'Selecione entre 1 e 3 alvos ABA V3.', data: { segments: [], available_metrics: [] } };
+    const endpoint = endpointWithQuery(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/chart-series-bundle`, {
+      targetIds: safeTargetIds.join(','),
+      days: Math.max(1, Math.min(Number(options.days || 180), 365)),
+      limit: Math.max(1, Math.min(Number(options.limit || 120), 180))
+    });
+    try {
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar a comparação ABA V3.', data: { segments: [], available_metrics: [] } };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar a comparação ABA V3.', data: { segments: [], available_metrics: [] } };
     }
   },
 
