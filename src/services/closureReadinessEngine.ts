@@ -376,7 +376,15 @@ function buildPhaseSummary(
       actionableCount
     };
   }
-  if (phase === 'prefacturing_ready' || phase === 'closed_ready_for_prefacturing') {
+  if (phase === 'closed_ready_for_prefacturing') {
+    return {
+      title: 'Fechamento concluído',
+      message: 'Conferência concluída. Esta sessão não segue para Pré-guia TISS.',
+      status: 'ready',
+      actionableCount: 0
+    };
+  }
+  if (phase === 'prefacturing_ready') {
     return {
       title: 'Faturamento TISS',
       message: 'Pronto para Pré-guia TISS.',
@@ -552,7 +560,9 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     appointment.payerType
   ));
   const nonInsuranceFinancialContext = NON_INSURANCE_FINANCIAL_CONTEXTS.has(financialContextType);
-  const notBillable = Boolean(input.manualNotBillable) || NOT_BILLABLE_STATUSES.has(status) || NON_BILLABLE_FINANCIAL_CONTEXTS.has(financialContextType);
+  const attendanceNotBillable = NOT_BILLABLE_STATUSES.has(status);
+  const financiallyNotBillable = Boolean(input.manualNotBillable) || NON_BILLABLE_FINANCIAL_CONTEXTS.has(financialContextType);
+  const notBillable = attendanceNotBillable || financiallyNotBillable;
   const unknown = !patientId && !scheduledStart && !input.appointmentId && !input.abaSessionId;
 
   const durationVariance = scheduledMinutes !== null && actualMinutes !== null
@@ -594,10 +604,10 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   checklist.push(buildCheck(
     'session_completed',
     'Sessão concluída',
-    notBillable ? 'NOT_APPLICABLE' : concluded ? 'PASSED' : futureOrOpen ? 'NOT_APPLICABLE' : 'FAILED',
+    attendanceNotBillable ? 'NOT_APPLICABLE' : concluded ? 'PASSED' : futureOrOpen ? 'NOT_APPLICABLE' : 'FAILED',
     true,
     'CRITICAL',
-    notBillable ? 'Sessão não faturável.' : concluded ? 'Sessão concluída.' : futureOrOpen ? 'Sessão ainda em aberto.' : 'Sessão ainda não consta como concluída.',
+    attendanceNotBillable ? 'Sessão cancelada ou ausência: conclusão clínica não se aplica.' : concluded ? 'Sessão concluída.' : futureOrOpen ? 'Sessão ainda em aberto.' : 'Sessão ainda não consta como concluída.',
     { status }
   ));
   checklist.push(buildCheck(
@@ -762,11 +772,27 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   checklist.push(buildCheck(
     'status_billable',
     'Status compatível com faturamento',
-    notBillable ? 'FAILED' : concluded ? 'PASSED' : futureOrOpen ? 'NOT_APPLICABLE' : 'WARNING',
-    true,
-    notBillable ? 'CRITICAL' : 'MEDIUM',
-    notBillable ? 'Sessão cancelada ou falta: não faturável.' : concluded ? 'Status compatível com conferência.' : futureOrOpen ? 'Sessão em aberto.' : 'Status da sessão exige conferência.',
-    { status }
+    attendanceNotBillable
+      ? 'FAILED'
+      : financiallyNotBillable
+        ? 'NOT_APPLICABLE'
+        : concluded
+          ? 'PASSED'
+          : futureOrOpen
+            ? 'NOT_APPLICABLE'
+            : 'WARNING',
+    !financiallyNotBillable,
+    attendanceNotBillable ? 'CRITICAL' : financiallyNotBillable ? 'LOW' : 'MEDIUM',
+    attendanceNotBillable
+      ? 'Sessão cancelada ou falta: não faturável.'
+      : financiallyNotBillable
+        ? 'Contexto financeiro sem faturamento: esta sessão não segue para cobrança.'
+        : concluded
+          ? 'Status compatível com conferência.'
+          : futureOrOpen
+            ? 'Sessão em aberto.'
+            : 'Status da sessão exige conferência.',
+    { status, financialContextType: financialContextType || null }
   ));
   checklist.push(buildCheck(
     'no_pending_reschedule_or_cancellation',
@@ -778,7 +804,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     { present: hasPendingRescheduleOrCancellation }
   ));
 
-  let phase: AppointmentOperationalPhase = notBillable
+  let phase: AppointmentOperationalPhase = attendanceNotBillable
     ? 'cancelled'
     : concluded
       ? 'completed_pending_closure'
@@ -800,7 +826,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     };
   });
   let operationalChecklist = classifyChecklist(phase);
-  if (concluded && !notBillable) {
+  if (concluded && !attendanceNotBillable) {
     const hasPostSessionIssues = operationalChecklist.some((item) =>
       item.section === 'postSession' &&
       (item.operationalStatus === 'blocking_now' || item.operationalStatus === 'actionable_now')
@@ -835,7 +861,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
   const operationalView = buildAppointmentClosureOperationalView(operationalChecklist, phase);
 
   const contextHash = stableHash({
-    engineVersion: 'operational-phases-v2-split-payer-documents',
+    engineVersion: 'operational-phases-v3-split-attendance-billability',
     organizationId: input.organizationId,
     appointmentId: input.appointmentId,
     abaSessionId: input.abaSessionId,
@@ -851,6 +877,7 @@ export function evaluateAppointmentClosureReadiness(input: AppointmentClosureInp
     guideNumber,
     payerId: requirements.payerId || appointment.payer_id || appointment.payerId || null,
     financialContextType: financialContextType || null,
+    manualNotBillable: Boolean(input.manualNotBillable),
     payerRequirementSource: requirements.payerRequirementSource || null,
     appliedPayerRequirementId: requirements.appliedPayerRequirementId || null,
     requireAuthorizationBeforeSession: requirements.requireAuthorizationBeforeSession,

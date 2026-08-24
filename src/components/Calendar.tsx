@@ -768,7 +768,7 @@ export const getAppointmentClosureOperationalView = (event: any, detail: any = n
     completed_pending_closure: { title: 'Fechamento da sessão', message: `${actionableCount} pendência(s) para concluir o fechamento.`, status: 'blocked' },
     prefacturing_blocked: { title: 'Faturamento TISS', message: `${actionableCount} bloqueio(s) para Pré-guia TISS.`, status: 'blocked' },
     prefacturing_ready: { title: 'Faturamento TISS', message: 'Pronto para Pré-guia TISS.', status: 'ready' },
-    closed_ready_for_prefacturing: { title: 'Faturamento TISS', message: 'Pronto para Pré-guia TISS.', status: 'ready' },
+    closed_ready_for_prefacturing: { title: 'Fechamento concluído', message: 'Conferência concluída. Esta sessão não segue para Pré-guia TISS.', status: 'ready' },
     cancelled: {
       title: 'Sessão cancelada',
       message: cancellationState.message || 'Esta sessão foi cancelada.',
