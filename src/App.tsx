@@ -57,7 +57,6 @@ import { persistPushRenewalContext } from './services/pushSubscriptionRenewal';
 import { SALES_CONTACT_REQUIRED_ERROR } from './constants/salesCommercial';
 import { decodeClinicalTextEntities } from './utils/clinicalText';
 import { patientMatchesProfessionalFilter } from './utils/patientList';
-import { buildPatientPortalViewportContent, resolvePatientPortalViewportWidth } from './utils/patientPortalViewport';
 import { resolvePatientNoteAudience, toStoredPatientNoteVisibility } from './utils/patientNoteVisibility';
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from './constants/organizationModules';
 
@@ -406,6 +405,8 @@ export default function App() {
   const isResetPasswordRoute =
     typeof window !== 'undefined' &&
     (/^\/reset-password\/?$/.test(window.location.pathname) || authAction === 'recovery');
+  const isAccessGatewayRoute =
+    typeof window !== 'undefined' && /^\/entrar\/?$/i.test(window.location.pathname);
   const invitationMode = typeof window !== 'undefined'
     ? String(new URLSearchParams(window.location.search).get('invite_mode') || '').trim().toLowerCase()
     : '';
@@ -480,7 +481,6 @@ export default function App() {
   const LAST_ACTIVE_ACCESS_CONTEXT_KEY = 'verto.last_active_access_context';
   const INSTALL_PROMPT_DISMISSED_KEY = 'verto_pwa_install_prompt_dismissed_at';
   const PATIENT_SESSION_HINT_KEY = 'verto.patient-portal-session-hint.v1';
-  const PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY = 'verto.patient-viewport-bootstrap-reload.v1';
   const [patientSessionRestorePending, setPatientSessionRestorePending] = useState(() => {
     try {
       return Boolean(window.localStorage.getItem(PATIENT_SESSION_HINT_KEY));
@@ -489,71 +489,6 @@ export default function App() {
     }
   });
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    const role = String(user?.role || '').trim().toLowerCase();
-    const patientPortalViewportActive = patientSessionRestorePending || ['patient', 'responsible', 'responsavel', 'guardian'].includes(role);
-    if (!patientPortalViewportActive) return;
-
-    const viewport = document.querySelector('meta[name="viewport"]');
-    const root = document.getElementById('root');
-    const html = document.documentElement;
-    const body = document.body;
-    if (!viewport || !root) return;
-
-    const previousRootZoom = root.style.getPropertyValue('zoom');
-    const previousRootWidth = root.style.width;
-    const previousRootMaxWidth = root.style.maxWidth;
-    const previousHtmlOverflowX = html.style.overflowX;
-    const previousBodyOverflowX = body.style.overflowX;
-    const previousBodyTouchAction = body.style.touchAction;
-    const previousHtmlOverscrollX = html.style.overscrollBehaviorX;
-    const previousBodyOverscrollX = body.style.overscrollBehaviorX;
-
-    const touchCapable = Boolean(
-      Number(navigator.maxTouchPoints || 0) > 0 ||
-      window.matchMedia?.('(pointer: coarse)')?.matches
-    );
-    const screenWidth = Number(window.screen?.width || 0);
-    const stableViewport = buildPatientPortalViewportContent({ screenWidth, touchCapable });
-    const defaultViewport = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes, viewport-fit=cover';
-
-    const normalizeViewport = () => {
-      // The parser-level bootstrap owns the initial mobile scale. React only keeps the same
-      // numeric-width contract after orientation/pageshow; it never applies CSS zoom or
-      // toggles user-scalable at runtime.
-      root.style.width = '100%';
-      root.style.maxWidth = '100%';
-      root.style.removeProperty('zoom');
-      viewport.setAttribute('content', stableViewport);
-      window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' });
-    };
-
-    html.style.overflowX = 'clip';
-    body.style.overflowX = 'clip';
-    html.style.overscrollBehaviorX = 'none';
-    body.style.overscrollBehaviorX = 'none';
-    body.style.touchAction = 'pan-y pinch-zoom';
-    normalizeViewport();
-
-    window.addEventListener('orientationchange', normalizeViewport);
-    window.addEventListener('pageshow', normalizeViewport);
-
-    return () => {
-      window.removeEventListener('orientationchange', normalizeViewport);
-      window.removeEventListener('pageshow', normalizeViewport);
-      viewport.setAttribute('content', defaultViewport);
-      root.style.width = previousRootWidth;
-      root.style.maxWidth = previousRootMaxWidth;
-      if (previousRootZoom) root.style.setProperty('zoom', previousRootZoom);
-      else root.style.removeProperty('zoom');
-      html.style.overflowX = previousHtmlOverflowX;
-      body.style.overflowX = previousBodyOverflowX;
-      body.style.touchAction = previousBodyTouchAction;
-      html.style.overscrollBehaviorX = previousHtmlOverscrollX;
-      body.style.overscrollBehaviorX = previousBodyOverscrollX;
-    };
-  }, [patientSessionRestorePending, user?.role, user?.id]);
 
   const getLastActiveAccessContextId = (userId?: string | null) => {
     const safeUserId = String(userId || '').trim();
@@ -1228,32 +1163,11 @@ export default function App() {
       try {
         if (isPatientPortalSession) {
           window.localStorage.setItem(PATIENT_SESSION_HINT_KEY, String(Date.now()));
-
-          // On the very first patient login the parser-level viewport bootstrap could not run,
-          // because the session hint did not exist yet. Reload exactly once on touch/mobile so
-          // the next document parses with the physical screen width before React paints.
-          const touchCapable = Boolean(
-            Number(navigator.maxTouchPoints || 0) > 0 ||
-            window.matchMedia?.('(pointer: coarse)')?.matches
-          );
-          const screenWidth = Number(window.screen?.width || 0);
-          const mobileWidth = resolvePatientPortalViewportWidth({ screenWidth, touchCapable });
-          const bootstrappedWidth = Number((window as any).__VERTO_PATIENT_VIEWPORT_BOOTSTRAPPED__ || 0);
-          const reloadGuard = String(window.sessionStorage.getItem(PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY) || '');
-          const userId = String(nextUser?.id || 'patient');
-
-          if (mobileWidth && bootstrappedWidth !== mobileWidth && reloadGuard !== userId) {
-            window.sessionStorage.setItem(PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY, userId);
-            window.setTimeout(() => window.location.replace(window.location.href), 0);
-          } else if (bootstrappedWidth === mobileWidth) {
-            window.sessionStorage.removeItem(PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY);
-          }
         } else {
           window.localStorage.removeItem(PATIENT_SESSION_HINT_KEY);
-          window.sessionStorage.removeItem(PATIENT_VIEWPORT_BOOTSTRAP_RELOAD_KEY);
         }
       } catch {
-        // Viewport hint is UX-only. The secure session remains server-side.
+        // Session hint is UX-only. The secure session remains server-side.
       }
       setProfilePicture(nextUser?.profilePicture || nextUser?.profile_picture || null);
       setCrp(formatProfessionalRegistry(nextUser?.crp || ''));
@@ -7941,6 +7855,9 @@ export default function App() {
     setTherapistNotes([]);
     setProtocols([]);
     setProfilePicture(null);
+    if (isRunningStandalone()) {
+      window.history.replaceState({}, document.title, '/entrar');
+    }
     setUser(null);
     setShowWorkspacePicker(false);
     window.setTimeout(() => {
@@ -8326,7 +8243,11 @@ export default function App() {
               <p className="text-sm font-semibold text-slate-500">Restaurando seu portal neste aparelho...</p>
             </div>
           ) : (
-            <LandingPage onLogin={handleLoginSuccess} setUser={setUser} />
+            <LandingPage
+              onLogin={handleLoginSuccess}
+              setUser={setUser}
+              accessOnly={isAccessGatewayRoute || isRunningStandalone()}
+            />
           )
         ) : user?.isPlatformAdmin === true ? (
           <SuperAdminDashboard onLogout={handleLogout} />

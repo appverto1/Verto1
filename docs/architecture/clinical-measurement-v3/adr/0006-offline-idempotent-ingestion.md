@@ -1,13 +1,13 @@
 # ADR-0006 — Offline and Idempotent Bulk Ingestion
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-08-20  
 **Decision owners:** Clinical Measurement Architecture  
 **Scope:** Clinical Measurement Engine V3  
 **Related ADRs:** ADR-0001, ADR-0002, ADR-0003, ADR-0007  
 **Supersedes:** —  
 **Superseded by:** —  
-**Implementation status:** Not started  
+**Implementation status:** Implemented — production baseline (2026-08-23)  
 
 ## Context
 

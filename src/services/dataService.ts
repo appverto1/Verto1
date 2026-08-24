@@ -31,6 +31,7 @@ import {
   PATIENT_LIST_INVALID_RESPONSE_CODE,
 } from '../utils/patientList';
 import type { NewFeatureKey } from '../constants/featureMetadata';
+import { invalidateClinicalAnalyticsPatient } from './clinicalAnalyticsQueryCache';
 
 enum OperationType {
   CREATE = 'create',
@@ -601,6 +602,16 @@ function normalizeClinicalMutationResult(result: any, fallback: string) {
     return { ...result, error: message, message };
   }
   return result;
+}
+
+function notifyClinicalOutcomesChanged(patientId: string) {
+  const safePatientId = String(patientId || '').trim();
+  if (!safePatientId) return;
+  invalidateClinicalAnalyticsPatient(safePatientId, 'all');
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent('verto:clinical-outcomes-changed', {
+    detail: { patientId: safePatientId },
+  }));
 }
 
 const abaDecisionIdempotencyKeys = new Map<string, string>();
@@ -1996,11 +2007,18 @@ export const dataService = {
           details: null
         };
       }
+      const responseErrorCode =
+        result?.code ||
+        result?.error_code ||
+        (typeof result?.error === 'string' && /^[A-Z0-9_]+$/.test(result.error) ? result.error : undefined);
       return {
         success: false,
         status: response.status,
-        code: result?.code || result?.error_code || undefined,
-        error: normalizeApiErrorMessage(result?.error || result?.message || 'Não foi possível criar o acesso do paciente'),
+        code: responseErrorCode,
+        requiresReauthentication:
+          response.status === 401 &&
+          ['SERVER_SESSION_REQUIRED', 'SESSION_REVOKED'].includes(String(responseErrorCode || '')),
+        error: normalizeApiErrorMessage(result?.message || result?.error || 'Não foi possível criar o acesso do paciente'),
         details: result
       };
     } catch (error) {
@@ -2200,8 +2218,9 @@ export const dataService = {
   async getRelationshipConfirmation(token: string) {
     try {
       const response = await fetch(`/api/portal/relationship-confirmations/${encodeURIComponent(token)}`, {
-        headers: await getAuthHeaders(),
-        credentials: 'include'
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
       });
       return await safeJson(response);
     } catch (error) {
@@ -2582,24 +2601,104 @@ export const dataService = {
 
   async completeAbaSession(sessionId: string, payload: any) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ id: String(sessionId), ...(payload || {}) });
-    const response = await fetchClinical(
-      `/api/aba/sessions/${encodeURIComponent(String(sessionId))}/complete`,
-      {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload || {})
-      },
-      {
-        helperName: 'completeAbaSession',
-        operation: 'write',
-        table: 'aba_sessions,aba_session_summaries,appointments,appointment_attendance_audit_events,appointment_closure_checks',
-        hasExplicitColumns: true,
-        requiresPatientOrSession: true
+    const safeSessionId = String(sessionId || '').trim();
+    const completionEndpoint = `/api/aba/sessions/${encodeURIComponent(safeSessionId)}/complete`;
+    const requestCompletion = async () => {
+      const response = await fetchClinical(
+        completionEndpoint,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload || {})
+        },
+        {
+          helperName: 'completeAbaSession',
+          operation: 'write',
+          table: 'aba_sessions,aba_session_summaries,appointments,appointment_attendance_audit_events,appointment_closure_checks',
+          hasExplicitColumns: true,
+          requiresPatientOrSession: true
+        }
+      );
+      const result = await response.json().catch(() => ({}));
+      return { response, result };
+    };
+
+    let completionAttempt = await requestCompletion();
+    const missingServerSession =
+      completionAttempt.response.status === 404 &&
+      completionAttempt.result?.code === 'SESSION_COMPLETION_NOT_FOUND' &&
+      completionAttempt.result?.missingResource === 'session' &&
+      completionAttempt.result?.recoverable === true;
+
+    if (missingServerSession) {
+      const recoveryStartedAt = String(
+        payload?.started_at ||
+        payload?.startedAt ||
+        payload?.summary?.startedAt ||
+        ''
+      ).trim();
+      if (!recoveryStartedAt) {
+        return {
+          success: false,
+          status: 409,
+          code: 'SESSION_COMPLETION_SESSION_RECOVERY_CONTEXT_MISSING',
+          error: 'A sessão não foi encontrada no servidor e o horário de início não está disponível para uma recuperação segura.'
+        };
       }
-    );
-    const result = await response.json().catch(() => ({}));
-    return response.ok ? result : { success: false, status: response.status, ...result };
+
+      const recoveryAppointmentId = payload?.appointment_id || payload?.appointmentId || undefined;
+      const recoveryTherapistId = payload?.therapist_id || payload?.therapistId || undefined;
+      const recoveryResult = await dataService.saveAbaSession({
+        id: safeSessionId,
+        patient_id: payload?.patient_id || payload?.patientId,
+        patientId: payload?.patientId || payload?.patient_id,
+        clinic_id: payload?.clinic_id || payload?.clinicId,
+        clinicId: payload?.clinicId || payload?.clinic_id,
+        appointment_id: recoveryAppointmentId,
+        appointmentId: recoveryAppointmentId,
+        therapist_id: recoveryTherapistId,
+        therapistId: recoveryTherapistId,
+        professional_id: recoveryTherapistId,
+        professionalId: recoveryTherapistId,
+        scheduled_start: payload?.scheduled_start || payload?.scheduledStart || payload?.scheduled_start_at || payload?.scheduledStartAt,
+        scheduled_start_at: payload?.scheduled_start_at || payload?.scheduledStartAt || payload?.scheduled_start || payload?.scheduledStart,
+        scheduled_end: payload?.scheduled_end || payload?.scheduledEnd || payload?.scheduled_end_at || payload?.scheduledEndAt,
+        scheduled_end_at: payload?.scheduled_end_at || payload?.scheduledEndAt || payload?.scheduled_end || payload?.scheduledEnd,
+        scheduled_duration_minutes: payload?.scheduled_duration_minutes || payload?.scheduledDurationMinutes,
+        actual_start: recoveryStartedAt,
+        actual_start_at: recoveryStartedAt,
+        started_at: recoveryStartedAt,
+        startedAt: recoveryStartedAt,
+        reference_date: payload?.reference_date || payload?.referenceDate,
+        referenceDate: payload?.referenceDate || payload?.reference_date,
+        status: 'active',
+        source: recoveryAppointmentId ? 'appointment' : 'verto_web',
+        clientSource: recoveryAppointmentId ? 'appointment' : 'verto_web'
+      });
+
+      const recoveryConfirmed =
+        recoveryResult?.success === true &&
+        recoveryResult?.pending !== true &&
+        recoveryResult?.offline !== true;
+      if (!recoveryConfirmed) {
+        return {
+          success: false,
+          status: recoveryResult?.status || 503,
+          code: recoveryResult?.code || 'SESSION_COMPLETION_SESSION_RECOVERY_PENDING',
+          retryable: Boolean(recoveryResult?.pending || recoveryResult?.offline),
+          error: recoveryResult?.error || 'A sessão ainda está sendo sincronizada com o servidor. Tente encerrar novamente em instantes.'
+        };
+      }
+
+      // Retry exactly once, only after the canonical session-start contract confirms
+      // the same session id on the server. Appointment-not-found errors are never healed here.
+      completionAttempt = await requestCompletion();
+    }
+
+    return completionAttempt.response.ok
+      ? completionAttempt.result
+      : { success: false, status: completionAttempt.response.status, ...completionAttempt.result };
   },
 
   async reopenAppointmentNoShow(appointmentId: string, payload: any) {
@@ -5911,7 +6010,9 @@ export const dataService = {
         table: 'clinical_observations,patient_therapeutic_plans,patient_professional_links',
         hasExplicitColumns: true,
       });
-      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível registrar a evidência clínica.');
+      const result = normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível registrar a evidência clínica.');
+      if (result?.success !== false) notifyClinicalOutcomesChanged(patientId);
+      return result;
     } catch (error) {
       const message = getApiErrorMessage(error, 'Não foi possível registrar a evidência clínica.');
       return { success: false, error: message, message };
@@ -5921,16 +6022,19 @@ export const dataService = {
   async getClinicalOutcomesDashboard(patientId: string, options: any = {}) {
     const endpoint = endpointWithQuery(`/api/patients/${encodeURIComponent(String(patientId))}/clinical-outcomes-dashboard`, {
       days: options.days,
+      dateFrom: options.dateFrom,
+      dateTo: options.dateTo,
       planId: options.planId,
     });
     try {
       const response = await fetchClinical(endpoint, {
-        headers: await buildConditionalHeaders(endpoint, 'aba'),
+        headers: await getNoStoreAuthHeaders(),
         credentials: 'include',
+        cache: 'no-store',
       }, {
         helperName: 'getClinicalOutcomesDashboard',
         operation: 'list',
-        table: 'patient_therapeutic_plans,clinical_measure_definitions,clinical_observations,clinical_goal_contributions,clinical_plan_phases,aba_session_metric_snapshots',
+        table: 'patient_therapeutic_plans,read_clinical_outcomes_converged_v3,clinical_measure_definitions,clinical_observations,clinical_goal_contributions,clinical_plan_phases,aba_session_metric_snapshots',
         hasExplicitColumns: true,
       });
       return await safeJson(response);
@@ -6190,7 +6294,9 @@ export const dataService = {
       maintenance_schedule_id: trial?.maintenance_schedule_id || trial?.maintenanceScheduleId || undefined,
       client_metadata: trial?.client_metadata || trial?.clientMetadata || {}
     };
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/trials', 'POST');
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/trials', 'POST');
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async saveAbaV3TrialRevision(input: any) {
@@ -6214,7 +6320,7 @@ export const dataService = {
       client_metadata: input?.client_metadata || input?.clientMetadata || {}
     };
     const queueEntityId = originalTrialId || originalClientEventId || clientRevisionEventId;
-    return await saveOfflineFirst(
+    const result = await saveOfflineFirst(
       clientRevisionEventId,
       data,
       'aba_v3',
@@ -6222,6 +6328,8 @@ export const dataService = {
       'POST',
       { queueEntityId }
     );
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async discardAbaV3FailedTrial(clientEventId: string) {
@@ -6285,7 +6393,9 @@ export const dataService = {
       metadata: action?.metadata || action?.client_metadata || action?.clientMetadata || {}
     };
     const queueEntityId = String(action?.causal_entity_id || action?.causalEntityId || action?.episode_event_id || action?.episodeEventId || clientEventId).trim() || clientEventId;
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/behavior-actions', 'POST', { queueEntityId });
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/behavior-actions', 'POST', { queueEntityId });
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async startAbaV3IntervalRun(input: any) {
@@ -6329,7 +6439,9 @@ export const dataService = {
       client_event_id: clientEventId,
       metadata: input?.metadata || {}
     };
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/observations`, 'POST', { queueEntityId: runId });
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/observations`, 'POST', { queueEntityId: runId });
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async finalizeAbaV3IntervalRun(input: any) {
@@ -6344,7 +6456,9 @@ export const dataService = {
       close_reason: input?.close_reason || input?.closeReason || 'CLIENT_COMPLETE',
       client_event_id: clientEventId
     };
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/finalize`, 'POST', { queueEntityId: runId });
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', `/api/aba/v3/interval-runs/${encodeURIComponent(runId)}/finalize`, 'POST', { queueEntityId: runId });
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async getAbaV3TaskAnalysisDefinition(input: { patientId: string; sessionId: string; targetId: string }) {
@@ -6378,7 +6492,9 @@ export const dataService = {
       results: Array.isArray(input?.results) ? input.results : [],
       metadata: input?.metadata || {}
     };
-    return await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/task-analysis-runs', 'POST');
+    const result = await saveOfflineFirst(clientEventId, data, 'aba_v3', '/api/aba/v3/task-analysis-runs', 'POST');
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
   },
 
   async getAbaV3SessionCollectionPlan(input: { patientId: string; sessionId: string; targetIds?: string[] }) {
@@ -6405,6 +6521,67 @@ export const dataService = {
       return { success: false, error: error?.message || 'Não foi possível carregar o plano de coleta ABA V3.', data: { targets: [], v3_behavior_ids: [], complete: false } };
     }
   },
+
+  async saveClinicalPlanMeasurementV3(patientId: string, payload: any = {}) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente não identificado.', data: null };
+    try {
+      const response = await fetchWithAuthRetry(`/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/plan-measurements`, {
+        method: 'POST',
+        headers: { ...(await getNoStoreAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return { success: false, status: response.status, code: result?.error, error: result?.message || result?.error || 'Não foi possível registrar a medição clínica V3.', data: null };
+      }
+      const successResult = { ...result, success: true };
+      notifyClinicalOutcomesChanged(safePatientId);
+      return successResult;
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível registrar a medição clínica V3.', data: null };
+    }
+  },
+
+  async getClinicalPlanOutcomesV3(patientId: string, options: { days?: number; planId?: string } = {}) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente não identificado.', data: { rows: [] } };
+    const endpoint = endpointWithQuery(`/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/plan-outcomes`, {
+      days: Math.max(7, Math.min(Number(options.days || 90), 730)),
+      planId: String(options.planId || '').trim() || undefined,
+    });
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+      }, {
+        helperName: 'getClinicalPlanOutcomesV3',
+        operation: 'list',
+        table: 'read_clinical_outcomes_converged_v3',
+        hasExplicitColumns: true,
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) {
+        return {
+          success: false,
+          status: response.status,
+          code: result?.error,
+          error: result?.message || result?.error || 'Não foi possível carregar as séries clínicas V3.',
+          data: { rows: [] },
+        };
+      }
+      return { ...result, success: true };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error?.message || 'Não foi possível carregar as séries clínicas V3.',
+        data: { rows: [] },
+      };
+    }
+  },
+
 
   async getClinicalMeasurementV3Catalog(patientId: string) {
     if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'Clinical Measurement V3 UI desabilitada.', data: { targets: [] } };
@@ -6467,6 +6644,48 @@ export const dataService = {
       return { ...result, success: true };
     } catch (error: any) {
       return { success: false, error: error?.message || 'Não foi possível carregar o catálogo de gráficos ABA V3.', data: { targets: [] } };
+    }
+  },
+
+  async getAbaV3PatientOverview(patientId: string) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { targets: [], review_counts: { maintenance_probes: 0, ioa: 0 } } };
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, error: 'Paciente ABA V3 não identificado.', data: { targets: [], review_counts: { maintenance_probes: 0, ioa: 0 } } };
+    try {
+      const response = await fetchWithAuthRetry(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/overview`, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar o estado clínico ABA V3.', data: { targets: [], review_counts: { maintenance_probes: 0, ioa: 0 } } };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar o estado clínico ABA V3.', data: { targets: [], review_counts: { maintenance_probes: 0, ioa: 0 } } };
+    }
+  },
+
+  async getAbaV3ChartSeriesBundle(patientId: string, targetIds: string[], options: { days?: number; limit?: number } = {}) {
+    if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'ABA V3 UI desabilitada.', data: { segments: [], available_metrics: [] } };
+    const safePatientId = String(patientId || '').trim();
+    const safeTargetIds = Array.from(new Set((Array.isArray(targetIds) ? targetIds : []).map((value) => String(value || '').trim()).filter(Boolean))).slice(0, 4);
+    if (!safePatientId || safeTargetIds.length < 1 || safeTargetIds.length > 3) return { success: false, error: 'Selecione entre 1 e 3 alvos ABA V3.', data: { segments: [], available_metrics: [] } };
+    const endpoint = endpointWithQuery(`/api/aba/v3/patients/${encodeURIComponent(safePatientId)}/chart-series-bundle`, {
+      targetIds: safeTargetIds.join(','),
+      days: Math.max(1, Math.min(Number(options.days || 180), 365)),
+      limit: Math.max(1, Math.min(Number(options.limit || 120), 180))
+    });
+    try {
+      const response = await fetchWithAuthRetry(endpoint, {
+        method: 'GET',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.code, error: result?.error || 'Não foi possível carregar a comparação ABA V3.', data: { segments: [], available_metrics: [] } };
+      return { ...result, success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Não foi possível carregar a comparação ABA V3.', data: { segments: [], available_metrics: [] } };
     }
   },
 

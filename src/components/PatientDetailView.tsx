@@ -45,6 +45,7 @@ import { debugEligibleRowsRender, debugFallbackTriggered } from '../utils/debugP
 import {
   buildAppointmentDateTime,
   calculateAppointmentEnd,
+  formatDateInAppointmentTimezone,
   getAppointmentDurationMinutes,
 } from '../utils/scheduling';
 import {
@@ -534,7 +535,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [primaryProfessionalError, setPrimaryProfessionalError] = useState('');
   const [caseTeamRefreshKey, setCaseTeamRefreshKey] = useState(0);
   const [caseTeamManagementAllowed, setCaseTeamManagementAllowed] = useState(false);
+  const [caseTeamLinksSnapshot, setCaseTeamLinksSnapshot] = useState<any[]>([]);
+  const [showChartsCaseTeam, setShowChartsCaseTeam] = useState(false);
   const primaryProfessionalOverrideRef = React.useRef<string | null | undefined>(undefined);
+
+  const activeCaseTeamLinks = useMemo(
+    () => caseTeamLinksSnapshot.filter((link: any) => String(link?.status || '').toLowerCase() === 'active'),
+    [caseTeamLinksSnapshot],
+  );
+  const caseTeamIntegrityPendingCount = useMemo(
+    () => activeCaseTeamLinks.filter((link: any) => Boolean(link?.integrityStatus) || link?.accessEnabled === false).length,
+    [activeCaseTeamLinks],
+  );
+
+  useEffect(() => {
+    setShowChartsCaseTeam(false);
+    setCaseTeamLinksSnapshot([]);
+  }, [patient?.id]);
 
   const historyRange = useMemo(
     () => resolvePatientHistoryRange(historyPeriod, historyCustomFrom, historyCustomTo),
@@ -1194,7 +1211,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const handleCaseTeamLinksChanged = (links: any[]) => {
-    const primaryLink = (Array.isArray(links) ? links : []).find((link: any) =>
+    const normalizedLinks = Array.isArray(links) ? links : [];
+    setCaseTeamLinksSnapshot(normalizedLinks);
+    const primaryLink = normalizedLinks.find((link: any) =>
       String(link?.status || '').toLowerCase() === 'active'
       && String(link?.relationship_type || '').toLowerCase() === 'primary'
     );
@@ -2157,7 +2176,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       location_type: scheduledSessionForPatient?.locationType || scheduledSessionForPatient?.location_type || scheduledSessionForPatient?.location || null,
       startedAt: startedAt.toISOString(),
       endsAt: endsAt.toISOString(),
-      referenceDate: startedAt.toISOString().slice(0, 10),
+      referenceDate: formatDateInAppointmentTimezone(startedAt) || startedAt.toISOString().slice(0, 10),
       recordCount: 0
     };
     persistActiveSession(nextSession);
@@ -2288,18 +2307,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         return;
       }
       const savedSession = saveResult?.session || saveResult?.data;
-      if (saveResult?.success && savedSession?.id && String(savedSession.id) !== String(nextSession.id)) {
+      if (saveResult?.success && savedSession?.id) {
+        const serverReferenceDate = savedSession.reference_date || savedSession.referenceDate || nextSession.referenceDate;
         persistActiveSession({
           ...nextSession,
           id: String(savedSession.id),
           status: savedSession.status || nextSession.status,
           startedAt: savedSession.actual_start_at || savedSession.started_at || nextSession.startedAt,
+          referenceDate: serverReferenceDate,
+          reference_date: serverReferenceDate,
           appointmentId: savedSession.appointment_id || nextSession.appointmentId,
           appointment_id: savedSession.appointment_id || nextSession.appointment_id,
           scheduledStart: savedSession.scheduled_start_at || nextSession.scheduledStart,
           scheduled_start: savedSession.scheduled_start_at || nextSession.scheduled_start,
           scheduledEnd: savedSession.scheduled_end_at || nextSession.scheduledEnd,
-          scheduled_end: savedSession.scheduled_end_at || nextSession.scheduled_end
+          scheduled_end: savedSession.scheduled_end_at || nextSession.scheduled_end,
+          locationContextSnapshot: savedSession.location_context_snapshot || nextSession.locationContextSnapshot,
+          location_context_snapshot: savedSession.location_context_snapshot || nextSession.location_context_snapshot
         });
       }
     }
@@ -2618,12 +2642,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         }).then((saveResult: any) => {
           const savedSession = saveResult?.session || saveResult?.data;
           if (saveResult?.success && savedSession?.id) {
+            const serverReferenceDate = savedSession.reference_date || savedSession.referenceDate || linkedSession.referenceDate;
             persistActiveSession({
               ...linkedSession,
               id: String(savedSession.id),
               status: savedSession.status || linkedSession.status,
+              referenceDate: serverReferenceDate,
+              reference_date: serverReferenceDate,
               appointmentId: savedSession.appointment_id || scheduledAppointmentId,
-              appointment_id: savedSession.appointment_id || scheduledAppointmentId
+              appointment_id: savedSession.appointment_id || scheduledAppointmentId,
+              locationContextSnapshot: savedSession.location_context_snapshot || linkedSession.locationContextSnapshot,
+              location_context_snapshot: savedSession.location_context_snapshot || linkedSession.location_context_snapshot
             });
           }
         }).catch((error: any) => {
@@ -10112,6 +10141,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       </span>
                     )}
                   </div>
+                  {activeTab === 'aba-charts' && patient?.id && (
+                    <button
+                      type="button"
+                      aria-expanded={showChartsCaseTeam}
+                      aria-controls="patient-care-context"
+                      onClick={() => setShowChartsCaseTeam((current) => !current)}
+                      className={`mt-1.5 inline-flex min-h-9 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors ${isPanelDark
+                        ? 'border-slate-700 bg-slate-900/70 text-slate-300 hover:border-violet-500/50'
+                        : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-violet-200 hover:bg-violet-50'}`}
+                    >
+                      <span>Equipe · {activeCaseTeamLinks.length}</span>
+                      {caseTeamIntegrityPendingCount > 0 && (
+                        <span className={isPanelDark ? 'text-amber-300' : 'text-amber-700'}>· ⚠ {caseTeamIntegrityPendingCount}</span>
+                      )}
+                      <ChevronDown size={13} className={`transition-transform ${showChartsCaseTeam ? 'rotate-180' : ''}`} aria-hidden="true" />
+                    </button>
+                  )}
                   {patientPhotoError && (
                     <p role="alert" className="mt-1 text-[11px] font-medium text-rose-600">{patientPhotoError}</p>
                   )}
@@ -10206,7 +10252,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
           <div
             id="patient-care-context"
-            className={`mt-6 grid min-w-0 items-start gap-5 ${
+            className={`${activeTab === 'aba-charts' && !showChartsCaseTeam ? 'hidden' : 'mt-3 grid'} min-w-0 items-start gap-3 ${
               canManagePrimaryProfessionalForPatient
                 ? 'lg:grid-cols-[minmax(13rem,16rem)_minmax(0,1fr)]'
                 : ''
@@ -11999,7 +12045,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} showAbaV3Details={isKidsProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} />
+          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} showAbaV3Details={isKidsProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} />
         ) : activeTab === 'session' && isKidsProfile ? (
           null
         ) : activeTab === 'school' ? (

@@ -46,7 +46,7 @@ assert.match(detail, /patientPhotoPolicy === 'CLINIC'/);
 assert.match(detail, /Adicionar foto do paciente/);
 assert.match(detail, /portalPatientPhotoSource/);
 
-assert.match(indexHtml, /initial-scale=1, minimum-scale=1, user-scalable=yes/);
-assert.doesNotMatch(indexHtml, /user-scalable=no/);
+assert.match(indexHtml, /width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes/);
+assert.doesNotMatch(indexHtml, /minimum-scale=0/);
 
 console.log('patientRecordUxSmokeFix.regression.test.mjs: ok');

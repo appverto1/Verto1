@@ -951,17 +951,12 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
           severity: item.averageSeverity,
           note: `${item.completedEvents} ABC(s) preenchido(s)`
         }));
-  const abcMissingFromRecords = effectiveBehaviorRecords.filter((record) => (
-    measurementTypeOf(record) !== 'abc' &&
-    !isIntervalAggregate(record) &&
-    !hasAbc(record)
-  )).length;
-  const abcMissingFromSummary = (sessionSummary.abcSummary || [])
-    .reduce((sum, item) => sum + Math.max(0, Number(item.missingEvents || 0)), 0);
-  const abcMissingFromWarnings = (sessionSummary.warningItems || [])
+  // ABC is an optional clinical complement. Only preserve an explicit historical
+  // ABC warning already persisted in a prior summary; never infer a pending item
+  // merely because a behavior record has no ABC fields.
+  const abcPendingCount = (sessionSummary.warningItems || [])
     .filter((item) => String(item.key || '').includes('abc_missing'))
     .reduce((sum, item) => sum + Math.max(1, Number(item.count || 1)), 0);
-  const abcPendingCount = abcMissingFromRecords || abcMissingFromSummary || abcMissingFromWarnings;
   const unsyncedCount = sourceRecords.filter((record) => {
     const status = String(valueOf(record, 'syncStatus', 'sync_status') || '').toLowerCase();
     return status === 'local' || status === 'syncing' || status === 'error';
@@ -975,10 +970,6 @@ export const buildSessionReport = (sessionSummary: SessionSummary): SessionRepor
     ...(sessionSummary.blockingItems || []),
     ...(sessionSummary.warningItems || [])
   ];
-  if (abcPendingCount > 0 && !pendingItems.some((item) => String(item.key || '').includes('abc_missing'))) {
-    pendingItems.push({ key: 'abc_missing', label: `${abcPendingCount} ABC(s) pendente(s)`, category: 'warning', count: abcPendingCount });
-  }
-
   return {
     header: {
       patient: formatPatientLabel({ name: sessionSummary.patientName, patientName: sessionSummary.patientName, id: sessionSummary.patientId }),

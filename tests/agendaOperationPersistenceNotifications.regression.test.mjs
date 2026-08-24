@@ -109,8 +109,8 @@ assert.match(patientDashboard, /await persistPushRenewalContext/);
 
 assert.doesNotMatch(push, /badge: logoUrl \|\| undefined/);
 assert.match(patientDashboard, /w-full h-auto max-h-56 object-contain/);
-assert.match(app, /buildPatientPortalViewportContent/);
-assert.match(app, /root\.style\.width = '100%'/);
+assert.doesNotMatch(app, /buildPatientPortalViewportContent/);
+assert.match(app, /accessOnly=\{isAccessGatewayRoute \|\| isRunningStandalone\(\)\}/);
 assert.doesNotMatch(app, /root\.style\.transform = `scale/);
 assert.doesNotMatch(patientDashboard, /document\.querySelector\('meta\[name="viewport"\]'/);
 assert.match(server, /PATIENT_PORTAL_SESSION_MAX_AGE_DAYS/);

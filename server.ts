@@ -66,6 +66,7 @@ import {
   checkDistributedRuntimeState,
   issueDistributedSessionToken,
   releaseDistributedJobLease,
+  revokeAllDistributedSessionTokens,
   revokeDistributedSessionToken,
   tryAcquireDistributedJobLease,
   validateDistributedSessionToken
@@ -4824,23 +4825,55 @@ async function isActiveSessionToken(userId?: unknown, token?: unknown): Promise<
   return !current || current === safeToken;
 }
 
-async function invalidateActiveSession(userId?: unknown, expectedToken?: unknown): Promise<void> {
+async function invalidateCurrentSession(userId?: unknown, expectedToken?: unknown): Promise<void> {
   const safeUserId = sanitizeString(userId, 120);
-  if (!safeUserId) return;
   const safeExpectedToken = sanitizeString(expectedToken, 200);
+  if (!safeUserId || !safeExpectedToken) return;
   if (requiresDistributedRuntimeState()) {
     if (!supabase) throw new Error('DISTRIBUTED_RUNTIME_STATE_UNAVAILABLE');
-    await revokeDistributedSessionToken({
-      supabase,
-      userId: safeUserId,
-      expectedToken: safeExpectedToken || null
-    });
-    return;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await revokeDistributedSessionToken({
+          supabase,
+          userId: safeUserId,
+          expectedToken: safeExpectedToken
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+    }
+    throw lastError;
   }
   const current = activeSessionByUserId.get(safeUserId);
-  if (!safeExpectedToken || current === safeExpectedToken) {
+  if (current === safeExpectedToken) {
     activeSessionByUserId.delete(safeUserId);
   }
+}
+
+async function invalidateAllActiveSessions(userId?: unknown): Promise<void> {
+  const safeUserId = sanitizeString(userId, 120);
+  if (!safeUserId) return;
+  if (requiresDistributedRuntimeState()) {
+    if (!supabase) throw new Error('DISTRIBUTED_RUNTIME_STATE_UNAVAILABLE');
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await revokeAllDistributedSessionTokens({
+          supabase,
+          userId: safeUserId
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+    }
+    throw lastError;
+  }
+  activeSessionByUserId.delete(safeUserId);
 }
 
 function markOtpTableAvailability(available: boolean): void {
@@ -21506,7 +21539,7 @@ async function startServer() {
       if (req.session.user?.authPolicyVersion !== OWNER_MFA_POLICY_VERSION) {
         const legacySecurityProfile = await fetchMfaSecurityProfile(sessionUserId);
         if (legacySecurityProfile.error || !legacySecurityProfile.data) {
-          await invalidateActiveSession(sessionUserId, sessionToken);
+          await invalidateCurrentSession(sessionUserId, sessionToken);
           req.session.destroy(() => {});
           return res.status(503).json({
             error: 'OWNER_MFA_SCHEMA_UNAVAILABLE',
@@ -21517,7 +21550,7 @@ async function startServer() {
           sanitizeString(legacySecurityProfile.data.role, 40).toLowerCase() === 'owner' &&
           !hasVerifiedOwnerMfaSession({ ...req.session.user, role: 'owner' })
         ) {
-          await invalidateActiveSession(sessionUserId, sessionToken);
+          await invalidateCurrentSession(sessionUserId, sessionToken);
           req.session.destroy(() => {});
           return res.status(401).json({
             error: 'OWNER_MFA_REQUIRED',
@@ -21527,7 +21560,7 @@ async function startServer() {
         req.session.user.authPolicyVersion = OWNER_MFA_POLICY_VERSION;
       }
       if (!hasVerifiedOwnerMfaSession(req.session.user)) {
-        await invalidateActiveSession(sessionUserId, sessionToken);
+        await invalidateCurrentSession(sessionUserId, sessionToken);
         req.session.destroy(() => {});
         return res.status(401).json({
           error: 'OWNER_MFA_REQUIRED',
@@ -24808,6 +24841,8 @@ async function startServer() {
       "/auth/password/recovery/bootstrap",
       "/auth/password/recovery/email/request",
       "/auth/password/recovery/verify",
+      "/portal/auth/request-code",
+      "/portal/auth/verify-code",
       "/stripe/create-checkout-registration",
       "/public/sales-leads",
     ]);
@@ -25091,6 +25126,8 @@ async function startServer() {
       return res.status(400).json({ error: 'MFA_CHALLENGE_INVALID' });
     }
 
+    let issuedSessionToken = '';
+    let issuedSessionUserId = '';
     try {
       const challengeHash = hashAuthMfaChallenge(challengeId);
       const boundHash = sanitizeString(req.session?.mfaChallengeHash, 128);
@@ -25236,7 +25273,6 @@ async function startServer() {
         role: roleForSession,
         isPlatformAdmin: isPlatformAdminLogin,
         name: profile.name,
-        sessionToken: await issueSessionToken(boundUserId),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -25268,10 +25304,23 @@ async function startServer() {
       });
 
       await regenerateExpressSession(req);
+      issuedSessionUserId = boundUserId;
+      issuedSessionToken = await issueSessionToken(boundUserId);
+      userData.sessionToken = issuedSessionToken;
       req.session.user = userData;
       await saveExpressSession(req);
+      issuedSessionToken = '';
       return res.json({ success: true, user: userData });
     } catch (error: any) {
+      if (issuedSessionToken && issuedSessionUserId) {
+        try {
+          await invalidateCurrentSession(issuedSessionUserId, issuedSessionToken);
+        } catch (cleanupError: any) {
+          console.error('[MFA] failed to clean issued session token:', sanitizeString(cleanupError?.message || String(cleanupError), 220));
+        }
+        req.session.destroy(() => {});
+        res.clearCookie('verto-session');
+      }
       console.error('[MFA] login failed:', sanitizeString(error?.message, 200));
       return res.status(500).json({ error: 'MFA_LOGIN_FAILED' });
     }
@@ -26046,6 +26095,8 @@ async function startServer() {
     const email = sanitizeEmail(req.body?.email);
     const code = sanitizeString(req.body?.code, 12).replace(/\D/g, '');
     const genericError = { success: false, error: 'INVALID_CODE', message: 'Código inválido ou expirado.' };
+    let issuedSessionToken = '';
+    let issuedSessionUserId = '';
 
     try {
       if (!email || !/^\d{6}$/.test(code)) return res.status(400).json(genericError);
@@ -26106,7 +26157,6 @@ async function startServer() {
         email: authUser.email || email,
         role: roleForSession,
         name: profile.name || authUser.user_metadata?.full_name || email.split('@')[0],
-        sessionToken: await issueSessionToken(sanitizeString(authUser.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -26132,9 +26182,52 @@ async function startServer() {
         firstLoginCompleted: (profile.first_login_completed ?? authUser.user_metadata?.first_login_completed) ?? null,
         workspaces
       };
-      await consumeOtpChallenge(key);
-      req.session.user = await hydrateSessionUserWithOnboardingContext(userData);
+      const sessionUser = await hydrateSessionUserWithOnboardingContext(userData);
+      const challengeConsumed = await consumeOtpChallenge(key);
+      if (!challengeConsumed) return res.status(400).json(genericError);
+      issuedSessionUserId = sanitizeString(authUser.id, 120);
+      issuedSessionToken = await issueSessionToken(issuedSessionUserId);
+      sessionUser.sessionToken = issuedSessionToken;
+      req.session.user = sessionUser;
       req.session.cookie.maxAge = patientPortalSessionMaxAgeDays * 24 * 60 * 60 * 1000;
+      try {
+        await saveExpressSession(req);
+        issuedSessionToken = '';
+      } catch (firstSessionSaveError: any) {
+        console.warn(
+          '[PortalAuth] primeira persistência da sessão falhou; tentando novamente:',
+          sanitizeString(firstSessionSaveError?.message || String(firstSessionSaveError), 220)
+        );
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+          await saveExpressSession(req);
+          issuedSessionToken = '';
+        } catch (sessionSaveError: any) {
+          console.error(
+            '[PortalAuth] não foi possível persistir a sessão do portal:',
+            sanitizeString(sessionSaveError?.message || String(sessionSaveError), 220)
+          );
+          try {
+            await invalidateCurrentSession(
+              sanitizeString(authUser.id, 120),
+              issuedSessionToken
+            );
+            issuedSessionToken = '';
+          } catch (cleanupError: any) {
+            console.error(
+              '[PortalAuth] falha ao invalidar token após erro de sessão:',
+              sanitizeString(cleanupError?.message || String(cleanupError), 220)
+            );
+          }
+          req.session.destroy(() => {});
+          res.clearCookie('verto-session');
+          return res.status(503).json({
+            success: false,
+            error: 'PORTAL_SESSION_UNAVAILABLE',
+            message: 'Não foi possível iniciar sua sessão segura agora. Solicite um novo código e tente novamente.'
+          });
+        }
+      }
       await persistIdentityAuditLog({
         title: 'OTP do portal verificado',
         content: `Login por código do portal concluído para ${maskEmail(email)}.`,
@@ -26144,8 +26237,17 @@ async function startServer() {
         request: req,
         status: 'verified'
       });
-      return res.json({ success: true, user: userData });
+      return res.json({ success: true, user: req.session.user });
     } catch (error: any) {
+      if (issuedSessionToken && issuedSessionUserId) {
+        try {
+          await invalidateCurrentSession(issuedSessionUserId, issuedSessionToken);
+        } catch (cleanupError: any) {
+          console.error('[PortalAuth] falha ao limpar token emitido após erro:', sanitizeString(cleanupError?.message || String(cleanupError), 220));
+        }
+        req.session.destroy(() => {});
+        res.clearCookie('verto-session');
+      }
       console.warn('[PortalAuth] verify-code warning:', error?.message || String(error));
       return res.status(400).json(genericError);
     }
@@ -26324,11 +26426,15 @@ async function startServer() {
         return res.status(400).json(genericError);
       }
 
+      // Security barrier: do not rotate the Auth password unless the current Verto
+      // session has already been revoked. Revoke again after the external Auth write
+      // to close the small concurrent-login window between the two systems.
+      await invalidateAllActiveSessions(challenge.userId);
       const { error: updateError } = await supabase.auth.admin.updateUserById(challenge.userId, {
         password: newPassword
       });
       if (updateError) throw updateError;
-      await invalidateActiveSession(challenge.userId);
+      await invalidateAllActiveSessions(challenge.userId);
 
       await persistIdentityAuditLog({
         title: 'Senha redefinida por recuperação',
@@ -26382,6 +26488,8 @@ async function startServer() {
     const credentialEmail = sanitizeEmail(req.body?.email);
     const credentialPassword = typeof req.body?.password === 'string' ? req.body.password : '';
     const hasCredentials = Boolean(credentialEmail && credentialPassword);
+    let issuedSessionToken = '';
+    let issuedSessionUserId = '';
     console.log('Login attempt auth header present:', !!accessToken, 'intendedRole:', intendedRole, 'hasCredentials:', hasCredentials);
 
     try {
@@ -27240,7 +27348,6 @@ async function startServer() {
         role: roleForSession,
         isPlatformAdmin: isPlatformAdminLogin,
         name: profile.name,
-        sessionToken: await issueSessionToken(sanitizeString(user.id, 120)),
         profilePicture: await resolvePatientPhotoUrl(profile.profile_picture, (profile as any)?.profile_picture_path),
         profilePicturePath: extractPatientPhotosStoragePath((profile as any)?.profile_picture_path || profile.profile_picture),
         address: sanitizeString((profile as any)?.address || (profile as any)?.endereco, 320) || null,
@@ -27283,16 +27390,63 @@ async function startServer() {
       };
 
       const sessionUser = await hydrateSessionUserWithOnboardingContext(userData);
+      issuedSessionUserId = sanitizeString(user.id, 120);
+      issuedSessionToken = await issueSessionToken(issuedSessionUserId);
+      sessionUser.sessionToken = issuedSessionToken;
       req.session.user = sessionUser;
       if (['patient','responsible','responsavel','guardian'].includes(String(sessionUser?.role || '').trim().toLowerCase())) {
         req.session.cookie.maxAge = patientPortalSessionMaxAgeDays * 24 * 60 * 60 * 1000;
       }
       const loginResponse = { success: true, user: sessionUser, isFirstLogin: Boolean(req.session.isFirstLogin) };
       console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
-      req.session.save((err) => {
+      req.session.save(async (err) => {
         if (err) {
           console.error("Session save error in login:", err);
           if (!res.headersSent) {
+            if (requiresDistributedRuntimeState()) {
+              logRouteDbError('/api/auth/login', err, {
+                requestId,
+                userId: sanitizeString(user.id, 120),
+                email: maskEmail(safeAuthEmail || credentialEmail),
+                stage: 'session_save_retry',
+                errorKind: 'session_persistence'
+              });
+              try {
+                await new Promise((resolve) => setTimeout(resolve, 120));
+                await saveExpressSession(req);
+                issuedSessionToken = '';
+                res.json(loginResponse);
+                delete req.session.isFirstLogin;
+                return;
+              } catch (sessionRetryError: any) {
+                logRouteDbError('/api/auth/login', sessionRetryError, {
+                  requestId,
+                  userId: sanitizeString(user.id, 120),
+                  email: maskEmail(safeAuthEmail || credentialEmail),
+                  stage: 'session_save_required',
+                  errorKind: 'session_persistence'
+                });
+              }
+              try {
+                await invalidateCurrentSession(
+                  sanitizeString(user.id, 120),
+                  sanitizeString(sessionUser?.sessionToken, 200)
+                );
+                issuedSessionToken = '';
+              } catch (sessionCleanupError: any) {
+                console.error(
+                  '[Auth] Falha ao limpar sessao ativa apos erro de persistencia:',
+                  sanitizeString(sessionCleanupError?.message || String(sessionCleanupError), 220)
+                );
+              }
+              req.session.destroy(() => {});
+              res.clearCookie('verto-session');
+              return res.status(503).json({
+                success: false,
+                error: 'SERVER_SESSION_PERSISTENCE_REQUIRED',
+                message: 'Não foi possível iniciar sua sessão segura. Tente entrar novamente em instantes.'
+              });
+            }
             if (isRecoverableSessionSaveError(err)) {
               logRouteDbError('/api/auth/login', err, {
                 requestId,
@@ -27316,10 +27470,23 @@ async function startServer() {
           }
           return;
         }
+        issuedSessionToken = '';
         res.json(loginResponse);
         delete req.session.isFirstLogin;
       });
     } catch (error) {
+      if (issuedSessionToken && issuedSessionUserId) {
+        try {
+          await invalidateCurrentSession(issuedSessionUserId, issuedSessionToken);
+        } catch (sessionCleanupError: any) {
+          console.error(
+            '[Auth] Falha ao limpar token emitido após erro de login:',
+            sanitizeString(sessionCleanupError?.message || String(sessionCleanupError), 220)
+          );
+        }
+        req.session.destroy(() => {});
+        res.clearCookie('verto-session');
+      }
       console.error("Login verification error:", error);
       return sendAuthRouteError(res, '/api/auth/login', 'login', error, {
         requestId,
@@ -27330,7 +27497,7 @@ async function startServer() {
 
   app.post('/api/auth/logout', async (req, res) => {
     try {
-      await invalidateActiveSession(req.session?.user?.id, req.session?.user?.sessionToken);
+      await invalidateCurrentSession(req.session?.user?.id, req.session?.user?.sessionToken);
     } catch (sessionStateError: any) {
       console.error('[Auth] Falha ao revogar sessão distribuída no logout:', sanitizeString(sessionStateError?.message || String(sessionStateError), 240));
     }
@@ -27367,7 +27534,7 @@ async function startServer() {
         return res.status(503).json({ user: null, error: 'PLATFORM_ADMIN_AUTHORITY_UNAVAILABLE' });
       }
       if (!hasVerifiedOwnerMfaSession(req.session.user)) {
-        await invalidateActiveSession(req.session.user?.id, req.session.user?.sessionToken);
+        await invalidateCurrentSession(req.session.user?.id, req.session.user?.sessionToken);
         req.session.destroy(() => {});
         res.clearCookie('verto-session');
         return res.status(401).json({ user: null, error: 'PRIVILEGED_MFA_REQUIRED' });
@@ -35851,6 +36018,8 @@ async function startServer() {
   };
 
   app.get('/api/portal/relationship-confirmations/:token', portalActionLimiter, async (req: any, res) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Pragma', 'no-cache');
     try {
       const fetched: any = await fetchRelationshipConfirmationByToken(req.params.token);
       if (!fetched.ok) return res.status(fetched.status).json({ success: false, error: fetched.error });
@@ -46636,7 +46805,9 @@ async function startServer() {
     behaviorId: row?.behavior_id,
     metricType: row?.metric_type,
     metricLabel: row?.metric_label,
-    value: Number(row?.metric_value ?? 0),
+    value: row?.metric_value === null || row?.metric_value === undefined
+      ? null
+      : Number(row.metric_value),
     previousValue: row?.previous_value === null || row?.previous_value === undefined ? null : Number(row.previous_value),
     deltaValue: row?.delta_value === null || row?.delta_value === undefined ? null : Number(row.delta_value),
     deltaPercent: row?.delta_percent === null || row?.delta_percent === undefined ? null : Number(row.delta_percent),
@@ -73403,7 +73574,7 @@ async function startServer() {
 
   const handleAbaV3ReadRpcError = (res: any, error: any) => {
     const message = sanitizeString(error?.message || '', 500);
-    if (hasMissingFinancialSchema(error) || /get_aba_v3_session_collection_plan|get_aba_patient_chart_catalog_v3|get_aba_target_chart_series_v3|get_aba_target_history_v3|get_aba_patient_overview_v3|get_aba_session_read_bundle_v3|PGRST202|42883|42P01/i.test(message)) {
+    if (hasMissingFinancialSchema(error) || /get_aba_v3_session_collection_plan|get_aba_patient_chart_catalog_v3|get_aba_chart_series_bundle_v3|get_aba_target_chart_series_v3|get_aba_target_history_v3|get_aba_patient_overview_v3|get_aba_session_read_bundle_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema ABA V3 ainda não aplicado.' });
     }
     if (message.includes('ABA_V3_READ_WINDOW_')) {
@@ -73411,6 +73582,9 @@ async function startServer() {
     }
     if (/ABA_V3_SESSION_PLAN_TARGET_LIMIT/i.test(message)) {
       return res.status(422).json({ success: false, code: 'ABA_V3_SESSION_PLAN_TARGET_LIMIT', error: 'O plano de coleta aceita no máximo 200 targets por sessão.' });
+    }
+    if (/ABA_V3_CHART_BUNDLE_TARGET_COUNT_INVALID/i.test(message)) {
+      return res.status(422).json({ success: false, code: 'ABA_V3_CHART_BUNDLE_TARGET_COUNT_INVALID', error: 'Selecione entre 1 e 3 alvos para comparação ABA V3.' });
     }
     if (/ABA_V3_SESSION_PLAN_(SCOPE_REQUIRED|SESSION_SCOPE_INVALID)/i.test(message)) {
       return res.status(403).json({ success: false, code: 'ABA_V3_SESSION_PLAN_SCOPE_DENIED', error: 'Acesso negado ao plano de coleta ABA V3.' });
@@ -73581,6 +73755,51 @@ async function startServer() {
   );
 
   app.get(
+    '/api/aba/v3/patients/:patientId/chart-series-bundle',
+    requireAbaV3ReadFeature,
+    checkAuth,
+    requireClinicCapability('aba.analytics.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const rawTargetIds = String(req.query?.targetIds || req.query?.target_ids || '')
+          .split(',')
+          .map((value) => sanitizeString(value, 180))
+          .filter(Boolean);
+        const targetIds = Array.from(new Set(rawTargetIds)).slice(0, 4);
+        if (!isUuid(patientId) || !isUuid(organizationId) || targetIds.length < 1 || targetIds.length > 3 || rawTargetIds.length > 3) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_CHART_BUNDLE_SCOPE_INVALID', error: 'Selecione entre 1 e 3 alvos ABA V3 válidos.' });
+        }
+        const chart = parseAbaChartParams(req.query || {});
+        const { data, error } = await supabase.rpc('get_aba_chart_series_bundle_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_target_ids: targetIds,
+          p_from: chart.dateFromIso,
+          p_to: chart.dateToIso,
+          p_limit: chart.limit
+        });
+        if (error) return handleAbaV3ReadRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({
+          success: true,
+          data: data || {
+            target_ids: targetIds,
+            continuity_policy: 'BREAK_ON_PHASE_OR_MODEL_CHANGE',
+            legacy_history_separate: true,
+            available_metrics: [],
+            segments: []
+          }
+        });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
     '/api/aba/v3/patients/:patientId/targets/:targetId/chart-series',
     requireAbaV3ReadFeature,
     checkAuth,
@@ -73623,11 +73842,17 @@ async function startServer() {
 
   const handleAbaV3RolloutRpcError = (res: any, error: any) => {
     const message = sanitizeString(error?.message || '', 1400);
-    if (hasMissingFinancialSchema(error) || /get_aba_v3_pilot_readiness|get_aba_v3_preflight_scope_snapshot|get_aba_v3_rollout_drain_status|set_aba_measurement_rollout_state_v3|PGRST202|42883|42P01/i.test(message)) {
+    if (hasMissingFinancialSchema(error) || /get_aba_v3_pilot_readiness|get_aba_v3_preflight_scope_snapshot|get_aba_v3_production_health_v1|get_aba_v3_rollout_drain_status|set_aba_measurement_rollout_state_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema operacional ABA V3 ainda não aplicado.' });
     }
-    if (/ABA_V3_ROLLOUT_STATE_VERSION_CONFLICT/i.test(message)) {
+    if (/ABA_V3_(ROLLOUT_STATE_VERSION_CONFLICT|COHORT_STATE_VERSION_CONFLICT)/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_ROLLOUT_STATE_VERSION_CONFLICT', error: 'O rollout mudou desde a última leitura. Atualize antes de tentar novamente.' });
+    }
+    if (/ABA_V3_COHORT_PREFLIGHT_BLOCKED/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'ABA_V3_COHORT_PREFLIGHT_BLOCKED', error: 'O alvo ainda não está pronto para ativação V3 ou existe uma sessão ABA aberta.' });
+    }
+    if (/ABA_V3_COHORT_(SCOPE_REQUIRED|TARGET_SCOPE_INVALID|EXPECTED_VERSIONS_REQUIRED|REASON_INVALID)/i.test(message)) {
+      return res.status(422).json({ success: false, code: 'ABA_V3_COHORT_INVALID', error: 'Escopo operacional ABA V3 inválido. Atualize os dados e tente novamente.' });
     }
     if (/ABA_V3_ROLLOUT_DRAIN_REQUIRED/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_ROLLOUT_DRAIN_REQUIRED', error: 'Ainda existem dados V3 em trânsito. Interrompa novas sessões e conclua a drenagem antes de desligar o sync.' });
@@ -73733,6 +73958,45 @@ async function startServer() {
   );
 
   app.get(
+    '/api/aba/v3/admin/production-health',
+    requireAbaV3PreflightFeature,
+    checkAuth,
+    checkPlatformAdmin,
+    async (req: any, res) => {
+      try {
+        const organizationIdRaw = sanitizeString(req.query?.organizationId || req.query?.organization_id, 120);
+        const organizationId = organizationIdRaw || null;
+        const windowDaysRaw = Number(req.query?.windowDays || req.query?.window_days || 7);
+        const windowDays = Number.isInteger(windowDaysRaw) ? windowDaysRaw : 7;
+        if ((organizationId && !isUuid(organizationId)) || windowDays < 1 || windowDays > 30) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_PRODUCTION_HEALTH_SCOPE_INVALID', error: 'Escopo de saúde ABA V3 inválido.' });
+        }
+        const { data, error } = await supabase.rpc('get_aba_v3_production_health_v1', {
+          p_organization_id: organizationId,
+          p_window_days: windowDays
+        });
+        if (error) return handleAbaV3RolloutRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({
+          success: true,
+          data: {
+            ...(data || {}),
+            runtime: {
+              readApiEnabled: isAbaV3ReadApiEnabled(),
+              preflightApiEnabled: isAbaV3PreflightApiEnabled(),
+              collectionApiEnabled: isAbaV3CollectionApiEnabled(),
+              rolloutAdminEnabled: isAbaV3RolloutAdminEnabled(),
+              uiBuildFlagEnabled: normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false)
+            }
+          }
+        });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
     '/api/aba/v3/admin/drain-status',
     requireAbaV3PreflightFeature,
     checkAuth,
@@ -73760,6 +74024,204 @@ async function startServer() {
         if (error) return handleAbaV3RolloutRpcError(res, error);
         res.setHeader('Cache-Control', 'private, no-store');
         return res.json({ success: true, data: data || null });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/admin/cohort-catalog',
+    requireAbaV3PreflightFeature,
+    checkAuth,
+    checkPlatformAdmin,
+    async (req: any, res) => {
+      try {
+        const stage = sanitizeString(req.query?.stage || 'clinics', 20).toLowerCase();
+        const query = sanitizeString(req.query?.q, 80).replace(/[%_]/g, '').trim();
+        const organizationId = sanitizeString(req.query?.organizationId || req.query?.organization_id, 120);
+        const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+
+        if (stage === 'clinics') {
+          let clinicQuery: any = supabase
+            .from('clinics')
+            .select('id,name')
+            .order('name', { ascending: true })
+            .limit(30);
+          if (query) clinicQuery = clinicQuery.ilike('name', `%${query}%`);
+          const { data, error } = await clinicQuery;
+          if (error) throw error;
+          res.setHeader('Cache-Control', 'private, no-store');
+          return res.json({ success: true, data: { stage, items: data || [] } });
+        }
+
+        if (!isUuid(organizationId)) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_CATALOG_SCOPE_INVALID', error: 'Clínica inválida para o catálogo ABA V3.' });
+        }
+
+        if (stage === 'patients') {
+          let patientQuery: any = supabase
+            .from('patients')
+            .select('id,name,clinic_id')
+            .eq('clinic_id', organizationId)
+            .order('name', { ascending: true })
+            .limit(50);
+          if (query) patientQuery = patientQuery.ilike('name', `%${query}%`);
+          const { data, error } = await patientQuery;
+          if (error) throw error;
+          res.setHeader('Cache-Control', 'private, no-store');
+          return res.json({ success: true, data: { stage, organizationId, items: data || [] } });
+        }
+
+        if (stage === 'targets') {
+          if (!isUuid(patientId)) {
+            return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_CATALOG_SCOPE_INVALID', error: 'Paciente inválido para o catálogo ABA V3.' });
+          }
+          const patientScope = await supabase
+            .from('patients')
+            .select('id,name,clinic_id')
+            .eq('id', patientId)
+            .eq('clinic_id', organizationId)
+            .limit(1)
+            .maybeSingle();
+          if (patientScope.error) throw patientScope.error;
+          if (!patientScope.data) {
+            return res.status(404).json({ success: false, code: 'ABA_V3_COHORT_PATIENT_NOT_FOUND', error: 'Paciente não encontrado nesta clínica.' });
+          }
+
+          const [programsResult, targetsResult] = await Promise.all([
+            supabase
+              .from('aba_programs')
+              .select('id,name,status,patient_id,clinic_id')
+              .eq('patient_id', patientId)
+              .eq('clinic_id', organizationId)
+              .order('created_at', { ascending: false })
+              .limit(100),
+            supabase
+              .from('aba_targets')
+              .select('id,name,program_id,target_type,phase,patient_id,clinic_id')
+              .eq('patient_id', patientId)
+              .eq('clinic_id', organizationId)
+              .order('created_at', { ascending: false })
+              .limit(200)
+          ]);
+          if (programsResult.error) throw programsResult.error;
+          if (targetsResult.error) throw targetsResult.error;
+          const programs = programsResult.data || [];
+          const targets = (targetsResult.data || []).filter((target: any) => {
+            if (!query) return true;
+            const program = programs.find((item: any) => sanitizeString(item?.id, 180) === sanitizeString(target?.program_id, 180));
+            return `${sanitizeString(target?.name, 240)} ${sanitizeString(program?.name, 240)}`.toLowerCase().includes(query.toLowerCase());
+          });
+          res.setHeader('Cache-Control', 'private, no-store');
+          return res.json({
+            success: true,
+            data: {
+              stage,
+              organizationId,
+              patient: patientScope.data,
+              programs,
+              targets
+            }
+          });
+        }
+
+        return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_CATALOG_STAGE_INVALID', error: 'Etapa de catálogo ABA V3 inválida.' });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.get(
+    '/api/aba/v3/admin/cohort-snapshot',
+    requireAbaV3PreflightFeature,
+    checkAuth,
+    checkPlatformAdmin,
+    async (req: any, res) => {
+      try {
+        const organizationId = sanitizeString(req.query?.organizationId || req.query?.organization_id, 120);
+        const patientId = sanitizeString(req.query?.patientId || req.query?.patient_id, 120);
+        const programId = sanitizeString(req.query?.programId || req.query?.program_id, 180);
+        const targetId = sanitizeString(req.query?.targetId || req.query?.target_id, 180);
+        if (!isUuid(organizationId) || !isUuid(patientId) || !programId || !targetId) {
+          return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_SCOPE_INVALID', error: 'Escopo do cohort ABA V3 inválido.' });
+        }
+        const { data, error } = await supabase.rpc('get_aba_v3_exact_target_cohort_snapshot_v1', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_program_id: programId,
+          p_target_id: targetId
+        });
+        if (error) return handleAbaV3RolloutRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({
+          success: true,
+          data: {
+            ...(data || {}),
+            runtime: {
+              readApiEnabled: isAbaV3ReadApiEnabled(),
+              preflightApiEnabled: isAbaV3PreflightApiEnabled(),
+              collectionApiEnabled: isAbaV3CollectionApiEnabled(),
+              rolloutAdminEnabled: isAbaV3RolloutAdminEnabled(),
+              uiBuildFlagEnabled: normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false)
+            }
+          }
+        });
+      } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/aba/v3/admin/cohort-control',
+    requireAbaV3RolloutAdminFeature,
+    checkAuth,
+    checkPlatformAdmin,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 12 * 1024, 'Cohort ABA V3')) return;
+        const organizationId = sanitizeString(req.body?.organization_id || req.body?.organizationId, 120);
+        const patientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
+        const programId = sanitizeString(req.body?.program_id || req.body?.programId, 180);
+        const targetId = sanitizeString(req.body?.target_id || req.body?.targetId, 180);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const enabled = req.body?.enabled;
+        const reason = sanitizeTextField(req.body?.reason, 500);
+        const expected = req.body?.expected_state_versions || req.body?.expectedStateVersions || {};
+        const clinicVersion = Number(expected?.clinic);
+        const patientVersion = Number(expected?.patient);
+        const targetVersion = Number(expected?.target);
+
+        if (!isUuid(organizationId) || !isUuid(patientId) || !isUuid(actorId) || !programId || !targetId || typeof enabled !== 'boolean') {
+          return res.status(400).json({ success: false, code: 'ABA_V3_COHORT_INVALID', error: 'Escopo operacional ABA V3 inválido.' });
+        }
+        if (reason.trim().length < 10) {
+          return res.status(422).json({ success: false, code: 'ABA_V3_COHORT_REASON_REQUIRED', error: 'Informe uma justificativa operacional com pelo menos 10 caracteres.' });
+        }
+        if (![clinicVersion, patientVersion, targetVersion].every((value) => Number.isInteger(value) && value >= 0)) {
+          return res.status(422).json({ success: false, code: 'ABA_V3_COHORT_VERSION_INVALID', error: 'Atualize o snapshot do cohort antes de aplicar a alteração.' });
+        }
+        if (enabled && (!isAbaV3ReadApiEnabled() || !isAbaV3CollectionApiEnabled() || !normalizeServerFeatureFlag(process.env.VITE_FEATURE_ABA_V3_UI, false))) {
+          return res.status(409).json({ success: false, code: 'ABA_V3_RUNTIME_NOT_READY', error: 'Leitura, coleta e UI V3 precisam estar validadas no runtime antes da ativação.' });
+        }
+
+        const { data, error } = await supabase.rpc('set_aba_v3_exact_target_cohort_v1', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_program_id: programId,
+          p_target_id: targetId,
+          p_enable: enabled,
+          p_reason: reason,
+          p_actor_id: actorId,
+          p_expected_clinic_version: clinicVersion,
+          p_expected_patient_version: patientVersion,
+          p_expected_target_version: targetVersion
+        });
+        if (error) return handleAbaV3RolloutRpcError(res, error);
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data });
       } catch (error: any) {
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }
@@ -77767,7 +78229,199 @@ async function startServer() {
     }
   });
 
-  app.get('/api/patients/:patientId/clinical-outcomes-dashboard', checkAuth, requireClinicCapability('reports.clinical.indicators'), checkPatientAccess, async (req: any, res) => {
+  const finiteClinicalOutcomeNumber = (value: any) => {
+    if (value === null || value === undefined || value === '') return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
+  const normalizeClinicalOutcomeDirectionFromV3 = (value: any) => {
+    const normalized = sanitizeString(value, 80).toUpperCase();
+    if (normalized === 'DECREASE_IS_BETTER') return 'lower_is_better';
+    if (normalized === 'TARGET_RANGE_IS_BETTER') return 'target_range';
+    if (normalized === 'NO_DIRECTIONAL_JUDGMENT') return 'no_directional_judgment';
+    return 'higher_is_better';
+  };
+
+  const normalizeClinicalOutcomeValueFromV3 = (row: any) => {
+    const canonicalUnit = sanitizeString(row?.canonical_value_unit, 80).toUpperCase();
+    const preferredUnitCode = sanitizeString(row?.unit_code, 80);
+    const preferredUnitLabel = sanitizeString(row?.unit_label, 120);
+    const finiteValue = finiteClinicalOutcomeNumber(row?.value_number);
+
+    if (canonicalUnit === 'CATEGORY') {
+      return { value: null, valueText: sanitizeString(row?.value_text, 180) || null, unit: '' };
+    }
+    if (canonicalUnit === 'EVENTS_PER_HOUR') {
+      return { value: finiteValue, valueText: null, unit: 'eventos/h' };
+    }
+    if (canonicalUnit === 'MILLISECOND') {
+      if (finiteValue === null) return { value: null, valueText: null, unit: 'ms' };
+      const requested = `${preferredUnitCode} ${preferredUnitLabel}`.trim().toLowerCase();
+      if (/\b(hour|hours|hora|horas|h)\b/.test(requested)) return { value: finiteValue / 3_600_000, valueText: null, unit: preferredUnitLabel || 'h' };
+      if (/\b(minute|minutes|minuto|minutos|min)\b/.test(requested)) return { value: finiteValue / 60_000, valueText: null, unit: preferredUnitLabel || 'min' };
+      if (/\b(second|seconds|segundo|segundos|sec|s)\b/.test(requested) && !/milli|mili/.test(requested)) return { value: finiteValue / 1_000, valueText: null, unit: preferredUnitLabel || 's' };
+      return { value: finiteValue, valueText: null, unit: preferredUnitLabel || preferredUnitCode || 'ms' };
+    }
+    if (canonicalUnit === 'COUNT') {
+      return { value: finiteValue, valueText: null, unit: preferredUnitLabel || preferredUnitCode || 'contagem' };
+    }
+    return {
+      value: finiteValue,
+      valueText: sanitizeString(row?.value_text, 180) || null,
+      unit: preferredUnitLabel || preferredUnitCode || sanitizeString(row?.canonical_value_unit, 80),
+    };
+  };
+
+  const normalizeClinicalPlanOutcomesV3ForDashboard = (
+    rows: any[],
+    visiblePlanMap: Map<string, any>,
+    objectivePlanMap: Map<string, Set<string>>,
+    targetById: Map<string, any>,
+  ) => {
+    const normalized: any[] = [];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const sourceKind = sanitizeString(row?.source_kind, 40).toUpperCase();
+      const objectiveId = sanitizeString(row?.therapeutic_objective_id, 120);
+      const directPlanId = sanitizeString(row?.plan_id, 120);
+      const planIds = sourceKind === 'PLAN_GOAL' || sourceKind === 'ABA_TARGET'
+        ? (visiblePlanMap.has(directPlanId) ? [directPlanId] : [])
+        : Array.from(objectivePlanMap.get(objectiveId) || []);
+      if (!planIds.length) continue;
+
+      const normalizedValue = normalizeClinicalOutcomeValueFromV3(row);
+      const observedAt = sanitizeString(row?.observed_at, 80) || `${sanitizeString(row?.clinical_date, 20)}T00:00:00.000Z`;
+      const coverageStatus = sanitizeString(row?.coverage_status, 80).toUpperCase();
+      const missingReason = coverageStatus && coverageStatus !== 'OBSERVED' ? coverageStatus.toLowerCase() : null;
+      const abaTargetId = sanitizeString(row?.value_details?.aba_target_id || row?.target_id, 180);
+      const abaTarget = sourceKind === 'ABA_TARGET' ? targetById.get(abaTargetId) || null : null;
+      for (const planId of planIds) {
+        const plan = visiblePlanMap.get(planId) || {};
+        normalized.push({
+          id: `cmv3:${sanitizeString(row?.expectation_id, 120)}:${planId}`,
+          planId,
+          planVersion: Number(plan?.edit_version || 1),
+          goalId: sanitizeString(row?.goal_id, 120) || objectiveId || null,
+          programId: sanitizeString(row?.program_id, 180) || null,
+          sessionId: sanitizeString(row?.session_id, 180) || null,
+          professionalId: null,
+          specialty: sanitizeTextField(row?.specialty || plan?.specialty, 120) || null,
+          itemId: sourceKind === 'ABA_TARGET'
+            ? sanitizeString(row?.value_details?.series_key || row?.item_id || row?.target_id, 260) || null
+            : sanitizeString(row?.item_id || row?.target_id, 260) || null,
+          itemLabel: sanitizeTextField(row?.item_label || row?.metric_label, 220) || null,
+          metricKey: sanitizeString(row?.metric_key, 120) || sanitizeString(row?.definition_id, 120),
+          metricLabel: sanitizeTextField(row?.metric_label, 180) || sanitizeString(row?.metric_key, 120) || 'Métrica clínica',
+          metricType: sanitizeString(row?.semantic_family, 40).toLowerCase(),
+          unit: normalizedValue.unit,
+          direction: normalizeClinicalOutcomeDirectionFromV3(row?.directionality),
+          value: normalizedValue.value,
+          valueText: normalizedValue.valueText,
+          numerator: finiteClinicalOutcomeNumber(row?.numerator),
+          denominator: finiteClinicalOutcomeNumber(row?.denominator),
+          observedAt,
+          context: 'clinic',
+          source: sanitizeString(row?.read_model_source, 120) === 'ABA_V3_TARGET_CHART_READ_MODEL' ? 'ABA V3 canônico' : 'V3 canônico',
+          instrumentId: sanitizeString(row?.read_model_source, 120) === 'ABA_V3_TARGET_CHART_READ_MODEL' ? 'ABA_V3_PHASE' : null,
+          instrumentVersion: sanitizeString(row?.value_details?.phase_assignment_id, 180) || null,
+          definitionVersion: Math.max(1, Number(row?.definition_version || 1)),
+          missingReason,
+          projectionStale: row?.projection_stale === true,
+          sourceAuthority: 'canonical',
+          metadata: {
+            cmv3: true,
+            sourceKind,
+            targetId: row?.target_id || null,
+            definitionId: row?.definition_id || null,
+            definitionVersionId: row?.definition_version_id || null,
+            expectationId: row?.expectation_id || null,
+            coverageStatus: row?.coverage_status || null,
+            canonicalValueUnit: row?.canonical_value_unit || null,
+            valueDetails: row?.value_details || {},
+            projectionQueueStatus: row?.projection_queue_status || null,
+            sourceLatestRecordedAt: row?.source_latest_recorded_at || null,
+            computedAt: row?.computed_at || null,
+            readModelSource: row?.read_model_source || null,
+            abaTargetId: row?.value_details?.aba_target_id || null,
+            targetDescription: abaTarget?.description || null,
+            masteryCriteria: abaTarget?.mastery_criteria || null,
+            targetType: abaTarget?.target_type || null,
+            targetPhase: abaTarget?.phase || null,
+            sourceFamily: row?.value_details?.source_family || null,
+            requiresReview: row?.value_details?.requires_review === true,
+            phaseAssignmentId: row?.value_details?.phase_assignment_id || null,
+            phaseType: row?.value_details?.phase_type || null,
+            phaseLabel: row?.value_details?.phase_label || null,
+          },
+          minimumDataPoints: 4,
+          recencyWindowDays: 30,
+          sourceRecordType: 'cmv3_projection',
+        });
+      }
+    }
+    return normalized;
+  };
+
+  const clinicalOutcomeCrossSourceFingerprint = (row: any) => {
+    const observed = new Date(String(row?.observedAt || ''));
+    const observedSecond = Number.isFinite(observed.getTime()) ? Math.floor(observed.getTime() / 1000) : String(row?.observedAt || '');
+    const numeric = finiteClinicalOutcomeNumber(row?.value);
+    const numerator = finiteClinicalOutcomeNumber(row?.numerator);
+    const denominator = finiteClinicalOutcomeNumber(row?.denominator);
+    return [
+      sanitizeString(row?.planId, 120),
+      sanitizeString(row?.goalId, 120),
+      sanitizeString(row?.metricKey, 120).toLowerCase(),
+      sanitizeString(row?.unit, 80).toLowerCase(),
+      sanitizeString(row?.direction, 80).toLowerCase(),
+      sanitizeTextField(row?.specialty, 120).toLowerCase(),
+      observedSecond,
+      numeric !== null ? String(Math.round(numeric * 1_000_000) / 1_000_000) : sanitizeString(row?.valueText, 180),
+      numerator !== null ? String(numerator) : '',
+      denominator !== null ? String(denominator) : '',
+    ].join('::');
+  };
+
+  const mergeClinicalOutcomeRowsV3First = (canonicalRows: any[], legacyRows: any[]) => {
+    const canonical = Array.isArray(canonicalRows) ? canonicalRows : [];
+    const legacy = Array.isArray(legacyRows) ? legacyRows : [];
+    const canonicalFingerprints = new Set(canonical.map(clinicalOutcomeCrossSourceFingerprint));
+    const canonicalAbaSessionTargets = new Set(
+      canonical
+        .filter((row) => sanitizeString(row?.metadata?.readModelSource, 120) === 'ABA_V3_TARGET_CHART_READ_MODEL')
+        .map((row) => {
+          const sessionId = sanitizeString(row?.sessionId, 180);
+          const targetId = sanitizeString(row?.metadata?.abaTargetId, 180);
+          return sessionId && targetId ? `${sessionId}::${targetId}` : '';
+        })
+        .filter(Boolean)
+    );
+    let deduplicatedLegacyCount = 0;
+    const preservedLegacy = legacy.filter((row) => {
+      const legacySessionId = sanitizeString(row?.sessionId, 180);
+      const legacyTargetId = sanitizeString(row?.itemId, 180);
+      const canonicalOwnsSessionTarget = row?.sourceRecordType === 'aba_snapshot'
+        && legacySessionId
+        && legacyTargetId
+        && canonicalAbaSessionTargets.has(`${legacySessionId}::${legacyTargetId}`);
+      if (!canonicalOwnsSessionTarget && !canonicalFingerprints.has(clinicalOutcomeCrossSourceFingerprint(row))) return true;
+      deduplicatedLegacyCount += 1;
+      return false;
+    });
+    const rows = [...canonical, ...preservedLegacy];
+    rows.sort((left, right) => new Date(String(left?.observedAt || 0)).getTime() - new Date(String(right?.observedAt || 0)).getTime());
+    return { rows, deduplicatedLegacyCount };
+  };
+
+  const isClinicalPlanV3ReaderUnavailable = (error: any) => {
+    const code = sanitizeString(error?.code, 80).toUpperCase();
+    const message = sanitizeString(error?.message || error?.details || error, 400).toLowerCase();
+    return code === 'PGRST202'
+      || ((message.includes('read_clinical_outcomes_converged_v3') || message.includes('read_clinical_plan_outcomes_v3'))
+        && (message.includes('does not exist') || message.includes('schema cache') || message.includes('could not find')));
+  };
+
+  app.get('/api/patients/:patientId/clinical-outcomes-dashboard', noStoreDynamicResponse, checkAuth, requireClinicCapability('reports.clinical.indicators'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -77776,9 +78430,27 @@ async function startServer() {
       if (!isUuid(patientId)) {
         return res.json({ success: true, data: { plans: [], observations: [], contributions: [], phases: [], specialties: [] } });
       }
-      const requestedDays = Math.max(7, Math.min(730, Number(req.query?.days || 90) || 90));
-      const dateTo = new Date();
-      const dateFrom = new Date(dateTo.getTime() - requestedDays * 86_400_000);
+      const requestedDateFrom = sanitizeString(req.query?.dateFrom, 10);
+      const requestedDateTo = sanitizeString(req.query?.dateTo, 10);
+      const hasExplicitRange = Boolean(requestedDateFrom || requestedDateTo);
+      if (hasExplicitRange && (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(requestedDateTo))) {
+        return res.status(400).json({ success: false, error: 'CLINICAL_OUTCOMES_PERIOD_INVALID', message: 'Informe o período clínico com data inicial e final válidas.' });
+      }
+
+      const requestedDaysFallback = Math.max(7, Math.min(730, Number(req.query?.days || 90) || 90));
+      const dateTo = hasExplicitRange
+        ? new Date(`${requestedDateTo}T23:59:59.999Z`)
+        : new Date();
+      const dateFrom = hasExplicitRange
+        ? new Date(`${requestedDateFrom}T00:00:00.000Z`)
+        : new Date(dateTo.getTime() - requestedDaysFallback * 86_400_000);
+      if (Number.isNaN(dateFrom.getTime()) || Number.isNaN(dateTo.getTime()) || dateTo < dateFrom) {
+        return res.status(400).json({ success: false, error: 'CLINICAL_OUTCOMES_PERIOD_INVALID', message: 'O período clínico informado é inválido.' });
+      }
+      const requestedDays = Math.max(1, Math.ceil((dateTo.getTime() - dateFrom.getTime()) / 86_400_000));
+      if (requestedDays > 730) {
+        return res.status(400).json({ success: false, error: 'CLINICAL_OUTCOMES_PERIOD_TOO_LARGE', message: 'O período máximo para os gráficos clínicos é de 730 dias.' });
+      }
       const dateFromIso = dateFrom.toISOString();
       const dateToIso = dateTo.toISOString();
 
@@ -77805,7 +78477,7 @@ async function startServer() {
           .limit(300),
         supabase
           .from('aba_targets')
-          .select('id,program_id,name,measurement_type,phase')
+          .select('id,program_id,name,description,target_type,measurement_type,phase,clinical_status,mastery_criteria')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .limit(1000),
@@ -77871,9 +78543,48 @@ async function startServer() {
       const visiblePlanIds = new Set(visiblePlans.map((plan: any) => String(plan.id)));
       const visiblePrograms = filterTherapeuticPlanProgramsForActor(programResult.data || [], allPlans, accessContext);
       const visibleProgramIds = new Set(visiblePrograms.map((program: any) => String(program.id)));
+      const visibleProgramIdList = Array.from(visibleProgramIds).map((programId) => sanitizeString(programId, 180)).filter(Boolean);
       const programById = new Map(visiblePrograms.map((program: any) => [String(program.id), program]));
       const targetById = new Map((targetResult.data || []).filter((target: any) => visibleProgramIds.has(String(target.program_id))).map((target: any) => [String(target.id), target]));
       const definitionById = new Map((definitionResult.error ? [] : definitionResult.data || []).filter((definition: any) => visiblePlanIds.has(String(definition.plan_id))).map((definition: any) => [String(definition.id), definition]));
+
+      const visiblePlanMap = new Map(visiblePlans.map((plan: any) => [String(plan.id), plan]));
+      const visiblePlanIdList = Array.from(visiblePlanIds).filter((planId: string) => isUuid(planId));
+      const objectivePlanMap = new Map<string, Set<string>>();
+      for (const program of visiblePrograms) {
+        const objectiveId = sanitizeString(program?.therapeutic_objective_id, 120);
+        const planId = sanitizeString(program?.therapeutic_plan_id, 120);
+        if (!isUuid(objectiveId) || !visiblePlanIds.has(planId)) continue;
+        const current = objectivePlanMap.get(objectiveId) || new Set<string>();
+        current.add(planId);
+        objectivePlanMap.set(objectiveId, current);
+      }
+      const visibleObjectiveIds = Array.from(objectivePlanMap.keys());
+      let v3ReadModelAvailable = isUuid(clinicId);
+      let v3PlanOutcomeRows: any[] = [];
+      let v3RpcCount = 0;
+      if (isUuid(clinicId) && (visiblePlanIdList.length > 0 || visibleObjectiveIds.length > 0)) {
+        const v3Result = await supabase.rpc('read_clinical_outcomes_converged_v3', {
+          p_organization_id: clinicId,
+          p_patient_id: patientId,
+          p_date_from: dateFromIso.slice(0, 10),
+          p_date_to: dateToIso.slice(0, 10),
+          p_plan_ids: visiblePlanIdList,
+          p_therapeutic_objective_ids: visibleObjectiveIds,
+          p_program_ids: visibleProgramIdList,
+          p_limit: 5000,
+        });
+        v3RpcCount = 1;
+        if (v3Result.error) {
+          if (isClinicalPlanV3ReaderUnavailable(v3Result.error)) {
+            v3ReadModelAvailable = false;
+          } else {
+            throw v3Result.error;
+          }
+        } else {
+          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById);
+        }
+      }
 
       const structuredObservations = (observationResult.error ? [] : observationResult.data || [])
         .filter((row: any) => visiblePlanIds.has(String(row.plan_id)))
@@ -77903,10 +78614,18 @@ async function startServer() {
             instrumentVersion: row.instrument_version || definition.instrument_version || null,
             definitionVersion: Number(row.definition_version || definition.definition_version || 1),
             missingReason: row.missing_reason || null,
-            metadata: row.metadata || {},
+            metadata: {
+              ...(row.metadata || {}),
+              targetType: definition.target_type || null,
+              targetValue: finiteClinicalOutcomeNumber(definition.target_value),
+              targetMin: finiteClinicalOutcomeNumber(definition.target_min),
+              targetMax: finiteClinicalOutcomeNumber(definition.target_max),
+            },
             minimumDataPoints: Number(definition.minimum_data_points || 4),
             recencyWindowDays: Number(definition.recency_window_days || 30),
-            sourceRecordType: 'clinical_observation'
+            sourceRecordType: 'clinical_observation',
+            sourceAuthority: 'legacy',
+            projectionStale: false
           };
         });
 
@@ -77932,7 +78651,9 @@ async function startServer() {
           metricType: point.metricType,
           unit: abaMetricUnit(String(point.metricType || '')).trim(),
           direction: String(point.metricDirection || '').toLowerCase() === 'lower_is_better' ? 'lower_is_better' : 'higher_is_better',
-          value: Number.isFinite(Number(point.value)) ? Number(point.value) : null,
+          value: point.value === null || point.value === undefined
+            ? null
+            : Number.isFinite(Number(point.value)) ? Number(point.value) : null,
           numerator: null,
           denominator: point.attemptsCount || null,
           observedAt: point.changedAt,
@@ -77942,10 +78663,20 @@ async function startServer() {
           instrumentVersion: null,
           definitionVersion: 1,
           missingReason: null,
-          metadata: { changeStatus: point.changeStatus, statusLabel: point.statusLabel, specialtySource: point.specialtySource },
+          metadata: {
+            changeStatus: point.changeStatus,
+            statusLabel: point.statusLabel,
+            specialtySource: point.specialtySource,
+            targetDescription: target?.description || null,
+            masteryCriteria: target?.mastery_criteria || null,
+            targetType: target?.target_type || null,
+            targetPhase: target?.phase || null,
+          },
           minimumDataPoints: 4,
           recencyWindowDays: 30,
-          sourceRecordType: 'aba_snapshot'
+          sourceRecordType: 'aba_snapshot',
+          sourceAuthority: 'legacy',
+          projectionStale: false
         };
       }).filter(Boolean);
 
@@ -77953,10 +78684,12 @@ async function startServer() {
         visiblePlanIds.has(String(row.pts_plan_id)) && visiblePlanIds.has(String(row.specialty_plan_id))
       ));
       const visiblePhases = (phaseResult.error ? [] : phaseResult.data || []).filter((row: any) => visiblePlanIds.has(String(row.plan_id)));
+      const legacyOutcomeRows = [...structuredObservations, ...abaObservations];
+      const mergedOutcomes = mergeClinicalOutcomeRowsV3First(v3PlanOutcomeRows, legacyOutcomeRows);
+      const legacyObservationCount = mergedOutcomes.rows.filter((row: any) => row?.sourceAuthority !== 'canonical').length;
       const specialties = Array.from(new Set([
         ...visiblePlans.map((plan: any) => sanitizeTextField(plan.specialty, 120)),
-        ...structuredObservations.map((row: any) => sanitizeTextField(row.specialty, 120)),
-        ...abaObservations.map((row: any) => sanitizeTextField(row?.specialty, 120))
+        ...mergedOutcomes.rows.map((row: any) => sanitizeTextField(row?.specialty, 120))
       ].filter(Boolean))).sort((left, right) => left.localeCompare(right, 'pt-BR'));
 
       return res.json({
@@ -77971,19 +78704,29 @@ async function startServer() {
             therapeuticObjectiveId: program.therapeutic_objective_id || null,
             measurementType: program.measurement_type || null
           })),
-          observations: [...structuredObservations, ...abaObservations],
+          observations: mergedOutcomes.rows,
           contributions: visibleContributions,
           phases: visiblePhases,
           specialties,
-          schemaAvailable: clinicalSchemaAvailable
+          schemaAvailable: clinicalSchemaAvailable || v3ReadModelAvailable,
+          v3Available: v3ReadModelAvailable,
+          v3ObservationCount: v3PlanOutcomeRows.length,
+          legacyObservationCount
         },
         meta: {
-          queryCount: 9,
+          queryCount: 9 + v3RpcCount,
+          rpcCount: v3RpcCount,
           batched: true,
           periodDays: requestedDays,
           dateFrom: dateFromIso,
           dateTo: dateToIso,
-          doesNotAverageSpecialties: true
+          doesNotAverageSpecialties: true,
+          canonicalSource: 'CMV3_PLAN_PROJECTIONS_PLUS_ABA_V3_READ_MODEL',
+          v3ObservationCount: v3PlanOutcomeRows.length,
+          legacyObservationCount,
+          deduplicatedLegacyCount: mergedOutcomes.deduplicatedLegacyCount,
+          rawEventsRead: false,
+          legacyFallbackPreserved: true
         }
       });
     } catch (error: any) {
@@ -79442,6 +80185,23 @@ async function startServer() {
         appointmentClaimNeedsRelease = claimResult.data?.claimedNow === true;
       }
 
+      const persistedSessionStartedAt = existingInProgressSession?.started_at || startedAt;
+      const existingLocationContext = parseStoredJsonObject(existingInProgressSession?.location_context_snapshot);
+      const sessionLocationTimezone = sanitizeString(
+        existingLocationContext?.locationTimezone ||
+          existingLocationContext?.location_timezone ||
+          linkedAppointment?.location_timezone ||
+          req.body?.location_timezone ||
+          req.body?.locationTimezone ||
+          req.body?.location_context_snapshot?.locationTimezone ||
+          req.body?.locationContextSnapshot?.locationTimezone,
+        120
+      ) || 'America/Sao_Paulo';
+      const serverReferenceDate =
+        sanitizeDate(existingInProgressSession?.reference_date) ||
+        formatDateInAppointmentTimezone(persistedSessionStartedAt, sessionLocationTimezone) ||
+        persistedSessionStartedAt.slice(0, 10);
+
       const payload = cleanObject({
         id: sessionId,
         organization_id: sanitizeString(linkedAppointment?.organization_id || linkedAppointment?.clinic_id || clinicId, 120),
@@ -79496,11 +80256,11 @@ async function startServer() {
           locationName: linkedAppointment?.location_name_snapshot || linkedAppointment?.room_name || null,
           locationAddress: linkedAppointment?.location_address_snapshot || null,
           locationSource: linkedAppointment?.location_source || null,
-          locationTimezone: linkedAppointment?.location_timezone || 'America/Sao_Paulo',
+          locationTimezone: sessionLocationTimezone,
           locationSnapshot: parseStoredJsonObject(linkedAppointment?.location_snapshot),
         }),
         service_type: sanitizeString(req.body?.service_type || req.body?.serviceType || linkedAppointment?.service_type || linkedAppointment?.approach, 120) || null,
-        started_at: existingInProgressSession?.started_at || startedAt,
+        started_at: persistedSessionStartedAt,
         ended_at: req.body?.ended_at || req.body?.endedAt ? sanitizeIsoDateTime(req.body?.ended_at || req.body?.endedAt, startedAt) : resolvedActualEndAt,
         duration_seconds: req.body?.duration_seconds !== undefined || req.body?.durationSeconds !== undefined
           ? asSafeNumber(req.body?.duration_seconds ?? req.body?.durationSeconds, 0, 86400)
@@ -79508,7 +80268,7 @@ async function startServer() {
         duration_minutes: req.body?.duration_minutes !== undefined || req.body?.durationMinutes !== undefined
           ? asSafeNumber(req.body?.duration_minutes ?? req.body?.durationMinutes, 0, 1440)
           : calculateAbaSessionDurationMinutes(resolvedActualStartAt, resolvedActualEndAt),
-        reference_date: sanitizeDate(req.body?.reference_date || req.body?.referenceDate) || startedAt.slice(0, 10),
+        reference_date: serverReferenceDate,
         record_count: existingInProgressSession?.record_count ?? (asSafeNumber(req.body?.record_count ?? req.body?.recordCount, 0, 100000) || 0),
         sync_status: 'synced',
         notes: sanitizeTextField(req.body?.notes, 2000),
@@ -80017,8 +80777,23 @@ async function startServer() {
       if (/SESSION_COMPLETION_ABSENCE_HAS_CLINICAL_RECORDS/i.test(message)) {
         return res.status(409).json({ success: false, code: 'ABSENCE_HAS_CLINICAL_RECORDS', error: 'Não é possível registrar falta ou cancelamento porque esta sessão já possui registros clínicos.' });
       }
-      if (/SESSION_COMPLETION_SESSION_NOT_FOUND|SESSION_COMPLETION_APPOINTMENT_NOT_FOUND/i.test(message)) {
-        return res.status(404).json({ success: false, code: 'SESSION_COMPLETION_NOT_FOUND', error: 'Sessão ou agendamento não encontrado.' });
+      if (/SESSION_COMPLETION_SESSION_NOT_FOUND/i.test(message)) {
+        return res.status(404).json({
+          success: false,
+          code: 'SESSION_COMPLETION_NOT_FOUND',
+          missingResource: 'session',
+          recoverable: true,
+          error: 'Sessão não encontrada no servidor.'
+        });
+      }
+      if (/SESSION_COMPLETION_APPOINTMENT_NOT_FOUND/i.test(message)) {
+        return res.status(404).json({
+          success: false,
+          code: 'SESSION_COMPLETION_NOT_FOUND',
+          missingResource: 'appointment',
+          recoverable: false,
+          error: 'Agendamento vinculado à sessão não encontrado.'
+        });
       }
       if (/SESSION_COMPLETION_ACCESS_DENIED|SESSION_COMPLETION_ACTOR_MISMATCH/i.test(message)) {
         return res.status(403).json({ success: false, code: 'SESSION_COMPLETION_ACCESS_DENIED', error: 'Você não possui permissão para encerrar esta sessão.' });
@@ -90792,7 +91567,11 @@ async function startServer() {
     checkPatientAccess,
     requireClinicCapability,
     sanitizeString,
-    currentClinicId
+    currentClinicId,
+    enforcePayloadLimit,
+    canEditTherapeuticPlanScope,
+    filterTherapeuticPlanScopesForActor,
+    filterTherapeuticPlanProgramsForActor
   });
 
   registerClinicAppointmentPolicyRoutes(app, {
@@ -90833,7 +91612,7 @@ async function startServer() {
           res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, no-transform');
           return;
         }
-        if (normalizedPath.endsWith('/manifest.webmanifest')) {
+        if (normalizedPath.endsWith('.webmanifest')) {
           res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
           res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, no-transform');
           return;

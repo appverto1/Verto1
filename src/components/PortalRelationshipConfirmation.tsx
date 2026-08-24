@@ -10,6 +10,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
   }, []);
   const [loading, setLoading] = useState(true);
   const [request, setRequest] = useState<any>(null);
+  const [requiresAuth, setRequiresAuth] = useState(true);
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [message, setMessage] = useState('');
@@ -40,6 +41,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
       setError(result?.message || result?.error || 'Não foi possível carregar a solicitação.');
     } else {
       setRequest(result.data);
+      setRequiresAuth(Boolean(result.requiresAuth));
       setConfirmed(Boolean(result.data?.canAuthorizeSharedHistory));
       setError('');
     }
@@ -74,6 +76,12 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     setError('');
     const result = await dataService.confirmRelationship(token);
     if (!result?.success) {
+      const authError = String(result?.error || '').trim();
+      if (authError === 'PORTAL_AUTH_REQUIRED' || authError === 'Requisição sensível sem autenticação válida.') {
+        setRequiresAuth(true);
+        setError('Confirme seu acesso com o código enviado ao e-mail responsável para continuar.');
+        return;
+      }
       setError(result?.message || result?.error || 'Não foi possível confirmar o vínculo.');
       return;
     }
@@ -86,6 +94,12 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     setError('');
     const result = await dataService.rejectRelationship(token);
     if (!result?.success) {
+      const authError = String(result?.error || '').trim();
+      if (authError === 'PORTAL_AUTH_REQUIRED' || authError === 'Requisição sensível sem autenticação válida.') {
+        setRequiresAuth(true);
+        setError('Confirme seu acesso com o código enviado ao e-mail responsável para continuar.');
+        return;
+      }
       setError(result?.message || result?.error || 'Não foi possível recusar o vínculo.');
       return;
     }
@@ -97,6 +111,12 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
     setError('');
     const result = await dataService.authorizeRelationshipHistory(token, scope);
     if (!result?.success) {
+      const authError = String(result?.error || '').trim();
+      if (authError === 'PORTAL_AUTH_REQUIRED' || authError === 'Requisição sensível sem autenticação válida.') {
+        setRequiresAuth(true);
+        setError('Confirme seu acesso com o código enviado ao e-mail responsável para continuar.');
+        return;
+      }
       setError(result?.message || result?.error || 'Não foi possível compartilhar o histórico.');
       return;
     }
@@ -170,7 +190,7 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
           </div>
         ) : loading ? (
           <p className="text-sm text-slate-500">Carregando solicitação...</p>
-        ) : request?.requiresAuth ? (
+        ) : requiresAuth ? (
           <div className="space-y-4">
             <p className="text-sm leading-6 text-slate-600">
               Para revisar esta solicitação, entre com um código de 6 dígitos enviado ao e-mail responsável.

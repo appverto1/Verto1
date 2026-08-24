@@ -128,19 +128,32 @@ export async function validateDistributedSessionToken(params: {
 export async function revokeDistributedSessionToken(params: {
   supabase: SupabaseLike;
   userId: string;
-  expectedToken?: string | null;
+  expectedToken: string;
+}) {
+  const userId = String(params.userId || '').trim().slice(0, 160);
+  const expectedToken = String(params.expectedToken || '').trim().slice(0, 200);
+  if (!userId || !expectedToken) return;
+  const now = new Date().toISOString();
+  const { error } = await params.supabase
+    .from('runtime_active_sessions')
+    .update({ revoked_at: now, updated_at: now })
+    .eq('user_id', userId)
+    .eq('token_hash', hashRuntimeSessionToken(expectedToken));
+  if (error) throw new Error(`DISTRIBUTED_SESSION_REVOKE_FAILED: ${error.message || error}`);
+}
+
+export async function revokeAllDistributedSessionTokens(params: {
+  supabase: SupabaseLike;
+  userId: string;
 }) {
   const userId = String(params.userId || '').trim().slice(0, 160);
   if (!userId) return;
   const now = new Date().toISOString();
-  let query = params.supabase
+  const { error } = await params.supabase
     .from('runtime_active_sessions')
     .update({ revoked_at: now, updated_at: now })
     .eq('user_id', userId);
-  const expectedToken = String(params.expectedToken || '').trim();
-  if (expectedToken) query = query.eq('token_hash', hashRuntimeSessionToken(expectedToken));
-  const { error } = await query;
-  if (error) throw new Error(`DISTRIBUTED_SESSION_REVOKE_FAILED: ${error.message || error}`);
+  if (error) throw new Error(`DISTRIBUTED_SESSION_REVOKE_ALL_FAILED: ${error.message || error}`);
 }
 
 export async function tryAcquireDistributedJobLease(params: {

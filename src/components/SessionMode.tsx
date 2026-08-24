@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   AlertCircle,
   Activity,
+  ArrowRight,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -326,11 +327,11 @@ const behaviorMeasurementOptions = [
 ];
 
 const behaviorPresets = [
-  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
-  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-amber-50 text-amber-700 border-amber-100' },
-  { id: 'aggression', name: 'Agressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'REQUIRED' as AbcRequirement, tone: 'bg-red-50 text-red-700 border-red-100' },
-  { id: 'self_injury', name: 'Autoagressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'REQUIRED' as AbcRequirement, tone: 'bg-rose-50 text-rose-700 border-rose-100' },
-  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'RECOMMENDED' as AbcRequirement, tone: 'bg-violet-50 text-violet-700 border-violet-100' },
+  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
+  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-amber-50 text-amber-700 border-amber-100' },
+  { id: 'aggression', name: 'Agressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-red-50 text-red-700 border-red-100' },
+  { id: 'self_injury', name: 'Autoagressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-rose-50 text-rose-700 border-rose-100' },
+  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-violet-50 text-violet-700 border-violet-100' },
   { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'whole_interval', 'momentary_time_sampling', 'duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
 ];
 
@@ -1246,6 +1247,7 @@ export const SessionMode = ({
   const [promptWarning, setPromptWarning] = useState('');
   const [abaV3ErrorSelection, setAbaV3ErrorSelection] = useState<AbaV3ErrorSelection | null>(null);
   const abaV3BindingCacheRef = useRef<Map<string, AbaV3BindingDecision>>(new Map());
+  const abaV3BindingInflightRef = useRef<Map<string, Promise<AbaV3BindingDecision | null>>>(new Map());
   const abaV3BehaviorBindingCacheRef = useRef<Map<string, AbaV3BehaviorDecision>>(new Map());
   const [abaV3SessionPlan, setAbaV3SessionPlan] = useState<AbaV3SessionCollectionPlan>({ targets: [], v3_behavior_ids: [], complete: false });
   const [abaV3SessionPlanStatus, setAbaV3SessionPlanStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -1425,6 +1427,10 @@ export const SessionMode = ({
   const sessionScrollRef = useRef<HTMLDivElement | null>(null);
   const postClosureScrollRef = useRef<HTMLDivElement | null>(null);
   const sessionSummaryScrollRef = useRef<HTMLDivElement | null>(null);
+  const closureAttendanceRef = useRef<HTMLDivElement | null>(null);
+  const closureNoteRef = useRef<HTMLDivElement | null>(null);
+  const closureDurationResolutionRef = useRef<HTMLDivElement | null>(null);
+  const closureIntervalResolutionRef = useRef<HTMLDivElement | null>(null);
   const clinicalDockRef = useRef<HTMLDivElement | null>(null);
   const intervalPausedControlsRef = useRef<HTMLDivElement | null>(null);
 
@@ -2267,7 +2273,44 @@ export const SessionMode = ({
   const goalTargetId = (goal: any) => String(goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || '').trim();
   const goalTargetName = (goal: any) => String(goal?.name || goal?.target_name || goal?.targetName || '').trim();
   const goalTargetType = (goal: any) => String(goal?.target_type || goal?.targetType || '').trim().toLowerCase();
+  const goalTherapeuticObjectiveId = (goal: any) => String(goal?.therapeutic_objective_id || goal?.therapeuticObjectiveId || '').trim();
+  const goalTherapeuticPlanId = (goal: any) => String(goal?.therapeutic_plan_id || goal?.therapeuticPlanId || '').trim();
   const therapeuticGoalKey = (goal: any) => goalTargetId(goal) || goalTargetName(goal) || String(goal?.id || '').trim();
+  const CMV3_PLAN_SUPPORTED_MEASUREMENTS = new Set(['correct_incorrect', 'frequency', 'duration', 'latency', 'percentage']);
+  const clinicalPlanMetricDirection = (goal: any, measurementType: string) => {
+    const criteria = goal?.masteryCriteria || goal?.mastery_criteria || {};
+    const operator = String(criteria?.operator || '').trim().toLowerCase();
+    if (['lte', 'lt', 'less_than', 'less_than_or_equal'].includes(operator)) return 'lower_is_better';
+    if (['gte', 'gt', 'greater_than', 'greater_than_or_equal'].includes(operator)) return 'higher_is_better';
+    if (measurementType === 'correct_incorrect' || measurementType === 'percentage') return 'higher_is_better';
+    if (measurementType === 'latency') return 'lower_is_better';
+    return 'no_directional_judgment';
+  };
+  const buildClinicalPlanMeasurementV3Payload = ({ goal, measurementType, numericValue, measurementUnit, timestamp, startedAt, endedAt, trialId }: any) => {
+    const therapeuticObjectiveId = goalTherapeuticObjectiveId(goal);
+    const targetId = goalTargetId(goal);
+    const targetName = goalTargetName(goal) || 'Alvo terapêutico';
+    if (!therapeuticObjectiveId || !CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(measurementType)) return null;
+    const metricKey = `program_target:${targetId || therapeuticObjectiveId}:${measurementType}`.slice(0, 120);
+    const metricLabel = `${targetName} · ${measurementType === 'correct_incorrect' ? 'Acurácia' : measurementType === 'frequency' ? 'Frequência' : measurementType === 'duration' ? 'Duração' : measurementType === 'latency' ? 'Latência' : 'Percentual'}`.slice(0, 180);
+    const payload: any = {
+      sourceKind: 'THERAPEUTIC_OBJECTIVE',
+      therapeuticObjectiveId,
+      metricKey,
+      metricLabel,
+      metricType: measurementType,
+      unit: measurementType === 'correct_incorrect' ? 'percent' : measurementUnit || null,
+      direction: clinicalPlanMetricDirection(goal, measurementType),
+      observedAt: timestamp,
+      idempotencyKey: trialId,
+      numericValue,
+    };
+    if (measurementType === 'duration' || measurementType === 'latency') {
+      payload.startedAt = startedAt;
+      payload.endedAt = endedAt || timestamp;
+    }
+    return payload;
+  };
   const therapeuticTimerElapsedMs = (timer: TherapeuticTimerState | null | undefined) => {
     if (!timer) return 0;
     const runningDelta = timer.runningSince ? Math.max(0, nowMs - new Date(timer.runningSince).getTime()) : 0;
@@ -2350,28 +2393,49 @@ export const SessionMode = ({
     addRecord(localRecord, 'local');
     window.setTimeout(() => updateRecordStatus(trialId, 'syncing'), 30);
     try {
-      const result = await dataService.saveAbaTrial({
-        id: trialId,
-        clinic_id: resolvedClinicId || undefined,
-        patient_id: patientId,
-        session_id: sessionId,
-        target_id: targetId || undefined,
-        target_name: targetName,
-        program_id: programId || undefined,
-        collection_type: normalizedCollectionType,
-        trial_type: normalizedCollectionType,
-        ...(isCorrectIncorrect ? { response_score: numericValue, max_score: 1, correct } : {}),
-        independent: false,
-        latency_ms: normalizedMeasurementType === 'latency' ? (latencyMs ?? Math.round(numericValue * 1000)) : undefined,
-        occurred_at: timestamp,
-        therapist_id: resolvedTherapistId || undefined,
-        source: 'therapeutic_program_measurement',
-        raw_payload: rawPayload
+      const cmv3Payload = buildClinicalPlanMeasurementV3Payload({
+        goal,
+        measurementType: normalizedMeasurementType,
+        numericValue,
+        measurementUnit,
+        timestamp,
+        startedAt: startedAt || timestamp,
+        endedAt: timestamp,
+        trialId,
       });
+      const useCanonicalPlanWriter = Boolean(cmv3Payload);
+      const result = useCanonicalPlanWriter
+        ? await dataService.saveClinicalPlanMeasurementV3(patientId, cmv3Payload)
+        : await dataService.saveAbaTrial({
+            id: trialId,
+            clinic_id: resolvedClinicId || undefined,
+            patient_id: patientId,
+            session_id: sessionId,
+            target_id: targetId || undefined,
+            target_name: targetName,
+            program_id: programId || undefined,
+            collection_type: normalizedCollectionType,
+            trial_type: normalizedCollectionType,
+            ...(isCorrectIncorrect ? { response_score: numericValue, max_score: 1, correct } : {}),
+            independent: false,
+            latency_ms: normalizedMeasurementType === 'latency' ? (latencyMs ?? Math.round(numericValue * 1000)) : undefined,
+            occurred_at: timestamp,
+            therapist_id: resolvedTherapistId || undefined,
+            source: 'therapeutic_program_measurement_legacy_fallback',
+            raw_payload: {
+              ...rawPayload,
+              canonicalPlanWriterFallback: true,
+              fallbackReason: !CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(normalizedMeasurementType)
+                ? 'SEMANTIC_FAMILY_NOT_SUPPORTED_BY_PLAN_WRITER'
+                : 'THERAPEUTIC_OBJECTIVE_IDENTITY_UNAVAILABLE',
+              therapeuticPlanId: goalTherapeuticPlanId(goal) || null,
+              therapeuticObjectiveId: goalTherapeuticObjectiveId(goal) || null,
+            }
+          });
       if (result?.success === false) {
         updateRecordStatus(trialId, result?.durable ? 'local' : 'error');
         if (!result?.durable) {
-          setSessionWarning(result?.error || 'Não foi possível salvar esta medida clínica.');
+          setSessionWarning(result?.error || (useCanonicalPlanWriter ? 'Não foi possível salvar esta medida no registro clínico V3. Nenhum registro Legacy foi criado.' : 'Não foi possível salvar esta medida clínica.'));
           showClinicalToast(buildClinicalSaveErrorToast(), 'error');
           return false;
         }
@@ -3302,17 +3366,40 @@ export const SessionMode = ({
     const cacheKey = `${sessionId}:${targetId}`;
     const cached = abaV3BindingCacheRef.current.get(cacheKey);
     if (cached) return cached;
-    const result = await dataService.resolveAbaV3SessionTargetBinding({
-      patientId,
-      sessionId,
-      targetId
-    });
-    if (!result?.success || !result?.data?.measurementModelVersion) {
-      throw new Error(result?.error || 'Não foi possível determinar o modelo de coleta deste target.');
+    const pending = abaV3BindingInflightRef.current.get(cacheKey);
+    if (pending) return pending;
+
+    const request = (async (): Promise<AbaV3BindingDecision | null> => {
+      const result = await dataService.resolveAbaV3SessionTargetBinding({
+        patientId,
+        sessionId,
+        targetId
+      });
+      if (!result?.success || !result?.data?.measurementModelVersion) {
+        throw new Error(result?.error || 'Não foi possível determinar o modelo de coleta deste target.');
+      }
+      const binding = result.data as AbaV3BindingDecision;
+      abaV3BindingCacheRef.current.set(cacheKey, binding);
+      return binding;
+    })();
+
+    abaV3BindingInflightRef.current.set(cacheKey, request);
+    try {
+      return await request;
+    } finally {
+      if (abaV3BindingInflightRef.current.get(cacheKey) === request) {
+        abaV3BindingInflightRef.current.delete(cacheKey);
+      }
     }
-    const binding = result.data as AbaV3BindingDecision;
-    abaV3BindingCacheRef.current.set(cacheKey, binding);
-    return binding;
+  };
+
+  const primeAbaV3BindingForGoal = (goal: any) => {
+    if (!goal || !patientId || !sessionId || sessionId.startsWith('draft-') || abaV3SessionPlanStatus !== 'ready') return;
+    if (abaV3PlannedModelForGoal(goal) !== 'V3') return;
+    void resolveAbaV3BindingForGoal(goal).catch((error: any) => {
+      console.warn('[ABA V3] Não foi possível preparar o binding do alvo selecionado:', error?.message || String(error));
+      setSessionWarning(error?.message || 'Não foi possível preparar a coleta V3 deste target.');
+    });
   };
 
   const resolveAbaV3BehaviorForAction = async (behavior: any): Promise<AbaV3BehaviorDecision | null> => {
@@ -5638,22 +5725,8 @@ export const SessionMode = ({
   };
 
   const buildSessionClosureIssues = (): { blockers: SessionSummaryPendingItem[]; warnings: SessionSummaryPendingItem[] } => {
-    const behaviorRecords = records.filter((record) => record.kind === 'behavior' && !record.intervalAggregate && !isCancelledIntervalClinicalRecord(record));
     const savingLocally = records.filter((record) => record.syncStatus === 'syncing');
     const notSyncedWithServer = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'error');
-    const abcMissingCounts: Record<AbcRequirement, number> = {
-      REQUIRED: 0,
-      RECOMMENDED: 0,
-      OPTIONAL: 0,
-      DISABLED: 0
-    };
-    behaviorRecords.filter((record) => (
-      inferRecordMeasurementType(record) !== 'abc' &&
-      !record.antecedent &&
-      !record.consequence
-    )).forEach((record) => {
-      abcMissingCounts[getRecordAbcRequirement(record)] += 1;
-    });
 
     const closure = canCloseAbaSession({
       openDurations,
@@ -5715,11 +5788,8 @@ export const SessionMode = ({
     }
 
     if (!isNonAttendance) {
-      if (abcMissingCounts.REQUIRED > 0) {
-        blockers.push({ key: 'required_abc_missing', label: `ABC obrigatório pendente em ${abcMissingCounts.REQUIRED} evento(s)`, category: 'blocker', blocking: true, count: abcMissingCounts.REQUIRED });
-      }
-      if (abcMissingCounts.RECOMMENDED > 0) warnings.push({ key: 'recommended_abc_missing', label: `ABC recomendado pendente em ${abcMissingCounts.RECOMMENDED} evento(s)`, category: 'warning', count: abcMissingCounts.RECOMMENDED });
-      if (abcMissingCounts.OPTIONAL > 0) warnings.push({ key: 'optional_abc_missing', label: `ABC opcional ausente em ${abcMissingCounts.OPTIONAL} evento(s)`, category: 'warning', count: abcMissingCounts.OPTIONAL });
+      // ABC remains available as an optional clinical complement. Missing ABC fields
+      // never block or warn during session closure; the behavior record itself is valid.
       warnings.push({ key: 'guardian_signature_pending', label: 'Assinatura do responsável pendente', category: 'warning', count: 1 });
       if (!sessionNote.trim()) warnings.push({ key: 'session_note_pending', label: 'Observação da sessão pendente', category: 'warning', count: 1 });
     }
@@ -5787,6 +5857,16 @@ export const SessionMode = ({
         appointmentId: activeAppointmentId || undefined,
         therapist_id: resolvedTherapistId || undefined,
         therapistId: resolvedTherapistId || undefined,
+        started_at: activeSession?.actualStartAt || activeSession?.actual_start_at || activeSession?.startedAt || activeSession?.started_at || finalSummary.startedAt,
+        startedAt: activeSession?.actualStartAt || activeSession?.actual_start_at || activeSession?.startedAt || activeSession?.started_at || finalSummary.startedAt,
+        scheduled_start: activeSession?.scheduledStart || activeSession?.scheduled_start || activeSession?.scheduledStartAt || activeSession?.scheduled_start_at || undefined,
+        scheduledStart: activeSession?.scheduledStart || activeSession?.scheduled_start || activeSession?.scheduledStartAt || activeSession?.scheduled_start_at || undefined,
+        scheduled_end: activeSession?.scheduledEnd || activeSession?.scheduled_end || activeSession?.scheduledEndAt || activeSession?.scheduled_end_at || undefined,
+        scheduledEnd: activeSession?.scheduledEnd || activeSession?.scheduled_end || activeSession?.scheduledEndAt || activeSession?.scheduled_end_at || undefined,
+        scheduled_duration_minutes: activeSession?.scheduledDurationMinutes || activeSession?.scheduled_duration_minutes || undefined,
+        scheduledDurationMinutes: activeSession?.scheduledDurationMinutes || activeSession?.scheduled_duration_minutes || undefined,
+        reference_date: activeSession?.referenceDate || activeSession?.reference_date || sessionClinicalDate || undefined,
+        referenceDate: activeSession?.referenceDate || activeSession?.reference_date || sessionClinicalDate || undefined,
         attendance_status: attendanceStatus,
         attendanceStatus,
         ended_at: endedAt,
@@ -5989,6 +6069,74 @@ export const SessionMode = ({
       }, 0);
     }
   };
+
+  const scrollClosureRefIntoView = (ref: React.RefObject<HTMLDivElement | null>) => {
+    if (typeof window === 'undefined') return;
+    window.setTimeout(() => {
+      ref.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const focusable = ref.current?.querySelector<HTMLElement>('textarea, input, select, button:not([disabled])');
+      focusable?.focus({ preventScroll: true });
+    }, 0);
+  };
+
+  const focusSessionHistoryRecord = (recordId: string) => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    window.setTimeout(() => {
+      const target = Array.from(document.querySelectorAll<HTMLElement>('[data-aba-session-record-id]'))
+        .find((element) => element.getAttribute('data-aba-session-record-id') === recordId);
+      target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target?.focus({ preventScroll: true });
+    }, 50);
+  };
+
+  const resolveClosureBlocker = (item: SessionSummaryPendingItem) => {
+    if (endingSession) return;
+
+    if (item.key === 'open_duration') {
+      scrollClosureRefIntoView(closureDurationResolutionRef);
+      return;
+    }
+    if (item.key === 'open_interval_collection') {
+      scrollClosureRefIntoView(closureIntervalResolutionRef);
+      return;
+    }
+    if (item.key === 'absence_with_clinical_records') {
+      scrollClosureRefIntoView(closureAttendanceRef);
+      return;
+    }
+    if (item.key === 'absence_reason_required') {
+      scrollClosureRefIntoView(closureNoteRef);
+      return;
+    }
+
+    if (item.key === 'v3_failed_trials_require_resolution' || item.key === 'server_sync_required' || item.key === 'unsaved_local_records') {
+      const unsyncedRecord = records.find((record) => (
+        record.syncStatus === 'error' || record.syncStatus === 'local' || record.syncStatus === 'syncing'
+      ));
+      if (unsyncedRecord) {
+        setSessionHistoryOpen(true);
+        returnToActiveSession();
+        focusSessionHistoryRecord(unsyncedRecord.id);
+        return;
+      }
+    }
+
+    if (item.key === 'therapeutic_measurement_timer_open') {
+      const timer = Object.values(therapeuticTimers)[0];
+      returnToActiveSession();
+      if (timer && typeof window !== 'undefined') {
+        window.setTimeout(() => focusTherapeuticTimerGoal(timer), 50);
+      }
+      return;
+    }
+
+    if (item.key === 'incomplete_trial') {
+      returnToActiveSession();
+      return;
+    }
+
+    returnToActiveSession();
+  };
   const abaV3SessionPlanTargetIds = useMemo(() => Array.from(new Set(
     sessionGoals.map((goal: any) => goalTargetId(goal)).filter(Boolean)
   )).slice(0, 200), [sessionGoals]);
@@ -5996,6 +6144,7 @@ export const SessionMode = ({
 
   useEffect(() => {
     abaV3BindingCacheRef.current.clear();
+    abaV3BindingInflightRef.current.clear();
     abaV3BehaviorBindingCacheRef.current.clear();
     if (!patientId || !sessionId || sessionId.startsWith('draft-')) {
       setAbaV3SessionPlan({ targets: [], v3_behavior_ids: [], complete: false });
@@ -6030,6 +6179,16 @@ export const SessionMode = ({
       });
     return () => { cancelled = true; };
   }, [abaV3SessionPlanTargetSignature, abaV3UiEnabled, patientId, sessionId]);
+
+  useEffect(() => {
+    if (abaV3SessionPlanStatus !== 'ready' || !mobileSelectedGoalKey) return;
+    const selectedGoal = sessionGoals.find((goal: any) => (
+      String(goal?.id || goal?.target_id || goal?.targetId || goal?.name || 'goal') === mobileSelectedGoalKey
+    ));
+    if (!selectedGoal) return;
+    primeAbaV3BindingForGoal(selectedGoal);
+  }, [abaV3SessionPlanStatus, mobileSelectedGoalKey, sessionGoals]);
+
   const planningTargetNameById = useMemo(() => {
     const names = new Map<string, string>();
     for (const goal of sessionGoals) {
@@ -10168,6 +10327,7 @@ export const SessionMode = ({
                   onClick={() => {
                     setMobileSelectedGoalKey(goalKey);
                     syncTrialTypeForGoal(goal);
+                    primeAbaV3BindingForGoal(goal);
                   }}
                   className={`min-w-0 overflow-hidden rounded-[18px] border bg-white px-3 py-3 shadow-sm transition-all ${selected ? 'border-[#7a32fc] ring-2 ring-[#7a32fc]/15' : 'border-blue-100'}`}
                 >
@@ -10363,7 +10523,7 @@ export const SessionMode = ({
               const instruction = String(goal.instruction || goal.antecedent || goal?.advanced_settings?.antecedent || '').trim();
               const expectedResponse = String(goal.expectedResponse || goal.expected_response || goal?.advanced_settings?.expectedResponse || '').trim();
               return (
-                <div key={goal.id} onPointerDown={() => syncTrialTypeForGoal(goal)} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
+                <div key={goal.id} onPointerDown={() => { syncTrialTypeForGoal(goal); primeAbaV3BindingForGoal(goal); }} className="bg-white rounded-[24px] sm:rounded-[32px] p-4 sm:p-6 shadow-xl shadow-blue-900/5 border border-white relative overflow-hidden">
                   <div className="flex flex-col gap-4 mb-5 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
                       <div className="mb-3 flex flex-wrap gap-2">
@@ -10573,7 +10733,7 @@ export const SessionMode = ({
             ) : visibleHistoryRecords.map((record) => {
               const lockedIntervalRecord = isIntervalHistoryRecord(record);
               return (
-              <div key={record.id} className="rounded-2xl border border-gray-100 bg-[#F8FAFF] p-3 sm:p-4">
+              <div key={record.id} data-aba-session-record-id={record.id} tabIndex={-1} className="rounded-2xl border border-gray-100 bg-[#F8FAFF] p-3 sm:p-4 outline-none focus:ring-2 focus:ring-[#7a32fc]/25">
                 {editingRecordId === record.id ? (
                   <div className="space-y-3">
                     <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">{record.kind === 'trial' ? 'Tentativa' : 'Comportamento'}</p>
@@ -11206,6 +11366,7 @@ export const SessionMode = ({
               </button>
             </div>
 
+            <div ref={closureAttendanceRef}>
             <SessionSummaryDisclosure title="Presença no atendimento" meta={SESSION_ATTENDANCE_OPTIONS.find((option) => option.value === attendanceStatus)?.label || 'Selecione'}>
 <section className="rounded-[24px] bg-white border border-blue-100 p-5">
               <h4 className="text-lg font-semibold text-gray-900">Presença no atendimento</h4>
@@ -11240,6 +11401,7 @@ export const SessionMode = ({
               )}
             </section>
             </SessionSummaryDisclosure>
+            </div>
 
             <SessionSummaryDisclosure title="Resumo geral" meta={`${formatSessionDuration(sessionClosureSummary.durationSeconds)} · ${sessionClosureSummary.totalTrials} tentativa(s) · ${sessionClosureSummary.totalBehaviorEvents} registro(s)`}>
 <section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
@@ -11385,13 +11547,23 @@ export const SessionMode = ({
                 {closureBlockers.length === 0 ? (
                   <p className="rounded-2xl bg-emerald-50 border border-emerald-100 px-4 py-3 text-sm font-semibold text-emerald-700">Nenhum bloqueio. O encerramento está liberado.</p>
                 ) : closureBlockers.map((item) => (
-                  <div key={item.key} className="rounded-2xl bg-red-50 border border-red-100 px-4 py-3 text-sm font-semibold text-red-700">
-                    {item.label}
-                  </div>
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => resolveClosureBlocker(item)}
+                    disabled={endingSession}
+                    className="group flex w-full items-center justify-between gap-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-left text-sm font-semibold text-red-700 transition hover:border-red-200 hover:bg-red-100/70 focus:outline-none focus:ring-2 focus:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    aria-label={`Resolver bloqueio: ${item.label}`}
+                  >
+                    <span className="min-w-0 flex-1">{item.label}</span>
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-red-600 shadow-sm">
+                      Resolver <ArrowRight size={12} className="transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                    </span>
+                  </button>
                 ))}
               </div>
               {openDurations.length > 0 && (
-                <div className="mt-4 space-y-3">
+                <div ref={closureDurationResolutionRef} className="mt-4 space-y-3">
                   {openDurations.map((event) => (
                     <div key={event.id} className="rounded-2xl bg-white border border-red-100 p-4">
                       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -11411,7 +11583,7 @@ export const SessionMode = ({
                 </div>
               )}
               {intervalRun && (
-                <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-4">
+                <div ref={closureIntervalResolutionRef} className="mt-4 rounded-2xl border border-red-100 bg-red-50 p-4">
                   <p className="font-bold text-red-700">Há uma coleta por intervalo em andamento</p>
                   <p className="mt-1 text-sm text-red-700">{intervalRun.behaviorName} - {getMeasurementLabel(intervalRun.measurementType)} - intervalo {intervalRun.intervalIndex}/{intervalRun.totalIntervals}</p>
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -11445,6 +11617,7 @@ export const SessionMode = ({
             </section>
             </SessionSummaryDisclosure>
 
+            <div ref={closureNoteRef}>
             <SessionSummaryDisclosure
               title={NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Motivo da falta ou do cancelamento' : 'Observação do atendimento'}
               meta={sessionNote.trim() ? 'preenchida' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'toque para informar' : 'opcional'}
@@ -11466,6 +11639,7 @@ export const SessionMode = ({
               </label>
             </section>
             </SessionSummaryDisclosure>
+            </div>
 
             {sessionEndError && (
               <div role="alert" className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">

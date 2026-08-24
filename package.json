@@ -122,7 +122,8 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test:patient-create-user-idempotency": "tsx tests/patientCreateUserIdempotency.test.ts",
-    "smoke:aba-v3-preproduction": "node scripts/aba-v3-pilot-smoke.mjs"
+    "smoke:aba-v3-preproduction": "node scripts/aba-v3-pilot-smoke.mjs",
+    "test:aba-v3-production-health": "node tests/abaV3ProductionHealthObservability.test.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

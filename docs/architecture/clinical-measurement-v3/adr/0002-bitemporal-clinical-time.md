@@ -1,13 +1,13 @@
 # ADR-0002 — Bitemporal Clinical Time
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-08-20  
 **Decision owners:** Clinical Measurement Architecture  
 **Scope:** Clinical Measurement Engine V3  
 **Related ADRs:** ADR-0001, ADR-0004, ADR-0005, ADR-0006, ADR-0008  
 **Supersedes:** —  
 **Superseded by:** —  
-**Implementation status:** Not started  
+**Implementation status:** Implemented — production baseline (2026-08-23)  
 
 ## Context
 

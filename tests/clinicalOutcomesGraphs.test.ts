@@ -2,6 +2,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
   canCombineClinicalOutcomeSeries,
+  clinicalOutcomeBaselineValue,
+  clinicalOutcomeEvidenceSampleLabel,
+  clinicalOutcomeMetricDisplayLabel,
+  clinicalOutcomeSourceLabel,
+  clinicalOutcomeTargetReference,
+  clinicalOutcomeUnitLabel,
+  compareClinicalOutcomePeriods,
   formatClinicalOutcomeValue,
   summarizeClinicalOutcomeSeries,
 } from '../src/utils/clinicalOutcomeAnalytics';
@@ -29,21 +36,119 @@ assert.equal(summaries.length, 1);
 assert.equal(summaries[0].evidenceState, 'sufficient');
 assert.equal(summaries[0].visualTrend, 'up');
 assert.equal(formatClinicalOutcomeValue(observations[3]), '5 de 10 — 50%');
+assert.equal(clinicalOutcomeUnitLabel('%', 'functional_requests', observations.map((row) => row.value)), 'Percentual (%)');
+assert.equal(clinicalOutcomeSourceLabel('aba_session_metric_snapshot'), 'Histórico ABA');
+assert.equal(clinicalOutcomeEvidenceSampleLabel(summaries[0]), '4 registros · 40 oportunidades');
+assert.equal(clinicalOutcomeMetricDisplayLabel('TARGET_TRIAL_COUNT', 'Canário V3 Default-On', 'Canário V3 Default-On'), 'Tentativas registradas');
 
 assert.equal(canCombineClinicalOutcomeSeries(base, { ...base, context: 'home' }), true, 'contextos comparáveis podem compartilhar o mesmo gráfico');
 assert.equal(canCombineClinicalOutcomeSeries(base, { ...base, unit: 'segundos' }), false, 'unidades incompatíveis não podem ser misturadas');
 assert.equal(canCombineClinicalOutcomeSeries(base, { ...base, direction: 'lower_is_better' }), false, 'direções opostas não podem ser misturadas');
 
+const nullIsNotZero = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'missing', observedAt: '2026-07-23T10:00:00.000Z', value: null, missingReason: 'expected_not_collected' },
+], new Date('2026-07-23T12:00:00.000Z'));
+assert.equal(nullIsNotZero[0].evidenceState, 'no_data', 'ausência explícita nunca pode virar zero no gráfico');
+
+const categorical = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'cat-1', metricKey: 'support_level', metricLabel: 'Nível de apoio', unit: '', value: null, valueText: 'Moderado', observedAt: '2026-07-20T10:00:00.000Z' },
+], new Date('2026-07-23T12:00:00.000Z'));
+assert.equal(categorical[0].evidenceState, 'baseline_only', 'categoria V3 é evidência válida mesmo sem valor numérico');
+assert.equal(formatClinicalOutcomeValue(categorical[0].latestObservation), 'Moderado');
+
+const mergedSources = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'legacy', source: 'professional_observation', observedAt: '2026-07-01T10:00:00.000Z', value: 20 },
+  { ...base, id: 'v3', source: 'V3 canônico', observedAt: '2026-07-08T10:00:00.000Z', value: 30 },
+], new Date('2026-07-09T00:00:00.000Z'));
+assert.equal(mergedSources.length, 1, 'mudança da fonte legado → V3 não pode quebrar a continuidade da mesma série clínica');
+assert.equal(mergedSources[0].source, 'V3 + histórico');
+
+const abaPhaseRows = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'phase-a', itemId: 'dtt:target-1', itemLabel: 'Canário V3 Default-On', metricKey: 'PRIMARY_INDEPENDENCE_PERCENT', metricLabel: 'Independência primária', instrumentId: 'ABA_V3_PHASE', instrumentVersion: 'phase-1', observedAt: '2026-07-01T10:00:00.000Z', value: 50 },
+  { ...base, id: 'phase-b', itemId: 'dtt:target-1', itemLabel: 'Canário V3 Default-On', metricKey: 'PRIMARY_INDEPENDENCE_PERCENT', metricLabel: 'Independência primária', instrumentId: 'ABA_V3_PHASE', instrumentVersion: 'phase-2', observedAt: '2026-07-08T10:00:00.000Z', value: 60 },
+], new Date('2026-07-09T00:00:00.000Z'));
+assert.equal(abaPhaseRows.length, 1, 'mudança de fase ABA V3 deve quebrar a linha, não criar outro card');
+assert.equal(abaPhaseRows[0].itemLabel, 'Canário V3 Default-On');
+
+const realInstrumentVersionRows = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'instrument-a', instrumentId: 'scale-x', instrumentVersion: '1', observedAt: '2026-07-01T10:00:00.000Z', value: 1 },
+  { ...base, id: 'instrument-b', instrumentId: 'scale-x', instrumentVersion: '2', observedAt: '2026-07-08T10:00:00.000Z', value: 2 },
+], new Date('2026-07-09T00:00:00.000Z'));
+assert.equal(realInstrumentVersionRows.length, 2, 'versões clínicas reais de instrumento continuam semanticamente separadas');
+
+const baselineAndTarget = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'baseline-1', itemId: 'target-criterion', observedAt: '2026-06-01T10:00:00.000Z', value: 20, metadata: { phaseType: 'baseline', phaseLabel: 'Linha de base', targetValue: 80 } },
+  { ...base, id: 'baseline-2', itemId: 'target-criterion', observedAt: '2026-06-02T10:00:00.000Z', value: 30, metadata: { phaseType: 'baseline', phaseLabel: 'Linha de base', targetValue: 80 } },
+  { ...base, id: 'teaching-1', itemId: 'target-criterion', observedAt: '2026-06-10T10:00:00.000Z', value: 50, metadata: { phaseType: 'intervention', phaseLabel: 'Aquisição', targetValue: 80 } },
+], new Date('2026-06-11T00:00:00.000Z'))[0];
+assert.equal(clinicalOutcomeBaselineValue(baselineAndTarget), 25, 'linha de base deve usar apenas pontos explicitamente identificados como baseline');
+assert.equal(clinicalOutcomeTargetReference(baselineAndTarget).targetValue, 80, 'critério explícito deve ser preservado como referência do gráfico');
+
+const currentPeriod = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'current-1', observedAt: '2026-07-20T10:00:00.000Z', value: 60 },
+  { ...base, id: 'current-2', observedAt: '2026-07-21T10:00:00.000Z', value: 80 },
+], new Date('2026-07-22T00:00:00.000Z'))[0];
+const previousPeriod = summarizeClinicalOutcomeSeries([
+  { ...base, id: 'previous-1', observedAt: '2026-06-20T10:00:00.000Z', value: 40 },
+  { ...base, id: 'previous-2', observedAt: '2026-06-21T10:00:00.000Z', value: 50 },
+], new Date('2026-07-22T00:00:00.000Z'))[0];
+const periodComparison = compareClinicalOutcomePeriods(currentPeriod, previousPeriod);
+assert.equal(periodComparison.delta, 25);
+assert.equal(periodComparison.deltaLabel, '+25 p.p.');
+assert.equal(periodComparison.movement, 'favorable');
+
 const dashboard = fs.readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
 assert.match(dashboard, /sem calcular média entre métricas incompatíveis/i);
-assert.match(dashboard, /Ausência de dados não é tratada como zero/);
-assert.match(dashboard, /Dados ainda insuficientes para interpretar tendência/);
+assert.match(dashboard, /Ausência de dados nunca vira zero/);
+assert.match(dashboard, /clinicalOutcomeEvidenceLabel\(.*evidenceState\)/, 'o badge deve continuar derivando o estado de evidência da semântica clínica');
 assert.match(dashboard, /Contribuição esperada, ainda sem vínculo explícito/);
 assert.match(dashboard, /connectNulls=\{false\}/);
+assert.match(dashboard, /const chartHeight = compact/, 'o gráfico detalhado deve adaptar a altura à quantidade de pontos renderizados');
+assert.match(dashboard, /minHeight=\{chartHeight\}/, 'o container do gráfico deve respeitar a altura adaptativa para não desperdiçar espaço vertical');
+assert.match(dashboard, /tickMargin=\{compact \? 6 : 10\}/, 'o eixo X deve reservar distância visual da série');
+assert.doesNotMatch(dashboard, />V3 canônico</, 'origem técnica não deve aparecer como badge primário na interface clínica');
+assert.match(dashboard, /verto:clinical-outcomes-changed/);
+assert.match(dashboard, /categoricalMode/);
+assert.match(dashboard, /isSegmentBoundary/);
+assert.match(dashboard, /series\.itemLabel \|\| series\.metricLabel/);
+assert.match(dashboard, /Comparar período anterior/);
+assert.match(dashboard, /Personalizado/);
+assert.match(dashboard, /Linha de base/);
+assert.match(dashboard, /Meta/);
+assert.match(dashboard, /periodEvidenceLabel/);
+assert.match(dashboard, />Atual</);
+assert.match(dashboard, /phaseMarkers/);
+assert.match(dashboard, /buildClinicalTargetGroups/, 'a especialidade deve agrupar múltiplas métricas dentro do mesmo alvo clínico');
+assert.match(dashboard, /clinical-target-card/, 'a visão desktop deve começar por cards compactos de alvo');
+assert.match(dashboard, /clinical-target-detail/, 'apenas o alvo selecionado deve abrir a evidência detalhada');
+assert.match(dashboard, /Ver evidência/, 'progressive disclosure deve substituir a exposição simultânea de todos os gráficos');
+assert.match(dashboard, /Evidência aberta/, 'o detalhe deve comunicar visualmente que é a expansão do alvo selecionado');
+assert.match(dashboard, /isCollectionVolumeSeries/, 'tentativas e volume de coleta não podem competir como outcome clínico');
+assert.match(dashboard, /Histórico anterior disponível/, 'legado deve permanecer descobrível sem competir com a série atual');
+assert.doesNotMatch(dashboard, /Histórico anterior preservado/, 'o card compacto não deve dar protagonismo excessivo ao legado');
+assert.match(dashboard, /Qualidade da evidência:/, 'a explicação de evidência preliminar deve ficar nos detalhes sob demanda, não repetir o badge no fluxo principal');
+assert.doesNotMatch(dashboard, /O resultado está disponível, mas ainda se apoia em poucas observações comparáveis/, 'o banner redundante de evidência preliminar deve sair da visão expandida principal');
+assert.match(dashboard, /Comparar período anterior/, 'comparação temporal deve permanecer no contexto global da página');
+assert.match(dashboard, /comparison\.movement === 'favorable'/, 'cor da variação deve seguir a direção clínica, não o sinal matemático isolado');
+assert.doesNotMatch(dashboard, /<progress\b|role=["']progressbar/, 'percentual clínico não pode ser representado como progresso de conclusão');
+assert.doesNotMatch(dashboard, /Target:\s*/, 'a interface clínica não deve expor jargão Target como rótulo do outcome');
+assert.doesNotMatch(dashboard, /series\.context} · \{series\.source}/, 'fonte técnica não deve aparecer crua no card clínico');
+assert.doesNotMatch(dashboard, /series\.slice\(0, 2\)/, 'PTS não pode esconder silenciosamente séries adicionais da especialidade');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 assert.match(server, /clinical-outcomes-dashboard/);
 assert.match(server, /doesNotAverageSpecialties: true/);
+assert.match(server, /supabase\.rpc\('read_clinical_outcomes_converged_v3'/, 'dashboard deve usar uma única leitura bulk V3 convergente');
+assert.match(server, /canonicalSource: 'CMV3_PLAN_PROJECTIONS_PLUS_ABA_V3_READ_MODEL'/);
+assert.match(server, /mergeClinicalOutcomeRowsV3First/);
+assert.match(server, /canonicalAbaSessionTargets/);
+assert.match(server, /metric_value === null \|\| row\?\.metric_value === undefined/);
+assert.match(server, /legacyFallbackPreserved: true/);
+assert.match(server, /rawEventsRead: false/);
+assert.match(server, /dateFrom/);
+assert.match(server, /dateTo/);
+assert.match(server, /mastery_criteria/);
+assert.match(server, /targetValue: finiteClinicalOutcomeNumber\(definition\.target_value\)/);
 assert.match(server, /clinical-observations/);
 assert.match(server, /onConflict: 'organization_id,idempotency_key'/);
 assert.match(server, /canEditTherapeuticPlanScope/);

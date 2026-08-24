@@ -58,3 +58,22 @@ tests/integration/measurement-v3/
 ├── projections/
 └── semantic-api/
 ```
+
+## Executable evidence map — production baseline 2026-08-23
+
+The reserved IDs above remain the architecture-level vocabulary. The current repository has executable regression suites that cover the implemented baseline as follows:
+
+| ADR / Area | Executable evidence in repository |
+|---|---|
+| ADR-0001 Foundations / tenancy / immutability | `clinicalMeasurementV3IdentitiesVersioning.test.mjs`, `clinicalMeasurementV3RawPrimitives.test.mjs`, `clinicalMeasurementV3SecurityShadow.test.mjs` |
+| ADR-0002 Bitemporal time / corrections | `clinicalMeasurementV3IdentitiesVersioning.test.mjs`, `clinicalMeasurementV3RawPrimitives.test.mjs`, `abaV3SessionHistoryRevision.test.mjs` |
+| ADR-0003 Semantic families | `clinicalMeasurementV3RawPrimitives.test.mjs`, `clinicalMeasurementV3AbaEngine.test.mjs`, `clinicalMeasurementV3PlanWriterUiConvergence.regression.test.mjs` |
+| ADR-0004 Projections / read models / N+1 boundary | `clinicalMeasurementV3ProjectionReadModels.test.mjs`, `clinicalMeasurementV3PlanReadModelBulk.test.mjs`, `clinicalMeasurementV3DashboardConvergedReader.test.mjs`, `abaV3AnalyticalMetricExpansion.regression.test.mjs`, `abaV3SimplifiedAnalyticsUx.regression.test.mjs` |
+| ADR-0005 Decisions / evidence / workflow | `clinicalMeasurementV3SemanticApiDecisions.test.mjs`, `abaMeasurementV3ProbesSessionFsm.test.mjs` |
+| ADR-0006 Offline / idempotent ingestion | `clinicalMeasurementV3BulkIngestion.test.mjs`, `abaMeasurementV3PersistenceSync.test.mjs` |
+| ADR-0007 Reliability / IOA | `abaMeasurementV3TaskIntervalIoa.test.mjs`; paired PRIMARY/RELIABILITY stream invariants are also covered by session/expectation schema tests. Broader multidisciplinary Reliability Profile remains an extension. |
+| ADR-0008 Semantic API / presentation | `clinicalMeasurementV3Presentation.test.mjs`, `clinicalMeasurementV3DashboardConvergedReader.test.mjs`, `clinicalMeasurementV3ClinicalOutcomesConvergence.regression.test.mjs` |
+| ABA Default-On production control | `abaV3OperationalRolloutControl.test.mjs`, `abaV3DefaultOnFinalizationArtifacts.test.mjs`, `abaV3FreshSessionBindingPrime.regression.test.mjs` |
+| Production observability | `abaV3ProductionHealthObservability.test.mjs` |
+
+The V3-focused test sweep is the release regression source. A documentation status must not be advanced by copy alone: the corresponding executable suites must remain green.

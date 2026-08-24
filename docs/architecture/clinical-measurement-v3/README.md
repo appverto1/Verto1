@@ -1,15 +1,31 @@
 # Verto Clinical Measurement Engine V3 — Architecture Baseline 1.0
 
-**Status:** Proposed baseline  
+**Status:** Accepted production baseline  
 **Date:** 2026-08-20  
 **Scope:** Clinical Measurement Engine V3  
-**Implementation status:** Not started  
+**Implementation status:** Implemented for the production baseline; scoped compatibility exceptions are listed below  
 
 ## Purpose
 
 This directory records the architecture decisions, semantic contract, threat model and verification matrix that govern the Verto Clinical Measurement Engine V3.
 
-The V3 engine is additive. It must coexist with V2 until an explicitly controlled rollout authorizes a cutover. No document in this baseline authorizes destructive migration, silent reinterpretation of historical data, or activation of a V3 writer in production.
+The V3 engine is additive and is now the production Default-On authority for semantically supported/readiness-green ABA targets, while V2 remains historical/compatibility. No document in this baseline authorizes destructive migration, silent reinterpretation of historical data, or backfill of semantics that were not originally observed.
+
+
+## Current implementation state — 2026-08-23
+
+The production baseline implements versioned identities/definitions, bitemporal activation and phase epochs, typed sessions/expectations/streams, append-only raw primitives, ABA-specific primitives, idempotent bulk ingestion, projection queues/read models, semantic decision/evidence APIs, canonical ABA analytics, Plan/PTS generic writing/reading and patient-scoped presentation caching.
+
+Operationally, ABA V3 uses `V3_DEFAULT_ON` plus `DEFAULT_INHERIT`; explicit false state remains a kill switch. Session-target bindings are immutable and may be materialized on explicit access to a target planned as V3 without creating a clinical trial.
+
+Scoped compatibility remains intentional rather than hidden:
+
+- ABC has no invented V3 semantic model and remains Legacy V2.
+- Historical V2 data is not rewritten into V3.
+- Simplified Plan/PTS Task Analysis collection remains on compatibility flow until the full step-level universal contract is used there.
+- ADR-0007 is implemented for canonical ABA reliability/IOA and paired reliability streams; a broader multidisciplinary versioned Reliability Profile remains an extension, not a blocker for the current ABA production baseline.
+
+Current operations are documented in `docs/operations/ABA_V3_PRODUCTION_RUNBOOK.md`; the older pilot runbook is historical.
 
 ## Architectural principles
 
@@ -71,7 +87,7 @@ Implementation status: Not started
 
 If implementation work reveals an unresolved structural question, the implementation must not invent a local answer. Resolve the question in a Proposed ADR, or create a new ADR if an Accepted decision must change, before continuing.
 
-## Planned execution order
+## Original execution order (historical)
 
 1. ADR baseline and verification model.
 2. Migration A — identities and versioning.

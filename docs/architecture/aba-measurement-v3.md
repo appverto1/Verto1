@@ -1,8 +1,10 @@
-# ABA Measurement V3 — arquitetura congelada para dark deploy
+# ABA Measurement V3 — baseline de Produção
 
-Status: **aprovada para implementação aditiva**  
-Escopo deste primeiro pacote: documentação + fundação de banco.  
-Impacto clínico imediato: **nenhum**.
+Status: **V3 Default-On em Produção para semântica suportada/readiness verde**  
+Baseline consolidada: **2026-08-23**  
+Compatibilidade: **Legacy V2 preservado para histórico, semântica não suportada e safety paths explícitos**.
+
+> As seções PR abaixo são mantidas como histórico de implementação. A operação corrente está em `docs/operations/ABA_V3_PRODUCTION_RUNBOOK.md`.
 
 ## 1. Princípios invariantes
 
@@ -450,7 +452,7 @@ Rollback é em duas fases: bloquear novas sessões V3 (`allow_new_v3_sessions=fa
 
 ## PR11 — fronteira pré-produção e isolamento real do piloto
 
-PR11 remove a última dependência global da UI V3 sobre sessões Legacy. O frontend passa a carregar **um plano de coleta por sessão** em uma única RPC, limitado aos targets que já estão no plano da sessão e aos vínculos comportamentais V3 ativos. Esse plano é somente leitura: ele antecipa a decisão pelo `session.started_at`, mas não cria bindings. A resolução histórica dos gates CLINIC/PATIENT/PROGRAM/TARGET é carregada em lote dentro da mesma consulta, evitando resolver rollout separadamente por target. Bindings continuam sendo materializados apenas no primeiro fato clínico V3.
+PR11 remove a última dependência global da UI V3 sobre sessões Legacy. O frontend passa a carregar **um plano de coleta por sessão** em uma única RPC, limitado aos targets que já estão no plano da sessão e aos vínculos comportamentais V3 ativos. Esse plano é somente leitura: ele antecipa a decisão pelo `session.started_at`, mas não cria bindings. A resolução histórica dos gates CLINIC/PATIENT/PROGRAM/TARGET é carregada em lote dentro da mesma consulta, evitando resolver rollout separadamente por target. Bindings V3 são materializados no primeiro acesso explícito ao alvo planejado como V3; essa materialização não cria trial nem outro fato clínico. A primeira ação clínica reutiliza o binding já congelado.
 
 Com o plano disponível, targets `LEGACY_V2` não chamam o resolver V3 por clique, não criam rows auxiliares e continuam usando exatamente os prompts/presets Legacy. Somente targets cuja decisão prevista é `V3` recebem a semântica categórica. Comportamentos canônicos substituem um preset Legacy apenas quando o `behavior_id` está explicitamente ligado a um target V3 naquele episódio. Um binding comportamental já congelado na sessão prevalece mesmo se o mapeamento administrativo for arquivado depois. Falha ou inconsistência de plano nunca autoriza fallback silencioso de um target V3 para um writer V2.
 
