@@ -20,13 +20,15 @@ import {
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
 type AnalyticsDomain = 'overview' | 'skills' | 'behaviors' | 'mastery' | 'maintenance' | 'changes';
-type AnalyticsAxis = 'date' | 'session';
+export type AnalyticsAxis = 'date' | 'session';
 
 type ClinicalPlanAnalyticsShellProps = {
   scopeLabel: string;
   series: ClinicalOutcomeSeriesSummary[];
   previousSeriesByKey: Map<string, ClinicalOutcomeSeriesSummary>;
   comparePrevious: boolean;
+  axis: AnalyticsAxis;
+  onAxisChange: (axis: AnalyticsAxis) => void;
   isDark?: boolean;
 };
 
@@ -411,9 +413,8 @@ function OverviewTooltip({ active, payload, label }: any) {
   );
 }
 
-export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, isDark = false }: ClinicalPlanAnalyticsShellProps) {
+export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false }: ClinicalPlanAnalyticsShellProps) {
   const [activeDomain, setActiveDomain] = useState<AnalyticsDomain>('overview');
-  const [axis, setAxis] = useState<AnalyticsAxis>('session');
   const [metricSignatureValue, setMetricSignatureValue] = useState('');
   const [selectedSeriesKeys, setSelectedSeriesKeys] = useState<string[]>([]);
 
@@ -451,8 +452,8 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
   }, [activeMetric]);
 
   useEffect(() => {
-    if (activeDomain === 'changes') setAxis('session');
-  }, [activeDomain]);
+    if (activeDomain === 'changes' && axis !== 'session') onAxisChange('session');
+  }, [activeDomain, axis, onAxisChange]);
 
   const selectedSeries = useMemo(() => activeMetric
     ? activeMetric.series.filter((item) => selectedSeriesKeys.includes(item.key)).slice(0, 3)
@@ -506,7 +507,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
 
   return (
     <section className={`overflow-hidden rounded-2xl border ${panel}`} data-testid="clinical-plan-analytics-shell">
-      <div className={`border-b px-3 pt-3 sm:px-4 sm:pt-4 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+      <div className={`border-b px-3 pt-3 sm:px-4 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className={`text-[10px] font-medium uppercase tracking-[0.14em] ${isDark ? 'text-violet-300' : 'text-violet-600'}`}>Leitura clínica</p>
@@ -514,20 +515,20 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
             <p className={`mt-1 text-xs ${subtle}`}>Escolha o domínio e a métrica. Séries incompatíveis continuam separadas.</p>
           </div>
           <div className="flex items-center gap-1 rounded-xl border p-1 dark:border-slate-700">
-            <button type="button" aria-pressed={axis === 'date'} onClick={() => activeDomain !== 'changes' && setAxis('date')} disabled={activeDomain === 'changes'} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium ${axis === 'date' ? 'bg-violet-600 text-white' : `${subtle} hover:text-violet-600`} disabled:cursor-not-allowed disabled:opacity-40`}><CalendarDays size={14} /> Por data</button>
-            <button type="button" aria-pressed={axis === 'session'} onClick={() => setAxis('session')} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium ${axis === 'session' ? 'bg-violet-600 text-white' : `${subtle} hover:text-violet-600`}`}><Layers3 size={14} /> Por sessão</button>
+            <button type="button" aria-pressed={axis === 'date'} onClick={() => activeDomain !== 'changes' && onAxisChange('date')} disabled={activeDomain === 'changes'} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium ${axis === 'date' ? 'bg-violet-600 text-white' : `${subtle} hover:text-violet-600`} disabled:cursor-not-allowed disabled:opacity-40`}><CalendarDays size={14} /> Por data</button>
+            <button type="button" aria-pressed={axis === 'session'} onClick={() => onAxisChange('session')} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium ${axis === 'session' ? 'bg-violet-600 text-white' : `${subtle} hover:text-violet-600`}`}><Layers3 size={14} /> Por sessão</button>
           </div>
         </div>
 
-        <nav className="mt-4 flex gap-1 overflow-x-auto" aria-label="Domínios dos gráficos do plano">
+        <nav className="mt-3 flex gap-1 overflow-x-auto" aria-label="Domínios dos gráficos do plano">
           {DOMAIN_TABS.map((tab) => {
             const available = tabAvailability(tab.id);
-            return <button key={tab.id} type="button" disabled={!available} aria-pressed={activeDomain === tab.id} onClick={() => available && setActiveDomain(tab.id)} className={`min-h-11 shrink-0 border-b-2 px-3 text-sm font-medium transition ${activeDomain === tab.id ? DOMAIN_ACTIVE_TONE[tab.id] : `border-transparent ${subtle} hover:text-violet-600`} disabled:cursor-not-allowed disabled:opacity-35`}>{tab.label}</button>;
+            return <button key={tab.id} type="button" disabled={!available} aria-pressed={activeDomain === tab.id} onClick={() => available && setActiveDomain(tab.id)} className={`min-h-10 shrink-0 border-b-2 px-3 text-sm font-medium transition ${activeDomain === tab.id ? DOMAIN_ACTIVE_TONE[tab.id] : `border-transparent ${subtle} hover:text-violet-600`} disabled:cursor-not-allowed disabled:opacity-35`}>{tab.label}</button>;
           })}
         </nav>
       </div>
 
-      <div className="p-3 sm:p-4">
+      <div className="p-3 sm:px-4 sm:py-3">
         {activeDomain !== 'overview' && activeMetric && (
           <div className="mb-4 space-y-3">
             <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Métricas clínicas">
@@ -558,13 +559,13 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
           {comparePrevious && <div className={`flex items-center gap-3 text-[11px] ${subtle}`}><span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-6 bg-violet-600" /> Atual</span><span className="inline-flex items-center gap-1.5"><span className="h-0 w-6 border-t-2 border-dashed border-violet-400" /> Anterior</span></div>}
         </div>
 
-        <div className="h-[330px] min-w-0 overflow-x-auto sm:h-[380px]">
+        <div className={`${activeDomain === 'overview' ? 'h-[170px] sm:h-[180px]' : 'h-[250px] sm:h-[285px]'} min-w-0 overflow-x-auto`}>
           <div className="h-full" style={{ minWidth: Math.max(620, rows.length * 72) }}>
-            <SafeResponsiveContainer width="100%" height="100%" minHeight={300}>
+            <SafeResponsiveContainer width="100%" height="100%" minHeight={activeDomain === 'overview' ? 150 : 230}>
               {activeDomain === 'overview' ? (
-                <BarChart data={rows} margin={{ top: 18, right: 22, left: 8, bottom: 44 }}>
+                <BarChart data={rows} margin={{ top: 8, right: 18, left: 4, bottom: 24 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#334155' : '#E2E8F0'} />
-                  <XAxis dataKey="x" tick={{ fontSize: 10, fill: isDark ? '#94A3B8' : '#64748B' }} angle={-18} textAnchor="end" height={58} interval={0} />
+                  <XAxis dataKey="x" tick={{ fontSize: 10, fill: isDark ? '#94A3B8' : '#64748B' }} angle={-18} textAnchor="end" height={38} interval={0} />
                   <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: isDark ? '#94A3B8' : '#64748B' }} label={{ value: 'Registros distintos', angle: -90, position: 'insideLeft', fontSize: 10 }} />
                   <Tooltip content={<OverviewTooltip />} cursor={{ fill: isDark ? 'rgba(148,163,184,0.06)' : 'rgba(124,58,237,0.04)' }} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -572,9 +573,9 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
                   {OVERVIEW_BARS.map((item) => <Bar key={item.key} dataKey={item.key} name={item.label} stackId="domains" fill={item.color} maxBarSize={52} />)}
                 </BarChart>
               ) : (
-                <LineChart data={rows} margin={{ top: 18, right: 22, left: 8, bottom: 44 }}>
+                <LineChart data={rows} margin={{ top: 12, right: 18, left: 4, bottom: 32 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#334155' : '#E2E8F0'} />
-                  <XAxis dataKey="x" tick={{ fontSize: 10, fill: isDark ? '#94A3B8' : '#64748B' }} angle={-18} textAnchor="end" height={58} interval={0} />
+                  <XAxis dataKey="x" tick={{ fontSize: 10, fill: isDark ? '#94A3B8' : '#64748B' }} angle={-18} textAnchor="end" height={44} interval={0} />
                   <YAxis
                     tick={{ fontSize: 10, fill: isDark ? '#94A3B8' : '#64748B' }}
                     domain={percentMode ? [0, 100] : ratioMode ? [0, 1] : ['auto', 'auto']}
