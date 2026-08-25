@@ -78296,11 +78296,14 @@ async function startServer() {
       const canonicalPlanId = sanitizeString(row?.plan_id, 120);
       const metricProgramPlanId = sanitizeString(metricProgram?.therapeutic_plan_id, 120);
       const explicitPlanId = contextPlanId || canonicalPlanId || metricProgramPlanId;
+      const sourceRequiresDirectPlan = sourceKind === 'PLAN_GOAL' || sourceKind === 'ABA_TARGET';
       const planIds = explicitPlanId
         ? (visiblePlanMap.has(explicitPlanId) ? [explicitPlanId] : [])
-        : sourceKind === 'THERAPEUTIC_OBJECTIVE'
-          ? Array.from(objectivePlanMap.get(objectiveId) || [])
-          : [];
+        : sourceRequiresDirectPlan
+          ? []
+          : sourceKind === 'THERAPEUTIC_OBJECTIVE'
+            ? Array.from(objectivePlanMap.get(objectiveId) || [])
+            : [];
       if (!planIds.length) continue;
 
       const normalizedValue = normalizeClinicalOutcomeValueFromV3(row);
@@ -78585,7 +78588,7 @@ async function startServer() {
       let v3RpcCount = 0;
       let v3ContextQueryCount = 0;
       if (isUuid(clinicId) && (visiblePlanIdList.length > 0 || visibleObjectiveIds.length > 0)) {
-        const v3Result = await supabase.rpc('read_clinical_outcomes_converged_v3', {
+        const convergedV3Result = await supabase.rpc('read_clinical_outcomes_converged_v3', {
           p_organization_id: clinicId,
           p_patient_id: patientId,
           p_date_from: dateFromIso.slice(0, 10),
@@ -78596,14 +78599,44 @@ async function startServer() {
           p_limit: 5000,
         });
         v3RpcCount = 1;
-        if (v3Result.error) {
-          if (isClinicalPlanV3ReaderUnavailable(v3Result.error)) {
-            v3ReadModelAvailable = false;
+        let rawV3Rows: any[] = [];
+        if (convergedV3Result.error) {
+          if (!isClinicalPlanV3ReaderUnavailable(convergedV3Result.error)) throw convergedV3Result.error;
+
+          // Compatibility bridge: the generic plan reader is the canonical source for
+          // PTS/specialty measurements and may be deployed before the converged ABA+plan
+          // reader. Never make the graph disappear only because the optional converged
+          // wrapper is not yet present in PostgREST's schema cache.
+          const genericV3Result = await supabase.rpc('read_clinical_plan_outcomes_v3', {
+            p_organization_id: clinicId,
+            p_patient_id: patientId,
+            p_date_from: dateFromIso.slice(0, 10),
+            p_date_to: dateToIso.slice(0, 10),
+            p_plan_ids: visiblePlanIdList,
+            p_therapeutic_objective_ids: visibleObjectiveIds,
+            p_limit: 5000,
+          });
+          v3RpcCount += 1;
+          if (genericV3Result.error) {
+            if (isClinicalPlanV3ReaderUnavailable(genericV3Result.error)) {
+              v3ReadModelAvailable = false;
+            } else {
+              throw genericV3Result.error;
+            }
           } else {
-            throw v3Result.error;
+            rawV3Rows = (Array.isArray(genericV3Result.data) ? genericV3Result.data : []).map((row: any) => ({
+              ...row,
+              program_id: row?.program_id || null,
+              item_id: row?.item_id || row?.target_id || null,
+              item_label: row?.item_label || row?.metric_label || null,
+              read_model_source: row?.read_model_source || 'CMV3_TYPED_SESSION_PROJECTION',
+            }));
           }
         } else {
-          const rawV3Rows = Array.isArray(v3Result.data) ? v3Result.data : [];
+          rawV3Rows = Array.isArray(convergedV3Result.data) ? convergedV3Result.data : [];
+        }
+
+        if (rawV3Rows.length > 0) {
           const cmv3SessionIds = Array.from(new Set(
             rawV3Rows
               .map((row: any) => sanitizeString(row?.session_id, 180))

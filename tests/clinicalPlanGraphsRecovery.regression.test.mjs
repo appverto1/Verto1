@@ -10,6 +10,9 @@ assert.match(server, /\^program_target:\(\[\^:\]\+\):\/i\.exec\(metricKey\)/, 'r
 assert.match(server, /metricAbaTarget[\s\S]*programById[\s\S]*therapeutic_plan_id/, 'alvo deve resolver programa e plano da especialidade sem heurística textual');
 assert.match(server, /visiblePlanMap\.has\(explicitPlanId\)/, 'somente plano já autorizado pode receber a série recuperada');
 assert.match(server, /clinical_measurement_session_context_links_v3/, 'reader deve aproveitar contexto append-only quando já disponível');
+
+assert.match(server, /read_clinical_outcomes_converged_v3[\s\S]*read_clinical_plan_outcomes_v3/, 'dashboard deve cair para o reader genérico quando o wrapper convergido ainda não estiver disponível');
+assert.match(server, /CMV3_TYPED_SESSION_PROJECTION/, 'fallback genérico deve preservar autoridade/proveniência CMV3 para a UI');
 assert.match(server, /sessionId:\s*sanitizeString\(contextLink\?\.aba_session_id/, 'gráfico por sessão deve preferir a sessão ABA clínica real');
 
 assert.match(dashboard, /ptsStructuredAnalyticsSeries/, 'PTS deve distinguir contribuição estruturada de visão multidisciplinar de fallback');
