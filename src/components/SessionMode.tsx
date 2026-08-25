@@ -2289,8 +2289,9 @@ export const SessionMode = ({
     if (measurementType === 'latency') return 'lower_is_better';
     return 'no_directional_judgment';
   };
-  const buildClinicalPlanMeasurementV3Payload = ({ goal, measurementType, numericValue, measurementUnit, timestamp, startedAt, endedAt, trialId }: any) => {
+  const buildClinicalPlanMeasurementV3Payload = ({ goal, measurementType, numericValue, measurementUnit, timestamp, startedAt, endedAt, trialId, abaSessionId }: any) => {
     const therapeuticObjectiveId = goalTherapeuticObjectiveId(goal);
+    const therapeuticPlanId = goalTherapeuticPlanId(goal);
     const targetId = goalTargetId(goal);
     const targetName = goalTargetName(goal) || 'Alvo terapêutico';
     if (!therapeuticObjectiveId || !CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(measurementType)) return null;
@@ -2299,6 +2300,10 @@ export const SessionMode = ({
     const payload: any = {
       sourceKind: 'THERAPEUTIC_OBJECTIVE',
       therapeuticObjectiveId,
+      therapeuticPlanId: therapeuticPlanId || null,
+      contextPlanId: therapeuticPlanId || null,
+      abaSessionId: String(abaSessionId || sessionId || '').trim() || null,
+      sessionId: String(abaSessionId || sessionId || '').trim() || null,
       metricKey,
       metricLabel,
       metricType: measurementType,
@@ -2372,6 +2377,8 @@ export const SessionMode = ({
       targetId: targetId || null,
       therapeuticPlanId: goalTherapeuticPlanId(goal) || null,
       therapeuticObjectiveId: goalTherapeuticObjectiveId(goal) || null,
+      abaSessionId: sessionId || null,
+      sessionId: sessionId || null,
       idempotencyKey: trialId,
       canonicalPlanWriter: Boolean(goalTherapeuticObjectiveId(goal) && CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(normalizedMeasurementType))
     };
@@ -2387,6 +2394,7 @@ export const SessionMode = ({
       therapistId: resolvedTherapistId || null,
       measurementType: normalizedMeasurementType,
       therapeuticMeasurement: true,
+      measurementModelVersion: 'V3',
       measuredValue: numericValue,
       measurementUnit: measurementUnit || null,
       durationSeconds: normalizedMeasurementType === 'duration' ? numericValue : null,
@@ -2409,6 +2417,7 @@ export const SessionMode = ({
         startedAt: startedAt || timestamp,
         endedAt: timestamp,
         trialId,
+        abaSessionId: sessionId,
       });
       const useCanonicalPlanWriter = Boolean(cmv3Payload);
       const result = useCanonicalPlanWriter
@@ -6153,7 +6162,8 @@ export const SessionMode = ({
         timestamp,
         startedAt: record.startedAt || rawPayload.startedAt || timestamp,
         endedAt: record.endedAt || rawPayload.endedAt || timestamp,
-        trialId: record.id
+        trialId: record.id,
+        abaSessionId: sessionId
       });
       if (!cmv3Payload) {
         updateRecord(record.id, {
