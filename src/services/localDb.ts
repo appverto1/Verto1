@@ -325,6 +325,68 @@ function entityIdForRecord(record: Pick<OfflineRecord, 'id' | 'entity_id' | 'dat
   return String(record.entity_id || record?.data?.id || record.id || '').trim();
 }
 
+const THERAPEUTIC_PLAN_V3_RECOVERY_TYPES = new Set(['correct_incorrect', 'frequency', 'duration', 'latency', 'percentage', 'task_analysis']);
+
+function recoverLegacyTherapeuticTrialAsClinicalPlanV3(record: OfflineRecord): { endpoint: string; data: any } | null {
+  if (record.type !== 'aba' || record.method !== 'POST' || !/\/api\/aba\/trials(?:\?|$)/.test(String(record.endpoint || ''))) return null;
+  const body = record.data && typeof record.data === 'object' ? record.data : {};
+  const raw = body?.raw_payload && typeof body.raw_payload === 'object'
+    ? body.raw_payload
+    : body?.rawPayload && typeof body.rawPayload === 'object'
+      ? body.rawPayload
+      : {};
+  const isTherapeuticFallback = raw?.therapeuticMeasurement === true
+    && (raw?.canonicalPlanWriterFallback === true || String(body?.source || raw?.source || '').includes('therapeutic_program_measurement'));
+  if (!isTherapeuticFallback) return null;
+
+  const patientId = String(body?.patient_id || body?.patientId || raw?.patientId || '').trim();
+  const targetId = String(body?.target_id || body?.targetId || raw?.targetId || '').trim();
+  const therapeuticObjectiveId = String(raw?.therapeuticObjectiveId || raw?.therapeutic_objective_id || '').trim();
+  const therapeuticPlanId = String(raw?.therapeuticPlanId || raw?.therapeutic_plan_id || '').trim();
+  const measurementType = String(raw?.measurementType || raw?.measurement_type || '').trim().toLowerCase();
+  const numericValue = Number(raw?.measurementValue ?? raw?.measurement_value ?? body?.response_score ?? body?.responseScore);
+  const clientEventId = String(raw?.idempotencyKey || raw?.idempotency_key || body?.id || record.entity_id || record.id || '').trim();
+  if (!patientId || !clientEventId || !THERAPEUTIC_PLAN_V3_RECOVERY_TYPES.has(measurementType) || !Number.isFinite(numericValue)) return null;
+  const sourceKind = therapeuticObjectiveId ? 'THERAPEUTIC_OBJECTIVE' : targetId ? 'ABA_TARGET' : '';
+  if (!sourceKind) return null;
+  const targetName = String(body?.target_name || body?.targetName || 'Alvo terapêutico').trim() || 'Alvo terapêutico';
+  const sourceIdentity = therapeuticObjectiveId || targetId;
+  const metricLabel = `${targetName} · ${measurementType === 'correct_incorrect' ? 'Acurácia' : measurementType === 'frequency' ? 'Frequência' : measurementType === 'duration' ? 'Duração' : measurementType === 'latency' ? 'Latência' : measurementType === 'task_analysis' ? 'Etapas concluídas' : 'Percentual'}`.slice(0, 180);
+  const observedAt = String(body?.occurred_at || body?.occurredAt || raw?.endedAt || raw?.ended_at || raw?.startedAt || raw?.started_at || new Date().toISOString());
+  const direction = measurementType === 'latency'
+    ? 'lower_is_better'
+    : ['correct_incorrect', 'percentage', 'task_analysis'].includes(measurementType)
+      ? 'higher_is_better'
+      : 'no_directional_judgment';
+  const data: any = {
+    sourceKind,
+    therapeuticObjectiveId: therapeuticObjectiveId || null,
+    abaTargetId: sourceKind === 'ABA_TARGET' ? targetId : null,
+    goalId: sourceKind === 'ABA_TARGET' ? targetId : null,
+    therapeuticPlanId: therapeuticPlanId || null,
+    contextPlanId: therapeuticPlanId || null,
+    abaSessionId: String(body?.session_id || body?.sessionId || raw?.abaSessionId || raw?.sessionId || '').trim() || null,
+    sessionId: String(body?.session_id || body?.sessionId || raw?.abaSessionId || raw?.sessionId || '').trim() || null,
+    metricKey: `program_target:${sourceIdentity}:${measurementType}`.slice(0, 120),
+    metricLabel,
+    metricType: measurementType,
+    unit: ['correct_incorrect', 'percentage', 'task_analysis'].includes(measurementType) ? 'percent' : String(raw?.measurementUnit || raw?.measurement_unit || '').trim() || null,
+    direction,
+    observedAt,
+    idempotencyKey: clientEventId,
+    numericValue,
+    recoveredFromLegacyOutbox: true
+  };
+  if (measurementType === 'duration' || measurementType === 'latency') {
+    data.startedAt = String(raw?.startedAt || raw?.started_at || observedAt);
+    data.endedAt = String(raw?.endedAt || raw?.ended_at || observedAt);
+  }
+  return {
+    endpoint: `/api/clinical-measurement-v3/patients/${encodeURIComponent(patientId)}/plan-measurements`,
+    data
+  };
+}
+
 function tombstoneKey(userId: string, type: OfflineRecord['type'], entityId: string) {
   return `${userId}:${type}:${entityId}`;
 }
@@ -459,8 +521,13 @@ export async function markRecordSyncStatus(
       });
       await removeTombstone(row.user_id, row.type, entityId);
     }
-    if (row.type === 'clinical_plan_v3' && decoded && typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
-      const patientId = String(decoded?.patientId || decoded?.patient_id || '').trim();
+    const recoveredTherapeutic = decoded ? recoverLegacyTherapeuticTrialAsClinicalPlanV3({
+      id: row.id, entity_id: row.entity_id || row.id, type: row.type, sync_status: row.sync_status, last_updated: row.last_updated,
+      retry_count: row.retry_count || 0, last_attempt_at: row.last_attempt_at || null, next_retry_at: row.next_retry_at || null, last_error: row.last_error || null,
+      method: row.method, endpoint: row.endpoint, data: decoded
+    }) : null;
+    if ((row.type === 'clinical_plan_v3' || recoveredTherapeutic) && decoded && typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
+      const patientId = String(decoded?.patientId || decoded?.patient_id || recoveredTherapeutic?.data?.patientId || recoveredTherapeutic?.data?.patient_id || '').trim();
       if (patientId) {
         window.dispatchEvent(new CustomEvent('verto:clinical-outcomes-changed', {
           detail: { patientId, source: 'clinical_plan_v3_outbox_ack', occurredAt: Date.now() }
@@ -728,15 +795,18 @@ export const syncOfflineData = async () => {
           last_error: record.last_error || null
         });
 
-        const response = await fetch(record.endpoint, {
+        const recoveredTherapeutic = recoverLegacyTherapeuticTrialAsClinicalPlanV3(record);
+        const requestEndpoint = recoveredTherapeutic?.endpoint || record.endpoint;
+        const requestData = recoveredTherapeutic?.data || record.data;
+        const response = await fetch(requestEndpoint, {
           method: record.method,
           headers: {
             'Content-Type': 'application/json',
             'Authorization': token ? `Bearer ${token}` : '',
-            ...(record?.data?.idempotencyKey ? { 'X-Idempotency-Key': String(record.data.idempotencyKey) } : {})
+            ...(requestData?.idempotencyKey ? { 'X-Idempotency-Key': String(requestData.idempotencyKey) } : {})
           },
           credentials: 'include',
-          body: JSON.stringify(record.data)
+          body: JSON.stringify(requestData)
         });
 
         const responsePayload = await response.json().catch(() => ({ error: 'Unknown error' }));

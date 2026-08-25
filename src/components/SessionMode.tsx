@@ -2279,7 +2279,7 @@ export const SessionMode = ({
   const goalTherapeuticObjectiveId = (goal: any) => String(goal?.therapeutic_objective_id || goal?.therapeuticObjectiveId || '').trim();
   const goalTherapeuticPlanId = (goal: any) => String(goal?.therapeutic_plan_id || goal?.therapeuticPlanId || '').trim();
   const therapeuticGoalKey = (goal: any) => goalTargetId(goal) || goalTargetName(goal) || String(goal?.id || '').trim();
-  const CMV3_PLAN_SUPPORTED_MEASUREMENTS = new Set(['correct_incorrect', 'frequency', 'duration', 'latency', 'percentage']);
+  const CMV3_PLAN_SUPPORTED_MEASUREMENTS = new Set(['correct_incorrect', 'frequency', 'duration', 'latency', 'percentage', 'task_analysis']);
   const clinicalPlanMetricDirection = (goal: any, measurementType: string) => {
     const criteria = goal?.masteryCriteria || goal?.mastery_criteria || {};
     const operator = String(criteria?.operator || '').trim().toLowerCase();
@@ -2294,12 +2294,17 @@ export const SessionMode = ({
     const therapeuticPlanId = goalTherapeuticPlanId(goal);
     const targetId = goalTargetId(goal);
     const targetName = goalTargetName(goal) || 'Alvo terapêutico';
-    if (!therapeuticObjectiveId || !CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(measurementType)) return null;
-    const metricKey = `program_target:${targetId || therapeuticObjectiveId}:${measurementType}`.slice(0, 120);
-    const metricLabel = `${targetName} · ${measurementType === 'correct_incorrect' ? 'Acurácia' : measurementType === 'frequency' ? 'Frequência' : measurementType === 'duration' ? 'Duração' : measurementType === 'latency' ? 'Latência' : 'Percentual'}`.slice(0, 180);
+    if (!CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(measurementType)) return null;
+    const sourceKind = therapeuticObjectiveId ? 'THERAPEUTIC_OBJECTIVE' : targetId ? 'ABA_TARGET' : '';
+    if (!sourceKind) return null;
+    const sourceIdentity = therapeuticObjectiveId || targetId;
+    const metricKey = `program_target:${sourceIdentity}:${measurementType}`.slice(0, 120);
+    const metricLabel = `${targetName} · ${measurementType === 'correct_incorrect' ? 'Acurácia' : measurementType === 'frequency' ? 'Frequência' : measurementType === 'duration' ? 'Duração' : measurementType === 'latency' ? 'Latência' : measurementType === 'task_analysis' ? 'Etapas concluídas' : 'Percentual'}`.slice(0, 180);
     const payload: any = {
-      sourceKind: 'THERAPEUTIC_OBJECTIVE',
-      therapeuticObjectiveId,
+      sourceKind,
+      therapeuticObjectiveId: therapeuticObjectiveId || null,
+      abaTargetId: sourceKind === 'ABA_TARGET' ? targetId : null,
+      goalId: sourceKind === 'ABA_TARGET' ? targetId : null,
       therapeuticPlanId: therapeuticPlanId || null,
       contextPlanId: therapeuticPlanId || null,
       abaSessionId: String(abaSessionId || sessionId || '').trim() || null,
@@ -2307,7 +2312,7 @@ export const SessionMode = ({
       metricKey,
       metricLabel,
       metricType: measurementType,
-      unit: measurementType === 'correct_incorrect' ? 'percent' : measurementUnit || null,
+      unit: measurementType === 'correct_incorrect' || measurementType === 'percentage' || measurementType === 'task_analysis' ? 'percent' : measurementUnit || null,
       direction: clinicalPlanMetricDirection(goal, measurementType),
       observedAt: timestamp,
       idempotencyKey: trialId,
@@ -2380,7 +2385,7 @@ export const SessionMode = ({
       abaSessionId: sessionId || null,
       sessionId: sessionId || null,
       idempotencyKey: trialId,
-      canonicalPlanWriter: Boolean(goalTherapeuticObjectiveId(goal) && CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(normalizedMeasurementType))
+      canonicalPlanWriter: Boolean((goalTherapeuticObjectiveId(goal) || targetId) && CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(normalizedMeasurementType))
     };
     const localRecord: Omit<SessionRecord, 'syncStatus'> = {
       id: trialId,
@@ -2420,34 +2425,30 @@ export const SessionMode = ({
         abaSessionId: sessionId,
       });
       const useCanonicalPlanWriter = Boolean(cmv3Payload);
-      const result = useCanonicalPlanWriter
-        ? await dataService.saveClinicalPlanMeasurementV3(patientId, cmv3Payload)
-        : await dataService.saveAbaTrial({
-            id: trialId,
-            clinic_id: resolvedClinicId || undefined,
-            patient_id: patientId,
-            session_id: sessionId,
-            target_id: targetId || undefined,
-            target_name: targetName,
-            program_id: programId || undefined,
-            collection_type: normalizedCollectionType,
-            trial_type: normalizedCollectionType,
-            ...(isCorrectIncorrect ? { response_score: numericValue, max_score: 1, correct } : {}),
-            independent: false,
-            latency_ms: normalizedMeasurementType === 'latency' ? (latencyMs ?? Math.round(numericValue * 1000)) : undefined,
-            occurred_at: timestamp,
-            therapist_id: resolvedTherapistId || undefined,
-            source: 'therapeutic_program_measurement_legacy_fallback',
-            raw_payload: {
-              ...rawPayload,
-              canonicalPlanWriterFallback: true,
-              fallbackReason: !CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(normalizedMeasurementType)
-                ? 'SEMANTIC_FAMILY_NOT_SUPPORTED_BY_PLAN_WRITER'
-                : 'THERAPEUTIC_OBJECTIVE_IDENTITY_UNAVAILABLE',
-              therapeuticPlanId: goalTherapeuticPlanId(goal) || null,
-              therapeuticObjectiveId: goalTherapeuticObjectiveId(goal) || null,
-            }
-          });
+      if (!useCanonicalPlanWriter) {
+        updateRecord(trialId, {
+          syncStatus: 'error',
+          syncErrorCode: 'CMV3_PLAN_IDENTITY_REQUIRED',
+          syncErrorMessage: 'Este alvo ainda não possui identidade clínica V3 suficiente para uma gravação segura.',
+          rawPayload: {
+            ...rawPayload,
+            canonicalPlanWriter: false,
+            legacyFallbackBlocked: true,
+            syncNeedsAttention: true,
+            fallbackReason: !CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(normalizedMeasurementType)
+              ? 'SEMANTIC_FAMILY_NOT_SUPPORTED_BY_PLAN_WRITER'
+              : 'CMV3_SOURCE_IDENTITY_UNAVAILABLE'
+          }
+        });
+        setSessionWarning('A coleta foi preservada localmente, mas não será enviada ao Legacy. Revise a identidade V3 deste alvo.');
+        showClinicalToast({
+          variant: 'error',
+          title: 'Coleta V3 precisa de revisão',
+          subtitle: 'O alvo não possui identidade V3 suficiente. Nenhum registro Legacy foi criado.'
+        }, 'error');
+        return false;
+      }
+      const result = await dataService.saveClinicalPlanMeasurementV3(patientId, cmv3Payload);
       if (result?.success === false) {
         updateRecord(trialId, {
           syncStatus: result?.durable ? 'local' : 'error',
