@@ -78295,15 +78295,23 @@ async function startServer() {
       const contextPlanId = sanitizeString(contextLink?.therapeutic_plan_id, 120);
       const canonicalPlanId = sanitizeString(row?.plan_id, 120);
       const metricProgramPlanId = sanitizeString(metricProgram?.therapeutic_plan_id, 120);
-      const explicitPlanId = contextPlanId || canonicalPlanId || metricProgramPlanId;
-      const sourceRequiresDirectPlan = sourceKind === 'PLAN_GOAL' || sourceKind === 'ABA_TARGET';
-      const planIds = explicitPlanId
-        ? (visiblePlanMap.has(explicitPlanId) ? [explicitPlanId] : [])
-        : sourceRequiresDirectPlan
-          ? []
-          : sourceKind === 'THERAPEUTIC_OBJECTIVE'
-            ? Array.from(objectivePlanMap.get(objectiveId) || [])
-            : [];
+
+      // Preserve the graph scoping behavior already proven in main: a therapeutic
+      // objective belongs to every authorized plan/program that explicitly references
+      // that objective. The append-only context link is operational provenance (ABA
+      // session + originating plan), not authority to hide the same objective from its
+      // other valid PTS/specialty perspectives.
+      let planIds = sourceKind === 'PLAN_GOAL' || sourceKind === 'ABA_TARGET'
+        ? (visiblePlanMap.has(canonicalPlanId) ? [canonicalPlanId] : [])
+        : sourceKind === 'THERAPEUTIC_OBJECTIVE'
+          ? Array.from(objectivePlanMap.get(objectiveId) || []).filter((planId) => visiblePlanMap.has(planId))
+          : [];
+
+      // Compatibility only: older or partially linked rows can lack the objective ->
+      // plan map. In that case reuse an exact authorized context/program relationship;
+      // never infer a plan by label, date or specialty text.
+      if (!planIds.length && contextPlanId && visiblePlanMap.has(contextPlanId)) planIds = [contextPlanId];
+      if (!planIds.length && metricProgramPlanId && visiblePlanMap.has(metricProgramPlanId)) planIds = [metricProgramPlanId];
       if (!planIds.length) continue;
 
       const normalizedValue = normalizeClinicalOutcomeValueFromV3(row);

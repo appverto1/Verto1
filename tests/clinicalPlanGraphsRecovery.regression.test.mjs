@@ -8,7 +8,8 @@ const dataService = readFileSync('src/services/dataService.ts', 'utf8');
 
 assert.match(server, /\^program_target:\(\[\^:\]\+\):\/i\.exec\(metricKey\)/, 'reader deve recuperar o alvo ABA embutido no metric_key do writer');
 assert.match(server, /metricAbaTarget[\s\S]*programById[\s\S]*therapeutic_plan_id/, 'alvo deve resolver programa e plano da especialidade sem heurística textual');
-assert.match(server, /visiblePlanMap\.has\(explicitPlanId\)/, 'somente plano já autorizado pode receber a série recuperada');
+assert.match(server, /sourceKind === 'THERAPEUTIC_OBJECTIVE'[\s\S]*objectivePlanMap\.get\(objectiveId\)/, 'objetivo terapêutico deve preservar o escopo de planos/programas já validado em main');
+assert.match(server, /contextPlanId[\s\S]*Compatibility only[\s\S]*visiblePlanMap\.has\(contextPlanId\)/, 'contexto append-only pode recuperar plano somente como fallback autorizado, sem esconder perspectivas válidas');
 assert.match(server, /clinical_measurement_session_context_links_v3/, 'reader deve aproveitar contexto append-only quando já disponível');
 
 assert.match(server, /read_clinical_outcomes_converged_v3[\s\S]*read_clinical_plan_outcomes_v3/, 'dashboard deve cair para o reader genérico quando o wrapper convergido ainda não estiver disponível');
