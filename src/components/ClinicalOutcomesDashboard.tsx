@@ -43,6 +43,7 @@ import {
   type ClinicalOutcomeSeriesSummary,
 } from '../utils/clinicalOutcomeAnalytics';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
+import { buildClinicalOutcomePlanScopeIndex, clinicalOutcomeSeriesBelongsToPlanScope } from '../utils/clinicalOutcomePlanScope';
 import { ClinicalPlanAnalyticsShell, type AnalyticsAxis } from './ClinicalPlanAnalyticsShell';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
@@ -640,10 +641,14 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
   const summaries = useMemo(() => summarizeClinicalOutcomeSeries(currentObservations), [currentObservations]);
   const previousSummaries = useMemo(() => summarizeClinicalOutcomeSeries(previousObservations), [previousObservations]);
   const previousSummaryByKey = useMemo(() => new Map(previousSummaries.map((series) => [series.key, series])), [previousSummaries]);
+  const planScopeIndex = useMemo(() => buildClinicalOutcomePlanScopeIndex(data.programs || []), [data.programs]);
   const selectedPlan = specialtyPlans.find((plan) => String(plan.id) === scopeId) || null;
   const selectedPlanSeries = useMemo(() => selectedPlan
-    ? summaries.filter((series) => seriesPlanId(series) === String(selectedPlan.id))
-    : [], [selectedPlan, summaries]);
+    ? summaries.filter((series) => clinicalOutcomeSeriesBelongsToPlanScope(series, selectedPlan.id, planScopeIndex))
+    : [], [planScopeIndex, selectedPlan, summaries]);
+  const ptsPlanSeries = useMemo(() => activePts
+    ? summaries.filter((series) => clinicalOutcomeSeriesBelongsToPlanScope(series, activePts.id, planScopeIndex))
+    : [], [activePts, planScopeIndex, summaries]);
   const allSelectedTargetGroups = useMemo(() => buildClinicalTargetGroups(selectedPlanSeries), [selectedPlanSeries]);
   const selectedTargetGroups = useMemo(() => allSelectedTargetGroups.filter((group) => group.clinicalSeries.length > 0), [allSelectedTargetGroups]);
   const volumeOnlyTargetGroups = useMemo(() => allSelectedTargetGroups.filter((group) => group.clinicalSeries.length === 0 && group.volumeSeries.length > 0), [allSelectedTargetGroups]);
@@ -708,6 +713,11 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
 
   const ptsAnalyticsSeries = useMemo(() => {
     const unique = new Map<string, ClinicalOutcomeSeriesSummary>();
+    // The canonical read model is the evidence authority. Structured PTS goals and
+    // contribution links organize that evidence when present, but never gate visibility.
+    for (const series of ptsPlanSeries) {
+      if (!isHistoricalOnlySeries(series)) unique.set(series.key, series);
+    }
     for (const row of ptsGoalRows) {
       for (const contribution of row.contributions) {
         for (const series of contribution.series) {
@@ -716,7 +726,10 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
       }
     }
     return Array.from(unique.values());
-  }, [ptsGoalRows]);
+  }, [ptsGoalRows, ptsPlanSeries]);
+  const ptsUnstructuredTargetGroups = useMemo(() => (
+    buildClinicalTargetGroups(ptsAnalyticsSeries).filter((group) => group.clinicalSeries.length > 0)
+  ), [ptsAnalyticsSeries]);
   const analyticsSeries = scopeId === 'pts'
     ? ptsAnalyticsSeries
     : selectedPlanSeries.filter((series) => !isHistoricalOnlySeries(series));
@@ -906,7 +919,36 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
           {!activePts ? (
             <div className={`rounded-3xl border p-8 text-center ${panel}`}><Layers3 className="mx-auto text-slate-300" /><p className={`mt-3 text-sm ${muted}`}>Nenhum PTS visível para este paciente.</p></div>
           ) : ptsGoalRows.length === 0 ? (
-            <div className={`rounded-3xl border p-8 text-center ${panel}`}><Target className="mx-auto text-slate-300" /><p className={`mt-3 text-sm ${muted}`}>O PTS ainda não possui objetivos compartilhados estruturados.</p></div>
+            ptsUnstructuredTargetGroups.length > 0 ? (
+              <section className={`rounded-3xl border p-5 ${panel}`} data-testid="pts-canonical-unstructured-evidence">
+                <div className="flex items-start gap-3">
+                  <Target className="mt-0.5 shrink-0 text-violet-500" size={20} />
+                  <div>
+                    <p className={`text-sm font-semibold ${text}`}>Evidências clínicas do PTS</p>
+                    <p className={`mt-1 text-xs leading-5 ${muted}`}>O PTS ainda não possui objetivos compartilhados estruturados. As evidências canônicas continuam visíveis por alvo e métrica, sem inferir automaticamente uma especialidade.</p>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-2 lg:grid-cols-2" data-testid="pts-canonical-target-list">
+                  {ptsUnstructuredTargetGroups.map((group) => {
+                    const series = group.primarySeries;
+                    return (
+                      <div key={group.key} className={`rounded-2xl border p-3 ${inset}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className={`truncate text-sm font-semibold ${text}`}>{group.title}</p>
+                            <p className={`mt-1 text-[11px] ${muted}`}>{series.metricLabel} · {clinicalOutcomeEvidenceSampleLabel(series)} · {group.phase}</p>
+                          </div>
+                          <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] ${evidenceTone(series, isPanelDark)}`}>{series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}</span>
+                        </div>
+                        <p className={`mt-2 text-xs ${muted}`}>Atual: <span className={text}>{formatClinicalOutcomeValue(series.latestObservation)}</span></p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ) : (
+              <div className={`rounded-3xl border p-8 text-center ${panel}`}><Target className="mx-auto text-slate-300" /><p className={`mt-3 text-sm ${muted}`}>O PTS ainda não possui objetivos compartilhados estruturados nem evidência clínica canônica neste período.</p></div>
+            )
           ) : ptsGoalRows.map(({ goal, contributions }) => {
             const evidenceCount = contributions.reduce((sum, contribution) => sum + contribution.series.length, 0);
             const evidenceSpecialties = contributions.filter((contribution) => contribution.series.length > 0).length;
