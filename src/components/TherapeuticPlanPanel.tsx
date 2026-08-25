@@ -454,16 +454,30 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     () => planScopes.filter((scope: any) => scope?.mode === 'interdisciplinary' && scope?.status !== 'archived'),
     [planScopes],
   );
+  const specialtyScopes = useMemo(
+    () => planScopes.filter((scope: any) => scope?.mode === 'specialty' && scope?.status !== 'archived'),
+    [planScopes],
+  );
   const primaryPtsScope = useMemo(() => {
     if (ptsScopes.length === 0) return null;
     return ptsScopes.find((scope: any) => String(scope.id) === workspaceScopeId)
       || ptsScopes.find((scope: any) => scope.status === 'active')
       || ptsScopes[0];
   }, [ptsScopes, workspaceScopeId]);
-  const primaryPtsPrograms = useMemo(() => {
+  const ptsWorkspacePrograms = useMemo(() => {
     if (!primaryPtsScope?.id) return [];
-    return programs.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '') === String(primaryPtsScope.id));
-  }, [primaryPtsScope?.id, programs]);
+    const visibleScopeIds = new Set([
+      String(primaryPtsScope.id),
+      ...specialtyScopes.map((scope: any) => String(scope?.id || '')).filter(Boolean),
+    ]);
+    const byId = new Map<string, any>();
+    programs.forEach((program: any) => {
+      const planId = String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '');
+      if (!visibleScopeIds.has(planId)) return;
+      byId.set(String(program?.id || `${planId}:${program?.name || byId.size}`), program);
+    });
+    return Array.from(byId.values());
+  }, [primaryPtsScope?.id, programs, specialtyScopes]);
   const historicalPrograms = Array.isArray(planData?.historicalPrograms)
     ? planData.historicalPrograms
     : [];
@@ -1966,15 +1980,18 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const responsibleNames = responsibleIds
       .map((professionalId: string) => linkedProfessionals.find((professional: any) => String(professional.id) === professionalId)?.name)
       .filter(Boolean);
-    const fallbackResponsible = primaryPtsScope
-      ? linkedProfessionals.find((professional: any) => String(professional.id) === String(primaryPtsScope.responsible_professional_id || ''))?.name
+    const programPlanScope = planScopes.find((scope: any) => String(scope?.id || '') === String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '')) || null;
+    const fallbackScope = programPlanScope || primaryPtsScope;
+    const fallbackResponsible = fallbackScope
+      ? linkedProfessionals.find((professional: any) => String(professional.id) === String(fallbackScope.responsible_professional_id || ''))?.name
       : '';
     const responsibleLabel = responsibleNames.length > 0 ? responsibleNames.join(', ') : fallbackResponsible || 'Equipe clínica';
     const specialtyLabel = responsibleIds
       .map((professionalId: string) => linkedProfessionals.find((professional: any) => String(professional.id) === professionalId)?.specialty)
       .filter(Boolean)[0]
       || program?.specialty
-      || (Array.isArray(primaryPtsScope?.participant_specialties) ? primaryPtsScope.participant_specialties.filter(Boolean).join(', ') : '')
+      || programPlanScope?.specialty
+      || (Array.isArray(fallbackScope?.participant_specialties) ? fallbackScope.participant_specialties.filter(Boolean).join(', ') : '')
       || 'Interdisciplinar';
     const reviewDate = program?.review_due_date || program?.reviewDueDate;
     const reviewOverdue = Boolean(
@@ -2570,8 +2587,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         <PtsTherapeuticDashboard
           scope={primaryPtsScope}
           availableScopes={ptsScopes}
+          specialtyScopes={specialtyScopes}
           professionals={linkedProfessionals}
-          programs={primaryPtsPrograms}
+          programs={ptsWorkspacePrograms}
           loading={loading}
           isDark={isDark}
           canCreateProgram={canCreateProgram && (canManageStructure || primaryPtsScope.canEdit === true)}
@@ -2579,7 +2597,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           canManagePlans={canCreatePlanScope || planScopes.length > 1}
           onScopeChange={setWorkspaceScopeId}
           onAddProgram={() => startCreationForScope(String(primaryPtsScope.id))}
+          onAddProgramForScope={(scopeId) => startCreationForScope(scopeId)}
           onNewVersion={() => startEditingScope(primaryPtsScope)}
+          onEditPerspectiveScope={(scope) => startEditingScope(scope)}
           onManagePlans={() => setShowPlanManager(true)}
           renderProgramCard={renderPtsProgramCard}
         />
