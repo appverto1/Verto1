@@ -459,6 +459,14 @@ export async function markRecordSyncStatus(
       });
       await removeTombstone(row.user_id, row.type, entityId);
     }
+    if (row.type === 'clinical_plan_v3' && decoded && typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
+      const patientId = String(decoded?.patientId || decoded?.patient_id || '').trim();
+      if (patientId) {
+        window.dispatchEvent(new CustomEvent('verto:clinical-outcomes-changed', {
+          detail: { patientId, source: 'clinical_plan_v3_outbox_ack', occurredAt: Date.now() }
+        }));
+      }
+    }
     await db.records.delete(id);
   } else {
     await db.records.update(id, patch);

@@ -6530,7 +6530,7 @@ export const dataService = {
     const endpoint = `/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/plan-measurements`;
     const result = await saveOfflineFirst(
       clientEventId,
-      { ...(payload || {}), idempotencyKey: clientEventId },
+      { ...(payload || {}), patientId: safePatientId, patient_id: safePatientId, idempotencyKey: clientEventId },
       'clinical_plan_v3',
       endpoint,
       'POST',

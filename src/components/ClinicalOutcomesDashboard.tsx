@@ -706,7 +706,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
     });
   }, [activePts, data.contributions, ptsPayload, specialtyPlans, summaries]);
 
-  const ptsAnalyticsSeries = useMemo(() => {
+  const ptsStructuredAnalyticsSeries = useMemo(() => {
     const unique = new Map<string, ClinicalOutcomeSeriesSummary>();
     for (const row of ptsGoalRows) {
       for (const contribution of row.contributions) {
@@ -717,6 +717,18 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
     }
     return Array.from(unique.values());
   }, [ptsGoalRows]);
+  const specialtyAnalyticsSeries = useMemo(() => {
+    const visibleSpecialtyPlanIds = new Set(specialtyPlans.map((plan) => String(plan.id)));
+    return summaries.filter((series) => (
+      visibleSpecialtyPlanIds.has(seriesPlanId(series)) && !isHistoricalOnlySeries(series)
+    ));
+  }, [specialtyPlans, summaries]);
+  const ptsUsesSpecialtyFallback = Boolean(activePts)
+    && ptsStructuredAnalyticsSeries.length === 0
+    && specialtyAnalyticsSeries.length > 0;
+  const ptsAnalyticsSeries = ptsUsesSpecialtyFallback
+    ? specialtyAnalyticsSeries
+    : ptsStructuredAnalyticsSeries;
   const analyticsSeries = scopeId === 'pts'
     ? ptsAnalyticsSeries
     : selectedPlanSeries.filter((series) => !isHistoricalOnlySeries(series));
@@ -886,6 +898,12 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
             )}
           </div>
         </section>
+      )}
+
+      {scopeId === 'pts' && ptsUsesSpecialtyFallback && (
+        <div className={`rounded-2xl border px-4 py-3 text-xs leading-5 ${inset}`}>
+          Exibindo as séries clínicas das especialidades como visão multidisciplinar. Elas não são agregadas nem tratadas como contribuição a um objetivo compartilhado do PTS até existir vínculo explícito.
+        </div>
       )}
 
       {analyticsSeries.length > 0 && (

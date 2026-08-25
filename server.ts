@@ -78278,23 +78278,39 @@ async function startServer() {
     visiblePlanMap: Map<string, any>,
     objectivePlanMap: Map<string, Set<string>>,
     targetById: Map<string, any>,
+    programById: Map<string, any>,
+    contextByCmv3Session: Map<string, any>,
   ) => {
     const normalized: any[] = [];
     for (const row of Array.isArray(rows) ? rows : []) {
       const sourceKind = sanitizeString(row?.source_kind, 40).toUpperCase();
       const objectiveId = sanitizeString(row?.therapeutic_objective_id, 120);
-      const directPlanId = sanitizeString(row?.plan_id, 120);
-      const planIds = sourceKind === 'PLAN_GOAL' || sourceKind === 'ABA_TARGET'
-        ? (visiblePlanMap.has(directPlanId) ? [directPlanId] : [])
-        : Array.from(objectivePlanMap.get(objectiveId) || []);
+      const physicalCmv3SessionId = sanitizeString(row?.session_id, 180);
+      const contextLink = contextByCmv3Session.get(physicalCmv3SessionId) || null;
+      const metricKey = sanitizeString(row?.metric_key, 120);
+      const metricTargetMatch = /^program_target:([^:]+):/i.exec(metricKey);
+      const metricAbaTargetId = sanitizeString(metricTargetMatch?.[1], 180);
+      const metricAbaTarget = metricAbaTargetId ? targetById.get(metricAbaTargetId) || null : null;
+      const metricProgram = metricAbaTarget ? programById.get(String(metricAbaTarget.program_id || '')) || null : null;
+      const contextPlanId = sanitizeString(contextLink?.therapeutic_plan_id, 120);
+      const canonicalPlanId = sanitizeString(row?.plan_id, 120);
+      const metricProgramPlanId = sanitizeString(metricProgram?.therapeutic_plan_id, 120);
+      const explicitPlanId = contextPlanId || canonicalPlanId || metricProgramPlanId;
+      const planIds = explicitPlanId
+        ? (visiblePlanMap.has(explicitPlanId) ? [explicitPlanId] : [])
+        : sourceKind === 'THERAPEUTIC_OBJECTIVE'
+          ? Array.from(objectivePlanMap.get(objectiveId) || [])
+          : [];
       if (!planIds.length) continue;
 
       const normalizedValue = normalizeClinicalOutcomeValueFromV3(row);
       const observedAt = sanitizeString(row?.observed_at, 80) || `${sanitizeString(row?.clinical_date, 20)}T00:00:00.000Z`;
       const coverageStatus = sanitizeString(row?.coverage_status, 80).toUpperCase();
       const missingReason = coverageStatus && coverageStatus !== 'OBSERVED' ? coverageStatus.toLowerCase() : null;
-      const abaTargetId = sanitizeString(row?.value_details?.aba_target_id || row?.target_id, 180);
-      const abaTarget = sourceKind === 'ABA_TARGET' ? targetById.get(abaTargetId) || null : null;
+      const abaTargetId = sourceKind === 'ABA_TARGET'
+        ? sanitizeString(row?.value_details?.aba_target_id || row?.target_id, 180)
+        : metricAbaTargetId;
+      const abaTarget = abaTargetId ? targetById.get(abaTargetId) || null : null;
       for (const planId of planIds) {
         const plan = visiblePlanMap.get(planId) || {};
         normalized.push({
@@ -78302,13 +78318,13 @@ async function startServer() {
           planId,
           planVersion: Number(plan?.edit_version || 1),
           goalId: sanitizeString(row?.goal_id, 120) || objectiveId || null,
-          programId: sanitizeString(row?.program_id, 180) || null,
-          sessionId: sanitizeString(row?.session_id, 180) || null,
+          programId: sanitizeString(row?.program_id, 180) || sanitizeString(metricProgram?.id, 180) || null,
+          sessionId: sanitizeString(contextLink?.aba_session_id, 180) || physicalCmv3SessionId || null,
           professionalId: null,
           specialty: sanitizeTextField(row?.specialty || plan?.specialty, 120) || null,
           itemId: sourceKind === 'ABA_TARGET'
             ? sanitizeString(row?.value_details?.series_key || row?.item_id || row?.target_id, 260) || null
-            : sanitizeString(row?.item_id || row?.target_id, 260) || null,
+            : sanitizeString(abaTargetId || row?.item_id || row?.target_id, 260) || null,
           itemLabel: sanitizeTextField(row?.item_label || row?.metric_label, 220) || null,
           metricKey: sanitizeString(row?.metric_key, 120) || sanitizeString(row?.definition_id, 120),
           metricLabel: sanitizeTextField(row?.metric_label, 180) || sanitizeString(row?.metric_key, 120) || 'Métrica clínica',
@@ -78331,7 +78347,11 @@ async function startServer() {
           metadata: {
             cmv3: true,
             sourceKind,
+            physicalCmv3SessionId: physicalCmv3SessionId || null,
+            linkedAbaSessionId: sanitizeString(contextLink?.aba_session_id, 180) || null,
+            contextPlanId: contextPlanId || null,
             targetId: row?.target_id || null,
+            abaTargetId: abaTargetId || null,
             definitionId: row?.definition_id || null,
             definitionVersionId: row?.definition_version_id || null,
             expectationId: row?.expectation_id || null,
@@ -78563,6 +78583,7 @@ async function startServer() {
       let v3ReadModelAvailable = isUuid(clinicId);
       let v3PlanOutcomeRows: any[] = [];
       let v3RpcCount = 0;
+      let v3ContextQueryCount = 0;
       if (isUuid(clinicId) && (visiblePlanIdList.length > 0 || visibleObjectiveIds.length > 0)) {
         const v3Result = await supabase.rpc('read_clinical_outcomes_converged_v3', {
           p_organization_id: clinicId,
@@ -78582,7 +78603,33 @@ async function startServer() {
             throw v3Result.error;
           }
         } else {
-          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById);
+          const rawV3Rows = Array.isArray(v3Result.data) ? v3Result.data : [];
+          const cmv3SessionIds = Array.from(new Set(
+            rawV3Rows
+              .map((row: any) => sanitizeString(row?.session_id, 180))
+              .filter(isUuid)
+          ));
+          const contextByCmv3Session = new Map<string, any>();
+          if (cmv3SessionIds.length > 0) {
+            const contextResult = await supabase
+              .from('clinical_measurement_session_context_links_v3')
+              .select('cmv3_session_id,aba_session_id,therapeutic_plan_id')
+              .eq('organization_id', clinicId)
+              .eq('patient_id', patientId)
+              .in('cmv3_session_id', cmv3SessionIds)
+              .limit(5000);
+            v3ContextQueryCount = 1;
+            if (contextResult.error) {
+              if (!isMissingRelationError(contextResult.error) && !hasMissingFinancialSchema(contextResult.error)) {
+                throw contextResult.error;
+              }
+            } else {
+              for (const link of contextResult.data || []) {
+                contextByCmv3Session.set(String(link.cmv3_session_id), link);
+              }
+            }
+          }
+          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(rawV3Rows, visiblePlanMap, objectivePlanMap, targetById, programById, contextByCmv3Session);
         }
       }
 
@@ -78714,7 +78761,7 @@ async function startServer() {
           legacyObservationCount
         },
         meta: {
-          queryCount: 9 + v3RpcCount,
+          queryCount: 9 + v3RpcCount + v3ContextQueryCount,
           rpcCount: v3RpcCount,
           batched: true,
           periodDays: requestedDays,
@@ -80132,6 +80179,36 @@ async function startServer() {
           reasonCode: existingInProgressSession?.id ? 'REUSE_IN_PROGRESS_SESSION' : 'START_ALLOWED'
         });
       }
+
+      const unscheduledStartClaimKey = !appointmentId && resolvedProfessionalId
+        ? sanitizeString(`unscheduled:${clinicId}:${patientId}:${resolvedProfessionalId}`, 240)
+        : '';
+      if (unscheduledStartClaimKey) {
+        const claimedSessionResult = await supabase
+          .from('aba_sessions')
+          .select('id,status,appointment_id,patient_id,clinic_id,therapist_id,actual_start_at,started_at,record_count,location_context_snapshot,reference_date,start_claim_key')
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .eq('therapist_id', resolvedProfessionalId)
+          .eq('start_claim_key', unscheduledStartClaimKey)
+          .in('status', ['active', 'in_progress', 'IN_PROGRESS'])
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (claimedSessionResult.error) {
+          if (extractMissingColumnName(claimedSessionResult.error) === 'start_claim_key') {
+            return res.status(503).json({
+              success: false,
+              code: 'ABA_UNSCHEDULED_SESSION_CLAIM_MIGRATION_REQUIRED',
+              retryable: false,
+              error: 'A proteção contra sessões duplicadas ainda precisa ser aplicada no banco.'
+            });
+          }
+          throw claimedSessionResult.error;
+        }
+        if (claimedSessionResult.data?.id) existingInProgressSession = claimedSessionResult.data;
+      }
+
       const requestedSessionId = sanitizeString(req.body?.id || req.body?.session_id || req.body?.sessionId || crypto.randomUUID(), 180);
       const sessionId = sanitizeString(existingInProgressSession?.id || requestedSessionId, 180);
       const requestedStatus = normalizeAbaSessionStatus(req.body?.status);
@@ -80213,6 +80290,7 @@ async function startServer() {
         source: requestSource,
         status: sessionStatus,
         appointment_id: appointmentId,
+        start_claim_key: unscheduledStartClaimKey || null,
         scheduled_start_at: req.body?.scheduled_start || req.body?.scheduledStart || req.body?.scheduled_start_at || req.body?.scheduledStartAt
           ? sanitizeIsoDateTime(req.body?.scheduled_start || req.body?.scheduledStart || req.body?.scheduled_start_at || req.body?.scheduledStartAt)
           : linkedAppointment?.scheduled_start_at || linkedAppointment?.scheduled_at || null,
@@ -80276,7 +80354,33 @@ async function startServer() {
         updated_at: new Date().toISOString()
       });
 
-      const result = await writeAbaRowWithSchemaFallback('aba_sessions', payload, 'upsert');
+      const result = await writeAbaRowWithSchemaFallback('aba_sessions', payload, 'upsert', {
+        criticalColumns: unscheduledStartClaimKey ? ['start_claim_key'] : []
+      });
+      if (result.error && unscheduledStartClaimKey) {
+        const conflictText = sanitizeString(`${result.error?.code || ''} ${result.error?.message || ''} ${result.error?.details || ''}`, 1200);
+        if (/23505|ux_aba_sessions_active_start_claim_v1|start_claim_key/i.test(conflictText)) {
+          const winnerResult = await supabase
+            .from('aba_sessions')
+            .select('id,status,appointment_id,patient_id,clinic_id,therapist_id,actual_start_at,started_at,ended_at,actual_end_at,record_count,reference_date,start_claim_key,updated_at')
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .eq('therapist_id', resolvedProfessionalId)
+            .eq('start_claim_key', unscheduledStartClaimKey)
+            .in('status', ['active', 'in_progress', 'IN_PROGRESS'])
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (!winnerResult.error && winnerResult.data?.id) {
+            return res.json({
+              success: true,
+              idempotent: true,
+              data: winnerResult.data,
+              session: winnerResult.data
+            });
+          }
+        }
+      }
       if (result.error) throw result.error;
       appointmentClaimNeedsRelease = false;
       if (payload.appointment_id) {
