@@ -81329,6 +81329,15 @@ async function startServer() {
         }
       }
 
+      if (therapeuticMeasurementWrite) {
+        return res.status(503).json({
+          success: false,
+          code: 'ABA_THERAPEUTIC_V3_REQUIRED',
+          retryable: true,
+          error: 'Esta coleta terapêutica deve ser sincronizada pelo Clinical Measurement V3.'
+        });
+      }
+
       const score = req.body?.response_score !== undefined || req.body?.responseScore !== undefined || req.body?.score !== undefined
         ? asSafeNumber(req.body?.response_score ?? req.body?.responseScore ?? req.body?.score, -100000, 100000)
         : null;
