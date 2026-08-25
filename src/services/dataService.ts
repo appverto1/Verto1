@@ -919,7 +919,7 @@ function normalizeNoteVisibility(value: any): 'private' | 'shared_patient' | 'sh
   return 'private';
 }
 
-type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'aba_v3' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
+type OfflineType = 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'aba_v3' | 'clinical_plan_v3' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
 
 async function buildConditionalHeaders(endpoint: string, type: OfflineType, includeBearer = false) {
   const headers = await getAuthHeaders(includeBearer);
@@ -1036,8 +1036,9 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
 }
 
 // Helper to handle offline-first saving
-async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string } = {}) {
-  const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
+async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string; idempotencyKey?: string } = {}) {
+  const requestedIdempotencyKey = String(options?.idempotencyKey || '').trim();
+  const idempotencyKey = requestedIdempotencyKey || createIdempotencyKey(`${method}:${endpoint}`, id);
   // Every mutation gets its own durable outbox row. Reusing an id while a prior
   // request is in-flight can let the older response acknowledge/delete the newer edit.
   const queueId = `${type}:${id}:${crypto.randomUUID()}`;
@@ -6525,23 +6526,18 @@ export const dataService = {
   async saveClinicalPlanMeasurementV3(patientId: string, payload: any = {}) {
     const safePatientId = String(patientId || '').trim();
     if (!safePatientId) return { success: false, error: 'Paciente não identificado.', data: null };
-    try {
-      const response = await fetchWithAuthRetry(`/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/plan-measurements`, {
-        method: 'POST',
-        headers: { ...(await getNoStoreAuthHeaders()), 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(payload || {})
-      });
-      const result = await safeJson(response);
-      if (!response.ok || result?.success === false) {
-        return { success: false, status: response.status, code: result?.error, error: result?.message || result?.error || 'Não foi possível registrar a medição clínica V3.', data: null };
-      }
-      const successResult = { ...result, success: true };
-      notifyClinicalOutcomesChanged(safePatientId);
-      return successResult;
-    } catch (error: any) {
-      return { success: false, error: error?.message || 'Não foi possível registrar a medição clínica V3.', data: null };
-    }
+    const clientEventId = String(payload?.idempotencyKey || payload?.clientEventId || payload?.client_event_id || generateId()).trim();
+    const endpoint = `/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/plan-measurements`;
+    const result = await saveOfflineFirst(
+      clientEventId,
+      { ...(payload || {}), idempotencyKey: clientEventId },
+      'clinical_plan_v3',
+      endpoint,
+      'POST',
+      { queueEntityId: clientEventId, idempotencyKey: clientEventId }
+    );
+    if (result?.success !== false && result?.pending !== true) notifyClinicalOutcomesChanged(safePatientId);
+    return result;
   },
 
   async getClinicalPlanOutcomesV3(patientId: string, options: { days?: number; planId?: string } = {}) {
