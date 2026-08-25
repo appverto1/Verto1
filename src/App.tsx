@@ -1502,22 +1502,30 @@ export default function App() {
           await Promise.all(recoverable.map((record) => resetFailedSyncRecord(record.id)));
           scheduleRecoveredSync();
         }
+        // Pending infrastructure failures never become a dead state. The outbox
+        // is checked frequently, while next_retry_at keeps network retries backed off.
+        if (navigator.onLine) await syncOfflineData();
 
       } catch {
         // Falhas ao ler o IndexedDB nao devem gerar faixa visual no app.
       }
     };
     void refreshFailedSyncCount();
-    const interval = window.setInterval(refreshFailedSyncCount, 60_000);
+    const interval = window.setInterval(refreshFailedSyncCount, 5_000);
     const handleFocus = () => void refreshFailedSyncCount();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') void refreshFailedSyncCount();
+    };
     window.addEventListener('focus', handleFocus);
     window.addEventListener('online', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       cancelled = true;
       retryTimers.forEach((timer) => window.clearTimeout(timer));
       window.clearInterval(interval);
       window.removeEventListener('focus', handleFocus);
       window.removeEventListener('online', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [user]);
 

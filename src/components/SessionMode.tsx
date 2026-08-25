@@ -1140,6 +1140,9 @@ export const SessionMode = ({
   const [planningFilter, setPlanningFilter] = useState<'pending' | 'high' | 'regression' | 'maintenance' | 'prompt_fading' | 'edited' | 'history'>('pending');
   const [planningDecisionLoadingId, setPlanningDecisionLoadingId] = useState('');
   const planningGenerationInFlightRef = useRef(false);
+  const therapeuticSyncInFlightRef = useRef(new Set<string>());
+  const clinicalRecordsRef = useRef<SessionRecord[]>([]);
+  const clinicalSessionGoalsRef = useRef<any[]>([]);
   const planningDecisionInFlightRef = useRef(new Set<string>());
   const [editingRecommendation, setEditingRecommendation] = useState<any>(null);
   const [editRecommendationForm, setEditRecommendationForm] = useState({
@@ -2366,7 +2369,11 @@ export const SessionMode = ({
       durationSeconds: normalizedMeasurementType === 'duration' ? numericValue : null,
       latencyMs: normalizedMeasurementType === 'latency' ? (latencyMs ?? Math.round(numericValue * 1000)) : null,
       programId,
-      targetId: targetId || null
+      targetId: targetId || null,
+      therapeuticPlanId: goalTherapeuticPlanId(goal) || null,
+      therapeuticObjectiveId: goalTherapeuticObjectiveId(goal) || null,
+      idempotencyKey: trialId,
+      canonicalPlanWriter: Boolean(goalTherapeuticObjectiveId(goal) && CMV3_PLAN_SUPPORTED_MEASUREMENTS.has(normalizedMeasurementType))
     };
     const localRecord: Omit<SessionRecord, 'syncStatus'> = {
       id: trialId,
@@ -2433,14 +2440,29 @@ export const SessionMode = ({
             }
           });
       if (result?.success === false) {
-        updateRecordStatus(trialId, result?.durable ? 'local' : 'error');
+        updateRecord(trialId, {
+          syncStatus: result?.durable ? 'local' : 'error',
+          syncErrorCode: result?.code || null,
+          syncErrorMessage: result?.error || null,
+          rawPayload: {
+            ...rawPayload,
+            offlineOutboxQueued: Boolean(result?.durable),
+            syncNeedsAttention: !result?.durable && Number(result?.status || 0) > 0 && Number(result?.status || 0) < 500 && ![408, 429].includes(Number(result?.status || 0)),
+            syncErrorStatus: result?.status || null
+          }
+        });
         if (!result?.durable) {
           setSessionWarning(result?.error || (useCanonicalPlanWriter ? 'Não foi possível salvar esta medida no registro clínico V3. Nenhum registro Legacy foi criado.' : 'Não foi possível salvar esta medida clínica.'));
           showClinicalToast(buildClinicalSaveErrorToast(), 'error');
           return false;
         }
       } else {
-        updateRecordStatus(trialId, result?.pending ? 'local' : 'synced');
+        updateRecord(trialId, {
+          syncStatus: result?.pending ? 'local' : 'synced',
+          syncErrorCode: null,
+          syncErrorMessage: null,
+          rawPayload: { ...rawPayload, offlineOutboxQueued: Boolean(result?.pending), syncNeedsAttention: false, syncErrorStatus: null }
+        });
       }
       triggerMicroFeedback(actionKey, normalizedMeasurementType === 'frequency' ? 'plus' : 'check');
       const measurementFeedback = displayLabel || formatTherapeuticMeasurementValue(normalizedMeasurementType, numericValue);
@@ -6044,6 +6066,180 @@ export const SessionMode = ({
   const sessionGoals = useMemo(() => (
     mergeSessionGoalsWithAvailableMaintenance(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules)
   ), [baseSessionGoals, sessionAvailableMaintenanceProbeSchedules]);
+
+  useEffect(() => {
+    clinicalRecordsRef.current = records;
+  }, [records]);
+
+  useEffect(() => {
+    clinicalSessionGoalsRef.current = sessionGoals;
+  }, [sessionGoals]);
+
+  useEffect(() => {
+    const handleOfflineSyncStatus = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail || {};
+      if (String(detail?.type || '') !== 'clinical_plan_v3') return;
+      const entityId = String(detail?.entityId || '').trim();
+      if (!entityId) return;
+      setRecords((previous) => previous.map((record) => {
+        if (record.id !== entityId) return record;
+        if (detail?.status === 'synced') {
+          return {
+            ...record,
+            syncStatus: 'synced',
+            syncErrorCode: null,
+            syncErrorMessage: null,
+            rawPayload: {
+              ...(record.rawPayload || {}),
+              offlineOutboxQueued: false,
+              syncNeedsAttention: false,
+              syncErrorStatus: null
+            }
+          };
+        }
+        if (detail?.status === 'pending') {
+          return {
+            ...record,
+            syncStatus: 'local',
+            syncErrorMessage: detail?.lastError || null,
+            rawPayload: { ...(record.rawPayload || {}), offlineOutboxQueued: true, syncNeedsAttention: false }
+          };
+        }
+        if (detail?.status === 'failed' || detail?.status === 'conflict') {
+          return {
+            ...record,
+            syncStatus: 'error',
+            syncErrorMessage: detail?.lastError || 'A sincronização exige revisão.',
+            rawPayload: { ...(record.rawPayload || {}), offlineOutboxQueued: false, syncNeedsAttention: true }
+          };
+        }
+        return record;
+      }));
+      if (detail?.status === 'synced') onSessionRecordSaved?.();
+    };
+    window.addEventListener('verto:offline-sync-status', handleOfflineSyncStatus as EventListener);
+    return () => window.removeEventListener('verto:offline-sync-status', handleOfflineSyncStatus as EventListener);
+  }, [onSessionRecordSaved]);
+
+  useEffect(() => {
+    if (isCompletedSessionReview || sessionCompleted || !patientId || sessionId.startsWith('draft-')) return;
+    let cancelled = false;
+
+    const findGoalForRecord = (record: SessionRecord) => {
+      const targetId = String(record.targetId || record.rawPayload?.targetId || '').trim();
+      const targetName = String(record.targetName || record.title || '').trim().toLowerCase();
+      return clinicalSessionGoalsRef.current.find((goal: any) => {
+        const goalId = goalTargetId(goal);
+        const goalName = goalTargetName(goal).toLowerCase();
+        return (targetId && goalId === targetId) || (!targetId && targetName && goalName === targetName);
+      }) || null;
+    };
+
+    const retryRecord = async (record: SessionRecord) => {
+      if (cancelled || therapeuticSyncInFlightRef.current.has(record.id)) return;
+      const rawPayload = record.rawPayload || {};
+      if (rawPayload?.syncNeedsAttention === true || rawPayload?.offlineOutboxQueued === true) return;
+      if (!navigator.onLine) return;
+      const goal = findGoalForRecord(record);
+      const measurementType = normalizeTherapeuticMeasurementType(record.measurementType || rawPayload.measurementType);
+      const numericValue = Number(record.measuredValue ?? rawPayload.measurementValue ?? record.durationSeconds ?? 0);
+      if (!goal || !Number.isFinite(numericValue)) return;
+      const timestamp = String(record.timestamp || rawPayload.endedAt || new Date().toISOString());
+      const cmv3Payload = buildClinicalPlanMeasurementV3Payload({
+        goal,
+        measurementType,
+        numericValue,
+        measurementUnit: record.measurementUnit || rawPayload.measurementUnit || null,
+        timestamp,
+        startedAt: record.startedAt || rawPayload.startedAt || timestamp,
+        endedAt: record.endedAt || rawPayload.endedAt || timestamp,
+        trialId: record.id
+      });
+      if (!cmv3Payload) {
+        updateRecord(record.id, {
+          syncStatus: 'error',
+          syncErrorCode: 'CMV3_RETRY_IDENTITY_REQUIRED',
+          syncErrorMessage: 'A coleta precisa de revisão porque sua identidade clínica não pôde ser reconstruída.',
+          rawPayload: { ...rawPayload, syncNeedsAttention: true }
+        });
+        return;
+      }
+
+      therapeuticSyncInFlightRef.current.add(record.id);
+      updateRecord(record.id, { syncStatus: 'syncing', syncErrorMessage: null });
+      try {
+        const result = await dataService.saveClinicalPlanMeasurementV3(patientId, cmv3Payload);
+        if (cancelled) return;
+        if (result?.success === false) {
+          const status = Number(result?.status || 0);
+          const terminal = status > 0 && status < 500 && ![408, 429].includes(status);
+          updateRecord(record.id, {
+            syncStatus: terminal ? 'error' : 'local',
+            syncErrorCode: result?.code || null,
+            syncErrorMessage: result?.error || 'Sincronização pendente.',
+            rawPayload: {
+              ...rawPayload,
+              offlineOutboxQueued: Boolean(result?.durable),
+              syncNeedsAttention: terminal,
+              syncErrorStatus: status || null
+            }
+          });
+          return;
+        }
+        updateRecord(record.id, {
+          syncStatus: result?.pending ? 'local' : 'synced',
+          syncErrorCode: null,
+          syncErrorMessage: null,
+          rawPayload: {
+            ...rawPayload,
+            therapeuticPlanId: goalTherapeuticPlanId(goal) || rawPayload.therapeuticPlanId || null,
+            therapeuticObjectiveId: goalTherapeuticObjectiveId(goal) || rawPayload.therapeuticObjectiveId || null,
+            idempotencyKey: record.id,
+            offlineOutboxQueued: Boolean(result?.pending),
+            syncNeedsAttention: false,
+            syncErrorStatus: null
+          }
+        });
+        if (!result?.pending) onSessionRecordSaved?.();
+      } catch (error: any) {
+        if (!cancelled) {
+          updateRecord(record.id, {
+            syncStatus: 'local',
+            syncErrorMessage: error?.message || 'Aguardando nova tentativa automática.'
+          });
+        }
+      } finally {
+        therapeuticSyncInFlightRef.current.delete(record.id);
+      }
+    };
+
+    const drain = () => {
+      const candidates = clinicalRecordsRef.current.filter((record) =>
+        record.therapeuticMeasurement === true
+        && (record.syncStatus === 'local' || record.syncStatus === 'error')
+        && record.rawPayload?.syncNeedsAttention !== true
+        && record.rawPayload?.offlineOutboxQueued !== true
+      );
+      for (const record of candidates.slice(0, 8)) void retryRecord(record);
+    };
+
+    drain();
+    const interval = window.setInterval(drain, 5_000);
+    const handleConnectivity = () => drain();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') drain();
+    };
+    window.addEventListener('online', handleConnectivity);
+    window.addEventListener('focus', handleConnectivity);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('online', handleConnectivity);
+      window.removeEventListener('focus', handleConnectivity);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [isCompletedSessionReview, onSessionRecordSaved, patientId, sessionCompleted, sessionId]);
   const sessionPlanGoals = useMemo(() => {
     if (sessionPlanFilter === 'skills') {
       return sessionGoals.filter((goal: any) => !goal?.isMaintenanceProbeAvailableSessionGoal && !sessionAvailableMaintenanceTargetIds.has(goalTargetId(goal)));
@@ -10862,7 +11058,13 @@ export const SessionMode = ({
                     </div>
                     <div className="shrink-0 flex flex-col items-end gap-2">
                       {renderSyncBadge(normalizeSyncStatus(record.syncStatus))}
-                      {record.measurementModelVersion === 'V3' ? (
+                      {record.therapeuticMeasurement && record.syncStatus !== 'synced' ? (
+                        <div className="flex max-w-[190px] flex-wrap justify-end gap-1.5">
+                          <span className="inline-flex min-h-[32px] items-center rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-[10px] uppercase tracking-widest text-blue-600">
+                            {record.rawPayload?.syncNeedsAttention ? 'Revisão necessária' : 'Retry automático ativo'}
+                          </span>
+                        </div>
+                      ) : record.measurementModelVersion === 'V3' ? (
                         <div className="flex max-w-[190px] flex-wrap justify-end gap-1.5">
                           <span className="inline-flex min-h-[32px] items-center rounded-full border border-purple-100 bg-purple-50 px-3 py-1 text-[10px] uppercase tracking-widest text-purple-600">V3 · auditável</span>
                           {record.kind === 'trial' && record.syncStatus === 'error' && (

@@ -1,7 +1,6 @@
 import Dexie, { Table } from 'dexie';
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
 import {
-  OFFLINE_SYNC_MAX_RETRIES,
   isIdempotentConflictPayload,
   isRecoverableFailedOfflineSyncRecord,
   type OfflineSyncStatus,
@@ -13,7 +12,7 @@ export interface OfflineRecord {
   id: string;
   entity_id?: string;
   data: any;
-  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'aba_v3' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
+  type: 'patient' | 'note' | 'history' | 'log' | 'profile' | 'task' | 'payment' | 'aba' | 'aba_v3' | 'clinical_plan_v3' | 'appointment' | 'clinic_state' | 'patient_record' | 'assigned_task';
   sync_status: OfflineSyncStatus;
   last_updated: number;
   retry_count?: number;
@@ -92,6 +91,21 @@ export class MyDatabase extends Dexie {
 
 export const db = new MyDatabase();
 export const generateId = () => crypto.randomUUID();
+
+function emitOfflineSyncStatus(row: Pick<OfflineRecordStored, 'id' | 'entity_id' | 'type'>, status: OfflineSyncStatus, lastError?: string | null) {
+  if (typeof window === 'undefined' || typeof CustomEvent === 'undefined') return;
+  const entityId = String(row.entity_id || row.id || '').trim();
+  window.dispatchEvent(new CustomEvent('verto:offline-sync-status', {
+    detail: {
+      queueId: row.id,
+      entityId,
+      type: row.type,
+      status,
+      lastError: lastError || null,
+      occurredAt: Date.now()
+    }
+  }));
+}
 
 const SESSION_SEED_KEY = 'verto.offline.crypto.seed';
 const PERSISTENT_SEED_PREFIX = 'verto.offline.crypto.seed.persisted';
@@ -456,6 +470,7 @@ export async function markRecordSyncStatus(
       persistLogBackup({ ...row, ...patch });
     }
   }
+  emitOfflineSyncStatus(row, status, patch.last_error);
 }
 
 export async function markRecordSyncFailure(id: string, params: { status?: number | null; error?: unknown; retryable?: boolean } = {}) {
@@ -463,8 +478,7 @@ export async function markRecordSyncFailure(id: string, params: { status?: numbe
   const resolved = resolveOfflineSyncFailure({
     currentRetryCount: (row as any)?.retry_count || 0,
     status: params.retryable === false ? 400 : params.status,
-    error: params.error,
-    maxRetries: OFFLINE_SYNC_MAX_RETRIES
+    error: params.error
   });
   await markRecordSyncStatus(id, resolved.sync_status, resolved);
   if (row?.method === 'DELETE' && resolved.sync_status === 'failed') {

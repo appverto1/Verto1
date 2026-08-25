@@ -1,8 +1,8 @@
 export type OfflineSyncStatus = 'synced' | 'pending' | 'failed' | 'conflict';
 
 export const OFFLINE_SYNC_MAX_RETRIES = 3;
-export const OFFLINE_SYNC_BASE_BACKOFF_MS = 30_000;
-export const OFFLINE_SYNC_MAX_BACKOFF_MS = 30 * 60_000;
+export const OFFLINE_SYNC_BASE_BACKOFF_MS = 5_000;
+export const OFFLINE_SYNC_MAX_BACKOFF_MS = 60_000;
 
 export type OfflineSyncLikeRecord = {
   sync_status?: OfflineSyncStatus;
@@ -51,7 +51,9 @@ export function shouldAttemptOfflineRecord(record: OfflineSyncLikeRecord, now = 
   if (record.sync_status !== 'pending') return false;
   const nextRetryAt = Number(record.next_retry_at || 0);
   if (Number.isFinite(nextRetryAt) && nextRetryAt > now) return false;
-  return normalizeRetryCount(record.retry_count) < OFFLINE_SYNC_MAX_RETRIES;
+  // Retryable infrastructure failures are intentionally non-terminal.
+  // next_retry_at provides the backoff; retry_count is observability only.
+  return true;
 }
 
 export function isRecoverableFailedOfflineSyncRecord(record: OfflineSyncLikeRecord): boolean {
@@ -85,7 +87,6 @@ export function resolveOfflineSyncFailure(params: {
   maxRetries?: number;
 }) {
   const now = params.now || Date.now();
-  const maxRetries = params.maxRetries || OFFLINE_SYNC_MAX_RETRIES;
   const currentRetryCount = normalizeRetryCount(params.currentRetryCount);
   const status = Number(params.status || 0);
   const retryable = status ? isRetryableOfflineSyncStatus(status) : true;
@@ -101,7 +102,7 @@ export function resolveOfflineSyncFailure(params: {
           ? `HTTP ${status}`
           : 'Erro de sincronizacao offline';
 
-  if (permanent || !retryable || nextRetryCount >= maxRetries) {
+  if (permanent || !retryable) {
     return {
       sync_status: 'failed' as const,
       retry_count: nextRetryCount,
