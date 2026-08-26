@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, BadgeCheck, CalendarDays, Layers3, Target, TrendingDown, TrendingUp } from 'lucide-react';
+import { Activity, ArrowRight, BadgeCheck, CalendarDays, Layers3, Target, TrendingDown, TrendingUp } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -521,11 +521,18 @@ function ProgramChangesView({
     const canOpen = clean(target.latestSessionId).startsWith('session-') && Boolean(onOpenSessionReport);
     const favorable = tone === 'improving';
     const sustained = target.movement === 'criterion_sustained';
-    const trendIcon = target.mathTrend === 'down'
+    const trendIcon = target.valueTrend === 'down'
       ? <TrendingDown size={17} className={`shrink-0 ${favorable ? 'text-emerald-500' : 'text-rose-500'}`} />
-      : target.mathTrend === 'up'
+      : target.valueTrend === 'up'
         ? <TrendingUp size={17} className={`shrink-0 ${favorable ? 'text-emerald-500' : 'text-rose-500'}`} />
-        : null;
+        : target.valueTrend === 'flat'
+          ? <ArrowRight size={17} className="shrink-0 text-slate-400" />
+          : null;
+    const criterionCopy = target.criterionLabel
+      ? `${target.criterionSource === 'target_mastery_criteria' || target.criterionSource === 'program_mastery_criteria' ? 'Critério de domínio' : 'Meta clínica configurada'}: ${target.criterionLabel}`
+      : favorable
+        ? 'Tendência clinicamente favorável'
+        : 'Tendência clinicamente desfavorável';
     return (
       <button
         type="button"
@@ -541,7 +548,7 @@ function ProgramChangesView({
           {sustained ? <BadgeCheck size={17} className="shrink-0 text-sky-500" /> : trendIcon}
         </div>
         <p className={`mt-2 text-sm font-semibold ${sustained ? 'text-sky-700 dark:text-sky-300' : favorable ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{movementValueText(target)}</p>
-        <p className={`mt-1 text-[11px] ${subtle}`}>{sustained ? 'Critério sustentado' : favorable ? 'Mudança clinicamente favorável' : 'Mudança clinicamente desfavorável'}{target.criterionLabel ? ` · ${target.criterionLabel}` : ''}</p>
+        <p className={`mt-1 text-[11px] ${subtle}`}>{criterionCopy}</p>
         <p className={`mt-1 text-[11px] ${subtle}`}>{target.pointCount} sessões comparáveis{canOpen ? ' · abrir sessão mais recente' : ''}</p>
       </button>
     );

@@ -14,7 +14,10 @@ assert.match(shell, /Precisam de atenção/, 'a visão deve destacar alvos em pi
 assert.match(shell, /Critério sustentado/, 'o programa deve separar critério sustentado de evolução');
 assert.match(shell, /Estagnado/, 'estabilidade abaixo do critério deve ser apresentada como estagnação');
 assert.match(shell, /nunca o sinal matemático isolado/i, 'cor e estado não podem seguir apenas o sinal matemático');
-assert.match(shell, /target\.mathTrend === 'down'[\s\S]*TrendingDown[\s\S]*text-emerald-500/, 'queda matemática favorável deve poder usar seta verde para baixo');
+assert.match(shell, /target\.valueTrend === 'down'[\s\S]*TrendingDown[\s\S]*text-emerald-500/, 'seta do card deve refletir o delta matemático enquanto a cor reflete a valência clínica');
+assert.match(shell, /target\.valueTrend === 'flat'[\s\S]*ArrowRight/, 'delta visualmente nulo deve usar seta horizontal, nunca falsa seta de alta');
+assert.match(shell, /Meta clínica configurada|Critério de domínio/, 'microcopy deve nomear a regra como meta ou critério, não como mudança');
+assert.doesNotMatch(shell, /Mudança clinicamente favorável/, 'critério clínico não pode ser rotulado como mudança');
 assert.match(shell, /sem criar score ou média entre unidades incompatíveis/i, 'a visão não pode reintroduzir score global');
 assert.match(shell, /activeDomain !== 'changes' && activeMetric/, 'mudanças por sessão não deve exibir seletor de uma métrica\/alvo individual');
 assert.match(shell, /ProgramChangesView series=\{series\} programs=\{programs\}/, 'a aba de mudanças deve usar o resumo por programa');
@@ -34,6 +37,11 @@ assert.match(changeAnalytics, /direction === 'lower_is_better'/, 'a direção cl
 assert.match(changeAnalytics, /no_directional_judgment/, 'volume sem direção clínica não pode virar melhora\/piora');
 assert.match(changeAnalytics, /previousMovement/, 'transições semânticas entre estados devem orientar os destaques');
 assert.match(changeAnalytics, /highlightPriority/, 'destaques devem priorizar transições de estado antes da magnitude');
+assert.match(changeAnalytics, /criterionMetAtStart/, 'ranking deve saber se o alvo já iniciou a janela no critério');
+assert.match(changeAnalytics, /target\.criterionMetAtStart && target\.criterionMet/, 'alvo que começa e termina no critério deve sair de Maiores evoluções');
+assert.match(changeAnalytics, /target\.valueTrend === 'flat'/, '100% -> 100% e outros deltas planos não podem ocupar Maiores evoluções');
+assert.match(changeAnalytics, /target\.criterionProgressDelta <= 0/, 'alvo com critério deve provar aproximação líquida real antes de entrar no ranking');
+assert.match(changeAnalytics, /endpointTrend/, 'microinteração deve derivar seta do primeiro para o último valor, separada da inclinação longitudinal');
 assert.doesNotMatch(changeAnalytics, /sort\(\(left, right\) => right\.relativeMagnitude - left\.relativeMagnitude/, 'destaques não podem ser ordenados por variação relativa bruta entre unidades incompatíveis');
 assert.match(changeAnalytics, /therapeuticObjectiveId/, 'evidência CMV3 sem programId deve poder resolver o programa pelo objetivo terapêutico');
 assert.match(changeAnalytics, /program_target:\(\[\^:\]\+\):/, 'alvos program_target devem preservar identidade individual mesmo quando compartilham o target CMV3 do objetivo');
