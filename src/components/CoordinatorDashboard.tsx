@@ -130,6 +130,7 @@ import {
   onlyDigits,
   parseDocumentForStorage,
 } from "../utils/brMasks";
+import { resolveClinicTimeZone } from "../utils/clinicTimeZone";
 import {
   getDefaultAnamnesisTemplate,
   normalizeAnamnesisTemplate,
@@ -2180,6 +2181,10 @@ export function CoordinatorDashboard({
   const [clinicStateUf, setClinicStateUf] = useState<string>(
     String(user?.clinicSettings?.clinicState || user?.clinicSettings?.state || "").toUpperCase().slice(0, 2),
   );
+  const [clinicTimeZone, setClinicTimeZone] = useState<string>(() => resolveClinicTimeZone({
+    timeZone: user?.clinicTimeZone || user?.clinic_timezone || user?.clinicSettings?.clinicTimeZone || user?.clinicSettings?.timezone,
+    state: user?.clinicSettings?.clinicState || user?.clinicSettings?.state,
+  }));
   const [clinicPostalCode, setClinicPostalCode] = useState<string>(
     maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")),
   );
@@ -3134,6 +3139,10 @@ export function CoordinatorDashboard({
     setClinicDistrict(String(user?.clinicSettings?.clinicDistrict || user?.clinicSettings?.district || ""));
     setClinicCity(String(user?.clinicSettings?.clinicCity || user?.clinicSettings?.city || ""));
     setClinicStateUf(String(user?.clinicSettings?.clinicState || user?.clinicSettings?.state || "").toUpperCase().slice(0, 2));
+    setClinicTimeZone(resolveClinicTimeZone({
+      timeZone: user?.clinicTimeZone || user?.clinic_timezone || user?.clinicSettings?.clinicTimeZone || user?.clinicSettings?.timezone,
+      state: user?.clinicSettings?.clinicState || user?.clinicSettings?.state,
+    }));
     setClinicPostalCode(maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")));
     setClinicPatientPhotoPolicy(String(user?.clinicSettings?.patientPhotoPolicy || user?.clinicSettings?.patient_photo_policy || 'PORTAL').toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL');
   }, [
@@ -3191,6 +3200,10 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.city,
     user?.clinicSettings?.clinicState,
     user?.clinicSettings?.state,
+    user?.clinicTimeZone,
+    user?.clinic_timezone,
+    user?.clinicSettings?.clinicTimeZone,
+    user?.clinicSettings?.timezone,
     user?.clinicSettings?.clinicPostalCode,
     user?.clinicSettings?.postalCode,
     user?.clinicSettings?.patientPhotoPolicy,
@@ -8509,6 +8522,7 @@ export function CoordinatorDashboard({
     const cleanClinicDistrict = clinicDistrict.trim();
     const cleanClinicCity = clinicCity.trim();
     const cleanClinicState = clinicStateUf.trim().toUpperCase().slice(0, 2);
+    const cleanClinicTimeZone = resolveClinicTimeZone({ timeZone: clinicTimeZone, state: cleanClinicState });
     const cleanClinicPostalCode = onlyDigits(clinicPostalCode, 8);
     const cleanClinicAddress =
       clinicAddress.trim() ||
@@ -8580,6 +8594,8 @@ export function CoordinatorDashboard({
       clinicDistrict: cleanClinicDistrict || null,
       clinicCity: cleanClinicCity || null,
       clinicState: cleanClinicState || null,
+      clinicTimeZone: cleanClinicTimeZone,
+      timezone: cleanClinicTimeZone,
       clinicPostalCode: cleanClinicPostalCode || null,
       clinicCnesCode: cleanClinicCnesCode || null,
       patientPhotoPolicy: clinicPatientPhotoPolicy,
@@ -10831,6 +10847,13 @@ export function CoordinatorDashboard({
               clinicContext={{
                 userId: user?.id || "",
                 clinicId: user?.activeWorkspaceId || user?.clinicId || "",
+                clinicTimeZone:
+                  clinicTimeZone ||
+                  user?.clinicTimeZone ||
+                  user?.clinic_timezone ||
+                  user?.clinicSettings?.clinicTimeZone ||
+                  user?.clinicSettings?.timezone ||
+                  null,
                 clinicName:
                   user?.clinicSettings?.clinicName ||
                   user?.workspaceName ||
@@ -14126,6 +14149,7 @@ export function CoordinatorDashboard({
                     clinicDistrict,
                     clinicCity,
                     clinicStateUf,
+                    clinicTimeZone,
                     clinicPostalCode,
                     clinicPatientPhotoPolicy,
                     workStart,
@@ -14166,6 +14190,7 @@ export function CoordinatorDashboard({
                     setClinicDistrict,
                     setClinicCity,
                     setClinicStateUf,
+                    setClinicTimeZone,
                     setClinicPostalCode,
                     setClinicPatientPhotoPolicy,
                     setWorkStart,

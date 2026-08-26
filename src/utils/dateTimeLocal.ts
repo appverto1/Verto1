@@ -1,28 +1,44 @@
+import {
+  buildAppointmentDateTime,
+  formatDateInAppointmentTimezone,
+  formatTimeInAppointmentTimezone,
+} from './scheduling';
+import { DEFAULT_CLINIC_TIME_ZONE, resolveClinicTimeZone } from './clinicTimeZone';
+
 /**
  * Converts an absolute instant (ISO/Date) to the wall-clock value expected by
- * <input type="datetime-local"> without leaking UTC into the UI.
+ * <input type="datetime-local"> in the clinic's canonical IANA timezone.
  *
- * datetime-local has no timezone. We therefore shift by the browser's offset
- * only for display and convert the selected local wall-clock time back to ISO
- * when persisting. This preserves the same instant across save/reopen cycles.
+ * datetime-local intentionally has no timezone. Clinical timestamps therefore
+ * must never inherit the operator device timezone; the clinic timezone is the
+ * display authority and the database remains UTC.
  */
-export const toDateTimeLocalValue = (value: string | Date | null | undefined): string => {
+export const toDateTimeLocalValue = (
+  value: string | Date | null | undefined,
+  timeZone = DEFAULT_CLINIC_TIME_ZONE,
+): string => {
   if (!value) return '';
   const parsed = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(parsed.getTime())) return '';
-
-  const offsetMs = parsed.getTimezoneOffset() * 60_000;
-  return new Date(parsed.getTime() - offsetMs).toISOString().slice(0, 16);
+  const resolvedTimeZone = resolveClinicTimeZone({ timeZone });
+  const dateKey = formatDateInAppointmentTimezone(parsed, resolvedTimeZone);
+  const timeKey = formatTimeInAppointmentTimezone(parsed, resolvedTimeZone);
+  return dateKey && timeKey ? `${dateKey}T${timeKey}` : '';
 };
 
 /**
- * Converts the wall-clock value emitted by datetime-local into a canonical ISO
- * instant. The browser interprets YYYY-MM-DDTHH:mm in its local timezone.
+ * Converts a clinic wall-clock datetime emitted by datetime-local into a
+ * canonical UTC ISO instant using the clinic's IANA timezone. The device/browser
+ * timezone is deliberately ignored.
  */
-export const fromDateTimeLocalValue = (value: string | null | undefined): string => {
+export const fromDateTimeLocalValue = (
+  value: string | null | undefined,
+  timeZone = DEFAULT_CLINIC_TIME_ZONE,
+): string => {
   const normalized = String(value || '').trim();
-  if (!normalized) return '';
-
-  const parsed = new Date(normalized);
-  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
+  const match = normalized.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/);
+  if (!match) return '';
+  const resolvedTimeZone = resolveClinicTimeZone({ timeZone });
+  const parsed = buildAppointmentDateTime(match[1], match[2], resolvedTimeZone);
+  return parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : '';
 };

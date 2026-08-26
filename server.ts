@@ -226,6 +226,10 @@ import {
   roomPreventsOverlappingAppointments
 } from './src/utils/scheduling';
 import {
+  DEFAULT_CLINIC_TIME_ZONE,
+  resolveClinicTimeZone,
+} from './src/utils/clinicTimeZone';
+import {
   buildAvailableRescheduleSlots,
   buildRescheduleRequestMessage,
   evaluateRequestedRescheduleSlot,
@@ -9140,15 +9144,15 @@ function currentClinicId(user: any): string | null {
 }
 
 function currentClinicTimeZone(user: any): string {
-  return sanitizeString(
-    user?.clinicTimeZone ||
+  return resolveClinicTimeZone({
+    timeZone:
+      user?.clinicTimeZone ||
       user?.clinic_timezone ||
-      user?.timezone ||
-      user?.time_zone ||
-      process.env.DEFAULT_CLINIC_TIMEZONE ||
-      'America/Sao_Paulo',
-    80
-  ) || 'America/Sao_Paulo';
+      user?.clinicSettings?.clinicTimeZone ||
+      user?.clinicSettings?.timezone,
+    state: user?.clinicSettings?.clinicState || user?.clinicSettings?.state,
+    fallback: user?.timezone || user?.time_zone || process.env.DEFAULT_CLINIC_TIMEZONE || DEFAULT_CLINIC_TIME_ZONE,
+  });
 }
 
 function dateGroupForClinic(value: unknown, user: any): string {
@@ -15650,6 +15654,7 @@ type ResolvedOnboardingContext = {
     subscriptionStatus: string | null;
     billingModel: string | null;
     address: string | null;
+    timeZone: string;
     patientPhotoPolicy: 'PORTAL' | 'CLINIC';
   } | null;
   membership: {
@@ -15677,6 +15682,7 @@ function compactOnboardingContextForSession(value: any): ResolvedOnboardingConte
         subscriptionStatus: normalizeClinicAccessStatus(value.clinic.subscriptionStatus) || null,
         billingModel: sanitizeString(value.clinic.billingModel, 60).toLowerCase() || null,
         address: sanitizeString(value.clinic.address, 320) || null,
+        timeZone: resolveClinicTimeZone({ timeZone: value.clinic.timeZone, state: value.clinic.state }),
         patientPhotoPolicy: sanitizeString(value.clinic.patientPhotoPolicy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
       }
     : null;
@@ -15723,6 +15729,7 @@ async function fetchClinicOnboardingSnapshot(clinicId: string) {
     'clinic_address',
     'city',
     'state',
+    'timezone',
     'patient_photo_policy',
   ];
   let columns = [...requiredColumns, ...optionalColumns];
@@ -15918,6 +15925,7 @@ async function resolveOnboardingContextForUser(params: {
           subscriptionStatus: null,
           billingModel: null,
           address: null,
+          timeZone: DEFAULT_CLINIC_TIME_ZONE,
           patientPhotoPolicy: 'PORTAL',
         },
         membership: null,
@@ -16012,6 +16020,7 @@ async function resolveOnboardingContextForUser(params: {
       subscriptionStatus: clinicSubscriptionStatus || null,
       billingModel: billingModel || null,
       address: clinicOnboardingAddress(clinicRow),
+      timeZone: resolveClinicTimeZone({ timeZone: clinicRow?.timezone, state: clinicRow?.state }),
       patientPhotoPolicy: sanitizeString(clinicRow?.patient_photo_policy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
     },
     membership: membership
@@ -16080,6 +16089,8 @@ function mergeAuthoritativeClinicSettings(sessionSettings: any, context: Resolve
     clinicWhatsapp: context.clinic.whatsapp,
     clinicLogoUrl: context.clinic.logoUrl,
     clinicAddress: context.clinic.address,
+    clinicTimeZone: context.clinic.timeZone,
+    timezone: context.clinic.timeZone,
     patientPhotoPolicy: context.clinic.patientPhotoPolicy,
     specialty: context.membership?.specialty || sessionSettings?.specialty || null,
   });
@@ -16125,6 +16136,8 @@ async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
     role: context.membership?.role || baseSessionUser.role,
     clinicId: context.clinic?.id || baseSessionUser.clinicId,
     activeWorkspaceId: context.clinic?.id || baseSessionUser.activeWorkspaceId,
+    clinicTimeZone: context.clinic?.timeZone || baseSessionUser.clinicTimeZone,
+    clinic_timezone: context.clinic?.timeZone || baseSessionUser.clinic_timezone,
     subscriptionStatus: clinicManagedBilling
       ? context.clinic?.subscriptionStatus || baseSessionUser.subscriptionStatus
       : baseSessionUser.subscriptionStatus,
@@ -16389,6 +16402,14 @@ function compactClinicSettingsForSession(settings: any) {
     clinicDistrict: sanitizeString(settings.clinicDistrict || settings.district, 120) || null,
     clinicCity: sanitizeString(settings.clinicCity || settings.city, 120) || null,
     clinicState: sanitizeString(settings.clinicState || settings.state, 2).toUpperCase() || null,
+    clinicTimeZone: resolveClinicTimeZone({
+      timeZone: settings.clinicTimeZone || settings.timezone,
+      state: settings.clinicState || settings.state,
+    }),
+    timezone: resolveClinicTimeZone({
+      timeZone: settings.clinicTimeZone || settings.timezone,
+      state: settings.clinicState || settings.state,
+    }),
     clinicPostalCode: sanitizeString(settings.clinicPostalCode || settings.postalCode, 20).replace(/\D/g, '') || null,
     clinicCnesCode: sanitizeString(settings.clinicCnesCode || settings.cnesCode, 40).replace(/\D/g, '') || null,
     clinicProviderCode: sanitizeString(settings.clinicProviderCode || settings.providerCode, 80) || null,
@@ -16581,6 +16602,16 @@ function buildSessionUserPayload(input: any) {
     miniCurriculum:
       sanitizeString(input?.miniCurriculum || input?.clinicSettings?.therapistMiniCurriculum, 3000) ||
       null,
+    clinicTimeZone: resolveClinicTimeZone({
+      timeZone: input?.clinicTimeZone || input?.clinic_timezone || input?.clinicSettings?.clinicTimeZone || input?.clinicSettings?.timezone,
+      state: input?.clinicSettings?.clinicState || input?.clinicSettings?.state,
+      fallback: process.env.DEFAULT_CLINIC_TIMEZONE || DEFAULT_CLINIC_TIME_ZONE,
+    }),
+    clinic_timezone: resolveClinicTimeZone({
+      timeZone: input?.clinicTimeZone || input?.clinic_timezone || input?.clinicSettings?.clinicTimeZone || input?.clinicSettings?.timezone,
+      state: input?.clinicSettings?.clinicState || input?.clinicSettings?.state,
+      fallback: process.env.DEFAULT_CLINIC_TIMEZONE || DEFAULT_CLINIC_TIME_ZONE,
+    }),
     clinicSettings: compactClinicSettingsForSession(input?.clinicSettings),
     professionalProfile: professionalProfile
       ? cleanObject({
@@ -44112,6 +44143,18 @@ async function startServer() {
       const clinicDistrict = sanitizeString(clinicSettingsInput?.clinicDistrict || clinicSettingsInput?.district || req.body?.clinicDistrict, 120);
       const clinicCity = sanitizeString(clinicSettingsInput?.clinicCity || clinicSettingsInput?.city || req.body?.clinicCity, 120);
       const clinicState = sanitizeString(clinicSettingsInput?.clinicState || clinicSettingsInput?.state || req.body?.clinicState, 2).toUpperCase();
+      const clinicTimeZone = resolveClinicTimeZone({
+        timeZone:
+          clinicSettingsInput?.clinicTimeZone ||
+          clinicSettingsInput?.timezone ||
+          req.body?.clinicTimeZone ||
+          req.body?.timezone ||
+          req.session.user?.clinicTimeZone ||
+          req.session.user?.clinicSettings?.clinicTimeZone ||
+          req.session.user?.clinicSettings?.timezone,
+        state: clinicState || req.session.user?.clinicSettings?.clinicState || req.session.user?.clinicSettings?.state,
+        fallback: currentClinicTimeZone(req.session.user),
+      });
       const clinicPostalCode = sanitizeString(clinicSettingsInput?.clinicPostalCode || clinicSettingsInput?.postalCode || req.body?.clinicPostalCode, 20).replace(/\D/g, '');
       const clinicCnesCode = sanitizeString(clinicSettingsInput?.clinicCnesCode || clinicSettingsInput?.cnesCode || req.body?.clinicCnesCode, 40).replace(/\D/g, '');
       const clinicPatientPhotoPolicy = sanitizeString(
@@ -44303,6 +44346,8 @@ async function startServer() {
             ...(clinicDistrict ? { clinicDistrict } : {}),
             ...(clinicCity ? { clinicCity } : {}),
             ...(clinicState ? { clinicState } : {}),
+            clinicTimeZone,
+            timezone: clinicTimeZone,
             ...(clinicPostalCode ? { clinicPostalCode } : {}),
             ...(clinicCnesCode ? { clinicCnesCode } : {}),
             patientPhotoPolicy: clinicPatientPhotoPolicy,
@@ -44345,6 +44390,7 @@ async function startServer() {
               district: clinicDistrict || undefined,
               city: clinicCity || undefined,
               state: clinicState || undefined,
+              timezone: clinicTimeZone,
               postal_code: clinicPostalCode || undefined,
               cnes_code: clinicCnesCode || undefined,
               patient_photo_policy: clinicPatientPhotoPolicy,
@@ -44420,6 +44466,8 @@ async function startServer() {
             metadata: mergedMetadata
           });
           req.session.user.signatureDataUrl = resolvedSignatureUrl;
+          req.session.user.clinicTimeZone = clinicTimeZone;
+          req.session.user.clinic_timezone = clinicTimeZone;
           req.session.user.clinicSettings = nextClinicSettings;
           req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(req.session.user.id));
           req.session.user.crp =

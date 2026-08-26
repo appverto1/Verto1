@@ -11134,6 +11134,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       masteryEvaluations={abaMasteryEvaluationsForPlan}
                       userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                       currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
+                      clinicTimeZone={resolvedClinicContext?.clinicTimeZone || resolvedClinicContext?.clinic_timezone || clinicContext?.clinicTimeZone || clinicContext?.clinic_timezone || null}
                       isDark={isPanelDark}
                       onStartSession={(planContext: any) => requestSessionStart('fullscreen', planContext)}
                     />
@@ -11495,6 +11496,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     masteryEvaluations={abaMasteryEvaluationsForPlan}
                     userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                     currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
+                    clinicTimeZone={resolvedClinicContext?.clinicTimeZone || resolvedClinicContext?.clinic_timezone || clinicContext?.clinicTimeZone || clinicContext?.clinic_timezone || null}
                     isDark={isPanelDark}
                   />
                 </div>

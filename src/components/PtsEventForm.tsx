@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { CalendarClock, Loader2, ShieldAlert } from 'lucide-react';
+import { fromDateTimeLocalValue, toDateTimeLocalValue } from '../utils/dateTimeLocal';
 
 type PtsEventKind = 'review' | 'risk';
 
@@ -9,30 +10,22 @@ type PtsEventSubmitPayload = {
   payload: Record<string, string>;
 };
 
-const toLocalInputValue = (date: Date) => {
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-};
-
-const toIso = (value: string) => {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
-};
-
 export function PtsEventForm({
   kind,
+  clinicTimeZone,
   isDark = false,
   saving = false,
   onCancel,
   onSubmit,
 }: {
   kind: PtsEventKind;
+  clinicTimeZone?: string;
   isDark?: boolean;
   saving?: boolean;
   onCancel: () => void;
   onSubmit: (payload: PtsEventSubmitPayload) => Promise<void> | void;
 }) {
-  const [occurredAt, setOccurredAt] = useState(() => toLocalInputValue(new Date()));
+  const [occurredAt, setOccurredAt] = useState(() => toDateTimeLocalValue(new Date(), clinicTimeZone));
   const [summary, setSummary] = useState('');
   const [decisions, setDecisions] = useState('');
   const [nextReviewDate, setNextReviewDate] = useState('');
@@ -56,14 +49,14 @@ export function PtsEventForm({
   }`;
 
   const canSubmit = useMemo(() => {
-    if (!toIso(occurredAt)) return false;
+    if (!fromDateTimeLocalValue(occurredAt, clinicTimeZone)) return false;
     if (isReview) return Boolean(summary.trim() || decisions.trim());
     return Boolean(riskTitle.trim());
-  }, [decisions, isReview, occurredAt, riskTitle, summary]);
+  }, [clinicTimeZone, decisions, isReview, occurredAt, riskTitle, summary]);
 
   const submit = async () => {
     setValidationMessage('');
-    const occurredAtIso = toIso(occurredAt);
+    const occurredAtIso = fromDateTimeLocalValue(occurredAt, clinicTimeZone);
     if (!occurredAtIso) {
       setValidationMessage('Informe uma data e hora válidas.');
       return;
@@ -124,7 +117,7 @@ export function PtsEventForm({
           className={`${field} mt-1.5`}
           type="datetime-local"
           value={occurredAt}
-          max={toLocalInputValue(new Date(Date.now() + 5 * 60_000))}
+          max={toDateTimeLocalValue(new Date(Date.now() + 5 * 60_000), clinicTimeZone)}
           onChange={(event) => setOccurredAt(event.target.value)}
         />
       </label>
