@@ -1,3 +1,4 @@
+// Case-team role labels are intentionally centralized here for consistent UI rendering.
 export const PATIENT_PROFESSIONAL_CASE_ROLE_OPTIONS = [
   { value: 'case_coordinator', label: 'Coordenação do caso' },
   { value: 'primary_therapist', label: 'Terapeuta principal' },
@@ -331,6 +332,15 @@ export function composePatientProfessionalLinks(params: {
         membership
       });
       const integrityStatus = status === 'active' ? resolvedIntegrity : null;
+      const membershipRole = membershipBelongsToClinic
+        ? cleanText(membership?.role).toLowerCase()
+        : '';
+      const protectedClinicManager = Boolean(
+        status === 'active' &&
+        membershipBelongsToClinic &&
+        cleanText(membership?.status).toLowerCase() === 'active' &&
+        ['director', 'coordinator'].includes(membershipRole)
+      );
       const professional =
         user && membershipBelongsToClinic
           ? {
@@ -356,7 +366,8 @@ export function composePatientProfessionalLinks(params: {
         professional,
         integrityStatus,
         accessEnabled: status === 'active' && integrityStatus === null,
-        canBeEnded: status === 'active'
+        canBeEnded: status === 'active' && !protectedClinicManager,
+        canBeEndedReason: protectedClinicManager ? 'protected_clinic_manager' : null
       };
     }
   );
