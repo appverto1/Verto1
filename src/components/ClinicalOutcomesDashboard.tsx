@@ -51,6 +51,7 @@ type ClinicalOutcomesDashboardProps = {
   patientId: string;
   organizationId?: string | null;
   isPanelDark?: boolean;
+  onOpenSessionReport?: (sessionId: string) => void;
 };
 
 type DashboardData = {
@@ -532,7 +533,7 @@ function SeriesChart({ series, isDark, axis, compact = false }: { series: Clinic
   );
 }
 
-export function ClinicalOutcomesDashboard({ patientId, organizationId = null, isPanelDark = false }: ClinicalOutcomesDashboardProps) {
+export function ClinicalOutcomesDashboard({ patientId, organizationId = null, isPanelDark = false, onOpenSessionReport }: ClinicalOutcomesDashboardProps) {
   const today = useMemo(() => localDateKey(new Date()), []);
   const [periodPreset, setPeriodPreset] = useState('90');
   const [customDateFrom, setCustomDateFrom] = useState(() => shiftDateKey(today, -89));
@@ -911,6 +912,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
           axis={analyticsAxis}
           onAxisChange={setAnalyticsAxis}
           isDark={isPanelDark}
+          onOpenSessionReport={onOpenSessionReport}
         />
       )}
 

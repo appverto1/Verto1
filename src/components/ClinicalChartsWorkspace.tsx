@@ -12,9 +12,10 @@ type ClinicalChartsWorkspaceProps = {
   showAbaDetails?: boolean;
   showAbaV3Details?: boolean;
   showClinicalMeasurementV3Details?: boolean;
+  onOpenSessionReport?: (sessionId: string) => void;
 };
 
-export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false }: ClinicalChartsWorkspaceProps) {
+export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false, onOpenSessionReport }: ClinicalChartsWorkspaceProps) {
   const [view, setView] = useState<'plans' | 'aba' | 'aba-v3' | 'clinical-v3'>('plans');
   return (
     <div className="space-y-4" data-testid="clinical-charts-workspace">
@@ -32,7 +33,7 @@ export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPa
           ? <AbaV3ClinicalChartPanel patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} />
           : view === 'clinical-v3' && showClinicalMeasurementV3Details
             ? <ClinicalMeasurementV3Panel patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} />
-            : <ClinicalOutcomesDashboard patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} />}
+            : <ClinicalOutcomesDashboard patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} onOpenSessionReport={onOpenSessionReport} />}
     </div>
   );
 }
