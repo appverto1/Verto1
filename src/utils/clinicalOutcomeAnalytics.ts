@@ -100,6 +100,42 @@ export type ClinicalOutcomeSeriesSummary = {
 
 const text = (value: unknown) => String(value ?? '').trim();
 
+const clinicalOutcomeSeriesSemanticValues = (
+  series: ClinicalOutcomeSeriesSummary,
+  selector: (row: ClinicalOutcomeObservation) => unknown[],
+) => Array.from(new Set(
+  (Array.isArray(series?.observations) ? series.observations : [])
+    .flatMap((row) => selector(row).map(text))
+    .filter(Boolean),
+));
+
+export const isClinicalOutcomeInterferingBehaviorSeries = (
+  series: ClinicalOutcomeSeriesSummary | null | undefined,
+) => {
+  if (!series) return false;
+  const metricTokens = [
+    text(series.metricKey),
+    text(series.metricLabel),
+    ...clinicalOutcomeSeriesSemanticValues(series, (row) => [
+      row.metricKey,
+      row.metricType,
+      row.metadata?.metricKey,
+      row.metadata?.metric_key,
+    ]),
+  ].map((value) => value.toUpperCase());
+
+  if (metricTokens.some((value) => value.startsWith('BEHAVIOR_'))) return true;
+
+  const sourceFamilies = clinicalOutcomeSeriesSemanticValues(series, (row) => [
+    row.metadata?.sourceFamily,
+    row.metadata?.source_family,
+    row.metadata?.valueDetails?.sourceFamily,
+    row.metadata?.valueDetails?.source_family,
+  ]).map((value) => value.toUpperCase());
+
+  return sourceFamilies.includes('BEHAVIOR');
+};
+
 export const normalizeClinicalOutcomeDirection = (value: unknown): ClinicalOutcomeDirection => {
   const normalized = text(value).toLowerCase();
   if (['lower_is_better', 'lower-is-better', 'lower', 'decrease'].includes(normalized)) return 'lower_is_better';
@@ -119,7 +155,7 @@ export const clinicalOutcomeSeriesKey = (observation: ClinicalOutcomeObservation
     text(observation.planId),
     text(observation.goalId),
     text(observation.programId),
-    text(observation.itemId),
+    text(observation.itemId) || text(observation.itemLabel),
     text(observation.metricKey),
     text(observation.unit),
     normalizeClinicalOutcomeDirection(observation.direction),

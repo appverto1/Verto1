@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import {
   clinicalOutcomeUnitLabel,
+  isClinicalOutcomeInterferingBehaviorSeries,
   type ClinicalOutcomeObservation,
   type ClinicalOutcomeSeriesSummary,
 } from '../utils/clinicalOutcomeAnalytics';
@@ -52,7 +53,7 @@ type ChartBucket = {
 const DOMAIN_TABS: Array<{ id: AnalyticsDomain; label: string }> = [
   { id: 'overview', label: 'Visão geral' },
   { id: 'skills', label: 'Habilidades' },
-  { id: 'behaviors', label: 'Comportamentos' },
+  { id: 'behaviors', label: 'Comportamentos interferentes' },
   { id: 'mastery', label: 'Maestria' },
   { id: 'maintenance', label: 'Manutenção' },
   { id: 'changes', label: 'Mudanças por sessão' },
@@ -68,7 +69,7 @@ const DOMAIN_COLORS = {
 
 const OVERVIEW_BARS = [
   { key: 'skills', label: 'Habilidades', color: DOMAIN_COLORS.skills[0] },
-  { key: 'behaviors', label: 'Comportamentos', color: DOMAIN_COLORS.behaviors[0] },
+  { key: 'behaviors', label: 'Comportamentos interferentes', color: DOMAIN_COLORS.behaviors[0] },
   { key: 'mastery', label: 'Maestria', color: DOMAIN_COLORS.mastery[0] },
   { key: 'maintenance', label: 'Manutenção', color: DOMAIN_COLORS.maintenance[0] },
   { key: 'alerts', label: 'Regressão/alertas', color: DOMAIN_COLORS.alerts[0] },
@@ -138,9 +139,9 @@ const isRegressionAlertSeries = (series: ClinicalOutcomeSeriesSummary) => {
 const analyticsDomainForSeries = (series: ClinicalOutcomeSeriesSummary): Exclude<AnalyticsDomain, 'overview' | 'changes'> => {
   const key = clean(series.metricKey).toUpperCase();
   const label = clean(series.metricLabel).toLocaleLowerCase('pt-BR');
-  if (key.includes('BEHAVIOR') || label.includes('comportamento') || label.includes('frequência') || label.includes('duração')) return 'behaviors';
   if (key.includes('MASTERY') || label.includes('maestria') || label.includes('domínio')) return 'mastery';
   if (key.includes('MAINTENANCE') || key.includes('REGRESSION') || label.includes('manutenção') || label.includes('regress')) return 'maintenance';
+  if (isClinicalOutcomeInterferingBehaviorSeries(series)) return 'behaviors';
   return 'skills';
 };
 
@@ -594,7 +595,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
 
             <div>
               <div className="flex items-center justify-between gap-3">
-                <p className={`text-[11px] font-medium uppercase tracking-wide ${subtle}`}>Alvos no gráfico · até 3</p>
+                <p className={`text-[11px] font-medium uppercase tracking-wide ${subtle}`}>{activeDomain === 'behaviors' ? 'Comportamentos interferentes no gráfico · até 3' : 'Alvos no gráfico · até 3'}</p>
                 {activeMetric.series.length > 3 && <p className={`text-[11px] ${subtle}`}>{selectedSeriesKeys.length}/3 selecionados</p>}
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
@@ -656,7 +657,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
           </div>
         </div>
 
-        {activeDomain !== 'overview' && selectedSeries.length === 0 && <div className="py-10 text-center"><Target className="mx-auto text-slate-300" size={26} /><p className={`mt-2 text-sm ${subtle}`}>Selecione ao menos um alvo para visualizar.</p></div>}
+        {activeDomain !== 'overview' && selectedSeries.length === 0 && <div className="py-10 text-center"><Target className="mx-auto text-slate-300" size={26} /><p className={`mt-2 text-sm ${subtle}`}>{activeDomain === 'behaviors' ? 'Selecione ao menos um comportamento interferente para visualizar.' : 'Selecione ao menos um alvo para visualizar.'}</p></div>}
         {activeDomain === 'overview' && <div className={`mt-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${isDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}><Activity size={15} className="mt-0.5 shrink-0 text-violet-500" /><span>A visão geral mostra atividade clínica por domínio para facilitar a leitura rápida. Percentuais, duração, frequência e outras unidades não são somados entre si.</span></div>}
       </div>
     </section>
