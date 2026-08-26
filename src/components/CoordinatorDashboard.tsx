@@ -224,8 +224,6 @@ type NavigationNode = {
   newFeatureKey?: NewFeatureKey;
 };
 
-const COORDINATOR_SIDEBAR_PREFERENCE_KEY = "verto:coordinator-sidebar-expanded";
-
 const SESSION_SPECIALTY_OPTIONS = [
   "ABA",
   "Fonoaudiologia",
@@ -245,23 +243,6 @@ const createWeeklyScheduleSlotId = () =>
   `weekly-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 
-const readSidebarPreference = (key: string) => {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(key) === "true";
-  } catch {
-    return false;
-  }
-};
-
-const writeSidebarPreference = (key: string, expanded: boolean) => {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(key, expanded ? "true" : "false");
-  } catch {
-    // Prefer stable navigation over failing when storage is unavailable.
-  }
-};
 import {
   PATIENT_FINANCIAL_BILLING_MODE_OPTIONS,
   PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS,
@@ -916,14 +897,7 @@ export function CoordinatorDashboard({
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isSidebarExpanded, setIsSidebarExpanded] = useState(() => readSidebarPreference(COORDINATOR_SIDEBAR_PREFERENCE_KEY));
-  const toggleSidebarExpanded = useCallback(() => {
-    setIsSidebarExpanded((current) => {
-      const next = !current;
-      writeSidebarPreference(COORDINATOR_SIDEBAR_PREFERENCE_KEY, next);
-      return next;
-    });
-  }, []);
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [expandedNavigationSections, setExpandedNavigationSections] = useState<Record<string, boolean>>({
     "care-root": true,
     "tiss-root": true,
@@ -10694,22 +10668,19 @@ export function CoordinatorDashboard({
       <div className="h-screen overflow-hidden bg-[#F4F7FE] flex">
         {/* Sidebar */}
         <div
-          className={`${patientSidebarExpanded ? "w-64" : "w-20"} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
+          className={`${patientSidebarExpanded ? "w-64 -mr-44 shadow-xl shadow-slate-900/5" : "w-20"} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-40`}
+          onMouseEnter={() => setIsSidebarExpanded(true)}
+          onMouseLeave={() => setIsSidebarExpanded(false)}
+          onFocusCapture={() => setIsSidebarExpanded(true)}
+          onBlurCapture={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsSidebarExpanded(false);
+          }}
         >
           <div
             className={`flex shrink-0 items-center ${patientSidebarExpanded ? "gap-2" : "flex-col justify-center gap-2"} mb-5 px-1 transition-all duration-300`}
           >
             <LogoVerto size={patientSidebarExpanded ? 30 : 38} showText={patientSidebarExpanded} />
             {patientSidebarExpanded && <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">Gestão</span>}
-            <button
-              type="button"
-              onClick={toggleSidebarExpanded}
-              className={`${patientSidebarExpanded ? "ml-auto" : ""} rounded-xl border border-slate-100 bg-white p-2 text-slate-400 shadow-sm transition-all hover:bg-violet-50 hover:text-[#7a32fc]`}
-              aria-label={patientSidebarExpanded ? "Recolher menu lateral" : "Expandir menu lateral"}
-              title={patientSidebarExpanded ? "Recolher menu" : "Expandir menu"}
-            >
-              {patientSidebarExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-            </button>
           </div>
 
           <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
@@ -10980,20 +10951,17 @@ export function CoordinatorDashboard({
     <div className="h-screen overflow-hidden bg-[#F4F7FE] flex">
       {/* Sidebar */}
       <aside
-        className={`${isSidebarExpanded ? 'w-64' : 'w-20'} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
+        className={`${isSidebarExpanded ? 'w-64 -mr-44 shadow-xl shadow-slate-900/5' : 'w-20'} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-40`}
+        onMouseEnter={() => setIsSidebarExpanded(true)}
+        onMouseLeave={() => setIsSidebarExpanded(false)}
+        onFocusCapture={() => setIsSidebarExpanded(true)}
+        onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsSidebarExpanded(false);
+        }}
       >
         <div className={`flex shrink-0 items-center ${isSidebarExpanded ? 'gap-2' : 'flex-col justify-center gap-2'} mb-5 px-1 transition-all duration-300`}>
           <LogoVerto size={isSidebarExpanded ? 30 : 38} showText={isSidebarExpanded} />
           {isSidebarExpanded && <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">Gestão</span>}
-          <button
-            type="button"
-            onClick={toggleSidebarExpanded}
-            className={`${isSidebarExpanded ? "ml-auto" : ""} rounded-xl border border-slate-100 bg-white p-2 text-slate-400 shadow-sm transition-all hover:bg-violet-50 hover:text-[#7a32fc]`}
-            aria-label={isSidebarExpanded ? "Recolher menu lateral" : "Expandir menu lateral"}
-            title={isSidebarExpanded ? "Recolher menu" : "Expandir menu"}
-          >
-            {isSidebarExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-          </button>
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
