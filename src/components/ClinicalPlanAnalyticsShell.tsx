@@ -247,10 +247,13 @@ const bucketAggregation = (series: ClinicalOutcomeSeriesSummary, rows: ClinicalO
 const displayValue = (value: unknown, unit: string) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return '—';
-  const rounded = Math.round(numeric * 10) / 10;
-  if (unit === '%') return `${rounded}%`;
-  if (!unit) return String(rounded);
-  return `${rounded} ${unit}`;
+  const formatted = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(numeric);
+  const normalizedUnit = clean(unit).toLowerCase();
+  if (unit === '%' || normalizedUnit.includes('percent')) return `${formatted}%`;
+  if (['s', 'sec', 'seg', 'segundos', 'second', 'seconds'].includes(normalizedUnit)) return `${formatted} s`;
+  if (['ms', 'millisecond', 'milliseconds'].includes(normalizedUnit)) return `${formatted} ms`;
+  if (!normalizedUnit) return formatted;
+  return `${formatted} ${unit}`;
 };
 
 const sessionIdentity = (observation: ClinicalOutcomeObservation) => clean(observation.sessionId) || `obs:${observation.id}`;
@@ -521,12 +524,29 @@ function ProgramChangesView({
     const canOpen = clean(target.latestSessionId).startsWith('session-') && Boolean(onOpenSessionReport);
     const favorable = tone === 'improving';
     const sustained = target.movement === 'criterion_sustained';
+    const movementTone = target.movement === 'criterion_sustained'
+      ? 'text-sky-500'
+      : target.movement === 'stagnant'
+        ? 'text-amber-500'
+        : target.movement === 'improving'
+          ? 'text-emerald-500'
+          : target.movement === 'attention'
+            ? 'text-rose-500'
+            : 'text-slate-400';
+    const flatTone = sustained ? 'text-sky-500' : 'text-amber-500';
+    const valueTone = target.valueTrend === 'flat'
+      ? sustained ? 'text-sky-700 dark:text-sky-300' : 'text-amber-700 dark:text-amber-300'
+      : sustained
+        ? 'text-sky-700 dark:text-sky-300'
+        : favorable
+          ? 'text-emerald-700 dark:text-emerald-300'
+          : 'text-rose-700 dark:text-rose-300';
     const trendIcon = target.valueTrend === 'down'
-      ? <TrendingDown size={17} className={`shrink-0 ${favorable ? 'text-emerald-500' : 'text-rose-500'}`} />
+      ? <TrendingDown size={17} className={`shrink-0 ${movementTone}`} />
       : target.valueTrend === 'up'
-        ? <TrendingUp size={17} className={`shrink-0 ${favorable ? 'text-emerald-500' : 'text-rose-500'}`} />
+        ? <TrendingUp size={17} className={`shrink-0 ${movementTone}`} />
         : target.valueTrend === 'flat'
-          ? <ArrowRight size={17} className="shrink-0 text-slate-400" />
+          ? <ArrowRight size={17} className={`shrink-0 ${flatTone}`} />
           : null;
     const criterionCopy = target.criterionLabel
       ? `${target.criterionSource === 'target_mastery_criteria' || target.criterionSource === 'program_mastery_criteria' ? 'Critério de domínio' : 'Meta clínica configurada'}: ${target.criterionLabel}`
@@ -547,7 +567,7 @@ function ProgramChangesView({
           </div>
           {sustained ? <BadgeCheck size={17} className="shrink-0 text-sky-500" /> : trendIcon}
         </div>
-        <p className={`mt-2 text-sm font-semibold ${sustained ? 'text-sky-700 dark:text-sky-300' : favorable ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{movementValueText(target)}</p>
+        <p className={`mt-2 text-sm font-semibold ${valueTone}`}>{movementValueText(target)}</p>
         <p className={`mt-1 text-[11px] ${subtle}`}>{criterionCopy}</p>
         <p className={`mt-1 text-[11px] ${subtle}`}>{target.pointCount} sessões comparáveis{canOpen ? ' · abrir sessão mais recente' : ''}</p>
       </button>

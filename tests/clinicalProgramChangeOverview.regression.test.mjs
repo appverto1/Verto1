@@ -18,6 +18,9 @@ assert.match(shell, /target\.valueTrend === 'down'[\s\S]*TrendingDown[\s\S]*text
 assert.match(shell, /target\.valueTrend === 'flat'[\s\S]*ArrowRight/, 'delta visualmente nulo deve usar seta horizontal, nunca falsa seta de alta');
 assert.match(shell, /Meta clínica configurada|Critério de domínio/, 'microcopy deve nomear a regra como meta ou critério, não como mudança');
 assert.doesNotMatch(shell, /Mudança clinicamente favorável/, 'critério clínico não pode ser rotulado como mudança');
+assert.match(shell, /normalizedUnit\.includes\('percent'\)/, 'unidades percent/percentage do contrato devem ser formatadas como % na UI');
+assert.match(shell, /const flatTone = sustained \? 'text-sky-500' : 'text-amber-500'/, 'seta plana só pode ser azul no critério sustentado; fora do teto deve ser âmbar');
+assert.match(shell, /target\.valueTrend === 'flat'[\s\S]*text-amber-700/, 'valor sem delta abaixo do teto não pode permanecer verde');
 assert.match(shell, /sem criar score ou média entre unidades incompatíveis/i, 'a visão não pode reintroduzir score global');
 assert.match(shell, /activeDomain !== 'changes' && activeMetric/, 'mudanças por sessão não deve exibir seletor de uma métrica\/alvo individual');
 assert.match(shell, /ProgramChangesView series=\{series\} programs=\{programs\}/, 'a aba de mudanças deve usar o resumo por programa');
@@ -42,6 +45,12 @@ assert.match(changeAnalytics, /target\.criterionMetAtStart && target\.criterionM
 assert.match(changeAnalytics, /target\.valueTrend === 'flat'/, '100% -> 100% e outros deltas planos não podem ocupar Maiores evoluções');
 assert.match(changeAnalytics, /target\.criterionProgressDelta <= 0/, 'alvo com critério deve provar aproximação líquida real antes de entrar no ranking');
 assert.match(changeAnalytics, /endpointTrend/, 'microinteração deve derivar seta do primeiro para o último valor, separada da inclinação longitudinal');
+assert.match(changeAnalytics, /metadataSignalsLowN/, 'ranking deve consumir LOW_N/qualidade quando o read model fornecer o sinal');
+assert.match(changeAnalytics, /latestOpportunityCount !== null && latestOpportunityCount <= 1/, 'uma sessão final 1\/1 deve sofrer penalidade de confiança no ranking');
+assert.match(changeAnalytics, /evidenceProfile\.lowN \? 200 : 0/, 'LOW_N deve sofrer penalidade explícita de prioridade, não apenas desempate');
+assert.match(changeAnalytics, /right\.rankingPriority - left\.rankingPriority/, 'ranking deve aplicar a prioridade semântica já penalizada por baixa amostra');
+assert.match(changeAnalytics, /right\.evidenceRank - left\.evidenceRank/, 'qualidade da evidência deve desempatar a prioridade antes da magnitude');
+assert.match(changeAnalytics, /right\.evidenceOpportunityCount - left\.evidenceOpportunityCount/, 'volume de oportunidades deve favorecer evidência mais robusta sem virar score clínico');
 assert.doesNotMatch(changeAnalytics, /sort\(\(left, right\) => right\.relativeMagnitude - left\.relativeMagnitude/, 'destaques não podem ser ordenados por variação relativa bruta entre unidades incompatíveis');
 assert.match(changeAnalytics, /therapeuticObjectiveId/, 'evidência CMV3 sem programId deve poder resolver o programa pelo objetivo terapêutico');
 assert.match(changeAnalytics, /program_target:\(\[\^:\]\+\):/, 'alvos program_target devem preservar identidade individual mesmo quando compartilham o target CMV3 do objetivo');
