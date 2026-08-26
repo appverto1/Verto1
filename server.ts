@@ -34987,7 +34987,11 @@ async function startServer() {
             });
           }
           if (message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED')) {
-            return res.status(403).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED' });
+            return res.status(403).json({
+              success: false,
+              error: 'PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED',
+              message: 'Você não tem permissão para alterar o profissional responsável deste caso.'
+            });
           }
           if (message.includes('PATIENT_NOT_FOUND')) {
             return res.status(404).json({ success: false, error: 'PATIENT_NOT_FOUND' });
@@ -35003,6 +35007,13 @@ async function startServer() {
           }
           if (message.includes('PATIENT_PROFESSIONAL_SPECIALTY_REQUIRED')) {
             return res.status(422).json({ success: false, error: 'PATIENT_PROFESSIONAL_SPECIALTY_REQUIRED' });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_LINK_LIMIT_REACHED')) {
+            return res.status(409).json({
+              success: false,
+              error: 'PATIENT_PROFESSIONAL_LINK_LIMIT_REACHED',
+              message: 'A equipe do caso já atingiu o limite de profissionais ativos. Encerre um vínculo antes de adicionar um novo responsável.'
+            });
           }
           throw error;
         }
@@ -35281,19 +35292,37 @@ async function startServer() {
       }
       const { data, error } = outcome.result;
       if (error) {
-        const message = sanitizeString(error.message, 200);
-        if (
-          message.includes('PATIENT_NOT_FOUND') ||
-          message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED')
-        ) {
+        const message = sanitizeString(error.message, 400);
+        const code = sanitizeString(error?.code, 40);
+        if (code === '42883' || message.includes('end_patient_professional_link_v1')) {
           return res.status(503).json({
             success: false,
-            error: 'MULTIDISCIPLINARY_MEMBERSHIP_AUTHORITY_MIGRATION_PENDING'
+            error: 'PATIENT_CASE_TEAM_MANAGEMENT_MIGRATION_REQUIRED',
+            message: 'A atualização da equipe do caso precisa da migração mais recente do banco.'
           });
         }
-        return res.status(404).json({
+        if (message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED')) {
+          return res.status(403).json({
+            success: false,
+            error: 'PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED',
+            message: 'Você não tem permissão para alterar a equipe deste caso.'
+          });
+        }
+        if (message.includes('PATIENT_NOT_FOUND')) {
+          return res.status(404).json({ success: false, error: 'PATIENT_NOT_FOUND' });
+        }
+        if (message.includes('PATIENT_PROFESSIONAL_LINK_NOT_FOUND')) {
+          return res.status(404).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_NOT_FOUND' });
+        }
+        logRouteDbError('/api/patients/:patientId/professional-links/:linkId/end [PATCH]', error, {
+          patientId,
+          linkId,
+          requestId: requestIdForLogs(req),
+        });
+        return res.status(500).json({
           success: false,
-          error: 'PATIENT_PROFESSIONAL_LINK_NOT_FOUND'
+          error: 'PATIENT_PROFESSIONAL_LINK_END_FAILED',
+          message: 'Não foi possível encerrar o vínculo. O histórico foi preservado.'
         });
       }
       return res.json({ success: true, link: data });
@@ -70850,7 +70879,7 @@ async function startServer() {
               .from('clinic_memberships')
               .select('user_id,clinic_id,role,status')
               .eq('clinic_id', clinicId)
-              .eq('role', 'therapist')
+              .in('role', ['therapist', 'supervisor', 'coordinator', 'director'])
               .eq('status', 'active')
               .in('user_id', linkedProfessionalIds)
               .limit(200),

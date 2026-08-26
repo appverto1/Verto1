@@ -78,7 +78,7 @@ const api = async (url: string, init?: RequestInit) => {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.success === false) {
-    throw new Error(payload?.error || 'Não foi possível atualizar a equipe.');
+    throw new Error(payload?.message || payload?.error || 'Não foi possível atualizar a equipe.');
   }
   return payload;
 };
@@ -254,8 +254,15 @@ export const PatientProfessionalLinksPanel = ({
         }
       );
       await load();
-    } catch {
-      setError('Não foi possível encerrar o vínculo. O histórico foi preservado.');
+    } catch (endError: any) {
+      const message = String(endError?.message || '');
+      setError(
+        message.includes('ACCESS_DENIED')
+          ? 'Você não tem permissão para alterar a equipe deste caso.'
+          : message.includes('MIGRATION') || message.includes('SCHEMA')
+            ? 'A atualização da equipe precisa da migração mais recente do banco.'
+            : 'Não foi possível encerrar o vínculo. O histórico foi preservado.'
+      );
     } finally {
       setBusy('');
     }

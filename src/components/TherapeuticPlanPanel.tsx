@@ -306,7 +306,7 @@ const sourceCardClass = (dark: boolean) => `group flex min-h-[150px] flex-col it
     : 'border-slate-200 bg-white text-slate-800 hover:border-violet-300 hover:shadow-sm'
 }`;
 
-export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], masteryEvaluations = [], userRole, currentUserId, clinicTimeZone, isDark = false, onStartSession }: any) => {
+export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], caseTeamLinks = [], masteryEvaluations = [], userRole, currentUserId, clinicTimeZone, isDark = false, onStartSession }: any) => {
   const patientId = String(patient?.id || '').trim();
   const patientName = String(patient?.name || patient?.nome || 'Paciente').trim() || 'Paciente';
   const normalizedRole = String(userRole || '').trim().toLowerCase();
@@ -480,7 +480,38 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const historicalPrograms = Array.isArray(planData?.historicalPrograms)
     ? planData.historicalPrograms
     : [];
-  const professionalLinks = Array.isArray(planData?.professionalLinks) ? planData.professionalLinks : [];
+  const professionalLinks = useMemo(() => {
+    const fromPlan = Array.isArray(planData?.professionalLinks) ? planData.professionalLinks : [];
+    const live = (Array.isArray(caseTeamLinks) ? caseTeamLinks : [])
+      .filter((link: any) => String(link?.status || '').toLowerCase() === 'active');
+    if (live.length === 0) return fromPlan;
+
+    const planLinkByProfessionalId = new Map(
+      fromPlan.map((link: any) => [String(link?.professional_id || ''), link]),
+    );
+    return live.map((link: any) => {
+      const professionalId = String(link?.professional_id || '');
+      const serverLink: any = planLinkByProfessionalId.get(professionalId) || {};
+      const specialty = link?.specialty || link?.professional?.specialty || serverLink?.specialty || null;
+      const hasServerEligibility = typeof serverLink?.planEligible === 'boolean';
+      const liveEligibility =
+        link?.accessEnabled !== false &&
+        link?.professional?.membershipActive !== false &&
+        String(specialty || '').trim().length >= 2 &&
+        link?.permissions?.write !== false;
+      return {
+        ...serverLink,
+        ...link,
+        name: link?.professional?.name || serverLink?.name || link?.professional?.email || 'Profissional',
+        profile_photo_url: link?.professional?.profile_photo_url || serverLink?.profile_photo_url || null,
+        specialty,
+        planEligible: (hasServerEligibility ? serverLink.planEligible === true : liveEligibility) && link?.accessEnabled !== false,
+        planEligibilityReason: link?.accessEnabled === false
+          ? 'Vínculo clínico com pendência de integridade.'
+          : serverLink?.planEligibilityReason || null,
+      };
+    });
+  }, [caseTeamLinks, planData?.professionalLinks]);
   const linkedProfessionals = useMemo(() => {
     const providedById = new Map(
       (Array.isArray(professionals) ? professionals : []).map((professional: any) => [
@@ -494,14 +525,17 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       return {
         ...provided,
         id,
-        name: provided.name || link.name || 'Profissional',
+        name: provided.name || link.name || link.professional?.name || 'Profissional',
         profile_photo_url:
           provided.profile_photo_url ||
           provided.profilePhotoUrl ||
           provided.profilePicture ||
           link.profile_photo_url ||
+          link.professional?.profile_photo_url ||
           null,
-        specialty: link.specialty || provided.specialty || null,
+        specialty: link.specialty || link.professional?.specialty || provided.specialty || null,
+        caseRole: link.case_role || link.caseRole || null,
+        relationshipType: link.relationship_type || link.relationshipType || null,
         permissions: link.permissions || {},
         planEligible: link.planEligible === true,
         planEligibilityReason: link.planEligibilityReason || null,
