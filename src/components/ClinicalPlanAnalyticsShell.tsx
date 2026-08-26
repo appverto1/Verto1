@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, CalendarDays, Layers3, Target } from 'lucide-react';
+import { Activity, CalendarDays, Layers3, Target, TrendingDown, TrendingUp } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -18,6 +18,7 @@ import {
   type ClinicalOutcomeObservation,
   type ClinicalOutcomeSeriesSummary,
 } from '../utils/clinicalOutcomeAnalytics';
+import { buildClinicalProgramChangeOverview, type ClinicalTargetChange } from '../utils/clinicalProgramChangeAnalytics';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
 type AnalyticsDomain = 'overview' | 'skills' | 'behaviors' | 'mastery' | 'maintenance' | 'changes';
@@ -32,6 +33,7 @@ type ClinicalPlanAnalyticsShellProps = {
   onAxisChange: (axis: AnalyticsAxis) => void;
   isDark?: boolean;
   onOpenSessionReport?: (sessionId: string) => void;
+  programs?: any[];
 };
 
 type MetricOption = {
@@ -487,6 +489,135 @@ const overviewRows = (
     });
 };
 
+
+const movementValueText = (target: ClinicalTargetChange) => {
+  if (target.firstValue === null || target.latestValue === null) return 'Sem comparação suficiente';
+  return `${displayValue(target.firstValue, target.unit)} → ${displayValue(target.latestValue, target.unit)}`;
+};
+
+function ProgramChangesView({
+  series,
+  programs,
+  isDark,
+  onOpenSessionReport,
+}: {
+  series: ClinicalOutcomeSeriesSummary[];
+  programs: any[];
+  isDark: boolean;
+  onOpenSessionReport?: (sessionId: string) => void;
+}) {
+  const overview = useMemo(() => buildClinicalProgramChangeOverview(series, programs), [programs, series]);
+  const subtle = isDark ? 'text-slate-400' : 'text-slate-500';
+  const text = isDark ? 'text-slate-100' : 'text-slate-900';
+  const card = isDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-slate-50/70';
+
+  const openTargetSession = (target: ClinicalTargetChange) => {
+    const sessionId = clean(target.latestSessionId);
+    if (!sessionId.startsWith('session-') || !onOpenSessionReport) return;
+    onOpenSessionReport(sessionId);
+  };
+
+  const HighlightCard = ({ target, tone }: { target: ClinicalTargetChange; tone: 'improving' | 'attention' }) => {
+    const canOpen = clean(target.latestSessionId).startsWith('session-') && Boolean(onOpenSessionReport);
+    const favorable = tone === 'improving';
+    return (
+      <button
+        type="button"
+        disabled={!canOpen}
+        onClick={() => canOpen && openTargetSession(target)}
+        className={`w-full rounded-2xl border p-3 text-left transition ${card} ${canOpen ? 'hover:border-violet-300 hover:bg-violet-50/40 dark:hover:border-violet-500/40 dark:hover:bg-violet-500/5' : 'cursor-default'}`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className={`truncate text-sm font-semibold ${text}`}>{target.label}</p>
+            <p className={`mt-0.5 truncate text-[11px] ${subtle}`}>{target.programName || 'Sem programa vinculado'} · {target.metricLabel}</p>
+          </div>
+          {favorable ? <TrendingUp size={17} className="shrink-0 text-emerald-500" /> : <TrendingDown size={17} className="shrink-0 text-rose-500" />}
+        </div>
+        <p className={`mt-2 text-sm font-semibold ${favorable ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{movementValueText(target)}</p>
+        <p className={`mt-1 text-[11px] ${subtle}`}>{target.pointCount} sessões comparáveis{canOpen ? ' · abrir sessão mais recente' : ''}</p>
+      </button>
+    );
+  };
+
+  return (
+    <div className="space-y-4" data-testid="program-change-overview">
+      <div className={`rounded-2xl border p-3 ${card}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className={`text-sm font-semibold ${text}`}>Evolução dos programas</p>
+            <p className={`mt-1 text-[11px] leading-5 ${subtle}`}>Cada alvo entra uma única vez, pela sua métrica clínica principal. O programa mostra a composição dos alvos entre evolução, estabilidade, atenção e evidência insuficiente — sem criar score ou média entre unidades incompatíveis.</p>
+          </div>
+          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`}>{overview.programs.length} programa(s)</span>
+        </div>
+
+        {overview.programs.length > 0 ? (
+          <div className="mt-4 space-y-3">
+            {overview.programs.map((program) => {
+              const total = Math.max(program.targetCount, 1);
+              const segments = [
+                { key: 'improving', label: 'Evoluindo', value: program.improving, className: 'bg-emerald-500' },
+                { key: 'stable', label: 'Estáveis', value: program.stable, className: 'bg-slate-400' },
+                { key: 'attention', label: 'Atenção', value: program.attention, className: 'bg-rose-500' },
+                { key: 'insufficient', label: 'Evidência insuficiente', value: program.insufficient, className: 'bg-amber-400' },
+              ];
+              return (
+                <div key={program.id} className={`rounded-xl border p-3 ${isDark ? 'border-slate-700/80 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className={`text-sm font-semibold ${text}`}>{program.name}</p>
+                    <p className={`text-[11px] ${subtle}`}>{program.targetCount} alvo(s) com evidência</p>
+                  </div>
+                  <div className={`mt-2.5 flex h-3 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`} aria-label={`Composição clínica do programa ${program.name}`}>
+                    {segments.filter((segment) => segment.value > 0).map((segment) => (
+                      <span key={segment.key} className={segment.className} style={{ width: `${(segment.value / total) * 100}%` }} title={`${segment.label}: ${segment.value}`} />
+                    ))}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                    <span className="text-emerald-700 dark:text-emerald-300">↑ {program.improving} evoluindo</span>
+                    <span className={subtle}>→ {program.stable} estáveis</span>
+                    <span className="text-rose-700 dark:text-rose-300">↓ {program.attention} atenção</span>
+                    <span className="text-amber-700 dark:text-amber-300">○ {program.insufficient} insuficiente</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className={`mt-4 rounded-xl border border-dashed px-4 py-6 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Ainda não há programas com evidência suficiente para compor esta leitura.</div>
+        )}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section className={`rounded-2xl border p-3 ${card}`}>
+          <div className="flex items-center gap-2">
+            <TrendingUp size={17} className="text-emerald-500" />
+            <div><p className={`text-sm font-semibold ${text}`}>Maiores evoluções</p><p className={`text-[11px] ${subtle}`}>Ordenadas por variação relativa; valores absolutos de unidades diferentes não são comparados.</p></div>
+          </div>
+          <div className="mt-3 space-y-2">
+            {overview.improvingTargets.length > 0
+              ? overview.improvingTargets.map((target) => <HighlightCard key={target.key} target={target} tone="improving" />)
+              : <p className={`rounded-xl border border-dashed p-4 text-center text-xs ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhum alvo com tendência favorável suficientemente sustentada neste período.</p>}
+          </div>
+        </section>
+
+        <section className={`rounded-2xl border p-3 ${card}`}>
+          <div className="flex items-center gap-2">
+            <TrendingDown size={17} className="text-rose-500" />
+            <div><p className={`text-sm font-semibold ${text}`}>Precisam de atenção</p><p className={`text-[11px] ${subtle}`}>Mudanças desfavoráveis com pelo menos 3 sessões comparáveis.</p></div>
+          </div>
+          <div className="mt-3 space-y-2">
+            {overview.attentionTargets.length > 0
+              ? overview.attentionTargets.map((target) => <HighlightCard key={target.key} target={target} tone="attention" />)
+              : <p className={`rounded-xl border border-dashed p-4 text-center text-xs ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhum alvo com tendência desfavorável sustentada neste período.</p>}
+          </div>
+        </section>
+      </div>
+
+      <p className={`px-1 text-[11px] leading-5 ${subtle}`}>A variação relativa serve apenas para ordenar os destaques. Percentuais, segundos, frequências e outras unidades não são somados nem transformados em um score clínico.</p>
+    </div>
+  );
+}
+
 function AnalyticsTooltip({ active, payload, label, unit, selectedSeries, changesMode = false }: any) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload || {};
@@ -528,7 +659,7 @@ function OverviewTooltip({ active, payload, label }: any) {
   );
 }
 
-export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport }: ClinicalPlanAnalyticsShellProps) {
+export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport, programs = [] }: ClinicalPlanAnalyticsShellProps) {
   const [activeDomain, setActiveDomain] = useState<AnalyticsDomain>('overview');
   const [metricSignatureValue, setMetricSignatureValue] = useState('');
   const [selectedSeriesKeys, setSelectedSeriesKeys] = useState<string[]>([]);
@@ -542,11 +673,11 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
     return counts;
   }, [series]);
 
-  const metricOptions = useMemo(() => activeDomain === 'overview' ? [] : metricOptionsForDomain(series, activeDomain), [activeDomain, series]);
+  const metricOptions = useMemo(() => (activeDomain === 'overview' || activeDomain === 'changes') ? [] : metricOptionsForDomain(series, activeDomain), [activeDomain, series]);
   const activeMetric = useMemo(() => metricOptions.find((option) => option.signature === metricSignatureValue) || metricOptions[0] || null, [metricOptions, metricSignatureValue]);
 
   useEffect(() => {
-    if (activeDomain === 'overview') return;
+    if (activeDomain === 'overview' || activeDomain === 'changes') return;
     if (!metricOptions.length) {
       setActiveDomain('overview');
       setMetricSignatureValue('');
@@ -583,14 +714,14 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
 
   const rows = useMemo(() => activeDomain === 'overview'
     ? overviewRows(series, previousSeriesByKey, comparePrevious, axis)
-    : chartRowsForSeries(selectedSeries, previousSeriesByKey, comparePrevious, activeDomain === 'changes' ? 'session' : axis, activeDomain === 'changes'),
+    : activeDomain === 'changes'
+      ? []
+      : chartRowsForSeries(selectedSeries, previousSeriesByKey, comparePrevious, axis, false),
   [activeDomain, axis, comparePrevious, previousSeriesByKey, selectedSeries, series]);
 
   const firstCurrentX = rows.find((row) => row.period === 'current')?.x;
   const numericValues = selectedSeries.flatMap((item) => item.validObservations.map((row) => row.value)).filter((value): value is number => value !== null && value !== undefined && Number.isFinite(Number(value))).map(Number);
-  const unitLabel = activeDomain === 'changes'
-    ? `Variação · ${activeMetric?.unitLabel || 'valor clínico'}`
-    : activeMetric?.unitLabel || 'Valor clínico';
+  const unitLabel = activeMetric?.unitLabel || 'Valor clínico';
   const unit = clean(selectedSeries[0]?.unit);
   const percentMode = activeDomain !== 'changes' && unitLabel === 'Percentual (%)';
   const ratioMode = activeDomain !== 'changes' && unitLabel === 'Pontuação (0–1)';
@@ -678,7 +809,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
       </div>
 
       <div className="p-3 sm:px-4 sm:py-3">
-        {activeDomain !== 'overview' && activeMetric && (
+        {activeDomain !== 'overview' && activeDomain !== 'changes' && activeMetric && (
           <div className="mb-4 space-y-3">
             <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Métricas clínicas">
               {metricOptions.map((option) => <button key={option.signature} type="button" aria-pressed={activeMetric.signature === option.signature} onClick={() => setMetricSignatureValue(option.signature)} className={`min-h-10 shrink-0 rounded-xl border px-3 text-xs font-medium ${activeMetric.signature === option.signature ? DOMAIN_SOFT_TONE[activeDomain as Exclude<AnalyticsDomain, 'overview'>] : isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`}>{option.label}</button>)}
@@ -702,12 +833,15 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
 
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className={`text-sm font-semibold ${text}`}>{activeDomain === 'overview' ? 'Registros clínicos por domínio' : activeDomain === 'changes' ? 'Mudanças entre sessões' : activeMetric?.label}</p>
-            <p className={`mt-0.5 text-[11px] ${subtle}`}>{activeDomain === 'overview' ? `Uma barra por ${axis === 'session' ? 'sessão' : 'dia'}, com os domínios empilhados; não é um score clínico.` : `${activeCount} ponto(s) no período atual${comparePrevious ? ` · ${previousCount} no período anterior` : ''} · ${unitLabel}`}</p>
+            <p className={`text-sm font-semibold ${text}`}>{activeDomain === 'overview' ? 'Registros clínicos por domínio' : activeDomain === 'changes' ? 'Andamento geral dos programas' : activeMetric?.label}</p>
+            <p className={`mt-0.5 text-[11px] ${subtle}`}>{activeDomain === 'overview' ? `Uma barra por ${axis === 'session' ? 'sessão' : 'dia'}, com os domínios empilhados; não é um score clínico.` : activeDomain === 'changes' ? 'Leitura consolidada das mudanças entre sessões, preservando a direção e a unidade de cada métrica.' : `${activeCount} ponto(s) no período atual${comparePrevious ? ` · ${previousCount} no período anterior` : ''} · ${unitLabel}`}</p>
           </div>
-          {comparePrevious && <div className={`flex items-center gap-3 text-[11px] ${subtle}`}><span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-6 bg-violet-600" /> Atual</span><span className="inline-flex items-center gap-1.5"><span className="h-0 w-6 border-t-2 border-dashed border-violet-400" /> Anterior</span></div>}
+          {comparePrevious && activeDomain !== 'changes' && <div className={`flex items-center gap-3 text-[11px] ${subtle}`}><span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-6 bg-violet-600" /> Atual</span><span className="inline-flex items-center gap-1.5"><span className="h-0 w-6 border-t-2 border-dashed border-violet-400" /> Anterior</span></div>}
         </div>
 
+        {activeDomain === 'changes' ? (
+          <ProgramChangesView series={series} programs={programs} isDark={isDark} onOpenSessionReport={onOpenSessionReport} />
+        ) : (
         <div className={`${activeDomain === 'overview' ? 'h-[170px] sm:h-[180px]' : 'h-[250px] sm:h-[285px]'} min-w-0 overflow-x-auto`}>
           <div className="h-full" style={{ minWidth: Math.max(620, rows.length * 72) }}>
             <SafeResponsiveContainer width="100%" height="100%" minHeight={activeDomain === 'overview' ? 150 : 230}>
@@ -730,9 +864,8 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
                     domain={percentMode ? [0, 100] : ratioMode ? [0, 1] : ['auto', 'auto']}
                     label={{ value: unitLabel, angle: -90, position: 'insideLeft', fontSize: 10 }}
                   />
-                  <Tooltip content={<AnalyticsTooltip unit={unit} selectedSeries={selectedSeries} changesMode={activeDomain === 'changes'} />} />
+                  <Tooltip content={<AnalyticsTooltip unit={unit} selectedSeries={selectedSeries} />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {activeDomain === 'changes' && <ReferenceLine y={0} stroke={isDark ? '#64748B' : '#94A3B8'} strokeDasharray="3 3" />}
                   {comparePrevious && firstCurrentX && <ReferenceLine x={firstCurrentX} stroke={isDark ? '#A78BFA' : '#7C3AED'} strokeDasharray="4 4" label={{ value: 'Período atual', fontSize: 9, position: 'insideTopLeft' }} />}
                   {selectedSeries.map((item, index) => {
                     const color = lineColors[index % lineColors.length];
@@ -747,8 +880,9 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
             </SafeResponsiveContainer>
           </div>
         </div>
+        )}
 
-        {activeDomain !== 'overview' && selectedSeries.length === 0 && <div className="py-10 text-center"><Target className="mx-auto text-slate-300" size={26} /><p className={`mt-2 text-sm ${subtle}`}>{activeDomain === 'behaviors' ? 'Selecione ao menos um comportamento interferente para visualizar.' : 'Selecione ao menos um alvo para visualizar.'}</p></div>}
+        {activeDomain !== 'overview' && activeDomain !== 'changes' && selectedSeries.length === 0 && <div className="py-10 text-center"><Target className="mx-auto text-slate-300" size={26} /><p className={`mt-2 text-sm ${subtle}`}>{activeDomain === 'behaviors' ? 'Selecione ao menos um comportamento interferente para visualizar.' : 'Selecione ao menos um alvo para visualizar.'}</p></div>}
         {activeDomain === 'overview' && <div className={`mt-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${isDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}><Activity size={15} className="mt-0.5 shrink-0 text-violet-500" /><span>A visão geral empilha, na mesma barra, a contagem de registros clínicos de cada domínio por dia ou sessão. Percentuais, duração, frequência e outras unidades não são somados entre si.</span></div>}
       </div>
     </section>
