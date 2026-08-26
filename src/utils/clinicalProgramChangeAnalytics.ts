@@ -48,6 +48,7 @@ export type ClinicalTargetChange = {
   movement: ClinicalTargetMovement;
   previousMovement: ClinicalTargetMovement;
   mathTrend: ClinicalMathTrend;
+  valueTrend: ClinicalMathTrend;
   pointCount: number;
   firstValue: number | null;
   latestValue: number | null;
@@ -58,6 +59,7 @@ export type ClinicalTargetChange = {
   criterionLabel: string;
   criterionSource: ClinicalCriterion['source'] | null;
   criterionMet: boolean;
+  criterionMetAtStart: boolean;
   criterionConsecutiveSessions: number;
   criterionRequiredSessions: number;
   highlightPriority: number;
@@ -371,6 +373,15 @@ const linearSlope = (values: number[]) => {
   return denominator > 0 ? numerator / denominator : 0;
 };
 
+const endpointTrend = (firstValue: number | null, latestValue: number | null): ClinicalMathTrend => {
+  if (firstValue === null || latestValue === null) return 'unknown';
+  const delta = latestValue - firstValue;
+  const scale = Math.max(Math.abs(firstValue), Math.abs(latestValue), 1);
+  const tolerance = Math.max(0.0001, scale * 0.001);
+  if (Math.abs(delta) <= tolerance) return 'flat';
+  return delta > 0 ? 'up' : 'down';
+};
+
 type MovementClassification = {
   movement: ClinicalTargetMovement;
   delta: number | null;
@@ -509,6 +520,7 @@ export const buildClinicalProgramChangeOverview = (
       movement: classification.movement,
       previousMovement: previousClassification.movement,
       mathTrend: classification.mathTrend,
+      valueTrend: endpointTrend(firstValue, latest?.value ?? null),
       pointCount: points.length,
       firstValue,
       latestValue: latest?.value ?? null,
@@ -519,6 +531,7 @@ export const buildClinicalProgramChangeOverview = (
       criterionLabel: criterionLabel(criterion, clean(entry.series.unit)),
       criterionSource: criterion?.source || null,
       criterionMet: classification.criterionMet,
+      criterionMetAtStart: Boolean(criterion && firstValue !== null && criterionIsMet(criterion, firstValue)),
       criterionConsecutiveSessions: classification.criterionConsecutiveSessions,
       criterionRequiredSessions: classification.criterionRequiredSessions,
       highlightPriority: Math.max(improvementPriority, attentionPriority),
@@ -550,7 +563,24 @@ export const buildClinicalProgramChangeOverview = (
 
   const highConfidence = targetChanges.filter((target) => target.pointCount >= 3 && target.movement !== 'insufficient');
   const improvingTargets = highConfidence
-    .filter((target) => target.movement === 'improving' || (target.movement === 'criterion_sustained' && target.highlightPriority > 0))
+    .filter((target) => {
+      const semanticallyImproving = target.movement === 'improving'
+        || (target.movement === 'criterion_sustained' && target.highlightPriority > 0);
+      if (!semanticallyImproving) return false;
+
+      // A highlight is a change, not merely a good status. Targets that already
+      // started at criterion and remain there belong to mastery/maintenance.
+      if (target.criterionMetAtStart && target.criterionMet) return false;
+
+      // Flat endpoints (for example 100% -> 100%) cannot occupy a "major
+      // evolution" slot even when intermediate sessions fluctuated.
+      if (target.valueTrend === 'flat' || target.valueTrend === 'unknown') return false;
+
+      // When a criterion exists, require real net approximation to that
+      // criterion. This prevents above-threshold growth from inflating rank.
+      if (target.criterionLabel && target.criterionProgressDelta <= 0) return false;
+      return true;
+    })
     .sort((left, right) => right.highlightPriority - left.highlightPriority || right.criterionProgressDelta - left.criterionProgressDelta || right.semanticStrength - left.semanticStrength || right.pointCount - left.pointCount)
     .slice(0, 4);
   const attentionTargets = highConfidence
