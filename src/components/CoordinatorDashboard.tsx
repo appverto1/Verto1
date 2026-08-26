@@ -10422,7 +10422,8 @@ export function CoordinatorDashboard({
     if (item.aliases?.some((alias) => activeTab === alias.intent.tab && isFinancialBreadcrumbActive(alias.intent.breadcrumb))) return true;
     if (item.intent?.breadcrumb) return activeTab === item.intent.tab && isFinancialBreadcrumbActive(item.intent.breadcrumb);
     if (item.tab) return activeTab === item.tab;
-    return Boolean(item.children?.some(isNavigationNodeActive));
+    if (!item.children?.length) return activeTab === (item.id as DashboardTab);
+    return item.children.some(isNavigationNodeActive);
   };
 
   const toggleNavigationSection = (itemId: string) => {
