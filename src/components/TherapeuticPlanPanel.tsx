@@ -323,7 +323,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const effectiveRole = String(
     planData?.capabilities?.actorRole || normalizedRole,
   ).trim().toLowerCase();
-  const canManageStructure = planData?.capabilities?.canManageAllPlans === true || ['owner', 'admin', 'director', 'coordinator', 'supervisor'].includes(effectiveRole);
+  const canManageStructure = planData?.capabilities?.canManageAllPlans === true || ['owner', 'admin', 'director', 'coordinator'].includes(effectiveRole);
   const roleCanCreate = planData?.capabilities?.canCreatePlans !== false && ['owner', 'admin', 'director', 'coordinator', 'supervisor', 'therapist'].includes(effectiveRole);
   const canCreatePlanScope = roleCanCreate && planData.readOnlyHistory !== true;
   const canCreateProgram =
@@ -393,7 +393,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const [selectedPlanScopeId, setSelectedPlanScopeId] = useState('');
   const [editingScopeId, setEditingScopeId] = useState('');
   const [workspaceScopeId, setWorkspaceScopeId] = useState('');
-  const [showPlanManager, setShowPlanManager] = useState(false);
+  const [showPlanManager, setShowPlanManager] = useState(true);
   const [ptsDraftOverride, setPtsDraftOverride] = useState<{ planId: string; version: any } | null>(null);
   const [ptsEventKind, setPtsEventKind] = useState<'review' | 'risk' | null>(null);
   const [ptsEventSaving, setPtsEventSaving] = useState(false);
@@ -464,24 +464,19 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   );
   const primaryPtsScope = useMemo(() => {
     if (ptsScopes.length === 0) return null;
-    return ptsScopes.find((scope: any) => String(scope.id) === workspaceScopeId)
-      || ptsScopes.find((scope: any) => scope.status === 'active')
-      || ptsScopes[0];
-  }, [ptsScopes, workspaceScopeId]);
+    return ptsScopes.find((scope: any) => scope.status === 'active') || ptsScopes[0];
+  }, [ptsScopes]);
+  const workspaceScope = useMemo(
+    () => planScopes.find((scope: any) => String(scope?.id || '') === workspaceScopeId) || null,
+    [planScopes, workspaceScopeId],
+  );
+  const selectedPtsScope = workspaceScope?.mode === 'interdisciplinary' ? workspaceScope : primaryPtsScope;
   const ptsWorkspacePrograms = useMemo(() => {
-    if (!primaryPtsScope?.id) return [];
-    const visibleScopeIds = new Set([
-      String(primaryPtsScope.id),
-      ...specialtyScopes.map((scope: any) => String(scope?.id || '')).filter(Boolean),
-    ]);
-    const byId = new Map<string, any>();
-    programs.forEach((program: any) => {
-      const planId = String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '');
-      if (!visibleScopeIds.has(planId)) return;
-      byId.set(String(program?.id || `${planId}:${program?.name || byId.size}`), program);
-    });
-    return Array.from(byId.values());
-  }, [primaryPtsScope?.id, programs, specialtyScopes]);
+    if (!workspaceScope?.id || workspaceScope?.mode !== 'interdisciplinary') return [];
+    return programs.filter((program: any) =>
+      String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '') === String(workspaceScope.id)
+    );
+  }, [programs, workspaceScope]);
   const historicalPrograms = Array.isArray(planData?.historicalPrograms)
     ? planData.historicalPrograms
     : [];
@@ -630,7 +625,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     });
     setSelectedProgramId('');
     setWorkspaceScopeId('');
-    setShowPlanManager(false);
+    setShowPlanManager(true);
     setEditingScopeId('');
     setPtsDraftOverride(null);
     setPtsEventKind(null);
@@ -643,16 +638,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   }, [patientId]);
 
   useEffect(() => {
-    if (ptsScopes.length === 0) {
-      setWorkspaceScopeId('');
-      setShowPlanManager(false);
-      return;
-    }
-    if (!ptsScopes.some((scope: any) => String(scope.id) === workspaceScopeId)) {
-      const preferred = ptsScopes.find((scope: any) => scope.status === 'active') || ptsScopes[0];
-      setWorkspaceScopeId(String(preferred.id));
-    }
-  }, [ptsScopes, workspaceScopeId]);
+    if (!workspaceScopeId) return;
+    if (planScopes.some((scope: any) => String(scope.id) === workspaceScopeId)) return;
+    setWorkspaceScopeId('');
+    setShowPlanManager(true);
+  }, [planScopes, workspaceScopeId]);
 
   useEffect(() => {
     if (creationStep !== 'recommendation' || recommendationsLoading) return undefined;
@@ -723,14 +713,13 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const startCreation = () => {
     const firstAvailableScope = planScopes.find(
       (scope: any) =>
+        scope.mode === 'specialty' &&
         scope.status !== 'archived' &&
         (canManageStructure || scope.canEdit === true),
     );
     if (!firstAvailableScope) {
-      setNotice(
-        'Crie primeiro um plano da especialidade ou um Projeto Terapêutico Singular (PTS).',
-      );
-      openPlanScopeForm();
+      setError('Crie primeiro um plano por especialidade para adicionar programas clínicos.');
+      openPlanScopeForm('specialty');
       return;
     }
     resetCreation();
@@ -743,11 +732,12 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const selectedScope = planScopes.find(
       (scope: any) =>
         String(scope.id) === String(scopeId) &&
+        scope.mode === 'specialty' &&
         scope.status !== 'archived' &&
         (canManageStructure || scope.canEdit === true),
     );
     if (!selectedScope) {
-      setNotice('Este plano não está disponível para receber novos programas.');
+      setError('Novos programas devem ser adicionados dentro de um plano por especialidade disponível para edição.');
       return;
     }
     resetCreation();
@@ -1038,7 +1028,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       return;
     }
     if (!editingProgramId && !selectedPlanScopeId) {
-      setFormError('Selecione o plano da especialidade ou o Projeto Terapêutico Singular deste programa.');
+      setFormError('Selecione o plano por especialidade deste programa.');
       return;
     }
     setFormError('');
@@ -1052,7 +1042,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       return;
     }
     if (!editingProgramId && !selectedPlanScopeId) {
-      setFormError('Selecione o plano da especialidade ou o Projeto Terapêutico Singular deste programa.');
+      setFormError('Selecione o plano por especialidade deste programa.');
       return;
     }
     if (saving) return;
@@ -1146,7 +1136,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       reason: `Fase alterada para ${THERAPEUTIC_PROGRAM_STATUS_LABELS[status as keyof typeof THERAPEUTIC_PROGRAM_STATUS_LABELS] || status}`,
       idempotencyKey: newIdempotencyKey(`therapeutic-program-status:${program.id}:${status}`),
     });
-    if (response?.success === false) setNotice(response?.message || response?.error || 'Não foi possível alterar a fase do programa.');
+    if (response?.success === false) setError(response?.message || response?.error || 'Não foi possível alterar a fase do programa.');
     else {
       setNotice(response?.message || 'Fase do programa atualizada.');
       await loadPlan(true);
@@ -1154,18 +1144,18 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     setActionProgramId('');
   };
 
-  const openPlanScopeForm = () => {
+  const openPlanScopeForm = (mode: 'specialty' | 'interdisciplinary' = 'specialty') => {
     scopeIdempotencyKeyRef.current = newIdempotencyKey(
       `therapeutic-plan-scope:${patientId}`,
     );
-    const responsibleProfessionalId = canManageStructure
-      ? ''
-      : actorId;
-    const specialty = canManageStructure
-      ? ''
-      : String(actorProfessional?.specialty || '');
+    const responsibleProfessionalId = canManageStructure ? '' : actorId;
+    const specialty = mode === 'specialty'
+      ? canManageStructure
+        ? ''
+        : String(actorProfessional?.specialty || '')
+      : '';
     setScopeDraft({
-      mode: 'specialty',
+      mode,
       specialty,
       responsibleProfessionalId,
       participantProfessionalIds: responsibleProfessionalId
@@ -1196,22 +1186,22 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       )
       .find((professional: any) => professional?.planEligible !== true);
     if (!scopeDraft.responsibleProfessionalId) {
-      setNotice('Informe o profissional responsável por este plano.');
+      setError('Informe o profissional responsável por este plano.');
       return;
     }
     if (ineligibleParticipant) {
-      setNotice(
+      setError(
         ineligibleParticipant.planEligibilityReason ||
         'Um dos participantes ainda não está apto a editar planos deste paciente.',
       );
       return;
     }
     if (scopeDraft.mode === 'specialty' && !derivedSpecialty) {
-      setNotice('Cadastre a especialidade clínica do responsável antes de criar o plano.');
+      setError('Cadastre a especialidade clínica do responsável antes de criar o plano.');
       return;
     }
     if (scopeDraft.mode === 'interdisciplinary' && participantIds.length < 2) {
-      setNotice('Selecione ao menos dois profissionais para o Projeto Terapêutico Singular.');
+      setError('Selecione ao menos dois profissionais para o Projeto Terapêutico Singular.');
       return;
     }
     if (!scopeIdempotencyKeyRef.current) {
@@ -1219,6 +1209,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         `therapeutic-plan-scope:${patientId}`,
       );
     }
+    setError('');
     setScopeSaving(true);
     const response = await dataService.createPatientTherapeuticPlanScope(patientId, {
       mode: scopeDraft.mode,
@@ -1230,7 +1221,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     });
     setScopeSaving(false);
     if (response?.success === false) {
-      setNotice(response?.message || response?.error || 'Não foi possível criar o escopo do plano.');
+      setError(response?.message || response?.error || 'Não foi possível criar o escopo do plano.');
       return;
     }
     setScopeFormOpen(false);
@@ -1256,11 +1247,12 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       setEditingScopeId(scopeId);
       return;
     }
+    setError('');
     setScopeSaving(true);
     const response = await dataService.createPtsDraftVersion(patientId, scopeId);
     setScopeSaving(false);
     if (response?.success === false || !response?.data?.id) {
-      setNotice(response?.message || response?.error || 'Não foi possível criar a nova versão do PTS.');
+      setError(response?.message || response?.error || 'Não foi possível criar a nova versão do PTS.');
       return;
     }
     setPtsDraftOverride({ planId: scopeId, version: response.data });
@@ -1292,6 +1284,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
   const savePlanScope = async () => {
     if (!editingScopeId || scopeSaving) return;
+    setError('');
     setScopeSaving(true);
     const commonObjectives = String(scopeEditDraft.commonObjectives || '').split('\n').map((value) => value.trim()).filter(Boolean);
     const specialtyObjectives = Object.fromEntries(
@@ -1308,7 +1301,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     });
     setScopeSaving(false);
     if (response?.success === false) {
-      setNotice(response?.message || response?.error || 'Não foi possível salvar este escopo.');
+      setError(response?.message || response?.error || 'Não foi possível salvar este plano.');
       return;
     }
     setEditingScopeId('');
@@ -1321,7 +1314,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const versionId = String(payload?.versionId || '');
     const expectedDraftRevision = Number(payload?.expectedDraftRevision || 0);
     if (!versionId || !Number.isSafeInteger(expectedDraftRevision) || expectedDraftRevision < 1) {
-      setNotice('O rascunho do PTS não está disponível. Reabra a edição e tente novamente.');
+      setError('O rascunho do PTS não está disponível. Reabra a edição e tente novamente.');
       return;
     }
     const requestPayload = {
@@ -1331,13 +1324,14 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       specialtyObjectives: payload?.specialtyObjectives,
       reviewDueDate: payload?.reviewDueDate || null,
     };
+    setError('');
     setScopeSaving(true);
     const response = payload?.action === 'activate'
       ? await dataService.activatePtsDraftVersion(patientId, scopeId, versionId, requestPayload)
       : await dataService.savePtsDraftVersion(patientId, scopeId, versionId, requestPayload);
     setScopeSaving(false);
     if (response?.success === false) {
-      setNotice(response?.message || response?.error || (payload?.action === 'activate'
+      setError(response?.message || response?.error || (payload?.action === 'activate'
         ? 'Não foi possível ativar o Projeto Terapêutico Singular.'
         : 'Não foi possível salvar o rascunho do Projeto Terapêutico Singular.'));
       return;
@@ -1355,15 +1349,16 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   };
 
   const savePtsEvent = async (eventPayload: any) => {
-    if (!primaryPtsScope?.id || ptsEventSaving) return;
+    if (!selectedPtsScope?.id || ptsEventSaving) return;
+    setError('');
     setPtsEventSaving(true);
-    const response = await dataService.appendPtsEvent(patientId, String(primaryPtsScope.id), {
+    const response = await dataService.appendPtsEvent(patientId, String(selectedPtsScope.id), {
       ...eventPayload,
-      idempotencyKey: newIdempotencyKey(`pts-event:${primaryPtsScope.id}:${eventPayload?.eventType || 'event'}`),
+      idempotencyKey: newIdempotencyKey(`pts-event:${selectedPtsScope.id}:${eventPayload?.eventType || 'event'}`),
     });
     setPtsEventSaving(false);
     if (response?.success === false) {
-      setNotice(response?.message || response?.error || 'Não foi possível registrar o evento do PTS.');
+      setError(response?.message || response?.error || 'Não foi possível registrar o evento do PTS.');
       return;
     }
     setPtsEventKind(null);
@@ -1385,10 +1380,14 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       const acknowledged = window.confirm(`${response?.message || 'Foi encontrado conteúdo potencialmente identificável.'}\n\nDeseja remover esses trechos e salvar o modelo sem dados do paciente?`);
       if (acknowledged) response = await dataService.saveTherapeuticProgramTemplate({ ...payload, privacyAcknowledged: true });
     }
-    setNotice(response?.success === false
-      ? response?.message || response?.error || 'Não foi possível salvar o modelo.'
-      : response?.message || 'Modelo salvo sem dados do paciente.');
-    if (response?.success !== false) setTemplates([]);
+    if (response?.success === false) {
+      setNotice('');
+      setError(response?.message || response?.error || 'Não foi possível salvar o modelo.');
+    } else {
+      setError('');
+      setNotice(response?.message || 'Modelo salvo sem dados do paciente.');
+      setTemplates([]);
+    }
     setActionProgramId('');
     setOpenMenuId('');
   };
@@ -1401,8 +1400,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       name,
       idempotencyKey: newIdempotencyKey(`therapeutic-target:${selectedProgram.id}`),
     });
-    if (response?.success === false) setNotice(response?.message || response?.error || 'Não foi possível adicionar o alvo.');
-    else {
+    if (response?.success === false) {
+      setNotice('');
+      setError(response?.message || response?.error || 'Não foi possível adicionar o alvo.');
+    } else {
+      setError('');
       setNewTargetName('');
       setNotice('Alvo adicionado ao programa.');
       await loadPlan(true);
@@ -1836,25 +1838,31 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                 <select
                   className={`${field} mt-1.5 disabled:cursor-not-allowed disabled:opacity-70`}
                   value={selectedPlanScopeId}
-                  disabled={Boolean(editingProgramId)}
+                  disabled={Boolean(editingProgramId) || Boolean(selectedPlanScopeId)}
                   onChange={(event) => setSelectedPlanScopeId(event.target.value)}
                 >
                   {editingProgramId && !selectedPlanScopeId ? (
                     <option value="">Programa anterior, sem plano vinculado</option>
                   ) : (
-                    <option value="" disabled>Selecione o plano</option>
+                    <option value="" disabled>Selecione o plano por especialidade</option>
                   )}
                   {planScopes
                     .filter(
                       (scope: any) =>
-                        scope.status !== 'archived' ||
-                        String(scope.id) === selectedPlanScopeId,
+                        (
+                          scope.mode === 'specialty' &&
+                          scope.status !== 'archived'
+                        ) ||
+                        (
+                          Boolean(editingProgramId) &&
+                          String(scope.id) === selectedPlanScopeId
+                        ),
                     )
                     .map((scope: any) => (
                       <option key={scope.id} value={scope.id}>
                         {scope.mode === 'interdisciplinary'
-                          ? 'Projeto Terapêutico Singular (PTS)'
-                          : `Plano da especialidade · ${scope.specialty || 'não informada'}`}
+                          ? 'PTS legado — vínculo preservado em somente leitura de contexto'
+                          : `Plano de ${scope.specialty || 'especialidade'}`}
                         {' · '}versão {scope.edit_version}
                       </option>
                     ))}
@@ -2304,416 +2312,429 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     );
   }
 
-  const renderPlanManagementWorkspace = () => (
-    <>
-      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
-        <div><h2 className={`text-lg font-medium ${text}`}>Plano terapêutico</h2><p className={`mt-1 text-sm leading-relaxed ${muted}`}>Objetivos gerais, programas individualizados e alvos usados nas sessões.</p></div>
-        <div className="flex flex-wrap gap-2">{typeof onStartSession === 'function' && programs.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status))) && <button type="button" className={secondaryButton} onClick={onStartSession}><Play size={16} /> Iniciar sessão</button>}{canCreateProgram && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={startCreation}><Plus size={17} /> Adicionar programa</button>}</div>
+  const statusLabelForScope = (scope: any) => (
+    scope?.status === 'active' ? 'Ativo'
+      : scope?.status === 'paused' ? 'Pausado'
+        : scope?.status === 'completed' ? 'Concluído'
+          : scope?.status === 'archived' ? 'Arquivado'
+            : 'Rascunho'
+  );
+
+  const scopeVersionNumber = (scope: any) => Number(
+    scope?.mode === 'interdisciplinary'
+      ? scope?.pts_lineage?.activeVersion?.versionNumber || scope?.pts_lineage?.draftVersion?.versionNumber || scope?.edit_version || 1
+      : scope?.edit_version || 1,
+  );
+
+  const responsibleNameForScope = (scope: any) => {
+    const professionalId = String(scope?.responsible_professional_id || '');
+    return linkedProfessionals.find((professional: any) => String(professional.id) === professionalId)?.name || 'Responsável não definido';
+  };
+
+  const actorOwnsScope = (scope: any) => {
+    const participantIds = [
+      String(scope?.responsible_professional_id || ''),
+      ...(Array.isArray(scope?.participant_professional_ids) ? scope.participant_professional_ids.map(String) : []),
+    ];
+    return Boolean(actorId && participantIds.includes(actorId));
+  };
+
+  const ownSpecialtyScopes = specialtyScopes.filter(actorOwnsScope);
+  const supervisedSpecialtyScopes = specialtyScopes.filter((scope: any) => !actorOwnsScope(scope) && scope?.accessReason === 'supervisor');
+  const managedSpecialtyScopes = specialtyScopes.filter((scope: any) => !actorOwnsScope(scope) && scope?.accessReason !== 'supervisor');
+
+  const openWorkspace = (scope: any) => {
+    if (!scope?.id) return;
+    setWorkspaceScopeId(String(scope.id));
+    setShowPlanManager(false);
+    setQuery('');
+    setFilter('all');
+    setEditingScopeId('');
+    setScopeFormOpen(false);
+  };
+
+  const renderScopeCreationForm = () => !scopeFormOpen ? null : (
+    <section className={`rounded-2xl border p-4 sm:p-5 ${panel}`} aria-label={scopeDraft.mode === 'interdisciplinary' ? 'Criar PTS da equipe' : 'Criar plano por especialidade'}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className={`text-sm font-medium ${text}`}>
+            {scopeDraft.mode === 'interdisciplinary' ? 'Criar PTS da equipe' : 'Novo plano por especialidade'}
+          </p>
+          <p className={`mt-1 text-xs leading-5 ${muted}`}>
+            {scopeDraft.mode === 'interdisciplinary'
+              ? 'Documento compartilhado pela equipe assistencial vinculada ao caso.'
+              : 'Documento clínico restrito aos participantes autorizados, supervisores vinculados e coordenação.'}
+          </p>
+        </div>
+        <button type="button" className={secondaryButton} onClick={() => setScopeFormOpen(false)}>Fechar</button>
       </div>
 
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <label className={`text-xs ${muted}`}>
+          Responsável principal
+          <select
+            className={`${field} mt-1.5`}
+            value={scopeDraft.responsibleProfessionalId}
+            disabled={!canManageStructure}
+            onChange={(event) => {
+              const responsibleProfessionalId = event.target.value;
+              const responsible = linkedProfessionals.find((professional: any) => String(professional.id) === responsibleProfessionalId);
+              setScopeDraft((current) => ({
+                ...current,
+                responsibleProfessionalId,
+                specialty: current.mode === 'specialty' ? String(responsible?.specialty || '') : '',
+                participantProfessionalIds: responsibleProfessionalId ? [responsibleProfessionalId] : [],
+              }));
+            }}
+          >
+            <option value="">Selecione</option>
+            {selectableResponsibleProfessionals.map((professional: any) => (
+              <option key={professional.id} value={professional.id}>
+                {professional.name} · {professional.specialty || 'especialidade pendente'}
+              </option>
+            ))}
+          </select>
+        </label>
 
-      <section className={`rounded-2xl border p-4 sm:p-5 ${subpanel}`} aria-label="Planos da equipe multiprofissional">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="max-w-2xl">
-            <p className={`text-sm font-medium ${text}`}>Planos da equipe</p>
-            <p className={`mt-1 text-xs leading-5 ${muted}`}>
-              Crie um plano próprio da especialidade ou um Projeto Terapêutico Singular (PTS), construído em conjunto pela equipe.
-            </p>
-          </div>
-          {canCreatePlanScope && (
-            <button
-              type="button"
-              disabled={selectableResponsibleProfessionals.length === 0}
-              className={secondaryButton}
-              onClick={() => scopeFormOpen ? setScopeFormOpen(false) : openPlanScopeForm()}
-            >
-              <Plus size={15} /> {scopeFormOpen ? 'Fechar' : 'Novo plano'}
-            </button>
-          )}
+        <div className={`rounded-xl border px-3.5 py-3 ${subpanel}`}>
+          <p className={`text-[11px] ${muted}`}>{scopeDraft.mode === 'interdisciplinary' ? 'Tipo de documento' : 'Especialidade'}</p>
+          <p className={`mt-1 text-sm ${text}`}>
+            {scopeDraft.mode === 'interdisciplinary'
+              ? 'Projeto Terapêutico Singular (PTS)'
+              : scopeDraft.specialty || 'Selecione um responsável com especialidade cadastrada'}
+          </p>
         </div>
 
-        {!loading && selectableResponsibleProfessionals.length === 0 && (
-          <p className={`mt-3 text-xs ${muted}`}>
-            Vincule ao menos um profissional de atendimento ativo, com especialidade cadastrada e permissão de escrita.
-          </p>
-        )}
-
-        {scopeFormOpen && (
-          <div className={`mt-4 grid gap-4 rounded-xl border p-4 md:grid-cols-2 ${panel}`}>
-            <label className={`text-xs ${muted}`}>
-              Tipo de plano
-              <select
-                className={`${field} mt-1.5`}
-                value={scopeDraft.mode}
-                onChange={(event) => {
-                  const mode = event.target.value;
-                  setScopeDraft((current) => ({
-                    ...current,
-                    mode,
-                    specialty: mode === 'specialty'
-                      ? String(
-                          linkedProfessionals.find((professional: any) =>
-                            String(professional.id) === current.responsibleProfessionalId
-                          )?.specialty || ''
-                        )
-                      : '',
-                    participantProfessionalIds: current.responsibleProfessionalId
-                      ? [current.responsibleProfessionalId]
-                      : [],
-                  }));
-                }}
-              >
-                <option value="specialty">Plano da especialidade</option>
-                <option value="interdisciplinary">Projeto Terapêutico Singular (PTS)</option>
-              </select>
-            </label>
-
-            <label className={`text-xs ${muted}`}>
-              Responsável principal
-              <select
-                className={`${field} mt-1.5`}
-                value={scopeDraft.responsibleProfessionalId}
-                disabled={!canManageStructure}
-                onChange={(event) => {
-                  const responsibleProfessionalId = event.target.value;
-                  const responsible = linkedProfessionals.find(
-                    (professional: any) =>
-                      String(professional.id) === responsibleProfessionalId,
-                  );
-                  setScopeDraft((current) => ({
-                    ...current,
-                    responsibleProfessionalId,
-                    specialty: current.mode === 'specialty'
-                      ? String(responsible?.specialty || '')
-                      : '',
-                    participantProfessionalIds: responsibleProfessionalId
-                      ? [responsibleProfessionalId]
-                      : [],
-                  }));
-                }}
-              >
-                <option value="">Selecione</option>
-                {selectableResponsibleProfessionals.map((professional: any) => (
-                  <option key={professional.id} value={professional.id}>
-                    {professional.name} · {professional.specialty || 'especialidade pendente'}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {scopeDraft.mode === 'specialty' && (
-              <div className={`rounded-xl border px-3.5 py-3 md:col-span-2 ${subpanel}`}>
-                <p className={`text-[11px] ${muted}`}>Especialidade obtida do cadastro profissional</p>
-                <p className={`mt-1 text-sm font-medium ${text}`}>
-                  {scopeDraft.specialty || 'Selecione um responsável com especialidade cadastrada'}
-                </p>
-              </div>
-            )}
-
-            <fieldset className="md:col-span-2">
-              <legend className={`text-xs ${muted}`}>
-                {scopeDraft.mode === 'interdisciplinary'
-                  ? 'Equipe participante (de 2 a 5 profissionais)'
-                  : 'Colaboradores da mesma especialidade (opcional)'}
-              </legend>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {linkedProfessionals
-                  .filter((professional: any) =>
-                    scopeDraft.mode === 'interdisciplinary' ||
-                    !scopeDraft.specialty ||
-                    String(professional.specialty || '').toLocaleLowerCase('pt-BR') ===
-                      scopeDraft.specialty.toLocaleLowerCase('pt-BR')
-                  )
-                  .map((professional: any) => {
-                    const id = String(professional.id);
-                    const selected = scopeDraft.participantProfessionalIds.includes(id);
-                    const requiredParticipant =
-                      id === scopeDraft.responsibleProfessionalId ||
-                      (!canManageStructure && id === actorId);
-                    const disabled =
-                      professional.planEligible !== true ||
-                      requiredParticipant ||
-                      (!selected && scopeDraft.participantProfessionalIds.length >= 5);
-                    return (
-                      <label
-                        key={id}
-                        className={`flex min-h-12 items-center gap-3 rounded-xl border px-3 text-sm ${
-                          selected
-                            ? isDark
-                              ? 'border-violet-500/50 bg-violet-500/10 text-violet-200'
-                              : 'border-violet-200 bg-violet-50 text-violet-800'
-                            : panel
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          disabled={disabled}
-                          onChange={() =>
-                            setScopeDraft((current) => ({
-                              ...current,
-                              participantProfessionalIds: selected
-                                ? current.participantProfessionalIds.filter((value) => value !== id)
-                                : [...current.participantProfessionalIds, id].slice(0, 5),
-                            }))
-                          }
-                        />
-                        <span className="min-w-0">
-                          <span className="block truncate">{professional.name}</span>
-                          <span className={`block truncate text-[11px] ${muted}`}>
-                            {professional.planEligible === true
-                              ? professional.specialty || 'Especialidade pendente'
-                              : professional.planEligibilityReason || 'Indisponível para novos planos'}
-                          </span>
-                        </span>
-                      </label>
-                    );
-                  })}
-              </div>
-            </fieldset>
-
-            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end md:col-span-2">
-              <button type="button" className={secondaryButton} onClick={() => setScopeFormOpen(false)}>
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={scopeSaving}
-                className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50"
-                onClick={() => void createPlanScope()}
-              >
-                {scopeSaving
-                  ? 'Salvando...'
-                  : scopeDraft.mode === 'interdisciplinary'
-                    ? 'Criar PTS'
-                    : 'Criar plano da especialidade'}
-              </button>
-            </div>
+        <fieldset className="md:col-span-2">
+          <legend className={`text-xs ${muted}`}>
+            {scopeDraft.mode === 'interdisciplinary'
+              ? 'Equipe participante (de 2 a 5 profissionais)'
+              : 'Colaboradores da mesma especialidade (opcional)'}
+          </legend>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {linkedProfessionals
+              .filter((professional: any) =>
+                scopeDraft.mode === 'interdisciplinary' ||
+                !scopeDraft.specialty ||
+                String(professional.specialty || '').toLocaleLowerCase('pt-BR') === scopeDraft.specialty.toLocaleLowerCase('pt-BR')
+              )
+              .map((professional: any) => {
+                const id = String(professional.id);
+                const selected = scopeDraft.participantProfessionalIds.includes(id);
+                const requiredParticipant = id === scopeDraft.responsibleProfessionalId || (!canManageStructure && id === actorId);
+                const disabled = professional.planEligible !== true || requiredParticipant || (!selected && scopeDraft.participantProfessionalIds.length >= 5);
+                return (
+                  <label
+                    key={id}
+                    className={`flex min-h-12 items-center gap-3 rounded-xl border px-3 text-sm ${selected ? isDark ? 'border-violet-500/50 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-800' : panel}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected}
+                      disabled={disabled}
+                      onChange={() => setScopeDraft((current) => ({
+                        ...current,
+                        participantProfessionalIds: selected
+                          ? current.participantProfessionalIds.filter((value) => value !== id)
+                          : [...current.participantProfessionalIds, id].slice(0, 5),
+                      }))}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate">{professional.name}</span>
+                      <span className={`block truncate text-[11px] ${muted}`}>
+                        {professional.planEligible === true
+                          ? professional.specialty || 'Especialidade pendente'
+                          : professional.planEligibilityReason || 'Indisponível para novos planos'}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
           </div>
-        )}
+        </fieldset>
 
-        {planScopes.length > 0 ? (
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {planScopes.map((scope: any) => {
-              const isPts = scope.mode === 'interdisciplinary';
-              const statusLabel =
-                scope.status === 'active' ? 'Ativo'
-                  : scope.status === 'paused' ? 'Pausado'
-                    : scope.status === 'completed' ? 'Concluído'
-                      : scope.status === 'archived' ? 'Arquivado'
-                        : 'Rascunho';
-              const commonObjectives = objectiveLines(scope.common_objectives);
-              const objectiveGroups = specialtyObjectiveGroups(
-                scope.specialty_objectives,
-              );
-              return (
-                <article key={scope.id} className={`rounded-xl border p-4 ${panel} ${isPts ? 'md:col-span-2' : ''}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className={`text-sm font-medium ${text}`}>
-                        {isPts
-                          ? 'Projeto Terapêutico Singular (PTS)'
-                          : `Plano da especialidade · ${scope.specialty || 'Não informada'}`}
-                      </p>
-                      <p className={`mt-1 text-xs leading-5 ${muted}`}>
-                        {isPts
-                          ? 'Plano integrado da equipe'
-                          : 'Plano clínico específico da especialidade'}
-                      </p>
+        <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end md:col-span-2">
+          <button type="button" className={secondaryButton} onClick={() => setScopeFormOpen(false)}>Cancelar</button>
+          <button
+            type="button"
+            disabled={scopeSaving}
+            className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50"
+            onClick={() => void createPlanScope()}
+          >
+            {scopeSaving ? 'Salvando...' : scopeDraft.mode === 'interdisciplinary' ? 'Criar PTS' : 'Criar plano por especialidade'}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+
+  const renderSpecialtyPlanList = (title: string, scopes: any[], description?: string) => {
+    if (scopes.length === 0) return null;
+    return (
+      <section className="space-y-3" aria-label={title}>
+        <div>
+          <h3 className={`text-sm font-medium ${text}`}>{title}</h3>
+          {description && <p className={`mt-1 text-xs leading-5 ${muted}`}>{description}</p>}
+        </div>
+        <div className="space-y-3">
+          {scopes.map((scope: any) => {
+            const scopePrograms = programs.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '') === String(scope.id));
+            const scopeSummary = buildTherapeuticPlanSummary(scopePrograms, []);
+            return (
+              <article key={scope.id} className={`rounded-2xl border p-4 sm:p-5 ${panel}`} data-testid="specialty-plan-list-item">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className={`text-base font-medium ${text}`}>{scope.specialty || 'Especialidade não informada'}</h4>
+                      <span className={`rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                        {statusLabelForScope(scope)} · v{scopeVersionNumber(scope)}
+                      </span>
                     </div>
-                    <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                      v{isPts ? scope?.pts_lineage?.activeVersion?.versionNumber || scope?.pts_lineage?.draftVersion?.versionNumber || scope.edit_version : scope.edit_version}
+                    <p className={`mt-1 text-xs ${muted}`}>Responsável: {responsibleNameForScope(scope)}</p>
+                    <p className={`mt-2 text-xs ${muted}`}>
+                      {scopeSummary.teaching} em ensino · {scopeSummary.maintenance} em manutenção · {scopePrograms.length} programa(s)
+                    </p>
+                  </div>
+                  <button type="button" className={secondaryButton} onClick={() => openWorkspace(scope)}>Abrir plano</button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    );
+  };
+
+  const renderPlanManagementWorkspace = () => {
+    const pts = primaryPtsScope ? hydratePtsClinicalPayloadFromPlan(primaryPtsScope) : null;
+    const ptsParticipants = primaryPtsScope?.participant_professional_ids || [];
+    const canCreatePts = canCreatePlanScope && canManageStructure && !primaryPtsScope;
+    const canCreateSpecialty = canCreatePlanScope && selectableResponsibleProfessionals.length > 0;
+
+    return (
+      <div className="space-y-6" data-testid="therapeutic-plan-hub">
+        <header>
+          <h2 className={`text-lg font-medium ${text}`}>Planos terapêuticos</h2>
+          <p className={`mt-1 text-sm leading-relaxed ${muted}`}>
+            Acesse o plano compartilhado da equipe e os planos clínicos sob sua responsabilidade ou supervisão.
+          </p>
+        </header>
+
+        {renderScopeCreationForm()}
+
+        <section className="space-y-3" aria-label="Plano da equipe">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 className={`text-sm font-medium ${text}`}>Plano da equipe</h3>
+              <p className={`mt-1 text-xs leading-5 ${muted}`}>Compartilhado com os profissionais ativos vinculados ao cuidado deste paciente.</p>
+            </div>
+            {canCreatePts && !scopeFormOpen && (
+              <button type="button" className={secondaryButton} onClick={() => openPlanScopeForm('interdisciplinary')}>
+                <Plus size={15} /> Criar PTS da equipe
+              </button>
+            )}
+          </div>
+
+          {primaryPtsScope ? (
+            <article className={`rounded-2xl border p-4 sm:p-5 ${panel}`} data-testid="team-pts-card">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className={`text-base font-medium ${text}`}>Projeto Terapêutico Singular (PTS)</h4>
+                    <span className={`rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                      {statusLabelForScope(primaryPtsScope)} · v{scopeVersionNumber(primaryPtsScope)}
                     </span>
                   </div>
-                  <p className={`mt-3 text-xs ${muted}`}>
-                    {(scope.participant_professional_ids || []).length} participante(s) · {statusLabel}
-                  </p>
-                  {isPts && (() => {
-                    const pts = hydratePtsClinicalPayloadFromPlan(scope);
-                    const openGoals = pts.goals.filter((goal) => !['achieved', 'cancelled'].includes(goal.status)).length;
-                    const achievedGoals = pts.goals.filter((goal) => goal.status === 'achieved').length;
-                    return (
-                      <div className={`mt-3 grid gap-2 rounded-xl border p-3 sm:grid-cols-3 ${isDark ? 'border-slate-700 bg-slate-950/30' : 'border-violet-100 bg-violet-50/60'}`}>
-                        <div><p className={`text-[11px] ${muted}`}>Metas em acompanhamento</p><p className={`mt-1 text-sm font-semibold ${text}`}>{openGoals}</p></div>
-                        <div><p className={`text-[11px] ${muted}`}>Metas alcançadas</p><p className={`mt-1 text-sm font-semibold ${text}`}>{achievedGoals}</p></div>
-                        <div><p className={`text-[11px] ${muted}`}>Próxima reavaliação</p><p className={`mt-1 text-sm font-semibold ${text}`}>{pts.nextReviewDate ? new Date(`${pts.nextReviewDate}T12:00:00`).toLocaleDateString('pt-BR') : 'Não definida'}</p></div>
-                      </div>
-                    );
-                  })()}
-                  <div className={`mt-3 space-y-3 border-t pt-3 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
-                    {commonObjectives.length > 0 && (
-                      <div>
-                        <p className={`text-[11px] ${muted}`}>
-                          {isPts ? 'Objetivos comuns do PTS' : 'Objetivos do plano'}
-                        </p>
-                        <ul className={`mt-1.5 space-y-1 text-sm leading-5 ${text}`}>
-                          {commonObjectives.map((objective, index) => (
-                            <li key={`${scope.id}-common-${index}`} className="flex gap-2">
-                              <span className="text-violet-500" aria-hidden="true">•</span>
-                              <span>{objective}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {objectiveGroups.map((group) => (
-                      <div key={`${scope.id}-${group.specialty}`}>
-                        <p className={`text-[11px] ${muted}`}>
-                          Objetivos de {group.specialty}
-                        </p>
-                        <ul className={`mt-1.5 space-y-1 text-sm leading-5 ${text}`}>
-                          {group.objectives.map((objective, index) => (
-                            <li key={`${scope.id}-${group.specialty}-${index}`} className="flex gap-2">
-                              <span className="text-violet-500" aria-hidden="true">•</span>
-                              <span>{objective}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ))}
-                    {commonObjectives.length === 0 && objectiveGroups.length === 0 && (
-                      <p className={`text-xs leading-5 ${muted}`}>
-                        Os objetivos ainda não foram definidos.
-                      </p>
-                    )}
+                  <p className={`mt-1 text-xs ${muted}`}>Plano integrado da equipe assistencial</p>
+                  <div className={`mt-4 grid gap-3 rounded-xl border p-3 sm:grid-cols-3 ${isDark ? 'border-slate-700 bg-slate-950/30' : 'border-violet-100 bg-violet-50/60'}`}>
+                    <div><p className={`text-[11px] ${muted}`}>Participantes</p><p className={`mt-1 text-sm ${text}`}>{ptsParticipants.length}</p></div>
+                    <div><p className={`text-[11px] ${muted}`}>Metas em acompanhamento</p><p className={`mt-1 text-sm ${text}`}>{pts ? pts.goals.filter((goal) => !['achieved', 'cancelled'].includes(goal.status)).length : 0}</p></div>
+                    <div><p className={`text-[11px] ${muted}`}>Próxima reavaliação</p><p className={`mt-1 text-sm ${text}`}>{pts?.nextReviewDate ? formatTherapeuticPlanDate(pts.nextReviewDate) : 'Não definida'}</p></div>
                   </div>
-                  {scope.canEdit === true && scope.status !== 'archived' && (
-                    <button
-                      type="button"
-                      className="mt-3 min-h-10 rounded-lg px-2 text-xs font-medium text-violet-600 hover:bg-violet-500/10"
-                      onClick={() => editingScopeId === String(scope.id) ? setEditingScopeId('') : startEditingScope(scope)}
-                    >
-                      {isPts
-                        ? editingScopeId === String(scope.id)
-                          ? 'Fechar rascunho'
-                          : draftVersionForScope(scope)?.id
-                            ? 'Continuar rascunho'
-                            : scope?.pts_lineage?.activeVersion?.id
-                              ? 'Criar nova versão'
-                              : 'Editar rascunho'
-                        : 'Editar objetivos e estado'}
-                    </button>
-                  )}
-                  {editingScopeId === String(scope.id) && (
-                    <div className={`mt-3 border-t pt-4 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
-                      {isPts ? (
-                        <PtsWorkspaceEditor
-                          key={`${scope.id}:${String(draftVersionForScope(scope)?.id || 'draft')}`}
-                          scope={scope}
-                          draftVersion={draftVersionForScope(scope)}
-                          events={Array.isArray(scope?.pts_events) ? scope.pts_events : []}
-                          professionals={linkedProfessionals}
-                          programs={programs}
-                          isDark={isDark}
-                          saving={scopeSaving}
-                          onSave={(payload) => savePtsScope(String(scope.id), payload)}
-                        />
-                      ) : (
-                        <div className="space-y-3">
-                          <label className={`block text-xs ${muted}`}>
-                            Objetivos comuns, um por linha
-                            <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.commonObjectives} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, commonObjectives: event.target.value }))} />
-                          </label>
-                          {Object.keys(scopeEditDraft.specialtyObjectives || {}).map((specialty) => (
-                            <label key={specialty} className={`block text-xs ${muted}`}>
-                              Objetivos de {specialty}, um por linha
-                              <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.specialtyObjectives[specialty]} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, specialtyObjectives: { ...current.specialtyObjectives, [specialty]: event.target.value } }))} />
-                            </label>
-                          ))}
-                          <label className={`block text-xs ${muted}`}>
-                            Estado
-                            <select className={`${field} mt-1.5`} value={scopeEditDraft.status} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, status: event.target.value }))}>
-                              <option value="draft">Rascunho</option>
-                              <option value="active">Ativo</option>
-                              <option value="paused">Pausado</option>
-                              <option value="completed">Concluído</option>
-                              <option value="archived">Arquivado</option>
-                            </select>
-                          </label>
-                          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                            <button type="button" className={secondaryButton} onClick={() => setEditingScopeId('')}>Cancelar</button>
-                            <button type="button" disabled={scopeSaving} className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50" onClick={() => void savePlanScope()}>
-                              {scopeSaving ? 'Salvando...' : 'Salvar nova versão'}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
+                </div>
+                <button type="button" className={secondaryButton} onClick={() => openWorkspace(primaryPtsScope)}>Abrir PTS</button>
+              </div>
+            </article>
+          ) : (
+            <div className={`rounded-2xl border border-dashed p-6 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
+              Ainda não há um PTS compartilhado para este paciente.
+            </div>
+          )}
+        </section>
+
+        <div className={`border-t ${isDark ? 'border-slate-700' : 'border-slate-200'}`} />
+
+        <section className="space-y-4" aria-label="Planos por especialidade">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h3 className={`text-sm font-medium ${text}`}>Planos por especialidade</h3>
+              <p className={`mt-1 text-xs leading-5 ${muted}`}>A lista já respeita seu vínculo com o caso, participação no plano e relações ativas de supervisão.</p>
+            </div>
+            {canCreateSpecialty && !scopeFormOpen && (
+              <button type="button" className={secondaryButton} onClick={() => openPlanScopeForm('specialty')}>
+                <Plus size={15} /> Novo plano por especialidade
+              </button>
+            )}
           </div>
-        ) : (
-          <p className={`mt-3 text-xs ${muted}`}>
-            Crie o primeiro plano para organizar responsabilidades e programas da equipe.
-          </p>
+
+          {canManageStructure ? (
+            specialtyScopes.length > 0
+              ? renderSpecialtyPlanList('Planos acessíveis neste caso', specialtyScopes)
+              : <div className={`rounded-2xl border border-dashed p-6 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhum plano por especialidade foi criado ainda.</div>
+          ) : (
+            <div className="space-y-6">
+              {renderSpecialtyPlanList('Meu plano', ownSpecialtyScopes, 'Planos em que você é responsável ou participante autorizado.')}
+              {renderSpecialtyPlanList('Planos supervisionados', supervisedSpecialtyScopes, 'Somente os planos vinculados às suas relações ativas de supervisão.')}
+              {managedSpecialtyScopes.length > 0 && renderSpecialtyPlanList('Outros planos autorizados', managedSpecialtyScopes)}
+              {specialtyScopes.length === 0 && (
+                <div className={`rounded-2xl border border-dashed p-6 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
+                  Nenhum plano por especialidade está disponível para o seu vínculo atual.
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      </div>
+    );
+  };
+
+  const renderSpecialtyPlanWorkspace = (scope: any) => {
+    const scopePrograms = programs.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '') === String(scope?.id || ''));
+    const needle = query.trim().toLocaleLowerCase('pt-BR');
+    const scopedVisiblePrograms = scopePrograms.filter((program: any) => {
+      const status = normalizeTherapeuticProgramStatus(program?.status);
+      const filterMatch = filter === 'all' || status === filter;
+      const searchable = `${program?.name || ''} ${program?.objective || ''} ${program?.category || ''} ${(program?.targets || []).map((target: any) => target?.name || '').join(' ')}`.toLocaleLowerCase('pt-BR');
+      return filterMatch && (!needle || searchable.includes(needle));
+    });
+    const scopeSummary = buildTherapeuticPlanSummary(scopePrograms, []);
+    const canEditThisScope = scope?.canEdit === true && scope?.status !== 'archived';
+    const canAddProgramHere = canCreateProgram && canEditThisScope;
+    const canStartSessionHere = typeof onStartSession === 'function' && canEditThisScope && scopePrograms.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status)));
+
+    return (
+      <div className="space-y-5" data-testid="specialty-plan-workspace">
+        <button type="button" className={secondaryButton} onClick={() => { setShowPlanManager(true); setWorkspaceScopeId(''); setEditingScopeId(''); }}>
+          <ChevronLeft size={16} /> Voltar aos planos
+        </button>
+
+        <header className={`rounded-2xl border p-4 sm:p-5 ${panel}`}>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className={`text-lg font-medium ${text}`}>Plano de {scope?.specialty || 'especialidade'}</h2>
+                <span className={`rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                  {statusLabelForScope(scope)} · v{scopeVersionNumber(scope)}
+                </span>
+              </div>
+              <p className={`mt-1 text-sm ${muted}`}>Plano clínico específico da especialidade · Responsável: {responsibleNameForScope(scope)}</p>
+              {primaryPtsScope && <p className={`mt-2 text-xs ${muted}`}>Integrado ao PTS compartilhado da equipe.</p>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {canStartSessionHere && <button type="button" className={secondaryButton} onClick={() => onStartSession?.({ therapeuticPlanId: String(scope.id), specialty: scope.specialty || null })}><Play size={16} /> Iniciar sessão</button>}
+              {canEditThisScope && <button type="button" className={secondaryButton} onClick={() => editingScopeId === String(scope.id) ? setEditingScopeId('') : startEditingScope(scope)}><Pencil size={15} /> {editingScopeId === String(scope.id) ? 'Fechar edição' : 'Editar plano'}</button>}
+              {canAddProgramHere && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={() => startCreationForScope(String(scope.id))}><Plus size={17} /> Adicionar programa</button>}
+            </div>
+          </div>
+        </header>
+
+        {editingScopeId === String(scope.id) && canEditThisScope && (
+          <section className={`rounded-2xl border p-4 sm:p-5 ${panel}`} aria-label="Editar plano por especialidade">
+            <div className="space-y-3">
+              <label className={`block text-xs ${muted}`}>
+                Objetivos comuns, um por linha
+                <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.commonObjectives} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, commonObjectives: event.target.value }))} />
+              </label>
+              {Object.keys(scopeEditDraft.specialtyObjectives || {}).map((specialty) => (
+                <label key={specialty} className={`block text-xs ${muted}`}>
+                  Objetivos de {specialty}, um por linha
+                  <textarea className={`${field} mt-1.5 min-h-20`} value={scopeEditDraft.specialtyObjectives[specialty]} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, specialtyObjectives: { ...current.specialtyObjectives, [specialty]: event.target.value } }))} />
+                </label>
+              ))}
+              <label className={`block text-xs ${muted}`}>
+                Estado
+                <select className={`${field} mt-1.5`} value={scopeEditDraft.status} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, status: event.target.value }))}>
+                  <option value="draft">Rascunho</option>
+                  <option value="active">Ativo</option>
+                  <option value="paused">Pausado</option>
+                  <option value="completed">Concluído</option>
+                  <option value="archived">Arquivado</option>
+                </select>
+              </label>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button type="button" className={secondaryButton} onClick={() => setEditingScopeId('')}>Cancelar</button>
+                <button type="button" disabled={scopeSaving} className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50" onClick={() => void savePlanScope()}>
+                  {scopeSaving ? 'Salvando...' : 'Salvar nova versão'}
+                </button>
+              </div>
+            </div>
+          </section>
         )}
-      </section>
 
-      <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-3 text-sm ${subpanel}`} data-therapeutic-plan-summary>
-        <span className={text}>{summary.teaching} em ensino</span><span className={muted}>·</span>
-        <span className={text}>{summary.maintenance} em manutenção</span><span className={muted}>·</span>
-        <span className={text}>{summary.masteredTargets} alvos dominados</span>
-        {summary.nextReview && <><span className={muted}>·</span><span className={muted}>revisão em {formatTherapeuticPlanDate(summary.nextReview)}</span></>}
+        <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-3 text-sm ${subpanel}`} data-therapeutic-plan-summary>
+          <span className={text}>{scopeSummary.teaching} em ensino</span><span className={muted}>·</span>
+          <span className={text}>{scopeSummary.maintenance} em manutenção</span><span className={muted}>·</span>
+          <span className={text}>{scopeSummary.masteredTargets} alvos dominados</span>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap gap-2">
+            {['all', 'teaching', 'maintenance', 'paused', 'completed'].map((value) => (
+              <button key={value} type="button" className={`rounded-full border px-3 py-1.5 text-xs ${filter === value ? 'border-violet-300 bg-violet-50 text-violet-700' : isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`} onClick={() => setFilter(value)}>
+                {value === 'all' ? 'Todos' : THERAPEUTIC_PROGRAM_STATUS_LABELS[value as keyof typeof THERAPEUTIC_PROGRAM_STATUS_LABELS] || value}
+              </button>
+            ))}
+          </div>
+          <label className="relative w-full sm:max-w-xs">
+            <Search size={15} className={`absolute left-3.5 top-1/2 -translate-y-1/2 ${muted}`} />
+            <input className={`${field} pl-10`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar programa ou alvo" />
+          </label>
+        </div>
+
+        {loading ? (
+          <div className={`flex items-center justify-center gap-2 rounded-2xl border border-dashed py-12 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><Loader2 size={18} className="animate-spin" /> Carregando plano...</div>
+        ) : scopedVisiblePrograms.length ? (
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">{scopedVisiblePrograms.map(renderProgramCard)}</div>
+        ) : (
+          <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+            <Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} />
+            <p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas neste plano por especialidade.'}</p>
+            {canAddProgramHere && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={() => startCreationForScope(String(scope.id))}>Adicionar o primeiro programa</button>}
+          </div>
+        )}
       </div>
-
-      <div className="flex justify-end">
-        <label className="relative w-full md:max-w-xs"><Search size={15} className={`absolute left-3.5 top-1/2 -translate-y-1/2 ${muted}`} /><input className={`${field} pl-10`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar programa ou alvo" /></label>
-      </div>
-
-      {loading ? <div className={`flex items-center justify-center gap-2 rounded-2xl border border-dashed py-12 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}><Loader2 size={18} className="animate-spin" /> Carregando Plano terapêutico...</div> : visiblePrograms.length ? <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">{visiblePrograms.map(renderProgramCard)}</div> : <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}><Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} /><p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas individualizados neste plano.'}</p>{canCreateProgram && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={startCreation}>Adicionar o primeiro programa</button>}</div>}
-
-    </>
-  );
+    );
+  };
 
   return (
     <section className="space-y-5" data-testid="therapeutic-plan-panel">
       {notice && <div className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div>}
       {error && <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}<button type="button" className="ml-2 underline" onClick={() => void loadPlan(true)}>Tentar novamente</button></div>}
 
-      {primaryPtsScope ? (
-        <>
+      {showPlanManager || !workspaceScope ? (
+        renderPlanManagementWorkspace()
+      ) : workspaceScope.mode === 'interdisciplinary' ? (
         <PtsTherapeuticDashboard
-          scope={primaryPtsScope}
+          scope={workspaceScope}
           availableScopes={ptsScopes}
-          specialtyScopes={specialtyScopes}
           professionals={linkedProfessionals}
           programs={ptsWorkspacePrograms}
           loading={loading}
           isDark={isDark}
-          canCreateProgram={canCreateProgram && (canManageStructure || primaryPtsScope.canEdit === true)}
-          canEditScope={primaryPtsScope.canEdit === true && primaryPtsScope.status !== 'archived'}
-          canManagePlans={canCreatePlanScope || planScopes.length > 1}
-          onScopeChange={setWorkspaceScopeId}
-          onAddProgram={() => startCreationForScope(String(primaryPtsScope.id))}
-          onAddProgramForScope={(scopeId) => startCreationForScope(scopeId)}
-          onNewVersion={() => void openPtsDraft(primaryPtsScope)}
+          canEditScope={workspaceScope.canEdit === true && workspaceScope.status !== 'archived'}
+          canManagePlans
+          onScopeChange={(scopeId) => { setWorkspaceScopeId(scopeId); setEditingScopeId(''); }}
+          onNewVersion={() => void openPtsDraft(workspaceScope)}
           onRecordReview={() => setPtsEventKind('review')}
           onRecordRisk={() => setPtsEventKind('risk')}
-          onEditPerspectiveScope={(scope) => startEditingScope(scope)}
-          onManagePlans={() => setShowPlanManager(true)}
+          onManagePlans={() => { setShowPlanManager(true); setWorkspaceScopeId(''); setEditingScopeId(''); }}
           renderProgramCard={renderPtsProgramCard}
         />
-
-          <ResponsiveDrawer
-            open={showPlanManager}
-            title="Planos da equipe"
-            titleId="pts-plan-manager-title"
-            description="Crie e gerencie planos por especialidade sem sair do centro de comando do PTS."
-            onRequestClose={() => setShowPlanManager(false)}
-            isDark={isDark}
-          >
-            <div className="space-y-5" data-testid="pts-plan-manager-drawer">
-              {renderPlanManagementWorkspace()}
-            </div>
-          </ResponsiveDrawer>
-        </>
       ) : (
-        renderPlanManagementWorkspace()
+        renderSpecialtyPlanWorkspace(workspaceScope)
       )}
 
-      {primaryPtsScope && !showPlanManager && editingScopeId === String(primaryPtsScope.id) && (
+      {selectedPtsScope && workspaceScope?.mode === 'interdisciplinary' && !showPlanManager && editingScopeId === String(selectedPtsScope.id) && (
         <ResponsiveDrawer
           open
           title="Nova versão do PTS"
@@ -2723,20 +2744,20 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           isDark={isDark}
         >
           <PtsWorkspaceEditor
-            key={`${primaryPtsScope.id}:${String(draftVersionForScope(primaryPtsScope)?.id || 'draft')}`}
-            scope={primaryPtsScope}
-            draftVersion={draftVersionForScope(primaryPtsScope)}
-            events={Array.isArray(primaryPtsScope?.pts_events) ? primaryPtsScope.pts_events : []}
+            key={`${selectedPtsScope.id}:${String(draftVersionForScope(selectedPtsScope)?.id || 'draft')}`}
+            scope={selectedPtsScope}
+            draftVersion={draftVersionForScope(selectedPtsScope)}
+            events={Array.isArray(selectedPtsScope?.pts_events) ? selectedPtsScope.pts_events : []}
             professionals={linkedProfessionals}
-            programs={programs}
+            programs={ptsWorkspacePrograms}
             isDark={isDark}
             saving={scopeSaving}
-            onSave={(payload) => savePtsScope(String(primaryPtsScope.id), payload)}
+            onSave={(payload) => savePtsScope(String(selectedPtsScope.id), payload)}
           />
         </ResponsiveDrawer>
       )}
 
-      {primaryPtsScope && ptsEventKind && (
+      {selectedPtsScope && workspaceScope?.mode === 'interdisciplinary' && ptsEventKind && (
         <ResponsiveDrawer
           open
           title={ptsEventKind === 'review' ? 'Registrar reavaliação' : 'Registrar risco'}
@@ -2747,7 +2768,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           interactionBlocked={ptsEventSaving}
         >
           <PtsEventForm
-            key={`${primaryPtsScope.id}:${ptsEventKind}`}
+            key={`${selectedPtsScope.id}:${ptsEventKind}`}
             kind={ptsEventKind}
             isDark={isDark}
             saving={ptsEventSaving}
@@ -2761,7 +2782,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         open={Boolean(creationStep)}
         title={creationTitle}
         titleId="therapeutic-program-drawer-title"
-        description="Adicione um programa de ensino ao Plano terapêutico."
+        description="Adicione um programa ao plano por especialidade selecionado."
         progress={creationProgress}
         onRequestClose={requestCloseCreation}
         returnFocusRef={addProgramButtonRef}

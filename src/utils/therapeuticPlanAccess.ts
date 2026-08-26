@@ -5,9 +5,23 @@ export type TherapeuticPlanActorContext = {
   actorId: unknown;
   actorRole: unknown;
   professionalLinks?: readonly unknown[];
+  supervisionLinks?: readonly unknown[];
 };
 
 type TherapeuticPlanPermission = 'read' | 'write';
+
+export type TherapeuticPlanAccessReason =
+  | 'clinic_manager'
+  | 'shared_pts'
+  | 'plan_participant'
+  | 'supervisor'
+  | 'none';
+
+export type TherapeuticPlanScopeAccess = {
+  canRead: boolean;
+  canEdit: boolean;
+  reason: TherapeuticPlanAccessReason;
+};
 
 const cleanText = (value: unknown): string => String(value ?? '').trim();
 
@@ -31,6 +45,12 @@ const resolveActorRole = (roleOrActor: unknown): string => {
 
 const resolveScopePatientId = (scope: unknown): string =>
   cleanText(readValue(scope, 'patient_id', 'patientId'));
+
+const resolveScopeClinicId = (scope: unknown): string =>
+  cleanText(readValue(scope, 'clinic_id', 'clinicId', 'organization_id', 'organizationId'));
+
+const resolveScopeMode = (scope: unknown): string =>
+  cleanText(readValue(scope, 'mode')).toLowerCase();
 
 const resolveProgramScopeId = (program: unknown): string =>
   cleanText(
@@ -86,8 +106,51 @@ const hasActiveProfessionalLink = (
       permissionAllows(link, permission)
   );
 
+const supervisionBelongsToScope = (
+  supervision: unknown,
+  scope: unknown,
+  actorId: string,
+): boolean => {
+  if (
+    cleanText(readValue(supervision, 'supervisor_user_id', 'supervisorUserId')) !== actorId ||
+    cleanText(readValue(supervision, 'status')).toLowerCase() !== 'active'
+  ) {
+    return false;
+  }
+
+  const scopePatientId = resolveScopePatientId(scope);
+  const scopeClinicId = resolveScopeClinicId(scope);
+  const supervisionPatientId = cleanText(readValue(supervision, 'patient_id', 'patientId'));
+  const supervisionClinicId = cleanText(readValue(supervision, 'clinic_id', 'clinicId'));
+  if (scopeClinicId && supervisionClinicId && scopeClinicId !== supervisionClinicId) return false;
+  if (supervisionPatientId && scopePatientId && supervisionPatientId === scopePatientId) return true;
+
+  const supervisedUserId = cleanText(
+    readValue(supervision, 'supervised_user_id', 'supervisedUserId')
+  );
+  return Boolean(
+    supervisedUserId && getTherapeuticPlanParticipantIds(scope).includes(supervisedUserId)
+  );
+};
+
+const hasActiveSupervisionAccess = (
+  scope: unknown,
+  context: TherapeuticPlanActorContext,
+): boolean => {
+  const actorId = cleanText(context.actorId);
+  if (!actorId) return false;
+  return (context.supervisionLinks ?? []).some((supervision) =>
+    supervisionBelongsToScope(supervision, scope, actorId)
+  );
+};
+
+/**
+ * Clinic-level plan authority. Supervision is deliberately not a manager role:
+ * a supervisor receives read access only through an active supervision
+ * relationship with this case/professional, never clinic-wide access.
+ */
 export function isTherapeuticPlanManager(roleOrActor: unknown): boolean {
-  return ['owner', 'admin', 'director', 'coordinator', 'supervisor'].includes(
+  return ['owner', 'admin', 'director', 'coordinator'].includes(
     resolveActorRole(roleOrActor)
   );
 }
@@ -127,48 +190,85 @@ export function isTherapeuticPlanParticipant(
   );
 }
 
+/**
+ * ReBAC contract for plan visibility:
+ * - PTS/interdisciplinary: every active professional on the patient case may
+ *   read it; only explicit participants (or clinic managers) may edit it.
+ * - Specialty plan: only explicit participants, their active supervisor, and
+ *   clinic managers may read it. Supervisory access is read-only unless the
+ *   supervisor is also an explicit participant.
+ */
+export function resolveTherapeuticPlanScopeAccess(
+  scope: unknown,
+  context: TherapeuticPlanActorContext,
+): TherapeuticPlanScopeAccess {
+  if (isTherapeuticPlanManager(context.actorRole)) {
+    return { canRead: true, canEdit: true, reason: 'clinic_manager' };
+  }
+
+  const actorId = cleanText(context.actorId);
+  if (!actorId) return { canRead: false, canEdit: false, reason: 'none' };
+
+  const patientId = resolveScopePatientId(scope);
+  const isParticipant = isTherapeuticPlanParticipant(scope, actorId);
+  const hasReadLink = hasActiveProfessionalLink(
+    context.professionalLinks ?? [],
+    actorId,
+    patientId,
+    'read'
+  );
+  const hasWriteLink = hasActiveProfessionalLink(
+    context.professionalLinks ?? [],
+    actorId,
+    patientId,
+    'write'
+  );
+  const supervised = hasActiveSupervisionAccess(scope, context);
+  const mode = resolveScopeMode(scope);
+
+  if (mode === 'interdisciplinary') {
+    if (isParticipant && hasReadLink) {
+      return {
+        canRead: true,
+        canEdit: hasWriteLink,
+        reason: 'plan_participant',
+      };
+    }
+    if (hasReadLink) {
+      return { canRead: true, canEdit: false, reason: 'shared_pts' };
+    }
+    if (supervised) {
+      return { canRead: true, canEdit: false, reason: 'supervisor' };
+    }
+    return { canRead: false, canEdit: false, reason: 'none' };
+  }
+
+  if (isParticipant && hasReadLink) {
+    return {
+      canRead: true,
+      canEdit: hasWriteLink,
+      reason: 'plan_participant',
+    };
+  }
+  if (supervised) {
+    return { canRead: true, canEdit: false, reason: 'supervisor' };
+  }
+  return { canRead: false, canEdit: false, reason: 'none' };
+}
+
 export function canEditTherapeuticPlanScope(
   scope: unknown,
   context: TherapeuticPlanActorContext
 ): boolean {
-  if (isTherapeuticPlanManager(context.actorRole)) return true;
-
-  const actorId = cleanText(context.actorId);
-  if (
-    resolveActorRole(context.actorRole) !== 'therapist' ||
-    !isTherapeuticPlanParticipant(scope, actorId)
-  ) {
-    return false;
-  }
-
-  return hasActiveProfessionalLink(
-    context.professionalLinks ?? [],
-    actorId,
-    resolveScopePatientId(scope),
-    'write'
-  );
+  return resolveTherapeuticPlanScopeAccess(scope, context).canEdit;
 }
 
 export function filterTherapeuticPlanScopesForActor<T>(
   scopes: readonly T[],
   context: TherapeuticPlanActorContext
 ): T[] {
-  if (isTherapeuticPlanManager(context.actorRole)) return [...scopes];
-
-  const actorId = cleanText(context.actorId);
-  if (resolveActorRole(context.actorRole) !== 'therapist' || !actorId) {
-    return [];
-  }
-
   return scopes.filter(
-    (scope) =>
-      isTherapeuticPlanParticipant(scope, actorId) &&
-      hasActiveProfessionalLink(
-        context.professionalLinks ?? [],
-        actorId,
-        resolveScopePatientId(scope),
-        'read'
-      )
+    (scope) => resolveTherapeuticPlanScopeAccess(scope, context).canRead
   );
 }
 
@@ -180,9 +280,7 @@ export function filterTherapeuticPlanProgramsForActor<TProgram, TScope>(
   if (isTherapeuticPlanManager(context.actorRole)) return [...programs];
 
   const actorId = cleanText(context.actorId);
-  if (resolveActorRole(context.actorRole) !== 'therapist' || !actorId) {
-    return [];
-  }
+  if (!actorId) return [];
 
   const visibleScopeIds = new Set(
     filterTherapeuticPlanScopesForActor(scopes, context)

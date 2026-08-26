@@ -1637,6 +1637,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [remainingSessionSeconds, setRemainingSessionSeconds] = useState(0);
   const [showSessionStartConfirm, setShowSessionStartConfirm] = useState(false);
   const [pendingSessionAction, setPendingSessionAction] = useState<'tab' | 'fullscreen'>('tab');
+  const [pendingSessionPlanContext, setPendingSessionPlanContext] = useState<{ therapeuticPlanId: string; specialty: string | null } | null>(null);
   const [restoreSessionData, setRestoreSessionData] = useState(false);
   const [clearMaintenanceOnSessionRestore, setClearMaintenanceOnSessionRestore] = useState(false);
   const [noShowReopenPrompt, setNoShowReopenPrompt] = useState<{
@@ -2005,7 +2006,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   }, [sessionStorageKey, patient?.id]);
 
-  const requestSessionStart = (nextAction: 'tab' | 'fullscreen' = 'fullscreen') => {
+  const requestSessionStart = (
+    nextAction: 'tab' | 'fullscreen' = 'fullscreen',
+    planContext?: { therapeuticPlanId?: string | null; specialty?: string | null } | null,
+  ) => {
     const resolvedAction = nextAction === 'tab' ? 'fullscreen' : nextAction;
     if (!abaV2Enabled) {
       setActiveTab(getSessionFallbackTab());
@@ -2016,6 +2020,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
     setPendingSessionAction(resolvedAction);
+    const requestedPlanId = String(planContext?.therapeuticPlanId || '').trim();
+    setPendingSessionPlanContext(requestedPlanId ? {
+      therapeuticPlanId: requestedPlanId,
+      specialty: String(planContext?.specialty || '').trim() || null,
+    } : null);
     setSessionDurationInput(String(scheduledSessionForPatient ? scheduledSessionDurationMinutes : configuredDefaultSessionMinutes));
     setRestoreSessionData(false);
     setClearMaintenanceOnSessionRestore(false);
@@ -2157,6 +2166,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       therapistId: scheduledProfessionalId,
       therapist_id: scheduledProfessionalId,
       therapistName: resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || null,
+      therapeuticPlanId: pendingSessionPlanContext?.therapeuticPlanId || null,
+      therapeutic_plan_id: pendingSessionPlanContext?.therapeuticPlanId || null,
+      therapeuticPlanSpecialty: pendingSessionPlanContext?.specialty || null,
       clinicId: resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null,
       serviceType: scheduledServiceType,
       service_type: scheduledServiceType,
@@ -2179,7 +2191,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       referenceDate: formatDateInAppointmentTimezone(startedAt) || startedAt.toISOString().slice(0, 10),
       recordCount: 0
     };
-    persistActiveSession(nextSession);
+    const requiresServerIssuedPlanContext = Boolean(nextSession.therapeutic_plan_id);
+    // A plan-scoped session becomes locally active only after the server has
+    // issued the immutable specialty-plan/PTS context. Generic legacy sessions
+    // preserve the existing offline-first behavior.
+    if (!requiresServerIssuedPlanContext) persistActiveSession(nextSession);
     if (abaV2Enabled) {
       const saveResult = await dataService.saveAbaSession({
         id: nextSession.id,
@@ -2206,6 +2222,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         therapist_id: nextSession.therapist_id || undefined,
         therapistId: nextSession.therapistId || undefined,
         therapistName: resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || undefined,
+        therapeutic_plan_id: nextSession.therapeutic_plan_id || undefined,
+        therapeuticPlanId: nextSession.therapeuticPlanId || undefined,
         service_type: nextSession.service_type || undefined,
         serviceType: nextSession.serviceType || undefined,
         appointment_snapshot: scheduledSessionForPatient
@@ -2279,6 +2297,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         source: nextSession.appointment_id ? 'appointment' : 'verto_web',
         clientSource: nextSession.appointment_id ? 'appointment' : 'verto_web'
       });
+      const savedSession = saveResult?.session || saveResult?.data;
       if (saveResult?.success === false && !saveResult?.offline && nextSession.appointment_id) {
         clearActiveSession();
         if (saveResult?.code === 'APPOINTMENT_NO_SHOW_REOPEN_REQUIRED') {
@@ -2306,7 +2325,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         alert(humanError);
         return;
       }
-      const savedSession = saveResult?.session || saveResult?.data;
+      if (requiresServerIssuedPlanContext) {
+        const confirmedPlanId = String(savedSession?.therapeutic_plan_id || savedSession?.therapeuticPlanId || '').trim();
+        const expectedPlanId = String(nextSession.therapeutic_plan_id || '').trim();
+        if (saveResult?.success !== true || saveResult?.offline === true || !savedSession?.id || confirmedPlanId !== expectedPlanId) {
+          clearActiveSession();
+          setShowSessionStartConfirm(false);
+          setPendingSessionPlanContext(null);
+          const planContextError = String(saveResult?.error || '').trim();
+          alert(
+            planContextError ||
+            'Para iniciar uma sessão vinculada a um plano por especialidade, a Verto precisa confirmar o contexto clínico no servidor. Verifique a conexão e tente novamente.'
+          );
+          return;
+        }
+      }
       if (saveResult?.success && savedSession?.id) {
         const serverReferenceDate = savedSession.reference_date || savedSession.referenceDate || nextSession.referenceDate;
         persistActiveSession({
@@ -2318,6 +2351,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           reference_date: serverReferenceDate,
           appointmentId: savedSession.appointment_id || nextSession.appointmentId,
           appointment_id: savedSession.appointment_id || nextSession.appointment_id,
+          therapeuticPlanId: savedSession.therapeutic_plan_id || nextSession.therapeuticPlanId || null,
+          therapeutic_plan_id: savedSession.therapeutic_plan_id || nextSession.therapeutic_plan_id || null,
+          therapeuticPlanSpecialty: nextSession.therapeuticPlanSpecialty || null,
           scheduledStart: savedSession.scheduled_start_at || nextSession.scheduledStart,
           scheduled_start: savedSession.scheduled_start_at || nextSession.scheduled_start,
           scheduledEnd: savedSession.scheduled_end_at || nextSession.scheduledEnd,
@@ -2328,6 +2364,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }
     }
     setShowSessionStartConfirm(false);
+    setPendingSessionPlanContext(null);
     setRestoreSessionData(false);
     setClearMaintenanceOnSessionRestore(false);
     onAddActivityLog?.(
@@ -9395,6 +9432,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 onClick={() => {
                   setRestoreSessionData(false);
                   setClearMaintenanceOnSessionRestore(false);
+                  setPendingSessionPlanContext(null);
                   setShowSessionStartConfirm(false);
                 }}
                 className="flex-1 py-3 rounded-2xl bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-200 font-semibold hover:bg-gray-200 dark:hover:bg-slate-700 transition-all"
@@ -9465,6 +9503,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   setNoShowReopenPrompt(null);
                   setNoShowReopenReason('');
                   setNoShowReopenError('');
+                  setPendingSessionPlanContext(null);
                   noShowReopenIdempotencyKeyRef.current = '';
                 }}
                 className="min-h-12 flex-1 rounded-2xl bg-gray-100 px-4 font-semibold text-gray-700 transition hover:bg-gray-200 disabled:opacity-60 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
@@ -11267,7 +11306,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       userRole={userRole || resolvedClinicContext?.role || clinicContext?.role}
                       currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                       isDark={isPanelDark}
-                      onStartSession={() => requestSessionStart('fullscreen')}
+                      onStartSession={(planContext: any) => requestSessionStart('fullscreen', planContext)}
                     />
                   )}
                   {therapeuticPlanMode === 'pei' && (

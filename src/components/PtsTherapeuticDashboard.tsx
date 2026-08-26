@@ -1,11 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   CalendarClock,
   ChevronDown,
   ChevronUp,
   ClipboardList,
   History,
-  Plus,
   Search,
   ShieldAlert,
   Target,
@@ -20,21 +19,16 @@ type WorkspaceTab = 'programs' | 'maintenance' | 'generalization' | 'history';
 type PtsTherapeuticDashboardProps = {
   scope: any;
   availableScopes: any[];
-  specialtyScopes?: any[];
   professionals: any[];
   programs: any[];
   loading?: boolean;
   isDark?: boolean;
-  canCreateProgram?: boolean;
   canEditScope?: boolean;
   canManagePlans?: boolean;
   onScopeChange: (scopeId: string) => void;
-  onAddProgram: () => void;
-  onAddProgramForScope?: (scopeId: string) => void;
   onNewVersion: () => void;
   onRecordReview?: () => void;
   onRecordRisk?: () => void;
-  onEditPerspectiveScope?: (scope: any) => void;
   onManagePlans: () => void;
   renderProgramCard: (program: any) => React.ReactNode;
 };
@@ -111,28 +105,22 @@ const dateValue = (value: unknown) => {
 export function PtsTherapeuticDashboard({
   scope,
   availableScopes,
-  specialtyScopes = [],
   professionals,
   programs,
   loading = false,
   isDark = false,
-  canCreateProgram = false,
   canEditScope = false,
   canManagePlans = false,
   onScopeChange,
-  onAddProgram,
-  onAddProgramForScope,
   onNewVersion,
   onRecordReview,
   onRecordRisk,
-  onEditPerspectiveScope,
   onManagePlans,
   renderProgramCard,
 }: PtsTherapeuticDashboardProps) {
   const [tab, setTab] = useState<WorkspaceTab>('programs');
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
-  const [perspectiveId, setPerspectiveId] = useState('pts');
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     reference: true,
     team: true,
@@ -146,64 +134,20 @@ export function PtsTherapeuticDashboard({
   const activePtsVersionNumber = Number(scope?.pts_lineage?.activeVersion?.versionNumber || scope?.pts_lineage?.currentVersionNumber || scope?.edit_version || 1);
   const hasPtsDraft = Boolean(scope?.pts_lineage?.draftVersion?.id);
   const ptsLifecycleStatus = String(scope?.pts_lineage?.activeVersion?.lifecycleStatus || (scope?.status === 'active' ? 'ACTIVE' : 'DRAFT')).toUpperCase();
-  const activeSpecialtyScopes = useMemo(() => (Array.isArray(specialtyScopes) ? specialtyScopes : [])
-    .filter((item: any) => item?.mode === 'specialty' && item?.status !== 'archived')
-    .slice()
-    .sort((left: any, right: any) => String(left?.specialty || '').localeCompare(String(right?.specialty || ''), 'pt-BR')), [specialtyScopes]);
-  const activePerspectiveScope = useMemo(() => (
-    perspectiveId === 'pts'
-      ? null
-      : activeSpecialtyScopes.find((item: any) => String(item?.id || '') === perspectiveId) || null
-  ), [activeSpecialtyScopes, perspectiveId]);
-  useEffect(() => {
-    if (perspectiveId === 'pts') return;
-    if (activeSpecialtyScopes.some((item: any) => String(item?.id || '') === perspectiveId)) return;
-    setPerspectiveId('pts');
-  }, [activeSpecialtyScopes, perspectiveId]);
-  const perspectivePrograms = useMemo(() => {
-    if (!activePerspectiveScope?.id) return programs;
-    return programs.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '') === String(activePerspectiveScope.id));
-  }, [activePerspectiveScope?.id, programs]);
-  const perspectiveLabel = activePerspectiveScope
-    ? String(activePerspectiveScope?.specialty || 'Plano da especialidade')
-    : 'Visão do PTS';
-  const displayScope = activePerspectiveScope || scope;
-  const currentPerspectiveCanEdit = activePerspectiveScope
-    ? activePerspectiveScope?.canEdit === true && activePerspectiveScope?.status !== 'archived'
-    : canEditScope;
-  const canCreateInPerspective = canCreateProgram && (
-    !activePerspectiveScope || activePerspectiveScope?.canEdit === true
-  );
-  const createProgramForPerspective = () => {
-    if (activePerspectiveScope?.id && onAddProgramForScope) {
-      onAddProgramForScope(String(activePerspectiveScope.id));
-      return;
-    }
-    onAddProgram();
-  };
-  const editCurrentPerspective = () => {
-    if (activePerspectiveScope && onEditPerspectiveScope) {
-      onEditPerspectiveScope(activePerspectiveScope);
-      return;
-    }
-    onNewVersion();
-  };
   const professionalById = useMemo(() => new Map(
     (Array.isArray(professionals) ? professionals : []).map((professional: any) => [String(professional.id), professional]),
   ), [professionals]);
   const participantIds = useMemo(() => Array.from(new Set([
-    String(displayScope?.responsible_professional_id || ''),
-    ...(Array.isArray(displayScope?.participant_professional_ids) ? displayScope.participant_professional_ids.map(String) : []),
-  ].filter(Boolean))), [displayScope]);
-  const responsible = professionalById.get(String(activePerspectiveScope
-    ? displayScope?.responsible_professional_id || ''
-    : pts.caseManagerId || displayScope?.responsible_professional_id || ''))
-    || professionalById.get(String(displayScope?.responsible_professional_id || ''))
+    String(scope?.responsible_professional_id || ''),
+    ...(Array.isArray(scope?.participant_professional_ids) ? scope.participant_professional_ids.map(String) : []),
+  ].filter(Boolean))), [scope]);
+  const responsible = professionalById.get(String(pts.caseManagerId || scope?.responsible_professional_id || ''))
+    || professionalById.get(String(scope?.responsible_professional_id || ''))
     || null;
 
-  const activePrograms = useMemo(() => perspectivePrograms.filter((program: any) => (
+  const activePrograms = useMemo(() => programs.filter((program: any) => (
     ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program?.status))
-  )), [perspectivePrograms]);
+  )), [programs]);
   const goalsInProgress = pts.goals.filter((goal) => ['pending', 'in_progress'].includes(goal.status)).length;
   const achievedGoals = pts.goals.filter((goal) => goal.status === 'achieved').length;
   const delayedGoals = pts.goals.filter((goal) => (
@@ -214,7 +158,7 @@ export function PtsTherapeuticDashboard({
 
   const visiblePrograms = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('pt-BR');
-    return perspectivePrograms.filter((program: any) => {
+    return programs.filter((program: any) => {
       const status = normalizeTherapeuticProgramStatus(program?.status);
       const tabMatch = tab === 'programs'
         || (tab === 'maintenance' && status === 'maintenance')
@@ -224,7 +168,7 @@ export function PtsTherapeuticDashboard({
         .toLocaleLowerCase('pt-BR');
       return tabMatch && filterMatch && (!needle || searchable.includes(needle));
     });
-  }, [filter, perspectivePrograms, query, tab]);
+  }, [filter, programs, query, tab]);
 
   const sharedObjectives = useMemo(() => {
     const fromGoals = pts.goals
@@ -269,20 +213,18 @@ export function PtsTherapeuticDashboard({
       }));
     return [
       {
-        id: `current-${displayScope?.id}`,
-        version: activePerspectiveScope ? Number(displayScope?.edit_version || 1) : activePtsVersionNumber,
-        date: displayScope?.updated_at || displayScope?.created_at,
-        label: activePerspectiveScope ? `Versão atual · ${perspectiveLabel}` : 'Versão ativa',
+        id: `current-${scope?.id}`,
+        version: activePtsVersionNumber,
+        date: scope?.updated_at || scope?.created_at,
+        label: 'Versão ativa',
         eventType: 'VERSION_ACTIVATED',
       },
       ...reviews,
     ].slice(0, 3);
-  }, [activePerspectiveScope, activePtsVersionNumber, displayScope, perspectiveLabel, pts.reviews, ptsEvents]);
+  }, [activePtsVersionNumber, pts.reviews, ptsEvents, scope]);
 
 
-  const displayNextReviewDate = activePerspectiveScope
-    ? String(displayScope?.review_due_date || displayScope?.reviewDueDate || '').slice(0, 10)
-    : String(scope?.review_due_date || pts.nextReviewDate || '').slice(0, 10);
+  const displayNextReviewDate = String(scope?.review_due_date || pts.nextReviewDate || '').slice(0, 10);
   const nextReviewOverdue = Boolean(
     displayNextReviewDate
     && new Date(`${displayNextReviewDate}T23:59:59`).getTime() < Date.now(),
@@ -315,14 +257,12 @@ export function PtsTherapeuticDashboard({
   };
 
   const emptyMessage = tab === 'maintenance'
-    ? 'Nenhum programa está em manutenção neste PTS.'
+    ? 'Nenhuma evidência de programa em manutenção está vinculada historicamente a este PTS.'
     : tab === 'generalization'
-      ? 'Nenhum programa possui estratégia de generalização registrada.'
+      ? 'Nenhuma evidência de generalização está vinculada historicamente a este PTS.'
       : query || filter !== 'all'
         ? 'Nenhum programa encontrado com estes filtros.'
-        : activePerspectiveScope
-          ? `Ainda não há programas individualizados vinculados à perspectiva de ${String(activePerspectiveScope?.specialty || 'especialidade')}.`
-          : 'Ainda não há programas individualizados vinculados a este PTS.';
+        : 'Os programas clínicos ficam nos planos por especialidade. Este PTS ainda não possui evidências legadas de programas vinculadas.';
 
   return (
     <div className="space-y-4" data-testid="pts-therapeutic-dashboard">
@@ -330,12 +270,12 @@ export function PtsTherapeuticDashboard({
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className={`text-lg font-semibold ${text}`}>{activePerspectiveScope ? `PTS · ${perspectiveLabel}` : 'PTS - Plano Terapêutico Singular'}</h2>
-              <span className={`rounded-full px-2.5 py-1 text-xs ${displayScope?.status === 'active' ? isDark ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                {STATUS_LABELS[String(displayScope?.status || 'draft')] || 'Rascunho'}
+              <h2 className={`text-lg font-semibold ${text}`}>Projeto Terapêutico Singular (PTS)</h2>
+              <span className={`rounded-full px-2.5 py-1 text-xs ${scope?.status === 'active' ? isDark ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                {STATUS_LABELS[String(scope?.status || 'draft')] || 'Rascunho'}
               </span>
               <span className={`rounded-full px-2.5 py-1 text-xs ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                Versão {activePerspectiveScope ? displayScope?.edit_version || 1 : activePtsVersionNumber}
+                Versão {activePtsVersionNumber}
               </span>
             </div>
             {availableScopes.length > 1 && (
@@ -347,7 +287,7 @@ export function PtsTherapeuticDashboard({
                   onChange={(event) => onScopeChange(event.target.value)}
                 >
                   {availableScopes.map((item: any) => (
-                    <option key={item.id} value={item.id}>PTS · versão {item?.pts_lineage?.activeVersion?.versionNumber || item?.pts_lineage?.draftVersion?.versionNumber || item.edit_version || 1}</option>
+                    <option key={item.id} value={item.id}>Versão {item?.pts_lineage?.activeVersion?.versionNumber || item?.pts_lineage?.draftVersion?.versionNumber || item.edit_version || 1} do PTS</option>
                   ))}
                 </select>
               </label>
@@ -361,47 +301,22 @@ export function PtsTherapeuticDashboard({
             </div>
             <div className="min-w-[120px]">
               <dt className={muted}>Última atualização</dt>
-              <dd className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(displayScope?.updated_at || displayScope?.created_at)}</dd>
+              <dd className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(scope?.updated_at || scope?.created_at)}</dd>
             </div>
             <div className="min-w-[130px]">
               <dt className={muted}>Próxima reavaliação</dt>
               <dd className={`mt-1 text-sm ${nextReviewOverdue ? 'text-rose-600' : text}`}>{displayNextReviewDate ? formatTherapeuticPlanDate(displayNextReviewDate) : 'Não definida'}</dd>
             </div>
             <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-1">
-              {canManagePlans && <button type="button" className={secondaryButton} onClick={onManagePlans}>Gerenciar planos</button>}
-              {!activePerspectiveScope && ptsLifecycleStatus === 'ACTIVE' && onRecordReview && <button type="button" className={secondaryButton} onClick={onRecordReview}><CalendarClock size={15} /> Registrar reavaliação</button>}
-              {!activePerspectiveScope && ptsLifecycleStatus === 'ACTIVE' && onRecordRisk && <button type="button" className={secondaryButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
-              {currentPerspectiveCanEdit && <button type="button" className="inline-flex min-h-10 items-center justify-center rounded-xl bg-violet-600 px-4 text-sm text-white hover:bg-violet-700" onClick={editCurrentPerspective}>{activePerspectiveScope ? 'Nova versão' : hasPtsDraft ? 'Continuar rascunho' : ptsLifecycleStatus === 'ACTIVE' ? 'Criar nova versão' : 'Editar rascunho'}</button>}
+              {canManagePlans && <button type="button" className={secondaryButton} onClick={onManagePlans}>Voltar aos planos</button>}
+              {ptsLifecycleStatus === 'ACTIVE' && onRecordReview && <button type="button" className={secondaryButton} onClick={onRecordReview}><CalendarClock size={15} /> Registrar reavaliação</button>}
+              {ptsLifecycleStatus === 'ACTIVE' && onRecordRisk && <button type="button" className={secondaryButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
+              {canEditScope && <button type="button" className="inline-flex min-h-10 items-center justify-center rounded-xl bg-violet-600 px-4 text-sm text-white hover:bg-violet-700" onClick={onNewVersion}>{hasPtsDraft ? 'Continuar rascunho' : ptsLifecycleStatus === 'ACTIVE' ? 'Criar nova versão' : 'Editar rascunho'}</button>}
             </div>
           </dl>
         </div>
       </header>
 
-      {activeSpecialtyScopes.length > 0 && (
-        <section className={`rounded-2xl border px-4 py-3 sm:px-5 ${surface}`} data-testid="pts-plan-perspective-selector">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className={`text-xs font-semibold uppercase tracking-wide ${muted}`}>Perspectiva do plano</p>
-              <p className={`mt-1 text-sm ${text}`}>A estrutura do PTS permanece única; a perspectiva apenas filtra os programas e evidências da especialidade.</p>
-            </div>
-            <label className={`flex min-w-0 items-center gap-2 text-xs ${muted}`}>
-              Visualização
-              <select
-                className={`min-w-[220px] rounded-xl border px-3 py-2 text-sm outline-none focus:border-violet-500 ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800'}`}
-                value={perspectiveId}
-                onChange={(event) => { setPerspectiveId(event.target.value); setTab('programs'); setFilter('all'); setQuery(''); }}
-                aria-label="Perspectiva do plano"
-              >
-                <option value="pts">Visão do PTS</option>
-                {activeSpecialtyScopes.map((item: any) => (
-                  <option key={item.id} value={String(item.id)}>{String(item.specialty || 'Plano da especialidade')} · v{item.edit_version || 1}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className={`mt-2 text-xs ${muted}`} data-testid="pts-active-perspective">Perspectiva ativa: {perspectiveLabel}</div>
-        </section>
-      )}
 
       <div className={`grid grid-cols-2 gap-px overflow-hidden rounded-xl border text-sm sm:grid-cols-4 ${isDark ? 'border-slate-700 bg-slate-700' : 'border-slate-100 bg-slate-100'}`}>
         {[
@@ -548,7 +463,6 @@ export function PtsTherapeuticDashboard({
                     placeholder="Buscar programa ou alvo"
                   />
                 </label>
-                {canCreateInPerspective && <button type="button" className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white hover:bg-violet-700" onClick={createProgramForPerspective}><Plus size={16} /> Adicionar programa</button>}
               </div>
 
               {tab === 'programs' && (
@@ -575,7 +489,6 @@ export function PtsTherapeuticDashboard({
                 <div className={`flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed px-6 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
                   <Target size={28} className={isDark ? 'text-slate-600' : 'text-slate-300'} />
                   <p className={`mt-3 text-sm ${muted}`}>{emptyMessage}</p>
-                  {canCreateInPerspective && tab === 'programs' && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-600 hover:underline" onClick={createProgramForPerspective}>Adicionar o primeiro programa</button>}
                 </div>
               )}
             </div>

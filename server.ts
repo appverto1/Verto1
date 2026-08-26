@@ -407,6 +407,7 @@ import {
   filterTherapeuticPlanProgramsForActor,
   filterTherapeuticPlanScopesForActor,
   isTherapeuticPlanManager,
+  resolveTherapeuticPlanScopeAccess,
   normalizeTherapeuticSpecialtyObjectives,
   resolveHistoricalTherapeuticPlanReadCutoff
 } from './src/utils/therapeuticPlanAccess';
@@ -46096,6 +46097,7 @@ async function startServer() {
     'patient_id',
     'patient_name',
     'therapist_id',
+    'therapeutic_plan_id',
     'appointment_id',
     'scheduled_start_at',
     'scheduled_end_at',
@@ -69975,7 +69977,6 @@ async function startServer() {
     programId: string;
   }) => {
     if (isTherapeuticPlanManager(params.actorRole)) return true;
-    if (params.actorRole !== 'therapist') return false;
 
     const { data: program, error: programError } = await supabase
       .from('aba_programs')
@@ -69992,7 +69993,7 @@ async function startServer() {
     const [planResult, linkResult] = await Promise.all([
       supabase
         .from('patient_therapeutic_plans')
-        .select('id,patient_id,responsible_professional_id,participant_professional_ids')
+        .select('id,organization_id,clinic_id,patient_id,mode,responsible_professional_id,participant_professional_ids')
         .eq('id', planId)
         .eq('organization_id', params.organizationId)
         .eq('patient_id', params.patientId)
@@ -70000,7 +70001,7 @@ async function startServer() {
         .maybeSingle(),
       supabase
         .from('patient_professional_links')
-        .select('patient_id,professional_id,status,permissions')
+        .select('organization_id,clinic_id,patient_id,professional_id,status,permissions')
         .eq('organization_id', params.organizationId)
         .eq('patient_id', params.patientId)
         .eq('professional_id', params.actorId)
@@ -70017,6 +70018,51 @@ async function startServer() {
       professionalLinks: [linkResult.data]
     });
   };
+
+  const loadSessionSpecialtyPlanContext = async (params: {
+    actorId: string;
+    actorRole: string;
+    organizationId: string;
+    clinicId: string;
+    patientId: string;
+    planId: string;
+  }) => {
+    const { data: plan, error: planError } = await supabase
+      .from('patient_therapeutic_plans')
+      .select('id,organization_id,clinic_id,patient_id,mode,status,specialty,responsible_professional_id,participant_professional_ids')
+      .eq('id', params.planId)
+      .eq('organization_id', params.organizationId)
+      .eq('clinic_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .limit(1)
+      .maybeSingle();
+    if (planError) throw planError;
+    if (!plan) return { plan: null, allowed: false, reason: 'not_found' as const };
+    if (sanitizeString(plan.mode, 40).toLowerCase() === 'interdisciplinary' || sanitizeString(plan.status, 40).toLowerCase() === 'archived') {
+      return { plan, allowed: false, reason: 'invalid_scope' as const };
+    }
+    if (isTherapeuticPlanManager(params.actorRole)) {
+      return { plan, allowed: true, reason: null };
+    }
+    const { data: link, error: linkError } = await supabase
+      .from('patient_professional_links')
+      .select('organization_id,clinic_id,patient_id,professional_id,status,permissions')
+      .eq('organization_id', params.organizationId)
+      .eq('clinic_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .eq('professional_id', params.actorId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    if (linkError) throw linkError;
+    const allowed = Boolean(link) && canEditTherapeuticPlanScope(plan, {
+      actorId: params.actorId,
+      actorRole: params.actorRole,
+      professionalLinks: link ? [link] : [],
+    });
+    return { plan, allowed, reason: allowed ? null : 'denied' as const };
+  };
+
   const canActorReadTherapeuticProgram = async (params: {
     actorId: string;
     actorRole: string;
@@ -70025,19 +70071,15 @@ async function startServer() {
     program: any;
   }) => {
     if (isTherapeuticPlanManager(params.actorRole)) return true;
-    if (params.actorRole !== 'therapist') return false;
 
     const patientId = sanitizeString(params.program?.patient_id, 120);
-    const planId = sanitizeString(
-      params.program?.therapeutic_plan_id,
-      120
-    );
+    const planId = sanitizeString(params.program?.therapeutic_plan_id, 120);
     if (!patientId) return false;
 
-    const [linkResult, planResult] = await Promise.all([
+    const [linkResult, planResult, supervisionResult] = await Promise.all([
       supabase
         .from('patient_professional_links')
-        .select('patient_id,professional_id,status,permissions')
+        .select('organization_id,clinic_id,patient_id,professional_id,status,permissions')
         .eq('organization_id', params.organizationId)
         .eq('clinic_id', params.clinicId)
         .eq('patient_id', patientId)
@@ -70048,35 +70090,44 @@ async function startServer() {
       planId
         ? supabase
             .from('patient_therapeutic_plans')
-            .select(
-              'id,patient_id,responsible_professional_id,participant_professional_ids'
-            )
+            .select('id,organization_id,clinic_id,patient_id,mode,responsible_professional_id,participant_professional_ids')
             .eq('id', planId)
             .eq('organization_id', params.organizationId)
             .eq('clinic_id', params.clinicId)
             .eq('patient_id', patientId)
             .limit(1)
             .maybeSingle()
-        : Promise.resolve({ data: null, error: null })
+        : Promise.resolve({ data: null, error: null }),
+      planId
+        ? supabase
+            .from('clinical_supervision_links')
+            .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status')
+            .eq('clinic_id', params.clinicId)
+            .eq('supervisor_user_id', params.actorId)
+            .eq('status', 'active')
+            .or(`patient_id.eq.${patientId},patient_id.is.null`)
+            .limit(100)
+        : Promise.resolve({ data: [], error: null })
     ]);
     if (linkResult.error) throw linkResult.error;
     if (planResult.error) throw planResult.error;
-    if (!linkResult.data || linkResult.data?.permissions?.read === false) {
-      return false;
-    }
+    if (supervisionResult.error) throw supervisionResult.error;
 
     if (planId) {
+      if (!planResult.data) return false;
       return filterTherapeuticPlanProgramsForActor(
         [params.program],
-        planResult.data ? [planResult.data] : [],
+        [planResult.data],
         {
           actorId: params.actorId,
           actorRole: params.actorRole,
-          professionalLinks: [linkResult.data]
+          professionalLinks: linkResult.data ? [linkResult.data] : [],
+          supervisionLinks: supervisionResult.data || []
         }
       ).length === 1;
     }
 
+    if (!linkResult.data || linkResult.data?.permissions?.read === false) return false;
     const legacyResponsibleIds = new Set([
       sanitizeString(params.program?.created_by, 120),
       ...(Array.isArray(params.program?.responsible_professional_ids)
@@ -70503,7 +70554,7 @@ async function startServer() {
           },
         });
       }
-      const [programResult, targetResult, objectiveResult, auditResult, trialResult, planScopeResult, professionalLinkResult, ptsWorkspaceResult] = await Promise.all([
+      const [programResult, targetResult, objectiveResult, auditResult, trialResult, planScopeResult, professionalLinkResult, supervisionLinkResult, ptsWorkspaceResult] = await Promise.all([
         supabase
           .from('aba_programs')
           .select(THERAPEUTIC_PROGRAM_SELECT)
@@ -70549,12 +70600,20 @@ async function startServer() {
           .limit(50),
         supabase
           .from('patient_professional_links')
-          .select('id,professional_id,specialty,case_role,relationship_type,permissions,status')
+          .select('id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,permissions,status')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .eq('status', 'active')
           .order('relationship_type', { ascending: false })
-          .limit(5),
+          .limit(50),
+        supabase
+          .from('clinical_supervision_links')
+          .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status,starts_at,ended_at')
+          .eq('clinic_id', clinicId)
+          .eq('supervisor_user_id', actorId)
+          .eq('status', 'active')
+          .or(`patient_id.eq.${patientId},patient_id.is.null`)
+          .limit(100),
         supabase.rpc('read_patient_pts_workspace_v2', {
           p_organization_id: organizationId,
           p_patient_id: patientId,
@@ -70565,7 +70624,7 @@ async function startServer() {
         ptsWorkspaceErrorCode.includes('PGRST202')
         || ptsWorkspaceErrorCode.includes('read_patient_pts_workspace_v2')
       );
-      const firstError = [programResult.error, targetResult.error, objectiveResult.error, auditResult.error, trialResult.error, planScopeResult.error, professionalLinkResult.error, ptsWorkspaceSchemaMissing ? null : ptsWorkspaceResult.error].find(Boolean);
+      const firstError = [programResult.error, targetResult.error, objectiveResult.error, auditResult.error, trialResult.error, planScopeResult.error, professionalLinkResult.error, supervisionLinkResult.error, ptsWorkspaceSchemaMissing ? null : ptsWorkspaceResult.error].find(Boolean);
       if (firstError) {
         if (hasMissingFinancialSchema(firstError) || isMissingRelationError(firstError)) {
           return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_UNAVAILABLE', message: 'A estrutura do Plano terapêutico ainda não foi aplicada.' });
@@ -70575,10 +70634,12 @@ async function startServer() {
 
       const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
       const professionalLinks = professionalLinkResult.data || [];
+      const supervisionLinks = supervisionLinkResult.data || [];
       const accessContext = {
         actorId,
         actorRole,
-        professionalLinks
+        professionalLinks,
+        supervisionLinks
       };
       const ptsWorkspace = !ptsWorkspaceSchemaMissing && ptsWorkspaceResult.data && typeof ptsWorkspaceResult.data === 'object'
         ? ptsWorkspaceResult.data as any
@@ -70612,10 +70673,12 @@ async function startServer() {
         planScopeResult.data || [],
         accessContext
       ).map((scope: any) => {
-        const canEdit = canEditTherapeuticPlanScope(scope, accessContext);
-        if (String(scope?.mode || '').toLowerCase() !== 'interdisciplinary') return { ...scope, canEdit };
+        const scopeAccess = resolveTherapeuticPlanScopeAccess(scope, accessContext);
+        const canEdit = scopeAccess.canEdit;
+        const accessReason = scopeAccess.reason;
+        if (String(scope?.mode || '').toLowerCase() !== 'interdisciplinary') return { ...scope, canEdit, accessReason };
         const document = ptsDocumentByPlanId.get(String(scope.id));
-        if (!document) return { ...scope, canEdit, pts_lineage: null, pts_events: [] };
+        if (!document) return { ...scope, canEdit, accessReason, pts_lineage: null, pts_events: [] };
         const documentVersions = ptsVersionsByDocumentId.get(String(document.id)) || [];
         const activeVersion = documentVersions.find((version: any) => String(version?.lifecycle_status) === 'ACTIVE') || null;
         const draftVersion = documentVersions.find((version: any) => String(version?.lifecycle_status) === 'DRAFT') || null;
@@ -70634,6 +70697,7 @@ async function startServer() {
         return {
           ...scope,
           canEdit,
+          accessReason,
           pts_lineage: {
             documentId: document.id,
             activeVersion: versionMeta(activeVersion),
@@ -70807,6 +70871,7 @@ async function startServer() {
             actorRole,
             programsEnabled: isAbaV2ApiEnabled(),
             canManageAllPlans: isTherapeuticPlanManager(actorRole),
+            canReviewSupervisedPlans: supervisionLinks.length > 0,
             canCreatePlans:
               isTherapeuticPlanManager(actorRole) ||
               enrichedProfessionalLinks.some((link: any) =>
@@ -70816,7 +70881,7 @@ async function startServer() {
           }
         },
         meta: {
-          queryCount: 7 + (linkedProfessionalIds.length ? 2 : 0) + (ptsWorkspaceSchemaMissing ? 0 : 1),
+          queryCount: 8 + (linkedProfessionalIds.length ? 3 : 0) + (ptsWorkspaceSchemaMissing ? 0 : 1),
           batched: true,
           patientId,
           organizationId
@@ -71685,7 +71750,7 @@ async function startServer() {
         return res.status(422).json({
           success: false,
           error: 'THERAPEUTIC_PLAN_SCOPE_REQUIRED',
-          message: 'Selecione o plano da especialidade ou o Projeto Terapêutico Singular deste programa.'
+          message: 'Selecione o plano por especialidade deste programa.'
         });
       }
       if (therapeuticPlanId) {
@@ -71694,7 +71759,7 @@ async function startServer() {
         }
         const { data: planScope, error: planScopeError } = await supabase
           .from('patient_therapeutic_plans')
-          .select('id,responsible_professional_id,participant_professional_ids,status')
+          .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,status')
           .eq('id', therapeuticPlanId)
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
@@ -71704,6 +71769,13 @@ async function startServer() {
         if (planScopeError) throw planScopeError;
         if (!planScope) {
           return res.status(404).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_NOT_FOUND' });
+        }
+        if (String(planScope.mode || '').toLowerCase() !== 'specialty') {
+          return res.status(422).json({
+            success: false,
+            error: 'THERAPEUTIC_PROGRAM_SPECIALTY_PLAN_REQUIRED',
+            message: 'Novos programas devem ser criados dentro de um plano por especialidade. O PTS permanece como plano compartilhado da equipe.'
+          });
         }
         const scopeParticipantIds = new Set([
           String(planScope.responsible_professional_id || ''),
@@ -73071,7 +73143,7 @@ async function startServer() {
     const clinicId = sanitizeString(currentClinicId(user), 120);
     let query = supabase
       .from('aba_sessions')
-      .select('id,clinic_id,patient_id,therapist_id,appointment_id,status,reference_date,scheduled_start_at,actual_start_at,started_at,created_at')
+      .select('id,clinic_id,patient_id,therapist_id,therapeutic_plan_id,appointment_id,status,reference_date,scheduled_start_at,actual_start_at,started_at,created_at')
       .eq('id', safeSessionId);
     if (!hasGlobalClinicAccess(user) && clinicId) query = query.eq('clinic_id', clinicId);
     if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
@@ -73090,6 +73162,49 @@ async function startServer() {
     return { ok: true, session: data, patientId, clinicId: sanitizeString(data.clinic_id || clinicId, 120) };
   };
 
+
+  const validateAbaSessionTargetPlanScope = async (params: {
+    organizationId: string;
+    patientId: string;
+    therapeuticPlanId: string;
+    targetIds: string[];
+  }) => {
+    const targetIds = Array.from(new Set((params.targetIds || []).map((value) => sanitizeString(value, 180)).filter(Boolean))).slice(0, 200);
+    if (!params.therapeuticPlanId || targetIds.length === 0) return { ok: true };
+    const { data: targetRows, error: targetError } = await supabase
+      .from('aba_targets')
+      .select('id,program_id')
+      .eq('clinic_id', params.organizationId)
+      .eq('patient_id', params.patientId)
+      .in('id', targetIds)
+      .limit(200);
+    if (targetError) throw targetError;
+    const programIds = Array.from(new Set((targetRows || []).map((row: any) => sanitizeString(row?.program_id, 180)).filter(Boolean)));
+    if (programIds.length === 0) return { ok: true, conflictingTargetIds: [] as string[] };
+    const { data: programRows, error: programError } = await supabase
+      .from('aba_programs')
+      .select('id,therapeutic_plan_id')
+      .eq('clinic_id', params.organizationId)
+      .eq('patient_id', params.patientId)
+      .in('id', programIds)
+      .limit(200);
+    if (programError) throw programError;
+    const planIdByProgramId = new Map(
+      (programRows || []).map((program: any) => [
+        sanitizeString(program?.id, 180),
+        sanitizeString(program?.therapeutic_plan_id, 120),
+      ]),
+    );
+    const conflictingTargetIds = (targetRows || []).flatMap((target: any) => {
+      const targetId = sanitizeString(target?.id, 180);
+      const programId = sanitizeString(target?.program_id, 180);
+      const planId = planIdByProgramId.get(programId) || '';
+      return targetId && planId && planId !== params.therapeuticPlanId ? [targetId] : [];
+    });
+    return conflictingTargetIds.length > 0
+      ? { ok: false, code: 'ABA_SESSION_TARGET_PLAN_MISMATCH', conflictingTargetIds }
+      : { ok: true, conflictingTargetIds: [] as string[] };
+  };
 
   const serializeAbaV3BindingForClient = (binding: any) => ({
     bindingId: sanitizeString(binding?.id, 120),
@@ -74023,6 +74138,22 @@ async function startServer() {
         if (!sessionScope.ok) return res.status((sessionScope as any).status || 400).json({ success: false, error: (sessionScope as any).error });
         if (sanitizeString((sessionScope as any).patientId, 120) !== patientId || sanitizeString((sessionScope as any).clinicId, 120) !== organizationId) {
           return res.status(403).json({ success: false, code: 'ABA_V3_SESSION_PLAN_SCOPE_DENIED', error: 'Sessão fora do escopo do paciente.' });
+        }
+        const sessionTherapeuticPlanId = sanitizeString((sessionScope as any)?.session?.therapeutic_plan_id, 120);
+        if (sessionTherapeuticPlanId && targetIds.length > 0) {
+          const targetScope = await validateAbaSessionTargetPlanScope({
+            organizationId,
+            patientId,
+            therapeuticPlanId: sessionTherapeuticPlanId,
+            targetIds,
+          });
+          if (!targetScope.ok) {
+            return res.status(409).json({
+              success: false,
+              code: targetScope.code || 'ABA_SESSION_TARGET_PLAN_MISMATCH',
+              error: 'Um ou mais alvos não pertencem ao plano por especialidade fixado nesta sessão.'
+            });
+          }
         }
         const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
         const [collectionPlanResult, ptsContextResult] = await Promise.all([
@@ -75127,7 +75258,29 @@ async function startServer() {
         });
       });
 
-      const availability = resolveMaintenanceProbeAvailability(realTargetSchedules, {
+      const sessionTherapeuticPlanId = sanitizeString(session?.therapeutic_plan_id, 120);
+      let sessionScopedTargetSchedules = realTargetSchedules;
+      if (sessionTherapeuticPlanId && realTargetSchedules.length > 0) {
+        const targetScope = await validateAbaSessionTargetPlanScope({
+          organizationId,
+          patientId,
+          therapeuticPlanId: sessionTherapeuticPlanId,
+          targetIds: realTargetSchedules
+            .map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180))
+            .filter(Boolean),
+        });
+        const conflictingTargetIds = new Set(targetScope.conflictingTargetIds || []);
+        if (conflictingTargetIds.size > 0) {
+          sessionScopedTargetSchedules = realTargetSchedules.filter((schedule: any) => {
+            const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+            if (!conflictingTargetIds.has(targetId)) return true;
+            trackFilteredOut('different_specialty_plan');
+            return false;
+          });
+        }
+      }
+
+      const availability = resolveMaintenanceProbeAvailability(sessionScopedTargetSchedules, {
         appointmentId: isUuid(activeAppointmentId) ? activeAppointmentId : null,
         sessionId: requestedSessionId,
         sessionClinicalDate: sessionClinicalDateKey,
@@ -75176,7 +75329,7 @@ async function startServer() {
       const diagnostics = cleanObject({
         resultCount: available.length + upcoming.length,
         appointmentScheduleCount: appointmentScheduleRows.length,
-        sessionScheduleCount: realTargetSchedules.filter((schedule: any) => (
+        sessionScheduleCount: sessionScopedTargetSchedules.filter((schedule: any) => (
           sanitizeString(schedule?.session_id || schedule?.sessionId || readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload)?.sessionId || '', 180) === requestedSessionId
         )).length,
         filteredOutCount: Object.values(filteredOutReasons).reduce((total, count) => total + count, 0),
@@ -75230,6 +75383,23 @@ async function startServer() {
     const session = (scope as any).session || {};
     if (sanitizeString((scope as any).patientId, 120) !== patientId) {
       return { ok: false, status: 403, error: 'Sessão ABA fora do escopo do paciente.' };
+    }
+    const sessionTherapeuticPlanId = sanitizeString(session?.therapeutic_plan_id, 120);
+    if (sessionTherapeuticPlanId) {
+      const targetPlanScope = await validateAbaSessionTargetPlanScope({
+        organizationId,
+        patientId,
+        therapeuticPlanId: sessionTherapeuticPlanId,
+        targetIds: [targetId],
+      });
+      if (!targetPlanScope.ok) {
+        return {
+          ok: false,
+          status: 409,
+          code: targetPlanScope.code || 'ABA_SESSION_TARGET_PLAN_MISMATCH',
+          error: 'O alvo desta sondagem não pertence ao plano por especialidade fixado na sessão.',
+        };
+      }
     }
 
     let targetQuery = supabase
@@ -78997,7 +79167,7 @@ async function startServer() {
         isUuid(organizationId)
           ? supabase
               .from('patient_pts_collection_contexts_v1')
-              .select('source_session_id,plan_id,version_number,context_opened_at')
+              .select('source_session_id,plan_id,specialty_plan_id,version_number,context_opened_at')
               .eq('organization_id', organizationId)
               .eq('patient_id', patientId)
               .gte('context_opened_at', dateFromIso)
@@ -79018,9 +79188,13 @@ async function startServer() {
       const ptsVersionBySessionPlan = new Map<string, number>();
       for (const contextRow of ptsContextResult.error ? [] : ptsContextResult.data || []) {
         const sessionId = sanitizeString((contextRow as any)?.source_session_id, 180);
-        const planId = sanitizeString((contextRow as any)?.plan_id, 120);
+        const ptsPlanId = sanitizeString((contextRow as any)?.plan_id, 120);
+        const specialtyPlanId = sanitizeString((contextRow as any)?.specialty_plan_id, 120);
         const versionNumber = Number((contextRow as any)?.version_number || 0);
-        if (sessionId && planId && versionNumber > 0) ptsVersionBySessionPlan.set(`${sessionId}::${planId}`, versionNumber);
+        if (sessionId && versionNumber > 0) {
+          if (ptsPlanId) ptsVersionBySessionPlan.set(`${sessionId}::${ptsPlanId}`, versionNumber);
+          if (specialtyPlanId) ptsVersionBySessionPlan.set(`${sessionId}::${specialtyPlanId}`, versionNumber);
+        }
       }
 
       const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
@@ -80411,6 +80585,33 @@ async function startServer() {
       });
       if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
 
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const sessionActorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const sessionActorRole = sanitizeString(req.effectiveClinicRole || req.session.user?.clinicRole || req.session.user?.role, 40).toLowerCase();
+      const requestedTherapeuticPlanId = sanitizeString(req.body?.therapeutic_plan_id || req.body?.therapeuticPlanId, 120);
+      if (requestedTherapeuticPlanId && !isUuid(requestedTherapeuticPlanId)) {
+        return res.status(400).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_INVALID', error: 'Plano terapêutico inválido para esta sessão.' });
+      }
+      if (requestedTherapeuticPlanId) {
+        const planContext = await loadSessionSpecialtyPlanContext({
+          actorId: sessionActorId,
+          actorRole: sessionActorRole,
+          organizationId,
+          clinicId,
+          patientId,
+          planId: requestedTherapeuticPlanId,
+        });
+        if (!planContext.plan) {
+          return res.status(404).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_NOT_FOUND', error: 'Plano por especialidade não encontrado para este paciente.' });
+        }
+        if (planContext.reason === 'invalid_scope') {
+          return res.status(422).json({ success: false, code: 'SESSION_SPECIALTY_PLAN_REQUIRED', error: 'A sessão deve ser iniciada a partir de um plano por especialidade, não do PTS compartilhado.' });
+        }
+        if (!planContext.allowed) {
+          return res.status(403).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_ACCESS_DENIED', error: 'Você não possui vínculo clínico de escrita com este plano.' });
+        }
+      }
+
       const startedAt = sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt);
       const requestSource = resolveAbaRequestSource(req.body);
       const appointmentStartRequested = ['appointment', 'agenda', 'calendar'].includes(
@@ -80627,6 +80828,18 @@ async function startServer() {
           reasonCode: existingInProgressSession?.id ? 'REUSE_IN_PROGRESS_SESSION' : 'START_ALLOWED'
         });
       }
+      const existingTherapeuticPlanId = sanitizeString(existingInProgressSession?.therapeutic_plan_id, 120);
+      if (existingInProgressSession?.id && requestedTherapeuticPlanId && existingTherapeuticPlanId !== requestedTherapeuticPlanId) {
+        return res.status(409).json({
+          success: false,
+          code: 'SESSION_THERAPEUTIC_PLAN_CONTEXT_IMMUTABLE',
+          error: existingTherapeuticPlanId
+            ? 'Esta sessão já foi aberta em outro plano por especialidade e não pode ser reinterpretada.'
+            : 'Esta sessão já foi aberta sem um plano por especialidade e não pode receber esse vínculo retroativamente.'
+        });
+      }
+      const sessionTherapeuticPlanId = existingTherapeuticPlanId || requestedTherapeuticPlanId || null;
+
       const requestedSessionId = sanitizeString(req.body?.id || req.body?.session_id || req.body?.sessionId || crypto.randomUUID(), 180);
       const sessionId = sanitizeString(existingInProgressSession?.id || requestedSessionId, 180);
       const requestedStatus = normalizeAbaSessionStatus(req.body?.status);
@@ -80704,6 +80917,7 @@ async function startServer() {
         patient_id: patientId,
         patient_name: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
         therapist_id: resolvedProfessionalId,
+        therapeutic_plan_id: sessionTherapeuticPlanId,
         device_id: sanitizeString(req.body?.device_id || req.body?.deviceId, 180),
         source: requestSource,
         status: sessionStatus,
@@ -80771,7 +80985,9 @@ async function startServer() {
         updated_at: new Date().toISOString()
       });
 
-      const result = await writeAbaRowWithSchemaFallback('aba_sessions', payload, 'upsert');
+      const result = await writeAbaRowWithSchemaFallback('aba_sessions', payload, 'upsert', {
+        criticalColumns: sessionTherapeuticPlanId ? ['therapeutic_plan_id'] : []
+      });
       if (result.error) throw result.error;
       appointmentClaimNeedsRelease = false;
       if (payload.appointment_id) {
@@ -80827,7 +81043,23 @@ async function startServer() {
         }
       }
       console.error('[ABA Sessions] start error:', error?.message || String(error));
-      if (hasMissingFinancialSchema(error) || /claim_appointment_for_session_start_v1|active_aba_session_id|session_start_previous_status|PGRST202|42883|42703/i.test(String(error?.message || error?.code || ''))) {
+      const sessionStartError = String(error?.message || error?.code || '');
+      if (/therapeutic_plan_id|ABA_SESSION_SPECIALTY_PLAN_SCOPE_INVALID|ABA_SESSION_SPECIALTY_PLAN_ACCESS_DENIED|ABA_SESSION_THERAPEUTIC_PLAN_IMMUTABLE/i.test(sessionStartError)) {
+        return res.status(/ACCESS_DENIED/i.test(sessionStartError) ? 403 : /IMMUTABLE/i.test(sessionStartError) ? 409 : 503).json({
+          success: false,
+          code: /ACCESS_DENIED/i.test(sessionStartError)
+            ? 'SESSION_THERAPEUTIC_PLAN_ACCESS_DENIED'
+            : /IMMUTABLE/i.test(sessionStartError)
+              ? 'SESSION_THERAPEUTIC_PLAN_CONTEXT_IMMUTABLE'
+              : 'SESSION_THERAPEUTIC_PLAN_SCHEMA_REQUIRED',
+          error: /ACCESS_DENIED/i.test(sessionStartError)
+            ? 'Você não possui vínculo clínico de escrita com este plano.'
+            : /IMMUTABLE/i.test(sessionStartError)
+              ? 'O plano clínico desta sessão já foi fixado e não pode ser alterado.'
+              : 'A vinculação segura entre sessão e plano por especialidade ainda precisa ser aplicada no banco.'
+        });
+      }
+      if (hasMissingFinancialSchema(error) || /claim_appointment_for_session_start_v1|active_aba_session_id|session_start_previous_status|PGRST202|42883|42703/i.test(sessionStartError)) {
         return res.status(503).json({
           success: false,
           code: 'SESSION_ATTENDANCE_POLICY_MIGRATION_REQUIRED',
