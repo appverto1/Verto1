@@ -29,6 +29,7 @@ import {
   type PtsResponsibility,
   type PtsRisk,
 } from '../utils/ptsClinicalWorkspace';
+import { fromDateTimeLocalValue, toDateTimeLocalValue } from '../utils/dateTimeLocal';
 
 const makeId = (prefix: string) => {
   const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -75,9 +76,6 @@ const NETWORK_LABELS: Record<string, string> = {
   community: 'Comunidade',
   other: 'Outro',
 };
-
-const toDateTimeLocal = (value: string) => value ? value.slice(0, 16) : '';
-const fromDateTimeLocal = (value: string) => value ? new Date(value).toISOString() : '';
 
 const CLINICAL_STATE_PILLS: Record<string, { label: string; className: string }> = {
   improving: { label: 'Evoluindo', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
@@ -311,7 +309,7 @@ export function PtsWorkspaceEditor({
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className={`text-xs ${subtle}`}>Participação do paciente e da família<select className={`${field} mt-1.5`} value={draft.participationStatus} onChange={(event) => setDraft((current) => ({ ...current, participationStatus: event.target.value as PtsClinicalPayload['participationStatus'] }))}><option value="not_started">Ainda não discutido</option><option value="discussed">Discutido</option><option value="agreed">Pactuado</option><option value="declined">Participação recusada/adiada</option></select></label>
-              <label className={`text-xs ${subtle}`}>Data da pactuação<input className={`${field} mt-1.5`} type="datetime-local" value={toDateTimeLocal(draft.participationRecordedAt)} onChange={(event) => setDraft((current) => ({ ...current, participationRecordedAt: fromDateTimeLocal(event.target.value) }))} /></label>
+              <label className={`text-xs ${subtle}`}>Data da pactuação<input className={`${field} mt-1.5`} type="datetime-local" value={toDateTimeLocalValue(draft.participationRecordedAt)} onChange={(event) => setDraft((current) => ({ ...current, participationRecordedAt: fromDateTimeLocalValue(event.target.value) }))} /></label>
             </div>
           </div>
         )}
