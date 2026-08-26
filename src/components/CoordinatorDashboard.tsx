@@ -266,8 +266,10 @@ import {
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
   isPatientVisibleInMainList,
+  patientMatchesNameFilter,
   patientMatchesProfessionalFilter,
   resolvePatientProfessionalIds,
+  sortPatientsAlphabetically,
 } from "../utils/patientList";
 import {
   ABA_INDIVIDUAL_EXPECTED_TUSS_CODE,
@@ -924,6 +926,7 @@ export function CoordinatorDashboard({
   const therapistMembersRequestSeqRef = useRef(0);
   const therapistMembersWorkspaceRef = useRef("");
   const [patientTherapistFilter, setPatientTherapistFilter] = useState<string>("all");
+  const [patientNameFilter, setPatientNameFilter] = useState<string>("");
   const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
   const [patientSchoolFilter, setPatientSchoolFilter] = useState("");
   const [patientSchoolUnitFilter, setPatientSchoolUnitFilter] = useState("");
@@ -1397,7 +1400,7 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     setPatientSchoolPage(1);
-  }, [patientSchoolFilter, patientSchoolUnitFilter, patientSchoolGradeFilter, patientSchoolClassFilter, patientSchoolShiftFilter, patientSchoolConsentFilter, patientSchoolIncludeHistorical, patientTherapistFilter]);
+  }, [patientNameFilter, patientSchoolFilter, patientSchoolUnitFilter, patientSchoolGradeFilter, patientSchoolClassFilter, patientSchoolShiftFilter, patientSchoolConsentFilter, patientSchoolIncludeHistorical, patientTherapistFilter]);
 
   useEffect(() => {
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
@@ -1516,41 +1519,49 @@ export function CoordinatorDashboard({
       }
     }
 
-    if (patientQuickFilter === "birthdaysToday") {
-      return filteredPatients.filter((patient: any) => isBirthdayTodayPatient(patient));
+    if (patientNameFilter.trim()) {
+      filteredPatients = filteredPatients.filter((patient: any) => patientMatchesNameFilter(patient, patientNameFilter));
     }
 
-    return filteredPatients;
-  }, [isTherapist, patientQuickFilter, patientTherapistFilter, roleScopedPatients, patientSchoolFilter, schoolFilteredPatientRows, therapistFilterOptions]);
+    if (patientQuickFilter === "birthdaysToday") {
+      filteredPatients = filteredPatients.filter((patient: any) => isBirthdayTodayPatient(patient));
+    }
+
+    return sortPatientsAlphabetically(filteredPatients);
+  }, [isTherapist, patientNameFilter, patientQuickFilter, patientTherapistFilter, roleScopedPatients, patientSchoolFilter, schoolFilteredPatientRows, therapistFilterOptions]);
 
   const visiblePatientsWithoutQuickFilter = useMemo(() => {
-    if (patientTherapistFilter === "all" || isTherapist) return roleScopedPatients;
-    if (patientTherapistFilter === "unassigned") {
-      return roleScopedPatients.filter((patient: any) => {
-        return resolvePatientProfessionalIds(patient).length === 0;
-      });
+    let patientsForRole = roleScopedPatients;
+    if (patientTherapistFilter !== "all" && !isTherapist) {
+      if (patientTherapistFilter === "unassigned") {
+        patientsForRole = roleScopedPatients.filter((patient: any) => resolvePatientProfessionalIds(patient).length === 0);
+      } else {
+        const selectedProfessional = therapistFilterOptions.find(
+          (professional: any) => String(professional?.id || "") === patientTherapistFilter,
+        );
+        const selectedProfessionalIds = Array.from(
+          new Set(
+            [
+              patientTherapistFilter,
+              ...(Array.isArray((selectedProfessional as any)?.matchIds)
+                ? (selectedProfessional as any).matchIds
+                : []),
+            ]
+              .map((id) => String(id || "").trim())
+              .filter(Boolean),
+          ),
+        );
+        patientsForRole = roleScopedPatients.filter((patient: any) =>
+          selectedProfessionalIds.some((professionalId) => patientMatchesProfessionalFilter(patient, professionalId)),
+        );
+      }
     }
-    const selectedProfessional = therapistFilterOptions.find(
-      (professional: any) => String(professional?.id || "") === patientTherapistFilter,
-    );
-    const selectedProfessionalIds = Array.from(
-      new Set(
-        [
-          patientTherapistFilter,
-          ...(Array.isArray((selectedProfessional as any)?.matchIds)
-            ? (selectedProfessional as any).matchIds
-            : []),
-        ]
-          .map((id) => String(id || "").trim())
-          .filter(Boolean),
-      ),
-    );
-    return roleScopedPatients.filter((patient: any) => {
-      return selectedProfessionalIds.some((professionalId) =>
-        patientMatchesProfessionalFilter(patient, professionalId),
-      );
-    });
-  }, [isTherapist, patientTherapistFilter, roleScopedPatients, therapistFilterOptions]);
+    if (patientNameFilter.trim()) {
+      patientsForRole = patientsForRole.filter((patient: any) => patientMatchesNameFilter(patient, patientNameFilter));
+    }
+    return sortPatientsAlphabetically(patientsForRole);
+  }, [isTherapist, patientNameFilter, patientTherapistFilter, roleScopedPatients, therapistFilterOptions]);
+
 
   const billingHistory = [
     {
@@ -13130,26 +13141,44 @@ export function CoordinatorDashboard({
                       )}
                     </div>
                   </div>
-                  {!isReceptionist && (
-                    <div className="w-full sm:w-[360px]">
+                  <div className={`grid w-full gap-3 ${isReceptionist ? 'sm:max-w-[520px]' : 'sm:max-w-[760px] sm:grid-cols-2'}`}>
+                    <div>
                       <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1.5 ml-1">
-                        Filtrar por profissional
+                        Buscar paciente
                       </label>
-                      <select
-                        className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
-                        value={patientTherapistFilter}
-                        onChange={(e) => setPatientTherapistFilter(e.target.value)}
-                      >
-                        <option value="all">Todos os pacientes</option>
-                        <option value="unassigned">Não atribuídos</option>
-                        {therapistFilterOptions.map((therapist) => (
-                          <option key={`therapist-filter-${therapist.id}`} value={therapist.id}>
-                            {therapist.label}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                          type="search"
+                          value={patientNameFilter}
+                          onChange={(e) => setPatientNameFilter(e.target.value)}
+                          placeholder="Digite o nome do paciente"
+                          autoComplete="off"
+                          className="w-full rounded-xl border border-slate-100 bg-slate-50 py-3 pl-10 pr-3 text-sm text-slate-700 outline-none transition-colors focus:border-violet-300 focus:bg-white"
+                        />
+                      </div>
                     </div>
-                  )}
+                    {!isReceptionist && (
+                      <div>
+                        <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1.5 ml-1">
+                          Filtrar por profissional
+                        </label>
+                        <select
+                          className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                          value={patientTherapistFilter}
+                          onChange={(e) => setPatientTherapistFilter(e.target.value)}
+                        >
+                          <option value="all">Todos os pacientes</option>
+                          <option value="unassigned">Não atribuídos</option>
+                          {therapistFilterOptions.map((therapist) => (
+                            <option key={`therapist-filter-${therapist.id}`} value={therapist.id}>
+                              {therapist.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
                   {canUseSchoolPatientFilters && (
                     <>
                       {patientSchoolOptionsLoadError && (
