@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Activity, ArrowRight, BadgeCheck, CalendarDays, Layers3, Target, TrendingDown, TrendingUp } from 'lucide-react';
 import {
   Bar,
@@ -78,13 +79,40 @@ const OVERVIEW_BARS = [
   { key: 'alerts', label: 'Regressão/alertas', color: DOMAIN_COLORS.alerts[0] },
 ] as const;
 
+type OverviewDomainKey = typeof OVERVIEW_BARS[number]['key'];
+
+const OVERVIEW_Y_AXIS_MIN = 10;
+const OVERVIEW_Y_AXIS_TOP = 8;
+const OVERVIEW_Y_AXIS_BOTTOM = 62;
+
+const niceCountAxis = (maxValue: number) => {
+  const safeMax = Math.max(OVERVIEW_Y_AXIS_MIN, Math.ceil(Number(maxValue) || 0));
+  const roughStep = safeMax / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(Math.max(1, roughStep)));
+  const normalized = roughStep / magnitude;
+  const multiplier = normalized <= 1 ? 1 : normalized <= 2.5 ? 2 : normalized <= 5 ? 5 : 10;
+  const step = Math.max(1, multiplier * magnitude);
+  const max = Math.max(OVERVIEW_Y_AXIS_MIN, Math.ceil(safeMax / step) * step);
+  const ticks: number[] = [];
+  for (let value = 0; value <= max + step / 2; value += step) ticks.push(Number(value.toFixed(6)));
+  return { max, ticks };
+};
+
+const overviewDomainLabel = (keys: OverviewDomainKey[]) => {
+  const labels = OVERVIEW_BARS.filter((item) => keys.includes(item.key)).map((item) => item.label);
+  if (labels.length === 0) return 'Todos os domínios';
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} e ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')} e ${labels.at(-1)}`;
+};
+
 const DOMAIN_ACTIVE_TONE: Record<AnalyticsDomain, string> = {
-  overview: 'border-violet-700 text-violet-800 dark:text-violet-200',
-  skills: 'border-emerald-600 text-emerald-800 dark:text-emerald-200',
-  behaviors: 'border-sky-600 text-sky-800 dark:text-sky-200',
-  mastery: 'border-violet-600 text-violet-800 dark:text-violet-200',
-  maintenance: 'border-amber-600 text-amber-900 dark:text-amber-200',
-  changes: 'border-fuchsia-600 text-fuchsia-800 dark:text-fuchsia-200',
+  overview: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
+  skills: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
+  behaviors: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
+  mastery: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
+  maintenance: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
+  changes: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
 };
 
 const DOMAIN_SOFT_TONE: Record<Exclude<AnalyticsDomain, 'overview'>, string> = {
@@ -643,6 +671,102 @@ function ProgramChangesView({
   );
 }
 
+function ChartTooltipPortal({ active, coordinate, chartRef, children }: any) {
+  if (!active || !children || typeof document === 'undefined' || typeof window === 'undefined') return null;
+  const rect = chartRef?.current?.getBoundingClientRect?.();
+  if (!rect) return null;
+  const coordinateX = Number(coordinate?.x);
+  const coordinateY = Number(coordinate?.y);
+  if (!Number.isFinite(coordinateX) || !Number.isFinite(coordinateY)) return null;
+  const anchorX = rect.left + coordinateX;
+  const anchorY = rect.top + coordinateY;
+  const tooltipWidth = Math.max(160, Math.min(320, window.innerWidth - 24));
+  const left = Math.max(12, Math.min(window.innerWidth - tooltipWidth - 12, anchorX + 12));
+  const placeBelow = anchorY < 160;
+  const top = Math.min(window.innerHeight - 12, Math.max(12, anchorY + (placeBelow ? 12 : -12)));
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-[240]"
+      style={{
+        left,
+        top,
+        maxWidth: tooltipWidth,
+        transform: placeBelow ? 'none' : 'translateY(-100%)',
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
+function PortalAnalyticsTooltip(props: any) {
+  const content = <AnalyticsTooltip {...props} />;
+  return <ChartTooltipPortal active={props.active} coordinate={props.coordinate} chartRef={props.chartRef}>{content}</ChartTooltipPortal>;
+}
+
+function PortalOverviewTooltip(props: any) {
+  const content = <OverviewTooltip {...props} />;
+  return <ChartTooltipPortal active={props.active} coordinate={props.coordinate} chartRef={props.chartRef}>{content}</ChartTooltipPortal>;
+}
+
+function OverviewYAxisPane({ max, ticks, isDark }: { max: number; ticks: number[]; isDark: boolean }) {
+  const axisLine = isDark ? 'border-slate-500' : 'border-slate-400';
+  const tickTone = isDark ? 'text-slate-400' : 'text-slate-500';
+  return (
+    <div
+      className={`relative h-full w-[60px] shrink-0 border-r ${axisLine} ${isDark ? 'bg-[#101b2e]' : 'bg-white'} shadow-[5px_0_10px_-9px_rgba(15,23,42,0.65)]`}
+      data-testid="overview-y-axis-pane"
+      role="img"
+      aria-label={`Eixo Y fixo. Escala de 0 a ${max} registros distintos.`}
+    >
+      <span className={`absolute left-0 top-1/2 -translate-y-1/2 -rotate-90 whitespace-nowrap text-[9px] ${tickTone}`}>Registros distintos</span>
+      <div className="absolute left-[24px] right-0" style={{ top: OVERVIEW_Y_AXIS_TOP, bottom: OVERVIEW_Y_AXIS_BOTTOM }}>
+        {ticks.map((tick) => {
+          const top = max > 0 ? ((max - tick) / max) * 100 : 100;
+          return (
+            <div key={tick} className="absolute left-0 right-0" style={{ top: `${top}%`, transform: 'translateY(-50%)' }}>
+              <span className={`absolute right-2 -translate-y-1/2 text-[10px] tabular-nums ${tickTone}`}>{tick}</span>
+              <span className={`absolute right-0 top-0 w-1.5 border-t ${axisLine}`} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OverviewGhostBarShape({ x, y, width, height, payload, isDark, onActivate }: any) {
+  if (!payload?.__ghost || !Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) return null;
+  const numericX = Number(x);
+  const numericY = Number(y);
+  const numericWidth = Math.max(1, Number(width) || 1);
+  const numericHeight = Math.max(1, Number(height) || 1);
+  const centerX = numericX + numericWidth / 2;
+  const baselineY = numericY + numericHeight;
+  const hitWidth = Math.max(44, numericWidth);
+  const message = String(payload.__ghostMessage || 'Sem registros para o filtro selecionado.');
+  const activate = () => onActivate?.(message);
+  return (
+    <g
+      role="button"
+      tabIndex={0}
+      aria-label={message}
+      onClick={activate}
+      onFocus={activate}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        activate();
+      }}
+    >
+      <title>{message}</title>
+      <rect x={centerX - hitWidth / 2} y={baselineY - 44} width={hitWidth} height={44} fill="transparent" pointerEvents="all" />
+      <line x1={centerX - 7} x2={centerX + 7} y1={baselineY - 1} y2={baselineY - 1} stroke={isDark ? '#64748B' : '#CBD5E1'} strokeWidth={2} strokeLinecap="round" pointerEvents="none" />
+    </g>
+  );
+}
+
 function AnalyticsTooltip({ active, payload, label, unit, selectedSeries, changesMode = false }: any) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload || {};
@@ -670,7 +794,17 @@ function AnalyticsTooltip({ active, payload, label, unit, selectedSeries, change
 function OverviewTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload || {};
-  const visibleItems = payload.filter((item: any) => Number(item.value) > 0);
+  const ghost = payload.find((item: any) => item.dataKey === '__ghost' && Number(item.value) > 0);
+  if (ghost) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+        <p className="font-semibold">{label}</p>
+        <p className="mt-0.5 text-slate-500 dark:text-slate-400">{row.xDetail}{row.period === 'previous' ? ' · período anterior' : ''}</p>
+        <p className="mt-2">{row.__ghostMessage || 'Sem registros para o filtro selecionado.'}</p>
+      </div>
+    );
+  }
+  const visibleItems = payload.filter((item: any) => !String(item.dataKey || '').startsWith('__') && Number(item.value) > 0);
   const total = visibleItems.reduce((sum: number, item: any) => sum + Number(item.value || 0), 0);
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
@@ -688,6 +822,19 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
   const [activeDomain, setActiveDomain] = useState<AnalyticsDomain>('overview');
   const [metricSignatureValue, setMetricSignatureValue] = useState('');
   const [selectedSeriesKeys, setSelectedSeriesKeys] = useState<string[]>([]);
+  const [overviewDomainKeys, setOverviewDomainKeys] = useState<OverviewDomainKey[]>([]);
+  const [overviewEmptyHint, setOverviewEmptyHint] = useState('');
+  const chartContentRef = useRef<HTMLDivElement>(null);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setPrefersReducedMotion(media.matches);
+    sync();
+    media.addEventListener?.('change', sync);
+    return () => media.removeEventListener?.('change', sync);
+  }, []);
 
   const availableDomainCounts = useMemo(() => {
     const counts = { skills: 0, behaviors: 0, mastery: 0, maintenance: 0, changes: 0 };
@@ -744,6 +891,39 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
       : chartRowsForSeries(selectedSeries, previousSeriesByKey, comparePrevious, axis, false),
   [activeDomain, axis, comparePrevious, previousSeriesByKey, selectedSeries, series]);
 
+  const overviewFilterActive = overviewDomainKeys.length > 0;
+  const overviewVisibleBars = useMemo(
+    () => overviewFilterActive ? OVERVIEW_BARS.filter((item) => overviewDomainKeys.includes(item.key)) : OVERVIEW_BARS,
+    [overviewDomainKeys, overviewFilterActive],
+  );
+  const overviewChartRows = useMemo(() => {
+    if (activeDomain !== 'overview') return rows;
+    const selectedLabel = overviewDomainLabel(overviewDomainKeys);
+    return rows.map((row: any) => {
+      const visibleTotal = overviewVisibleBars.reduce((sum, item) => sum + Number(row[item.key] || 0), 0);
+      const hasFilteredGap = overviewFilterActive && visibleTotal === 0;
+      const bucketLabel = axis === 'session' ? 'nesta sessão' : 'nesta data';
+      return {
+        ...row,
+        __ghost: hasFilteredGap ? 1 : 0,
+        __ghostMessage: hasFilteredGap ? `Sem registros de ${selectedLabel} ${bucketLabel}.` : '',
+        __filteredEmpty: hasFilteredGap,
+      };
+    });
+  }, [activeDomain, axis, overviewDomainKeys, overviewFilterActive, overviewVisibleBars, rows]);
+  const overviewYAxis = useMemo(() => {
+    if (activeDomain !== 'overview') return niceCountAxis(OVERVIEW_Y_AXIS_MIN);
+    const maxVisible = overviewChartRows.reduce((max, row: any) => {
+      const total = overviewVisibleBars.reduce((sum, item) => sum + Number(row[item.key] || 0), 0);
+      return Math.max(max, total);
+    }, 0);
+    return niceCountAxis(maxVisible);
+  }, [activeDomain, overviewChartRows, overviewVisibleBars]);
+
+  useEffect(() => {
+    setOverviewEmptyHint('');
+  }, [axis, overviewDomainKeys]);
+
   const firstCurrentX = rows.find((row) => row.period === 'current')?.x;
   const numericValues = selectedSeries.flatMap((item) => item.validObservations.map((row) => row.value)).filter((value): value is number => value !== null && value !== undefined && Number.isFinite(Number(value))).map(Number);
   const unitLabel = activeMetric?.unitLabel || 'Valor clínico';
@@ -767,6 +947,18 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
       }
       if (current.length >= 3) return current;
       return [...current, key];
+    });
+  };
+
+  const toggleOverviewDomain = (key: OverviewDomainKey) => {
+    setOverviewDomainKeys((current) => {
+      if (current.length === 0) return [key];
+      if (current.includes(key)) {
+        if (current.length === 1) return [];
+        return current.filter((item) => item !== key);
+      }
+      const next = [...current, key];
+      return next.length === OVERVIEW_BARS.length ? [] : next;
     });
   };
 
@@ -828,7 +1020,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
         <nav className="mt-3 flex gap-1 overflow-x-auto" aria-label="Domínios dos gráficos do plano">
           {DOMAIN_TABS.map((tab) => {
             const available = tabAvailability(tab.id);
-            return <button key={tab.id} type="button" disabled={!available} aria-pressed={activeDomain === tab.id} onClick={() => available && setActiveDomain(tab.id)} className={`min-h-10 shrink-0 border-b-2 px-3 text-sm font-medium transition ${activeDomain === tab.id ? DOMAIN_ACTIVE_TONE[tab.id] : `border-transparent ${subtle} hover:text-violet-600`} disabled:cursor-not-allowed disabled:opacity-35`}>{tab.label}</button>;
+            return <button key={tab.id} type="button" disabled={!available} aria-pressed={activeDomain === tab.id} onClick={() => available && setActiveDomain(tab.id)} className={`min-h-10 shrink-0 border-b-[3px] px-3 text-sm font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${activeDomain === tab.id ? DOMAIN_ACTIVE_TONE[tab.id] : `border-transparent ${isDark ? 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`} disabled:cursor-not-allowed disabled:opacity-35`}>{tab.label}</button>;
           })}
         </nav>
       </div>
@@ -864,23 +1056,85 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
           {comparePrevious && activeDomain !== 'changes' && <div className={`flex items-center gap-3 text-[11px] ${subtle}`}><span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-6 bg-violet-600" /> Atual</span><span className="inline-flex items-center gap-1.5"><span className="h-0 w-6 border-t-2 border-dashed border-violet-400" /> Anterior</span></div>}
         </div>
 
+        {activeDomain === 'overview' && (
+          <div className="mb-2.5 space-y-2" data-testid="overview-domain-filters">
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filtrar domínios exibidos no gráfico">
+              <span className={`mr-1 text-[11px] ${subtle}`}>Exibir:</span>
+              <button
+                type="button"
+                aria-pressed={!overviewFilterActive}
+                onClick={() => setOverviewDomainKeys([])}
+                className={`min-h-10 rounded-lg border px-3 text-xs font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${!overviewFilterActive ? isDark ? 'border-violet-400 bg-slate-900 text-violet-200' : 'border-violet-500 bg-white text-violet-800' : isDark ? 'border-slate-700 bg-transparent text-slate-300 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+              >Todos</button>
+              {OVERVIEW_BARS.map((item) => {
+                const selected = overviewDomainKeys.includes(item.key);
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => toggleOverviewDomain(item.key)}
+                    className={`inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-xs font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${selected ? isDark ? 'border-violet-400 bg-slate-900 text-slate-100' : 'border-violet-500 bg-white text-slate-900' : isDark ? 'border-slate-700 bg-transparent text-slate-300 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}
+                  >
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} aria-hidden="true" />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+            {overviewEmptyHint && <p role="status" aria-live="polite" className={`w-fit rounded-lg border px-2.5 py-1.5 text-[11px] ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>{overviewEmptyHint}</p>}
+          </div>
+        )}
+
         {activeDomain === 'changes' ? (
           <ProgramChangesView series={series} programs={programs} isDark={isDark} onOpenSessionReport={onOpenSessionReport} />
+        ) : activeDomain === 'overview' ? (
+          <div className="flex h-[170px] min-w-0 sm:h-[180px]" data-testid="overview-chart-frame">
+            <OverviewYAxisPane max={overviewYAxis.max} ticks={overviewYAxis.ticks} isDark={isDark} />
+            <div className="min-w-0 flex-1 overflow-x-auto" data-testid="overview-x-scroll-viewport">
+              <div ref={chartContentRef} className="h-full" style={{ minWidth: Math.max(620, overviewChartRows.length * 72) }}>
+                <SafeResponsiveContainer width="100%" height="100%" minHeight={150}>
+                  <BarChart data={overviewChartRows} margin={{ top: OVERVIEW_Y_AXIS_TOP, right: 24, left: 0, bottom: 24 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#334155' : '#E2E8F0'} />
+                    <XAxis
+                      dataKey="x"
+                      height={38}
+                      interval={0}
+                      tick={(props: any) => {
+                        const row = overviewChartRows[props.index];
+                        const muted = Boolean(row?.__filteredEmpty);
+                        return (
+                          <g transform={`translate(${props.x},${props.y})`}>
+                            <text x={0} y={0} dy={12} textAnchor="end" transform="rotate(-18)" fontSize={10} fill={muted ? (isDark ? '#64748B' : '#94A3B8') : (isDark ? '#94A3B8' : '#64748B')} opacity={muted ? 0.72 : 1}>
+                              {props.payload?.value}
+                            </text>
+                          </g>
+                        );
+                      }}
+                    />
+                    <YAxis hide width={0} allowDecimals={false} domain={[0, overviewYAxis.max]} ticks={overviewYAxis.ticks} />
+                    <Tooltip content={<PortalOverviewTooltip chartRef={chartContentRef} />} cursor={{ fill: isDark ? 'rgba(148,163,184,0.06)' : 'rgba(124,58,237,0.04)' }} />
+                    {comparePrevious && firstCurrentX && <ReferenceLine x={firstCurrentX} stroke={isDark ? '#A78BFA' : '#7C3AED'} strokeDasharray="4 4" label={{ value: 'Período atual', fontSize: 9, position: 'insideTopLeft' }} />}
+                    {overviewVisibleBars.map((item) => <Bar key={item.key} dataKey={item.key} name={item.label} stackId="domains" fill={item.color} maxBarSize={52} isAnimationActive={!prefersReducedMotion} animationDuration={180} cursor={onOpenSessionReport ? 'pointer' : 'default'} onClick={(entry: any) => openSessionReport(entry?.sessionId || entry?.payload?.sessionId)} />)}
+                    {overviewFilterActive && (
+                      <Bar
+                        dataKey="__ghost"
+                        name="Sem registros no filtro"
+                        stackId="domains"
+                        fill="transparent"
+                        isAnimationActive={false}
+                        shape={(props: any) => <OverviewGhostBarShape {...props} isDark={isDark} onActivate={setOverviewEmptyHint} />}
+                      />
+                    )}
+                  </BarChart>
+                </SafeResponsiveContainer>
+              </div>
+            </div>
+          </div>
         ) : (
-        <div className={`${activeDomain === 'overview' ? 'h-[170px] sm:h-[180px]' : 'h-[250px] sm:h-[285px]'} min-w-0 overflow-x-auto`}>
-          <div className="h-full" style={{ minWidth: Math.max(620, rows.length * 72) }}>
-            <SafeResponsiveContainer width="100%" height="100%" minHeight={activeDomain === 'overview' ? 150 : 230}>
-              {activeDomain === 'overview' ? (
-                <BarChart data={rows} margin={{ top: 8, right: 18, left: 4, bottom: 24 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#334155' : '#E2E8F0'} />
-                  <XAxis dataKey="x" tick={{ fontSize: 10, fill: isDark ? '#94A3B8' : '#64748B' }} angle={-18} textAnchor="end" height={38} interval={0} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 10, fill: isDark ? '#94A3B8' : '#64748B' }} label={{ value: 'Registros distintos', angle: -90, position: 'insideLeft', fontSize: 10 }} />
-                  <Tooltip content={<OverviewTooltip />} cursor={{ fill: isDark ? 'rgba(148,163,184,0.06)' : 'rgba(124,58,237,0.04)' }} />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {comparePrevious && firstCurrentX && <ReferenceLine x={firstCurrentX} stroke={isDark ? '#A78BFA' : '#7C3AED'} strokeDasharray="4 4" label={{ value: 'Período atual', fontSize: 9, position: 'insideTopLeft' }} />}
-                  {OVERVIEW_BARS.map((item) => <Bar key={item.key} dataKey={item.key} name={item.label} stackId="domains" fill={item.color} maxBarSize={52} cursor={onOpenSessionReport ? 'pointer' : 'default'} onClick={(entry: any) => openSessionReport(entry?.sessionId || entry?.payload?.sessionId)} />)}
-                </BarChart>
-              ) : (
+          <div className="h-[250px] min-w-0 overflow-x-auto sm:h-[285px]">
+            <div ref={chartContentRef} className="h-full" style={{ minWidth: Math.max(620, rows.length * 72) }}>
+              <SafeResponsiveContainer width="100%" height="100%" minHeight={230}>
                 <LineChart data={rows} margin={{ top: 12, right: 18, left: 4, bottom: 32 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#334155' : '#E2E8F0'} />
                   <XAxis dataKey="x" tick={{ fontSize: 10, fill: isDark ? '#94A3B8' : '#64748B' }} angle={-18} textAnchor="end" height={44} interval={0} />
@@ -889,7 +1143,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
                     domain={percentMode ? [0, 100] : ratioMode ? [0, 1] : ['auto', 'auto']}
                     label={{ value: unitLabel, angle: -90, position: 'insideLeft', fontSize: 10 }}
                   />
-                  <Tooltip content={<AnalyticsTooltip unit={unit} selectedSeries={selectedSeries} />} />
+                  <Tooltip content={<PortalAnalyticsTooltip chartRef={chartContentRef} unit={unit} selectedSeries={selectedSeries} />} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {comparePrevious && firstCurrentX && <ReferenceLine x={firstCurrentX} stroke={isDark ? '#A78BFA' : '#7C3AED'} strokeDasharray="4 4" label={{ value: 'Período atual', fontSize: 9, position: 'insideTopLeft' }} />}
                   {selectedSeries.map((item, index) => {
@@ -901,10 +1155,9 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
                     </React.Fragment>;
                   })}
                 </LineChart>
-              )}
-            </SafeResponsiveContainer>
+              </SafeResponsiveContainer>
+            </div>
           </div>
-        </div>
         )}
 
         {activeDomain !== 'overview' && activeDomain !== 'changes' && selectedSeries.length === 0 && <div className="py-10 text-center"><Target className="mx-auto text-slate-300" size={26} /><p className={`mt-2 text-sm ${subtle}`}>{activeDomain === 'behaviors' ? 'Selecione ao menos um comportamento interferente para visualizar.' : 'Selecione ao menos um alvo para visualizar.'}</p></div>}

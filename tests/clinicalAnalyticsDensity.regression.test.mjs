@@ -6,8 +6,10 @@ const dashboard = readFileSync('src/components/ClinicalOutcomesDashboard.tsx', '
 
 assert.match(shell, /axis: AnalyticsAxis;/, 'o eixo analítico deve ser controlado pelo dashboard');
 assert.match(shell, /onAxisChange: \(axis: AnalyticsAxis\) => void;/, 'a troca de eixo deve ser compartilhada com os cards individuais');
-assert.match(shell, /h-\[170px\] sm:h-\[180px\]/, 'a visão geral deve permanecer compacta');
-assert.match(shell, /activeDomain === 'overview' \? 150 : 230/, 'o gráfico-resumo não deve voltar à altura antiga');
+assert.match(shell, /flex h-\[170px\] min-w-0 sm:h-\[180px\]/, 'a visão geral deve permanecer compacta');
+assert.match(shell, /minHeight=\{150\}/, 'o gráfico-resumo não deve voltar à altura antiga');
+assert.match(shell, /data-testid="overview-y-axis-pane"/, 'o eixo Y compacto deve permanecer fixo fora do viewport rolável');
+assert.match(shell, /data-testid="overview-x-scroll-viewport"/, 'a densidade temporal deve ser absorvida apenas pelo scroll do eixo X');
 
 assert.match(dashboard, /useState<AnalyticsAxis>\('session'\)/, 'o dashboard deve manter um único eixo analítico compartilhado');
 assert.match(dashboard, /axis=\{analyticsAxis\}/, 'o shell e o card detalhado devem receber o mesmo eixo');
