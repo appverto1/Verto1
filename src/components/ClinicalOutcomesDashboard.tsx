@@ -921,6 +921,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
           onAxisChange={setAnalyticsAxis}
           isDark={isPanelDark}
           onOpenSessionReport={onOpenSessionReport}
+          programs={data.programs || []}
         />
       )}
 
