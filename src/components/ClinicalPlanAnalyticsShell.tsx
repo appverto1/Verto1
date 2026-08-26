@@ -253,6 +253,23 @@ const displayValue = (value: unknown, unit: string) => {
 
 const sessionIdentity = (observation: ClinicalOutcomeObservation) => clean(observation.sessionId) || `obs:${observation.id}`;
 const sessionDisplayLabel = (observation: ClinicalOutcomeObservation) => sessionDateTimeLabel(observation.observedAt);
+const abaSessionStartTimestamp = (sessionId: unknown) => {
+  const match = clean(sessionId).match(/-(\d{13})$/);
+  if (!match) return 0;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+const overviewSessionAnchorTimestamp = (observation: ClinicalOutcomeObservation) => (
+  abaSessionStartTimestamp(observation.sessionId) || timestamp(observation.observedAt)
+);
+const overviewSessionMinuteTimestamp = (observation: ClinicalOutcomeObservation) => {
+  const anchor = overviewSessionAnchorTimestamp(observation);
+  return anchor > 0 ? Math.floor(anchor / 60_000) * 60_000 : 0;
+};
+const reportableAbaSessionId = (observation: ClinicalOutcomeObservation) => {
+  const sessionId = clean(observation.sessionId);
+  return abaSessionStartTimestamp(sessionId) > 0 ? sessionId : '';
+};
 
 const collectBuckets = (
   selectedSeries: ClinicalOutcomeSeriesSummary[],
@@ -374,29 +391,100 @@ const overviewRows = (
   const previousSeries = comparePrevious
     ? currentSeries.map((series) => previousSeriesByKey.get(series.key)).filter((series): series is ClinicalOutcomeSeriesSummary => Boolean(series))
     : [];
-  const allSeries = [...currentSeries, ...previousSeries];
-  const buckets = collectBuckets(currentSeries, previousSeriesByKey, comparePrevious, axis);
-  const rows = buckets.map((bucket) => ({ x: bucket.label, xDetail: bucket.detail, period: bucket.period, sortTime: bucket.sortTime, sessionId: bucket.sessionIds.length === 1 ? bucket.sessionIds[0] : null, skills: 0, behaviors: 0, mastery: 0, maintenance: 0, alerts: 0 }));
-  const index = new Map(buckets.map((bucket, rowIndex) => [bucket.key, rowIndex]));
+  type OverviewRow = {
+    x: string;
+    xDetail: string;
+    period: 'current' | 'previous';
+    sortTime: number;
+    sessionId: string | null;
+    skills: number;
+    behaviors: number;
+    mastery: number;
+    maintenance: number;
+    alerts: number;
+    _sessionIds: Set<string>;
+    _reportSessionIds: Set<string>;
+  };
+  const rowsByKey = new Map<string, OverviewRow>();
   const seen = new Set<string>();
+
+  const bucketDescriptor = (observation: ClinicalOutcomeObservation, period: 'current' | 'previous') => {
+    if (axis === 'date') {
+      const dateKey = localDateKey(observation.observedAt);
+      return {
+        key: `${period}::date:${dateKey}`,
+        label: shortDate(dateKey),
+        detail: fullDate(dateKey),
+        sortTime: timestamp(`${dateKey}T12:00:00`),
+      };
+    }
+
+    // CMV3 plan projections may use one UUID per measurement while ABA keeps one
+    // durable session id. For the overview, both must land in the same clinical
+    // session bar. ABA's trailing epoch is the authoritative session start; other
+    // canonical observations fall back to their observed minute.
+    const sessionMinute = overviewSessionMinuteTimestamp(observation);
+    const safeMinute = sessionMinute || Math.floor(timestamp(observation.observedAt) / 60_000) * 60_000;
+    const iso = safeMinute > 0 ? new Date(safeMinute).toISOString() : observation.observedAt;
+    return {
+      key: `${period}::session-minute:${safeMinute || clean(observation.observedAt)}`,
+      label: sessionDateTimeLabel(iso),
+      detail: sessionDateTimeDetail(iso),
+      sortTime: safeMinute || timestamp(observation.observedAt),
+    };
+  };
 
   const countSeries = (series: ClinicalOutcomeSeriesSummary, period: 'current' | 'previous') => {
     for (const observation of series.validObservations) {
-      const baseKey = axis === 'session' ? sessionIdentity(observation) : localDateKey(observation.observedAt);
-      const bucketKey = `${period}::${baseKey}`;
-      const rowIndex = index.get(bucketKey);
-      if (rowIndex === undefined) continue;
+      const bucket = bucketDescriptor(observation, period);
+      let row = rowsByKey.get(bucket.key);
+      if (!row) {
+        row = {
+          x: bucket.label,
+          xDetail: bucket.detail,
+          period,
+          sortTime: bucket.sortTime,
+          sessionId: null,
+          skills: 0,
+          behaviors: 0,
+          mastery: 0,
+          maintenance: 0,
+          alerts: 0,
+          _sessionIds: new Set<string>(),
+          _reportSessionIds: new Set<string>(),
+        };
+        rowsByKey.set(bucket.key, row);
+      }
+
+      const sessionId = clean(observation.sessionId);
+      if (sessionId) row._sessionIds.add(sessionId);
+      const reportSessionId = reportableAbaSessionId(observation);
+      if (reportSessionId) row._reportSessionIds.add(reportSessionId);
+
       const domain = isRegressionAlertSeries(series) ? 'alerts' : analyticsDomainForSeries(series);
-      const identity = `${bucketKey}::${domain}::${sessionIdentity(observation)}::${clean(observation.itemId || observation.goalId || observation.programId) || observation.id}`;
+      const identity = `${bucket.key}::${domain}::${sessionIdentity(observation)}::${clean(observation.itemId || observation.goalId || observation.programId) || observation.id}`;
       if (seen.has(identity)) continue;
       seen.add(identity);
-      rows[rowIndex][domain] += 1;
+      row[domain] += 1;
     }
   };
 
   currentSeries.forEach((series) => countSeries(series, 'current'));
   previousSeries.forEach((series) => countSeries(series, 'previous'));
-  return rows;
+
+  return Array.from(rowsByKey.values())
+    .sort((left, right) => left.sortTime - right.sortTime)
+    .map((row) => {
+      const reportSessionIds = Array.from(row._reportSessionIds);
+      const sessionIds = Array.from(row._sessionIds);
+      const sessionId = reportSessionIds.length === 1
+        ? reportSessionIds[0]
+        : reportSessionIds.length === 0 && sessionIds.length === 1
+          ? sessionIds[0]
+          : null;
+      const { _sessionIds, _reportSessionIds, ...publicRow } = row;
+      return { ...publicRow, sessionId };
+    });
 };
 
 function AnalyticsTooltip({ active, payload, label, unit, selectedSeries, changesMode = false }: any) {
@@ -426,12 +514,15 @@ function AnalyticsTooltip({ active, payload, label, unit, selectedSeries, change
 function OverviewTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload || {};
+  const visibleItems = payload.filter((item: any) => Number(item.value) > 0);
+  const total = visibleItems.reduce((sum: number, item: any) => sum + Number(item.value || 0), 0);
   return (
     <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
       <p className="font-semibold">{label}</p>
       <p className="mt-0.5 text-slate-500 dark:text-slate-400">{row.xDetail}{row.period === 'previous' ? ' · período anterior' : ''}</p>
-      <div className="mt-2 space-y-1">
-        {payload.filter((item: any) => Number(item.value) > 0).map((item: any) => <p key={item.dataKey}>{item.name}: <strong>{item.value}</strong></p>)}
+      <p className="mt-2 border-b border-slate-100 pb-1.5 font-medium dark:border-slate-800">Total: <strong>{total}</strong></p>
+      <div className="mt-1.5 space-y-1">
+        {visibleItems.map((item: any) => <p key={item.dataKey}>{item.name}: <strong>{item.value}</strong></p>)}
       </div>
     </div>
   );
@@ -612,7 +703,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className={`text-sm font-semibold ${text}`}>{activeDomain === 'overview' ? 'Registros clínicos por domínio' : activeDomain === 'changes' ? 'Mudanças entre sessões' : activeMetric?.label}</p>
-            <p className={`mt-0.5 text-[11px] ${subtle}`}>{activeDomain === 'overview' ? 'Contagem de registros distintos; não é um score clínico.' : `${activeCount} ponto(s) no período atual${comparePrevious ? ` · ${previousCount} no período anterior` : ''} · ${unitLabel}`}</p>
+            <p className={`mt-0.5 text-[11px] ${subtle}`}>{activeDomain === 'overview' ? `Uma barra por ${axis === 'session' ? 'sessão' : 'dia'}, com os domínios empilhados; não é um score clínico.` : `${activeCount} ponto(s) no período atual${comparePrevious ? ` · ${previousCount} no período anterior` : ''} · ${unitLabel}`}</p>
           </div>
           {comparePrevious && <div className={`flex items-center gap-3 text-[11px] ${subtle}`}><span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-6 bg-violet-600" /> Atual</span><span className="inline-flex items-center gap-1.5"><span className="h-0 w-6 border-t-2 border-dashed border-violet-400" /> Anterior</span></div>}
         </div>
@@ -658,7 +749,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
         </div>
 
         {activeDomain !== 'overview' && selectedSeries.length === 0 && <div className="py-10 text-center"><Target className="mx-auto text-slate-300" size={26} /><p className={`mt-2 text-sm ${subtle}`}>{activeDomain === 'behaviors' ? 'Selecione ao menos um comportamento interferente para visualizar.' : 'Selecione ao menos um alvo para visualizar.'}</p></div>}
-        {activeDomain === 'overview' && <div className={`mt-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${isDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}><Activity size={15} className="mt-0.5 shrink-0 text-violet-500" /><span>A visão geral mostra atividade clínica por domínio para facilitar a leitura rápida. Percentuais, duração, frequência e outras unidades não são somados entre si.</span></div>}
+        {activeDomain === 'overview' && <div className={`mt-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${isDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}><Activity size={15} className="mt-0.5 shrink-0 text-violet-500" /><span>A visão geral empilha, na mesma barra, a contagem de registros clínicos de cada domínio por dia ou sessão. Percentuais, duração, frequência e outras unidades não são somados entre si.</span></div>}
       </div>
     </section>
   );

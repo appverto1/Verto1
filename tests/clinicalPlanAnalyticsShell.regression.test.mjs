@@ -29,7 +29,12 @@ assert.match(shell, /current_\$\{index\}/, 'o período atual deve permanecer com
 assert.match(shell, /previous_\$\{index\}/, 'o período anterior deve permanecer no mesmo gráfico, sem substituir o atual');
 assert.match(shell, /strokeDasharray="6 5"/, 'o período anterior deve usar o mesmo significado cromático com estilo visual distinto');
 assert.match(shell, /connectNulls=\{false\}/, 'períodos e lacunas não podem ser conectados artificialmente');
-assert.match(shell, /Contagem de registros distintos; não é um score clínico\./, 'a visão geral não pode sugerir um score global');
+assert.match(shell, /com os domínios empilhados; não é um score clínico/, 'a visão geral deve explicar o empilhamento sem sugerir score global');
+assert.match(shell, /stackId="domains"/, 'a visão geral deve empilhar os domínios na mesma barra');
+assert.match(shell, /session-minute:/, 'a visão geral por sessão deve consolidar registros canônicos da mesma sessão visual');
+assert.match(shell, /abaSessionStartTimestamp/, 'sessões ABA devem usar o timestamp de início persistido no id como âncora visual');
+assert.ok(shell.includes('Total: <strong>{total}</strong>'), 'o tooltip da barra empilhada deve mostrar o total da sessão ou dia');
+assert.match(shell, /_reportSessionIds/, 'o agrupamento empilhado deve preservar um sessionId navegável quando houver uma única sessão ABA');
 assert.match(shell, /Percentuais, duração, frequência e outras unidades não são somados entre si\./, 'a visão geral deve proibir soma de unidades incompatíveis');
 assert.match(shell, /metricSignature/, 'métricas devem permanecer separadas por assinatura semântica');
 assert.match(shell, /previousSeriesByKey/, 'comparação deve reutilizar a série clínica compatível do período anterior');
