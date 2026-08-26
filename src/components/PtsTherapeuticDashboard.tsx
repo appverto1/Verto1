@@ -133,10 +133,30 @@ export function PtsTherapeuticDashboard({
   const professionalById = useMemo(() => new Map(
     (Array.isArray(professionals) ? professionals : []).map((professional: any) => [String(professional.id), professional]),
   ), [professionals]);
-  const participantIds = useMemo(() => Array.from(new Set([
-    String(scope?.responsible_professional_id || ''),
-    ...(Array.isArray(scope?.participant_professional_ids) ? scope.participant_professional_ids.map(String) : []),
-  ].filter(Boolean))), [scope]);
+  const caseTeamProfessionals = useMemo(() => {
+    const activeTeam = (Array.isArray(professionals) ? professionals : [])
+      .filter((professional: any) => String(professional?.id || '').trim());
+    if (activeTeam.length > 0) {
+      const seen = new Set<string>();
+      return activeTeam.filter((professional: any) => {
+        const id = String(professional?.id || '').trim();
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+    }
+
+    // Compatibility fallback for historical snapshots created before the case-team
+    // projection was available. Current PTS screens should normally use the live,
+    // relationship-authorized case team supplied by the server.
+    const fallbackIds = Array.from(new Set([
+      String(scope?.responsible_professional_id || ''),
+      ...(Array.isArray(scope?.participant_professional_ids) ? scope.participant_professional_ids.map(String) : []),
+    ].filter(Boolean)));
+    return fallbackIds
+      .map((professionalId) => professionalById.get(professionalId))
+      .filter(Boolean);
+  }, [professionals, professionalById, scope]);
   const responsible = professionalById.get(String(pts.caseManagerId || scope?.responsible_professional_id || ''))
     || professionalById.get(String(scope?.responsible_professional_id || ''))
     || null;
@@ -344,8 +364,8 @@ export function PtsTherapeuticDashboard({
 
           {section('team', 'Equipe multidisciplinar', (
             <div className="space-y-2">
-              {participantIds.map((professionalId) => {
-                const professional = professionalById.get(professionalId);
+              {caseTeamProfessionals.map((professional: any) => {
+                const professionalId = String(professional?.id || '');
                 return (
                   <div key={professionalId} className="flex items-center gap-2.5">
                     {professionalPhotoSource(professional) ? (
@@ -360,7 +380,7 @@ export function PtsTherapeuticDashboard({
                   </div>
                 );
               })}
-              {participantIds.length === 0 && <p className={`text-xs ${muted}`}>Ainda não preenchido.</p>}
+              {caseTeamProfessionals.length === 0 && <p className={`text-xs ${muted}`}>Nenhum profissional ativo na equipe do caso.</p>}
             </div>
           ))}
 
