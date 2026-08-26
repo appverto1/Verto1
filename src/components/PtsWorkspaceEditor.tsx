@@ -232,7 +232,9 @@ export function PtsWorkspaceEditor({
           target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
           if (target instanceof HTMLElement) target.focus({ preventScroll: true });
         });
-        return;
+        // Activation may be blocked, but the current form must still reach the
+        // server so the draft is persisted. The activation RPC commits the
+        // draft first and returns an activation-only validation outcome.
       }
     }
     const normalized = stripPtsTrackingFieldsForDraft(normalizePtsClinicalPayload(draft, {
