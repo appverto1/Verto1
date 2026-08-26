@@ -32,6 +32,7 @@ import { AlertDialog } from './ui/AlertDialog';
 import { dataService } from '../services/dataService';
 import { PtsWorkspaceEditor } from './PtsWorkspaceEditor';
 import { PtsTherapeuticDashboard } from './PtsTherapeuticDashboard';
+import { PtsEventForm } from './PtsEventForm';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
 import { decodeClinicalTextEntities, normalizeClinicalTextRecord } from '../utils/clinicalText';
 import {
@@ -393,6 +394,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const [editingScopeId, setEditingScopeId] = useState('');
   const [workspaceScopeId, setWorkspaceScopeId] = useState('');
   const [showPlanManager, setShowPlanManager] = useState(false);
+  const [ptsDraftOverride, setPtsDraftOverride] = useState<{ planId: string; version: any } | null>(null);
+  const [ptsEventKind, setPtsEventKind] = useState<'review' | 'risk' | null>(null);
+  const [ptsEventSaving, setPtsEventSaving] = useState(false);
   const [scopeEditDraft, setScopeEditDraft] = useState<any>({ commonObjectives: '', specialtyObjectives: {}, status: 'draft', expectedVersion: 1 });
   const requestSequence = useRef(0);
   const scopeIdempotencyKeyRef = useRef('');
@@ -627,6 +631,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     setSelectedProgramId('');
     setWorkspaceScopeId('');
     setShowPlanManager(false);
+    setEditingScopeId('');
+    setPtsDraftOverride(null);
+    setPtsEventKind(null);
+    setPtsEventSaving(false);
     void loadPlan(false);
     return () => {
       requestSequence.current += 1;
@@ -1234,9 +1242,38 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     await loadPlan(true);
   };
 
+  const draftVersionForScope = (scope: any) => {
+    const scopeId = String(scope?.id || '');
+    if (ptsDraftOverride?.planId === scopeId && ptsDraftOverride.version?.id) return ptsDraftOverride.version;
+    return scope?.pts_lineage?.draftVersion || null;
+  };
+
+  const openPtsDraft = async (scope: any) => {
+    const scopeId = String(scope?.id || '');
+    if (!scopeId || scopeSaving) return;
+    const existingDraft = draftVersionForScope(scope);
+    if (existingDraft?.id) {
+      setEditingScopeId(scopeId);
+      return;
+    }
+    setScopeSaving(true);
+    const response = await dataService.createPtsDraftVersion(patientId, scopeId);
+    setScopeSaving(false);
+    if (response?.success === false || !response?.data?.id) {
+      setNotice(response?.message || response?.error || 'Não foi possível criar a nova versão do PTS.');
+      return;
+    }
+    setPtsDraftOverride({ planId: scopeId, version: response.data });
+    setEditingScopeId(scopeId);
+    setNotice('Nova versão criada como rascunho. A versão vigente permanece intacta até a ativação.');
+  };
+
   const startEditingScope = (scope: any) => {
+    if (scope.mode === 'interdisciplinary') {
+      void openPtsDraft(scope);
+      return;
+    }
     setEditingScopeId(String(scope.id));
-    if (scope.mode === 'interdisciplinary') return;
     const common = Array.isArray(scope.common_objectives) ? scope.common_objectives : [];
     const specific = scope.specialty_objectives && typeof scope.specialty_objectives === 'object'
       ? scope.specialty_objectives
@@ -1281,15 +1318,58 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
   const savePtsScope = async (scopeId: string, payload: any) => {
     if (!scopeId || scopeSaving) return;
-    setScopeSaving(true);
-    const response = await dataService.updatePatientTherapeuticPlanScope(patientId, scopeId, payload);
-    setScopeSaving(false);
-    if (response?.success === false) {
-      setNotice(response?.message || response?.error || 'Não foi possível salvar o Projeto Terapêutico Singular.');
+    const versionId = String(payload?.versionId || '');
+    const expectedDraftRevision = Number(payload?.expectedDraftRevision || 0);
+    if (!versionId || !Number.isSafeInteger(expectedDraftRevision) || expectedDraftRevision < 1) {
+      setNotice('O rascunho do PTS não está disponível. Reabra a edição e tente novamente.');
       return;
     }
-    setEditingScopeId('');
-    setNotice('PTS atualizado em uma nova versão, sem alterar o histórico anterior.');
+    const requestPayload = {
+      expectedDraftRevision,
+      ptsPayload: payload?.ptsPayload,
+      commonObjectives: payload?.commonObjectives,
+      specialtyObjectives: payload?.specialtyObjectives,
+      reviewDueDate: payload?.reviewDueDate || null,
+    };
+    setScopeSaving(true);
+    const response = payload?.action === 'activate'
+      ? await dataService.activatePtsDraftVersion(patientId, scopeId, versionId, requestPayload)
+      : await dataService.savePtsDraftVersion(patientId, scopeId, versionId, requestPayload);
+    setScopeSaving(false);
+    if (response?.success === false) {
+      setNotice(response?.message || response?.error || (payload?.action === 'activate'
+        ? 'Não foi possível ativar o Projeto Terapêutico Singular.'
+        : 'Não foi possível salvar o rascunho do Projeto Terapêutico Singular.'));
+      return;
+    }
+    if (payload?.action === 'activate') {
+      setPtsDraftOverride(null);
+      setEditingScopeId('');
+      setNotice('PTS ativado. A versão anterior e os eventos clínicos foram preservados integralmente.');
+      await loadPlan(true);
+      return;
+    }
+    if (response?.data?.id) setPtsDraftOverride({ planId: scopeId, version: response.data });
+    setNotice('Rascunho salvo. A versão vigente continua somente leitura e não foi alterada.');
+    await loadPlan(true);
+  };
+
+  const savePtsEvent = async (eventPayload: any) => {
+    if (!primaryPtsScope?.id || ptsEventSaving) return;
+    setPtsEventSaving(true);
+    const response = await dataService.appendPtsEvent(patientId, String(primaryPtsScope.id), {
+      ...eventPayload,
+      idempotencyKey: newIdempotencyKey(`pts-event:${primaryPtsScope.id}:${eventPayload?.eventType || 'event'}`),
+    });
+    setPtsEventSaving(false);
+    if (response?.success === false) {
+      setNotice(response?.message || response?.error || 'Não foi possível registrar o evento do PTS.');
+      return;
+    }
+    setPtsEventKind(null);
+    setNotice(eventPayload?.eventType === 'RISK_OPENED'
+      ? 'Risco registrado no histórico longitudinal sem alterar a versão publicada.'
+      : 'Reavaliação registrada no histórico longitudinal sem alterar a versão publicada.');
     await loadPlan(true);
   };
 
@@ -2442,7 +2522,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                       </p>
                     </div>
                     <span className={`shrink-0 rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                      v{scope.edit_version}
+                      v{isPts ? scope?.pts_lineage?.activeVersion?.versionNumber || scope?.pts_lineage?.draftVersion?.versionNumber || scope.edit_version : scope.edit_version}
                     </span>
                   </div>
                   <p className={`mt-3 text-xs ${muted}`}>
@@ -2503,15 +2583,25 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                       className="mt-3 min-h-10 rounded-lg px-2 text-xs font-medium text-violet-600 hover:bg-violet-500/10"
                       onClick={() => editingScopeId === String(scope.id) ? setEditingScopeId('') : startEditingScope(scope)}
                     >
-                      {isPts ? (editingScopeId === String(scope.id) ? 'Fechar PTS' : 'Abrir e editar PTS') : 'Editar objetivos e estado'}
+                      {isPts
+                        ? editingScopeId === String(scope.id)
+                          ? 'Fechar rascunho'
+                          : draftVersionForScope(scope)?.id
+                            ? 'Continuar rascunho'
+                            : scope?.pts_lineage?.activeVersion?.id
+                              ? 'Criar nova versão'
+                              : 'Editar rascunho'
+                        : 'Editar objetivos e estado'}
                     </button>
                   )}
                   {editingScopeId === String(scope.id) && (
                     <div className={`mt-3 border-t pt-4 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
                       {isPts ? (
                         <PtsWorkspaceEditor
-                          key={`${scope.id}:${scope.edit_version}`}
+                          key={`${scope.id}:${String(draftVersionForScope(scope)?.id || 'draft')}`}
                           scope={scope}
+                          draftVersion={draftVersionForScope(scope)}
+                          events={Array.isArray(scope?.pts_events) ? scope.pts_events : []}
                           professionals={linkedProfessionals}
                           programs={programs}
                           isDark={isDark}
@@ -2598,7 +2688,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           onScopeChange={setWorkspaceScopeId}
           onAddProgram={() => startCreationForScope(String(primaryPtsScope.id))}
           onAddProgramForScope={(scopeId) => startCreationForScope(scopeId)}
-          onNewVersion={() => startEditingScope(primaryPtsScope)}
+          onNewVersion={() => void openPtsDraft(primaryPtsScope)}
+          onRecordReview={() => setPtsEventKind('review')}
+          onRecordRisk={() => setPtsEventKind('risk')}
           onEditPerspectiveScope={(scope) => startEditingScope(scope)}
           onManagePlans={() => setShowPlanManager(true)}
           renderProgramCard={renderPtsProgramCard}
@@ -2631,13 +2723,36 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           isDark={isDark}
         >
           <PtsWorkspaceEditor
-            key={`${primaryPtsScope.id}:${primaryPtsScope.edit_version}`}
+            key={`${primaryPtsScope.id}:${String(draftVersionForScope(primaryPtsScope)?.id || 'draft')}`}
             scope={primaryPtsScope}
+            draftVersion={draftVersionForScope(primaryPtsScope)}
+            events={Array.isArray(primaryPtsScope?.pts_events) ? primaryPtsScope.pts_events : []}
             professionals={linkedProfessionals}
             programs={programs}
             isDark={isDark}
             saving={scopeSaving}
             onSave={(payload) => savePtsScope(String(primaryPtsScope.id), payload)}
+          />
+        </ResponsiveDrawer>
+      )}
+
+      {primaryPtsScope && ptsEventKind && (
+        <ResponsiveDrawer
+          open
+          title={ptsEventKind === 'review' ? 'Registrar reavaliação' : 'Registrar risco'}
+          titleId="pts-event-form-title"
+          description="Acrescente um evento ao histórico longitudinal sem alterar a versão publicada do PTS."
+          onRequestClose={() => { if (!ptsEventSaving) setPtsEventKind(null); }}
+          isDark={isDark}
+          interactionBlocked={ptsEventSaving}
+        >
+          <PtsEventForm
+            key={`${primaryPtsScope.id}:${ptsEventKind}`}
+            kind={ptsEventKind}
+            isDark={isDark}
+            saving={ptsEventSaving}
+            onCancel={() => setPtsEventKind(null)}
+            onSubmit={savePtsEvent}
           />
         </ResponsiveDrawer>
       )}

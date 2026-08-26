@@ -413,7 +413,8 @@ import {
 import {
   emptyPtsClinicalPayload,
   normalizePtsClinicalPayload,
-  ptsLastReviewedAt
+  ptsLastReviewedAt,
+  stripPtsTrackingFieldsForDraft
 } from './src/utils/ptsClinicalWorkspace';
 import {
   canAssignClinicRole,
@@ -69828,6 +69829,136 @@ async function startServer() {
     'created_at', 'updated_at', 'idempotency_key', 'request_hash', 'pts_payload',
     'pts_schema_version', 'review_due_date', 'last_reviewed_at'
   ].join(',');
+  const loadPtsPlanWriteContext = async (params: {
+    patientId: string;
+    planId: string;
+    organizationId: string;
+    actorId: string;
+    actorRole: string;
+  }) => {
+    const { data: plan, error: planError } = await supabase
+      .from('patient_therapeutic_plans')
+      .select(PATIENT_THERAPEUTIC_PLAN_SELECT)
+      .eq('id', params.planId)
+      .eq('organization_id', params.organizationId)
+      .eq('patient_id', params.patientId)
+      .limit(1)
+      .maybeSingle();
+    if (planError) throw planError;
+    if (!plan || String(plan.mode || '').toLowerCase() !== 'interdisciplinary') {
+      return { plan: null, allowed: false, reason: 'not_found' as const };
+    }
+    if (isTherapeuticPlanManager(params.actorRole)) {
+      return { plan, allowed: true, reason: null };
+    }
+    const permittedIds = new Set([
+      String(plan.responsible_professional_id || ''),
+      ...(Array.isArray(plan.participant_professional_ids) ? plan.participant_professional_ids.map(String) : []),
+    ].filter(Boolean));
+    if (!permittedIds.has(params.actorId)) {
+      return { plan, allowed: false, reason: 'denied' as const };
+    }
+    const { data: actorLink, error: actorLinkError } = await supabase
+      .from('patient_professional_links')
+      .select('permissions,status')
+      .eq('organization_id', params.organizationId)
+      .eq('patient_id', params.patientId)
+      .eq('professional_id', params.actorId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    if (actorLinkError) throw actorLinkError;
+    return {
+      plan,
+      allowed: Boolean(actorLink && (actorLink as any)?.permissions?.write !== false),
+      reason: actorLink && (actorLink as any)?.permissions?.write !== false ? null : 'denied' as const,
+    };
+  };
+
+  const ptsDraftInput = (plan: any, body: any) => {
+    const participantIds = Array.from(new Set([
+      String(plan?.responsible_professional_id || ''),
+      ...(Array.isArray(plan?.participant_professional_ids) ? plan.participant_professional_ids.map(String) : []),
+    ].filter(Boolean)));
+    const specialties = Array.isArray(plan?.participant_specialties) ? plan.participant_specialties.map(String) : [];
+    const normalizedSpecialtyObjectives = normalizeTherapeuticSpecialtyObjectives(
+      body?.specialtyObjectives ?? body?.specialty_objectives ?? plan?.specialty_objectives ?? {},
+      specialties,
+    );
+    if (!normalizedSpecialtyObjectives) return { error: 'THERAPEUTIC_PLAN_SPECIALTY_OBJECTIVES_INVALID' as const };
+    const normalizedPts = stripPtsTrackingFieldsForDraft(normalizePtsClinicalPayload(
+      body?.ptsPayload ?? body?.pts_payload ?? plan?.pts_payload,
+      {
+        participantIds,
+        specialties,
+        defaultCaseManagerId: String(plan?.responsible_professional_id || ''),
+        defaultStartedAt: String(plan?.created_at || '').slice(0, 10),
+      },
+    ));
+    const requestedReviewDueDate = sanitizeString(
+      body?.reviewDueDate ?? body?.review_due_date ?? normalizedPts.nextReviewDate,
+      10,
+    );
+    return {
+      error: null,
+      ptsPayload: sanitizeClinicalPayload(normalizedPts),
+      commonObjectives: sanitizeClinicalPayload(
+        body?.commonObjectives ?? body?.common_objectives ?? normalizedPts.goals.map((goal: any) => goal.title).filter(Boolean),
+      ),
+      specialtyObjectives: sanitizeClinicalPayload(normalizedSpecialtyObjectives),
+      reviewDueDate: /^\d{4}-\d{2}-\d{2}$/.test(requestedReviewDueDate) ? requestedReviewDueDate : null,
+    };
+  };
+
+  const normalizePtsEventPayload = (eventType: string, body: any) => {
+    const payload = body?.payload && typeof body.payload === 'object' && !Array.isArray(body.payload) ? body.payload : {};
+    if (eventType === 'REVIEW_RECORDED') {
+      const summary = sanitizeTextField(payload.summary, 3000);
+      const decisions = sanitizeTextField(payload.decisions, 3000);
+      const nextReviewDateRaw = sanitizeString(payload.nextReviewDate || payload.next_review_date, 10);
+      if (!summary && !decisions) return { error: 'PTS_REVIEW_CONTENT_REQUIRED', payload: null };
+      return {
+        error: null,
+        payload: cleanObject({
+          summary,
+          decisions,
+          nextReviewDate: /^\d{4}-\d{2}-\d{2}$/.test(nextReviewDateRaw) ? nextReviewDateRaw : undefined,
+        }),
+      };
+    }
+    if (eventType === 'RISK_OPENED') {
+      const title = sanitizeTextField(payload.title, 180);
+      if (!title) return { error: 'PTS_RISK_TITLE_REQUIRED', payload: null };
+      const severity = sanitizeString(payload.severity, 30).toLowerCase();
+      return {
+        error: null,
+        payload: cleanObject({
+          title,
+          severity: ['low', 'medium', 'high', 'critical'].includes(severity) ? severity : 'medium',
+          description: sanitizeTextField(payload.description, 1600),
+          responsePlan: sanitizeTextField(payload.responsePlan || payload.response_plan, 2200),
+        }),
+      };
+    }
+    if (eventType === 'TEAM_DECISION_RECORDED') {
+      const decisions = sanitizeTextField(payload.decisions || payload.summary, 3000);
+      return decisions
+        ? { error: null, payload: { decisions } }
+        : { error: 'PTS_TEAM_DECISION_REQUIRED', payload: null };
+    }
+    if (eventType === 'RISK_STATUS_UPDATED' || eventType === 'RISK_RESOLVED') {
+      const status = eventType === 'RISK_RESOLVED' ? 'resolved' : sanitizeString(payload.status, 30).toLowerCase();
+      if (!['active', 'controlled', 'resolved'].includes(status)) return { error: 'PTS_RISK_STATUS_INVALID', payload: null };
+      return { error: null, payload: cleanObject({ status, note: sanitizeTextField(payload.note, 1800) }) };
+    }
+    if (eventType === 'GOAL_STATUS_UPDATED') {
+      const status = sanitizeString(payload.status, 30).toLowerCase();
+      if (!['pending', 'in_progress', 'achieved', 'paused', 'cancelled'].includes(status)) return { error: 'PTS_GOAL_STATUS_INVALID', payload: null };
+      return { error: null, payload: cleanObject({ status, note: sanitizeTextField(payload.note, 1800) }) };
+    }
+    return { error: 'PTS_EVENT_TYPE_INVALID', payload: null };
+  };
+
   const THERAPEUTIC_TARGET_SELECT = [
     'id', 'organization_id', 'clinic_id', 'patient_id', 'program_id', 'name',
     'description', 'target_type', 'phase', 'protocol_id', 'protocol_title',
@@ -70372,7 +70503,7 @@ async function startServer() {
           },
         });
       }
-      const [programResult, targetResult, objectiveResult, auditResult, trialResult, planScopeResult, professionalLinkResult] = await Promise.all([
+      const [programResult, targetResult, objectiveResult, auditResult, trialResult, planScopeResult, professionalLinkResult, ptsWorkspaceResult] = await Promise.all([
         supabase
           .from('aba_programs')
           .select(THERAPEUTIC_PROGRAM_SELECT)
@@ -70423,9 +70554,18 @@ async function startServer() {
           .eq('patient_id', patientId)
           .eq('status', 'active')
           .order('relationship_type', { ascending: false })
-          .limit(5)
+          .limit(5),
+        supabase.rpc('read_patient_pts_workspace_v2', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+        })
       ]);
-      const firstError = [programResult.error, targetResult.error, objectiveResult.error, auditResult.error, trialResult.error, planScopeResult.error, professionalLinkResult.error].find(Boolean);
+      const ptsWorkspaceErrorCode = sanitizeString(ptsWorkspaceResult.error?.message || ptsWorkspaceResult.error?.code, 400);
+      const ptsWorkspaceSchemaMissing = Boolean(ptsWorkspaceResult.error) && (
+        ptsWorkspaceErrorCode.includes('PGRST202')
+        || ptsWorkspaceErrorCode.includes('read_patient_pts_workspace_v2')
+      );
+      const firstError = [programResult.error, targetResult.error, objectiveResult.error, auditResult.error, trialResult.error, planScopeResult.error, professionalLinkResult.error, ptsWorkspaceSchemaMissing ? null : ptsWorkspaceResult.error].find(Boolean);
       if (firstError) {
         if (hasMissingFinancialSchema(firstError) || isMissingRelationError(firstError)) {
           return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_UNAVAILABLE', message: 'A estrutura do Plano terapêutico ainda não foi aplicada.' });
@@ -70440,13 +70580,69 @@ async function startServer() {
         actorRole,
         professionalLinks
       };
+      const ptsWorkspace = !ptsWorkspaceSchemaMissing && ptsWorkspaceResult.data && typeof ptsWorkspaceResult.data === 'object'
+        ? ptsWorkspaceResult.data as any
+        : { documents: [], versions: [], events: [] };
+      const ptsDocuments = Array.isArray(ptsWorkspace.documents) ? ptsWorkspace.documents : [];
+      const ptsVersions = Array.isArray(ptsWorkspace.versions) ? ptsWorkspace.versions : [];
+      const ptsEvents = Array.isArray(ptsWorkspace.events) ? ptsWorkspace.events : [];
+      const ptsDocumentByPlanId = new Map(ptsDocuments.map((document: any) => [String(document.plan_id), document]));
+      const ptsVersionsByDocumentId = new Map<string, any[]>();
+      const ptsVersionNumberById = new Map<string, number>();
+      for (const version of ptsVersions) {
+        const documentId = String(version?.document_id || '');
+        if (!documentId) continue;
+        const rows = ptsVersionsByDocumentId.get(documentId) || [];
+        rows.push(version);
+        ptsVersionsByDocumentId.set(documentId, rows);
+        if (version?.id) ptsVersionNumberById.set(String(version.id), Number(version.version_number || 0));
+      }
+      const ptsEventsByDocumentId = new Map<string, any[]>();
+      for (const event of ptsEvents) {
+        const documentId = String(event?.document_id || '');
+        if (!documentId) continue;
+        const rows = ptsEventsByDocumentId.get(documentId) || [];
+        rows.push({
+          ...event,
+          occurred_under_version_number: ptsVersionNumberById.get(String(event?.occurred_under_version_id || '')) || null,
+        });
+        ptsEventsByDocumentId.set(documentId, rows);
+      }
       const visiblePlanScopes = filterTherapeuticPlanScopesForActor(
         planScopeResult.data || [],
         accessContext
-      ).map((scope: any) => ({
-        ...scope,
-        canEdit: canEditTherapeuticPlanScope(scope, accessContext)
-      }));
+      ).map((scope: any) => {
+        const canEdit = canEditTherapeuticPlanScope(scope, accessContext);
+        if (String(scope?.mode || '').toLowerCase() !== 'interdisciplinary') return { ...scope, canEdit };
+        const document = ptsDocumentByPlanId.get(String(scope.id));
+        if (!document) return { ...scope, canEdit, pts_lineage: null, pts_events: [] };
+        const documentVersions = ptsVersionsByDocumentId.get(String(document.id)) || [];
+        const activeVersion = documentVersions.find((version: any) => String(version?.lifecycle_status) === 'ACTIVE') || null;
+        const draftVersion = documentVersions.find((version: any) => String(version?.lifecycle_status) === 'DRAFT') || null;
+        const versionMeta = (version: any, includeSnapshot = false) => version ? {
+          id: version.id,
+          versionNumber: Number(version.version_number || 0),
+          lifecycleStatus: String(version.lifecycle_status || ''),
+          draftRevision: Number(version.draft_revision || 0),
+          replacesVersionId: version.replaces_version_id || null,
+          effectiveFrom: version.effective_from || null,
+          activatedAt: version.activated_at || null,
+          supersededAt: version.superseded_at || null,
+          updatedAt: version.updated_at || null,
+          ...(includeSnapshot ? { snapshot: version.snapshot || {} } : {}),
+        } : null;
+        return {
+          ...scope,
+          canEdit,
+          pts_lineage: {
+            documentId: document.id,
+            activeVersion: versionMeta(activeVersion),
+            draftVersion: versionMeta(draftVersion, true),
+            currentVersionNumber: Number(activeVersion?.version_number || draftVersion?.version_number || 1),
+          },
+          pts_events: ptsEventsByDocumentId.get(String(document.id)) || [],
+        };
+      });
       const visibleProgramRows = filterTherapeuticPlanProgramsForActor(
         programResult.data || [],
         planScopeResult.data || [],
@@ -70620,7 +70816,7 @@ async function startServer() {
           }
         },
         meta: {
-          queryCount: 7 + (linkedProfessionalIds.length ? 2 : 0),
+          queryCount: 7 + (linkedProfessionalIds.length ? 2 : 0) + (ptsWorkspaceSchemaMissing ? 0 : 1),
           batched: true,
           patientId,
           organizationId
@@ -70875,7 +71071,7 @@ async function startServer() {
         normalizedSpecialtyObjectives,
       );
       const ptsPayload = mode === 'interdisciplinary'
-        ? normalizePtsClinicalPayload(
+        ? stripPtsTrackingFieldsForDraft(normalizePtsClinicalPayload(
             req.body?.ptsPayload ?? req.body?.pts_payload ?? emptyPtsClinicalPayload({
               participantIds: participantProfessionalIds,
               specialties: participantSpecialties,
@@ -70888,7 +71084,7 @@ async function startServer() {
               defaultCaseManagerId: responsibleProfessionalId,
               defaultStartedAt: now.slice(0, 10),
             },
-          )
+          ))
         : {};
       const reviewDueDate = mode === 'interdisciplinary' && ptsPayload.nextReviewDate
         ? ptsPayload.nextReviewDate
@@ -71102,6 +71298,13 @@ async function startServer() {
         ...(Array.isArray(existing.participant_professional_ids) ? existing.participant_professional_ids.map(String) : []),
       ].filter(Boolean)));
       const isPts = String(existing.mode || '').toLowerCase() === 'interdisciplinary';
+      if (isPts) {
+        return res.status(409).json({
+          success: false,
+          error: 'PTS_VERSION_ENDPOINT_REQUIRED',
+          message: 'O PTS usa versões imutáveis. Salve o rascunho ou ative a versão pelo fluxo próprio do PTS.',
+        });
+      }
       const ptsPayload = isPts
         ? normalizePtsClinicalPayload(
             req.body?.ptsPayload ?? req.body?.pts_payload ?? existing.pts_payload,
@@ -71186,6 +71389,210 @@ async function startServer() {
       return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId [PATCH]', error, {
         fallbackMessage: 'Não foi possível atualizar o escopo do Plano terapêutico.'
       });
+    }
+  });
+
+
+  app.post('/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Criação de versão do PTS')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const planId = sanitizeString(req.params.planId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      if (!isUuid(planId) || !isUuid(patientId)) return res.status(400).json({ success: false, error: 'PTS_SCOPE_INVALID' });
+      const access = await loadPtsPlanWriteContext({ patientId, planId, organizationId, actorId, actorRole });
+      if (!access.plan) return res.status(404).json({ success: false, error: 'PTS_NOT_FOUND' });
+      if (!access.allowed) return res.status(403).json({ success: false, error: 'PTS_EDIT_DENIED' });
+      const { data, error } = await supabase.rpc('create_patient_pts_draft_v2', {
+        p_plan_id: planId,
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_actor_id: actorId,
+        p_now: new Date().toISOString(),
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 400);
+        if (code.includes('PGRST202') || code.includes('create_patient_pts_draft_v2')) {
+          return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED', message: 'A migração de versionamento do PTS precisa ser aplicada antes desta ação.' });
+        }
+        throw error;
+      }
+      return res.status(201).json({ success: true, data, message: 'Rascunho criado sem alterar a versão vigente.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft [POST]', error, { fallbackMessage: 'Não foi possível criar a nova versão do PTS.' });
+    }
+  });
+
+  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Rascunho do PTS')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const planId = sanitizeString(req.params.planId, 120);
+      const versionId = sanitizeString(req.params.versionId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const expectedDraftRevision = Number(req.body?.expectedDraftRevision ?? req.body?.expected_draft_revision);
+      if (!isUuid(planId) || !isUuid(versionId) || !isUuid(patientId) || !Number.isSafeInteger(expectedDraftRevision) || expectedDraftRevision < 1) {
+        return res.status(400).json({ success: false, error: 'PTS_DRAFT_SCOPE_INVALID' });
+      }
+      const access = await loadPtsPlanWriteContext({ patientId, planId, organizationId, actorId, actorRole });
+      if (!access.plan) return res.status(404).json({ success: false, error: 'PTS_NOT_FOUND' });
+      if (!access.allowed) return res.status(403).json({ success: false, error: 'PTS_EDIT_DENIED' });
+      const input = ptsDraftInput(access.plan, req.body || {});
+      if (input.error) return res.status(422).json({ success: false, error: input.error, message: 'Revise os campos do PTS antes de salvar.' });
+      const { data, error } = await supabase.rpc('save_patient_pts_draft_v2', {
+        p_plan_id: planId,
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_version_id: versionId,
+        p_expected_draft_revision: expectedDraftRevision,
+        p_common_objectives: input.commonObjectives,
+        p_specialty_objectives: input.specialtyObjectives,
+        p_pts_payload: input.ptsPayload,
+        p_review_due_date: input.reviewDueDate,
+        p_actor_id: actorId,
+        p_now: new Date().toISOString(),
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 400);
+        if (code.includes('PTS_DRAFT_VERSION_CONFLICT')) return res.status(409).json({ success: false, error: 'PTS_DRAFT_VERSION_CONFLICT', message: 'Este rascunho foi atualizado em outro contexto. Recarregue antes de continuar.' });
+        if (code.includes('PTS_DRAFT_NOT_FOUND')) return res.status(409).json({ success: false, error: 'PTS_DRAFT_NOT_FOUND', message: 'Esta versão não é mais um rascunho editável.' });
+        if (code.includes('PGRST202') || code.includes('save_patient_pts_draft_v2')) return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED' });
+        throw error;
+      }
+      return res.json({ success: true, data, message: 'Rascunho salvo. A versão vigente não foi alterada.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId [PATCH]', error, { fallbackMessage: 'Não foi possível salvar o rascunho do PTS.' });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId/activate', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Ativação do PTS')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const planId = sanitizeString(req.params.planId, 120);
+      const versionId = sanitizeString(req.params.versionId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const expectedDraftRevision = Number(req.body?.expectedDraftRevision ?? req.body?.expected_draft_revision);
+      if (!isUuid(planId) || !isUuid(versionId) || !isUuid(patientId) || !Number.isSafeInteger(expectedDraftRevision) || expectedDraftRevision < 1) {
+        return res.status(400).json({ success: false, error: 'PTS_DRAFT_SCOPE_INVALID' });
+      }
+      const access = await loadPtsPlanWriteContext({ patientId, planId, organizationId, actorId, actorRole });
+      if (!access.plan) return res.status(404).json({ success: false, error: 'PTS_NOT_FOUND' });
+      if (!access.allowed) return res.status(403).json({ success: false, error: 'PTS_EDIT_DENIED' });
+      const input = ptsDraftInput(access.plan, req.body || {});
+      if (input.error) return res.status(422).json({ success: false, error: input.error, message: 'Revise os campos do PTS antes de ativar.' });
+      const { data, error } = await supabase.rpc('activate_patient_pts_draft_v2', {
+        p_plan_id: planId,
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_version_id: versionId,
+        p_expected_draft_revision: expectedDraftRevision,
+        p_common_objectives: input.commonObjectives,
+        p_specialty_objectives: input.specialtyObjectives,
+        p_pts_payload: input.ptsPayload,
+        p_review_due_date: input.reviewDueDate,
+        p_actor_id: actorId,
+        p_now: new Date().toISOString(),
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 500);
+        if (code.includes('PTS_DRAFT_VERSION_CONFLICT') || code.includes('PTS_DRAFT_ACTIVATION_CONFLICT')) return res.status(409).json({ success: false, error: 'PTS_DRAFT_VERSION_CONFLICT', message: 'O rascunho mudou durante a ativação. Recarregue e revise antes de tentar novamente.' });
+        if (code.includes('PTS_DRAFT_VALIDATION_FAILED')) return res.status(422).json({ success: false, error: 'PTS_DRAFT_VALIDATION_FAILED', message: 'Existem campos obrigatórios pendentes antes da ativação.' });
+        if (code.includes('PGRST202') || code.includes('activate_patient_pts_draft_v2')) return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED' });
+        throw error;
+      }
+      return res.json({ success: true, data, message: 'PTS ativado. A versão anterior foi preservada integralmente.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId/activate [POST]', error, { fallbackMessage: 'Não foi possível ativar o PTS.' });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-events', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Evento do PTS')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const planId = sanitizeString(req.params.planId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const eventType = sanitizeString(req.body?.eventType || req.body?.event_type, 60).toUpperCase();
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180);
+      const sessionId = sanitizeString(req.body?.sessionId || req.body?.session_id, 180);
+      const requestedEntityId = sanitizeString(req.body?.entityId || req.body?.entity_id, 120);
+      const entityId = requestedEntityId || (eventType === 'RISK_OPENED' ? crypto.randomUUID() : '');
+      const occurredAtRaw = sanitizeString(req.body?.occurredAt || req.body?.occurred_at, 80);
+      const occurredAtDate = occurredAtRaw ? new Date(occurredAtRaw) : new Date();
+      if (!isUuid(planId) || !isUuid(patientId) || idempotencyKey.length < 16 || Number.isNaN(occurredAtDate.getTime()) || occurredAtDate.getTime() > Date.now() + 5 * 60 * 1000) {
+        return res.status(400).json({ success: false, error: 'PTS_EVENT_REQUEST_INVALID' });
+      }
+      if (['RISK_STATUS_UPDATED', 'RISK_RESOLVED', 'GOAL_STATUS_UPDATED'].includes(eventType) && !entityId) {
+        return res.status(422).json({ success: false, error: 'PTS_EVENT_ENTITY_REQUIRED' });
+      }
+      const access = await loadPtsPlanWriteContext({ patientId, planId, organizationId, actorId, actorRole });
+      if (!access.plan) return res.status(404).json({ success: false, error: 'PTS_NOT_FOUND' });
+      if (!access.allowed) return res.status(403).json({ success: false, error: 'PTS_EDIT_DENIED' });
+      const normalizedEvent = normalizePtsEventPayload(eventType, req.body || {});
+      if (normalizedEvent.error || !normalizedEvent.payload) return res.status(422).json({ success: false, error: normalizedEvent.error || 'PTS_EVENT_PAYLOAD_INVALID' });
+
+      let boundVersionId: string | null = null;
+      if (sessionId) {
+        if (!isUuid(organizationId)) return res.status(422).json({ success: false, error: 'PTS_COLLECTION_ORGANIZATION_INVALID' });
+        const resolveResult = await supabase.rpc('resolve_patient_pts_plan_version_v1', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_plan_id: planId,
+          p_source_session_id: sessionId,
+          p_actor_id: actorId,
+          p_now: new Date().toISOString(),
+        });
+        if (resolveResult.error) throw resolveResult.error;
+        const { data: contextRow, error: contextError } = await supabase
+          .from('patient_pts_collection_contexts_v1')
+          .select('pts_version_id')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('source_session_id', sessionId)
+          .eq('plan_id', planId)
+          .limit(1)
+          .maybeSingle();
+        if (contextError) throw contextError;
+        boundVersionId = sanitizeString(contextRow?.pts_version_id, 120) || null;
+        if (!boundVersionId) return res.status(409).json({ success: false, error: 'PTS_COLLECTION_CONTEXT_REQUIRED' });
+      }
+
+      const { data, error } = await supabase.rpc('append_patient_pts_event_v2', {
+        p_plan_id: planId,
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_event_type: eventType,
+        p_entity_id: entityId || null,
+        p_occurred_at: occurredAtDate.toISOString(),
+        p_payload: sanitizeClinicalPayload(normalizedEvent.payload),
+        p_actor_id: actorId,
+        p_idempotency_key: idempotencyKey,
+        p_bound_version_id: boundVersionId,
+        p_now: new Date().toISOString(),
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 500);
+        if (code.includes('PTS_EVENT_IDEMPOTENCY_CONFLICT')) return res.status(409).json({ success: false, error: 'PTS_EVENT_IDEMPOTENCY_CONFLICT' });
+        if (code.includes('PTS_EVENT_ACTIVE_VERSION_REQUIRED')) return res.status(409).json({ success: false, error: 'PTS_ACTIVE_VERSION_REQUIRED' });
+        if (code.includes('PGRST202') || code.includes('append_patient_pts_event_v2')) return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED' });
+        throw error;
+      }
+      return res.status(201).json({ success: true, data, message: 'Evento clínico registrado sem alterar a versão publicada do PTS.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-events [POST]', error, { fallbackMessage: 'Não foi possível registrar o evento do PTS.' });
     }
   });
 
@@ -73617,15 +74024,33 @@ async function startServer() {
         if (sanitizeString((sessionScope as any).patientId, 120) !== patientId || sanitizeString((sessionScope as any).clinicId, 120) !== organizationId) {
           return res.status(403).json({ success: false, code: 'ABA_V3_SESSION_PLAN_SCOPE_DENIED', error: 'Sessão fora do escopo do paciente.' });
         }
-        const { data, error } = await supabase.rpc('get_aba_v3_session_collection_plan', {
-          p_organization_id: organizationId,
-          p_patient_id: patientId,
-          p_session_id: sessionId,
-          p_target_ids: targetIds
-        });
-        if (error) return handleAbaV3ReadRpcError(res, error);
+        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+        const [collectionPlanResult, ptsContextResult] = await Promise.all([
+          supabase.rpc('get_aba_v3_session_collection_plan', {
+            p_organization_id: organizationId,
+            p_patient_id: patientId,
+            p_session_id: sessionId,
+            p_target_ids: targetIds
+          }),
+          supabase.rpc('bind_patient_pts_collection_contexts_v1', {
+            p_organization_id: organizationId,
+            p_patient_id: patientId,
+            p_source_session_id: sessionId,
+            p_target_ids: targetIds,
+            p_actor_id: actorId,
+            p_now: new Date().toISOString(),
+          }),
+        ]);
+        if (collectionPlanResult.error) return handleAbaV3ReadRpcError(res, collectionPlanResult.error);
+        if (ptsContextResult.error) {
+          const code = sanitizeString(ptsContextResult.error?.message || ptsContextResult.error?.code, 500);
+          if (code.includes('PGRST202') || code.includes('bind_patient_pts_collection_contexts_v1')) {
+            return res.status(503).json({ success: false, code: 'PTS_CONTEXT_SCHEMA_REQUIRED', error: 'O vínculo imutável entre sessão e versão do PTS ainda não está disponível.' });
+          }
+          throw ptsContextResult.error;
+        }
         res.setHeader('Cache-Control', 'private, no-store');
-        return res.json({ success: true, data: data || { session_id: sessionId, targets: [], v3_behavior_ids: [], complete: true } });
+        return res.json({ success: true, data: collectionPlanResult.data || { session_id: sessionId, targets: [], v3_behavior_ids: [], complete: true } });
       } catch (error: any) {
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }
@@ -78179,15 +78604,41 @@ async function startServer() {
       if (!allowedContexts.has(context) || !allowedSources.has(source) || !allowedMetricTypes.has(metricType)) {
         return res.status(422).json({ success: false, error: 'CLINICAL_OBSERVATION_CLASSIFICATION_INVALID', message: 'Contexto, fonte ou tipo de métrica inválido.' });
       }
+      const sourceSessionId = sanitizeString(req.body?.sessionId || req.body?.session_id, 120) || null;
+      let authoritativePlanVersion = Math.max(1, Number(planResult.data.edit_version || 1));
+      if (String(planResult.data.mode || '').toLowerCase() === 'interdisciplinary') {
+        if (!isUuid(organizationId)) {
+          return res.status(422).json({ success: false, error: 'PTS_COLLECTION_ORGANIZATION_INVALID' });
+        }
+        const versionResult = await supabase.rpc('resolve_patient_pts_plan_version_v1', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_plan_id: planId,
+          p_source_session_id: sourceSessionId,
+          p_actor_id: actorId,
+          p_now: new Date().toISOString(),
+        });
+        if (versionResult.error) {
+          const code = sanitizeString(versionResult.error?.message || versionResult.error?.code, 500);
+          if (code.includes('PGRST202') || code.includes('resolve_patient_pts_plan_version_v1')) {
+            return res.status(503).json({ success: false, error: 'PTS_CONTEXT_SCHEMA_REQUIRED', message: 'O vínculo entre evidência e versão do PTS ainda não está disponível.' });
+          }
+          if (code.includes('PTS_COLLECTION_SESSION_SCOPE_INVALID') || code.includes('PTS_COLLECTION_VERSION_NOT_FOUND')) {
+            return res.status(409).json({ success: false, error: 'PTS_COLLECTION_CONTEXT_INVALID', message: 'A sessão não possui uma versão válida do PTS para esta coleta.' });
+          }
+          throw versionResult.error;
+        }
+        authoritativePlanVersion = Math.max(1, Number(versionResult.data || 1));
+      }
       const payload = {
         organization_id: organizationId,
         clinic_id: clinicId,
         patient_id: patientId,
         plan_id: planId,
-        plan_version: Math.max(1, Number(req.body?.planVersion || req.body?.plan_version || planResult.data.edit_version || 1)),
+        plan_version: authoritativePlanVersion,
         goal_id: sanitizeString(req.body?.goalId || req.body?.goal_id, 100) || null,
         program_id: sanitizeString(req.body?.programId || req.body?.program_id, 120) || null,
-        session_id: sanitizeString(req.body?.sessionId || req.body?.session_id, 120) || null,
+        session_id: sourceSessionId,
         professional_id: actorId,
         specialty: authoritativeSpecialty || null,
         measure_definition_id: isUuid(req.body?.measureDefinitionId || req.body?.measure_definition_id) ? sanitizeString(req.body?.measureDefinitionId || req.body?.measure_definition_id, 120) : null,
@@ -78279,6 +78730,7 @@ async function startServer() {
     objectivePlanMap: Map<string, Set<string>>,
     targetById: Map<string, any>,
     programById: Map<string, any>,
+    ptsVersionBySessionPlan: Map<string, number>,
   ) => {
     const normalized: any[] = [];
     for (const row of Array.isArray(rows) ? rows : []) {
@@ -78309,10 +78761,12 @@ async function startServer() {
         : null;
       for (const planId of planIds) {
         const plan = visiblePlanMap.get(planId) || {};
+        const sourceSessionId = sanitizeString(row?.session_id, 180);
+        const boundPlanVersion = sourceSessionId ? ptsVersionBySessionPlan.get(`${sourceSessionId}::${planId}`) : undefined;
         normalized.push({
           id: `cmv3:${sanitizeString(row?.expectation_id, 120)}:${planId}`,
           planId,
-          planVersion: Number(plan?.edit_version || 1),
+          planVersion: Number(boundPlanVersion || plan?.edit_version || 1),
           goalId: sanitizeString(row?.goal_id, 120) || objectiveId || null,
           programId: sanitizeString(row?.program_id || semanticProgram?.id, 180) || null,
           sessionId: sanitizeString(row?.session_id, 180) || null,
@@ -78470,7 +78924,7 @@ async function startServer() {
       const dateFromIso = dateFrom.toISOString();
       const dateToIso = dateTo.toISOString();
 
-      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult] = await Promise.all([
+      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult] = await Promise.all([
         supabase
           .from('patient_therapeutic_plans')
           .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,pts_payload,pts_schema_version,review_due_date,last_reviewed_at,status,edit_version,created_at,updated_at')
@@ -78539,7 +78993,17 @@ async function startServer() {
           .eq('patient_id', patientId)
           .lte('started_at', dateToIso)
           .order('started_at', { ascending: true })
-          .limit(500)
+          .limit(500),
+        isUuid(organizationId)
+          ? supabase
+              .from('patient_pts_collection_contexts_v1')
+              .select('source_session_id,plan_id,version_number,context_opened_at')
+              .eq('organization_id', organizationId)
+              .eq('patient_id', patientId)
+              .gte('context_opened_at', dateFromIso)
+              .lte('context_opened_at', dateToIso)
+              .limit(2000)
+          : Promise.resolve({ data: [], error: null })
       ]);
 
       const criticalError = [planResult.error, linkResult.error, programResult.error, targetResult.error, snapshotResult.error].find(Boolean);
@@ -78548,6 +79012,16 @@ async function startServer() {
       const clinicalSchemaAvailable = clinicalSchemaResults.every((result: any) => !result.error);
       const unexpectedClinicalError = clinicalSchemaResults.map((result: any) => result.error).find((error: any) => error && !isMissingRelationError(error) && !hasMissingFinancialSchema(error));
       if (unexpectedClinicalError) throw unexpectedClinicalError;
+      if (ptsContextResult.error && !isMissingRelationError(ptsContextResult.error) && !hasMissingFinancialSchema(ptsContextResult.error)) {
+        throw ptsContextResult.error;
+      }
+      const ptsVersionBySessionPlan = new Map<string, number>();
+      for (const contextRow of ptsContextResult.error ? [] : ptsContextResult.data || []) {
+        const sessionId = sanitizeString((contextRow as any)?.source_session_id, 180);
+        const planId = sanitizeString((contextRow as any)?.plan_id, 120);
+        const versionNumber = Number((contextRow as any)?.version_number || 0);
+        if (sessionId && planId && versionNumber > 0) ptsVersionBySessionPlan.set(`${sessionId}::${planId}`, versionNumber);
+      }
 
       const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
       const accessContext = { actorId, actorRole, professionalLinks: linkResult.data || [] };
@@ -78598,7 +79072,7 @@ async function startServer() {
             throw v3Result.error;
           }
         } else {
-          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById, programById);
+          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById, programById, ptsVersionBySessionPlan);
         }
       }
 
@@ -78654,7 +79128,7 @@ async function startServer() {
         return {
           id: String(point.id),
           planId,
-          planVersion: null,
+          planVersion: planId && point.sessionId ? ptsVersionBySessionPlan.get(`${String(point.sessionId)}::${planId}`) || null : null,
           goalId: program?.therapeutic_objective_id || null,
           programId: program?.id || null,
           sessionId: point.sessionId || null,
@@ -78735,7 +79209,7 @@ async function startServer() {
           legacyObservationCount
         },
         meta: {
-          queryCount: 9 + v3RpcCount,
+          queryCount: 9 + v3RpcCount + (ptsContextResult.error ? 0 : 1),
           rpcCount: v3RpcCount,
           batched: true,
           periodDays: requestedDays,

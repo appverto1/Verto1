@@ -5138,6 +5138,90 @@ export const dataService = {
     }
   },
 
+  async createPtsDraftVersion(patientId: string, planId: string) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}/pts-draft`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({})
+      }, {
+        helperName: 'createPtsDraftVersion',
+        operation: 'write',
+        table: 'patient_pts_documents_v2,patient_pts_versions_v2',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível criar a nova versão do PTS.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível criar a nova versão do PTS.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async savePtsDraftVersion(patientId: string, planId: string, versionId: string, payload: any = {}) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}/pts-draft/${encodeURIComponent(String(versionId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'savePtsDraftVersion',
+        operation: 'write',
+        table: 'patient_pts_versions_v2',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível salvar o rascunho do PTS.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível salvar o rascunho do PTS.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async activatePtsDraftVersion(patientId: string, planId: string, versionId: string, payload: any = {}) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}/pts-draft/${encodeURIComponent(String(versionId))}/activate`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'activatePtsDraftVersion',
+        operation: 'write',
+        table: 'patient_pts_documents_v2,patient_pts_versions_v2,patient_pts_events_v2,patient_therapeutic_plans',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível ativar o PTS.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível ativar o PTS.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async appendPtsEvent(patientId: string, planId: string, payload: any = {}) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}/pts-events`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'appendPtsEvent',
+        operation: 'write',
+        table: 'patient_pts_events_v2',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível registrar o evento do PTS.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível registrar o evento do PTS.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async createTherapeuticProgram(patientId: string, payload: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(null);
     const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-programs`;

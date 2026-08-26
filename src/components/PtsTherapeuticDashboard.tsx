@@ -7,6 +7,7 @@ import {
   History,
   Plus,
   Search,
+  ShieldAlert,
   Target,
   Pencil,
 } from 'lucide-react';
@@ -31,6 +32,8 @@ type PtsTherapeuticDashboardProps = {
   onAddProgram: () => void;
   onAddProgramForScope?: (scopeId: string) => void;
   onNewVersion: () => void;
+  onRecordReview?: () => void;
+  onRecordRisk?: () => void;
   onEditPerspectiveScope?: (scope: any) => void;
   onManagePlans: () => void;
   renderProgramCard: (program: any) => React.ReactNode;
@@ -120,6 +123,8 @@ export function PtsTherapeuticDashboard({
   onAddProgram,
   onAddProgramForScope,
   onNewVersion,
+  onRecordReview,
+  onRecordRisk,
   onEditPerspectiveScope,
   onManagePlans,
   renderProgramCard,
@@ -137,6 +142,10 @@ export function PtsTherapeuticDashboard({
   });
 
   const pts = useMemo(() => hydratePtsClinicalPayloadFromPlan(scope), [scope]);
+  const ptsEvents = useMemo(() => Array.isArray(scope?.pts_events) ? scope.pts_events : [], [scope?.pts_events]);
+  const activePtsVersionNumber = Number(scope?.pts_lineage?.activeVersion?.versionNumber || scope?.pts_lineage?.currentVersionNumber || scope?.edit_version || 1);
+  const hasPtsDraft = Boolean(scope?.pts_lineage?.draftVersion?.id);
+  const ptsLifecycleStatus = String(scope?.pts_lineage?.activeVersion?.lifecycleStatus || (scope?.status === 'active' ? 'ACTIVE' : 'DRAFT')).toUpperCase();
   const activeSpecialtyScopes = useMemo(() => (Array.isArray(specialtyScopes) ? specialtyScopes : [])
     .filter((item: any) => item?.mode === 'specialty' && item?.status !== 'archived')
     .slice()
@@ -226,6 +235,28 @@ export function PtsTherapeuticDashboard({
   }, [pts.goals, scope?.common_objectives]);
 
   const versionEvents = useMemo(() => {
+    if (ptsEvents.length > 0) {
+      return ptsEvents
+        .filter((event: any) => ['VERSION_ACTIVATED', 'REVIEW_RECORDED', 'TEAM_DECISION_RECORDED'].includes(String(event?.event_type || '').toUpperCase()))
+        .slice()
+        .sort((left: any, right: any) => dateValue(right?.occurred_at || right?.recorded_at) - dateValue(left?.occurred_at || left?.recorded_at))
+        .slice(0, 3)
+        .map((event: any) => {
+          const eventType = String(event?.event_type || '').toUpperCase();
+          const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+          return {
+            id: String(event?.id || `${eventType}-${event?.occurred_at || ''}`),
+            version: eventType === 'VERSION_ACTIVATED' ? Number(payload?.versionNumber || 0) || null : null,
+            date: event?.occurred_at || event?.recorded_at,
+            label: eventType === 'VERSION_ACTIVATED'
+              ? 'Versão ativada'
+              : eventType === 'REVIEW_RECORDED'
+                ? String(payload?.summary || payload?.decisions || 'Reavaliação registrada')
+                : String(payload?.decisions || 'Decisão da equipe registrada'),
+            eventType,
+          };
+        });
+    }
     const reviews = [...pts.reviews]
       .sort((left, right) => dateValue(right.completedAt || right.scheduledFor) - dateValue(left.completedAt || left.scheduledFor))
       .slice(0, 2)
@@ -234,21 +265,24 @@ export function PtsTherapeuticDashboard({
         version: null as number | null,
         date: review.completedAt || review.scheduledFor,
         label: review.summary || review.decisions || 'Reavaliação registrada',
+        eventType: 'REVIEW_RECORDED',
       }));
     return [
       {
         id: `current-${displayScope?.id}`,
-        version: Number(displayScope?.edit_version || 1) as number | null,
+        version: activePerspectiveScope ? Number(displayScope?.edit_version || 1) : activePtsVersionNumber,
         date: displayScope?.updated_at || displayScope?.created_at,
-        label: activePerspectiveScope ? `Versão atual · ${perspectiveLabel}` : 'Versão atual',
+        label: activePerspectiveScope ? `Versão atual · ${perspectiveLabel}` : 'Versão ativa',
+        eventType: 'VERSION_ACTIVATED',
       },
       ...reviews,
     ].slice(0, 3);
-  }, [activePerspectiveScope, displayScope, perspectiveLabel, pts.reviews]);
+  }, [activePerspectiveScope, activePtsVersionNumber, displayScope, perspectiveLabel, pts.reviews, ptsEvents]);
+
 
   const displayNextReviewDate = activePerspectiveScope
     ? String(displayScope?.review_due_date || displayScope?.reviewDueDate || '').slice(0, 10)
-    : pts.nextReviewDate;
+    : String(scope?.review_due_date || pts.nextReviewDate || '').slice(0, 10);
   const nextReviewOverdue = Boolean(
     displayNextReviewDate
     && new Date(`${displayNextReviewDate}T23:59:59`).getTime() < Date.now(),
@@ -301,7 +335,7 @@ export function PtsTherapeuticDashboard({
                 {STATUS_LABELS[String(displayScope?.status || 'draft')] || 'Rascunho'}
               </span>
               <span className={`rounded-full px-2.5 py-1 text-xs ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                Versão {displayScope?.edit_version || 1}
+                Versão {activePerspectiveScope ? displayScope?.edit_version || 1 : activePtsVersionNumber}
               </span>
             </div>
             {availableScopes.length > 1 && (
@@ -313,7 +347,7 @@ export function PtsTherapeuticDashboard({
                   onChange={(event) => onScopeChange(event.target.value)}
                 >
                   {availableScopes.map((item: any) => (
-                    <option key={item.id} value={item.id}>PTS · versão {item.edit_version || 1}</option>
+                    <option key={item.id} value={item.id}>PTS · versão {item?.pts_lineage?.activeVersion?.versionNumber || item?.pts_lineage?.draftVersion?.versionNumber || item.edit_version || 1}</option>
                   ))}
                 </select>
               </label>
@@ -335,7 +369,9 @@ export function PtsTherapeuticDashboard({
             </div>
             <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-1">
               {canManagePlans && <button type="button" className={secondaryButton} onClick={onManagePlans}>Gerenciar planos</button>}
-              {currentPerspectiveCanEdit && <button type="button" className="inline-flex min-h-10 items-center justify-center rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white hover:bg-violet-700" onClick={editCurrentPerspective}>Nova versão</button>}
+              {!activePerspectiveScope && ptsLifecycleStatus === 'ACTIVE' && onRecordReview && <button type="button" className={secondaryButton} onClick={onRecordReview}><CalendarClock size={15} /> Registrar reavaliação</button>}
+              {!activePerspectiveScope && ptsLifecycleStatus === 'ACTIVE' && onRecordRisk && <button type="button" className={secondaryButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
+              {currentPerspectiveCanEdit && <button type="button" className="inline-flex min-h-10 items-center justify-center rounded-xl bg-violet-600 px-4 text-sm text-white hover:bg-violet-700" onClick={editCurrentPerspective}>{activePerspectiveScope ? 'Nova versão' : hasPtsDraft ? 'Continuar rascunho' : ptsLifecycleStatus === 'ACTIVE' ? 'Criar nova versão' : 'Editar rascunho'}</button>}
             </div>
           </dl>
         </div>
@@ -451,7 +487,7 @@ export function PtsTherapeuticDashboard({
               ) : <p className={`text-xs leading-5 ${muted}`}>Os objetivos compartilhados ainda não foram definidos.</p>}
               {canEditScope && (
                 <button type="button" onClick={onNewVersion} className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-600 hover:underline">
-                  <Pencil size={13} /> Editar na nova versão do PTS
+                  <Pencil size={13} /> {hasPtsDraft ? 'Editar no rascunho do PTS' : 'Editar em nova versão do PTS'}
                 </button>
               )}
             </div>
@@ -464,7 +500,7 @@ export function PtsTherapeuticDashboard({
               </p>
               {canEditScope && (
                 <button type="button" onClick={onNewVersion} className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-600 hover:underline">
-                  <Pencil size={13} /> Editar prioridades familiares
+                  <Pencil size={13} /> {hasPtsDraft ? 'Editar no rascunho do PTS' : 'Editar prioridades em nova versão'}
                 </button>
               )}
             </div>
@@ -476,7 +512,7 @@ export function PtsTherapeuticDashboard({
                 <div key={event.id} className="flex gap-3">
                   <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${event.id.startsWith('current-') ? 'bg-emerald-500' : isDark ? 'bg-slate-600' : 'bg-slate-300'}`} />
                   <div className="min-w-0">
-                    <p className={`text-sm ${text}`}>{event.version ? `Versão ${event.version}` : 'Reavaliação'} · {formatTherapeuticPlanDate(event.date)}</p>
+                    <p className={`text-sm ${text}`}>{event.version ? `Versão ${event.version}` : event.eventType === 'TEAM_DECISION_RECORDED' ? 'Decisão da equipe' : 'Reavaliação'} · {formatTherapeuticPlanDate(event.date)}</p>
                     <p className={`mt-0.5 line-clamp-2 text-xs leading-4 ${muted}`}>{event.label}</p>
                   </div>
                 </div>
@@ -549,28 +585,52 @@ export function PtsTherapeuticDashboard({
                 <div className="flex items-start gap-3">
                   <History size={18} className="mt-0.5 text-violet-500" />
                   <div>
-                    <p className={`text-sm font-semibold ${text}`}>Versão {scope?.edit_version || 1} · versão atual</p>
-                    <p className={`mt-1 text-xs ${muted}`}>Atualizada em {formatTherapeuticPlanDate(scope?.updated_at || scope?.created_at)}</p>
+                    <p className={`text-sm font-semibold ${text}`}>Versão {activePtsVersionNumber} · versão ativa</p>
+                    <p className={`mt-1 text-xs ${muted}`}>O histórico abaixo é append-only e não reabre versões publicadas.</p>
                   </div>
                 </div>
               </div>
-              {pts.reviews.length > 0 ? pts.reviews
+              {ptsEvents.length > 0 ? ptsEvents
                 .slice()
-                .sort((left, right) => dateValue(right.completedAt || right.scheduledFor) - dateValue(left.completedAt || left.scheduledFor))
-                .map((review) => (
-                  <article key={review.id} className={`rounded-2xl border p-4 ${inset}`}>
-                    <div className="flex items-start gap-3">
-                      <CalendarClock size={18} className="mt-0.5 text-violet-500" />
-                      <div className="min-w-0">
-                        <p className={`text-sm font-semibold ${text}`}>Reavaliação de {formatTherapeuticPlanDate(review.completedAt || review.scheduledFor)}</p>
-                        {review.summary && <p className={`mt-2 whitespace-pre-line text-sm leading-6 ${text}`}>{review.summary}</p>}
-                        {review.decisions && <p className={`mt-2 whitespace-pre-line text-xs leading-5 ${muted}`}>Decisões: {review.decisions}</p>}
+                .sort((left: any, right: any) => dateValue(right?.occurred_at || right?.recorded_at) - dateValue(left?.occurred_at || left?.recorded_at))
+                .map((event: any) => {
+                  const eventType = String(event?.event_type || '').toUpperCase();
+                  const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+                  const title = eventType === 'VERSION_ACTIVATED'
+                    ? `Versão ${payload?.versionNumber || ''} ativada`.trim()
+                    : eventType === 'REVIEW_RECORDED'
+                      ? 'Reavaliação registrada'
+                      : eventType === 'RISK_OPENED'
+                        ? 'Risco registrado'
+                        : eventType === 'RISK_RESOLVED'
+                          ? 'Risco resolvido'
+                          : eventType === 'GOAL_STATUS_UPDATED'
+                            ? 'Status de meta atualizado'
+                            : 'Decisão clínica registrada';
+                  const detail = payload?.summary || payload?.decisions || payload?.title || payload?.note || '';
+                  return (
+                    <article key={String(event?.id)} className={`rounded-2xl border p-4 ${inset}`}>
+                      <div className="flex items-start gap-3">
+                        <CalendarClock size={18} className="mt-0.5 text-violet-500" />
+                        <div className="min-w-0">
+                          <p className={`text-sm font-semibold ${text}`}>{title} · {formatTherapeuticPlanDate(event?.occurred_at || event?.recorded_at)}</p>
+                          {detail && <p className={`mt-2 whitespace-pre-line text-sm leading-6 ${text}`}>{String(detail)}</p>}
+                          <p className={`mt-1 text-xs ${muted}`}>Registrado sem alterar a versão publicada do PTS.</p>
+                        </div>
                       </div>
-                    </div>
-                  </article>
-                )) : (
-                  <div className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma reavaliação registrada nesta versão.</div>
-                )}
+                    </article>
+                  );
+                }) : pts.reviews.length > 0 ? pts.reviews
+                  .slice()
+                  .sort((left, right) => dateValue(right.completedAt || right.scheduledFor) - dateValue(left.completedAt || left.scheduledFor))
+                  .map((review) => (
+                    <article key={review.id} className={`rounded-2xl border p-4 ${inset}`}>
+                      <p className={`text-sm font-semibold ${text}`}>Reavaliação legada de {formatTherapeuticPlanDate(review.completedAt || review.scheduledFor)}</p>
+                      {review.summary && <p className={`mt-2 whitespace-pre-line text-sm leading-6 ${text}`}>{review.summary}</p>}
+                    </article>
+                  )) : (
+                    <div className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhum evento longitudinal registrado neste PTS.</div>
+                  )}
             </div>
           )}
         </main>
