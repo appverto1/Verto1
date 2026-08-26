@@ -30,6 +30,7 @@ type ClinicalPlanAnalyticsShellProps = {
   axis: AnalyticsAxis;
   onAxisChange: (axis: AnalyticsAxis) => void;
   isDark?: boolean;
+  onOpenSessionReport?: (sessionId: string) => void;
 };
 
 type MetricOption = {
@@ -45,6 +46,7 @@ type ChartBucket = {
   detail: string;
   sortTime: number;
   period: 'current' | 'previous';
+  sessionIds: string[];
 };
 
 const DOMAIN_TABS: Array<{ id: AnalyticsDomain; label: string }> = [
@@ -73,20 +75,20 @@ const OVERVIEW_BARS = [
 ] as const;
 
 const DOMAIN_ACTIVE_TONE: Record<AnalyticsDomain, string> = {
-  overview: 'border-violet-600 text-violet-700 dark:text-violet-300',
-  skills: 'border-emerald-500 text-emerald-700 dark:text-emerald-300',
-  behaviors: 'border-sky-500 text-sky-700 dark:text-sky-300',
-  mastery: 'border-violet-500 text-violet-700 dark:text-violet-300',
-  maintenance: 'border-amber-500 text-amber-700 dark:text-amber-300',
-  changes: 'border-fuchsia-500 text-fuchsia-700 dark:text-fuchsia-300',
+  overview: 'border-violet-700 text-violet-800 dark:text-violet-200',
+  skills: 'border-emerald-600 text-emerald-800 dark:text-emerald-200',
+  behaviors: 'border-sky-600 text-sky-800 dark:text-sky-200',
+  mastery: 'border-violet-600 text-violet-800 dark:text-violet-200',
+  maintenance: 'border-amber-600 text-amber-900 dark:text-amber-200',
+  changes: 'border-fuchsia-600 text-fuchsia-800 dark:text-fuchsia-200',
 };
 
 const DOMAIN_SOFT_TONE: Record<Exclude<AnalyticsDomain, 'overview'>, string> = {
-  skills: 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/35 dark:bg-emerald-500/10 dark:text-emerald-200',
-  behaviors: 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-500/35 dark:bg-sky-500/10 dark:text-sky-200',
-  mastery: 'border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-500/35 dark:bg-violet-500/10 dark:text-violet-200',
-  maintenance: 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/35 dark:bg-amber-500/10 dark:text-amber-200',
-  changes: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-800 dark:border-fuchsia-500/35 dark:bg-fuchsia-500/10 dark:text-fuchsia-200',
+  skills: 'border-emerald-700 bg-emerald-600 text-white shadow-sm dark:border-emerald-400 dark:bg-emerald-500 dark:text-slate-950',
+  behaviors: 'border-sky-700 bg-sky-600 text-white shadow-sm dark:border-sky-400 dark:bg-sky-500 dark:text-slate-950',
+  mastery: 'border-violet-700 bg-violet-600 text-white shadow-sm dark:border-violet-400 dark:bg-violet-500 dark:text-white',
+  maintenance: 'border-amber-700 bg-amber-500 text-slate-950 shadow-sm dark:border-amber-300 dark:bg-amber-400 dark:text-slate-950',
+  changes: 'border-fuchsia-700 bg-fuchsia-600 text-white shadow-sm dark:border-fuchsia-400 dark:bg-fuchsia-500 dark:text-white',
 };
 
 const clean = (value: unknown) => String(value || '').trim();
@@ -113,6 +115,18 @@ const fullDate = (value: string) => {
   return Number.isNaN(parsed.getTime())
     ? value
     : parsed.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+const sessionDateTimeLabel = (value: string) => {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : parsed.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+};
+const sessionDateTimeDetail = (value: string) => {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : parsed.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 };
 
 const isRegressionAlertSeries = (series: ClinicalOutcomeSeriesSummary) => {
@@ -237,7 +251,7 @@ const displayValue = (value: unknown, unit: string) => {
 };
 
 const sessionIdentity = (observation: ClinicalOutcomeObservation) => clean(observation.sessionId) || `obs:${observation.id}`;
-const sessionDisplayLabel = (observation: ClinicalOutcomeObservation, index: number) => clean(observation.metadata?.sessionLabel || observation.metadata?.session_label) || `Sessão ${index + 1}`;
+const sessionDisplayLabel = (observation: ClinicalOutcomeObservation) => sessionDateTimeLabel(observation.observedAt);
 
 const collectBuckets = (
   selectedSeries: ClinicalOutcomeSeriesSummary[],
@@ -262,8 +276,8 @@ const collectBuckets = (
     const index = sessionOrder.size;
     sessionOrder.set(id, {
       index,
-      label: sessionDisplayLabel(row.observation, index),
-      detail: `${fullDate(row.observation.observedAt)}${clean(row.observation.metadata?.sessionLabel || row.observation.metadata?.session_label) ? ` · ${clean(row.observation.metadata?.sessionLabel || row.observation.metadata?.session_label)}` : ''}`,
+      label: sessionDisplayLabel(row.observation),
+      detail: sessionDateTimeDetail(row.observation.observedAt),
       sortTime: timestamp(row.observation.observedAt),
     });
   }
@@ -277,11 +291,19 @@ const collectBuckets = (
     if (buckets.has(key)) continue;
     buckets.set(key, {
       key,
-      label: axis === 'session' ? (session?.label || `Sessão ${buckets.size + 1}`) : shortDate(dateKey),
-      detail: axis === 'session' ? (session?.detail || fullDate(row.observation.observedAt)) : fullDate(dateKey),
+      label: axis === 'session' ? (session?.label || sessionDateTimeLabel(row.observation.observedAt)) : shortDate(dateKey),
+      detail: axis === 'session' ? (session?.detail || sessionDateTimeDetail(row.observation.observedAt)) : fullDate(dateKey),
       sortTime: axis === 'session' ? (session?.sortTime || timestamp(row.observation.observedAt)) : timestamp(`${dateKey}T12:00:00`),
       period: row.period,
+      sessionIds: [],
     });
+  }
+  for (const row of rows) {
+    const dateKey = localDateKey(row.observation.observedAt);
+    const baseKey = axis === 'session' ? sessionIdentity(row.observation) : dateKey;
+    const bucket = buckets.get(`${row.period}::${baseKey}`);
+    const sessionId = clean(row.observation.sessionId);
+    if (bucket && sessionId && !bucket.sessionIds.includes(sessionId)) bucket.sessionIds.push(sessionId);
   }
   return Array.from(buckets.values()).sort((left, right) => left.sortTime - right.sortTime);
 };
@@ -299,6 +321,7 @@ const chartRowsForSeries = (
     xDetail: bucket.detail,
     period: bucket.period,
     sortTime: bucket.sortTime,
+    sessionId: bucket.sessionIds.length === 1 ? bucket.sessionIds[0] : null,
   } as Record<string, any>));
   const bucketIndex = new Map(buckets.map((bucket, index) => [bucket.key, index]));
 
@@ -352,7 +375,7 @@ const overviewRows = (
     : [];
   const allSeries = [...currentSeries, ...previousSeries];
   const buckets = collectBuckets(currentSeries, previousSeriesByKey, comparePrevious, axis);
-  const rows = buckets.map((bucket) => ({ x: bucket.label, xDetail: bucket.detail, period: bucket.period, sortTime: bucket.sortTime, skills: 0, behaviors: 0, mastery: 0, maintenance: 0, alerts: 0 }));
+  const rows = buckets.map((bucket) => ({ x: bucket.label, xDetail: bucket.detail, period: bucket.period, sortTime: bucket.sortTime, sessionId: bucket.sessionIds.length === 1 ? bucket.sessionIds[0] : null, skills: 0, behaviors: 0, mastery: 0, maintenance: 0, alerts: 0 }));
   const index = new Map(buckets.map((bucket, rowIndex) => [bucket.key, rowIndex]));
   const seen = new Set<string>();
 
@@ -413,7 +436,7 @@ function OverviewTooltip({ active, payload, label }: any) {
   );
 }
 
-export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false }: ClinicalPlanAnalyticsShellProps) {
+export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport }: ClinicalPlanAnalyticsShellProps) {
   const [activeDomain, setActiveDomain] = useState<AnalyticsDomain>('overview');
   const [metricSignatureValue, setMetricSignatureValue] = useState('');
   const [selectedSeriesKeys, setSelectedSeriesKeys] = useState<string[]>([]);
@@ -504,6 +527,40 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
   const panel = isDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white';
   const subtle = isDark ? 'text-slate-400' : 'text-slate-500';
   const text = isDark ? 'text-slate-100' : 'text-slate-900';
+  const reportableSessionId = (sessionId: unknown) => {
+    const normalized = clean(sessionId);
+    return normalized.startsWith('session-') ? normalized : '';
+  };
+  const openSessionReport = (sessionId: unknown) => {
+    const normalized = reportableSessionId(sessionId);
+    if (!normalized || !onOpenSessionReport) return;
+    onOpenSessionReport(normalized);
+  };
+  const clickableDot = (props: any) => {
+    const { cx, cy, fill, stroke, strokeWidth, payload } = props || {};
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+    const canOpen = Boolean(reportableSessionId(payload?.sessionId) && onOpenSessionReport);
+    return (
+      <circle
+        cx={cx}
+        cy={cy}
+        r={4}
+        fill={fill}
+        stroke={stroke || '#fff'}
+        strokeWidth={strokeWidth || 1.5}
+        role={canOpen ? 'button' : undefined}
+        tabIndex={canOpen ? 0 : -1}
+        aria-label={canOpen ? `Abrir relatório da sessão de ${payload?.x || ''}` : undefined}
+        style={{ cursor: canOpen ? 'pointer' : 'default' }}
+        onClick={() => canOpen && openSessionReport(payload.sessionId)}
+        onKeyDown={(event) => {
+          if (!canOpen || (event.key !== 'Enter' && event.key !== ' ')) return;
+          event.preventDefault();
+          openSessionReport(payload.sessionId);
+        }}
+      />
+    );
+  };
 
   return (
     <section className={`overflow-hidden rounded-2xl border ${panel}`} data-testid="clinical-plan-analytics-shell">
@@ -570,7 +627,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
                   <Tooltip content={<OverviewTooltip />} cursor={{ fill: isDark ? 'rgba(148,163,184,0.06)' : 'rgba(124,58,237,0.04)' }} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   {comparePrevious && firstCurrentX && <ReferenceLine x={firstCurrentX} stroke={isDark ? '#A78BFA' : '#7C3AED'} strokeDasharray="4 4" label={{ value: 'Período atual', fontSize: 9, position: 'insideTopLeft' }} />}
-                  {OVERVIEW_BARS.map((item) => <Bar key={item.key} dataKey={item.key} name={item.label} stackId="domains" fill={item.color} maxBarSize={52} />)}
+                  {OVERVIEW_BARS.map((item) => <Bar key={item.key} dataKey={item.key} name={item.label} stackId="domains" fill={item.color} maxBarSize={52} cursor={onOpenSessionReport ? 'pointer' : 'default'} onClick={(entry: any) => openSessionReport(entry?.sessionId || entry?.payload?.sessionId)} />)}
                 </BarChart>
               ) : (
                 <LineChart data={rows} margin={{ top: 12, right: 18, left: 4, bottom: 32 }}>
@@ -589,8 +646,8 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
                     const color = lineColors[index % lineColors.length];
                     const name = item.itemLabel || item.metricLabel;
                     return <React.Fragment key={item.key}>
-                      {comparePrevious && <Line type="linear" dataKey={`previous_${index}`} name={`${name} · anterior`} stroke={color} strokeOpacity={0.42} strokeDasharray="6 5" strokeWidth={2} dot={{ r: 2.5, fill: color, fillOpacity: 0.42 }} activeDot={{ r: 5 }} connectNulls={false} />}
-                      <Line type="linear" dataKey={`current_${index}`} name={name} stroke={color} strokeWidth={2.7} dot={{ r: 3.5, fill: color, stroke: '#fff', strokeWidth: 1.5 }} activeDot={{ r: 6 }} connectNulls={false} />
+                      {comparePrevious && <Line type="linear" dataKey={`previous_${index}`} name={`${name} · anterior`} stroke={color} strokeOpacity={0.42} strokeDasharray="6 5" strokeWidth={2} dot={clickableDot} activeDot={clickableDot} connectNulls={false} />}
+                      <Line type="linear" dataKey={`current_${index}`} name={name} stroke={color} strokeWidth={2.7} dot={clickableDot} activeDot={clickableDot} connectNulls={false} />
                     </React.Fragment>;
                   })}
                 </LineChart>
