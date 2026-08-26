@@ -189,7 +189,7 @@ export function normalizePtsClinicalPayload(
       priority: enumValue(item?.priority, ['low', 'medium', 'high', 'critical'] as const, 'medium'),
       status: enumValue(item?.status, ['pending', 'in_progress', 'achieved', 'paused', 'cancelled'] as const, 'pending'),
     }))
-    .filter((item) => item.id && item.title);
+    .filter((item) => item.id);
 
   const goals: PtsGoal[] = (Array.isArray(source.goals) ? source.goals : [])
     .slice(0, 40)
@@ -213,7 +213,7 @@ export function normalizePtsClinicalPayload(
         .filter((specialty) => allowedSpecialties.size === 0 || allowedSpecialties.has(specialty)),
       status: enumValue(item?.status, ['pending', 'in_progress', 'achieved', 'paused', 'cancelled'] as const, 'pending'),
     }))
-    .filter((item) => item.id && item.title);
+    .filter((item) => item.id);
 
   const responsibilities: PtsResponsibility[] = (Array.isArray(source.responsibilities) ? source.responsibilities : [])
     .slice(0, 60)
@@ -231,7 +231,7 @@ export function normalizePtsClinicalPayload(
         status: enumValue(item?.status, ['pending', 'in_progress', 'achieved', 'paused', 'cancelled'] as const, 'pending'),
       };
     })
-    .filter((item) => item.id && item.action && (item.actorType !== 'professional' || item.actorId));
+    .filter((item) => item.id);
 
   const network: PtsNetworkContact[] = (Array.isArray(source.network) ? source.network : [])
     .slice(0, 30)
@@ -243,7 +243,7 @@ export function normalizePtsClinicalPayload(
       contact: text(item?.contact, 240),
       consentStatus: enumValue(item?.consentStatus || item?.consent_status, ['not_required', 'pending', 'authorized', 'revoked'] as const, 'pending'),
     }))
-    .filter((item) => item.id && item.name);
+    .filter((item) => item.id);
 
   const risks: PtsRisk[] = (Array.isArray(source.risks) ? source.risks : [])
     .slice(0, 20)
@@ -255,7 +255,7 @@ export function normalizePtsClinicalPayload(
       responsePlan: text(item?.responsePlan || item?.response_plan, 1800),
       status: enumValue(item?.status, ['active', 'controlled', 'resolved'] as const, 'active'),
     }))
-    .filter((item) => item.id && item.title);
+    .filter((item) => item.id);
 
   const reviews: PtsReview[] = (Array.isArray(source.reviews) ? source.reviews : [])
     .slice(0, 40)

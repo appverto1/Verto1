@@ -1379,10 +1379,16 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         && String(response?.error || '') === 'PTS_DRAFT_VALIDATION_FAILED'
       ) {
         setError('');
+        if (response?.draftPreserved === true && response?.data?.id) {
+          setPtsDraftOverride({ planId: scopeId, version: response.data });
+        }
         setActivationWarning(
           response?.message
-          || 'O rascunho foi preservado. Os campos pendentes impedem somente a ativação; você pode continuar editando e salvando o PTS normalmente.',
+          || 'O rascunho foi salvo. Os campos pendentes impedem somente a ativação; você pode continuar editando e salvando o PTS normalmente.',
         );
+        if (response?.draftPreserved === true) {
+          setNotice('Rascunho salvo. Nenhuma informação preenchida foi descartada.');
+        }
         return;
       }
       setActivationWarning('');

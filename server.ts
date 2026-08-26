@@ -71733,7 +71733,7 @@ async function startServer() {
       if (!access.allowed) return res.status(403).json({ success: false, error: 'PTS_EDIT_DENIED' });
       const input = ptsDraftInput(access.plan, req.body || {});
       if (input.error) return res.status(422).json({ success: false, error: input.error, message: 'Revise os campos do PTS antes de ativar.' });
-      const { data, error } = await supabase.rpc('activate_patient_pts_draft_v2', {
+      const { data, error } = await supabase.rpc('activate_patient_pts_draft_v3', {
         p_plan_id: planId,
         p_organization_id: organizationId,
         p_patient_id: patientId,
@@ -71749,9 +71749,21 @@ async function startServer() {
       if (error) {
         const code = sanitizeString(error?.message || error?.code, 500);
         if (code.includes('PTS_DRAFT_VERSION_CONFLICT') || code.includes('PTS_DRAFT_ACTIVATION_CONFLICT')) return res.status(409).json({ success: false, error: 'PTS_DRAFT_VERSION_CONFLICT', message: 'O rascunho mudou durante a ativação. Recarregue e revise antes de tentar novamente.' });
-        if (code.includes('PTS_DRAFT_VALIDATION_FAILED')) return res.status(422).json({ success: false, error: 'PTS_DRAFT_VALIDATION_FAILED', blockingScope: 'activation_only', draftPreserved: true, message: 'O rascunho foi preservado. Complete os campos indicados para ativar o PTS; isso não impede continuar editando ou salvando o plano.' });
-        if (code.includes('PGRST202') || code.includes('activate_patient_pts_draft_v2')) return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED' });
+        if (code.includes('PGRST202') || code.includes('activate_patient_pts_draft_v3')) return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED', message: 'A atualização de persistência do PTS ainda não foi aplicada neste ambiente.' });
+        // Older database functions rolled the save back when activation validation
+        // failed. Never claim that the draft was preserved in that state.
+        if (code.includes('PTS_DRAFT_VALIDATION_FAILED')) return res.status(503).json({ success: false, error: 'PTS_ACTIVATION_PERSISTENCE_MIGRATION_REQUIRED', draftPreserved: false, message: 'Atualize a migration do PTS antes de ativar. O sistema não confirmou a persistência desta tentativa.' });
         throw error;
+      }
+      if (data && typeof data === 'object' && (data as any).validationFailed === true) {
+        return res.status(422).json({
+          success: false,
+          error: 'PTS_DRAFT_VALIDATION_FAILED',
+          blockingScope: 'activation_only',
+          draftPreserved: true,
+          data: (data as any).version || null,
+          message: 'O rascunho foi salvo. Complete os campos indicados para ativar o PTS; isso não impede continuar editando e salvando o plano.',
+        });
       }
       return res.json({ success: true, data, message: 'PTS ativado. A versão anterior foi preservada integralmente.' });
     } catch (error) {
