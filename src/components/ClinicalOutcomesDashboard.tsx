@@ -35,6 +35,7 @@ import {
   clinicalOutcomeTargetReference,
   clinicalOutcomeUnitLabel,
   compareClinicalOutcomePeriods,
+  formatClinicalValue,
   formatClinicalOutcomeValue,
   isClinicalOutcomeInterferingBehaviorSeries,
   summarizeClinicalOutcomePeriod,
@@ -206,10 +207,7 @@ const seriesDescription = (series: ClinicalOutcomeSeriesSummary) => {
 
 const formatSeriesAggregateValue = (series: ClinicalOutcomeSeriesSummary, value: number | null) => {
   if (value === null || !Number.isFinite(value)) return 'Sem dado comparável';
-  const rounded = Math.round(value * 10) / 10;
-  const unit = clean(series.unit);
-  if (unit === '%') return `${rounded}%`;
-  return `${rounded}${unit ? ` ${unit}` : ''}`;
+  return formatClinicalValue(value, series.unit);
 };
 
 const formatPtsGoalValue = (value: unknown, unit: unknown) => {
