@@ -70669,6 +70669,58 @@ async function startServer() {
         });
         ptsEventsByDocumentId.set(documentId, rows);
       }
+      const buildPtsReadModel = (scope: any, documentEvents: any[] = []) => {
+        const participantIds = Array.from(new Set([
+          String(scope?.responsible_professional_id || ''),
+          ...(Array.isArray(scope?.participant_professional_ids) ? scope.participant_professional_ids.map(String) : []),
+        ].filter(Boolean)));
+        const specialties = Array.isArray(scope?.participant_specialties) ? scope.participant_specialties.map(String) : [];
+        const normalizedPts = normalizePtsClinicalPayload(scope?.pts_payload || {}, {
+          participantIds,
+          specialties,
+          defaultCaseManagerId: String(scope?.responsible_professional_id || ''),
+          defaultStartedAt: String(scope?.created_at || '').slice(0, 10),
+        });
+        const goalStatusById = new Map(normalizedPts.goals.map((goal: any) => [String(goal.id), String(goal.status || 'pending')]));
+        const riskStatusById = new Map(normalizedPts.risks.map((risk: any) => [String(risk.id), String(risk.status || 'active')]));
+        let nextReviewDate = sanitizeString(scope?.review_due_date || normalizedPts.nextReviewDate, 10) || null;
+        let lastReviewAt = scope?.last_reviewed_at || null;
+        const orderedEvents = (Array.isArray(documentEvents) ? documentEvents : []).slice().sort((left: any, right: any) => {
+          const leftAt = new Date(left?.occurred_at || left?.recorded_at || 0).getTime();
+          const rightAt = new Date(right?.occurred_at || right?.recorded_at || 0).getTime();
+          return (Number.isFinite(leftAt) ? leftAt : 0) - (Number.isFinite(rightAt) ? rightAt : 0);
+        });
+        for (const event of orderedEvents) {
+          const eventType = sanitizeString(event?.event_type, 60).toUpperCase();
+          const entityId = sanitizeString(event?.entity_id, 120);
+          const payload = event?.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload : {};
+          if (eventType === 'GOAL_STATUS_UPDATED' && entityId) {
+            const status = sanitizeString(payload?.status, 30).toLowerCase();
+            if (['pending', 'in_progress', 'achieved', 'paused', 'cancelled'].includes(status)) goalStatusById.set(entityId, status);
+          }
+          if (eventType === 'RISK_OPENED' && entityId) riskStatusById.set(entityId, 'active');
+          if (['RISK_STATUS_UPDATED', 'RISK_RESOLVED'].includes(eventType) && entityId) {
+            const status = eventType === 'RISK_RESOLVED' ? 'resolved' : sanitizeString(payload?.status, 30).toLowerCase();
+            if (['active', 'controlled', 'resolved'].includes(status)) riskStatusById.set(entityId, status);
+          }
+          if (eventType === 'REVIEW_RECORDED') {
+            lastReviewAt = event?.occurred_at || event?.recorded_at || lastReviewAt;
+            const eventNextReviewDate = sanitizeString(payload?.nextReviewDate || payload?.next_review_date, 10);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(eventNextReviewDate)) nextReviewDate = eventNextReviewDate;
+          }
+        }
+        const goalStatuses = Array.from(goalStatusById.values());
+        const riskStatuses = Array.from(riskStatusById.values());
+        return {
+          goalsInProgress: goalStatuses.filter((status) => ['pending', 'in_progress'].includes(status)).length,
+          achievedGoals: goalStatuses.filter((status) => status === 'achieved').length,
+          activeRisks: riskStatuses.filter((status) => status === 'active').length,
+          controlledRisks: riskStatuses.filter((status) => status === 'controlled').length,
+          nextReviewDate,
+          lastReviewAt,
+        };
+      };
+
       const visiblePlanScopes = filterTherapeuticPlanScopesForActor(
         planScopeResult.data || [],
         accessContext
@@ -70678,7 +70730,7 @@ async function startServer() {
         const accessReason = scopeAccess.reason;
         if (String(scope?.mode || '').toLowerCase() !== 'interdisciplinary') return { ...scope, canEdit, accessReason };
         const document = ptsDocumentByPlanId.get(String(scope.id));
-        if (!document) return { ...scope, canEdit, accessReason, pts_lineage: null, pts_events: [] };
+        if (!document) return { ...scope, canEdit, accessReason, pts_lineage: null, pts_events: [], pts_read_model: buildPtsReadModel(scope, []) };
         const documentVersions = ptsVersionsByDocumentId.get(String(document.id)) || [];
         const activeVersion = documentVersions.find((version: any) => String(version?.lifecycle_status) === 'ACTIVE') || null;
         const draftVersion = documentVersions.find((version: any) => String(version?.lifecycle_status) === 'DRAFT') || null;
@@ -70692,8 +70744,11 @@ async function startServer() {
           activatedAt: version.activated_at || null,
           supersededAt: version.superseded_at || null,
           updatedAt: version.updated_at || null,
+          createdAt: version.created_at || null,
+          authoredBy: version.authored_by || null,
           ...(includeSnapshot ? { snapshot: version.snapshot || {} } : {}),
         } : null;
+        const documentEvents = ptsEventsByDocumentId.get(String(document.id)) || [];
         return {
           ...scope,
           canEdit,
@@ -70704,7 +70759,8 @@ async function startServer() {
             draftVersion: versionMeta(draftVersion, true),
             currentVersionNumber: Number(activeVersion?.version_number || draftVersion?.version_number || 1),
           },
-          pts_events: ptsEventsByDocumentId.get(String(document.id)) || [],
+          pts_events: documentEvents,
+          pts_read_model: buildPtsReadModel(scope, documentEvents),
         };
       });
       const visibleProgramRows = filterTherapeuticPlanProgramsForActor(
@@ -70846,18 +70902,62 @@ async function startServer() {
         list.push(event);
         historyByProgram.set(programId, list);
       }
-      const lastAppliedByProgram = new Map<string, string>();
+      const lastAppliedByAnyProgram = new Map<string, string>();
       for (const trial of trialResult.data || []) {
         const programId = sanitizeString((trial as any)?.program_id, 180);
         const occurredAt = sanitizeString((trial as any)?.occurred_at, 80);
-        if (programId && visibleProgramIds.has(programId) && occurredAt && !lastAppliedByProgram.has(programId)) lastAppliedByProgram.set(programId, occurredAt);
+        if (programId && occurredAt && !lastAppliedByAnyProgram.has(programId)) {
+          lastAppliedByAnyProgram.set(programId, occurredAt);
+        }
       }
       const programs = visibleProgramRows.map((program: any) => ({
         ...program,
         targets: targetsByProgram.get(String(program.id)) || [],
         history: historyByProgram.get(String(program.id)) || [],
-        last_applied_at: lastAppliedByProgram.get(String(program.id)) || null
+        last_applied_at: lastAppliedByAnyProgram.get(String(program.id)) || null
       }));
+
+      // PTS consumes an explicit, intentionally small shared projection. It
+      // never receives the private specialty-plan payload merely because the
+      // professional can read the shared PTS. The source plan id is omitted
+      // unless the current actor can independently open that specialty plan.
+      const visiblePlanScopeIds = new Set(visiblePlanScopes.map((scope: any) => String(scope?.id || '')).filter(Boolean));
+      const rawPlanScopeById = new Map((planScopeResult.data || []).map((scope: any) => [String(scope?.id || ''), scope]));
+      const visiblePtsPlanIds = new Set(
+        visiblePlanScopes
+          .filter((scope: any) => String(scope?.mode || '').toLowerCase() === 'interdisciplinary')
+          .map((scope: any) => String(scope?.id || ''))
+          .filter(Boolean)
+      );
+      const hasVisiblePts = visiblePtsPlanIds.size > 0;
+      const ptsSharedEvidence = hasVisiblePts
+        ? (programResult.data || []).flatMap((program: any) => {
+            const sourcePlanId = sanitizeString(program?.therapeutic_plan_id, 120);
+            const sourcePlan: any = rawPlanScopeById.get(sourcePlanId) || null;
+            const sourceMode = String(sourcePlan?.mode || '').toLowerCase();
+            const legacyPtsEvidence = sourceMode === 'interdisciplinary' && visiblePtsPlanIds.has(sourcePlanId);
+            const explicitlyShared = program?.advanced_settings?.shareWithPts === true || program?.advanced_settings?.share_with_pts === true;
+            if (!legacyPtsEvidence && !explicitlyShared) return [];
+            if (!legacyPtsEvidence && sourceMode !== 'specialty') return [];
+
+            const canOpenSourcePlan = sourceMode === 'specialty' && visiblePlanScopeIds.has(sourcePlanId);
+            return [{
+              id: sanitizeString(program?.id, 180),
+              name: sanitizeTextField(program?.name, 240) || 'Evidência compartilhada',
+              objective: sanitizeTextField(program?.objective || program?.description, 1000) || null,
+              category: sanitizeString(program?.category, 80) || null,
+              status: sanitizeString(program?.status, 40) || 'draft',
+              sourceSpecialty: sanitizeTextField(sourcePlan?.specialty, 120) || (legacyPtsEvidence ? 'Interdisciplinar' : 'Especialidade não informada'),
+              sourcePlanId: canOpenSourcePlan ? sourcePlanId : null,
+              canOpenSourcePlan,
+              sharingMode: legacyPtsEvidence ? 'legacy_pts' : 'explicit_specialty_summary',
+              lastAppliedAt: lastAppliedByAnyProgram.get(String(program?.id || '')) || null,
+              reviewDueDate: program?.review_due_date || null,
+              updatedAt: program?.updated_at || null,
+            }];
+          })
+        : [];
+
       return res.json({
         success: true,
         data: {
@@ -70866,6 +70966,7 @@ async function startServer() {
           targets: visibleTargetRows,
           planScopes: visiblePlanScopes,
           professionalLinks: enrichedProfessionalLinks,
+          ptsSharedEvidence,
           capabilities: {
             actorId,
             actorRole,
@@ -71949,6 +72050,11 @@ async function startServer() {
         p_targets: sanitizeClinicalPayload(targets),
         p_advanced_settings: sanitizeClinicalPayload({
           ...(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+          shareWithPts:
+            req.body?.advancedSettings?.shareWithPts === true
+            || req.body?.advancedSettings?.share_with_pts === true
+            || req.body?.advanced_settings?.shareWithPts === true
+            || req.body?.advanced_settings?.share_with_pts === true,
           ...(therapeuticPlanScope?.id
             ? { therapeuticPlanId: therapeuticPlanScope.id }
             : {}),
@@ -72092,7 +72198,14 @@ async function startServer() {
         p_category: sanitizeString(req.body?.category || 'OUTRO', 120),
         p_measurement_type: sanitizeString(req.body?.measurementType || req.body?.measurement_type || 'independent_prompted_no_response', 80),
         p_mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria || req.body?.mastery_criteria || {}),
-        p_advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+        p_advanced_settings: sanitizeClinicalPayload({
+          ...(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+          shareWithPts:
+            req.body?.advancedSettings?.shareWithPts === true
+            || req.body?.advancedSettings?.share_with_pts === true
+            || req.body?.advanced_settings?.shareWithPts === true
+            || req.body?.advanced_settings?.share_with_pts === true,
+        }),
         p_targets: sanitizeClinicalPayload(targets),
         p_review_due_date: sanitizeIsoDateOnly(req.body?.reviewDueDate || req.body?.review_due_date) || null,
         p_expected_version: Number.isFinite(Number(req.body?.expectedVersion ?? req.body?.expected_version)) ? Number(req.body?.expectedVersion ?? req.body?.expected_version) : null,

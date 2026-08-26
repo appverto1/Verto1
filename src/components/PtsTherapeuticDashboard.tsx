@@ -5,22 +5,21 @@ import {
   ChevronUp,
   ClipboardList,
   History,
-  Search,
+  Pencil,
   ShieldAlert,
   Target,
-  Pencil,
 } from 'lucide-react';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
 import { SecureImage } from './SecureMedia';
 import { formatTherapeuticPlanDate, normalizeTherapeuticProgramStatus } from '../utils/therapeuticPlan';
 
-type WorkspaceTab = 'programs' | 'maintenance' | 'generalization' | 'history';
+type WorkspaceTab = 'evidence' | 'reviews' | 'history';
 
 type PtsTherapeuticDashboardProps = {
   scope: any;
   availableScopes: any[];
   professionals: any[];
-  programs: any[];
+  sharedEvidence: any[];
   loading?: boolean;
   isDark?: boolean;
   canEditScope?: boolean;
@@ -30,29 +29,12 @@ type PtsTherapeuticDashboardProps = {
   onRecordReview?: () => void;
   onRecordRisk?: () => void;
   onManagePlans: () => void;
-  renderProgramCard: (program: any) => React.ReactNode;
+  onOpenSourcePlan?: (planId: string) => void;
 };
-
-const STATUS_LABELS: Record<string, string> = {
-  active: 'Ativo',
-  draft: 'Rascunho',
-  paused: 'Pausado',
-  completed: 'Concluído',
-  archived: 'Arquivado',
-};
-
-const FILTERS = [
-  ['all', 'Todos'],
-  ['teaching', 'Em ensino'],
-  ['maintenance', 'Manutenção'],
-  ['paused', 'Pausados'],
-  ['completed', 'Concluídos'],
-] as const;
 
 const TABS: Array<{ id: WorkspaceTab; label: string }> = [
-  { id: 'programs', label: 'Programas' },
-  { id: 'maintenance', label: 'Manutenção' },
-  { id: 'generalization', label: 'Generalização' },
+  { id: 'evidence', label: 'Evidências do cuidado' },
+  { id: 'reviews', label: 'Reavaliações' },
   { id: 'history', label: 'Histórico' },
 ];
 
@@ -62,7 +44,6 @@ const initials = (value: unknown) => String(value || 'P')
   .slice(0, 2)
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
-
 
 const professionalPhotoSource = (professional: any) => String(
   professional?.profilePicture
@@ -102,11 +83,23 @@ const dateValue = (value: unknown) => {
   return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
 };
 
+const humanSpecialty = (value: unknown) => {
+  const raw = String(value || '').trim();
+  const normalized = raw.toLocaleLowerCase('pt-BR');
+  if (!raw) return 'Especialidade';
+  if (normalized.includes('fono')) return 'Fonoaudiologia';
+  if (normalized.includes('terapeuta ocupacional') || normalized === 'to') return 'Terapia Ocupacional';
+  if (normalized.includes('psicolog')) return 'Psicologia';
+  if (normalized.includes('fisioter')) return 'Fisioterapia';
+  if (normalized.includes('psicopedag')) return 'Psicopedagogia';
+  return raw;
+};
+
 export function PtsTherapeuticDashboard({
   scope,
   availableScopes,
   professionals,
-  programs,
+  sharedEvidence,
   loading = false,
   isDark = false,
   canEditScope = false,
@@ -116,11 +109,9 @@ export function PtsTherapeuticDashboard({
   onRecordReview,
   onRecordRisk,
   onManagePlans,
-  renderProgramCard,
+  onOpenSourcePlan,
 }: PtsTherapeuticDashboardProps) {
-  const [tab, setTab] = useState<WorkspaceTab>('programs');
-  const [filter, setFilter] = useState('all');
-  const [query, setQuery] = useState('');
+  const [tab, setTab] = useState<WorkspaceTab>('evidence');
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     reference: true,
     team: true,
@@ -131,9 +122,14 @@ export function PtsTherapeuticDashboard({
 
   const pts = useMemo(() => hydratePtsClinicalPayloadFromPlan(scope), [scope]);
   const ptsEvents = useMemo(() => Array.isArray(scope?.pts_events) ? scope.pts_events : [], [scope?.pts_events]);
-  const activePtsVersionNumber = Number(scope?.pts_lineage?.activeVersion?.versionNumber || scope?.pts_lineage?.currentVersionNumber || scope?.edit_version || 1);
-  const hasPtsDraft = Boolean(scope?.pts_lineage?.draftVersion?.id);
-  const ptsLifecycleStatus = String(scope?.pts_lineage?.activeVersion?.lifecycleStatus || (scope?.status === 'active' ? 'ACTIVE' : 'DRAFT')).toUpperCase();
+  const activeVersion = scope?.pts_lineage?.activeVersion || null;
+  const draftVersion = scope?.pts_lineage?.draftVersion || null;
+  const ptsReadModel = scope?.pts_read_model && typeof scope.pts_read_model === 'object' ? scope.pts_read_model : {};
+  const hasActiveVersion = Boolean(activeVersion?.id) || String(scope?.status || '').toLowerCase() === 'active';
+  const hasPtsDraft = Boolean(draftVersion?.id) || (!hasActiveVersion && String(scope?.status || '').toLowerCase() === 'draft');
+  const activePtsVersionNumber = Number(activeVersion?.versionNumber || (hasActiveVersion ? scope?.edit_version : 0) || 1);
+  const draftPtsVersionNumber = Number(draftVersion?.versionNumber || (!hasActiveVersion ? scope?.edit_version : 0) || activePtsVersionNumber + 1 || 1);
+
   const professionalById = useMemo(() => new Map(
     (Array.isArray(professionals) ? professionals : []).map((professional: any) => [String(professional.id), professional]),
   ), [professionals]);
@@ -144,31 +140,8 @@ export function PtsTherapeuticDashboard({
   const responsible = professionalById.get(String(pts.caseManagerId || scope?.responsible_professional_id || ''))
     || professionalById.get(String(scope?.responsible_professional_id || ''))
     || null;
-
-  const activePrograms = useMemo(() => programs.filter((program: any) => (
-    ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program?.status))
-  )), [programs]);
-  const goalsInProgress = pts.goals.filter((goal) => ['pending', 'in_progress'].includes(goal.status)).length;
-  const achievedGoals = pts.goals.filter((goal) => goal.status === 'achieved').length;
-  const delayedGoals = pts.goals.filter((goal) => (
-    Boolean(goal.dueDate)
-    && !['achieved', 'cancelled'].includes(goal.status)
-    && new Date(`${goal.dueDate}T23:59:59`).getTime() < Date.now()
-  )).length;
-
-  const visiblePrograms = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase('pt-BR');
-    return programs.filter((program: any) => {
-      const status = normalizeTherapeuticProgramStatus(program?.status);
-      const tabMatch = tab === 'programs'
-        || (tab === 'maintenance' && status === 'maintenance')
-        || (tab === 'generalization' && Boolean(String(program?.advanced_settings?.generalization || '').trim()));
-      const filterMatch = tab !== 'programs' || filter === 'all' || status === filter;
-      const searchable = `${program?.name || ''} ${program?.objective || ''} ${(program?.targets || []).map((target: any) => target?.name || '').join(' ')}`
-        .toLocaleLowerCase('pt-BR');
-      return tabMatch && filterMatch && (!needle || searchable.includes(needle));
-    });
-  }, [filter, programs, query, tab]);
+  const activeAuthor = professionalById.get(String(activeVersion?.authoredBy || '')) || null;
+  const draftAuthor = professionalById.get(String(draftVersion?.authoredBy || '')) || null;
 
   const sharedObjectives = useMemo(() => {
     const fromGoals = pts.goals
@@ -178,57 +151,42 @@ export function PtsTherapeuticDashboard({
     return fromGoals.length ? fromGoals : objectiveLines(scope?.common_objectives);
   }, [pts.goals, scope?.common_objectives]);
 
-  const versionEvents = useMemo(() => {
-    if (ptsEvents.length > 0) {
-      return ptsEvents
-        .filter((event: any) => ['VERSION_ACTIVATED', 'REVIEW_RECORDED', 'TEAM_DECISION_RECORDED'].includes(String(event?.event_type || '').toUpperCase()))
-        .slice()
-        .sort((left: any, right: any) => dateValue(right?.occurred_at || right?.recorded_at) - dateValue(left?.occurred_at || left?.recorded_at))
-        .slice(0, 3)
-        .map((event: any) => {
-          const eventType = String(event?.event_type || '').toUpperCase();
-          const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
-          return {
-            id: String(event?.id || `${eventType}-${event?.occurred_at || ''}`),
-            version: eventType === 'VERSION_ACTIVATED' ? Number(payload?.versionNumber || 0) || null : null,
-            date: event?.occurred_at || event?.recorded_at,
-            label: eventType === 'VERSION_ACTIVATED'
-              ? 'Versão ativada'
-              : eventType === 'REVIEW_RECORDED'
-                ? String(payload?.summary || payload?.decisions || 'Reavaliação registrada')
-                : String(payload?.decisions || 'Decisão da equipe registrada'),
-            eventType,
-          };
-        });
-    }
-    const reviews = [...pts.reviews]
-      .sort((left, right) => dateValue(right.completedAt || right.scheduledFor) - dateValue(left.completedAt || left.scheduledFor))
-      .slice(0, 2)
-      .map((review) => ({
-        id: review.id,
-        version: null as number | null,
-        date: review.completedAt || review.scheduledFor,
-        label: review.summary || review.decisions || 'Reavaliação registrada',
-        eventType: 'REVIEW_RECORDED',
-      }));
-    return [
-      {
-        id: `current-${scope?.id}`,
-        version: activePtsVersionNumber,
-        date: scope?.updated_at || scope?.created_at,
-        label: 'Versão ativa',
-        eventType: 'VERSION_ACTIVATED',
-      },
-      ...reviews,
-    ].slice(0, 3);
-  }, [activePtsVersionNumber, pts.reviews, ptsEvents, scope]);
+  const reviewEvents = useMemo(() => ptsEvents
+    .filter((event: any) => ['REVIEW_RECORDED', 'TEAM_DECISION_RECORDED'].includes(String(event?.event_type || '').toUpperCase()))
+    .slice()
+    .sort((left: any, right: any) => dateValue(right?.occurred_at || right?.recorded_at) - dateValue(left?.occurred_at || left?.recorded_at)), [ptsEvents]);
 
+  const legacyReviews = useMemo(() => {
+    const eventSignatures = new Set(reviewEvents.map((event: any) => {
+      const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+      const date = String(event?.occurred_at || event?.recorded_at || '').slice(0, 10);
+      const detail = String(payload?.summary || payload?.decisions || '').trim().toLocaleLowerCase('pt-BR');
+      return `${date}|${detail}`;
+    }));
+    return pts.reviews
+      .filter((review) => {
+        const date = String(review.completedAt || review.scheduledFor || '').slice(0, 10);
+        const detail = String(review.summary || review.decisions || '').trim().toLocaleLowerCase('pt-BR');
+        return !eventSignatures.has(`${date}|${detail}`);
+      })
+      .slice()
+      .sort((left, right) => dateValue(right.completedAt || right.scheduledFor) - dateValue(left.completedAt || left.scheduledFor));
+  }, [pts.reviews, reviewEvents]);
 
-  const displayNextReviewDate = String(scope?.review_due_date || pts.nextReviewDate || '').slice(0, 10);
-  const nextReviewOverdue = Boolean(
-    displayNextReviewDate
-    && new Date(`${displayNextReviewDate}T23:59:59`).getTime() < Date.now(),
-  );
+  const timelineEvents = useMemo(() => ptsEvents
+    .slice()
+    .sort((left: any, right: any) => dateValue(right?.occurred_at || right?.recorded_at) - dateValue(left?.occurred_at || left?.recorded_at)), [ptsEvents]);
+
+  const displayNextReviewDate = String(ptsReadModel?.nextReviewDate || scope?.review_due_date || pts.nextReviewDate || '').slice(0, 10);
+  const goalsInProgress = Number.isFinite(Number(ptsReadModel?.goalsInProgress))
+    ? Number(ptsReadModel.goalsInProgress)
+    : pts.goals.filter((goal) => ['pending', 'in_progress'].includes(goal.status)).length;
+  const achievedGoals = Number.isFinite(Number(ptsReadModel?.achievedGoals))
+    ? Number(ptsReadModel.achievedGoals)
+    : pts.goals.filter((goal) => goal.status === 'achieved').length;
+  const activeRisks = Number.isFinite(Number(ptsReadModel?.activeRisks))
+    ? Number(ptsReadModel.activeRisks)
+    : pts.risks.filter((risk) => risk.status === 'active').length;
 
   const surface = isDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white';
   const inset = isDark ? 'border-slate-700 bg-slate-900/45' : 'border-slate-100 bg-slate-50/70';
@@ -237,6 +195,13 @@ export function PtsTherapeuticDashboard({
   const secondaryButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors ${
     isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-700 hover:bg-slate-50'
   }`;
+  const primaryButton = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm text-white transition-colors hover:bg-violet-700';
+  const draftBadge = isDark
+    ? 'border-amber-400/25 bg-amber-500/10 text-amber-200'
+    : 'border-amber-200 bg-amber-50 text-amber-800';
+  const activeBadge = isDark
+    ? 'border-violet-400/25 bg-violet-500/10 text-violet-200'
+    : 'border-violet-200 bg-violet-50 text-violet-700';
 
   const section = (id: string, title: string, content: React.ReactNode) => {
     const open = openSections[id] !== false;
@@ -244,110 +209,122 @@ export function PtsTherapeuticDashboard({
       <section className={`border-b py-4 last:border-b-0 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
         <button
           type="button"
-          className="flex w-full items-center justify-between gap-3 text-left"
+          className="flex min-h-10 w-full items-center justify-between gap-3 text-left"
           onClick={() => setOpenSections((current) => ({ ...current, [id]: !open }))}
           aria-expanded={open}
         >
-          <span className={`text-sm font-semibold ${text}`}>{title}</span>
+          <span className={`text-sm ${text}`}>{title}</span>
           {open ? <ChevronUp size={16} className={muted} /> : <ChevronDown size={16} className={muted} />}
         </button>
-        {open && <div className="mt-3">{content}</div>}
+        {open && <div className="pb-1 pt-2">{content}</div>}
       </section>
     );
   };
 
-  const emptyMessage = tab === 'maintenance'
-    ? 'Nenhuma evidência de programa em manutenção está vinculada historicamente a este PTS.'
-    : tab === 'generalization'
-      ? 'Nenhuma evidência de generalização está vinculada historicamente a este PTS.'
-      : query || filter !== 'all'
-        ? 'Nenhum programa encontrado com estes filtros.'
-        : 'Os programas clínicos ficam nos planos por especialidade. Este PTS ainda não possui evidências legadas de programas vinculadas.';
+  const eventTitle = (event: any) => {
+    const eventType = String(event?.event_type || '').toUpperCase();
+    const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+    if (eventType === 'VERSION_ACTIVATED') return `Versão ${payload?.versionNumber || ''} ativada`.trim();
+    if (eventType === 'REVIEW_RECORDED') return 'Reavaliação registrada';
+    if (eventType === 'RISK_OPENED') return 'Risco registrado';
+    if (eventType === 'RISK_STATUS_UPDATED') return 'Risco atualizado';
+    if (eventType === 'RISK_RESOLVED') return 'Risco resolvido';
+    if (eventType === 'GOAL_STATUS_UPDATED') return 'Status de meta atualizado';
+    if (eventType === 'TEAM_DECISION_RECORDED') return 'Decisão da equipe';
+    return 'Evento clínico registrado';
+  };
+
+  const eventDetail = (event: any) => {
+    const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
+    return String(payload?.summary || payload?.decisions || payload?.title || payload?.note || '').trim();
+  };
 
   return (
     <div className="space-y-4" data-testid="pts-therapeutic-dashboard">
       <header className={`rounded-2xl border px-4 py-4 sm:px-5 ${surface}`}>
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className={`text-lg font-semibold ${text}`}>Projeto Terapêutico Singular (PTS)</h2>
-              <span className={`rounded-full px-2.5 py-1 text-xs ${scope?.status === 'active' ? isDark ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                {STATUS_LABELS[String(scope?.status || 'draft')] || 'Rascunho'}
-              </span>
-              <span className={`rounded-full px-2.5 py-1 text-xs ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                Versão {activePtsVersionNumber}
-              </span>
+              <h2 className={`text-xl font-semibold ${text}`}>Projeto Terapêutico Singular</h2>
+              {hasActiveVersion ? (
+                <span className={`rounded-full border px-2.5 py-1 text-xs ${activeBadge}`}>Ativo · v{activePtsVersionNumber}</span>
+              ) : (
+                <span className={`rounded-full border px-2.5 py-1 text-xs ${draftBadge}`}>Rascunho · v{draftPtsVersionNumber}</span>
+              )}
             </div>
+            <p className={`mt-1 text-sm ${muted}`}>Plano compartilhado da equipe assistencial.</p>
+            {hasActiveVersion ? (
+              <p className={`mt-2 text-xs leading-5 ${muted}`}>
+                Ativado em {formatTherapeuticPlanDate(activeVersion?.activatedAt || scope?.updated_at || scope?.created_at)}
+                {activeAuthor?.name ? ` · autoria: ${activeAuthor.name}` : ''}
+                {responsible?.name ? ` · técnico de referência: ${responsible.name}` : ''}
+              </p>
+            ) : (
+              <p className={`mt-2 text-xs leading-5 ${muted}`}>
+                {draftAuthor?.name ? `Rascunho iniciado por ${draftAuthor.name}` : 'Rascunho em elaboração'}
+                {draftVersion?.createdAt ? ` · ${formatTherapeuticPlanDate(draftVersion.createdAt)}` : ''}
+              </p>
+            )}
+
             {availableScopes.length > 1 && (
-              <label className={`mt-2 inline-flex items-center gap-2 text-xs ${muted}`}>
-                Plano em exibição
+              <label className={`mt-3 inline-flex items-center gap-2 text-xs ${muted}`}>
+                Documento em exibição
                 <select
                   className={`rounded-lg border px-2 py-1.5 outline-none ${isDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-700'}`}
                   value={String(scope?.id || '')}
                   onChange={(event) => onScopeChange(event.target.value)}
                 >
                   {availableScopes.map((item: any) => (
-                    <option key={item.id} value={item.id}>Versão {item?.pts_lineage?.activeVersion?.versionNumber || item?.pts_lineage?.draftVersion?.versionNumber || item.edit_version || 1} do PTS</option>
+                    <option key={item.id} value={item.id}>PTS · v{item?.pts_lineage?.activeVersion?.versionNumber || item?.pts_lineage?.draftVersion?.versionNumber || item.edit_version || 1}</option>
                   ))}
                 </select>
               </label>
             )}
           </div>
 
-          <dl className="grid min-w-0 gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4 xl:flex xl:items-center">
-            <div className="min-w-[150px]">
-              <dt className={muted}>Responsável de referência</dt>
-              <dd className={`mt-1 truncate text-sm ${text}`}>{responsible?.name || 'Não definido'}</dd>
-            </div>
-            <div className="min-w-[120px]">
-              <dt className={muted}>Última atualização</dt>
-              <dd className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(scope?.updated_at || scope?.created_at)}</dd>
-            </div>
-            <div className="min-w-[130px]">
-              <dt className={muted}>Próxima reavaliação</dt>
-              <dd className={`mt-1 text-sm ${nextReviewOverdue ? 'text-rose-600' : text}`}>{displayNextReviewDate ? formatTherapeuticPlanDate(displayNextReviewDate) : 'Não definida'}</dd>
-            </div>
-            <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-1">
-              {canManagePlans && <button type="button" className={secondaryButton} onClick={onManagePlans}>Voltar aos planos</button>}
-              {ptsLifecycleStatus === 'ACTIVE' && onRecordReview && <button type="button" className={secondaryButton} onClick={onRecordReview}><CalendarClock size={15} /> Registrar reavaliação</button>}
-              {ptsLifecycleStatus === 'ACTIVE' && onRecordRisk && <button type="button" className={secondaryButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
-              {canEditScope && <button type="button" className="inline-flex min-h-10 items-center justify-center rounded-xl bg-violet-600 px-4 text-sm text-white hover:bg-violet-700" onClick={onNewVersion}>{hasPtsDraft ? 'Continuar rascunho' : ptsLifecycleStatus === 'ACTIVE' ? 'Criar nova versão' : 'Editar rascunho'}</button>}
-            </div>
-          </dl>
+          <div className="flex flex-wrap gap-2 xl:max-w-[520px] xl:justify-end">
+            {canManagePlans && <button type="button" className={secondaryButton} onClick={onManagePlans}>Voltar aos planos</button>}
+            {hasActiveVersion && onRecordReview && <button type="button" className={secondaryButton} onClick={onRecordReview}><CalendarClock size={15} /> Nova reavaliação</button>}
+            {hasActiveVersion && onRecordRisk && <button type="button" className={secondaryButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
+            {canEditScope && (
+              <button type="button" className={primaryButton} onClick={onNewVersion}>
+                <Pencil size={15} /> {hasPtsDraft ? (hasActiveVersion ? 'Continuar rascunho' : 'Editar rascunho') : 'Criar nova versão'}
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
+      {hasActiveVersion && hasPtsDraft && (
+        <div className={`rounded-2xl border px-4 py-3 ${draftBadge}`} data-testid="pts-active-with-draft-notice">
+          <p className="text-sm">Rascunho v{draftPtsVersionNumber} em elaboração. A versão v{activePtsVersionNumber} permanece como referência clínica ativa até a nova ativação.</p>
+        </div>
+      )}
 
-      <div className={`grid grid-cols-2 gap-px overflow-hidden rounded-xl border text-sm sm:grid-cols-4 ${isDark ? 'border-slate-700 bg-slate-700' : 'border-slate-100 bg-slate-100'}`}>
-        {[
-          ['programs', `${activePrograms.length} programas ativos`],
-          ['progress', `${goalsInProgress} metas em andamento`],
-          ['achieved', `${achievedGoals} metas atingidas`],
-          ['delayed', `${delayedGoals} metas atrasadas`],
-        ].map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={`min-h-11 px-3 text-left transition-colors ${isDark ? 'bg-slate-900/80 hover:bg-slate-800' : 'bg-slate-50 hover:bg-white'} ${id === 'delayed' && delayedGoals > 0 ? 'text-rose-600' : text}`}
-            onClick={() => {
-              setTab('programs');
-              if (id === 'programs') setFilter('all');
-              if (id === 'achieved') setFilter('completed');
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      {hasActiveVersion && (
+        <dl className={`grid gap-px overflow-hidden rounded-xl border sm:grid-cols-4 ${isDark ? 'border-slate-700 bg-slate-700' : 'border-slate-100 bg-slate-100'}`} data-testid="pts-active-summary">
+          {[
+            ['Metas em andamento', goalsInProgress],
+            ['Metas atingidas', achievedGoals],
+            ['Riscos ativos', activeRisks],
+            ['Evidências compartilhadas', sharedEvidence.length],
+          ].map(([label, value]) => (
+            <div key={String(label)} className={isDark ? 'bg-slate-900/80 px-4 py-3' : 'bg-white px-4 py-3'}>
+              <dt className={`text-xs ${muted}`}>{label}</dt>
+              <dd className={`mt-1 text-xl ${text}`}>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
 
-      <div className="grid min-h-[620px] gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className={`self-start rounded-2xl border px-4 lg:sticky lg:top-4 ${surface}`} aria-label="Resumo executivo do PTS">
+      <div className="grid min-h-[560px] gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+        <aside className={`self-start rounded-2xl border px-4 lg:sticky lg:top-4 ${surface}`} aria-label="Índice do PTS">
           <div className="flex items-center gap-2 border-b py-4">
             <ClipboardList size={18} className="text-violet-500" />
-            <h3 className={`text-base font-semibold ${text}`}>Resumo executivo</h3>
+            <h3 className={`text-base font-semibold ${text}`}>{hasActiveVersion ? 'Resumo do plano' : 'Estrutura do rascunho'}</h3>
           </div>
 
-          {section('reference', 'Responsável de referência', (
+          {section('reference', 'Técnico de referência', (
             <div className="flex items-center gap-3">
               {professionalPhotoSource(responsible) ? (
                 <SecureImage
@@ -359,8 +336,8 @@ export function PtsTherapeuticDashboard({
                 <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs ${isDark ? 'bg-violet-500/15 text-violet-200' : 'bg-violet-50 text-violet-700'}`}>{initials(responsible?.name)}</span>
               )}
               <div className="min-w-0">
-                <p className={`truncate text-sm ${text}`}>{responsible?.name || 'Não definido'}</p>
-                <p className={`mt-0.5 truncate text-xs ${muted}`}>{responsible?.specialty || 'Especialidade não informada'}</p>
+                <p className={`truncate text-sm ${text}`}>{responsible?.name || 'Ainda não definido'}</p>
+                <p className={`mt-0.5 truncate text-xs ${muted}`}>{responsible?.specialty || 'Referência do PTS'}</p>
               </div>
             </div>
           ))}
@@ -372,11 +349,7 @@ export function PtsTherapeuticDashboard({
                 return (
                   <div key={professionalId} className="flex items-center gap-2.5">
                     {professionalPhotoSource(professional) ? (
-                      <SecureImage
-                        src={professionalPhotoSource(professional)}
-                        alt={`Foto de ${professional?.name || 'profissional da equipe'}`}
-                        className="h-8 w-8 shrink-0 rounded-full object-cover"
-                      />
+                      <SecureImage src={professionalPhotoSource(professional)} alt={`Foto de ${professional?.name || 'profissional da equipe'}`} className="h-8 w-8 shrink-0 rounded-full object-cover" />
                     ) : (
                       <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{initials(professional?.name)}</span>
                     )}
@@ -387,164 +360,210 @@ export function PtsTherapeuticDashboard({
                   </div>
                 );
               })}
-              {participantIds.length === 0 && <p className={`text-xs ${muted}`}>Equipe ainda não definida.</p>}
+              {participantIds.length === 0 && <p className={`text-xs ${muted}`}>Ainda não preenchido.</p>}
             </div>
           ))}
 
           {section('objectives', 'Objetivos compartilhados', (
-            <div className="space-y-3">
-              {sharedObjectives.length > 0 ? (
-                <ul className={`space-y-2 text-sm leading-5 ${text}`}>
-                  {sharedObjectives.slice(0, 5).map((objective, index) => (
-                    <li key={`${objective}-${index}`} className="flex gap-2"><span className="text-violet-500">•</span><span>{objective}</span></li>
-                  ))}
-                </ul>
-              ) : <p className={`text-xs leading-5 ${muted}`}>Os objetivos compartilhados ainda não foram definidos.</p>}
-              {canEditScope && (
-                <button type="button" onClick={onNewVersion} className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-600 hover:underline">
-                  <Pencil size={13} /> {hasPtsDraft ? 'Editar no rascunho do PTS' : 'Editar em nova versão do PTS'}
-                </button>
-              )}
-            </div>
+            sharedObjectives.length > 0 ? (
+              <ul className={`space-y-2 text-sm leading-5 ${text}`}>
+                {sharedObjectives.slice(0, 5).map((objective, index) => (
+                  <li key={`${objective}-${index}`} className="flex gap-2"><span className="text-violet-500">•</span><span>{objective}</span></li>
+                ))}
+              </ul>
+            ) : <p className={`text-xs leading-5 ${muted}`}>Ainda não preenchido.</p>
           ))}
 
           {section('family', 'Prioridades familiares', (
-            <div className="space-y-3">
-              <p className={`whitespace-pre-line text-sm leading-5 ${pts.familyVoice ? text : muted}`}>
-                {pts.familyVoice || 'As prioridades da família ainda não foram registradas.'}
-              </p>
-              {canEditScope && (
-                <button type="button" onClick={onNewVersion} className="inline-flex items-center gap-1.5 text-xs font-medium text-violet-600 hover:underline">
-                  <Pencil size={13} /> {hasPtsDraft ? 'Editar no rascunho do PTS' : 'Editar prioridades em nova versão'}
-                </button>
-              )}
-            </div>
+            <p className={`whitespace-pre-line text-sm leading-5 ${pts.familyVoice ? text : muted}`}>
+              {pts.familyVoice || 'Ainda não preenchido.'}
+            </p>
           ))}
 
-          {section('versions', 'Histórico de versões', (
+          {section('versions', 'Versões', (
             <div className="space-y-3">
-              {versionEvents.map((event) => (
-                <div key={event.id} className="flex gap-3">
-                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${event.id.startsWith('current-') ? 'bg-emerald-500' : isDark ? 'bg-slate-600' : 'bg-slate-300'}`} />
-                  <div className="min-w-0">
-                    <p className={`text-sm ${text}`}>{event.version ? `Versão ${event.version}` : event.eventType === 'TEAM_DECISION_RECORDED' ? 'Decisão da equipe' : 'Reavaliação'} · {formatTherapeuticPlanDate(event.date)}</p>
-                    <p className={`mt-0.5 line-clamp-2 text-xs leading-4 ${muted}`}>{event.label}</p>
+              {hasPtsDraft && (
+                <div className="flex gap-3">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+                  <div>
+                    <p className={`text-sm ${text}`}>v{draftPtsVersionNumber} · Rascunho</p>
+                    <p className={`mt-0.5 text-xs ${muted}`}>{draftVersion?.updatedAt ? `Atualizado em ${formatTherapeuticPlanDate(draftVersion.updatedAt)}` : 'Em elaboração'}</p>
                   </div>
                 </div>
-              ))}
-              <button type="button" className="text-xs text-violet-600 hover:underline" onClick={() => setTab('history')}>Ver histórico completo</button>
+              )}
+              {hasActiveVersion && (
+                <div className="flex gap-3">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-violet-500" />
+                  <div>
+                    <p className={`text-sm ${text}`}>v{activePtsVersionNumber} · Ativo</p>
+                    <p className={`mt-0.5 text-xs ${muted}`}>{formatTherapeuticPlanDate(activeVersion?.activatedAt || scope?.updated_at || scope?.created_at)}</p>
+                  </div>
+                </div>
+              )}
+              {hasActiveVersion && <button type="button" className="text-xs text-violet-600 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2" onClick={() => setTab('history')}>Ver histórico completo</button>}
             </div>
           ))}
         </aside>
 
         <main className={`min-w-0 rounded-2xl border p-4 sm:p-5 ${surface}`}>
-          <nav className={`flex gap-1 overflow-x-auto border-b ${isDark ? 'border-slate-700' : 'border-slate-100'}`} aria-label="Áreas do PTS">
-            {TABS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`shrink-0 border-b-2 px-3 py-3 text-sm transition-colors ${tab === item.id ? 'border-violet-600 text-violet-600' : `border-transparent ${muted} hover:text-violet-500`}`}
-                onClick={() => setTab(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-
-          {tab !== 'history' ? (
-            <div className="mt-4 space-y-4">
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                <label className="relative w-full xl:max-w-sm">
-                  <Search size={16} className={`absolute left-3.5 top-1/2 -translate-y-1/2 ${muted}`} />
-                  <input
-                    className={`w-full rounded-xl border py-2.5 pl-10 pr-4 text-sm outline-none focus:border-violet-500 ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100 placeholder:text-slate-600' : 'border-slate-200 bg-white text-slate-800 placeholder:text-slate-400'}`}
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder="Buscar programa ou alvo"
-                  />
-                </label>
+          {!hasActiveVersion ? (
+            <div className="space-y-5" data-testid="pts-draft-overview">
+              <div>
+                <p className={`text-sm ${muted}`}>Rascunho em elaboração</p>
+                <h3 className={`mt-1 text-lg font-semibold ${text}`}>Complete o planejamento antes de ativar o PTS</h3>
+                <p className={`mt-2 max-w-2xl text-sm leading-6 ${muted}`}>Enquanto este documento estiver em rascunho, ele ainda não é a referência clínica operante. Evidências de progresso e reavaliações aparecem somente depois da ativação.</p>
               </div>
-
-              {tab === 'programs' && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`mr-1 text-xs ${muted}`}>Filtros</span>
-                  {FILTERS.map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${filter === value ? 'border-violet-300 bg-violet-50 text-violet-700' : isDark ? 'border-slate-700 text-slate-300 hover:border-violet-500' : 'border-slate-200 text-slate-600 hover:border-violet-300'}`}
-                      onClick={() => setFilter(value)}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {loading ? (
-                <div className={`flex min-h-48 items-center justify-center rounded-2xl border border-dashed text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Carregando programas...</div>
-              ) : visiblePrograms.length > 0 ? (
-                <div className="space-y-3 lg:max-h-[520px] lg:overflow-y-auto lg:pr-2">{visiblePrograms.map(renderProgramCard)}</div>
-              ) : (
-                <div className={`flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed px-6 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
-                  <Target size={28} className={isDark ? 'text-slate-600' : 'text-slate-300'} />
-                  <p className={`mt-3 text-sm ${muted}`}>{emptyMessage}</p>
-                </div>
-              )}
+              <div className="grid gap-3 sm:grid-cols-2">
+                {[
+                  ['Visão compartilhada', pts.summary || pts.patientVoice || pts.familyVoice ? 'Preenchida' : 'Ainda não preenchida'],
+                  ['Metas compartilhadas', pts.goals.length ? `${pts.goals.length} registrada(s)` : 'Ainda não preenchidas'],
+                  ['Responsabilidades', pts.responsibilities.length ? `${pts.responsibilities.length} registrada(s)` : 'Ainda não preenchidas'],
+                  ['Rede de apoio', pts.network.length ? `${pts.network.length} vínculo(s)` : 'Ainda não preenchida'],
+                  ['Riscos', pts.risks.length ? `${pts.risks.length} registrado(s)` : 'Ainda não preenchidos'],
+                  ['Próxima reavaliação', displayNextReviewDate ? formatTherapeuticPlanDate(displayNextReviewDate) : 'Ainda não definida'],
+                ].map(([label, value]) => (
+                  <div key={label} className={`rounded-xl border px-4 py-3 ${inset}`}>
+                    <p className={`text-xs ${muted}`}>{label}</p>
+                    <p className={`mt-1 text-sm ${text}`}>{value}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : (
-            <div className="mt-4 space-y-4">
-              <div className={`rounded-2xl border p-4 ${inset}`}>
-                <div className="flex items-start gap-3">
-                  <History size={18} className="mt-0.5 text-violet-500" />
+            <>
+              <nav className={`flex gap-5 overflow-x-auto border-b ${isDark ? 'border-slate-700' : 'border-slate-100'}`} aria-label="Áreas do PTS" role="tablist">
+                {TABS.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === item.id}
+                    className={`relative shrink-0 px-1 pb-3 pt-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${tab === item.id ? (isDark ? 'text-violet-300' : 'text-violet-700') : `${muted} hover:text-violet-500`}`}
+                    onClick={() => setTab(item.id)}
+                  >
+                    {item.label}
+                    {tab === item.id && <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-t-full bg-violet-600" aria-hidden="true" />}
+                  </button>
+                ))}
+              </nav>
+
+              {tab === 'evidence' && (
+                <div className="mt-5 space-y-4">
                   <div>
-                    <p className={`text-sm font-semibold ${text}`}>Versão {activePtsVersionNumber} · versão ativa</p>
-                    <p className={`mt-1 text-xs ${muted}`}>O histórico abaixo é append-only e não reabre versões publicadas.</p>
+                    <h3 className={`text-base font-semibold ${text}`}>Evidências do cuidado</h3>
+                    <p className={`mt-1 text-sm leading-6 ${muted}`}>Somente resumos explicitamente compartilhados com o PTS aparecem aqui. Os planos por especialidade continuam protegidos por vínculo e permissão próprios.</p>
                   </div>
+                  {loading ? (
+                    <div className={`flex min-h-48 items-center justify-center rounded-2xl border border-dashed text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Carregando evidências compartilhadas...</div>
+                  ) : sharedEvidence.length > 0 ? (
+                    <div className="space-y-3">
+                      {sharedEvidence.map((evidence: any) => {
+                        const sourceSpecialty = humanSpecialty(evidence?.sourceSpecialty);
+                        const status = normalizeTherapeuticProgramStatus(evidence?.status);
+                        return (
+                          <article key={String(evidence?.id)} className={`rounded-2xl border p-4 ${surface}`} data-testid="pts-shared-evidence-card">
+                            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className={`text-xs ${muted}`}>{sourceSpecialty}</p>
+                                  {evidence?.sharingMode === 'legacy_pts' && <span className={`rounded-full border px-2 py-0.5 text-[10px] ${isDark ? 'border-slate-600 text-slate-300' : 'border-slate-200 text-slate-500'}`}>Legado</span>}
+                                </div>
+                                <h4 className={`mt-1 text-base font-semibold ${text}`}>{evidence?.name || 'Evidência compartilhada'}</h4>
+                                {evidence?.objective && <p className={`mt-2 text-sm leading-6 ${muted}`}>{evidence.objective}</p>}
+                                <div className={`mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t pt-3 text-xs ${isDark ? 'border-slate-700' : 'border-slate-100'} ${muted}`}>
+                                  <span>Estado operacional: {status === 'teaching' ? 'Em ensino' : status === 'maintenance' ? 'Manutenção' : status === 'completed' ? 'Concluído' : status === 'paused' ? 'Pausado' : 'Rascunho'}</span>
+                                  <span>Última evidência: {evidence?.lastAppliedAt ? formatTherapeuticPlanDate(evidence.lastAppliedAt) : 'Não registrada'}</span>
+                                  <span>Revisão: {evidence?.reviewDueDate ? formatTherapeuticPlanDate(evidence.reviewDueDate) : 'Não definida'}</span>
+                                </div>
+                              </div>
+                              {evidence?.canOpenSourcePlan === true && evidence?.sourcePlanId && onOpenSourcePlan && (
+                                <button type="button" className={secondaryButton} onClick={() => onOpenSourcePlan(String(evidence.sourcePlanId))}>Ver no Plano de {sourceSpecialty}</button>
+                              )}
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className={`flex min-h-52 flex-col items-center justify-center rounded-2xl border border-dashed px-6 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                      <Target size={28} className={isDark ? 'text-slate-600' : 'text-slate-300'} />
+                      <p className={`mt-3 text-sm ${muted}`}>Nenhuma evidência foi compartilhada com este PTS ainda.</p>
+                      <p className={`mt-1 max-w-xl text-xs leading-5 ${muted}`}>O conteúdo privado dos planos por especialidade não é carregado automaticamente nesta visão.</p>
+                    </div>
+                  )}
                 </div>
-              </div>
-              {ptsEvents.length > 0 ? ptsEvents
-                .slice()
-                .sort((left: any, right: any) => dateValue(right?.occurred_at || right?.recorded_at) - dateValue(left?.occurred_at || left?.recorded_at))
-                .map((event: any) => {
-                  const eventType = String(event?.event_type || '').toUpperCase();
-                  const payload = event?.payload && typeof event.payload === 'object' ? event.payload : {};
-                  const title = eventType === 'VERSION_ACTIVATED'
-                    ? `Versão ${payload?.versionNumber || ''} ativada`.trim()
-                    : eventType === 'REVIEW_RECORDED'
-                      ? 'Reavaliação registrada'
-                      : eventType === 'RISK_OPENED'
-                        ? 'Risco registrado'
-                        : eventType === 'RISK_RESOLVED'
-                          ? 'Risco resolvido'
-                          : eventType === 'GOAL_STATUS_UPDATED'
-                            ? 'Status de meta atualizado'
-                            : 'Decisão clínica registrada';
-                  const detail = payload?.summary || payload?.decisions || payload?.title || payload?.note || '';
-                  return (
+              )}
+
+              {tab === 'reviews' && (
+                <div className="mt-5 space-y-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className={`text-base font-semibold ${text}`}>Reavaliações e decisões</h3>
+                      <p className={`mt-1 text-sm ${muted}`}>Eventos append-only preservam a versão publicada do plano.</p>
+                    </div>
+                    {onRecordReview && <button type="button" className={primaryButton} onClick={onRecordReview}><CalendarClock size={15} /> Nova reavaliação</button>}
+                  </div>
+                  {reviewEvents.length > 0 && reviewEvents.map((event: any) => (
+                    <article key={String(event?.id)} className={`rounded-2xl border p-4 ${inset}`}>
+                      <p className={`text-sm ${text}`}>{eventTitle(event)} · {formatTherapeuticPlanDate(event?.occurred_at || event?.recorded_at)}</p>
+                      {eventDetail(event) && <p className={`mt-2 whitespace-pre-line text-sm leading-6 ${text}`}>{eventDetail(event)}</p>}
+                      <p className={`mt-1 text-xs ${muted}`}>Registrado sem alterar a versão publicada do PTS.</p>
+                    </article>
+                  ))}
+                  {legacyReviews.map((review) => (
+                    <article key={`legacy-review-${review.id}`} className={`rounded-2xl border p-4 ${inset}`}>
+                      <p className={`text-sm ${text}`}>Reavaliação anterior · {formatTherapeuticPlanDate(review.completedAt || review.scheduledFor)}</p>
+                      {(review.summary || review.decisions) && <p className={`mt-2 whitespace-pre-line text-sm leading-6 ${text}`}>{review.summary || review.decisions}</p>}
+                      <p className={`mt-1 text-xs ${muted}`}>Registro legado preservado somente para leitura.</p>
+                    </article>
+                  ))}
+                  {reviewEvents.length === 0 && legacyReviews.length === 0 && (
+                    <div className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma reavaliação longitudinal registrada neste PTS.</div>
+                  )}
+                </div>
+              )}
+
+              {tab === 'history' && (
+                <div className="mt-5 space-y-4">
+                  <div className={`rounded-2xl border p-4 ${inset}`}>
+                    <div className="flex items-start gap-3">
+                      <History size={18} className="mt-0.5 text-violet-500" />
+                      <div>
+                        <p className={`text-sm ${text}`}>Histórico longitudinal do PTS</p>
+                        <p className={`mt-1 text-xs ${muted}`}>Versões publicadas permanecem imutáveis; eventos posteriores são acrescentados sem reescrever o passado.</p>
+                      </div>
+                    </div>
+                  </div>
+                  {timelineEvents.map((event: any) => (
                     <article key={String(event?.id)} className={`rounded-2xl border p-4 ${inset}`}>
                       <div className="flex items-start gap-3">
                         <CalendarClock size={18} className="mt-0.5 text-violet-500" />
                         <div className="min-w-0">
-                          <p className={`text-sm font-semibold ${text}`}>{title} · {formatTherapeuticPlanDate(event?.occurred_at || event?.recorded_at)}</p>
-                          {detail && <p className={`mt-2 whitespace-pre-line text-sm leading-6 ${text}`}>{String(detail)}</p>}
-                          <p className={`mt-1 text-xs ${muted}`}>Registrado sem alterar a versão publicada do PTS.</p>
+                          <p className={`text-sm ${text}`}>{eventTitle(event)} · {formatTherapeuticPlanDate(event?.occurred_at || event?.recorded_at)}</p>
+                          {eventDetail(event) && <p className={`mt-2 whitespace-pre-line text-sm leading-6 ${text}`}>{eventDetail(event)}</p>}
+                          {event?.occurred_under_version_number && <p className={`mt-1 text-xs ${muted}`}>Ocorreu sob PTS v{event.occurred_under_version_number}.</p>}
                         </div>
                       </div>
                     </article>
-                  );
-                }) : pts.reviews.length > 0 ? pts.reviews
-                  .slice()
-                  .sort((left, right) => dateValue(right.completedAt || right.scheduledFor) - dateValue(left.completedAt || left.scheduledFor))
-                  .map((review) => (
-                    <article key={review.id} className={`rounded-2xl border p-4 ${inset}`}>
-                      <p className={`text-sm font-semibold ${text}`}>Reavaliação legada de {formatTherapeuticPlanDate(review.completedAt || review.scheduledFor)}</p>
-                      {review.summary && <p className={`mt-2 whitespace-pre-line text-sm leading-6 ${text}`}>{review.summary}</p>}
+                  ))}
+                  {legacyReviews.map((review) => (
+                    <article key={`legacy-history-${review.id}`} className={`rounded-2xl border p-4 ${inset}`}>
+                      <div className="flex items-start gap-3">
+                        <CalendarClock size={18} className="mt-0.5 text-slate-400" />
+                        <div className="min-w-0">
+                          <p className={`text-sm ${text}`}>Reavaliação anterior · {formatTherapeuticPlanDate(review.completedAt || review.scheduledFor)}</p>
+                          {(review.summary || review.decisions) && <p className={`mt-2 whitespace-pre-line text-sm leading-6 ${text}`}>{review.summary || review.decisions}</p>}
+                          <p className={`mt-1 text-xs ${muted}`}>Registro legado preservado sem reescrever a versão publicada.</p>
+                        </div>
+                      </div>
                     </article>
-                  )) : (
+                  ))}
+                  {timelineEvents.length === 0 && legacyReviews.length === 0 && (
                     <div className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhum evento longitudinal registrado neste PTS.</div>
                   )}
-            </div>
+                </div>
+              )}
+            </>
           )}
         </main>
       </div>

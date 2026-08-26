@@ -6,12 +6,10 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  ClipboardCheck,
   HeartHandshake,
   Loader2,
   Network,
   Plus,
-  RefreshCw,
   ShieldAlert,
   Target,
   Trash2,
@@ -103,18 +101,16 @@ const explicitProgramClinicalState = (program: any) => {
 export function PtsWorkspaceEditor({
   scope,
   draftVersion,
-  events = [],
   professionals,
-  programs = [],
+  sharedEvidence = [],
   isDark = false,
   saving = false,
   onSave,
 }: {
   scope: any;
   draftVersion?: any;
-  events?: any[];
   professionals: any[];
-  programs?: any[];
+  sharedEvidence?: any[];
   isDark?: boolean;
   saving?: boolean;
   onSave: (payload: {
@@ -139,17 +135,16 @@ export function PtsWorkspaceEditor({
   const professionalById = useMemo<Map<string, any>>(() => new Map<string, any>(
     (Array.isArray(professionals) ? professionals : []).map((professional) => [String(professional.id), professional]),
   ), [professionals]);
-  const scopedPrograms = useMemo(() => (
-    (Array.isArray(programs) ? programs : [])
-      .filter((program) => String(program?.therapeutic_plan_id || '') === String(scope?.id || ''))
-  ), [programs, scope?.id]);
+  const sharedEvidenceRows = useMemo(() => (
+    Array.isArray(sharedEvidence) ? sharedEvidence : []
+  ), [sharedEvidence]);
   const draftScope = useMemo(() => {
     const snapshot = draftVersion?.snapshot && typeof draftVersion.snapshot === 'object'
       ? draftVersion.snapshot
       : null;
     return snapshot ? { ...scope, ...snapshot, pts_payload: snapshot.pts_payload || {} } : scope;
   }, [draftVersion, scope]);
-  const [draft, setDraft] = useState<PtsClinicalPayload>(() => hydratePtsClinicalPayloadFromPlan(draftScope));
+  const [draft, setDraft] = useState<PtsClinicalPayload>(() => stripPtsTrackingFieldsForDraft(hydratePtsClinicalPayloadFromPlan(draftScope)));
   const [validationVisible, setValidationVisible] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     context: true,
@@ -175,17 +170,8 @@ export function PtsWorkspaceEditor({
     isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-700 hover:bg-slate-50'
   }`;
 
-  const achievedGoals = draft.goals.filter((goal) => goal.status === 'achieved').length;
-  const overdueGoals = draft.goals.filter((goal) => goal.dueDate && goal.status !== 'achieved' && new Date(`${goal.dueDate}T23:59:59`).getTime() < Date.now()).length;
-  const pendingResponsibilities = draft.responsibilities.filter((item) => !['achieved', 'cancelled'].includes(item.status)).length;
   const activationValidation = useMemo(() => validatePtsDraftForActivation(draft), [draft]);
   const sectionErrors = validationVisible ? activationValidation.sectionErrors : {};
-  const reviewEventCount = useMemo(() => {
-    const appendOnlyCount = (Array.isArray(events) ? events : []).filter((event) => String(event?.event_type || event?.eventType || '').toUpperCase() === 'REVIEW_RECORDED').length;
-    if (appendOnlyCount > 0) return appendOnlyCount;
-    const legacy = hydratePtsClinicalPayloadFromPlan(scope);
-    return legacy.reviews.length;
-  }, [events, scope]);
   const draftVersionNumber = Number(draftVersion?.version_number || draftVersion?.versionNumber || scope?.pts_lineage?.draftVersion?.versionNumber || 1);
   const draftRevision = Number(draftVersion?.draft_revision || draftVersion?.draftRevision || scope?.pts_lineage?.draftVersion?.draftRevision || scope?.edit_version || 1);
   const draftVersionId = String(draftVersion?.id || scope?.pts_lineage?.draftVersion?.id || '');
@@ -299,20 +285,6 @@ export function PtsWorkspaceEditor({
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {[
-          [Target, 'Metas', String(draft.goals.length), `${achievedGoals} alcançada(s)`],
-          [AlertTriangle, 'Atenção', String(overdueGoals), 'meta(s) vencida(s)'],
-          [ClipboardCheck, 'Ações', String(pendingResponsibilities), 'responsabilidade(s) aberta(s)'],
-          [RefreshCw, 'Próxima reavaliação', draft.nextReviewDate ? new Date(`${draft.nextReviewDate}T12:00:00`).toLocaleDateString('pt-BR') : 'Não definida', `${reviewEventCount} ${reviewEventCount === 1 ? 'reavaliação registrada' : 'reavaliações registradas'}`],
-        ].map(([Icon, label, value, detail]: any) => (
-          <div key={label} className={`rounded-2xl border p-4 ${surface}`}>
-            <div className="flex items-center gap-2 text-violet-500"><Icon size={17} /><span className={`text-xs ${subtle}`}>{label}</span></div>
-            <p className={`mt-2 text-xl font-semibold ${strongText}`}>{value}</p>
-            <p className={`mt-1 text-xs ${subtle}`}>{detail}</p>
-          </div>
-        ))}
-      </div>
 
       <section data-pts-section="context" className={sectionClass('context')}>
         {sectionHeader('context', <HeartHandshake size={20} />, 'Visão compartilhada do caso', 'Registre o que importa para o paciente e a família, além das potencialidades e necessidades prioritárias.')}
@@ -353,10 +325,9 @@ export function PtsWorkspaceEditor({
             {draft.goals.length === 0 && <p className={`rounded-xl border border-dashed p-4 text-xs ${subtle}`}>Crie a primeira meta compartilhada do PTS.</p>}
             {draft.goals.map((goal, index) => (
               <div key={goal.id} className={`rounded-2xl border p-4 ${inset}`}>
-                <div className="grid gap-3 lg:grid-cols-[1.4fr_0.6fr_0.6fr_auto]">
+                <div className="grid gap-3 lg:grid-cols-[1.5fr_0.7fr_auto]">
                   <input id={`pts-goal-${index}-title`} className={field} value={goal.title} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Resultado que se deseja alcançar" />
                   <select className={field} value={goal.horizon} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, horizon: event.target.value as PtsGoal['horizon'] } : item))}>{Object.entries(HORIZON_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-                  <select className={field} value={goal.status} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, status: event.target.value as PtsGoal['status'] } : item))}>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
                   <button type="button" aria-label="Remover meta" className="rounded-xl p-3 text-rose-500 hover:bg-rose-500/10" onClick={() => setList('goals', draft.goals.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={17} /></button>
                 </div>
                 <textarea className={`${field} mt-3 min-h-16`} value={goal.description} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, description: event.target.value } : item))} placeholder="Por que esta meta é relevante para a vida do paciente?" />
@@ -377,23 +348,23 @@ export function PtsWorkspaceEditor({
       </section>
 
       <section className={`rounded-2xl border p-4 ${surface}`}>
-        {sectionHeader('evidence', <Activity size={20} />, 'Evidências do cuidado', 'Programas e registros já vinculados ao PTS aparecem aqui sem duplicar informações clínicas.')}
+        {sectionHeader('evidence', <Activity size={20} />, 'Evidências do cuidado', 'Somente resumos explicitamente compartilhados pelas especialidades aparecem aqui; o PTS não lê o conteúdo privado dos outros planos.')}
         {openSections.evidence !== false && (
           <div className="mt-4 space-y-3">
-            {scopedPrograms.length === 0 ? (
-              <p className={`rounded-xl border border-dashed p-4 text-xs ${subtle}`}>Nenhum programa clínico foi vinculado a este PTS ainda.</p>
-            ) : scopedPrograms.map((program) => (
+            {sharedEvidenceRows.length === 0 ? (
+              <p className={`rounded-xl border border-dashed p-4 text-xs ${subtle}`}>Nenhuma evidência foi compartilhada com este PTS ainda.</p>
+            ) : sharedEvidenceRows.map((program) => (
               <div key={program.id} className={`flex flex-col gap-3 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between ${inset}`}>
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <p className={`text-sm font-semibold ${strongText}`}>{program.name || 'Programa terapêutico'}</p>
                     {(() => { const state = explicitProgramClinicalState(program); return state ? <span className={`rounded-full border px-2 py-0.5 text-[10px] ${state.className}`}>{state.label}</span> : null; })()}
                   </div>
-                  <p className={`mt-1 text-xs ${subtle}`}>{program.category || 'Sem categoria'} · {(program.targets || []).length} alvo(s)</p>
+                  <p className={`mt-1 text-xs ${subtle}`}>{program.sourceSpecialty || 'Especialidade'} · resumo compartilhado</p>
                 </div>
                 <div className="text-left sm:text-right">
                   <p className={`text-xs ${subtle}`}>Última aplicação</p>
-                  <p className={`mt-1 text-sm ${secondaryStrongText}`}>{program.last_applied_at ? new Date(program.last_applied_at).toLocaleDateString('pt-BR') : 'Sem registro'}</p>
+                  <p className={`mt-1 text-sm ${secondaryStrongText}`}>{program.lastAppliedAt ? new Date(program.lastAppliedAt).toLocaleDateString('pt-BR') : 'Sem registro'}</p>
                 </div>
               </div>
             ))}
@@ -443,13 +414,12 @@ export function PtsWorkspaceEditor({
         {sectionHeader('risks', <ShieldAlert size={20} />, 'Riscos e plano de proteção', 'Área clínica restrita aos profissionais autorizados do caso. Registre apenas informações necessárias à segurança.')}
         {openSections.risks !== false && (
           <div className="mt-4 space-y-3">
-            <div className="flex justify-end"><button type="button" className={secondaryButton} onClick={addRisk}><Plus size={15} /> Registrar risco</button></div>
+            <div className="flex justify-end"><button type="button" className={secondaryButton} onClick={addRisk}><Plus size={15} /> Adicionar risco ao plano</button></div>
             {draft.risks.map((item, index) => (
               <div key={item.id} className={`rounded-xl border p-3 ${inset}`}>
-                <div className="grid gap-3 lg:grid-cols-[1.2fr_0.5fr_0.5fr_auto]">
+                <div className="grid gap-3 lg:grid-cols-[1.4fr_0.6fr_auto]">
                   <input className={field} value={item.title} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, title: event.target.value } : current))} placeholder="Risco ou situação de atenção" />
                   <select className={field} value={item.severity} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, severity: event.target.value as PtsRisk['severity'] } : current))}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-                  <select className={field} value={item.status} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, status: event.target.value as PtsRisk['status'] } : current))}><option value="active">Ativo</option><option value="controlled">Controlado</option><option value="resolved">Resolvido</option></select>
                   <button type="button" aria-label="Remover risco" className="rounded-xl p-3 text-rose-500 hover:bg-rose-500/10" onClick={() => setList('risks', draft.risks.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={17} /></button>
                 </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2"><textarea className={`${field} min-h-20`} value={item.description} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, description: event.target.value } : current))} placeholder="Sinais, contexto e fatores associados." /><textarea className={`${field} min-h-20`} value={item.responsePlan} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, responsePlan: event.target.value } : current))} placeholder="Conduta combinada e critérios de escalonamento." /></div>
