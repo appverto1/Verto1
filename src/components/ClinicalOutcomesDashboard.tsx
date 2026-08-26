@@ -36,6 +36,7 @@ import {
   clinicalOutcomeUnitLabel,
   compareClinicalOutcomePeriods,
   formatClinicalOutcomeValue,
+  isClinicalOutcomeInterferingBehaviorSeries,
   summarizeClinicalOutcomePeriod,
   summarizeClinicalOutcomeSeries,
   type ClinicalOutcomeObservation,
@@ -726,8 +727,15 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
         }
       }
     }
+    // Comportamentos interferentes são evidência longitudinal do paciente e não
+    // pertencem semanticamente a uma especialidade. Na visão multidisciplinar do PTS,
+    // preserve-os mesmo quando o legado ainda não carrega planId/goalId/programId.
+    // A autoridade/origem permanece explícita na própria série; não inferimos vínculo.
+    for (const series of summaries) {
+      if (isClinicalOutcomeInterferingBehaviorSeries(series)) unique.set(series.key, series);
+    }
     return Array.from(unique.values());
-  }, [ptsGoalRows, ptsPlanSeries]);
+  }, [ptsGoalRows, ptsPlanSeries, summaries]);
   const ptsUnstructuredTargetGroups = useMemo(() => (
     buildClinicalTargetGroups(ptsAnalyticsSeries).filter((group) => group.clinicalSeries.length > 0)
   ), [ptsAnalyticsSeries]);
