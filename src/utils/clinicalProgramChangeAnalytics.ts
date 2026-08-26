@@ -1,6 +1,7 @@
 import {
   normalizeClinicalOutcomeDirection,
   type ClinicalOutcomeDirection,
+  type ClinicalOutcomeEvidenceState,
   type ClinicalOutcomeObservation,
   type ClinicalOutcomeSeriesSummary,
 } from './clinicalOutcomeAnalytics';
@@ -50,6 +51,13 @@ export type ClinicalTargetChange = {
   mathTrend: ClinicalMathTrend;
   valueTrend: ClinicalMathTrend;
   pointCount: number;
+  evidenceState: ClinicalOutcomeEvidenceState;
+  evidenceOpportunityCount: number;
+  latestOpportunityCount: number | null;
+  lowN: boolean;
+  evidenceRank: number;
+  evidencePenalty: number;
+  rankingPriority: number;
   firstValue: number | null;
   latestValue: number | null;
   delta: number | null;
@@ -382,6 +390,43 @@ const endpointTrend = (firstValue: number | null, latestValue: number | null): C
   return delta > 0 ? 'up' : 'down';
 };
 
+const metadataSignalsLowN = (value: unknown): boolean => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toUpperCase();
+    return normalized === 'LOW_N' || normalized === 'LOW-N' || normalized === 'LOW SAMPLE' || normalized === 'LOW_SAMPLE';
+  }
+  if (Array.isArray(value)) return value.some(metadataSignalsLowN);
+  if (typeof value !== 'object') return false;
+  const row = value as Record<string, any>;
+  if (row.lowN === true || row.low_n === true) return true;
+  return [row.code, row.key, row.id, row.status, row.level, row.flag, row.flags].some(metadataSignalsLowN);
+};
+
+const seriesEvidenceProfile = (series: ClinicalOutcomeSeriesSummary) => {
+  const rows = Array.isArray(series.validObservations) ? series.validObservations : [];
+  const opportunityCounts = rows
+    .map((row) => finite(row.denominator))
+    .filter((value): value is number => value !== null && value > 0);
+  const evidenceOpportunityCount = opportunityCounts.reduce((sum, value) => sum + value, 0);
+  const latestDenominator = finite(series.latestObservation?.denominator);
+  const latestOpportunityCount = latestDenominator !== null && latestDenominator > 0 ? latestDenominator : null;
+  const explicitLowN = rows.some((row) => (
+    metadataSignalsLowN(row.metadata?.quality)
+    || metadataSignalsLowN(row.metadata?.reliability)
+    || metadataSignalsLowN(row.metadata?.qualityFlags)
+    || metadataSignalsLowN(row.metadata?.quality_flags)
+    || metadataSignalsLowN(row.metadata?.evidenceQuality)
+    || metadataSignalsLowN(row.metadata?.evidence_quality)
+  ));
+  const lowN = explicitLowN
+    || series.evidenceState === 'baseline_only'
+    || series.evidenceState === 'preliminary'
+    || (latestOpportunityCount !== null && latestOpportunityCount <= 1);
+  const evidenceRank = lowN ? 0 : series.evidenceState === 'sufficient' ? 2 : 1;
+  return { evidenceOpportunityCount, latestOpportunityCount, lowN, evidenceRank };
+};
+
 type MovementClassification = {
   movement: ClinicalTargetMovement;
   delta: number | null;
@@ -511,6 +556,9 @@ export const buildClinicalProgramChangeOverview = (
     const latest = points[points.length - 1];
     const improvementPriority = improvementTransitionPriority(classification.movement, previousClassification.movement);
     const attentionPriority = attentionTransitionPriority(classification.movement, previousClassification.movement);
+    const evidenceProfile = seriesEvidenceProfile(entry.series);
+    const evidencePenalty = evidenceProfile.lowN ? 200 : 0;
+    const rankingPriority = Math.max(0, improvementPriority - evidencePenalty);
     return {
       key,
       label: clean(entry.series.itemLabel) || clean(entry.series.metricLabel) || 'Alvo clínico',
@@ -522,6 +570,13 @@ export const buildClinicalProgramChangeOverview = (
       mathTrend: classification.mathTrend,
       valueTrend: endpointTrend(firstValue, latest?.value ?? null),
       pointCount: points.length,
+      evidenceState: entry.series.evidenceState,
+      evidenceOpportunityCount: evidenceProfile.evidenceOpportunityCount,
+      latestOpportunityCount: evidenceProfile.latestOpportunityCount,
+      lowN: evidenceProfile.lowN,
+      evidenceRank: evidenceProfile.evidenceRank,
+      evidencePenalty,
+      rankingPriority,
       firstValue,
       latestValue: latest?.value ?? null,
       delta: classification.delta,
@@ -581,7 +636,15 @@ export const buildClinicalProgramChangeOverview = (
       if (target.criterionLabel && target.criterionProgressDelta <= 0) return false;
       return true;
     })
-    .sort((left, right) => right.highlightPriority - left.highlightPriority || right.criterionProgressDelta - left.criterionProgressDelta || right.semanticStrength - left.semanticStrength || right.pointCount - left.pointCount)
+    .sort((left, right) => (
+      right.rankingPriority - left.rankingPriority
+      || right.evidenceRank - left.evidenceRank
+      || right.highlightPriority - left.highlightPriority
+      || right.criterionProgressDelta - left.criterionProgressDelta
+      || right.evidenceOpportunityCount - left.evidenceOpportunityCount
+      || right.semanticStrength - left.semanticStrength
+      || right.pointCount - left.pointCount
+    ))
     .slice(0, 4);
   const attentionTargets = highConfidence
     .filter((target) => target.movement === 'attention')
