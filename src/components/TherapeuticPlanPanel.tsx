@@ -334,6 +334,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [activationWarning, setActivationWarning] = useState('');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
   const [creationStep, setCreationStep] = useState<CreationStep>(null);
@@ -629,6 +630,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     setShowPlanManager(true);
     setEditingScopeId('');
     setPtsDraftOverride(null);
+    setActivationWarning('');
     setPtsEventKind(null);
     setPtsEventSaving(false);
     void loadPlan(false);
@@ -1230,6 +1232,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       return;
     }
     setScopeFormOpen(false);
+    setActivationWarning('');
     scopeIdempotencyKeyRef.current = '';
     setScopeDraft({ mode: 'specialty', specialty: '', responsibleProfessionalId: '', participantProfessionalIds: [] });
     setNotice(scopeDraft.mode === 'interdisciplinary'
@@ -1247,6 +1250,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const openPtsDraft = async (scope: any) => {
     const scopeId = String(scope?.id || '');
     if (!scopeId || scopeSaving) return;
+    setActivationWarning('');
     const existingDraft = draftVersionForScope(scope);
     if (existingDraft?.id) {
       setEditingScopeId(scopeId);
@@ -1336,11 +1340,24 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       : await dataService.savePtsDraftVersion(patientId, scopeId, versionId, requestPayload);
     setScopeSaving(false);
     if (response?.success === false) {
+      if (
+        payload?.action === 'activate'
+        && String(response?.error || '') === 'PTS_DRAFT_VALIDATION_FAILED'
+      ) {
+        setError('');
+        setActivationWarning(
+          response?.message
+          || 'O rascunho foi preservado. Os campos pendentes impedem somente a ativação; você pode continuar editando e salvando o PTS normalmente.',
+        );
+        return;
+      }
+      setActivationWarning('');
       setError(response?.message || response?.error || (payload?.action === 'activate'
         ? 'Não foi possível ativar o Projeto Terapêutico Singular.'
         : 'Não foi possível salvar o rascunho do Projeto Terapêutico Singular.'));
       return;
     }
+    setActivationWarning('');
     if (payload?.action === 'activate') {
       setPtsDraftOverride(null);
       setEditingScopeId('');
@@ -2646,6 +2663,19 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   return (
     <section className="space-y-5" data-testid="therapeutic-plan-panel">
       {notice && <div className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div>}
+      {activationWarning && (
+        <div
+          role="status"
+          className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${
+            isDark
+              ? 'border-amber-400/30 bg-amber-500/10 text-amber-100'
+              : 'border-amber-200 bg-amber-50 text-amber-900'
+          }`}
+        >
+          <span>{activationWarning}</span>
+          <button type="button" aria-label="Fechar aviso" onClick={() => setActivationWarning('')}><X size={15} /></button>
+        </div>
+      )}
       {error && <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}<button type="button" className="ml-2 underline" onClick={() => void loadPlan(true)}>Tentar novamente</button></div>}
 
       {showPlanManager || !workspaceScope ? (

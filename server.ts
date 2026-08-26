@@ -71672,7 +71672,7 @@ async function startServer() {
       if (error) {
         const code = sanitizeString(error?.message || error?.code, 500);
         if (code.includes('PTS_DRAFT_VERSION_CONFLICT') || code.includes('PTS_DRAFT_ACTIVATION_CONFLICT')) return res.status(409).json({ success: false, error: 'PTS_DRAFT_VERSION_CONFLICT', message: 'O rascunho mudou durante a ativação. Recarregue e revise antes de tentar novamente.' });
-        if (code.includes('PTS_DRAFT_VALIDATION_FAILED')) return res.status(422).json({ success: false, error: 'PTS_DRAFT_VALIDATION_FAILED', message: 'Existem campos obrigatórios pendentes antes da ativação.' });
+        if (code.includes('PTS_DRAFT_VALIDATION_FAILED')) return res.status(422).json({ success: false, error: 'PTS_DRAFT_VALIDATION_FAILED', blockingScope: 'activation_only', draftPreserved: true, message: 'O rascunho foi preservado. Complete os campos indicados para ativar o PTS; isso não impede continuar editando ou salvando o plano.' });
         if (code.includes('PGRST202') || code.includes('activate_patient_pts_draft_v2')) return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED' });
         throw error;
       }
