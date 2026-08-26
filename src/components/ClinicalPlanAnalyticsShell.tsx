@@ -107,13 +107,15 @@ const overviewDomainLabel = (keys: OverviewDomainKey[]) => {
 };
 
 const DOMAIN_ACTIVE_TONE: Record<AnalyticsDomain, string> = {
-  overview: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
-  skills: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
-  behaviors: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
-  mastery: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
-  maintenance: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
-  changes: 'border-violet-600 text-violet-800 dark:border-violet-400 dark:text-violet-200',
+  overview: 'border-violet-600 bg-violet-50 text-[#7a32fc] shadow-sm ring-1 ring-violet-100',
+  skills: 'border-violet-600 bg-violet-50 text-[#7a32fc] shadow-sm ring-1 ring-violet-100',
+  behaviors: 'border-violet-600 bg-violet-50 text-[#7a32fc] shadow-sm ring-1 ring-violet-100',
+  mastery: 'border-violet-600 bg-violet-50 text-[#7a32fc] shadow-sm ring-1 ring-violet-100',
+  maintenance: 'border-violet-600 bg-violet-50 text-[#7a32fc] shadow-sm ring-1 ring-violet-100',
+  changes: 'border-violet-600 bg-violet-50 text-[#7a32fc] shadow-sm ring-1 ring-violet-100',
 };
+
+const DOMAIN_ACTIVE_TONE_DARK = 'border-violet-400 bg-violet-500/10 text-violet-200 shadow-sm ring-1 ring-violet-400/20';
 
 const DOMAIN_SOFT_TONE: Record<Exclude<AnalyticsDomain, 'overview'>, string> = {
   skills: 'border-emerald-700 bg-emerald-600 text-white shadow-sm dark:border-emerald-400 dark:bg-emerald-500 dark:text-slate-950',
@@ -1020,7 +1022,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
         <nav className="mt-3 flex gap-1 overflow-x-auto" aria-label="Domínios dos gráficos do plano">
           {DOMAIN_TABS.map((tab) => {
             const available = tabAvailability(tab.id);
-            return <button key={tab.id} type="button" disabled={!available} aria-pressed={activeDomain === tab.id} onClick={() => available && setActiveDomain(tab.id)} className={`min-h-10 shrink-0 border-b-[3px] px-3 text-sm font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${activeDomain === tab.id ? DOMAIN_ACTIVE_TONE[tab.id] : `border-transparent ${isDark ? 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`} disabled:cursor-not-allowed disabled:opacity-35`}>{tab.label}</button>;
+            return <button key={tab.id} type="button" disabled={!available} aria-pressed={activeDomain === tab.id} onClick={() => available && setActiveDomain(tab.id)} className={`min-h-10 shrink-0 border-b-[3px] px-3 text-sm font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${activeDomain === tab.id ? (isDark ? DOMAIN_ACTIVE_TONE_DARK : DOMAIN_ACTIVE_TONE[tab.id]) : `border-transparent ${isDark ? 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`} disabled:cursor-not-allowed disabled:opacity-35`}>{tab.label}</button>;
           })}
         </nav>
       </div>
