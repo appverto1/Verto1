@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Activity, CalendarDays, Layers3, Target, TrendingDown, TrendingUp } from 'lucide-react';
+import { Activity, BadgeCheck, CalendarDays, Layers3, Target, TrendingDown, TrendingUp } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -520,6 +520,12 @@ function ProgramChangesView({
   const HighlightCard = ({ target, tone }: { target: ClinicalTargetChange; tone: 'improving' | 'attention' }) => {
     const canOpen = clean(target.latestSessionId).startsWith('session-') && Boolean(onOpenSessionReport);
     const favorable = tone === 'improving';
+    const sustained = target.movement === 'criterion_sustained';
+    const trendIcon = target.mathTrend === 'down'
+      ? <TrendingDown size={17} className={`shrink-0 ${favorable ? 'text-emerald-500' : 'text-rose-500'}`} />
+      : target.mathTrend === 'up'
+        ? <TrendingUp size={17} className={`shrink-0 ${favorable ? 'text-emerald-500' : 'text-rose-500'}`} />
+        : null;
     return (
       <button
         type="button"
@@ -532,9 +538,10 @@ function ProgramChangesView({
             <p className={`truncate text-sm font-semibold ${text}`}>{target.label}</p>
             <p className={`mt-0.5 truncate text-[11px] ${subtle}`}>{target.programName || 'Sem programa vinculado'} · {target.metricLabel}</p>
           </div>
-          {favorable ? <TrendingUp size={17} className="shrink-0 text-emerald-500" /> : <TrendingDown size={17} className="shrink-0 text-rose-500" />}
+          {sustained ? <BadgeCheck size={17} className="shrink-0 text-sky-500" /> : trendIcon}
         </div>
-        <p className={`mt-2 text-sm font-semibold ${favorable ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{movementValueText(target)}</p>
+        <p className={`mt-2 text-sm font-semibold ${sustained ? 'text-sky-700 dark:text-sky-300' : favorable ? 'text-emerald-700 dark:text-emerald-300' : 'text-rose-700 dark:text-rose-300'}`}>{movementValueText(target)}</p>
+        <p className={`mt-1 text-[11px] ${subtle}`}>{sustained ? 'Critério sustentado' : favorable ? 'Mudança clinicamente favorável' : 'Mudança clinicamente desfavorável'}{target.criterionLabel ? ` · ${target.criterionLabel}` : ''}</p>
         <p className={`mt-1 text-[11px] ${subtle}`}>{target.pointCount} sessões comparáveis{canOpen ? ' · abrir sessão mais recente' : ''}</p>
       </button>
     );
@@ -546,7 +553,7 @@ function ProgramChangesView({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className={`text-sm font-semibold ${text}`}>Evolução dos programas</p>
-            <p className={`mt-1 text-[11px] leading-5 ${subtle}`}>Cada alvo entra uma única vez, pela sua métrica clínica principal. O programa mostra a composição dos alvos entre evolução, estabilidade, atenção e evidência insuficiente — sem criar score ou média entre unidades incompatíveis.</p>
+            <p className={`mt-1 text-[11px] leading-5 ${subtle}`}>Cada alvo entra uma única vez, pela sua métrica clínica principal. Cor e estado seguem a intenção clínica da métrica e do critério persistido — nunca o sinal matemático isolado — sem criar score ou média entre unidades incompatíveis.</p>
           </div>
           <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`}>{overview.programs.length} programa(s)</span>
         </div>
@@ -557,9 +564,10 @@ function ProgramChangesView({
               const total = Math.max(program.targetCount, 1);
               const segments = [
                 { key: 'improving', label: 'Evoluindo', value: program.improving, className: 'bg-emerald-500' },
-                { key: 'stable', label: 'Estáveis', value: program.stable, className: 'bg-slate-400' },
-                { key: 'attention', label: 'Atenção', value: program.attention, className: 'bg-rose-500' },
-                { key: 'insufficient', label: 'Evidência insuficiente', value: program.insufficient, className: 'bg-amber-400' },
+                { key: 'criterion_sustained', label: 'Critério sustentado', value: program.criterionSustained, className: 'bg-sky-500' },
+                { key: 'stagnant', label: 'Estagnado', value: program.stagnant, className: 'bg-amber-400' },
+                { key: 'attention', label: 'Requer atenção', value: program.attention, className: 'bg-rose-500' },
+                { key: 'insufficient', label: 'Evidência insuficiente', value: program.insufficient, className: isDark ? 'bg-slate-600' : 'bg-slate-300' },
               ];
               return (
                 <div key={program.id} className={`rounded-xl border p-3 ${isDark ? 'border-slate-700/80 bg-slate-950/30' : 'border-slate-200 bg-white'}`}>
@@ -573,10 +581,11 @@ function ProgramChangesView({
                     ))}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
-                    <span className="text-emerald-700 dark:text-emerald-300">↑ {program.improving} evoluindo</span>
-                    <span className={subtle}>→ {program.stable} estáveis</span>
-                    <span className="text-rose-700 dark:text-rose-300">↓ {program.attention} atenção</span>
-                    <span className="text-amber-700 dark:text-amber-300">○ {program.insufficient} insuficiente</span>
+                    <span className="text-emerald-700 dark:text-emerald-300">↗ {program.improving} evoluindo</span>
+                    <span className="text-sky-700 dark:text-sky-300">✓ {program.criterionSustained} critério sustentado</span>
+                    <span className="text-amber-700 dark:text-amber-300">→ {program.stagnant} estagnado</span>
+                    <span className="text-rose-700 dark:text-rose-300">! {program.attention} requer atenção</span>
+                    <span className={subtle}>○ {program.insufficient} insuficiente</span>
                   </div>
                 </div>
               );
@@ -591,7 +600,7 @@ function ProgramChangesView({
         <section className={`rounded-2xl border p-3 ${card}`}>
           <div className="flex items-center gap-2">
             <TrendingUp size={17} className="text-emerald-500" />
-            <div><p className={`text-sm font-semibold ${text}`}>Maiores evoluções</p><p className={`text-[11px] ${subtle}`}>Ordenadas por variação relativa; valores absolutos de unidades diferentes não são comparados.</p></div>
+            <div><p className={`text-sm font-semibold ${text}`}>Maiores evoluções</p><p className={`text-[11px] ${subtle}`}>Priorizadas por transição de estado semântico e aproximação do critério; unidades incompatíveis nunca são ranqueadas pela diferença bruta.</p></div>
           </div>
           <div className="mt-3 space-y-2">
             {overview.improvingTargets.length > 0
@@ -603,7 +612,7 @@ function ProgramChangesView({
         <section className={`rounded-2xl border p-3 ${card}`}>
           <div className="flex items-center gap-2">
             <TrendingDown size={17} className="text-rose-500" />
-            <div><p className={`text-sm font-semibold ${text}`}>Precisam de atenção</p><p className={`text-[11px] ${subtle}`}>Mudanças desfavoráveis com pelo menos 3 sessões comparáveis.</p></div>
+            <div><p className={`text-sm font-semibold ${text}`}>Precisam de atenção</p><p className={`text-[11px] ${subtle}`}>Regressão clínica ou afastamento do critério com pelo menos 3 sessões comparáveis.</p></div>
           </div>
           <div className="mt-3 space-y-2">
             {overview.attentionTargets.length > 0
@@ -613,7 +622,7 @@ function ProgramChangesView({
         </section>
       </div>
 
-      <p className={`px-1 text-[11px] leading-5 ${subtle}`}>A variação relativa serve apenas para ordenar os destaques. Percentuais, segundos, frequências e outras unidades não são somados nem transformados em um score clínico.</p>
+      <p className={`px-1 text-[11px] leading-5 ${subtle}`}>Os destaques obedecem à direcionalidade e ao critério clínico persistidos. Percentuais, segundos, frequências e outras unidades não são somados, comparados por delta bruto nem transformados em score clínico.</p>
     </div>
   );
 }
