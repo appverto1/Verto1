@@ -231,6 +231,24 @@ export type AbaBehaviorCompositionRow = {
   [seriesKey: string]: any;
 };
 
+export type AbaBehaviorLongitudinalSeries = {
+  key: string;
+  label: string;
+  behaviorId: string;
+  pointCount: number;
+};
+
+export type AbaBehaviorLongitudinalRow = {
+  groupKey: string;
+  groupBy: 'session' | 'day';
+  label: string;
+  sortAt: string;
+  sessionId?: string | null;
+  sessionIds?: string[];
+  sessionCount?: number;
+  [seriesKey: string]: any;
+};
+
 export const ABA_CLINICAL_CHART_DEFAULT_THRESHOLDS: AbaClinicalChartThresholds = {
   stablePercent: 5,
   meaningfulPercent: 10,
@@ -801,6 +819,113 @@ const behaviorCompositionPatternFor = (
   const labelKey = behaviorCompositionBehaviorLabel(point).toLowerCase();
   return patternByName.get(labelKey) || null;
 };
+
+export function buildBehaviorLongitudinalChart(
+  points: any[] = [],
+  options: {
+    metricType?: string;
+    groupBy?: 'session' | 'day';
+    selectedBehaviorIds?: string[];
+    maxSeries?: number;
+  } = {}
+): { rows: AbaBehaviorLongitudinalRow[]; series: AbaBehaviorLongitudinalSeries[] } {
+  const metricType = String(options.metricType || 'BEHAVIOR_FREQUENCY');
+  const groupBy = options.groupBy || 'session';
+  const maxSeries = Math.min(3, Math.max(1, options.maxSeries || 3));
+  const requestedIds = Array.from(new Set((options.selectedBehaviorIds || []).map((value) => String(value || '').trim()).filter(Boolean))).slice(0, maxSeries);
+  const metricUsesAverage = ['BEHAVIOR_DURATION_AVG', 'BEHAVIOR_INTERVAL_OCCURRENCE'].includes(normalizeStatus(metricType));
+  const candidates = (Array.isArray(points) ? points : [])
+    .filter((point) => String(point?.metricType || point?.metric_type || '') === metricType)
+    .map((point) => {
+      const raw = point?.value ?? point?.metricValue ?? point?.metric_value ?? point?.chartValue ?? point?.chart_value;
+      const value = Number(raw);
+      const behaviorId = behaviorCompositionBehaviorId(point);
+      return { point, value, behaviorId, label: behaviorCompositionBehaviorLabel(point) };
+    })
+    .filter((row) => row.behaviorId && Number.isFinite(row.value));
+
+  const rankedIds = Array.from(candidates.reduce((map, row) => {
+    const id = String(row.behaviorId);
+    const current = map.get(id) || { label: row.label, count: 0 };
+    current.count += 1;
+    if (!current.label && row.label) current.label = row.label;
+    map.set(id, current);
+    return map;
+  }, new Map<string, { label: string; count: number }>()).entries())
+    .sort((a, b) => b[1].count - a[1].count || a[1].label.localeCompare(b[1].label, 'pt-BR'));
+
+  const selectedIds = requestedIds.length > 0 ? requestedIds : rankedIds.slice(0, maxSeries).map(([id]) => id);
+  const selectedSet = new Set(selectedIds);
+  const labelById = new Map(rankedIds.map(([id, meta]) => [id, meta.label]));
+  const series = selectedIds.map((behaviorId, index) => ({
+    key: `behavior_${index}`,
+    label: labelById.get(behaviorId) || behaviorId,
+    behaviorId,
+    pointCount: candidates.filter((row) => String(row.behaviorId) === behaviorId).length
+  }));
+  const seriesKeyByBehaviorId = new Map(series.map((item) => [item.behaviorId, item.key]));
+
+  const grouped = new Map<string, {
+    groupKey: string;
+    label: string;
+    sortAt: string;
+    sessionId?: string | null;
+    sessionIds: Set<string>;
+    values: Map<string, number[]>;
+  }>();
+
+  candidates.filter((row) => selectedSet.has(String(row.behaviorId))).forEach((row, index) => {
+    const point = row.point;
+    const changedAt = String(point?.changedAt || point?.changed_at || point?.date || '');
+    const date = new Date(changedAt || 0);
+    const sortAt = Number.isNaN(date.getTime()) ? changedAt : date.toISOString();
+    const sessionId = String(point?.sessionId || point?.session_id || '').trim() || null;
+    const dayKey = buildCanonicalChartDayKey(changedAt);
+    const sessionLabel = buildSessionDisplayLabel({ sessionId, changedAt, fallbackIndex: index });
+    const groupKey = groupBy === 'day'
+      ? `day:${dayKey}`
+      : `session:${sessionId || sortAt || index}`;
+    const label = groupBy === 'day' ? formatCanonicalChartDayLabel(dayKey) : sessionLabel.label;
+    if (!grouped.has(groupKey)) {
+      grouped.set(groupKey, { groupKey, label, sortAt, sessionId, sessionIds: new Set<string>(), values: new Map<string, number[]>() });
+    }
+    const group = grouped.get(groupKey)!;
+    if (sessionId) group.sessionIds.add(sessionId);
+    if (!group.sessionId && sessionId) group.sessionId = sessionId;
+    if (sortAt && (!group.sortAt || sortAt < group.sortAt)) group.sortAt = sortAt;
+    const seriesKey = seriesKeyByBehaviorId.get(String(row.behaviorId));
+    if (!seriesKey) return;
+    const values = group.values.get(seriesKey) || [];
+    values.push(row.value);
+    group.values.set(seriesKey, values);
+  });
+
+  const rows = Array.from(grouped.values())
+    .sort((a, b) => String(a.sortAt).localeCompare(String(b.sortAt)))
+    .map((group) => {
+      const row: AbaBehaviorLongitudinalRow = {
+        groupKey: group.groupKey,
+        groupBy,
+        label: group.label,
+        sortAt: group.sortAt,
+        sessionId: groupBy === 'session' && group.sessionIds.size === 1 ? Array.from(group.sessionIds)[0] : null,
+        sessionIds: Array.from(group.sessionIds),
+        sessionCount: group.sessionIds.size
+      };
+      series.forEach((item) => {
+        const values = group.values.get(item.key) || [];
+        if (!values.length) {
+          row[item.key] = null;
+          return;
+        }
+        const total = values.reduce((sum, value) => sum + value, 0);
+        row[item.key] = round2(metricUsesAverage ? total / values.length : total);
+      });
+      return row;
+    });
+
+  return { rows, series };
+}
 
 export function buildBehaviorCompositionStack(
   points: any[] = [],

@@ -28,7 +28,7 @@ export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPa
         </div>
       )}
       {view === 'aba' && showAbaDetails
-        ? <AbaClinicalChartsPanel patientId={patientId} isPanelDark={isPanelDark} />
+        ? <AbaClinicalChartsPanel patientId={patientId} isPanelDark={isPanelDark} onOpenSessionReport={onOpenSessionReport} />
         : view === 'aba-v3' && showAbaV3Details
           ? <AbaV3ClinicalChartPanel patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} />
           : view === 'clinical-v3' && showClinicalMeasurementV3Details
