@@ -11216,41 +11216,35 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <div className="space-y-6 animate-fade-in"> 
             {isKidsProfile && (
               <div className={`p-6 rounded-[32px] shadow-sm border mb-6 relative overflow-hidden transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
-                <div className="absolute top-0 right-0 w-32 h-32 bg-[#05CD99]/5 rounded-bl-full -z-0"></div>
-                <div className="flex items-center justify-between mb-6 relative z-10">
-                  <div>
-                    <h3 className={`text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>Plano terapêutico</h3>
-                    <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Objetivos, programas de ensino, alvos e progresso do paciente.</p>
-                  </div>
-                  <div className="flex gap-2">
-                    <div className="p-3 bg-[#05CD99]/10 rounded-2xl text-[#05CD99]">
-                      <Target size={24} />
-                    </div>
-                  </div>
+                <div className="mb-5">
+                  <h3 className={`text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-900'}`}>Planejamento</h3>
+                  <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Navegue entre o planejamento terapêutico compartilhado e, quando aplicável, o planejamento educacional do paciente.</p>
                 </div>
 
-                <div className={`mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-2 ${isPanelDark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-200 bg-slate-50'}`} data-testid="therapeutic-plan-mode-switch">
-                  <div className="flex gap-1" role="tablist" aria-label="Tipo de plano terapêutico">
+                <div className={`mb-6 border-b ${isPanelDark ? 'border-slate-700' : 'border-slate-200'}`} data-testid="therapeutic-plan-mode-switch">
+                  <div className="flex min-h-[44px] gap-6 overflow-x-auto" role="tablist" aria-label="Tipo de plano terapêutico">
                     <button
                       type="button"
                       role="tab"
                       aria-selected={therapeuticPlanMode === 'pts'}
                       onClick={() => { setTherapeuticPlanMode('pts'); setActivePeiPlanSubtab('teaching'); }}
-                      className={`min-h-10 rounded-xl px-4 text-sm transition-colors ${therapeuticPlanMode === 'pts' ? 'bg-violet-600 text-white shadow-sm' : isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-white'}`}
+                      className={`relative shrink-0 px-1 pb-3 pt-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${therapeuticPlanMode === 'pts' ? (isPanelDark ? 'text-violet-300' : 'text-violet-700') : isPanelDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       PTS
+                      {therapeuticPlanMode === 'pts' && <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-t-full bg-violet-600" aria-hidden="true" />}
                     </button>
                     <button
                       type="button"
                       role="tab"
                       aria-selected={therapeuticPlanMode === 'pei'}
                       onClick={() => setTherapeuticPlanMode('pei')}
-                      className={`min-h-10 rounded-xl px-4 text-sm transition-colors ${therapeuticPlanMode === 'pei' ? 'bg-violet-600 text-white shadow-sm' : isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-white'}`}
+                      className={`relative shrink-0 px-1 pb-3 pt-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${therapeuticPlanMode === 'pei' ? (isPanelDark ? 'text-violet-300' : 'text-violet-700') : isPanelDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       PEI
+                      {therapeuticPlanMode === 'pei' && <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-t-full bg-violet-600" aria-hidden="true" />}
                     </button>
                   </div>
-                  <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  <p className={`pb-3 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
                     {therapeuticPlanMode === 'pts' ? 'Coordenação clínica compartilhada da equipe.' : 'Metas educacionais e estruturas legadas do paciente.'}
                   </p>
                 </div>

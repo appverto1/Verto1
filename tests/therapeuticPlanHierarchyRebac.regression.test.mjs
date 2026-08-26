@@ -67,4 +67,20 @@ assert.match(
   'o servidor precisa manter a autorização mesmo que a UI seja forjada',
 );
 
+assert.match(
+  server,
+  /const ptsSharedEvidence = hasVisiblePts/,
+  'o PTS deve receber uma projeção compartilhada explícita em vez do payload privado dos planos de especialidade',
+);
+assert.match(
+  server,
+  /sourcePlanId: canOpenSourcePlan \? sourcePlanId : null/,
+  'o identificador do plano de origem não pode vazar quando o ator não pode abrir a especialidade',
+);
+assert.match(
+  server,
+  /explicitlyShared = program\?\.advanced_settings\?\.shareWithPts === true/,
+  'evidência de especialidade só pode entrar no PTS por compartilhamento explícito',
+);
+
 console.log('therapeuticPlanHierarchyRebac.regression.test.mjs: ok');
