@@ -101,6 +101,7 @@ export function PtsWorkspaceEditor({
   draftVersion,
   professionals,
   sharedEvidence = [],
+  clinicTimeZone,
   isDark = false,
   saving = false,
   onSave,
@@ -109,6 +110,7 @@ export function PtsWorkspaceEditor({
   draftVersion?: any;
   professionals: any[];
   sharedEvidence?: any[];
+  clinicTimeZone?: string;
   isDark?: boolean;
   saving?: boolean;
   onSave: (payload: {
@@ -309,7 +311,7 @@ export function PtsWorkspaceEditor({
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className={`text-xs ${subtle}`}>Participação do paciente e da família<select className={`${field} mt-1.5`} value={draft.participationStatus} onChange={(event) => setDraft((current) => ({ ...current, participationStatus: event.target.value as PtsClinicalPayload['participationStatus'] }))}><option value="not_started">Ainda não discutido</option><option value="discussed">Discutido</option><option value="agreed">Pactuado</option><option value="declined">Participação recusada/adiada</option></select></label>
-              <label className={`text-xs ${subtle}`}>Data da pactuação<input className={`${field} mt-1.5`} type="datetime-local" value={toDateTimeLocalValue(draft.participationRecordedAt)} onChange={(event) => setDraft((current) => ({ ...current, participationRecordedAt: fromDateTimeLocalValue(event.target.value) }))} /></label>
+              <label className={`text-xs ${subtle}`}>Data da pactuação<input className={`${field} mt-1.5`} type="datetime-local" value={toDateTimeLocalValue(draft.participationRecordedAt, clinicTimeZone)} onChange={(event) => setDraft((current) => ({ ...current, participationRecordedAt: fromDateTimeLocalValue(event.target.value, clinicTimeZone) }))} /></label>
             </div>
           </div>
         )}

@@ -306,7 +306,7 @@ const sourceCardClass = (dark: boolean) => `group flex min-h-[150px] flex-col it
     : 'border-slate-200 bg-white text-slate-800 hover:border-violet-300 hover:shadow-sm'
 }`;
 
-export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], masteryEvaluations = [], userRole, currentUserId, isDark = false, onStartSession }: any) => {
+export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], masteryEvaluations = [], userRole, currentUserId, clinicTimeZone, isDark = false, onStartSession }: any) => {
   const patientId = String(patient?.id || '').trim();
   const patientName = String(patient?.name || patient?.nome || 'Paciente').trim() || 'Paciente';
   const normalizedRole = String(userRole || '').trim().toLowerCase();
@@ -2721,6 +2721,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
             draftVersion={draftVersionForScope(selectedPtsScope)}
             professionals={linkedProfessionals}
             sharedEvidence={ptsSharedEvidence}
+            clinicTimeZone={clinicTimeZone}
             isDark={isDark}
             saving={scopeSaving}
             onSave={(payload) => savePtsScope(String(selectedPtsScope.id), payload)}
@@ -2741,6 +2742,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <PtsEventForm
             key={`${selectedPtsScope.id}:${ptsEventKind}`}
             kind={ptsEventKind}
+            clinicTimeZone={clinicTimeZone}
             isDark={isDark}
             saving={ptsEventSaving}
             onCancel={() => setPtsEventKind(null)}
