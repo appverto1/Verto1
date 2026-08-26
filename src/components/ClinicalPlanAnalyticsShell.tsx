@@ -14,6 +14,7 @@ import {
 } from 'recharts';
 import {
   clinicalOutcomeUnitLabel,
+  formatClinicalValue,
   isClinicalOutcomeInterferingBehaviorSeries,
   type ClinicalOutcomeObservation,
   type ClinicalOutcomeSeriesSummary,
@@ -242,18 +243,6 @@ const bucketAggregation = (series: ClinicalOutcomeSeriesSummary, rows: ClinicalO
     || key.endsWith('_COUNT')
   ) return numeric.reduce((sum, value) => sum + value, 0);
   return numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
-};
-
-const displayValue = (value: unknown, unit: string) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '—';
-  const formatted = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 }).format(numeric);
-  const normalizedUnit = clean(unit).toLowerCase();
-  if (unit === '%' || normalizedUnit.includes('percent')) return `${formatted}%`;
-  if (['s', 'sec', 'seg', 'segundos', 'second', 'seconds'].includes(normalizedUnit)) return `${formatted} s`;
-  if (['ms', 'millisecond', 'milliseconds'].includes(normalizedUnit)) return `${formatted} ms`;
-  if (!normalizedUnit) return formatted;
-  return `${formatted} ${unit}`;
 };
 
 const sessionIdentity = (observation: ClinicalOutcomeObservation) => clean(observation.sessionId) || `obs:${observation.id}`;
@@ -495,7 +484,7 @@ const overviewRows = (
 
 const movementValueText = (target: ClinicalTargetChange) => {
   if (target.firstValue === null || target.latestValue === null) return 'Sem comparação suficiente';
-  return `${displayValue(target.firstValue, target.unit)} → ${displayValue(target.latestValue, target.unit)}`;
+  return `${formatClinicalValue(target.firstValue, target.unit)} → ${formatClinicalValue(target.latestValue, target.unit)}`;
 };
 
 function ProgramChangesView({
@@ -568,7 +557,7 @@ function ProgramChangesView({
           {sustained ? <BadgeCheck size={17} className="shrink-0 text-sky-500" /> : trendIcon}
         </div>
         <p className={`mt-2 text-sm font-semibold ${valueTone}`}>{movementValueText(target)}</p>
-        <p className={`mt-1 text-[11px] ${subtle}`}>{criterionCopy}</p>
+        <p className={`mt-1 text-[11px] font-medium ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{criterionCopy}</p>
         <p className={`mt-1 text-[11px] ${subtle}`}>{target.pointCount} sessões comparáveis{canOpen ? ' · abrir sessão mais recente' : ''}</p>
       </button>
     );
@@ -669,7 +658,7 @@ function AnalyticsTooltip({ active, payload, label, unit, selectedSeries, change
           return (
             <div key={`${item.dataKey}-${item.name}`} className="flex items-center justify-between gap-4">
               <span className="flex min-w-0 items-center gap-2"><span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} /><span className="truncate">{series?.itemLabel || item.name}</span></span>
-              <strong>{changesMode && Number(item.value) > 0 ? '+' : ''}{displayValue(item.value, unit)}</strong>
+              <strong>{changesMode && Number(item.value) > 0 ? '+' : ''}{formatClinicalValue(item.value, unit)}</strong>
             </div>
           );
         })}

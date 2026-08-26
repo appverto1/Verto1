@@ -9,6 +9,7 @@ import {
   clinicalOutcomeTargetReference,
   clinicalOutcomeUnitLabel,
   compareClinicalOutcomePeriods,
+  formatClinicalValue,
   formatClinicalOutcomeValue,
   summarizeClinicalOutcomeSeries,
 } from '../src/utils/clinicalOutcomeAnalytics';
@@ -36,6 +37,12 @@ assert.equal(summaries.length, 1);
 assert.equal(summaries[0].evidenceState, 'sufficient');
 assert.equal(summaries[0].visualTrend, 'up');
 assert.equal(formatClinicalOutcomeValue(observations[3]), '5 de 10 — 50%');
+assert.equal(formatClinicalValue(33.3, 'percent'), '33,3%');
+assert.equal(formatClinicalValue(48.8, 'seconds'), '48,8 s');
+assert.equal(formatClinicalValue(564.3, 'seconds'), '564,3 s');
+assert.equal(formatClinicalValue(1, 'occurrence'), '1 ocorrência');
+assert.equal(formatClinicalValue(4, 'occurrences'), '4 ocorrências');
+assert.equal(formatClinicalOutcomeValue({ ...observations[3], value: 100, numerator: 1, denominator: 1, unit: 'percent' }), '1 de 1 — 100%');
 assert.equal(clinicalOutcomeUnitLabel('%', 'functional_requests', observations.map((row) => row.value)), 'Percentual (%)');
 assert.equal(clinicalOutcomeSourceLabel('aba_session_metric_snapshot'), 'Histórico ABA');
 assert.equal(clinicalOutcomeEvidenceSampleLabel(summaries[0]), '4 registros · 40 oportunidades');
@@ -96,6 +103,12 @@ const periodComparison = compareClinicalOutcomePeriods(currentPeriod, previousPe
 assert.equal(periodComparison.delta, 25);
 assert.equal(periodComparison.deltaLabel, '+25 p.p.');
 assert.equal(periodComparison.movement, 'favorable');
+
+const percentAliasComparison = compareClinicalOutcomePeriods(
+  { ...currentPeriod, unit: 'percentage' },
+  { ...previousPeriod, unit: 'percentage' },
+);
+assert.equal(percentAliasComparison.deltaLabel, '+25 p.p.');
 
 const dashboard = fs.readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
 assert.match(dashboard, /sem calcular média entre métricas incompatíveis/i);

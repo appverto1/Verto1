@@ -18,7 +18,11 @@ assert.match(shell, /target\.valueTrend === 'down'[\s\S]*TrendingDown[\s\S]*text
 assert.match(shell, /target\.valueTrend === 'flat'[\s\S]*ArrowRight/, 'delta visualmente nulo deve usar seta horizontal, nunca falsa seta de alta');
 assert.match(shell, /Meta clínica configurada|Critério de domínio/, 'microcopy deve nomear a regra como meta ou critério, não como mudança');
 assert.doesNotMatch(shell, /Mudança clinicamente favorável/, 'critério clínico não pode ser rotulado como mudança');
-assert.match(shell, /normalizedUnit\.includes\('percent'\)/, 'unidades percent/percentage do contrato devem ser formatadas como % na UI');
+assert.match(shell, /formatClinicalValue\(target\.firstValue, target\.unit\)/, 'destaques devem reutilizar o formatador clínico compartilhado');
+assert.match(outcomeAnalytics, /export const formatClinicalValue/, 'formatação clínica deve permanecer centralizada fora dos componentes');
+assert.match(outcomeAnalytics, /normalizedUnit\.includes\('percent'\)/, 'unidades percent/percentage do contrato devem ser formatadas como % na UI');
+assert.match(outcomeAnalytics, /second', 'seconds'/, 'unidades de duração em inglês devem ser normalizadas antes da renderização');
+assert.match(shell, /font-medium[\s\S]*criterionCopy/, 'critério clínico deve ter hierarquia visual superior ao metadado de sessões');
 assert.match(shell, /const flatTone = sustained \? 'text-sky-500' : 'text-amber-500'/, 'seta plana só pode ser azul no critério sustentado; fora do teto deve ser âmbar');
 assert.match(shell, /target\.valueTrend === 'flat'[\s\S]*text-amber-700/, 'valor sem delta abaixo do teto não pode permanecer verde');
 assert.match(shell, /sem criar score ou média entre unidades incompatíveis/i, 'a visão não pode reintroduzir score global');
