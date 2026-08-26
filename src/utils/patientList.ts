@@ -107,3 +107,32 @@ export function patientMatchesProfessionalFilter(patient: any, professionalId: u
   if (normalizedProfessionalId === 'unassigned') return professionalIds.length === 0;
   return professionalIds.includes(normalizedProfessionalId);
 }
+
+export const normalizePatientDirectoryText = (value: unknown): string =>
+  String(value ?? '')
+    .normalize('NFC')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+
+export function patientMatchesNameFilter(patient: any, query: unknown): boolean {
+  const normalizedQuery = normalizePatientDirectoryText(query);
+  if (!normalizedQuery) return true;
+  return normalizePatientDirectoryText(patient?.name).includes(normalizedQuery);
+}
+
+export function sortPatientsAlphabetically<T = any>(patients: T[]): T[] {
+  return [...(Array.isArray(patients) ? patients : [])].sort((left: any, right: any) => {
+    const leftName = String(left?.name ?? '').normalize('NFC').trim();
+    const rightName = String(right?.name ?? '').normalize('NFC').trim();
+    const byName = leftName.localeCompare(rightName, 'pt-BR', {
+      sensitivity: 'base',
+      numeric: true,
+      ignorePunctuation: true,
+    });
+    if (byName !== 0) return byName;
+    return String(left?.id ?? '').localeCompare(String(right?.id ?? ''), 'pt-BR');
+  });
+}

@@ -100,6 +100,39 @@ const PATIENT_HISTORY_PAGE_SIZE = 40;
 const PATIENT_FILE_MAX_SIZE_BYTES = 10 * 1024 * 1024;
 const PATIENT_FILE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
 
+const REPORT_PERIOD_MONTHS: Record<string, number> = {
+  monthly: 1,
+  bimonthly: 2,
+  quarterly: 3,
+  semiannual: 6,
+  annual: 12,
+};
+
+const resolveReportPeriodStartKey = (period: string, anchorKey: string) => {
+  const match = String(anchorKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '';
+  const months = REPORT_PERIOD_MONTHS[String(period || '')] || REPORT_PERIOD_MONTHS.monthly;
+  const year = Number(match[1]);
+  const monthIndex = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  const targetMonth = new Date(Date.UTC(year, monthIndex - months, 1));
+  const targetYear = targetMonth.getUTCFullYear();
+  const targetMonthIndex = targetMonth.getUTCMonth();
+  const lastDayOfTargetMonth = new Date(Date.UTC(targetYear, targetMonthIndex + 1, 0)).getUTCDate();
+  targetMonth.setUTCDate(Math.min(day, lastDayOfTargetMonth));
+  return targetMonth.toISOString().slice(0, 10);
+};
+
+const resolveReportNoteDateKey = (value: any) => {
+  const raw = String(value || '').trim();
+  const isoMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  const brMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (brMatch) return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+};
+
 const formatPatientFileStorageBytes = (value: number) => {
   const bytes = Math.max(0, Number(value) || 0);
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
@@ -3579,16 +3612,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return { image: image || null, image_path: imagePath || null };
   };
 
-  const availableSnapshots = useMemo(() => {
-    const dates = (history || [])
-      .filter((h: any) => String(h?.patientId || h?.patient_id || '') === String(patient.id))
-      .filter((h: any) => String(h?.type || '').toLowerCase() === 'task')
-      .filter((h: any) => h?.score !== undefined && h?.score !== null)
-      .map(resolveHistorySnapshotKey)
-      .filter(Boolean);
-    return Array.from(new Set(dates)).sort((a: any, b: any) => String(b).localeCompare(String(a)));
-  }, [history, patient.id]);
-
   const evaluationSkills = useMemo(() => {
     const skills: any[] = [];
     protocols.filter((p: any) => p.category === 'evaluation' || !p.category).forEach((p: any) => {
@@ -3681,6 +3704,140 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     return Array.from(catalog.values());
   }, [safeProtocols, approvedVertoProtocolStatuses]);
+
+
+  const kidsReportScoredRows = useMemo(() => {
+    if (!isKidsProfile) return [];
+    return (Array.isArray(history) ? history : [])
+      .filter((row: any) => String(row?.patientId || row?.patient_id || '') === String(patient?.id || ''))
+      .filter((row: any) => String(row?.type || '').toLowerCase() === 'task')
+      .filter((row: any) => row?.score !== undefined && row?.score !== null)
+      .filter((row: any) => Boolean(normalizeClinicalTaskKey(row?.title || row?.taskTitle || row?.task_data?.title || '')));
+  }, [history, isKidsProfile, patient?.id]);
+
+  const reportChartProtocol = useMemo(() => {
+    const selected = planProtocolCatalog.find((protocol: any) => String(protocol?.id || '') === String(selectedChartProtocolId || '')) || null;
+    if (!isKidsProfile) return selected || planProtocolCatalog[0] || null;
+
+    const matchCount = (protocol: any) => {
+      const protocolIds = new Set(
+        [protocol?.id, protocol?.canonicalKey, protocol?.canonical_key]
+          .map((value: any) => String(value || '').trim())
+          .filter(Boolean)
+      );
+      const domains = new Set<string>();
+      const skills: string[] = [];
+      (Array.isArray(protocol?.data) ? protocol.data : []).forEach((domain: any) => {
+        const domainKey = normalizeClinicalTaskKey(domain?.name || '');
+        if (domainKey) domains.add(domainKey);
+        (Array.isArray(domain?.skills) ? domain.skills : []).forEach((skill: any) => {
+          const skillKey = normalizeClinicalTaskKey(skill?.name || skill?.title || '');
+          if (skillKey) skills.push(skillKey);
+        });
+      });
+      return kidsReportScoredRows.reduce((count: number, row: any) => {
+        const rowProtocolId = String(row?.protocol_id || row?.protocolId || row?.task_data?.protocol_id || '').trim();
+        if (rowProtocolId && protocolIds.has(rowProtocolId)) return count + 1;
+        const rowDomain = normalizeClinicalTaskKey(row?.domain || row?.domainName || row?.task_data?.domain || row?.task_data?.domainName || '');
+        const rowTitle = normalizeClinicalTaskKey(row?.title || row?.taskTitle || row?.task_data?.title || '');
+        if (rowDomain && domains.has(rowDomain)) return count + 1;
+        if (rowTitle && skills.some((skillKey) => skillKey === rowTitle || skillKey.includes(rowTitle) || rowTitle.includes(skillKey))) return count + 1;
+        return count;
+      }, 0);
+    };
+
+    if (selected && matchCount(selected) > 0) return selected;
+    const bestMatch = planProtocolCatalog
+      .map((protocol: any) => ({ protocol, count: matchCount(protocol) }))
+      .sort((left, right) => right.count - left.count)[0];
+    if ((bestMatch?.count || 0) > 0) return bestMatch.protocol;
+
+    // Historical child records can legitimately outlive an imported/renamed protocol.
+    // Build a read-only report projection from the explicit domain/title persisted in
+    // those records instead of leaving the report blank or inventing a DB request.
+    if (kidsReportScoredRows.length > 0) {
+      const domains = new Map<string, { name: string; skills: Map<string, { name: string; maxScore: number }> }>();
+      kidsReportScoredRows.forEach((row: any) => {
+        const domainLabel = String(
+          row?.domain || row?.domainName || row?.task_data?.domain || row?.task_data?.domainName || 'Atividades clínicas'
+        ).trim() || 'Atividades clínicas';
+        const taskLabel = String(row?.title || row?.taskTitle || row?.task_data?.title || '').trim();
+        if (!taskLabel) return;
+        const domainKey = normalizeClinicalTaskKey(domainLabel) || 'atividades clinicas';
+        const taskKey = normalizeClinicalTaskKey(taskLabel);
+        if (!taskKey) return;
+        if (!domains.has(domainKey)) domains.set(domainKey, { name: domainLabel, skills: new Map() });
+        const domain = domains.get(domainKey)!;
+        if (!domain.skills.has(taskKey)) {
+          domain.skills.set(taskKey, {
+            name: taskLabel,
+            maxScore: Math.max(1, Number(row?.maxScore ?? row?.max_score ?? 1) || 1),
+          });
+        }
+      });
+      const data = Array.from(domains.values()).map((domain, index) => ({
+        id: `history-domain-${index + 1}`,
+        name: domain.name,
+        skills: Array.from(domain.skills.values()),
+      }));
+      if (data.length > 0) {
+        return {
+          id: '__history_report_projection__',
+          title: 'Registros clínicos',
+          data,
+          isHistoryProjection: true,
+        };
+      }
+    }
+
+    return selected || planProtocolCatalog[0] || null;
+  }, [isKidsProfile, kidsReportScoredRows, planProtocolCatalog, selectedChartProtocolId]);
+
+  const kidsReportAvailableSnapshots = useMemo(() => {
+    if (!isKidsProfile || !reportChartProtocol) return [];
+
+    const domainNames = new Set<string>();
+    const skillNames = new Set<string>();
+    (Array.isArray(reportChartProtocol?.data) ? reportChartProtocol.data : []).forEach((domain: any) => {
+      const domainKey = normalizeClinicalTaskKey(domain?.name || '');
+      if (domainKey) domainNames.add(domainKey);
+      (Array.isArray(domain?.skills) ? domain.skills : []).forEach((skill: any) => {
+        const skillKey = normalizeClinicalTaskKey(skill?.name || skill?.title || '');
+        if (skillKey) skillNames.add(skillKey);
+      });
+    });
+
+    const matchingDates = kidsReportScoredRows
+      .filter((row: any) => {
+        const titleKey = normalizeClinicalTaskKey(row?.title || row?.taskTitle || row?.task_data?.title || '');
+        const domainKey = normalizeClinicalTaskKey(row?.domain || row?.domainName || row?.task_data?.domain || row?.task_data?.domainName || '');
+        if (!titleKey && !domainKey) return false;
+        if (domainKey && domainNames.has(domainKey)) return true;
+        if (!titleKey) return false;
+        return Array.from(skillNames).some((candidate) => candidate === titleKey || candidate.includes(titleKey) || titleKey.includes(candidate));
+      })
+      .map(resolveHistorySnapshotKey)
+      .filter(Boolean);
+
+    const uniqueDates = Array.from(new Set<string>(matchingDates)).sort((left, right) => left.localeCompare(right));
+    const anchorKey = uniqueDates[uniqueDates.length - 1] || '';
+    const periodStartKey = resolveReportPeriodStartKey(reportPeriod, anchorKey);
+    return uniqueDates.filter((dateKey) => !periodStartKey || dateKey >= periodStartKey);
+  }, [isKidsProfile, kidsReportScoredRows, reportChartProtocol, reportPeriod]);
+
+  const kidsReportSnapshotSignature = kidsReportAvailableSnapshots.join('|');
+  useEffect(() => {
+    if (!isKidsProfile) return;
+    if (!kidsReportAvailableSnapshots.length) {
+      setComparisonDate1('');
+      setComparisonDate2('');
+      return;
+    }
+    const firstDate = kidsReportAvailableSnapshots[0] || '';
+    const lastDate = kidsReportAvailableSnapshots[kidsReportAvailableSnapshots.length - 1] || firstDate;
+    setComparisonDate1(firstDate);
+    setComparisonDate2(lastDate);
+  }, [isKidsProfile, kidsReportSnapshotSignature]);
 
   const filteredProtocols = useMemo(() => { 
     return planProtocolCatalog.filter((p: any) => { 
@@ -4435,6 +4592,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     });
   }, [isKidsProfile, notes, patient?.id]);
 
+
+  const kidsReportSelectableNotesInPeriod = useMemo(() => {
+    if (!isKidsProfile) return [];
+    const anchorKey = comparisonDate2 || kidsReportAvailableSnapshots[kidsReportAvailableSnapshots.length - 1] || '';
+    if (!anchorKey) return kidsReportSelectableNotes;
+    const startKey = resolveReportPeriodStartKey(reportPeriod, anchorKey);
+    return kidsReportSelectableNotes.filter((note: any) => {
+      const dateKey = resolveReportNoteDateKey(note?.date || note?.created_at || note?.createdAt || '');
+      return Boolean(dateKey) && (!startKey || dateKey >= startKey) && dateKey <= anchorKey;
+    });
+  }, [comparisonDate2, isKidsProfile, kidsReportAvailableSnapshots, kidsReportSelectableNotes, reportPeriod]);
+
+  useEffect(() => {
+    if (!isKidsProfile) return;
+    const visibleIds = new Set(kidsReportSelectableNotesInPeriod.map((note: any) => String(note?.id || '')));
+    setSelectedReportNotes((current) => current.filter((id: any) => visibleIds.has(String(id))));
+  }, [isKidsProfile, kidsReportSelectableNotesInPeriod]);
+
   const resolveFamilyImageForNote = (note: any) => {
     if (!note) return null;
     const normalizedText = String(note?.text || '')
@@ -4591,25 +4766,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const comparisonChartData = useMemo(() => {
-    const selectedProto = protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId));
+    const selectedProto = reportChartProtocol;
     if (!selectedProto) return [];
 
-    const uniqueDates = Array.from(new Set((history || [])
-      .filter((h: any) => String(h?.patientId || h?.patient_id || '') === String(patient.id))
-      .filter((h: any) => String(h?.type || '').toLowerCase() === 'task')
-      .filter((h: any) => h?.score !== undefined && h?.score !== null)
-      .map(resolveHistorySnapshotKey)
-      .filter(Boolean)))
-      .sort((a: any, b: any) => String(b).localeCompare(String(a)));
-    const fallbackDates = uniqueDates.slice(0, 2);
+    const fallbackDates = kidsReportAvailableSnapshots;
     const d1 = comparisonDate1 || fallbackDates[0] || '';
-    const d2 = comparisonDate2 || fallbackDates.find((date: any) => String(date) !== String(d1)) || fallbackDates[0] || '';
+    const d2 = comparisonDate2 || fallbackDates[fallbackDates.length - 1] || fallbackDates[0] || '';
     if (!d1 || !d2) return [];
 
-    const scoredEvents = (history || [])
-      .filter((h: any) => String(h?.patientId || h?.patient_id || '') === String(patient.id))
-      .filter((h: any) => String(h?.type || '').toLowerCase() === 'task')
-      .filter((h: any) => h?.score !== undefined && h?.score !== null)
+    const scoredEvents = kidsReportScoredRows
       .map((h: any) => {
         const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
         const title = String(h?.title || h?.taskTitle || h?.task_data?.title || '').trim();
@@ -4679,7 +4844,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }));
 
     return data;
-  }, [history, protocols, selectedChartProtocolId, patient.id, comparisonDate1, comparisonDate2]);
+  }, [kidsReportScoredRows, reportChartProtocol, kidsReportAvailableSnapshots, comparisonDate1, comparisonDate2]);
 
   const toggleReportNote = (id: string | number) => {
     setSelectedReportNotes(prev => 
@@ -4956,8 +5121,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [patientTasks, assignedTasks, isKidsProfile]);
 
   const selectedChartProtocol = useMemo(
-    () => protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId)),
-    [protocols, selectedChartProtocolId]
+    () => planProtocolCatalog.find((p: any) => String(p.id) === String(selectedChartProtocolId)) || planProtocolCatalog[0] || null,
+    [planProtocolCatalog, selectedChartProtocolId]
   );
 
   const resolveTaskProtocol = (task: any) => {
@@ -5245,7 +5410,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       score: `${task.professionalScore ?? '-'} de ${task.maxScore ?? '-'} PTS`,
       notes: task.evolutionNote || 'Sem anotação técnica registrada.'
     }));
-  }, [isKidsProfile, kidsReportSelectableNotes, selectedReportNotes, adultEvolutionSelectedTasks]);
+  }, [isKidsProfile, kidsReportSelectableNotesInPeriod, selectedReportNotes, adultEvolutionSelectedTasks]);
 
   const progressReportPeriodLabel = isKidsProfile
     ? `${formatReportDateLabel(progressReportComparisonKeys[0] || comparisonDate1 || '') || 'Base'} VS ${formatReportDateLabel(progressReportComparisonKeys[1] || comparisonDate2 || '') || 'Final'}`
@@ -10868,11 +11033,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         id="report-date-1"
                         className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
                         value={comparisonDate1}
-                        onChange={(e) => setComparisonDate1(e.target.value)}
+                        onChange={(e) => {
+                          const nextDate = e.target.value;
+                          setComparisonDate1(nextDate);
+                          if (nextDate && nextDate === comparisonDate2 && kidsReportAvailableSnapshots.length > 1) {
+                            setComparisonDate2(kidsReportAvailableSnapshots.find((date) => date !== nextDate) || nextDate);
+                          }
+                        }}
                       >
                         <option value="">Selecione...</option>
-                        {availableSnapshots.map((date: any) => (
-                          <option key={date} value={date}>{date}</option>
+                        {kidsReportAvailableSnapshots.map((date: any) => (
+                          <option key={date} value={date} disabled={kidsReportAvailableSnapshots.length > 1 && date === comparisonDate2}>{formatReportDateLabel(date)}</option>
                         ))}
                       </select>
                     </div>
@@ -10882,11 +11053,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         id="report-date-2"
                         className="w-full bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm font-semibold text-gray-700 outline-none focus:border-[#4318FF]"
                         value={comparisonDate2}
-                        onChange={(e) => setComparisonDate2(e.target.value)}
+                        onChange={(e) => {
+                          const nextDate = e.target.value;
+                          setComparisonDate2(nextDate);
+                          if (nextDate && nextDate === comparisonDate1 && kidsReportAvailableSnapshots.length > 1) {
+                            const fallbackBase = [...kidsReportAvailableSnapshots].reverse().find((date) => date !== nextDate) || nextDate;
+                            setComparisonDate1(fallbackBase);
+                          }
+                        }}
                       >
                         <option value="">Selecione...</option>
-                        {availableSnapshots.map((date: any) => (
-                          <option key={date} value={date}>{date}</option>
+                        {kidsReportAvailableSnapshots.map((date: any) => (
+                          <option key={date} value={date} disabled={kidsReportAvailableSnapshots.length > 1 && date === comparisonDate1}>{formatReportDateLabel(date)}</option>
                         ))}
                       </select>
                     </div>
@@ -10897,8 +11075,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               {isKidsProfile ? (
                 <ComparisonBarChart 
                   data={comparisonChartData} 
-                  title={`Comparativo de Domínios (%): ${comparisonDate1 || 'Base'} vs ${comparisonDate2 || 'Atual'}`} 
+                  title={`Comparativo de Domínios (%): ${formatReportDateLabel(comparisonDate1) || 'Base'} vs ${formatReportDateLabel(comparisonDate2) || 'Atual'}`} 
                   maxScore={100}
+                  emptyMessage={comparisonDate1 && comparisonDate2
+                    ? 'Não há medições comparáveis para as datas e o período selecionados.'
+                    : 'Selecione duas datas com medições para comparar o progresso.'}
                 />
               ) : (
                 <ComparisonBarChart
@@ -10920,7 +11101,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
                   {isKidsProfile
-                    ? kidsReportSelectableNotes.map((note: any) => (
+                    ? kidsReportSelectableNotesInPeriod.map((note: any) => (
                         <div
                           key={note.id}
                           onClick={() => toggleReportNote(note.id)}
@@ -10963,7 +11144,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <FileText size={18} className="text-[#7a32fc]" /> Observações Selecionadas para o Relatório
                   </h4>
                   <div className="space-y-4">
-                    {kidsReportSelectableNotes.filter((n: any) => selectedReportNotes.includes(n.id)).map((note: any) => (
+                    {kidsReportSelectableNotesInPeriod.filter((n: any) => selectedReportNotes.includes(n.id)).map((note: any) => (
                       <div key={note.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                         <div className="flex justify-between items-center mb-3">
                           <span className="text-[10px] font-semibold text-gray-400 uppercase">{note.date}</span>
