@@ -83,6 +83,19 @@ assert.match(source, /<ClinicalChartsWorkspace patientId=/);
 assert.match(source, /role="alert"[\s\S]*Tentar novamente/,
   'erro ABA precisa permanecer visivel e oferecer retry controlado');
 assert.match(source, /activeTab !== 'history'[\s\S]*requestPatientHistoryPage/);
+assert.doesNotMatch(
+  source,
+  /id="patient-history-insights"|Uma leitura consolidada do protocolo selecionado/,
+  'o Histórico infantil não deve voltar a carregar o bloco analítico legado; análises pertencem à aba Gráficos',
+);
+const kidsHistoryStart = source.indexOf('{isKidsProfile ? (\n              <React.Fragment>');
+const sessionReportsIndex = source.indexOf('id="patient-session-reports-heading"', kidsHistoryStart);
+const timelineIndex = source.indexOf('id="patient-timeline-heading"', sessionReportsIndex);
+assert.notEqual(kidsHistoryStart, -1, 'o bloco de histórico infantil precisa existir');
+assert.notEqual(sessionReportsIndex, -1, 'Relatórios de sessão devem permanecer no Histórico');
+assert.notEqual(timelineIndex, -1, 'Linha do tempo deve permanecer no Histórico');
+assert.ok(sessionReportsIndex < timelineIndex, 'Relatórios de sessão devem aparecer antes da linha do tempo');
+
 assert.match(source, /\(abaV2Enabled \|\| abaV3UiEnabled\) && isSessionModeOpen[\s\S]*<SessionMode/);
 
 assert.equal(

@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, 
 import { createPortal } from 'react-dom';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
-import { ComparisonBarChart, EvolutionBarChart } from './Charts';
+import { ComparisonBarChart } from './Charts';
 import { HistoryCard } from './History';
 import { SessionMode } from './SessionMode';
 import { RadarDomainAssessmentChart } from './RadarDomainAssessmentChart';
@@ -3622,107 +3622,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return max;
   }, [protocols, selectedChartProtocolId]);
 
-  const radarChartData = useMemo(() => {
-    const selectedProto = protocols.find((p: any) => String(p.id) === String(selectedChartProtocolId));
-    if (!selectedProto) return { labels: [], datasets: [] };
 
-    const normalizeSkill = (value: any) =>
-      String(value || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-
-    const isSameSkill = (a: string, b: string) => {
-      const left = normalizeSkill(a);
-      const right = normalizeSkill(b);
-      if (!left || !right) return false;
-      return left === right || left.includes(right) || right.includes(left);
-    };
-
-    const labels = selectedProto.data.map((d: any) => String(d?.name || '').trim()).filter(Boolean);
-
-    const sourceHistory = (Array.isArray(history) ? history : [])
-      .filter((h: any) => String(h?.patientId || h?.patient_id || '') === String(patient.id))
-      .filter((h: any) => String(h?.type || '').toLowerCase() === 'task')
-      .filter((h: any) => h?.score !== undefined && h?.score !== null)
-      .map((h: any) => {
-        const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
-        const score = Math.max(0, Math.min(1, Number(h?.score ?? 0) || 0));
-        return { ...h, _ts: ts, _score: score, _titleKey: normalizeSkill(String(h?.title || '')) };
-      })
-      .sort((a: any, b: any) => a._ts - b._ts);
-
-    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
-    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
-
-    const getDomainPercent = (domain: any, mode: 'first' | 'latest') => {
-      const domainTasks = (Array.isArray(domain?.skills) ? domain.skills : [])
-        .map((s: any) => ({
-          name: String(s?.name || '').trim(),
-          maxScore: Math.max(1, Number(s?.maxScore ?? s?.max_score ?? 1) || 1)
-        }))
-        .filter((s: any) => s.name);
-      if (!domainTasks.length) return 0;
-      const domainEvents = sourceHistory
-        .filter((row: any) => domainTasks.some((task: any) => isSameSkill(task.name, String(row?.title || ''))))
-        .map((row: any) => ({
-          title: row?.title || '',
-          score: row?._score,
-          maxScore: 1,
-          consecutive_successes: row?.consecutive_successes,
-          created_at: row?.created_at || row?.date || null
-        }));
-      return calculateDomainMastery(domainEvents, domainTasks, {
-        mode: mode === 'first' ? 'baseline' : 'latest',
-        protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
-        vbmappMasteryCriterion: vbmappCriterion
-      });
-    };
-
-    const currentData = selectedProto.data.map((domain: any) => getDomainPercent(domain, 'latest'));
-
-    if (selectedSnapshotDate === "all") {
-      return {
-        labels,
-        datasets: [
-          {
-            label: 'Último registro',
-            data: currentData,
-            backgroundColor: 'rgba(67, 24, 255, 0.25)',
-            borderColor: '#7a32fc',
-            pointBackgroundColor: '#7a32fc',
-            borderWidth: 4
-          }
-        ]
-      };
-    }
-
-    const baselineData = selectedProto.data.map((domain: any) => getDomainPercent(domain, 'first'));
-    return {
-      labels,
-      datasets: [
-        {
-          label: 'Primeira avaliação registrada',
-          data: baselineData,
-          backgroundColor: 'rgba(5, 205, 153, 0.35)',
-          borderColor: '#05CD99',
-          pointBackgroundColor: '#05CD99',
-          borderWidth: 4
-        },
-        {
-          label: 'Último registro',
-          data: currentData,
-          backgroundColor: 'rgba(122, 50, 252, 0.25)',
-          borderColor: '#7a32fc',
-          pointBackgroundColor: '#7a32fc',
-          borderWidth: 4
-        }
-      ]
-    };
-  }, [history, protocols, patient.id, selectedChartProtocolId, selectedSnapshotDate]);
 
   const safeProtocols = Array.isArray(protocols) ? protocols : []; 
   useEffect(() => {
@@ -10610,71 +10510,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             )}
             {isKidsProfile ? (
               <React.Fragment>
-                <section
-                  id="patient-history-insights"
-                  className={`space-y-4 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-slate-50/70'}`}
-                  aria-labelledby="patient-history-insights-heading"
-                >
-                  <div id="history-filters" className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                    <div className="min-w-0">
-                      <h2 id="patient-history-insights-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                        Evolução clínica
-                      </h2>
-                      <p className={`mt-1 max-w-2xl text-sm leading-6 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                        Uma leitura consolidada do protocolo selecionado. Para análises ABA detalhadas, use a aba Gráficos ABA.
-                      </p>
-                    </div>
-                    <label className={`block w-full lg:max-w-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                      <span className="mb-1.5 flex items-center gap-2 text-xs font-medium">
-                        <SlidersHorizontal size={14} className="text-[#7a32fc]" /> Protocolo
-                      </span>
-                      <div className="relative">
-                        <select
-                          id="protocol-selector"
-                          className={`h-11 w-full appearance-none rounded-xl border px-3 pr-10 text-sm font-medium outline-none transition focus:border-[#7a32fc] focus:ring-2 focus:ring-[#7a32fc]/15 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
-                          value={selectedChartProtocolId}
-                          onChange={(e) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(e.target.value); }}
-                        >
-                          {planProtocolCatalog.map((protocol: any) => (
-                            <option key={protocol.id} value={protocol.id}>{protocol.title}</option>
-                          ))}
-                        </select>
-                        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                      </div>
-                    </label>
-                  </div>
-                  <div id="evolution-chart-container" className="min-w-0">
-                  <EvolutionBarChart
-                    chartData={radarChartData}
-                    maxScore={100}
-                    title="Evolução por domínio"
-                    description="Compare a primeira avaliação registrada com o registro mais recente do protocolo selecionado."
-                    variant="patient-history"
-                    dark={isPanelDark}
-                  />
-                  </div>
-                  {showCoordinatorPatientRadar && (
-                    <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
-                      <RadarDomainAssessmentChart
-                        patientId={patient.id}
-                        protocols={planProtocolCatalog}
-                        history={cumulativeGrowthHistory}
-                        protocolId={selectedChartProtocolId}
-                        compact
-                        dark={isPanelDark}
-                      />
-                      <CumulativeGrowthChart
-                        patientId={patient.id}
-                        history={cumulativeGrowthHistory}
-                        protocols={planProtocolCatalog}
-                        protocolId={selectedChartProtocolId}
-                        compact
-                        dark={isPanelDark}
-                        useCanonicalMastery={useCanonicalMasteryGrowth}
-                      />
-                    </div>
-                  )}
-                </section>
                 <section className={`space-y-3 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-white'}`} aria-labelledby="patient-session-reports-heading">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>

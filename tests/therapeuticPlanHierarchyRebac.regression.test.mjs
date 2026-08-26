@@ -56,6 +56,23 @@ assert.doesNotMatch(
   'especialidade isolada não pode funcionar como autorização de leitura',
 );
 
+
+assert.match(
+  panel,
+  /PTS_DRAFT_VALIDATION_FAILED[\s\S]*setActivationWarning/,
+  'campos pendentes de ativação devem virar aviso de rascunho, não erro global impeditivo',
+);
+assert.match(
+  panel,
+  /Os campos pendentes impedem somente a ativação; você pode continuar editando e salvando o PTS normalmente/,
+  'a UI deve deixar explícito que um rascunho incompleto continua salvável',
+);
+assert.match(
+  server,
+  /PTS_DRAFT_VALIDATION_FAILED'[\s\S]*blockingScope: 'activation_only'[\s\S]*draftPreserved: true/,
+  'o contrato da API deve declarar que a validação bloqueia apenas ativação e preserva o draft',
+);
+
 assert.match(
   server,
   /SESSION_SPECIALTY_PLAN_REQUIRED/,
