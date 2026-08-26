@@ -35,12 +35,12 @@ import { dataService } from '../services/dataService';
 import {
   ABA_CLINICAL_LINE_METRICS,
   aggregateClinicalChangesBySession,
-  buildBehaviorCompositionStack,
+  buildBehaviorLongitudinalChart,
   getClinicalChangeDrilldown,
   type AbaAggregatedClinicalChange,
   type AbaAggregatedClinicalChangeGroup,
-  type AbaBehaviorCompositionRow,
-  type AbaBehaviorCompositionSeries,
+  type AbaBehaviorLongitudinalRow,
+  type AbaBehaviorLongitudinalSeries,
   type AbaBehaviorContextDistributionValue,
   type AbaBehaviorContextPattern,
   type AbaClinicalChangeCategory,
@@ -53,6 +53,7 @@ import { aggregateAbaPointsBySpecialty } from '../utils/abaSpecialtyAnalytics';
 type AbaClinicalChartsPanelProps = {
   patientId: string;
   isPanelDark?: boolean;
+  onOpenSessionReport?: (sessionId: string) => void;
 };
 
 type ChartPoint = {
@@ -750,42 +751,25 @@ const AggregatedTooltip = ({ active, payload }: any) => {
   );
 };
 
-const BehaviorCompositionTooltip = ({ active, payload, metricType }: any) => {
+const BehaviorLongitudinalTooltip = ({ active, payload, metricType }: any) => {
   if (!active || !payload?.length) return null;
-  const row: AbaBehaviorCompositionRow = payload[0]?.payload || {};
-  const segments = Array.isArray(row.segments) ? row.segments.filter((segment) => segment.value > 0) : [];
-  const isDayGroup = row.groupBy === 'day';
+  const row: AbaBehaviorLongitudinalRow = payload[0]?.payload || {};
+  const entries = payload
+    .filter((entry: any) => entry?.dataKey && String(entry.dataKey).startsWith('behavior_') && Number.isFinite(Number(entry.value)))
+    .map((entry: any) => ({ label: entry.name || entry.dataKey, value: Number(entry.value), color: entry.color }));
   return (
-    <div className="max-w-[340px] rounded-lg border border-slate-100 bg-white p-4 text-xs shadow-xl">
-      <p className="font-black uppercase tracking-widest text-slate-900">
-        {isDayGroup
-          ? `Dia: ${row.clinicalDateLabel || row.label || 'Sem data'}`
-          : `Sessão: ${row.sessionTooltipLabel || row.sessionDisplayLabel || row.label || 'Sessão'}`}
-      </p>
-      {!isDayGroup && row.sessionShortCode && (
-        <p className="mt-1 text-[11px] font-bold uppercase tracking-widest text-slate-400">Código curto: {row.sessionShortCode}</p>
-      )}
-      <p className="mt-2 font-bold text-slate-700">
-        Total: <span className="text-slate-900">{formatValue(row.total, metricType)}</span>
-      </p>
-      {isDayGroup && (
-        <p className="mt-1 text-[11px] font-bold text-slate-500">Sessões incluídas: {row.sessionCount || 0}</p>
-      )}
-      <div className="mt-3 space-y-1 text-slate-500">
-        {segments.map((segment) => (
-          <p key={segment.key} className="flex items-center justify-between gap-3">
-            <span className="truncate">{segment.label}</span>
-            <strong className="shrink-0 text-slate-800">{formatValue(segment.value, metricType)}</strong>
+    <div className="max-w-[320px] rounded-xl border border-slate-200 bg-white p-3 text-xs shadow-xl">
+      <p className="font-black text-slate-900">{row.groupBy === 'day' ? `Dia ${row.label}` : `Sessão ${row.label}`}</p>
+      <div className="mt-2 space-y-1.5">
+        {entries.map((entry: any) => (
+          <p key={entry.label} className="flex items-center justify-between gap-4 text-slate-600">
+            <span className="flex min-w-0 items-center gap-2 truncate"><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} />{entry.label}</span>
+            <strong className="shrink-0 text-slate-900">{formatValue(entry.value, metricType)}</strong>
           </p>
         ))}
       </div>
-      {(row.dominantLocation || row.commonSeverity || row.commonCollectionMethod) && (
-        <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-slate-600">
-          <p className="font-black uppercase tracking-widest text-slate-400">Contexto predominante</p>
-          {row.dominantLocation && <p className="mt-1">Local mais frequente: <strong>{row.dominantLocation.value}</strong></p>}
-          {row.commonSeverity && <p>Severidade predominante: <strong>{row.commonSeverity.value}</strong></p>}
-          {row.commonCollectionMethod && <p>Método predominante: <strong>{row.commonCollectionMethod.value}</strong></p>}
-        </div>
+      {row.groupBy === 'session' && row.sessionId && (
+        <p className="mt-2 border-t border-slate-100 pt-2 text-[10px] font-bold uppercase tracking-widest text-violet-600">Clique no ponto para abrir o relatório da sessão</p>
       )}
     </div>
   );
@@ -892,12 +876,13 @@ const ContextDistributionRows = ({
   );
 };
 
-export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaClinicalChartsPanelProps) {
+export function AbaClinicalChartsPanel({ patientId, isPanelDark = false, onOpenSessionReport }: AbaClinicalChartsPanelProps) {
   const [activeTab, setActiveTab] = useState<(typeof chartTabs)[number]['id']>('overview');
   const [viewMode, setViewMode] = useState<ClinicalChartViewMode>('stacked');
   const [periodDays, setPeriodDays] = useState(30);
   const [targetId, setTargetId] = useState('');
   const [behaviorId, setBehaviorId] = useState('');
+  const [selectedBehaviorIds, setSelectedBehaviorIds] = useState<string[]>([]);
   const [metricType, setMetricType] = useState('');
   const [groupBy, setGroupBy] = useState<'session' | 'day'>('session');
   const [lineCategory, setLineCategory] = useState<AbaClinicalLineCategory>('target');
@@ -1055,6 +1040,28 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     });
     return Array.from(map.entries());
   }, [allKnownPoints]);
+
+  useEffect(() => {
+    if (activeTab !== 'behaviors' || behaviorId) return;
+    const availableIds = behaviorOptions.map(([id]) => id);
+    setSelectedBehaviorIds((current) => {
+      const kept = current.filter((id) => availableIds.includes(id)).slice(0, 3);
+      if (kept.length > 0) return kept;
+      return availableIds.slice(0, 3);
+    });
+  }, [activeTab, behaviorId, behaviorOptions]);
+
+  const toggleBehaviorSeries = (id: string) => {
+    setBehaviorId('');
+    setSelectedBehaviorIds((current) => {
+      if (current.includes(id)) {
+        if (current.length === 1) return current;
+        return current.filter((value) => value !== id);
+      }
+      if (current.length >= 3) return current;
+      return [...current, id];
+    });
+  };
 
   const lineMetricOptions = useMemo(() => {
     const fromServer = Array.isArray(lineData.availableMetrics) && lineData.availableMetrics.length > 0
@@ -1228,6 +1235,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     if (activeTab === 'behaviors') {
       rows = rows.filter((point) => String(point.metricType || '') === effectiveMetricType);
       if (hasSpecificBehavior) rows = rows.filter((point) => String(point.behaviorId || '') === behaviorId);
+      else if (selectedBehaviorIds.length > 0) rows = rows.filter((point) => selectedBehaviorIds.includes(String(point.behaviorId || '')));
     }
     if (activeTab === 'mastery') {
       rows = rows.filter((point) => String(point.metricType || '') === 'MASTERY_STATUS');
@@ -1248,19 +1256,20 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
         chartValue: activeTab === 'overview' || activeTab === 'session-changes' ? magnitude : rawValue
       };
     });
-  }, [activePoints, activeTab, behaviorId, effectiveMetricType, hasSpecificBehavior, hasSpecificTarget, targetId]);
+  }, [activePoints, activeTab, behaviorId, effectiveMetricType, hasSpecificBehavior, hasSpecificTarget, selectedBehaviorIds, targetId]);
 
-  const behaviorComposition = useMemo(() => {
-    if (activeTab !== 'behaviors') return { rows: [] as AbaBehaviorCompositionRow[], series: [] as AbaBehaviorCompositionSeries[] };
-    return buildBehaviorCompositionStack(chartRows, {
+  const behaviorLongitudinal = useMemo(() => {
+    if (activeTab !== 'behaviors') return { rows: [] as AbaBehaviorLongitudinalRow[], series: [] as AbaBehaviorLongitudinalSeries[] };
+    const selectedIds = behaviorId ? [behaviorId] : selectedBehaviorIds;
+    return buildBehaviorLongitudinalChart(activePoints, {
       metricType: effectiveMetricType,
       groupBy: groupBy === 'day' ? 'day' : 'session',
-      contextPatterns: Array.isArray(activeData.contextPatterns) ? activeData.contextPatterns as AbaBehaviorContextPattern[] : [],
-      maxSeries: 8
+      selectedBehaviorIds: selectedIds,
+      maxSeries: 3
     });
-  }, [activeData.contextPatterns, activeTab, chartRows, effectiveMetricType, groupBy]);
-  const behaviorCompositionRows = behaviorComposition.rows;
-  const behaviorCompositionSeries = behaviorComposition.series;
+  }, [activePoints, activeTab, behaviorId, effectiveMetricType, groupBy, selectedBehaviorIds]);
+  const behaviorLongitudinalRows = behaviorLongitudinal.rows;
+  const behaviorLongitudinalSeries = behaviorLongitudinal.series;
 
   const lineChartRows = useMemo(() => {
     const points: ChartPoint[] = Array.isArray(lineData.points) ? lineData.points : [];
@@ -1309,8 +1318,8 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
 
   const annotations = Array.isArray(activeData.annotations) ? activeData.annotations : [];
   const isLoading = loadingTab === activeTab || (activeTab === 'overview' && loadingTab === 'overview');
-  const showBehaviorCompositionChart = viewMode === 'stacked' && activeTab === 'behaviors' && behaviorCompositionRows.length > 0;
-  const showAggregatedChart = viewMode === 'stacked' && !showBehaviorCompositionChart && (
+  const showBehaviorLongitudinalChart = viewMode === 'stacked' && activeTab === 'behaviors' && behaviorLongitudinalRows.length > 0;
+  const showAggregatedChart = viewMode === 'stacked' && !showBehaviorLongitudinalChart && (
     activeTab === 'overview' ||
     activeTab === 'session-changes' ||
     activeTab === 'mastery' ||
@@ -1318,7 +1327,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     (activeTab === 'targets' && !hasSpecificTarget)
   );
   const shouldRenderChart = viewMode === 'stacked' && (
-    showBehaviorCompositionChart ||
+    showBehaviorLongitudinalChart ||
     (showAggregatedChart ? aggregatedChangeRows.length > 0 : chartRows.length > 0)
   );
   const visibleAggregateBars = useMemo(() => {
@@ -1334,7 +1343,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
   const yAxisLabel = showAggregatedChart
     ? 'Intensidade das mudanças'
     : metricAxisLabels[effectiveMetricType] || 'Valor';
-  const stackedMinWidth = Math.max(760, (showBehaviorCompositionChart ? behaviorCompositionRows.length : showAggregatedChart ? aggregatedChangeRows.length : chartRows.length) * 72);
+  const stackedMinWidth = Math.max(760, (showBehaviorLongitudinalChart ? behaviorLongitudinalRows.length : showAggregatedChart ? aggregatedChangeRows.length : chartRows.length) * 76);
 
   const emptyText = activeTab === 'overview' || activeTab === 'session-changes'
     ? 'Sem mudanças clínicas detectadas neste período.'
@@ -1561,44 +1570,75 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
 
   const behaviorContextPatterns = useMemo(() => {
     const patterns = Array.isArray(activeData.contextPatterns) ? activeData.contextPatterns as AbaBehaviorContextPattern[] : [];
+    const selectedIds = behaviorId ? [behaviorId] : selectedBehaviorIds;
     return patterns
-      .filter((pattern) => !behaviorId || String(pattern.behaviorId || '') === behaviorId)
+      .filter((pattern) => selectedIds.length === 0 || selectedIds.includes(String(pattern.behaviorId || '')))
       .sort((a, b) => b.totalRecords - a.totalRecords)
       .slice(0, 4);
-  }, [activeData.contextPatterns, behaviorId]);
+  }, [activeData.contextPatterns, behaviorId, selectedBehaviorIds]);
 
   const behaviorTrendSummary = useMemo(() => {
-    const behaviorRows = aggregateSourcePoints.filter((point) => String(point.metricType || '').startsWith('BEHAVIOR_'));
-    const improved = behaviorRows.filter(isImprovedChange).length;
-    const worsened = behaviorRows.filter(isWorsenedChange).length;
-    const stable = behaviorRows.filter(isStableChange).length;
-    if (worsened > improved && worsened > 0) {
+    const comparable = behaviorLongitudinalSeries.map((series) => {
+      const values = behaviorLongitudinalRows
+        .map((row) => Number(row[series.key]))
+        .filter((value) => Number.isFinite(value));
+      if (values.length < 3) return null;
+      const midpoint = Math.max(1, Math.floor(values.length / 2));
+      const previous = values.slice(0, midpoint);
+      const recent = values.slice(midpoint);
+      if (!recent.length) return null;
+      const previousMean = previous.reduce((sum, value) => sum + value, 0) / previous.length;
+      const recentMean = recent.reduce((sum, value) => sum + value, 0) / recent.length;
+      const baseline = Math.max(Math.abs(previousMean), 1);
+      const relativeDelta = ((recentMean - previousMean) / baseline) * 100;
+      const direction = Math.abs(relativeDelta) < 10 ? 'stable' : relativeDelta > 0 ? 'increase' : 'decrease';
+      return { series, values, previousMean, recentMean, relativeDelta, direction };
+    }).filter(Boolean) as Array<{
+      series: AbaBehaviorLongitudinalSeries;
+      values: number[];
+      previousMean: number;
+      recentMean: number;
+      relativeDelta: number;
+      direction: 'increase' | 'decrease' | 'stable';
+    }>;
+
+    if (!comparable.length) {
       return {
-        label: 'Regressão',
-        className: 'border-red-200 bg-red-50 text-red-700',
-        body: `${worsened} registro(s) com aumento clínico de comportamento interferente no período.`
+        label: 'Dados insuficientes',
+        className: 'border-slate-200 bg-slate-50 text-slate-600',
+        body: 'São necessários pelo menos 3 pontos comparáveis do mesmo comportamento e métrica para sugerir tendência.'
       };
     }
-    if (improved > 0 && improved >= worsened) {
+
+    const increased = comparable.filter((row) => row.direction === 'increase');
+    const decreased = comparable.filter((row) => row.direction === 'decrease');
+    const stable = comparable.filter((row) => row.direction === 'stable');
+    const metricLabel = metricLabels[effectiveMetricType] || 'métrica selecionada';
+    const evidencePoints = comparable.reduce((sum, row) => sum + row.values.length, 0);
+    const comparabilityNote = effectiveMetricType === 'BEHAVIOR_FREQUENCY'
+      ? ' Frequência absoluta depende da duração da janela observacional; não compare exposições muito diferentes como se fossem equivalentes.'
+      : '';
+
+    if (increased.length > decreased.length && increased.length > 0) {
       return {
-        label: 'Melhora',
-        className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-        body: `${improved} registro(s) com redução ou melhora clínica no período.`
+        label: 'Tendência de aumento',
+        className: 'border-amber-200 bg-amber-50 text-amber-900',
+        body: `${increased.length} comportamento(s) apresentaram aumento descritivo em ${metricLabel.toLowerCase()} (${evidencePoints} pontos comparáveis). Isso não equivale, isoladamente, a regressão clínica.${comparabilityNote}`
       };
     }
-    if (stable > 0) {
+    if (decreased.length > increased.length && decreased.length > 0) {
       return {
-        label: 'Estável',
-        className: 'border-amber-200 bg-amber-50 text-amber-800',
-        body: 'Sem mudança clínica relevante nos comportamentos interferentes filtrados.'
+        label: 'Tendência de redução',
+        className: 'border-emerald-200 bg-emerald-50 text-emerald-800',
+        body: `${decreased.length} comportamento(s) apresentaram redução descritiva em ${metricLabel.toLowerCase()} (${evidencePoints} pontos comparáveis).${comparabilityNote}`
       };
     }
     return {
-      label: 'Dados insuficientes',
-      className: 'border-slate-200 bg-slate-50 text-slate-600',
-      body: 'Ainda não há comparação suficiente para tendência contextual.'
+      label: 'Sem tendência clara',
+      className: 'border-slate-200 bg-slate-50 text-slate-700',
+      body: `${stable.length} comportamento(s) permaneceram estáveis ou as direções ficaram divididas entre os alvos selecionados.${comparabilityNote}`
     };
-  }, [aggregateSourcePoints]);
+  }, [behaviorLongitudinalRows, behaviorLongitudinalSeries, effectiveMetricType]);
 
   const goalLines = annotations.filter((annotation: any) => annotation.annotation_type === 'GOAL_LINE' && annotation.value !== null && annotation.value !== '');
   const showDefaultCriterion = activeTab === 'targets' && percentMetrics.has(effectiveMetricType) && !goalLines.length;
@@ -1758,6 +1798,41 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
     ? (activeTab === 'targets' ? targetMetricOptions : behaviorMetricOptions)
     : [];
 
+  const reportableSessionId = (sessionId: unknown) => {
+    const normalized = String(sessionId || '').trim();
+    return normalized.startsWith('session-') ? normalized : '';
+  };
+  const openSessionReport = (sessionId: unknown) => {
+    const normalized = reportableSessionId(sessionId);
+    if (!normalized || !onOpenSessionReport) return;
+    onOpenSessionReport(normalized);
+  };
+  const behaviorActiveDot = (props: any) => {
+    const { cx, cy, fill, stroke, payload } = props || {};
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+    const canOpen = Boolean(reportableSessionId(payload?.sessionId) && onOpenSessionReport);
+    return (
+      <circle
+        cx={cx}
+        cy={cy}
+        r={6}
+        fill={fill}
+        stroke={stroke || '#fff'}
+        strokeWidth={2}
+        role={canOpen ? 'button' : undefined}
+        tabIndex={canOpen ? 0 : -1}
+        aria-label={canOpen ? `Abrir relatório da sessão de ${payload?.label || ''}` : undefined}
+        style={{ cursor: canOpen ? 'pointer' : 'default' }}
+        onClick={() => canOpen && openSessionReport(payload.sessionId)}
+        onKeyDown={(event) => {
+          if (!canOpen || (event.key !== 'Enter' && event.key !== ' ')) return;
+          event.preventDefault();
+          openSessionReport(payload.sessionId);
+        }}
+      />
+    );
+  };
+
   return (
     <div className={`space-y-5 rounded-lg border p-4 shadow-sm sm:p-6 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1777,7 +1852,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               onClick={showStackedView}
               className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-bold ${viewMode === 'stacked' ? 'bg-white text-[#7a32fc] shadow-sm' : 'text-slate-500'}`}
             >
-              <BarChart3 size={15} /> Empilhado
+              <BarChart3 size={15} /> {activeTab === 'behaviors' ? 'Comparar' : 'Empilhado'}
             </button>
             <button
               type="button"
@@ -1856,7 +1931,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
               key={id}
               type="button"
               onClick={() => setMetricType(id)}
-              className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${effectiveMetricType === id ? 'border-[#7a32fc] bg-[#7a32fc]/10 text-[#7a32fc]' : 'border-slate-200 bg-white text-slate-500'}`}
+              className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold ${effectiveMetricType === id ? 'border-violet-600 bg-violet-600 text-white shadow-sm' : 'border-slate-200 bg-white text-slate-600 hover:border-violet-300 hover:text-violet-700'}`}
             >
               <Target size={14} />
               {metricLabels[id]}
@@ -1864,6 +1939,38 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
           ))}
         </div>
       )}
+
+      {viewMode === 'stacked' && activeTab === 'behaviors' && behaviorOptions.length > 0 && (
+        <section className="rounded-xl border border-slate-200 bg-white p-3" data-aba-behavior-series-selector>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Comportamentos no gráfico · até 3</p>
+              <p className="mt-0.5 text-xs font-semibold text-slate-600">Compare o mesmo indicador ao longo das sessões sem misturar métricas diferentes.</p>
+            </div>
+            <span className="shrink-0 text-[11px] font-bold text-slate-400">{behaviorId ? 1 : selectedBehaviorIds.length}/3</span>
+          </div>
+          <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
+            {behaviorOptions.map(([id, label]) => {
+              const selected = behaviorId ? behaviorId === id : selectedBehaviorIds.includes(id);
+              const disabled = !selected && !behaviorId && selectedBehaviorIds.length >= 3;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  disabled={disabled}
+                  aria-pressed={selected}
+                  onClick={() => toggleBehaviorSeries(id)}
+                  className={`min-h-10 shrink-0 rounded-xl border px-3 text-xs font-bold transition ${selected ? 'border-sky-500 bg-sky-600 text-white shadow-sm' : 'border-slate-200 bg-white text-slate-600 hover:border-sky-300 hover:text-sky-700'} disabled:cursor-not-allowed disabled:opacity-35`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+
 
       {activeTab === 'behaviors' && (
         <section className="grid grid-cols-1 gap-3 rounded-lg border border-sky-100 bg-sky-50/50 p-4 lg:grid-cols-[240px_1fr]" data-aba-behavior-context-panel>
@@ -1879,7 +1986,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
                 <h4 className="text-sm font-bold text-slate-900">Insights contextuais dos comportamentos</h4>
               </div>
               <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-sky-700">
-                {behaviorContextPatterns.length} comportamento(s)
+                {behaviorLongitudinalSeries.length} comportamento(s) · {behaviorContextPatterns.length} com contexto
               </span>
             </div>
             {behaviorContextPatterns.length > 0 ? (
@@ -2093,15 +2200,15 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm font-bold text-slate-900">
-                {showBehaviorCompositionChart
-                  ? 'Composição por comportamento'
+                {showBehaviorLongitudinalChart
+                  ? 'Evolução do comportamento'
                   : showAggregatedChart
                   ? 'Resumo clínico agrupado'
                   : metricAxisLabels[effectiveMetricType] || chartTabs.find((tab) => tab.id === activeTab)?.label}
               </p>
               <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                {showBehaviorCompositionChart
-                  ? `${behaviorCompositionRows.length} grupo(s) · ${behaviorCompositionSeries.length} comportamento(s)`
+                {showBehaviorLongitudinalChart
+                  ? `${behaviorLongitudinalRows.length} ponto(s) · ${behaviorLongitudinalSeries.length} comportamento(s) · ${groupBy === 'day' ? 'por dia' : 'por sessão'}`
                   : showAggregatedChart ? `${aggregatedChangeRows.length} grupo(s) · ${groupBy === 'day' ? 'por dia' : 'por sessão'}` : `${chartRows.length} ponto(s) · ${yAxisLabel}`}
               </p>
             </div>
@@ -2110,25 +2217,34 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
           <div className="h-[360px] min-w-0 overflow-x-auto">
             <div className="h-full" style={{ minWidth: stackedMinWidth }}>
               <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={320}>
-                {showBehaviorCompositionChart ? (
-                  <BarChart data={behaviorCompositionRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }} data-aba-behavior-composition-chart>
+                {showBehaviorLongitudinalChart ? (
+                  <LineChart data={behaviorLongitudinalRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }} data-aba-behavior-longitudinal-chart>
                   <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tick={{ fill: '#64748B', fontSize: 10, fontWeight: 700 }} angle={-18} textAnchor="end" height={58} interval={0} />
-                  <YAxis tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }} />
-                  <Tooltip content={<BehaviorCompositionTooltip metricType={effectiveMetricType} />} cursor={{ fill: 'rgba(122, 50, 252, 0.06)' }} />
+                  <YAxis
+                    tick={{ fill: '#94A3B8', fontSize: 11, fontWeight: 700 }}
+                    domain={percentMetrics.has(effectiveMetricType) ? [0, 100] : [0, 'auto']}
+                    label={{ value: yAxisLabel, angle: -90, position: 'insideLeft', fill: '#94A3B8', fontSize: 11, fontWeight: 700 }}
+                  />
+                  <Tooltip content={<BehaviorLongitudinalTooltip metricType={effectiveMetricType} />} />
                   <Legend wrapperStyle={{ fontSize: 11, fontWeight: 700 }} />
-                  {behaviorCompositionSeries.map((series, index) => (
-                    <Bar
-                      key={series.key}
-                      dataKey={series.key}
-                      name={series.label}
-                      stackId="behavior-composition"
-                      fill={behaviorStackColors[index % behaviorStackColors.length]}
-                      radius={index === behaviorCompositionSeries.length - 1 ? [6, 6, 0, 0] : undefined}
-                      maxBarSize={56}
-                    />
-                  ))}
-                  </BarChart>
+                  {behaviorLongitudinalSeries.map((series, index) => {
+                    const color = behaviorStackColors[index % behaviorStackColors.length];
+                    return (
+                      <Line
+                        key={series.key}
+                        type="linear"
+                        dataKey={series.key}
+                        name={series.label}
+                        stroke={color}
+                        strokeWidth={2.8}
+                        dot={false}
+                        activeDot={behaviorActiveDot}
+                        connectNulls={false}
+                      />
+                    );
+                  })}
+                  </LineChart>
                 ) : showAggregatedChart ? (
                   <BarChart data={aggregatedChangeRows} margin={{ top: 20, right: 24, left: 8, bottom: 44 }}>
                   <CartesianGrid stroke="#EEF2F7" strokeDasharray="3 3" vertical={false} />
@@ -2183,6 +2299,7 @@ export function AbaClinicalChartsPanel({ patientId, isPanelDark = false }: AbaCl
       ) : activeTab !== 'maintenance' && activeTab !== 'mastery' ? (
         <EmptyState text={emptyText} />
       ) : null}
+
 
       {activeTab === 'session-changes' && aggregatedChangeRows.length > 0 && (
         <div className="rounded-lg border border-slate-100 bg-white p-4">
