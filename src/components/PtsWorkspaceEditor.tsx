@@ -138,6 +138,8 @@ export function PtsWorkspaceEditor({
       : 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400'
   }`;
   const subtle = isDark ? 'text-slate-400' : 'text-slate-500';
+  const strongText = isDark ? 'text-slate-100' : 'text-slate-900';
+  const secondaryStrongText = isDark ? 'text-slate-200' : 'text-slate-800';
   const surface = isDark ? 'border-slate-700 bg-slate-900/55' : 'border-slate-200 bg-white';
   const inset = isDark ? 'border-slate-700 bg-slate-950/35' : 'border-slate-100 bg-slate-50';
   const secondaryButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm ${
@@ -163,7 +165,7 @@ export function PtsWorkspaceEditor({
         <span className="flex items-start gap-3">
           <span className="mt-0.5 text-violet-500">{icon}</span>
           <span>
-            <span className="block text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</span>
+            <span className={`block text-sm font-semibold ${strongText}`}>{title}</span>
             <span className={`mt-0.5 block text-xs leading-5 ${subtle}`}>{description}</span>
           </span>
         </span>
@@ -250,7 +252,7 @@ export function PtsWorkspaceEditor({
         ].map(([Icon, label, value, detail]: any) => (
           <div key={label} className={`rounded-2xl border p-4 ${surface}`}>
             <div className="flex items-center gap-2 text-violet-500"><Icon size={17} /><span className={`text-xs ${subtle}`}>{label}</span></div>
-            <p className="mt-2 text-xl font-semibold text-slate-900 dark:text-slate-100">{value}</p>
+            <p className={`mt-2 text-xl font-semibold ${strongText}`}>{value}</p>
             <p className={`mt-1 text-xs ${subtle}`}>{detail}</p>
           </div>
         ))}
@@ -267,7 +269,7 @@ export function PtsWorkspaceEditor({
             </div>
             <label className={`block text-xs ${subtle}`}>Potencialidades e interesses<input className={`${field} mt-1.5`} value={draft.strengths.join(' · ')} onChange={(event) => setDraft((current) => ({ ...current, strengths: event.target.value.split('·').map((item) => item.trim()).filter(Boolean) }))} placeholder="Separe os itens com ·" /></label>
             <div className="space-y-3">
-              <div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Necessidades prioritárias</p><button type="button" className={secondaryButton} onClick={addNeed}><Plus size={15} /> Adicionar</button></div>
+              <div className="flex items-center justify-between"><p className={`text-sm font-semibold ${strongText}`}>Necessidades prioritárias</p><button type="button" className={secondaryButton} onClick={addNeed}><Plus size={15} /> Adicionar</button></div>
               {draft.needs.length === 0 && <p className={`rounded-xl border border-dashed p-4 text-xs ${subtle}`}>Nenhuma necessidade priorizada ainda.</p>}
               {draft.needs.map((need, index) => (
                 <div key={need.id} className={`grid gap-3 rounded-xl border p-3 lg:grid-cols-[1.2fr_0.8fr_0.6fr_auto] ${inset}`}>
@@ -328,12 +330,12 @@ export function PtsWorkspaceEditor({
             ) : scopedPrograms.map((program) => (
               <div key={program.id} className={`flex flex-col gap-3 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between ${inset}`}>
                 <div>
-                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{program.name || 'Programa terapêutico'}</p>
+                  <p className={`text-sm font-semibold ${strongText}`}>{program.name || 'Programa terapêutico'}</p>
                   <p className={`mt-1 text-xs ${subtle}`}>{program.category || 'Sem categoria'} · {(program.targets || []).length} alvo(s)</p>
                 </div>
                 <div className="text-left sm:text-right">
                   <p className={`text-xs ${subtle}`}>Última aplicação</p>
-                  <p className="mt-1 text-sm text-slate-800 dark:text-slate-200">{program.last_applied_at ? new Date(program.last_applied_at).toLocaleDateString('pt-BR') : 'Sem registro'}</p>
+                  <p className={`mt-1 text-sm ${secondaryStrongText}`}>{program.last_applied_at ? new Date(program.last_applied_at).toLocaleDateString('pt-BR') : 'Sem registro'}</p>
                 </div>
               </div>
             ))}

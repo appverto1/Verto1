@@ -44,6 +44,8 @@ assert.match(shell, /height=\{44\}/, 'a área tocável da ghost bar deve atingir
 assert.match(shell, /createPortal/, 'tooltips em gráficos roláveis devem escapar do clipping via portal');
 assert.match(shell, /prefers-reduced-motion: reduce/, 'a transição curta do filtro deve respeitar preferência por movimento reduzido');
 assert.match(shell, /border-b-\[3px\][\s\S]*?font-normal/, 'abas devem manter tipografia regular e indicador inferior forte em vez de depender de peso semibold');
+assert.match(shell, /bg-violet-50 text-\[#7a32fc\] shadow-sm ring-1 ring-violet-100/, 'aba ativa em tema claro deve usar o mesmo destaque visual do menu lateral, sem aparência desabilitada');
+assert.match(shell, /isDark \? DOMAIN_ACTIVE_TONE_DARK : DOMAIN_ACTIVE_TONE\[tab.id\]/, 'estado ativo da aba deve respeitar isDark explicitamente e não depender do seletor global dark');
 assert.doesNotMatch(shell, /<BarChart[\s\S]*?<Legend wrapperStyle=\{\{ fontSize: 11 \}\} \/>[\s\S]*?overviewVisibleBars/, 'a visão geral não deve voltar a usar a legenda nativa do Recharts');
 assert.match(shell, /session-minute:/, 'a visão geral por sessão deve consolidar registros canônicos da mesma sessão visual');
 assert.match(shell, /abaSessionStartTimestamp/, 'sessões ABA devem usar o timestamp de início persistido no id como âncora visual');
