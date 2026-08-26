@@ -78278,6 +78278,7 @@ async function startServer() {
     visiblePlanMap: Map<string, any>,
     objectivePlanMap: Map<string, Set<string>>,
     targetById: Map<string, any>,
+    programById: Map<string, any>,
   ) => {
     const normalized: any[] = [];
     for (const row of Array.isArray(rows) ? rows : []) {
@@ -78293,8 +78294,19 @@ async function startServer() {
       const observedAt = sanitizeString(row?.observed_at, 80) || `${sanitizeString(row?.clinical_date, 20)}T00:00:00.000Z`;
       const coverageStatus = sanitizeString(row?.coverage_status, 80).toUpperCase();
       const missingReason = coverageStatus && coverageStatus !== 'OBSERVED' ? coverageStatus.toLowerCase() : null;
-      const abaTargetId = sanitizeString(row?.value_details?.aba_target_id || row?.target_id, 180);
-      const abaTarget = sourceKind === 'ABA_TARGET' ? targetById.get(abaTargetId) || null : null;
+      const metricKey = sanitizeString(row?.metric_key, 120);
+      const programTargetMatch = metricKey.match(/^program_target:([^:]+):/i);
+      const semanticTargetId = sourceKind === 'ABA_TARGET'
+        ? sanitizeString(row?.value_details?.aba_target_id || row?.target_id, 180)
+        : sanitizeString(programTargetMatch?.[1], 180);
+      const semanticTarget = semanticTargetId ? targetById.get(semanticTargetId) || null : null;
+      const semanticProgram = semanticTarget?.program_id ? programById.get(String(semanticTarget.program_id)) || null : null;
+      const targetMasteryCriteria = semanticTarget?.mastery_criteria && typeof semanticTarget.mastery_criteria === 'object' && !Array.isArray(semanticTarget.mastery_criteria) && Object.keys(semanticTarget.mastery_criteria).length > 0
+        ? semanticTarget.mastery_criteria
+        : null;
+      const programMasteryCriteria = semanticProgram?.mastery_criteria && typeof semanticProgram.mastery_criteria === 'object' && !Array.isArray(semanticProgram.mastery_criteria) && Object.keys(semanticProgram.mastery_criteria).length > 0
+        ? semanticProgram.mastery_criteria
+        : null;
       for (const planId of planIds) {
         const plan = visiblePlanMap.get(planId) || {};
         normalized.push({
@@ -78302,7 +78314,7 @@ async function startServer() {
           planId,
           planVersion: Number(plan?.edit_version || 1),
           goalId: sanitizeString(row?.goal_id, 120) || objectiveId || null,
-          programId: sanitizeString(row?.program_id, 180) || null,
+          programId: sanitizeString(row?.program_id || semanticProgram?.id, 180) || null,
           sessionId: sanitizeString(row?.session_id, 180) || null,
           professionalId: null,
           specialty: sanitizeTextField(row?.specialty || plan?.specialty, 120) || null,
@@ -78310,7 +78322,7 @@ async function startServer() {
             ? sanitizeString(row?.value_details?.series_key || row?.item_id || row?.target_id, 260) || null
             : sanitizeString(row?.item_id || row?.target_id, 260) || null,
           itemLabel: sanitizeTextField(row?.item_label || row?.metric_label, 220) || null,
-          metricKey: sanitizeString(row?.metric_key, 120) || sanitizeString(row?.definition_id, 120),
+          metricKey: metricKey || sanitizeString(row?.definition_id, 120),
           metricLabel: sanitizeTextField(row?.metric_label, 180) || sanitizeString(row?.metric_key, 120) || 'Métrica clínica',
           metricType: sanitizeString(row?.semantic_family, 40).toLowerCase(),
           unit: normalizedValue.unit,
@@ -78342,11 +78354,15 @@ async function startServer() {
             sourceLatestRecordedAt: row?.source_latest_recorded_at || null,
             computedAt: row?.computed_at || null,
             readModelSource: row?.read_model_source || null,
-            abaTargetId: row?.value_details?.aba_target_id || null,
-            targetDescription: abaTarget?.description || null,
-            masteryCriteria: abaTarget?.mastery_criteria || null,
-            targetType: abaTarget?.target_type || null,
-            targetPhase: abaTarget?.phase || null,
+            abaTargetId: sourceKind === 'ABA_TARGET' ? semanticTargetId || null : null,
+            programTargetId: sourceKind === 'THERAPEUTIC_OBJECTIVE' ? semanticTargetId || null : null,
+            targetDescription: semanticTarget?.description || null,
+            masteryCriteria: targetMasteryCriteria || programMasteryCriteria || null,
+            programMasteryCriteria: programMasteryCriteria || null,
+            criterionSource: targetMasteryCriteria ? 'TARGET' : programMasteryCriteria ? 'PROGRAM_INHERITED' : null,
+            targetType: semanticTarget?.target_type || null,
+            targetPhase: semanticTarget?.phase || null,
+            programMeasurementType: semanticProgram?.measurement_type || null,
             sourceFamily: row?.value_details?.source_family || null,
             requiresReview: row?.value_details?.requires_review === true,
             phaseAssignmentId: row?.value_details?.phase_assignment_id || null,
@@ -78471,7 +78487,7 @@ async function startServer() {
           .limit(20),
         supabase
           .from('aba_programs')
-          .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,name,status,measurement_type,responsible_professional_ids,created_by')
+          .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,name,status,measurement_type,mastery_criteria,responsible_professional_ids,created_by')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .limit(300),
@@ -78582,7 +78598,7 @@ async function startServer() {
             throw v3Result.error;
           }
         } else {
-          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById);
+          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById, programById);
         }
       }
 
@@ -78668,7 +78684,11 @@ async function startServer() {
             statusLabel: point.statusLabel,
             specialtySource: point.specialtySource,
             targetDescription: target?.description || null,
-            masteryCriteria: target?.mastery_criteria || null,
+            masteryCriteria: target?.mastery_criteria && typeof target.mastery_criteria === 'object' && Object.keys(target.mastery_criteria).length > 0
+              ? target.mastery_criteria
+              : program?.mastery_criteria || null,
+            programMasteryCriteria: program?.mastery_criteria || null,
+            criterionSource: target?.mastery_criteria && typeof target.mastery_criteria === 'object' && Object.keys(target.mastery_criteria).length > 0 ? 'TARGET' : program?.mastery_criteria ? 'PROGRAM_INHERITED' : null,
             targetType: target?.target_type || null,
             targetPhase: target?.phase || null,
           },
@@ -78702,7 +78722,8 @@ async function startServer() {
             status: program.status,
             therapeuticPlanId: program.therapeutic_plan_id || null,
             therapeuticObjectiveId: program.therapeutic_objective_id || null,
-            measurementType: program.measurement_type || null
+            measurementType: program.measurement_type || null,
+            masteryCriteria: program.mastery_criteria || null
           })),
           observations: mergedOutcomes.rows,
           contributions: visibleContributions,

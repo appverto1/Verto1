@@ -138,11 +138,12 @@ export const isClinicalOutcomeInterferingBehaviorSeries = (
 
 export const normalizeClinicalOutcomeDirection = (value: unknown): ClinicalOutcomeDirection => {
   const normalized = text(value).toLowerCase();
-  if (['lower_is_better', 'lower-is-better', 'lower', 'decrease'].includes(normalized)) return 'lower_is_better';
+  if (['lower_is_better', 'lower-is-better', 'lower', 'decrease', 'decrease_is_better'].includes(normalized)) return 'lower_is_better';
   if (['target_value', 'target-value', 'target'].includes(normalized)) return 'target_value';
-  if (['target_range', 'target-range', 'range'].includes(normalized)) return 'target_range';
+  if (['target_range', 'target-range', 'range', 'target_range_is_better'].includes(normalized)) return 'target_range';
   if (['event', 'milestone', 'binary'].includes(normalized)) return 'event';
   if (['no_directional_judgment', 'no-directional-judgment', 'neutral', 'none'].includes(normalized)) return 'no_directional_judgment';
+  if (['higher_is_better', 'higher-is-better', 'higher', 'increase', 'increase_is_better'].includes(normalized)) return 'higher_is_better';
   return 'higher_is_better';
 };
 
