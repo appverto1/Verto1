@@ -320,6 +320,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     historicalPlanVersions: [],
     historicalPrograms: [],
     ptsSharedEvidence: [],
+    ptsLegacyEvidence: [],
     readOnlyHistory: false,
   });
   const effectiveRole = String(
@@ -477,6 +478,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const ptsSharedEvidence = useMemo(() => (
     Array.isArray(planData?.ptsSharedEvidence) ? planData.ptsSharedEvidence : []
   ), [planData?.ptsSharedEvidence]);
+  const ptsLegacyEvidence = useMemo(() => (
+    Array.isArray(planData?.ptsLegacyEvidence) ? planData.ptsLegacyEvidence : []
+  ), [planData?.ptsLegacyEvidence]);
   const historicalPrograms = Array.isArray(planData?.historicalPrograms)
     ? planData.historicalPrograms
     : [];
@@ -639,6 +643,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       historicalPlanVersions: Array.isArray(data?.historicalPlanVersions) ? data.historicalPlanVersions : [],
       historicalPrograms: Array.isArray(data?.historicalPrograms) ? data.historicalPrograms : [],
       ptsSharedEvidence: Array.isArray(data?.ptsSharedEvidence) ? data.ptsSharedEvidence : [],
+      ptsLegacyEvidence: Array.isArray(data?.ptsLegacyEvidence) ? data.ptsLegacyEvidence : [],
       readOnlyHistory: data?.readOnlyHistory === true,
       accessEndedAt: data?.accessEndedAt || null,
     });
@@ -1242,7 +1247,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       return;
     }
     if (scopeDraft.mode === 'interdisciplinary' && participantIds.length < 2) {
-      setError('Selecione ao menos dois profissionais para o Projeto Terapêutico Singular.');
+      setError('O responsável já conta como participante. Selecione pelo menos mais um profissional para o Projeto Terapêutico Singular.');
       return;
     }
     if (!scopeIdempotencyKeyRef.current) {
@@ -2355,7 +2360,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <label className={`text-xs ${muted}`}>
-          Responsável principal
+          Responsável principal · também participa do plano
           <select
             className={`${field} mt-1.5`}
             value={scopeDraft.responsibleProfessionalId}
@@ -2392,7 +2397,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         <fieldset className="md:col-span-2">
           <legend className={`text-xs ${muted}`}>
             {scopeDraft.mode === 'interdisciplinary'
-              ? 'Equipe participante (de 2 a 5 profissionais)'
+              ? 'Equipe participante (responsável incluído · 2 a 5 profissionais)'
               : 'Colaboradores da mesma especialidade (opcional)'}
           </legend>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -2726,6 +2731,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           availableScopes={ptsScopes}
           professionals={linkedProfessionals}
           sharedEvidence={ptsSharedEvidence}
+          legacyEvidence={ptsLegacyEvidence}
           loading={loading}
           isDark={isDark}
           canEditScope={workspaceScope.canEdit === true && workspaceScope.status !== 'archived'}

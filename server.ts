@@ -394,6 +394,7 @@ import {
   executeAuthorizedPatientProfessionalLinkEnd,
   isPatientProfessionalLinkManager,
   isPatientProfessionalCaseRole,
+  PATIENT_CASE_TEAM_MEMBERSHIP_ROLES,
   resolveProfessionalProfileSpecialty,
   validatePatientProfessionalCandidate
 } from './src/utils/patientProfessionalLinks';
@@ -71428,9 +71429,9 @@ async function startServer() {
               .limit(200),
             supabase
               .from('clinic_memberships')
-              .select('user_id,clinic_id,role,status')
+              .select('user_id,clinic_id,role,status,specialty')
               .eq('clinic_id', clinicId)
-              .in('role', ['therapist', 'supervisor', 'coordinator', 'director'])
+              .in('role', Array.from(PATIENT_CASE_TEAM_MEMBERSHIP_ROLES))
               .eq('status', 'active')
               .in('user_id', linkedProfessionalIds)
               .limit(200),
@@ -71477,37 +71478,41 @@ async function startServer() {
       const linkedProfileById = new Map(
         scopedLinkedProfiles.map((profile: any) => [String(profile.user_id), profile])
       );
-      const linkedMembershipIds = new Set(
-        (linkedMembershipsResult.data || []).map((membership: any) =>
-          String(membership.user_id)
-        )
+      const linkedMembershipById = new Map(
+        (linkedMembershipsResult.data || []).map((membership: any) => [
+          String(membership.user_id),
+          membership,
+        ])
       );
       const enrichedProfessionalLinks = professionalLinks.map((link: any) => {
-        const profile: any = linkedProfileById.get(String(link.professional_id)) || {};
-        const canonicalSpecialty = normalizeClinicalSpecialty(profile?.specialty);
-        const hasActiveTherapistMembership = linkedMembershipIds.has(
-          String(link.professional_id)
-        );
+        const professionalId = String(link.professional_id);
+        const profile: any = linkedProfileById.get(professionalId) || {};
+        const membership: any = linkedMembershipById.get(professionalId) || null;
+        const membershipSpecialty = normalizeClinicalSpecialty(membership?.specialty);
+        const profileSpecialty = normalizeClinicalSpecialty(profile?.specialty);
+        const hasActiveClinicalMembership = Boolean(membership);
         const canWritePlan = link?.permissions?.write !== false;
         const planEligible =
-          hasActiveTherapistMembership &&
-          Boolean(canonicalSpecialty) &&
+          hasActiveClinicalMembership &&
+          Boolean(membershipSpecialty) &&
           canWritePlan;
         return {
           ...link,
           name: sanitizeString(profile?.full_name, 180) || 'Profissional',
           profile_photo_url: profile?.profile_photo_url || null,
           specialty:
-            canonicalSpecialty ||
+            membershipSpecialty ||
+            profileSpecialty ||
             sanitizeTextField(link?.specialty, 120) ||
             null,
           specialtySnapshot:
             sanitizeTextField(link?.specialty, 120) || null,
+          membershipRole: sanitizeString(membership?.role, 40) || null,
           planEligible,
-          planEligibilityReason: !hasActiveTherapistMembership
-            ? 'Profissional sem acesso de atendimento ativo nesta clínica.'
-            : !canonicalSpecialty
-              ? 'Especialidade clínica canônica ainda não cadastrada.'
+          planEligibilityReason: !hasActiveClinicalMembership
+            ? 'Profissional sem vínculo clínico ativo nesta clínica.'
+            : !membershipSpecialty
+              ? 'Especialidade clínica ainda não cadastrada na equipe desta clínica.'
               : !canWritePlan
                 ? 'Vínculo sem permissão de escrita neste plano.'
                 : null
@@ -71707,7 +71712,7 @@ async function startServer() {
         .from('clinic_memberships')
         .select('user_id,clinic_id,role,status,specialty')
         .eq('clinic_id', clinicId)
-        .eq('role', 'therapist')
+        .in('role', Array.from(PATIENT_CASE_TEAM_MEMBERSHIP_ROLES))
         .eq('status', 'active')
         .in('user_id', participantProfessionalIds)
         .limit(5);
@@ -71726,7 +71731,7 @@ async function startServer() {
         return res.status(403).json({
           success: false,
           error: 'THERAPEUTIC_PLAN_PROFESSIONAL_MEMBERSHIP_INACTIVE',
-          message: 'Todos os participantes precisam ser profissionais de atendimento ativos nesta clínica.'
+          message: 'Todos os participantes precisam ter vínculo clínico ativo nesta clínica.'
         });
       }
       const participantSpecialties = participantProfessionalIds.map((id) =>
