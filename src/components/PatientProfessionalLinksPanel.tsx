@@ -26,6 +26,7 @@ type ProfessionalLink = {
     | null;
   accessEnabled?: boolean;
   canBeEnded?: boolean;
+  canBeEndedReason?: 'protected_clinic_manager' | null;
   professional?: {
     id: string;
     name?: string | null;
@@ -257,11 +258,13 @@ export const PatientProfessionalLinksPanel = ({
     } catch (endError: any) {
       const message = String(endError?.message || '');
       setError(
-        message.includes('ACCESS_DENIED')
-          ? 'Você não tem permissão para alterar a equipe deste caso.'
-          : message.includes('MIGRATION') || message.includes('SCHEMA')
-            ? 'A atualização da equipe precisa da migração mais recente do banco.'
-            : 'Não foi possível encerrar o vínculo. O histórico foi preservado.'
+        message.includes('PROTECTED_CLINIC_MANAGER')
+          ? 'Diretores e coordenadores ativos da clínica não podem ser removidos da equipe do caso.'
+          : message.includes('ACCESS_DENIED')
+            ? 'Você não tem permissão para alterar a equipe deste caso.'
+            : message.includes('MIGRATION') || message.includes('SCHEMA')
+              ? 'A atualização da equipe precisa da migração mais recente do banco.'
+              : 'Não foi possível encerrar o vínculo. O histórico foi preservado.'
       );
     } finally {
       setBusy('');
@@ -463,9 +466,6 @@ export const PatientProfessionalLinksPanel = ({
                       {available.map((professional) => (
                         <option key={professional.id} value={professional.id}>
                           {professional.name || professional.email}
-                          {resolveProfessionalProfileSpecialty(professional)
-                            ? ` — ${resolveProfessionalProfileSpecialty(professional)}`
-                            : ' — especialidade não informada'}
                         </option>
                       ))}
                     </select>
@@ -590,6 +590,10 @@ export const PatientProfessionalLinksPanel = ({
                         {effectiveCanManage && link.canBeEnded !== false ? (
                           <div className={`border-t px-3 ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
                             <button type="button" onClick={() => setPendingEndLink(link)} disabled={busy === `end:${link.id}`} className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 text-xs font-medium text-rose-600 disabled:opacity-50"><UserRoundX size={14} /> Encerrar vínculo</button>
+                          </div>
+                        ) : effectiveCanManage && link.canBeEndedReason === 'protected_clinic_manager' ? (
+                          <div className={`border-t px-3 py-2 text-center text-[11px] ${dark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
+                            Gestão da clínica · vínculo protegido
                           </div>
                         ) : null}
                       </article>
