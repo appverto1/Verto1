@@ -61,6 +61,133 @@ export type SalesAssumptionSnapshot = {
   sourceDetails?: Partial<Record<keyof SalesAssumptionValues, string>>;
 };
 
+
+export type SalesPortfolioCostAllocation = {
+  modelVersion: '2026-08-portfolio-fixed-v1';
+  taxRegime: 'mei';
+  existingOperationalClinicCount: number;
+  allocatedClinicCount: number;
+  fixedCostPoolCents: number | null;
+  allocatedFixedCostCents: number | null;
+  complete: boolean;
+};
+
+export function applySalesPortfolioCostAllocation(
+  snapshot: SalesAssumptionSnapshot,
+  existingOperationalClinicCount: number
+): { assumptions: SalesAssumptionSnapshot; allocation: SalesPortfolioCostAllocation } {
+  const existingCount = Math.max(0, Math.floor(Number(existingOperationalClinicCount || 0)));
+  const allocatedClinicCount = existingCount + 1;
+  const values = snapshot.values;
+  const fixedParts = [
+    values.meiDasMonthlyCents,
+    values.supabaseMonthlyCostCents,
+    values.railwayMonthlyCostCents
+  ];
+  const complete = fixedParts.every((value) => value !== null && value !== undefined);
+  const fixedCostPoolCents = complete
+    ? fixedParts.reduce<number>((sum, value) => sum + Number(value || 0), 0)
+    : null;
+  const allocatedFixedCostCents = fixedCostPoolCents === null
+    ? null
+    : Math.round(fixedCostPoolCents / allocatedClinicCount);
+  const allocation: SalesPortfolioCostAllocation = {
+    modelVersion: '2026-08-portfolio-fixed-v1',
+    taxRegime: 'mei',
+    existingOperationalClinicCount: existingCount,
+    allocatedClinicCount,
+    fixedCostPoolCents,
+    allocatedFixedCostCents,
+    complete
+  };
+
+  if (!complete) {
+    const meiConfigured = values.meiDasMonthlyCents !== null && values.meiDasMonthlyCents !== undefined;
+    return {
+      assumptions: {
+        ...snapshot,
+        values: {
+          ...values,
+          // New quotes must never fall back to the historical fixed-cost bucket
+          // when the current shared infrastructure pool is incomplete. Null keeps
+          // profitability explicitly incomplete instead of inventing margin.
+          fixedMonthlyEligibleCostCents: null,
+          fixedAllocationMethod: 'per_clinic',
+          fixedAllocationClinicCount: allocatedClinicCount,
+          ...(meiConfigured
+            ? {
+                revenueTaxBasisPoints: 0,
+                profitTaxBasisPoints: 0
+              }
+            : {})
+        },
+        sources: {
+          ...(snapshot.sources || {}),
+          fixedMonthlyEligibleCostCents: 'estimated',
+          fixedAllocationClinicCount: 'calculated',
+          ...(meiConfigured
+            ? {
+                revenueTaxBasisPoints: 'calculated' as const,
+                profitTaxBasisPoints: 'calculated' as const
+              }
+            : {})
+        },
+        sourceDetails: {
+          ...(snapshot.sourceDetails || {}),
+          fixedMonthlyEligibleCostCents:
+            'Pool compartilhado incompleto: informe DAS MEI, Supabase e Railway para calcular margem sem repetir custos fixos históricos.',
+          fixedAllocationClinicCount:
+            `${existingCount} clínica(s) operacional(is) existentes + 1 nova proposta.`,
+          ...(meiConfigured
+            ? {
+                revenueTaxBasisPoints:
+                  'Regime atual configurado como MEI: o DAS mensal fixo substitui o percentual genérico de imposto sobre faturamento neste modelo.',
+                profitTaxBasisPoints:
+                  'Regime atual configurado como MEI: sem imposto percentual adicional sobre lucro neste modelo.'
+              }
+            : {})
+        }
+      },
+      allocation
+    };
+  }
+
+  const sourceDetails = {
+    ...(snapshot.sourceDetails || {}),
+    fixedMonthlyEligibleCostCents:
+      `Pool fixo mensal compartilhado: DAS MEI + Supabase + Railway. Rateado entre ${allocatedClinicCount} clínica(s), incluindo esta proposta.`,
+    fixedAllocationClinicCount:
+      `${existingCount} clínica(s) operacional(is) existentes + 1 nova proposta.`,
+    revenueTaxBasisPoints:
+      'Regime atual configurado como MEI: o DAS mensal fixo já integra o pool compartilhado; não aplicar percentual adicional de imposto sobre faturamento.',
+    profitTaxBasisPoints:
+      'Regime atual configurado como MEI: sem imposto percentual adicional sobre lucro neste modelo.'
+  };
+
+  return {
+    assumptions: {
+      ...snapshot,
+      values: {
+        ...values,
+        fixedMonthlyEligibleCostCents: fixedCostPoolCents,
+        fixedAllocationMethod: 'per_clinic',
+        fixedAllocationClinicCount: allocatedClinicCount,
+        revenueTaxBasisPoints: 0,
+        profitTaxBasisPoints: 0
+      },
+      sources: {
+        ...snapshot.sources,
+        fixedMonthlyEligibleCostCents: 'calculated',
+        fixedAllocationClinicCount: 'calculated',
+        revenueTaxBasisPoints: 'calculated',
+        profitTaxBasisPoints: 'calculated'
+      },
+      sourceDetails
+    },
+    allocation
+  };
+}
+
 export type SalesSimulationInput = {
   initialActivePatientQuantity: number;
   baseUnitAmountCents: number;

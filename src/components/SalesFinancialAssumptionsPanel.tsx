@@ -625,10 +625,11 @@ export const SalesFinancialAssumptionsPanel = () => {
           </div>
 
           <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-normal leading-5 text-emerald-900">
-            Nesta fase, a proposta usa somente: DAS MEI, Stripe, Supabase e
-            Railway. Como existe uma única clínica pagante, DAS, Supabase e
-            Railway são atribuídos integralmente à operação atual. Atualize os
-            valores reais quando as faturas mudarem.
+            DAS MEI, Supabase e Railway formam um único pool fixo mensal da
+            Verto. Em cada novo orçamento, o backend rateia esse pool entre as
+            clínicas operacionais existentes e a nova proposta; o valor integral
+            nunca é repetido por paciente ou por cliente. A Stripe permanece como
+            custo variável da cobrança.
           </div>
 
           <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-normal leading-5 text-amber-900">
@@ -667,11 +668,11 @@ export const SalesFinancialAssumptionsPanel = () => {
             </summary>
             <div className="space-y-6 border-t border-slate-200 bg-white p-4">
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-normal leading-5 text-slate-600">
-                Estes campos continuam disponíveis apenas para leitura de
-                simulações históricas e compatibilidade do motor legado, incluindo
-                DRE gerencial, perdas e lucro líquido. A visão atual da proposta não usa inadimplência presumida,
-                custos diretos por módulo, rateios, EBITDA atribuído ou lucro
-                líquido estimado.
+                Estes campos continuam disponíveis para leitura de simulações
+                históricas e compatibilidade do motor legado. Nos novos orçamentos,
+                custos técnicos por módulo vêm dos modelos de custo do catálogo;
+                DAS MEI, Supabase e Railway entram somente uma vez no pool fixo
+                compartilhado, com o rateio congelado no snapshot da proposta.
               </div>
 
               <fieldset>

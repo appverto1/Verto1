@@ -108,6 +108,7 @@ import {
   normalizePublicSalesWhatsappNumber
 } from './src/constants/salesCommercial';
 import {
+  applySalesPortfolioCostAllocation,
   calculateSalesProfitability,
   validateSalesSimulationInput,
   type FixedCostAllocationMethod,
@@ -1716,7 +1717,6 @@ async function failActivePatientSyncJob(params: {
 async function drainActivePatientSyncQueue(trigger: string): Promise<void> {
   if (activePatientSyncDrainInFlight) return;
   const activePatientPriceId = resolveActivePatientPriceId();
-  if (!activePatientPriceId) return;
   activePatientSyncDrainInFlight = true;
   const lockToken = crypto.randomUUID();
 
@@ -1858,17 +1858,49 @@ async function queueActivePatientSync(
   }
 }
 
+async function enqueueDueCapacityContractBillingSync(trigger: string): Promise<number> {
+  const safeTrigger = sanitizeString(trigger, 100) || 'scheduled_capacity_grace';
+  try {
+    const result = await supabase.rpc('enqueue_due_capacity_contract_billing_sync', {
+      p_trigger: safeTrigger
+    });
+    if (result.error) {
+      const message = sanitizeString(
+        `${result.error?.message || ''} ${result.error?.details || ''} ${result.error?.hint || ''}`,
+        600,
+      ).toLowerCase();
+      const unavailable =
+        ['PGRST202', '42883', '42P01'].includes(sanitizeString(result.error?.code, 40).toUpperCase())
+        || message.includes('enqueue_due_capacity_contract_billing_sync')
+        || message.includes('organization_billing_contracts');
+      if (unavailable) return 0;
+      throw result.error;
+    }
+    return Math.max(0, Number(result.data || 0));
+  } catch (error: any) {
+    console.error('[ActivePatientSync] capacity grace enqueue failed', {
+      trigger: safeTrigger,
+      message: sanitizeString(error?.message || String(error), 240)
+    });
+    return 0;
+  }
+}
+
 async function reconcileActivePatientSyncQueue(trigger: string): Promise<number> {
   try {
+    const safeTrigger = sanitizeString(trigger, 100) || 'scheduled_reconciliation';
     const { data, error } = await supabase.rpc('reconcile_active_patient_billing_sync_queue', {
-      p_trigger: sanitizeString(trigger, 100) || 'scheduled_reconciliation'
+      p_trigger: safeTrigger
     });
     if (error) {
       if (isActivePatientSyncQueueUnavailable(error)) return 0;
       throw error;
     }
+    const capacityGraceQueued = await enqueueDueCapacityContractBillingSync(
+      `${safeTrigger}:capacity_grace`,
+    );
     await drainActivePatientSyncQueue(trigger);
-    return Math.max(0, Number(data || 0));
+    return Math.max(0, Number(data || 0)) + capacityGraceQueued;
   } catch (error: any) {
     console.error('[ActivePatientSync] reconciliation failed', {
       trigger,
@@ -2135,6 +2167,7 @@ const SALES_FIXED_ALLOCATION_METHODS = new Set<FixedCostAllocationMethod>([
 ]);
 const SALES_ASSUMPTION_BASIS_POINTS_KEYS: Array<keyof SalesAssumptionValues> = [
   "stripeFeeBasisPoints",
+  "currentOperatingMarginTargetBasisPoints",
   "revenueTaxBasisPoints",
   "estimatedDelinquencyBasisPoints",
   "refundChargebackBasisPoints",
@@ -2145,6 +2178,9 @@ const SALES_ASSUMPTION_BASIS_POINTS_KEYS: Array<keyof SalesAssumptionValues> = [
   "attentionMarginBasisPoints",
 ];
 const SALES_ASSUMPTION_CENTS_KEYS: Array<keyof SalesAssumptionValues> = [
+  "meiDasMonthlyCents",
+  "supabaseMonthlyCostCents",
+  "railwayMonthlyCostCents",
   "stripeFixedFeeCents",
   "variablePatientCostCents",
   "variableClinicCostCents",
@@ -2184,6 +2220,10 @@ const SALES_OFFER_SIMULATION_SELECT =
 function buildEmptySalesAssumptionValues(): SalesAssumptionValues {
   return {
     officialUnitAmountCents: PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents,
+    meiDasMonthlyCents: null,
+    supabaseMonthlyCostCents: null,
+    railwayMonthlyCostCents: null,
+    currentOperatingMarginTargetBasisPoints: null,
     stripeFeeBasisPoints: null,
     stripeFixedFeeCents: null,
     revenueTaxBasisPoints: null,
@@ -2447,6 +2487,33 @@ function normalizeStoredSalesAssumptionSnapshot(
     sources: sources as SalesAssumptionSnapshot["sources"],
     sourceDetails:
       sourceDetails as SalesAssumptionSnapshot["sourceDetails"],
+  };
+}
+
+async function countSalesOperationalBillingClinics(): Promise<number> {
+  const result = await supabase
+    .from("clinics")
+    .select("id", { count: "exact", head: true })
+    .not("stripe_subscription_id", "is", null);
+  if (result.error) throw result.error;
+  return Math.max(0, Number(result.count || 0));
+}
+
+async function buildSalesAssumptionsForNewProposal(
+  row: any,
+): Promise<{
+  assumptions: SalesAssumptionSnapshot;
+  portfolioCostAllocation: ReturnType<typeof applySalesPortfolioCostAllocation>["allocation"];
+}> {
+  const base = mapSalesAssumptionSnapshot(row);
+  const existingOperationalClinicCount = await countSalesOperationalBillingClinics();
+  const allocated = applySalesPortfolioCostAllocation(
+    base,
+    existingOperationalClinicCount,
+  );
+  return {
+    assumptions: allocated.assumptions,
+    portfolioCostAllocation: allocated.allocation,
   };
 }
 
@@ -20489,7 +20556,7 @@ async function startServer() {
     }
     const { data: offer, error: offerError } = await supabase
       .from("sales_offers")
-      .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type")
+      .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,modular_snapshot,simulation_snapshot")
       .eq("id", offerId)
       .eq("lead_id", leadId)
       .maybeSingle();
@@ -24317,6 +24384,203 @@ async function startServer() {
     }
   };
 
+  const resolveAcceptedModularCapacityContract = (offer: any) => {
+    const modularSnapshot =
+      offer?.modular_snapshot && typeof offer.modular_snapshot === "object"
+        ? offer.modular_snapshot
+        : {};
+    const frozenResults =
+      offer?.simulation_snapshot?.results
+      && typeof offer.simulation_snapshot.results === "object"
+        ? offer.simulation_snapshot.results
+        : {};
+    const capacity =
+      modularSnapshot?.basePackage?.capacity
+      || modularSnapshot?.capacity
+      || frozenResults?.basePackage?.capacity
+      || null;
+    if (!capacity || typeof capacity !== "object" || Array.isArray(capacity)) {
+      return null;
+    }
+    if (!validateCustomCapacityPolicy(capacity.policy) || capacity.policy.enabled !== true) {
+      throw new Error("MODULAR_CAPACITY_POLICY_INVALID");
+    }
+    const acceptedCapacityLimitPatients = Number(capacity.totalContractedLimitPatients);
+    const initialCapacityBlocks = Number(capacity.selectedBlocks || 0);
+    const blockSizePatients = Number(capacity.policy.blockSizePatients);
+    const effectiveBlockPriceCents = Number(
+      capacity.effectiveBlockPriceCents ?? capacity.policy.blockPriceCents,
+    );
+    const initialCapacityMonthlyCents = Number(capacity.blocksMonthlyRevenueCents || 0);
+    const safeNonNegativeInteger = (value: number) =>
+      Number.isSafeInteger(value) && value >= 0;
+    if (
+      !Number.isSafeInteger(acceptedCapacityLimitPatients)
+      || acceptedCapacityLimitPatients < 1
+      || !safeNonNegativeInteger(initialCapacityBlocks)
+      || !Number.isSafeInteger(blockSizePatients)
+      || blockSizePatients < 1
+      || !safeNonNegativeInteger(effectiveBlockPriceCents)
+      || !safeNonNegativeInteger(initialCapacityMonthlyCents)
+      || initialCapacityMonthlyCents !== initialCapacityBlocks * effectiveBlockPriceCents
+    ) {
+      throw new Error("MODULAR_CAPACITY_SNAPSHOT_INVALID");
+    }
+    return {
+      acceptedCapacityLimitPatients,
+      initialCapacityBlocks,
+      initialCapacityMonthlyCents,
+      blockSizePatients,
+      blockPriceCents: effectiveBlockPriceCents,
+      gracePeriodDays: Number(capacity.policy.gracePeriodDays),
+      billingAdjustment: "next_cycle" as const,
+      blocksClinicalAccess: false as const,
+      sourceSnapshot: {
+        schemaVersion: Number(capacity.schemaVersion || 1),
+        acceptedCapacityLimitPatients,
+        initialCapacityBlocks,
+        initialCapacityMonthlyCents,
+        blockSizePatients,
+        blockPriceCents: effectiveBlockPriceCents,
+        gracePeriodDays: Number(capacity.policy.gracePeriodDays),
+        billingAdjustment: "next_cycle",
+        blocksClinicalAccess: false,
+        blockPricingBasis: sanitizeString(capacity.blockPricingBasis, 80) || "catalog_fixed",
+        capacityBlockPhases: (Array.isArray(modularSnapshot?.capacityBlockPhases)
+          ? modularSnapshot.capacityBlockPhases
+          : Array.isArray(frozenResults?.commercialPricing?.capacityBlockPhases)
+            ? frozenResults.commercialPricing.capacityBlockPhases
+            : [])
+          .slice(0, 24)
+          .map((phase: any) => ({
+            phaseNumber: Number(phase?.phaseNumber || 0),
+            startsAt: sanitizeString(phase?.startsAt, 80),
+            endsAt: phase?.endsAt == null ? null : sanitizeString(phase.endsAt, 80),
+            blockPriceCents: Number(phase?.blockPriceCents || 0),
+            blocksRevenueCents: Number(phase?.blocksRevenueCents || 0),
+            selectedBlocks: Number(phase?.selectedBlocks || 0),
+          }))
+          .filter((phase: any) =>
+            Number.isSafeInteger(phase.phaseNumber)
+            && phase.phaseNumber > 0
+            && Number.isSafeInteger(phase.blockPriceCents)
+            && phase.blockPriceCents >= 0
+            && Number.isSafeInteger(phase.blocksRevenueCents)
+            && phase.blocksRevenueCents >= 0
+            && Number.isSafeInteger(phase.selectedBlocks)
+            && phase.selectedBlocks >= 0
+            && Boolean(phase.startsAt)
+          ),
+      },
+    };
+  };
+
+  const provisionModularCapacityBillingContract = async (params: {
+    offer: any;
+    organizationId: string;
+    stripeSubscriptionId: string;
+  }) => {
+    const offerId = sanitizeString(params.offer?.id, 120);
+    const leadId = sanitizeString(params.offer?.lead_id, 120);
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const stripeSubscriptionId = sanitizeString(params.stripeSubscriptionId, 200);
+    if (
+      !isUuid(offerId)
+      || !isUuid(leadId)
+      || !isUuid(organizationId)
+      || !stripeSubscriptionId
+      || sanitizeString(params.offer?.offer_type, 30) !== "modular"
+    ) {
+      return null;
+    }
+    const capacity = resolveAcceptedModularCapacityContract(params.offer);
+    if (!capacity) return null;
+
+    const [leadResult, linkResult, existingResult] = await Promise.all([
+      supabase
+        .from("sales_leads")
+        .select("id,converted_clinic_id")
+        .eq("id", leadId)
+        .eq("converted_clinic_id", organizationId)
+        .is("deleted_at", null)
+        .maybeSingle(),
+      supabase
+        .from("sales_checkout_links")
+        .select("id,stripe_subscription_id,stripe_schedule_id")
+        .eq("offer_id", offerId)
+        .eq("stripe_subscription_id", stripeSubscriptionId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("organization_billing_contracts")
+        .select("id,organization_id,sales_offer_id,stripe_subscription_id,status")
+        .eq("organization_id", organizationId)
+        .maybeSingle(),
+    ]);
+    const readError = leadResult.error || linkResult.error || existingResult.error;
+    if (readError) throw readError;
+    if (!leadResult.data) throw new Error("MODULAR_CAPACITY_TENANT_LINKAGE_INVALID");
+    if (!linkResult.data) throw new Error("MODULAR_CAPACITY_CHECKOUT_LINK_MISSING");
+
+    if (existingResult.data) {
+      const sameContract =
+        sanitizeString(existingResult.data.sales_offer_id, 120) === offerId
+        && sanitizeString(existingResult.data.stripe_subscription_id, 200) === stripeSubscriptionId;
+      if (!sameContract) throw new Error("MODULAR_CAPACITY_CONTRACT_CONFLICT");
+      const { error: refreshError } = await supabase
+        .from("organization_billing_contracts")
+        .update({
+          status: "active",
+          stripe_schedule_id: sanitizeString(linkResult.data.stripe_schedule_id, 200) || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existingResult.data.id);
+      if (refreshError) throw refreshError;
+      return existingResult.data.id;
+    }
+
+    const { data: created, error: createError } = await supabase
+      .from("organization_billing_contracts")
+      .insert([{
+        organization_id: organizationId,
+        sales_offer_id: offerId,
+        sales_checkout_link_id: linkResult.data.id,
+        stripe_subscription_id: stripeSubscriptionId,
+        stripe_schedule_id: sanitizeString(linkResult.data.stripe_schedule_id, 200) || null,
+        billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+        status: "active",
+        accepted_capacity_limit_patients: capacity.acceptedCapacityLimitPatients,
+        initial_capacity_blocks: capacity.initialCapacityBlocks,
+        initial_capacity_monthly_cents: capacity.initialCapacityMonthlyCents,
+        block_size_patients: capacity.blockSizePatients,
+        block_price_cents: capacity.blockPriceCents,
+        grace_period_days: capacity.gracePeriodDays,
+        billing_adjustment: capacity.billingAdjustment,
+        blocks_clinical_access: capacity.blocksClinicalAccess,
+        source_snapshot: capacity.sourceSnapshot,
+      }])
+      .select("id")
+      .single();
+    if (createError) throw createError;
+
+    await patchTableSafely("clinics", { column: "id", value: organizationId }, {
+      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+      stripe_subscription_id: stripeSubscriptionId,
+      current_active_patient_limit: capacity.acceptedCapacityLimitPatients,
+      pending_billing_quantity: null,
+      pending_billing_status: null,
+      billing_sync_status: "modular_capacity_contract_ready",
+      billing_sync_error: null,
+      updated_at: new Date().toISOString(),
+    });
+    await queueActivePatientSync(
+      organizationId,
+      "modular_capacity_contract_provisioned",
+    );
+    return created?.id || null;
+  };
+
   async function finalizeSalesActivationForUser(params: {
     email: string;
     userId: string;
@@ -24351,7 +24615,7 @@ async function startServer() {
           .maybeSingle(),
         supabase
           .from("sales_offers")
-          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type")
+          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,modular_snapshot,simulation_snapshot")
           .eq("id", offerId)
           .eq("lead_id", leadId)
           .eq("status", "paid")
@@ -24436,6 +24700,11 @@ async function startServer() {
           stripeSubscriptionId: subscriptionId,
           stripeEventId: `activation:${checkoutSessionId}:${subscriptionId}`,
           status: entitlementStatus,
+        });
+        await provisionModularCapacityBillingContract({
+          offer: offerResult.data,
+          organizationId: params.clinicId,
+          stripeSubscriptionId: subscriptionId,
         });
       }
 
@@ -35299,6 +35568,13 @@ async function startServer() {
             success: false,
             error: 'PATIENT_CASE_TEAM_MANAGEMENT_MIGRATION_REQUIRED',
             message: 'A atualização da equipe do caso precisa da migração mais recente do banco.'
+          });
+        }
+        if (message.includes('PATIENT_PROFESSIONAL_LINK_PROTECTED_CLINIC_MANAGER')) {
+          return res.status(409).json({
+            success: false,
+            error: 'PATIENT_PROFESSIONAL_LINK_PROTECTED_CLINIC_MANAGER',
+            message: 'Diretores e coordenadores ativos da clínica não podem ser removidos da equipe do caso.'
           });
         }
         if (message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED')) {
@@ -71012,22 +71288,46 @@ async function startServer() {
             const sourcePlanId = sanitizeString(program?.therapeutic_plan_id, 120);
             const sourcePlan: any = rawPlanScopeById.get(sourcePlanId) || null;
             const sourceMode = String(sourcePlan?.mode || '').toLowerCase();
-            const legacyPtsEvidence = sourceMode === 'interdisciplinary' && visiblePtsPlanIds.has(sourcePlanId);
             const explicitlyShared = program?.advanced_settings?.shareWithPts === true || program?.advanced_settings?.share_with_pts === true;
-            if (!legacyPtsEvidence && !explicitlyShared) return [];
-            if (!legacyPtsEvidence && sourceMode !== 'specialty') return [];
+            if (!explicitlyShared || sourceMode !== 'specialty') return [];
 
-            const canOpenSourcePlan = sourceMode === 'specialty' && visiblePlanScopeIds.has(sourcePlanId);
+            const canOpenSourcePlan = visiblePlanScopeIds.has(sourcePlanId);
             return [{
               id: sanitizeString(program?.id, 180),
               name: sanitizeTextField(program?.name, 240) || 'Evidência compartilhada',
               objective: sanitizeTextField(program?.objective || program?.description, 1000) || null,
               category: sanitizeString(program?.category, 80) || null,
               status: sanitizeString(program?.status, 40) || 'draft',
-              sourceSpecialty: sanitizeTextField(sourcePlan?.specialty, 120) || (legacyPtsEvidence ? 'Interdisciplinar' : 'Especialidade não informada'),
+              sourceSpecialty: sanitizeTextField(sourcePlan?.specialty, 120) || 'Especialidade não informada',
               sourcePlanId: canOpenSourcePlan ? sourcePlanId : null,
               canOpenSourcePlan,
-              sharingMode: legacyPtsEvidence ? 'legacy_pts' : 'explicit_specialty_summary',
+              sharingMode: 'explicit_specialty_summary',
+              lastAppliedAt: lastAppliedByAnyProgram.get(String(program?.id || '')) || null,
+              reviewDueDate: program?.review_due_date || null,
+              updatedAt: program?.updated_at || null,
+            }];
+          })
+        : [];
+      // Historical programs that were created directly under the old PTS model
+      // remain readable so no clinical history disappears, but they are NOT
+      // promoted to the current shared-evidence boundary. Keeping a separate
+      // projection prevents legacy data from looking like an explicit share.
+      const ptsLegacyEvidence = hasVisiblePts
+        ? (programResult.data || []).flatMap((program: any) => {
+            const sourcePlanId = sanitizeString(program?.therapeutic_plan_id, 120);
+            const sourcePlan: any = rawPlanScopeById.get(sourcePlanId) || null;
+            const sourceMode = String(sourcePlan?.mode || '').toLowerCase();
+            if (sourceMode !== 'interdisciplinary' || !visiblePtsPlanIds.has(sourcePlanId)) return [];
+            return [{
+              id: sanitizeString(program?.id, 180),
+              name: sanitizeTextField(program?.name, 240) || 'Registro clínico legado',
+              objective: sanitizeTextField(program?.objective || program?.description, 1000) || null,
+              category: sanitizeString(program?.category, 80) || null,
+              status: sanitizeString(program?.status, 40) || 'draft',
+              sourceSpecialty: 'Interdisciplinar',
+              sourcePlanId: null,
+              canOpenSourcePlan: false,
+              sharingMode: 'legacy_history_only',
               lastAppliedAt: lastAppliedByAnyProgram.get(String(program?.id || '')) || null,
               reviewDueDate: program?.review_due_date || null,
               updatedAt: program?.updated_at || null,
@@ -71044,6 +71344,7 @@ async function startServer() {
           planScopes: visiblePlanScopes,
           professionalLinks: enrichedProfessionalLinks,
           ptsSharedEvidence,
+          ptsLegacyEvidence,
           capabilities: {
             actorId,
             actorRole,
@@ -88419,9 +88720,8 @@ async function startServer() {
         ) {
           return sendSalesProfitabilityPolicyRequired(res);
         }
-        const assumptions = mapSalesAssumptionSnapshot(
-          assumptionResult.data,
-        );
+        const { assumptions, portfolioCostAllocation } =
+          await buildSalesAssumptionsForNewProposal(assumptionResult.data);
         const results = calculateSalesModularProposal(
           input,
           catalog,
@@ -88494,6 +88794,7 @@ async function startServer() {
         }
         const resultSnapshot = {
           ...results,
+          portfolioCostAllocation,
           commercialReview: {
             ...review,
             canGeneratePublicOffer:
@@ -88840,9 +89141,10 @@ async function startServer() {
             error: "Selecione uma versão de premissas válida.",
           });
         }
-        const assumptionSnapshot = mapSalesAssumptionSnapshot(
-          assumptionResult.data,
-        );
+        const {
+          assumptions: assumptionSnapshot,
+          portfolioCostAllocation,
+        } = await buildSalesAssumptionsForNewProposal(assumptionResult.data);
         const results = calculateSalesProfitability(
           simulationInput,
           assumptionSnapshot,
@@ -88912,7 +89214,10 @@ async function startServer() {
                 simulationInput.customMonthlyCostCents,
               onboarding_cost_cents: simulationInput.onboardingCostCents,
               assumptions_snapshot: assumptionSnapshot,
-              results_snapshot: results,
+              results_snapshot: {
+                ...results,
+                portfolioCostAllocation,
+              },
               profitability_rating: results.rating,
               internal_justification: justification || null,
               internal_notes:
@@ -89294,8 +89599,8 @@ async function startServer() {
       ) {
         return sendSalesProfitabilityPolicyRequired(res);
       }
-      const assumptions = mapSalesAssumptionSnapshot(
-        assumptionResult.data,
+      const assumptions = normalizeStoredSalesAssumptionSnapshot(
+        simulation.assumptions_snapshot,
       );
       const recalculated = calculateSalesModularProposal(
         input,
@@ -92630,9 +92935,10 @@ async function startServer() {
   }, 90 * 1000);
 
   setInterval(() => {
-    void runWithDistributedJobLease('active-patient-retry-drain', 4 * 60, () =>
-      drainActivePatientSyncQueue('scheduled_retry_drain')
-    );
+    void runWithDistributedJobLease('active-patient-retry-drain', 4 * 60, async () => {
+      await enqueueDueCapacityContractBillingSync('scheduled_capacity_grace');
+      await drainActivePatientSyncQueue('scheduled_retry_drain');
+    });
   }, 5 * 60 * 1000);
 
   setInterval(() => {
