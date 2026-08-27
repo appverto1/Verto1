@@ -3453,7 +3453,7 @@ export default function App() {
             <p className="text-slate-500 font-normal mb-8 leading-relaxed">
               Para acessar o painel completo da Verto, é necessário ativar uma assinatura ou um trial autorizado.
               {isPatientCheckout ? (
-                <span> O valor para pacientes é de apenas <strong>R$ 4,90/mês</strong>.</span>
+                <span> O acesso do paciente é administrado pela clínica e não possui assinatura individual.</span>
               ) : (
                 <span> A cobrança da Verto é modular, de acordo com a quantidade de pacientes ativos da sua clínica.</span>
               )}
@@ -3690,13 +3690,9 @@ export default function App() {
               </div>
             )}
             {isPatientCheckout ? (
-              <button 
-                onClick={submitCheckout}
-                disabled={checkoutLoading}
-                className="w-full bg-[#7a32fc] text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:scale-[1.02] transition-all active:scale-[0.98] disabled:opacity-60"
-              >
-                {checkoutLoading ? 'Abrindo pagamento...' : 'Pagar Agora (R$ 4,90)'}
-              </button>
+              <div className="w-full rounded-2xl border border-violet-100 bg-violet-50 px-4 py-4 text-center text-sm font-bold text-violet-800">
+                Nenhuma cobrança é feita ao paciente. O acesso é gerenciado pela clínica responsável.
+              </div>
             ) : isEnterpriseSelected ? (
               <button
                 onClick={() => handleEnterpriseContact(user, plansState.salesContactUrl)}
