@@ -37,8 +37,8 @@ const payload = buildPatientReminderNotificationPayload({
   canRequestReschedule: false,
 });
 
-// O SO identifica o app pela Verto e exibe a clínica como imagem principal.
-assert.equal(payload.icon, VERTO_NOTIFICATION_ICON_URL);
+// Lembretes usam o logo da clínica no ícone compacto; o badge do app permanece Verto.
+assert.equal(payload.icon, branding.logoUrl);
 assert.equal(payload.badge, VERTO_NOTIFICATION_BADGE_URL);
 assert.equal(payload.image, branding.logoUrl);
 assert.equal(payload.data.brandLogoUrl, branding.logoUrl);
@@ -66,10 +66,10 @@ assert.equal(modal.brandLogoUrl, branding.logoUrl);
 assert.equal(modal.rescheduleLabel, null);
 assert.equal(modal.allowedActions.canRequestReschedule, false);
 
-// Service worker preserva a marca Verto nos lembretes e usa o logo da clínica
-// somente como ícone compacto nos avisos, com fallback real sem assets.
+// Service worker respeita o logo da clínica no ícone compacto dos lembretes e avisos;
+// o badge continua reservado à identificação do app/SO.
 assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v20"/);
-assert.match(serviceWorker, /const iconUrl = isClinicAnnouncement[\s\S]*?asNotificationAssetUrl\(VERTO_NOTIFICATION_ICON\)/);
+assert.match(serviceWorker, /const iconUrl = isClinicAnnouncement[\s\S]*?brandLogo \|\| payload\.icon \|\| VERTO_NOTIFICATION_ICON/);
 assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""[\s\S]*?VERTO_NOTIFICATION_BADGE/);
 assert.match(serviceWorker, /const imageUrl = isClinicAnnouncement\s*\? ""[\s\S]*?payload\.image \|\| brandLogo \|\| VERTO_NOTIFICATION_ICON/);
 assert.match(serviceWorker, /showNotification\(title, notificationOptions\)/);

@@ -253,7 +253,7 @@ export function buildPatientReminderNotificationPayload(input: ReminderPayloadIn
   return {
     title: input.branding.displayName,
     body,
-    icon: VERTO_NOTIFICATION_ICON_URL,
+    icon: clinicLogoUrl || VERTO_NOTIFICATION_ICON_URL,
     badge: VERTO_NOTIFICATION_BADGE_URL,
     image: clinicLogoUrl || VERTO_NOTIFICATION_ICON_URL,
     tag: appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined,
