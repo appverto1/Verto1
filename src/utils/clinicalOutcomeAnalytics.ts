@@ -100,13 +100,50 @@ export type ClinicalOutcomeSeriesSummary = {
 
 const text = (value: unknown) => String(value ?? '').trim();
 
+const clinicalOutcomeSeriesSemanticValues = (
+  series: ClinicalOutcomeSeriesSummary,
+  selector: (row: ClinicalOutcomeObservation) => unknown[],
+) => Array.from(new Set(
+  (Array.isArray(series?.observations) ? series.observations : [])
+    .flatMap((row) => selector(row).map(text))
+    .filter(Boolean),
+));
+
+export const isClinicalOutcomeInterferingBehaviorSeries = (
+  series: ClinicalOutcomeSeriesSummary | null | undefined,
+) => {
+  if (!series) return false;
+  const metricTokens = [
+    text(series.metricKey),
+    text(series.metricLabel),
+    ...clinicalOutcomeSeriesSemanticValues(series, (row) => [
+      row.metricKey,
+      row.metricType,
+      row.metadata?.metricKey,
+      row.metadata?.metric_key,
+    ]),
+  ].map((value) => value.toUpperCase());
+
+  if (metricTokens.some((value) => value.startsWith('BEHAVIOR_'))) return true;
+
+  const sourceFamilies = clinicalOutcomeSeriesSemanticValues(series, (row) => [
+    row.metadata?.sourceFamily,
+    row.metadata?.source_family,
+    row.metadata?.valueDetails?.sourceFamily,
+    row.metadata?.valueDetails?.source_family,
+  ]).map((value) => value.toUpperCase());
+
+  return sourceFamilies.includes('BEHAVIOR');
+};
+
 export const normalizeClinicalOutcomeDirection = (value: unknown): ClinicalOutcomeDirection => {
   const normalized = text(value).toLowerCase();
-  if (['lower_is_better', 'lower-is-better', 'lower', 'decrease'].includes(normalized)) return 'lower_is_better';
+  if (['lower_is_better', 'lower-is-better', 'lower', 'decrease', 'decrease_is_better'].includes(normalized)) return 'lower_is_better';
   if (['target_value', 'target-value', 'target'].includes(normalized)) return 'target_value';
-  if (['target_range', 'target-range', 'range'].includes(normalized)) return 'target_range';
+  if (['target_range', 'target-range', 'range', 'target_range_is_better'].includes(normalized)) return 'target_range';
   if (['event', 'milestone', 'binary'].includes(normalized)) return 'event';
   if (['no_directional_judgment', 'no-directional-judgment', 'neutral', 'none'].includes(normalized)) return 'no_directional_judgment';
+  if (['higher_is_better', 'higher-is-better', 'higher', 'increase', 'increase_is_better'].includes(normalized)) return 'higher_is_better';
   return 'higher_is_better';
 };
 
@@ -119,7 +156,7 @@ export const clinicalOutcomeSeriesKey = (observation: ClinicalOutcomeObservation
     text(observation.planId),
     text(observation.goalId),
     text(observation.programId),
-    text(observation.itemId),
+    text(observation.itemId) || text(observation.itemLabel),
     text(observation.metricKey),
     text(observation.unit),
     normalizeClinicalOutcomeDirection(observation.direction),
@@ -256,6 +293,25 @@ export const clinicalOutcomeEvidenceSampleLabel = (series: ClinicalOutcomeSeries
   return opportunities > 0 ? `${base} · ${opportunities} ${opportunities === 1 ? 'oportunidade' : 'oportunidades'}` : base;
 };
 
+const clinicalNumberFormatter = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 1 });
+
+export const formatClinicalValue = (value: unknown, unit: unknown = ''): string => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '—';
+
+  const formatted = clinicalNumberFormatter.format(numeric);
+  const rawUnit = text(unit);
+  const normalizedUnit = rawUnit.toLocaleLowerCase('pt-BR');
+
+  if (rawUnit === '%' || normalizedUnit.includes('percent')) return `${formatted}%`;
+  if (['s', 'sec', 'seg', 'segundo', 'segundos', 'second', 'seconds'].includes(normalizedUnit)) return `${formatted} s`;
+  if (['ms', 'millisecond', 'milliseconds'].includes(normalizedUnit)) return `${formatted} ms`;
+  if (['min', 'minuto', 'minutos', 'minute', 'minutes'].includes(normalizedUnit)) return `${formatted} min`;
+  if (['occurrence', 'occurrences'].includes(normalizedUnit)) return `${formatted} ${Math.abs(numeric) === 1 ? 'ocorrência' : 'ocorrências'}`;
+  if (!rawUnit) return formatted;
+  return `${formatted}${/^[%°]/.test(rawUnit) ? '' : ' '}${rawUnit}`;
+};
+
 export const summarizeClinicalOutcomePeriod = (series: ClinicalOutcomeSeriesSummary | null | undefined): ClinicalOutcomePeriodStats => {
   const rows = series?.validObservations || [];
   const sessionIds = Array.from(new Set(rows.map((row) => text(row.sessionId)).filter(Boolean)));
@@ -307,12 +363,13 @@ export const compareClinicalOutcomePeriods = (
     ? current.meanValue - previous.meanValue
     : null;
   const unit = text(currentSeries.unit);
+  const normalizedUnit = unit.toLocaleLowerCase('pt-BR');
   const roundedDelta = delta === null ? null : Math.round(delta * 10) / 10;
   const deltaLabel = roundedDelta === null
     ? 'Sem período anterior comparável'
-    : unit === '%'
-      ? `${roundedDelta > 0 ? '+' : ''}${roundedDelta} p.p.`
-      : `${roundedDelta > 0 ? '+' : ''}${roundedDelta}${unit ? ` ${unit}` : ''}`;
+    : unit === '%' || normalizedUnit.includes('percent')
+      ? `${roundedDelta > 0 ? '+' : ''}${clinicalNumberFormatter.format(roundedDelta)} p.p.`
+      : `${roundedDelta > 0 ? '+' : ''}${formatClinicalValue(roundedDelta, unit)}`;
   let movement: ClinicalOutcomePeriodComparison['movement'] = 'unknown';
   if (delta !== null) {
     const scale = Math.max(1, Math.abs(current.meanValue || 0), Math.abs(previous.meanValue || 0));
@@ -470,18 +527,16 @@ export const formatClinicalOutcomeValue = (observation: ClinicalOutcomeObservati
   const value = finiteValue(observation.value);
   const categoricalValue = text(observation.valueText);
   if (value === null) return categoricalValue || 'Sem evidência';
-  const unit = text(observation.unit);
-  const unitSuffix = unit ? (/^[%°]/.test(unit) ? unit : ` ${unit}`) : '';
-  const rounded = Math.round(value * 10) / 10;
+  const formattedValue = formatClinicalValue(value, observation.unit);
   const numerator = finiteValue(observation.numerator);
   const denominator = finiteValue(observation.denominator);
   if (numerator !== null && denominator !== null && denominator > 0) {
-    return `${numerator} de ${denominator} — ${rounded}${unitSuffix}`;
+    return `${clinicalNumberFormatter.format(numerator)} de ${clinicalNumberFormatter.format(denominator)} — ${formattedValue}`;
   }
   if (denominator !== null && denominator > 0) {
-    return `${rounded}${unitSuffix} · ${denominator} oportunidade(s)`;
+    return `${formattedValue} · ${clinicalNumberFormatter.format(denominator)} oportunidade(s)`;
   }
-  return `${rounded}${unitSuffix}`;
+  return formattedValue;
 };
 
 export const clinicalOutcomeEvidenceLabel = (state: ClinicalOutcomeEvidenceState) => {

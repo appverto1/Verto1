@@ -1036,10 +1036,12 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
 }
 
 // Helper to handle offline-first saving
-async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string } = {}) {
+async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string; requireServerAck?: boolean } = {}) {
   const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
-  // Every mutation gets its own durable outbox row. Reusing an id while a prior
-  // request is in-flight can let the older response acknowledge/delete the newer edit.
+  // Ordinary offline-first mutations get their own durable outbox row. Reusing
+  // an id while a prior request is in-flight can let an older response
+  // acknowledge/delete a newer edit. Server-context mutations deliberately skip
+  // that queue until the authoritative context has been issued.
   const queueId = `${type}:${id}:${crypto.randomUUID()}`;
   const queueEntityId = String(options?.queueEntityId || id).trim() || id;
   const payloadWithIdempotency = {
@@ -1047,26 +1049,34 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     idempotencyKey
   };
   let locallyPersisted = false;
+  const requireServerAck = options?.requireServerAck === true;
 
-  // 1. Save locally first
-  try {
-    await saveEncryptedRecord({
-      id: queueId,
-      entity_id: queueEntityId,
-      data: payloadWithIdempotency,
-      type,
-      sync_status: 'pending',
-      last_updated: nextOfflineMutationTimestamp(),
-      retry_count: 0,
-      last_attempt_at: null,
-      next_retry_at: null,
-      last_error: null,
-      method,
-      endpoint
-    });
-    locallyPersisted = true;
-  } catch (offlineError) {
-    console.error(`[offline-cache] failed to persist ${type} locally:`, offlineError);
+  // 1. Save locally first for ordinary offline-first mutations. Mutations that
+  // establish a server-issued clinical context (for example, opening a session
+  // from a specialty plan) must be acknowledged by the server before they can
+  // become a durable local session. Queuing those cold-start mutations would
+  // let a later sync choose a different PTS version than the one that was
+  // canonical when care actually began.
+  if (!requireServerAck) {
+    try {
+      await saveEncryptedRecord({
+        id: queueId,
+        entity_id: queueEntityId,
+        data: payloadWithIdempotency,
+        type,
+        sync_status: 'pending',
+        last_updated: nextOfflineMutationTimestamp(),
+        retry_count: 0,
+        last_attempt_at: null,
+        next_retry_at: null,
+        last_error: null,
+        method,
+        endpoint
+      });
+      locallyPersisted = true;
+    } catch (offlineError) {
+      console.error(`[offline-cache] failed to persist ${type} locally:`, offlineError);
+    }
   }
 
   // 2. Try to sync with server
@@ -1084,16 +1094,19 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     if (response.ok) {
       const result = await safeJson(response);
       if (result?.queued === true) {
-        await markRecordSyncFailure(queueId, {
-          status: 503,
-          retryable: true,
-          error: result?.warning || 'Servidor enfileirou o sync para tentar depois.'
-        });
+        if (locallyPersisted) {
+          await markRecordSyncFailure(queueId, {
+            status: 503,
+            retryable: true,
+            error: result?.warning || 'Servidor enfileirou o sync para tentar depois.'
+          });
+        }
         return {
-          success: locallyPersisted,
+          success: requireServerAck ? false : locallyPersisted,
           offline: true,
-          pending: true,
-          durable: locallyPersisted,
+          pending: requireServerAck ? false : locallyPersisted,
+          durable: requireServerAck ? false : locallyPersisted,
+          serverAckRequired: requireServerAck,
           status: response.status,
           warning: result?.warning,
           details: result,
@@ -1102,11 +1115,13 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       }
       if (result?.success === false) {
         const logicalError = result?.error || result?.message || 'O servidor recusou a persistência.';
-        await markRecordSyncFailure(queueId, {
-          status: 400,
-          retryable: false,
-          error: logicalError
-        });
+        if (locallyPersisted) {
+          await markRecordSyncFailure(queueId, {
+            status: 400,
+            retryable: false,
+            error: logicalError
+          });
+        }
         return {
           ...result,
           success: false,
@@ -1117,8 +1132,9 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
           data: payloadWithIdempotency
         };
       }
-      // 3. Mark as synced only after an explicit successful server contract.
-      await markRecordSyncStatus(queueId, 'synced');
+      // 3. Mark the durable outbox row as synced only after an explicit successful
+      // server contract. Server-required mutations have no pre-ack outbox row.
+      if (locallyPersisted) await markRecordSyncStatus(queueId, 'synced');
       return {
         ...(result || {}),
         success: true,
@@ -1129,7 +1145,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     }
     const errorPayload = await safeJson(response);
     if (response.status === 409 && isIdempotentConflictPayload(errorPayload)) {
-      await markRecordSyncStatus(queueId, 'synced');
+      if (locallyPersisted) await markRecordSyncStatus(queueId, 'synced');
       return {
         ...errorPayload,
         success: true,
@@ -1143,16 +1159,19 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
         errorPayload?.error ||
         errorPayload?.message ||
         'Outra alteração foi confirmada antes desta. A versão local foi preservada.';
-      await markRecordSyncStatus(queueId, 'conflict', {
-        last_attempt_at: Date.now(),
-        next_retry_at: null,
-        last_error: conflictMessage
-      });
+      if (locallyPersisted) {
+        await markRecordSyncStatus(queueId, 'conflict', {
+          last_attempt_at: Date.now(),
+          next_retry_at: null,
+          last_error: conflictMessage
+        });
+      }
       return {
         ...errorPayload,
-        success: locallyPersisted,
-        durable: locallyPersisted,
-        pending: locallyPersisted,
+        success: requireServerAck ? false : locallyPersisted,
+        durable: requireServerAck ? false : locallyPersisted,
+        pending: requireServerAck ? false : locallyPersisted,
+        serverAckRequired: requireServerAck,
         conflict: true,
         status: response.status,
         error: conflictMessage,
@@ -1163,11 +1182,13 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
 
     if (!isRetryable) {
       // Validation/auth errors should not retry forever, but the local record is kept for audit/retry UI.
-      await markRecordSyncFailure(queueId, {
-        status: response.status,
-        retryable: false,
-        error: errorPayload?.error || errorPayload?.message || `Falha permanente (${response.status})`
-      });
+      if (locallyPersisted) {
+        await markRecordSyncFailure(queueId, {
+          status: response.status,
+          retryable: false,
+          error: errorPayload?.error || errorPayload?.message || `Falha permanente (${response.status})`
+        });
+      }
       return {
         success: false,
         offline: false,
@@ -1183,19 +1204,22 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       };
     }
 
-    await markRecordSyncFailure(queueId, {
-      status: response.status,
-      retryable: true,
-      error:
-        errorPayload?.error ||
-        errorPayload?.message ||
-        `Falha temporária (${response.status})`
-    });
+    if (locallyPersisted) {
+      await markRecordSyncFailure(queueId, {
+        status: response.status,
+        retryable: true,
+        error:
+          errorPayload?.error ||
+          errorPayload?.message ||
+          `Falha temporária (${response.status})`
+      });
+    }
     return {
-      success: locallyPersisted,
+      success: requireServerAck ? false : locallyPersisted,
       offline: true,
-      pending: true,
-      durable: locallyPersisted,
+      pending: requireServerAck ? false : locallyPersisted,
+      durable: requireServerAck ? false : locallyPersisted,
+      serverAckRequired: requireServerAck,
       status: response.status,
       code: errorPayload?.code || errorPayload?.error_code || undefined,
       error:
@@ -1206,7 +1230,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       data: payloadWithIdempotency
     };
   } catch (error) {
-    console.log(`Working offline: ${type} saved locally.`);
+    console.log(requireServerAck ? `Working offline: ${type} requires server acknowledgement.` : `Working offline: ${type} saved locally.`);
     if (locallyPersisted) {
       await markRecordSyncFailure(queueId, {
         retryable: true,
@@ -1214,12 +1238,17 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
       });
     }
     return {
-      success: locallyPersisted,
+      success: requireServerAck ? false : locallyPersisted,
       data: payloadWithIdempotency,
       offline: true,
-      pending: locallyPersisted,
-      durable: locallyPersisted,
-      error: locallyPersisted ? undefined : 'Não foi possível persistir localmente nem confirmar no servidor.'
+      pending: requireServerAck ? false : locallyPersisted,
+      durable: requireServerAck ? false : locallyPersisted,
+      serverAckRequired: requireServerAck,
+      error: requireServerAck
+        ? 'Esta operação exige confirmação do servidor para preservar o contexto clínico.'
+        : locallyPersisted
+          ? undefined
+          : 'Não foi possível persistir localmente nem confirmar no servidor.'
     };
   }
 }
@@ -2585,7 +2614,15 @@ export const dataService = {
       started_at: session?.started_at || session?.startedAt || new Date().toISOString(),
       source: session?.source || session?.clientSource || ABA_DEFAULT_SOURCE
     };
-    return await saveOfflineFirst(id, data, 'aba', '/api/aba/sessions');
+    const therapeuticPlanId = String(session?.therapeutic_plan_id || session?.therapeuticPlanId || '').trim();
+    return await saveOfflineFirst(
+      id,
+      data,
+      'aba',
+      '/api/aba/sessions',
+      'POST',
+      { requireServerAck: Boolean(therapeuticPlanId) },
+    );
   },
 
   async updateAbaSession(sessionId: string, updates: any) {
@@ -5134,6 +5171,90 @@ export const dataService = {
       return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível atualizar o escopo do Plano terapêutico.');
     } catch (error) {
       const message = getApiErrorMessage(error, 'Não foi possível atualizar o escopo do Plano terapêutico.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async createPtsDraftVersion(patientId: string, planId: string) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}/pts-draft`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({})
+      }, {
+        helperName: 'createPtsDraftVersion',
+        operation: 'write',
+        table: 'patient_pts_documents_v2,patient_pts_versions_v2',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível criar a nova versão do PTS.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível criar a nova versão do PTS.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async savePtsDraftVersion(patientId: string, planId: string, versionId: string, payload: any = {}) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}/pts-draft/${encodeURIComponent(String(versionId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'savePtsDraftVersion',
+        operation: 'write',
+        table: 'patient_pts_versions_v2',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível salvar o rascunho do PTS.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível salvar o rascunho do PTS.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async activatePtsDraftVersion(patientId: string, planId: string, versionId: string, payload: any = {}) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}/pts-draft/${encodeURIComponent(String(versionId))}/activate`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'activatePtsDraftVersion',
+        operation: 'write',
+        table: 'patient_pts_documents_v2,patient_pts_versions_v2,patient_pts_events_v2,patient_therapeutic_plans',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível ativar o PTS.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível ativar o PTS.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async appendPtsEvent(patientId: string, planId: string, payload: any = {}) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/therapeutic-plans/${encodeURIComponent(String(planId))}/pts-events`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      }, {
+        helperName: 'appendPtsEvent',
+        operation: 'write',
+        table: 'patient_pts_events_v2',
+        hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível registrar o evento do PTS.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível registrar o evento do PTS.');
       return { success: false, error: message, message };
     }
   },

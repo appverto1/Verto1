@@ -1085,6 +1085,7 @@ export const SessionMode = ({
   const resolvedTherapistId = String(therapistId || activeSession?.therapistId || activeSession?.therapist_id || '').trim();
   const resolvedClinicId = String(clinicId || activeSession?.clinicId || activeSession?.clinic_id || patient?.clinicId || patient?.clinic_id || patient?.organizationId || patient?.organization_id || '').trim();
   const activeAppointmentId = String(activeSession?.appointmentId || activeSession?.appointment_id || '').trim();
+  const activeTherapeuticPlanId = String(activeSession?.therapeuticPlanId || activeSession?.therapeutic_plan_id || '').trim();
   const activeSessionLocationName = String(
     activeSession?.locationNameSnapshot ||
       activeSession?.location_name_snapshot ||
@@ -1378,7 +1379,10 @@ export const SessionMode = ({
           setTherapeuticPrograms([]);
           return;
         }
-        setTherapeuticPrograms(normalizeTherapeuticPrograms(result?.data || result));
+        const normalizedPrograms = normalizeTherapeuticPrograms(result?.data || result);
+        setTherapeuticPrograms(activeTherapeuticPlanId
+          ? normalizedPrograms.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '').trim() === activeTherapeuticPlanId)
+          : normalizedPrograms);
       })
       .catch((loadError: any) => {
         if (import.meta.env.DEV) console.warn('Falha ao carregar programas terapêuticos na sessão:', loadError);
@@ -1390,7 +1394,7 @@ export const SessionMode = ({
     return () => {
       cancelled = true;
     };
-  }, [patientId]);
+  }, [activeTherapeuticPlanId, patientId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -6011,20 +6015,24 @@ export const SessionMode = ({
       timeZone: maintenanceTimeZone
     });
   }, [activeAppointmentId, activeSession?.actualStartAt, activeSession?.actual_start_at, activeSession?.startedAt, activeSession?.started_at, maintenanceTimeZone, panelAppointmentMaintenanceProbeSchedules, sessionClinicalDate, sessionId]);
-  const sessionAvailableMaintenanceProbeSchedules = useMemo(() => (
-    mergeMaintenanceScheduleLists(
-      normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.available || []),
+  const sessionAvailableMaintenanceProbeSchedules = useMemo(() => {
+    const serverScopedSchedules = normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.available || []);
+    if (activeTherapeuticPlanId) return serverScopedSchedules;
+    return mergeMaintenanceScheduleLists(
+      serverScopedSchedules,
       normalizeSessionMaintenanceProbeList(overviewAppointmentMaintenanceProbeAvailability.available || []),
       normalizeSessionMaintenanceProbeList(panelAppointmentMaintenanceProbeAvailability.available || [])
-    )
-  ), [overviewAppointmentMaintenanceProbeAvailability.available, panelAppointmentMaintenanceProbeAvailability.available, sessionMaintenanceProbes]);
-  const sessionUpcomingMaintenanceProbeSchedules = useMemo(() => (
-    mergeMaintenanceScheduleLists(
-      normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.upcoming || []),
+    );
+  }, [activeTherapeuticPlanId, overviewAppointmentMaintenanceProbeAvailability.available, panelAppointmentMaintenanceProbeAvailability.available, sessionMaintenanceProbes]);
+  const sessionUpcomingMaintenanceProbeSchedules = useMemo(() => {
+    const serverScopedSchedules = normalizeSessionMaintenanceProbeList(sessionMaintenanceProbes?.upcoming || []);
+    if (activeTherapeuticPlanId) return serverScopedSchedules;
+    return mergeMaintenanceScheduleLists(
+      serverScopedSchedules,
       normalizeSessionMaintenanceProbeList(overviewAppointmentMaintenanceProbeAvailability.upcoming || []),
       normalizeSessionMaintenanceProbeList(panelAppointmentMaintenanceProbeAvailability.upcoming || [])
-    )
-  ), [overviewAppointmentMaintenanceProbeAvailability.upcoming, panelAppointmentMaintenanceProbeAvailability.upcoming, sessionMaintenanceProbes]);
+    );
+  }, [activeTherapeuticPlanId, overviewAppointmentMaintenanceProbeAvailability.upcoming, panelAppointmentMaintenanceProbeAvailability.upcoming, sessionMaintenanceProbes]);
   const sessionAvailableMaintenanceTargetIds = useMemo(() => new Set(
     sessionAvailableMaintenanceProbeSchedules
       .map((schedule: any) => maintenanceScheduleTargetId(schedule))
@@ -6038,8 +6046,11 @@ export const SessionMode = ({
     therapeuticSessionGoals.map((goal: any) => String(goal?.programId || goal?.program_id || '')).filter(Boolean),
   ).size, [therapeuticSessionGoals]);
   const baseSessionGoals = useMemo(
-    () => mergeLegacyAndTherapeuticSessionGoals(legacySessionGoals, therapeuticSessionGoals),
-    [legacySessionGoals, therapeuticSessionGoals],
+    () => mergeLegacyAndTherapeuticSessionGoals(
+      activeTherapeuticPlanId ? [] : legacySessionGoals,
+      therapeuticSessionGoals,
+    ),
+    [activeTherapeuticPlanId, legacySessionGoals, therapeuticSessionGoals],
   );
   const sessionGoals = useMemo(() => (
     mergeSessionGoalsWithAvailableMaintenance(baseSessionGoals, sessionAvailableMaintenanceProbeSchedules)

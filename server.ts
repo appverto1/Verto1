@@ -108,6 +108,7 @@ import {
   normalizePublicSalesWhatsappNumber
 } from './src/constants/salesCommercial';
 import {
+  applySalesPortfolioCostAllocation,
   calculateSalesProfitability,
   validateSalesSimulationInput,
   type FixedCostAllocationMethod,
@@ -225,6 +226,10 @@ import {
   normalizeScheduleLocationType,
   roomPreventsOverlappingAppointments
 } from './src/utils/scheduling';
+import {
+  DEFAULT_CLINIC_TIME_ZONE,
+  resolveClinicTimeZone,
+} from './src/utils/clinicTimeZone';
 import {
   buildAvailableRescheduleSlots,
   buildRescheduleRequestMessage,
@@ -407,13 +412,15 @@ import {
   filterTherapeuticPlanProgramsForActor,
   filterTherapeuticPlanScopesForActor,
   isTherapeuticPlanManager,
+  resolveTherapeuticPlanScopeAccess,
   normalizeTherapeuticSpecialtyObjectives,
   resolveHistoricalTherapeuticPlanReadCutoff
 } from './src/utils/therapeuticPlanAccess';
 import {
   emptyPtsClinicalPayload,
   normalizePtsClinicalPayload,
-  ptsLastReviewedAt
+  ptsLastReviewedAt,
+  stripPtsTrackingFieldsForDraft
 } from './src/utils/ptsClinicalWorkspace';
 import {
   canAssignClinicRole,
@@ -1710,7 +1717,6 @@ async function failActivePatientSyncJob(params: {
 async function drainActivePatientSyncQueue(trigger: string): Promise<void> {
   if (activePatientSyncDrainInFlight) return;
   const activePatientPriceId = resolveActivePatientPriceId();
-  if (!activePatientPriceId) return;
   activePatientSyncDrainInFlight = true;
   const lockToken = crypto.randomUUID();
 
@@ -1852,17 +1858,49 @@ async function queueActivePatientSync(
   }
 }
 
+async function enqueueDueCapacityContractBillingSync(trigger: string): Promise<number> {
+  const safeTrigger = sanitizeString(trigger, 100) || 'scheduled_capacity_grace';
+  try {
+    const result = await supabase.rpc('enqueue_due_capacity_contract_billing_sync', {
+      p_trigger: safeTrigger
+    });
+    if (result.error) {
+      const message = sanitizeString(
+        `${result.error?.message || ''} ${result.error?.details || ''} ${result.error?.hint || ''}`,
+        600,
+      ).toLowerCase();
+      const unavailable =
+        ['PGRST202', '42883', '42P01'].includes(sanitizeString(result.error?.code, 40).toUpperCase())
+        || message.includes('enqueue_due_capacity_contract_billing_sync')
+        || message.includes('organization_billing_contracts');
+      if (unavailable) return 0;
+      throw result.error;
+    }
+    return Math.max(0, Number(result.data || 0));
+  } catch (error: any) {
+    console.error('[ActivePatientSync] capacity grace enqueue failed', {
+      trigger: safeTrigger,
+      message: sanitizeString(error?.message || String(error), 240)
+    });
+    return 0;
+  }
+}
+
 async function reconcileActivePatientSyncQueue(trigger: string): Promise<number> {
   try {
+    const safeTrigger = sanitizeString(trigger, 100) || 'scheduled_reconciliation';
     const { data, error } = await supabase.rpc('reconcile_active_patient_billing_sync_queue', {
-      p_trigger: sanitizeString(trigger, 100) || 'scheduled_reconciliation'
+      p_trigger: safeTrigger
     });
     if (error) {
       if (isActivePatientSyncQueueUnavailable(error)) return 0;
       throw error;
     }
+    const capacityGraceQueued = await enqueueDueCapacityContractBillingSync(
+      `${safeTrigger}:capacity_grace`,
+    );
     await drainActivePatientSyncQueue(trigger);
-    return Math.max(0, Number(data || 0));
+    return Math.max(0, Number(data || 0)) + capacityGraceQueued;
   } catch (error: any) {
     console.error('[ActivePatientSync] reconciliation failed', {
       trigger,
@@ -2129,6 +2167,7 @@ const SALES_FIXED_ALLOCATION_METHODS = new Set<FixedCostAllocationMethod>([
 ]);
 const SALES_ASSUMPTION_BASIS_POINTS_KEYS: Array<keyof SalesAssumptionValues> = [
   "stripeFeeBasisPoints",
+  "currentOperatingMarginTargetBasisPoints",
   "revenueTaxBasisPoints",
   "estimatedDelinquencyBasisPoints",
   "refundChargebackBasisPoints",
@@ -2139,6 +2178,9 @@ const SALES_ASSUMPTION_BASIS_POINTS_KEYS: Array<keyof SalesAssumptionValues> = [
   "attentionMarginBasisPoints",
 ];
 const SALES_ASSUMPTION_CENTS_KEYS: Array<keyof SalesAssumptionValues> = [
+  "meiDasMonthlyCents",
+  "supabaseMonthlyCostCents",
+  "railwayMonthlyCostCents",
   "stripeFixedFeeCents",
   "variablePatientCostCents",
   "variableClinicCostCents",
@@ -2178,6 +2220,10 @@ const SALES_OFFER_SIMULATION_SELECT =
 function buildEmptySalesAssumptionValues(): SalesAssumptionValues {
   return {
     officialUnitAmountCents: PUBLIC_ACTIVE_PATIENT_PRICE.unitAmountCents,
+    meiDasMonthlyCents: null,
+    supabaseMonthlyCostCents: null,
+    railwayMonthlyCostCents: null,
+    currentOperatingMarginTargetBasisPoints: null,
     stripeFeeBasisPoints: null,
     stripeFixedFeeCents: null,
     revenueTaxBasisPoints: null,
@@ -2441,6 +2487,46 @@ function normalizeStoredSalesAssumptionSnapshot(
     sources: sources as SalesAssumptionSnapshot["sources"],
     sourceDetails:
       sourceDetails as SalesAssumptionSnapshot["sourceDetails"],
+  };
+}
+
+async function countSalesOperationalBillingClinics(): Promise<number> {
+  // A trial subscription is not yet revenue and must not subsidize a new quote.
+  // Count only organizations with a confirmed first Stripe payment.
+  const paidState = await supabase
+    .from("platform_subscription_financial_state")
+    .select("organization_id", { count: "exact", head: true })
+    .not("organization_id", "is", null)
+    .not("first_paid_at", "is", null)
+    .eq("stripe_status", "active");
+  if (!paidState.error) return Math.max(0, Number(paidState.count || 0));
+  if (!isMissingRelationError(paidState.error)) throw paidState.error;
+
+  // Deploy-order fallback only. Once the platform ledger migration is applied,
+  // this branch is no longer used.
+  const legacy = await supabase
+    .from("clinics")
+    .select("id", { count: "exact", head: true })
+    .not("stripe_subscription_id", "is", null);
+  if (legacy.error) throw legacy.error;
+  return Math.max(0, Number(legacy.count || 0));
+}
+
+async function buildSalesAssumptionsForNewProposal(
+  row: any,
+): Promise<{
+  assumptions: SalesAssumptionSnapshot;
+  portfolioCostAllocation: ReturnType<typeof applySalesPortfolioCostAllocation>["allocation"];
+}> {
+  const base = mapSalesAssumptionSnapshot(row);
+  const existingOperationalClinicCount = await countSalesOperationalBillingClinics();
+  const allocated = applySalesPortfolioCostAllocation(
+    base,
+    existingOperationalClinicCount,
+  );
+  return {
+    assumptions: allocated.assumptions,
+    portfolioCostAllocation: allocated.allocation,
   };
 }
 
@@ -9138,15 +9224,15 @@ function currentClinicId(user: any): string | null {
 }
 
 function currentClinicTimeZone(user: any): string {
-  return sanitizeString(
-    user?.clinicTimeZone ||
+  return resolveClinicTimeZone({
+    timeZone:
+      user?.clinicTimeZone ||
       user?.clinic_timezone ||
-      user?.timezone ||
-      user?.time_zone ||
-      process.env.DEFAULT_CLINIC_TIMEZONE ||
-      'America/Sao_Paulo',
-    80
-  ) || 'America/Sao_Paulo';
+      user?.clinicSettings?.clinicTimeZone ||
+      user?.clinicSettings?.timezone,
+    state: user?.clinicSettings?.clinicState || user?.clinicSettings?.state,
+    fallback: user?.timezone || user?.time_zone || process.env.DEFAULT_CLINIC_TIMEZONE || DEFAULT_CLINIC_TIME_ZONE,
+  });
 }
 
 function dateGroupForClinic(value: unknown, user: any): string {
@@ -15648,6 +15734,7 @@ type ResolvedOnboardingContext = {
     subscriptionStatus: string | null;
     billingModel: string | null;
     address: string | null;
+    timeZone: string;
     patientPhotoPolicy: 'PORTAL' | 'CLINIC';
   } | null;
   membership: {
@@ -15675,6 +15762,7 @@ function compactOnboardingContextForSession(value: any): ResolvedOnboardingConte
         subscriptionStatus: normalizeClinicAccessStatus(value.clinic.subscriptionStatus) || null,
         billingModel: sanitizeString(value.clinic.billingModel, 60).toLowerCase() || null,
         address: sanitizeString(value.clinic.address, 320) || null,
+        timeZone: resolveClinicTimeZone({ timeZone: value.clinic.timeZone, state: value.clinic.state }),
         patientPhotoPolicy: sanitizeString(value.clinic.patientPhotoPolicy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
       }
     : null;
@@ -15721,6 +15809,7 @@ async function fetchClinicOnboardingSnapshot(clinicId: string) {
     'clinic_address',
     'city',
     'state',
+    'timezone',
     'patient_photo_policy',
   ];
   let columns = [...requiredColumns, ...optionalColumns];
@@ -15916,6 +16005,7 @@ async function resolveOnboardingContextForUser(params: {
           subscriptionStatus: null,
           billingModel: null,
           address: null,
+          timeZone: DEFAULT_CLINIC_TIME_ZONE,
           patientPhotoPolicy: 'PORTAL',
         },
         membership: null,
@@ -16010,6 +16100,7 @@ async function resolveOnboardingContextForUser(params: {
       subscriptionStatus: clinicSubscriptionStatus || null,
       billingModel: billingModel || null,
       address: clinicOnboardingAddress(clinicRow),
+      timeZone: resolveClinicTimeZone({ timeZone: clinicRow?.timezone, state: clinicRow?.state }),
       patientPhotoPolicy: sanitizeString(clinicRow?.patient_photo_policy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
     },
     membership: membership
@@ -16078,6 +16169,8 @@ function mergeAuthoritativeClinicSettings(sessionSettings: any, context: Resolve
     clinicWhatsapp: context.clinic.whatsapp,
     clinicLogoUrl: context.clinic.logoUrl,
     clinicAddress: context.clinic.address,
+    clinicTimeZone: context.clinic.timeZone,
+    timezone: context.clinic.timeZone,
     patientPhotoPolicy: context.clinic.patientPhotoPolicy,
     specialty: context.membership?.specialty || sessionSettings?.specialty || null,
   });
@@ -16123,6 +16216,8 @@ async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
     role: context.membership?.role || baseSessionUser.role,
     clinicId: context.clinic?.id || baseSessionUser.clinicId,
     activeWorkspaceId: context.clinic?.id || baseSessionUser.activeWorkspaceId,
+    clinicTimeZone: context.clinic?.timeZone || baseSessionUser.clinicTimeZone,
+    clinic_timezone: context.clinic?.timeZone || baseSessionUser.clinic_timezone,
     subscriptionStatus: clinicManagedBilling
       ? context.clinic?.subscriptionStatus || baseSessionUser.subscriptionStatus
       : baseSessionUser.subscriptionStatus,
@@ -16387,6 +16482,14 @@ function compactClinicSettingsForSession(settings: any) {
     clinicDistrict: sanitizeString(settings.clinicDistrict || settings.district, 120) || null,
     clinicCity: sanitizeString(settings.clinicCity || settings.city, 120) || null,
     clinicState: sanitizeString(settings.clinicState || settings.state, 2).toUpperCase() || null,
+    clinicTimeZone: resolveClinicTimeZone({
+      timeZone: settings.clinicTimeZone || settings.timezone,
+      state: settings.clinicState || settings.state,
+    }),
+    timezone: resolveClinicTimeZone({
+      timeZone: settings.clinicTimeZone || settings.timezone,
+      state: settings.clinicState || settings.state,
+    }),
     clinicPostalCode: sanitizeString(settings.clinicPostalCode || settings.postalCode, 20).replace(/\D/g, '') || null,
     clinicCnesCode: sanitizeString(settings.clinicCnesCode || settings.cnesCode, 40).replace(/\D/g, '') || null,
     clinicProviderCode: sanitizeString(settings.clinicProviderCode || settings.providerCode, 80) || null,
@@ -16579,6 +16682,16 @@ function buildSessionUserPayload(input: any) {
     miniCurriculum:
       sanitizeString(input?.miniCurriculum || input?.clinicSettings?.therapistMiniCurriculum, 3000) ||
       null,
+    clinicTimeZone: resolveClinicTimeZone({
+      timeZone: input?.clinicTimeZone || input?.clinic_timezone || input?.clinicSettings?.clinicTimeZone || input?.clinicSettings?.timezone,
+      state: input?.clinicSettings?.clinicState || input?.clinicSettings?.state,
+      fallback: process.env.DEFAULT_CLINIC_TIMEZONE || DEFAULT_CLINIC_TIME_ZONE,
+    }),
+    clinic_timezone: resolveClinicTimeZone({
+      timeZone: input?.clinicTimeZone || input?.clinic_timezone || input?.clinicSettings?.clinicTimeZone || input?.clinicSettings?.timezone,
+      state: input?.clinicSettings?.clinicState || input?.clinicSettings?.state,
+      fallback: process.env.DEFAULT_CLINIC_TIMEZONE || DEFAULT_CLINIC_TIME_ZONE,
+    }),
     clinicSettings: compactClinicSettingsForSession(input?.clinicSettings),
     professionalProfile: professionalProfile
       ? cleanObject({
@@ -20106,6 +20219,176 @@ async function startServer() {
       200,
     );
 
+  const stripeTimestampToIso = (value: unknown): string | null => {
+    const seconds = Number(value || 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    return new Date(seconds * 1000).toISOString();
+  };
+
+  const stripeInvoicePeriodBounds = (invoice: Stripe.Invoice) => {
+    const lines = Array.isArray((invoice as any)?.lines?.data)
+      ? (invoice as any).lines.data
+      : [];
+    const starts = lines
+      .map((line: any) => Number(line?.period?.start || 0))
+      .filter((value: number) => Number.isFinite(value) && value > 0);
+    const ends = lines
+      .map((line: any) => Number(line?.period?.end || 0))
+      .filter((value: number) => Number.isFinite(value) && value > 0);
+    return {
+      periodStart: starts.length ? new Date(Math.min(...starts) * 1000).toISOString() : null,
+      periodEnd: ends.length ? new Date(Math.max(...ends) * 1000).toISOString() : null,
+    };
+  };
+
+  const persistPlatformSubscriptionFinancialState = async (params: {
+    subscription: Stripe.Subscription;
+    organizationId?: string | null;
+    offerId?: string | null;
+    leadId?: string | null;
+    invoice?: Stripe.Invoice | null;
+    paid?: boolean;
+  }) => {
+    const subscription = params.subscription;
+    const subscriptionId = sanitizeString(subscription?.id, 200);
+    if (!subscriptionId) return;
+    const invoice = params.invoice || null;
+    const nowIso = new Date().toISOString();
+    const organizationId = sanitizeString(
+      params.organizationId || (subscription.metadata as any)?.clinicId,
+      120,
+    );
+    const offerId = sanitizeString(
+      params.offerId || (subscription.metadata as any)?.offerId,
+      120,
+    );
+    const leadId = sanitizeString(
+      params.leadId || (subscription.metadata as any)?.leadId,
+      120,
+    );
+    const paidAt = invoice
+      ? (stripeTimestampToIso((invoice as any)?.status_transitions?.paid_at)
+        || (params.paid && Number((invoice as any)?.amount_paid || 0) > 0 ? nowIso : null))
+      : null;
+    const payload = cleanObject({
+      organization_id: isUuid(organizationId) ? organizationId : null,
+      sales_offer_id: isUuid(offerId) ? offerId : null,
+      sales_lead_id: isUuid(leadId) ? leadId : null,
+      stripe_subscription_id: subscriptionId,
+      stripe_customer_id: sanitizeString(String(subscription.customer || ''), 200) || null,
+      stripe_status: sanitizeString(subscription.status, 50) || 'unknown',
+      trial_start_at: stripeTimestampToIso((subscription as any)?.trial_start),
+      trial_ends_at: stripeTimestampToIso((subscription as any)?.trial_end),
+      current_period_start: stripeTimestampToIso((subscription as any)?.current_period_start),
+      current_period_end: stripeTimestampToIso((subscription as any)?.current_period_end),
+      cancel_at_period_end: Boolean((subscription as any)?.cancel_at_period_end),
+      cancel_at: stripeTimestampToIso((subscription as any)?.cancel_at),
+      canceled_at: stripeTimestampToIso((subscription as any)?.canceled_at),
+      last_invoice_id: invoice ? sanitizeString(invoice.id, 200) || null : undefined,
+      last_invoice_status: invoice ? sanitizeString((invoice as any)?.status, 50) || null : undefined,
+      last_invoice_amount_due_cents: invoice ? Math.max(0, Number((invoice as any)?.amount_due || 0)) : undefined,
+      last_invoice_amount_paid_cents: invoice ? Math.max(0, Number((invoice as any)?.amount_paid || 0)) : undefined,
+      ...(params.paid && paidAt ? {
+        first_paid_at: paidAt,
+        last_paid_at: paidAt,
+      } : {}),
+      updated_at: nowIso,
+    });
+    const { data: existing, error: existingError } = await supabase
+      .from('platform_subscription_financial_state')
+      .select('id,first_paid_at,last_paid_at')
+      .eq('stripe_subscription_id', subscriptionId)
+      .maybeSingle();
+    if (existingError && isMissingRelationError(existingError)) return;
+    if (existingError) throw existingError;
+    if (params.paid && paidAt && existing?.first_paid_at) {
+      (payload as any).first_paid_at = existing.first_paid_at;
+    }
+    const { error } = await supabase
+      .from('platform_subscription_financial_state')
+      .upsert([{
+        ...(existing?.id ? { id: existing.id } : {}),
+        ...payload,
+      }], { onConflict: 'stripe_subscription_id' });
+    if (error && !isMissingRelationError(error)) throw error;
+  };
+
+  const persistPlatformBillingInvoiceLedger = async (params: {
+    invoice: Stripe.Invoice;
+    subscription?: Stripe.Subscription | null;
+    organizationId?: string | null;
+    offerId?: string | null;
+    leadId?: string | null;
+    eventId?: string | null;
+    failed?: boolean;
+  }) => {
+    const invoice = params.invoice;
+    const invoiceId = sanitizeString(invoice?.id, 200);
+    if (!invoiceId) return;
+    const subscriptionId = stripeInvoiceSubscriptionId(invoice)
+      || sanitizeString(params.subscription?.id, 200);
+    const subscription = params.subscription || null;
+    const organizationId = sanitizeString(
+      params.organizationId || (subscription?.metadata as any)?.clinicId,
+      120,
+    );
+    const offerId = sanitizeString(
+      params.offerId || (subscription?.metadata as any)?.offerId,
+      120,
+    );
+    const leadId = sanitizeString(
+      params.leadId || (subscription?.metadata as any)?.leadId,
+      120,
+    );
+    const discountCents = Math.max(0, Number(
+      (invoice as any)?.total_discount_amounts?.reduce(
+        (sum: number, item: any) => sum + Number(item?.amount || 0),
+        0,
+      ) || 0,
+    ));
+    const taxCents = Math.max(0, Number(
+      (invoice as any)?.total_tax_amounts?.reduce(
+        (sum: number, item: any) => sum + Number(item?.amount || 0),
+        0,
+      ) || 0,
+    ));
+    const period = stripeInvoicePeriodBounds(invoice);
+    const paidAt = stripeTimestampToIso((invoice as any)?.status_transitions?.paid_at);
+    const failedAt = params.failed ? new Date().toISOString() : null;
+    const payload = {
+      stripe_invoice_id: invoiceId,
+      stripe_subscription_id: subscriptionId || null,
+      stripe_customer_id: sanitizeString(String((invoice as any)?.customer || subscription?.customer || ''), 200) || null,
+      organization_id: isUuid(organizationId) ? organizationId : null,
+      sales_offer_id: isUuid(offerId) ? offerId : null,
+      sales_lead_id: isUuid(leadId) ? leadId : null,
+      status: sanitizeString((invoice as any)?.status, 50) || (params.failed ? 'payment_failed' : 'unknown'),
+      currency: sanitizeString((invoice as any)?.currency, 12).toLowerCase() || 'brl',
+      billing_reason: sanitizeString((invoice as any)?.billing_reason, 80) || null,
+      subtotal_cents: Math.max(0, Number((invoice as any)?.subtotal || 0)),
+      total_cents: Math.max(0, Number((invoice as any)?.total || 0)),
+      amount_due_cents: Math.max(0, Number((invoice as any)?.amount_due || 0)),
+      amount_paid_cents: Math.max(0, Number((invoice as any)?.amount_paid || 0)),
+      amount_remaining_cents: Math.max(0, Number((invoice as any)?.amount_remaining || 0)),
+      discount_cents: discountCents,
+      tax_cents: taxCents,
+      period_start: period.periodStart,
+      period_end: period.periodEnd,
+      paid_at: paidAt,
+      failed_at: failedAt,
+      source_event_id: sanitizeString(params.eventId, 200) || null,
+      metadata: {
+        collectionMethod: sanitizeString((invoice as any)?.collection_method, 40) || null,
+        attemptCount: Math.max(0, Number((invoice as any)?.attempt_count || 0)),
+      },
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabase
+      .from('platform_billing_invoice_ledger')
+      .upsert([payload], { onConflict: 'stripe_invoice_id' });
+    if (error && !isMissingRelationError(error)) throw error;
+  };
+
   const salesAssistedFlowType = (value: unknown) => {
     const flow = sanitizeString(value, 80);
     return flow === "sales_assisted_signup" || flow === "sales_modular_assisted";
@@ -20456,7 +20739,7 @@ async function startServer() {
     }
     const { data: offer, error: offerError } = await supabase
       .from("sales_offers")
-      .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type")
+      .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,modular_snapshot,simulation_snapshot")
       .eq("id", offerId)
       .eq("lead_id", leadId)
       .maybeSingle();
@@ -20469,6 +20752,38 @@ async function startServer() {
     ) {
       throw new Error("SALES_SUBSCRIPTION_LINKAGE_INVALID");
     }
+
+    const { data: billingLead, error: billingLeadError } = await supabase
+      .from("sales_leads")
+      .select("id,converted_clinic_id")
+      .eq("id", leadId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (billingLeadError) throw billingLeadError;
+    const billingOrganizationId = sanitizeString(
+      billingLead?.converted_clinic_id,
+      120,
+    );
+
+    if (invoice) {
+      await persistPlatformBillingInvoiceLedger({
+        invoice,
+        subscription,
+        organizationId: billingOrganizationId,
+        offerId,
+        leadId,
+        eventId: event.id,
+        failed: event.type === "invoice.payment_failed",
+      });
+    }
+    await persistPlatformSubscriptionFinancialState({
+      subscription,
+      organizationId: billingOrganizationId,
+      offerId,
+      leadId,
+      invoice,
+      paid: event.type === "invoice.paid" || event.type === "invoice.payment_succeeded",
+    });
 
     if (
       event.type === "invoice.paid" ||
@@ -20518,17 +20833,7 @@ async function startServer() {
         .eq("stripe_subscription_id", subscription.id);
       if (linkLifecycleError) throw linkLifecycleError;
 
-      const { data: entitlementLead, error: entitlementLeadError } = await supabase
-        .from("sales_leads")
-        .select("id,converted_clinic_id")
-        .eq("id", leadId)
-        .is("deleted_at", null)
-        .maybeSingle();
-      if (entitlementLeadError) throw entitlementLeadError;
-      const organizationId = sanitizeString(
-        entitlementLead?.converted_clinic_id,
-        120,
-      );
+      const organizationId = billingOrganizationId;
       if (isUuid(organizationId)) {
         await applyModularEntitlementsForOrganization({
           offerId,
@@ -24284,6 +24589,203 @@ async function startServer() {
     }
   };
 
+  const resolveAcceptedModularCapacityContract = (offer: any) => {
+    const modularSnapshot =
+      offer?.modular_snapshot && typeof offer.modular_snapshot === "object"
+        ? offer.modular_snapshot
+        : {};
+    const frozenResults =
+      offer?.simulation_snapshot?.results
+      && typeof offer.simulation_snapshot.results === "object"
+        ? offer.simulation_snapshot.results
+        : {};
+    const capacity =
+      modularSnapshot?.basePackage?.capacity
+      || modularSnapshot?.capacity
+      || frozenResults?.basePackage?.capacity
+      || null;
+    if (!capacity || typeof capacity !== "object" || Array.isArray(capacity)) {
+      return null;
+    }
+    if (!validateCustomCapacityPolicy(capacity.policy) || capacity.policy.enabled !== true) {
+      throw new Error("MODULAR_CAPACITY_POLICY_INVALID");
+    }
+    const acceptedCapacityLimitPatients = Number(capacity.totalContractedLimitPatients);
+    const initialCapacityBlocks = Number(capacity.selectedBlocks || 0);
+    const blockSizePatients = Number(capacity.policy.blockSizePatients);
+    const effectiveBlockPriceCents = Number(
+      capacity.effectiveBlockPriceCents ?? capacity.policy.blockPriceCents,
+    );
+    const initialCapacityMonthlyCents = Number(capacity.blocksMonthlyRevenueCents || 0);
+    const safeNonNegativeInteger = (value: number) =>
+      Number.isSafeInteger(value) && value >= 0;
+    if (
+      !Number.isSafeInteger(acceptedCapacityLimitPatients)
+      || acceptedCapacityLimitPatients < 1
+      || !safeNonNegativeInteger(initialCapacityBlocks)
+      || !Number.isSafeInteger(blockSizePatients)
+      || blockSizePatients < 1
+      || !safeNonNegativeInteger(effectiveBlockPriceCents)
+      || !safeNonNegativeInteger(initialCapacityMonthlyCents)
+      || initialCapacityMonthlyCents !== initialCapacityBlocks * effectiveBlockPriceCents
+    ) {
+      throw new Error("MODULAR_CAPACITY_SNAPSHOT_INVALID");
+    }
+    return {
+      acceptedCapacityLimitPatients,
+      initialCapacityBlocks,
+      initialCapacityMonthlyCents,
+      blockSizePatients,
+      blockPriceCents: effectiveBlockPriceCents,
+      gracePeriodDays: Number(capacity.policy.gracePeriodDays),
+      billingAdjustment: "next_cycle" as const,
+      blocksClinicalAccess: false as const,
+      sourceSnapshot: {
+        schemaVersion: Number(capacity.schemaVersion || 1),
+        acceptedCapacityLimitPatients,
+        initialCapacityBlocks,
+        initialCapacityMonthlyCents,
+        blockSizePatients,
+        blockPriceCents: effectiveBlockPriceCents,
+        gracePeriodDays: Number(capacity.policy.gracePeriodDays),
+        billingAdjustment: "next_cycle",
+        blocksClinicalAccess: false,
+        blockPricingBasis: sanitizeString(capacity.blockPricingBasis, 80) || "catalog_fixed",
+        capacityBlockPhases: (Array.isArray(modularSnapshot?.capacityBlockPhases)
+          ? modularSnapshot.capacityBlockPhases
+          : Array.isArray(frozenResults?.commercialPricing?.capacityBlockPhases)
+            ? frozenResults.commercialPricing.capacityBlockPhases
+            : [])
+          .slice(0, 24)
+          .map((phase: any) => ({
+            phaseNumber: Number(phase?.phaseNumber || 0),
+            startsAt: sanitizeString(phase?.startsAt, 80),
+            endsAt: phase?.endsAt == null ? null : sanitizeString(phase.endsAt, 80),
+            blockPriceCents: Number(phase?.blockPriceCents || 0),
+            blocksRevenueCents: Number(phase?.blocksRevenueCents || 0),
+            selectedBlocks: Number(phase?.selectedBlocks || 0),
+          }))
+          .filter((phase: any) =>
+            Number.isSafeInteger(phase.phaseNumber)
+            && phase.phaseNumber > 0
+            && Number.isSafeInteger(phase.blockPriceCents)
+            && phase.blockPriceCents >= 0
+            && Number.isSafeInteger(phase.blocksRevenueCents)
+            && phase.blocksRevenueCents >= 0
+            && Number.isSafeInteger(phase.selectedBlocks)
+            && phase.selectedBlocks >= 0
+            && Boolean(phase.startsAt)
+          ),
+      },
+    };
+  };
+
+  const provisionModularCapacityBillingContract = async (params: {
+    offer: any;
+    organizationId: string;
+    stripeSubscriptionId: string;
+  }) => {
+    const offerId = sanitizeString(params.offer?.id, 120);
+    const leadId = sanitizeString(params.offer?.lead_id, 120);
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const stripeSubscriptionId = sanitizeString(params.stripeSubscriptionId, 200);
+    if (
+      !isUuid(offerId)
+      || !isUuid(leadId)
+      || !isUuid(organizationId)
+      || !stripeSubscriptionId
+      || sanitizeString(params.offer?.offer_type, 30) !== "modular"
+    ) {
+      return null;
+    }
+    const capacity = resolveAcceptedModularCapacityContract(params.offer);
+    if (!capacity) return null;
+
+    const [leadResult, linkResult, existingResult] = await Promise.all([
+      supabase
+        .from("sales_leads")
+        .select("id,converted_clinic_id")
+        .eq("id", leadId)
+        .eq("converted_clinic_id", organizationId)
+        .is("deleted_at", null)
+        .maybeSingle(),
+      supabase
+        .from("sales_checkout_links")
+        .select("id,stripe_subscription_id,stripe_schedule_id")
+        .eq("offer_id", offerId)
+        .eq("stripe_subscription_id", stripeSubscriptionId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("organization_billing_contracts")
+        .select("id,organization_id,sales_offer_id,stripe_subscription_id,status")
+        .eq("organization_id", organizationId)
+        .maybeSingle(),
+    ]);
+    const readError = leadResult.error || linkResult.error || existingResult.error;
+    if (readError) throw readError;
+    if (!leadResult.data) throw new Error("MODULAR_CAPACITY_TENANT_LINKAGE_INVALID");
+    if (!linkResult.data) throw new Error("MODULAR_CAPACITY_CHECKOUT_LINK_MISSING");
+
+    if (existingResult.data) {
+      const sameContract =
+        sanitizeString(existingResult.data.sales_offer_id, 120) === offerId
+        && sanitizeString(existingResult.data.stripe_subscription_id, 200) === stripeSubscriptionId;
+      if (!sameContract) throw new Error("MODULAR_CAPACITY_CONTRACT_CONFLICT");
+      const { error: refreshError } = await supabase
+        .from("organization_billing_contracts")
+        .update({
+          status: "active",
+          stripe_schedule_id: sanitizeString(linkResult.data.stripe_schedule_id, 200) || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existingResult.data.id);
+      if (refreshError) throw refreshError;
+      return existingResult.data.id;
+    }
+
+    const { data: created, error: createError } = await supabase
+      .from("organization_billing_contracts")
+      .insert([{
+        organization_id: organizationId,
+        sales_offer_id: offerId,
+        sales_checkout_link_id: linkResult.data.id,
+        stripe_subscription_id: stripeSubscriptionId,
+        stripe_schedule_id: sanitizeString(linkResult.data.stripe_schedule_id, 200) || null,
+        billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+        status: "active",
+        accepted_capacity_limit_patients: capacity.acceptedCapacityLimitPatients,
+        initial_capacity_blocks: capacity.initialCapacityBlocks,
+        initial_capacity_monthly_cents: capacity.initialCapacityMonthlyCents,
+        block_size_patients: capacity.blockSizePatients,
+        block_price_cents: capacity.blockPriceCents,
+        grace_period_days: capacity.gracePeriodDays,
+        billing_adjustment: capacity.billingAdjustment,
+        blocks_clinical_access: capacity.blocksClinicalAccess,
+        source_snapshot: capacity.sourceSnapshot,
+      }])
+      .select("id")
+      .single();
+    if (createError) throw createError;
+
+    await patchTableSafely("clinics", { column: "id", value: organizationId }, {
+      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+      stripe_subscription_id: stripeSubscriptionId,
+      current_active_patient_limit: capacity.acceptedCapacityLimitPatients,
+      pending_billing_quantity: null,
+      pending_billing_status: null,
+      billing_sync_status: "modular_capacity_contract_ready",
+      billing_sync_error: null,
+      updated_at: new Date().toISOString(),
+    });
+    await queueActivePatientSync(
+      organizationId,
+      "modular_capacity_contract_provisioned",
+    );
+    return created?.id || null;
+  };
+
   async function finalizeSalesActivationForUser(params: {
     email: string;
     userId: string;
@@ -24318,7 +24820,7 @@ async function startServer() {
           .maybeSingle(),
         supabase
           .from("sales_offers")
-          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type")
+          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,modular_snapshot,simulation_snapshot")
           .eq("id", offerId)
           .eq("lead_id", leadId)
           .eq("status", "paid")
@@ -24403,6 +24905,11 @@ async function startServer() {
           stripeSubscriptionId: subscriptionId,
           stripeEventId: `activation:${checkoutSessionId}:${subscriptionId}`,
           status: entitlementStatus,
+        });
+        await provisionModularCapacityBillingContract({
+          offer: offerResult.data,
+          organizationId: params.clinicId,
+          stripeSubscriptionId: subscriptionId,
         });
       }
 
@@ -25403,8 +25910,10 @@ async function startServer() {
       roleToUse = 'coordinator';
     }
 
-    const normalizedPlanName = roleToUse === 'patient' ? 'Paciente' : null;
-    const finalPlanPrice = roleToUse === 'patient' ? 4.90 : null;
+    // Patient access is clinic-managed. The legacy individual R$ 4,90 subscription
+    // is retired and must not leak into SaaS revenue/customer reporting.
+    const normalizedPlanName = null;
+    const finalPlanPrice = null;
 
     const newProfile = cleanObject({
       id: authUser.id,
@@ -34954,7 +35463,11 @@ async function startServer() {
             });
           }
           if (message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED')) {
-            return res.status(403).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED' });
+            return res.status(403).json({
+              success: false,
+              error: 'PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED',
+              message: 'Você não tem permissão para alterar o profissional responsável deste caso.'
+            });
           }
           if (message.includes('PATIENT_NOT_FOUND')) {
             return res.status(404).json({ success: false, error: 'PATIENT_NOT_FOUND' });
@@ -34970,6 +35483,13 @@ async function startServer() {
           }
           if (message.includes('PATIENT_PROFESSIONAL_SPECIALTY_REQUIRED')) {
             return res.status(422).json({ success: false, error: 'PATIENT_PROFESSIONAL_SPECIALTY_REQUIRED' });
+          }
+          if (message.includes('PATIENT_PROFESSIONAL_LINK_LIMIT_REACHED')) {
+            return res.status(409).json({
+              success: false,
+              error: 'PATIENT_PROFESSIONAL_LINK_LIMIT_REACHED',
+              message: 'A equipe do caso já atingiu o limite de profissionais ativos. Encerre um vínculo antes de adicionar um novo responsável.'
+            });
           }
           throw error;
         }
@@ -35248,19 +35768,44 @@ async function startServer() {
       }
       const { data, error } = outcome.result;
       if (error) {
-        const message = sanitizeString(error.message, 200);
-        if (
-          message.includes('PATIENT_NOT_FOUND') ||
-          message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED')
-        ) {
+        const message = sanitizeString(error.message, 400);
+        const code = sanitizeString(error?.code, 40);
+        if (code === '42883' || message.includes('end_patient_professional_link_v1')) {
           return res.status(503).json({
             success: false,
-            error: 'MULTIDISCIPLINARY_MEMBERSHIP_AUTHORITY_MIGRATION_PENDING'
+            error: 'PATIENT_CASE_TEAM_MANAGEMENT_MIGRATION_REQUIRED',
+            message: 'A atualização da equipe do caso precisa da migração mais recente do banco.'
           });
         }
-        return res.status(404).json({
+        if (message.includes('PATIENT_PROFESSIONAL_LINK_PROTECTED_CLINIC_MANAGER')) {
+          return res.status(409).json({
+            success: false,
+            error: 'PATIENT_PROFESSIONAL_LINK_PROTECTED_CLINIC_MANAGER',
+            message: 'Diretores e coordenadores ativos da clínica não podem ser removidos da equipe do caso.'
+          });
+        }
+        if (message.includes('PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED')) {
+          return res.status(403).json({
+            success: false,
+            error: 'PATIENT_PROFESSIONAL_LINK_ACCESS_DENIED',
+            message: 'Você não tem permissão para alterar a equipe deste caso.'
+          });
+        }
+        if (message.includes('PATIENT_NOT_FOUND')) {
+          return res.status(404).json({ success: false, error: 'PATIENT_NOT_FOUND' });
+        }
+        if (message.includes('PATIENT_PROFESSIONAL_LINK_NOT_FOUND')) {
+          return res.status(404).json({ success: false, error: 'PATIENT_PROFESSIONAL_LINK_NOT_FOUND' });
+        }
+        logRouteDbError('/api/patients/:patientId/professional-links/:linkId/end [PATCH]', error, {
+          patientId,
+          linkId,
+          requestId: requestIdForLogs(req),
+        });
+        return res.status(500).json({
           success: false,
-          error: 'PATIENT_PROFESSIONAL_LINK_NOT_FOUND'
+          error: 'PATIENT_PROFESSIONAL_LINK_END_FAILED',
+          message: 'Não foi possível encerrar o vínculo. O histórico foi preservado.'
         });
       }
       return res.json({ success: true, link: data });
@@ -36956,7 +37501,8 @@ async function startServer() {
           patient_profile_type: canonicalProfileType,
           panel_type: canonicalProfileType,
           subscription_status: 'pending',
-          plan_price: 4.90,
+          plan_name: null,
+          plan_price: null,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
           status: 'pending_activation',
           first_login_completed: false,
@@ -44110,6 +44656,18 @@ async function startServer() {
       const clinicDistrict = sanitizeString(clinicSettingsInput?.clinicDistrict || clinicSettingsInput?.district || req.body?.clinicDistrict, 120);
       const clinicCity = sanitizeString(clinicSettingsInput?.clinicCity || clinicSettingsInput?.city || req.body?.clinicCity, 120);
       const clinicState = sanitizeString(clinicSettingsInput?.clinicState || clinicSettingsInput?.state || req.body?.clinicState, 2).toUpperCase();
+      const clinicTimeZone = resolveClinicTimeZone({
+        timeZone:
+          clinicSettingsInput?.clinicTimeZone ||
+          clinicSettingsInput?.timezone ||
+          req.body?.clinicTimeZone ||
+          req.body?.timezone ||
+          req.session.user?.clinicTimeZone ||
+          req.session.user?.clinicSettings?.clinicTimeZone ||
+          req.session.user?.clinicSettings?.timezone,
+        state: clinicState || req.session.user?.clinicSettings?.clinicState || req.session.user?.clinicSettings?.state,
+        fallback: currentClinicTimeZone(req.session.user),
+      });
       const clinicPostalCode = sanitizeString(clinicSettingsInput?.clinicPostalCode || clinicSettingsInput?.postalCode || req.body?.clinicPostalCode, 20).replace(/\D/g, '');
       const clinicCnesCode = sanitizeString(clinicSettingsInput?.clinicCnesCode || clinicSettingsInput?.cnesCode || req.body?.clinicCnesCode, 40).replace(/\D/g, '');
       const clinicPatientPhotoPolicy = sanitizeString(
@@ -44301,6 +44859,8 @@ async function startServer() {
             ...(clinicDistrict ? { clinicDistrict } : {}),
             ...(clinicCity ? { clinicCity } : {}),
             ...(clinicState ? { clinicState } : {}),
+            clinicTimeZone,
+            timezone: clinicTimeZone,
             ...(clinicPostalCode ? { clinicPostalCode } : {}),
             ...(clinicCnesCode ? { clinicCnesCode } : {}),
             patientPhotoPolicy: clinicPatientPhotoPolicy,
@@ -44343,6 +44903,7 @@ async function startServer() {
               district: clinicDistrict || undefined,
               city: clinicCity || undefined,
               state: clinicState || undefined,
+              timezone: clinicTimeZone,
               postal_code: clinicPostalCode || undefined,
               cnes_code: clinicCnesCode || undefined,
               patient_photo_policy: clinicPatientPhotoPolicy,
@@ -44418,6 +44979,8 @@ async function startServer() {
             metadata: mergedMetadata
           });
           req.session.user.signatureDataUrl = resolvedSignatureUrl;
+          req.session.user.clinicTimeZone = clinicTimeZone;
+          req.session.user.clinic_timezone = clinicTimeZone;
           req.session.user.clinicSettings = nextClinicSettings;
           req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(req.session.user.id));
           req.session.user.crp =
@@ -46095,6 +46658,7 @@ async function startServer() {
     'patient_id',
     'patient_name',
     'therapist_id',
+    'therapeutic_plan_id',
     'appointment_id',
     'scheduled_start_at',
     'scheduled_end_at',
@@ -69828,6 +70392,136 @@ async function startServer() {
     'created_at', 'updated_at', 'idempotency_key', 'request_hash', 'pts_payload',
     'pts_schema_version', 'review_due_date', 'last_reviewed_at'
   ].join(',');
+  const loadPtsPlanWriteContext = async (params: {
+    patientId: string;
+    planId: string;
+    organizationId: string;
+    actorId: string;
+    actorRole: string;
+  }) => {
+    const { data: plan, error: planError } = await supabase
+      .from('patient_therapeutic_plans')
+      .select(PATIENT_THERAPEUTIC_PLAN_SELECT)
+      .eq('id', params.planId)
+      .eq('organization_id', params.organizationId)
+      .eq('patient_id', params.patientId)
+      .limit(1)
+      .maybeSingle();
+    if (planError) throw planError;
+    if (!plan || String(plan.mode || '').toLowerCase() !== 'interdisciplinary') {
+      return { plan: null, allowed: false, reason: 'not_found' as const };
+    }
+    if (isTherapeuticPlanManager(params.actorRole)) {
+      return { plan, allowed: true, reason: null };
+    }
+    const permittedIds = new Set([
+      String(plan.responsible_professional_id || ''),
+      ...(Array.isArray(plan.participant_professional_ids) ? plan.participant_professional_ids.map(String) : []),
+    ].filter(Boolean));
+    if (!permittedIds.has(params.actorId)) {
+      return { plan, allowed: false, reason: 'denied' as const };
+    }
+    const { data: actorLink, error: actorLinkError } = await supabase
+      .from('patient_professional_links')
+      .select('permissions,status')
+      .eq('organization_id', params.organizationId)
+      .eq('patient_id', params.patientId)
+      .eq('professional_id', params.actorId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    if (actorLinkError) throw actorLinkError;
+    return {
+      plan,
+      allowed: Boolean(actorLink && (actorLink as any)?.permissions?.write !== false),
+      reason: actorLink && (actorLink as any)?.permissions?.write !== false ? null : 'denied' as const,
+    };
+  };
+
+  const ptsDraftInput = (plan: any, body: any) => {
+    const participantIds = Array.from(new Set([
+      String(plan?.responsible_professional_id || ''),
+      ...(Array.isArray(plan?.participant_professional_ids) ? plan.participant_professional_ids.map(String) : []),
+    ].filter(Boolean)));
+    const specialties = Array.isArray(plan?.participant_specialties) ? plan.participant_specialties.map(String) : [];
+    const normalizedSpecialtyObjectives = normalizeTherapeuticSpecialtyObjectives(
+      body?.specialtyObjectives ?? body?.specialty_objectives ?? plan?.specialty_objectives ?? {},
+      specialties,
+    );
+    if (!normalizedSpecialtyObjectives) return { error: 'THERAPEUTIC_PLAN_SPECIALTY_OBJECTIVES_INVALID' as const };
+    const normalizedPts = stripPtsTrackingFieldsForDraft(normalizePtsClinicalPayload(
+      body?.ptsPayload ?? body?.pts_payload ?? plan?.pts_payload,
+      {
+        participantIds,
+        specialties,
+        defaultCaseManagerId: String(plan?.responsible_professional_id || ''),
+        defaultStartedAt: String(plan?.created_at || '').slice(0, 10),
+      },
+    ));
+    const requestedReviewDueDate = sanitizeString(
+      body?.reviewDueDate ?? body?.review_due_date ?? normalizedPts.nextReviewDate,
+      10,
+    );
+    return {
+      error: null,
+      ptsPayload: sanitizeClinicalPayload(normalizedPts),
+      commonObjectives: sanitizeClinicalPayload(
+        body?.commonObjectives ?? body?.common_objectives ?? normalizedPts.goals.map((goal: any) => goal.title).filter(Boolean),
+      ),
+      specialtyObjectives: sanitizeClinicalPayload(normalizedSpecialtyObjectives),
+      reviewDueDate: /^\d{4}-\d{2}-\d{2}$/.test(requestedReviewDueDate) ? requestedReviewDueDate : null,
+    };
+  };
+
+  const normalizePtsEventPayload = (eventType: string, body: any) => {
+    const payload = body?.payload && typeof body.payload === 'object' && !Array.isArray(body.payload) ? body.payload : {};
+    if (eventType === 'REVIEW_RECORDED') {
+      const summary = sanitizeTextField(payload.summary, 3000);
+      const decisions = sanitizeTextField(payload.decisions, 3000);
+      const nextReviewDateRaw = sanitizeString(payload.nextReviewDate || payload.next_review_date, 10);
+      if (!summary && !decisions) return { error: 'PTS_REVIEW_CONTENT_REQUIRED', payload: null };
+      return {
+        error: null,
+        payload: cleanObject({
+          summary,
+          decisions,
+          nextReviewDate: /^\d{4}-\d{2}-\d{2}$/.test(nextReviewDateRaw) ? nextReviewDateRaw : undefined,
+        }),
+      };
+    }
+    if (eventType === 'RISK_OPENED') {
+      const title = sanitizeTextField(payload.title, 180);
+      if (!title) return { error: 'PTS_RISK_TITLE_REQUIRED', payload: null };
+      const severity = sanitizeString(payload.severity, 30).toLowerCase();
+      return {
+        error: null,
+        payload: cleanObject({
+          title,
+          severity: ['low', 'medium', 'high', 'critical'].includes(severity) ? severity : 'medium',
+          description: sanitizeTextField(payload.description, 1600),
+          responsePlan: sanitizeTextField(payload.responsePlan || payload.response_plan, 2200),
+        }),
+      };
+    }
+    if (eventType === 'TEAM_DECISION_RECORDED') {
+      const decisions = sanitizeTextField(payload.decisions || payload.summary, 3000);
+      return decisions
+        ? { error: null, payload: { decisions } }
+        : { error: 'PTS_TEAM_DECISION_REQUIRED', payload: null };
+    }
+    if (eventType === 'RISK_STATUS_UPDATED' || eventType === 'RISK_RESOLVED') {
+      const status = eventType === 'RISK_RESOLVED' ? 'resolved' : sanitizeString(payload.status, 30).toLowerCase();
+      if (!['active', 'controlled', 'resolved'].includes(status)) return { error: 'PTS_RISK_STATUS_INVALID', payload: null };
+      return { error: null, payload: cleanObject({ status, note: sanitizeTextField(payload.note, 1800) }) };
+    }
+    if (eventType === 'GOAL_STATUS_UPDATED') {
+      const status = sanitizeString(payload.status, 30).toLowerCase();
+      if (!['pending', 'in_progress', 'achieved', 'paused', 'cancelled'].includes(status)) return { error: 'PTS_GOAL_STATUS_INVALID', payload: null };
+      return { error: null, payload: cleanObject({ status, note: sanitizeTextField(payload.note, 1800) }) };
+    }
+    return { error: 'PTS_EVENT_TYPE_INVALID', payload: null };
+  };
+
   const THERAPEUTIC_TARGET_SELECT = [
     'id', 'organization_id', 'clinic_id', 'patient_id', 'program_id', 'name',
     'description', 'target_type', 'phase', 'protocol_id', 'protocol_title',
@@ -69844,7 +70538,6 @@ async function startServer() {
     programId: string;
   }) => {
     if (isTherapeuticPlanManager(params.actorRole)) return true;
-    if (params.actorRole !== 'therapist') return false;
 
     const { data: program, error: programError } = await supabase
       .from('aba_programs')
@@ -69861,7 +70554,7 @@ async function startServer() {
     const [planResult, linkResult] = await Promise.all([
       supabase
         .from('patient_therapeutic_plans')
-        .select('id,patient_id,responsible_professional_id,participant_professional_ids')
+        .select('id,organization_id,clinic_id,patient_id,mode,responsible_professional_id,participant_professional_ids')
         .eq('id', planId)
         .eq('organization_id', params.organizationId)
         .eq('patient_id', params.patientId)
@@ -69869,7 +70562,7 @@ async function startServer() {
         .maybeSingle(),
       supabase
         .from('patient_professional_links')
-        .select('patient_id,professional_id,status,permissions')
+        .select('organization_id,clinic_id,patient_id,professional_id,status,permissions')
         .eq('organization_id', params.organizationId)
         .eq('patient_id', params.patientId)
         .eq('professional_id', params.actorId)
@@ -69886,6 +70579,51 @@ async function startServer() {
       professionalLinks: [linkResult.data]
     });
   };
+
+  const loadSessionSpecialtyPlanContext = async (params: {
+    actorId: string;
+    actorRole: string;
+    organizationId: string;
+    clinicId: string;
+    patientId: string;
+    planId: string;
+  }) => {
+    const { data: plan, error: planError } = await supabase
+      .from('patient_therapeutic_plans')
+      .select('id,organization_id,clinic_id,patient_id,mode,status,specialty,responsible_professional_id,participant_professional_ids')
+      .eq('id', params.planId)
+      .eq('organization_id', params.organizationId)
+      .eq('clinic_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .limit(1)
+      .maybeSingle();
+    if (planError) throw planError;
+    if (!plan) return { plan: null, allowed: false, reason: 'not_found' as const };
+    if (sanitizeString(plan.mode, 40).toLowerCase() === 'interdisciplinary' || sanitizeString(plan.status, 40).toLowerCase() === 'archived') {
+      return { plan, allowed: false, reason: 'invalid_scope' as const };
+    }
+    if (isTherapeuticPlanManager(params.actorRole)) {
+      return { plan, allowed: true, reason: null };
+    }
+    const { data: link, error: linkError } = await supabase
+      .from('patient_professional_links')
+      .select('organization_id,clinic_id,patient_id,professional_id,status,permissions')
+      .eq('organization_id', params.organizationId)
+      .eq('clinic_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .eq('professional_id', params.actorId)
+      .eq('status', 'active')
+      .limit(1)
+      .maybeSingle();
+    if (linkError) throw linkError;
+    const allowed = Boolean(link) && canEditTherapeuticPlanScope(plan, {
+      actorId: params.actorId,
+      actorRole: params.actorRole,
+      professionalLinks: link ? [link] : [],
+    });
+    return { plan, allowed, reason: allowed ? null : 'denied' as const };
+  };
+
   const canActorReadTherapeuticProgram = async (params: {
     actorId: string;
     actorRole: string;
@@ -69894,19 +70632,15 @@ async function startServer() {
     program: any;
   }) => {
     if (isTherapeuticPlanManager(params.actorRole)) return true;
-    if (params.actorRole !== 'therapist') return false;
 
     const patientId = sanitizeString(params.program?.patient_id, 120);
-    const planId = sanitizeString(
-      params.program?.therapeutic_plan_id,
-      120
-    );
+    const planId = sanitizeString(params.program?.therapeutic_plan_id, 120);
     if (!patientId) return false;
 
-    const [linkResult, planResult] = await Promise.all([
+    const [linkResult, planResult, supervisionResult] = await Promise.all([
       supabase
         .from('patient_professional_links')
-        .select('patient_id,professional_id,status,permissions')
+        .select('organization_id,clinic_id,patient_id,professional_id,status,permissions')
         .eq('organization_id', params.organizationId)
         .eq('clinic_id', params.clinicId)
         .eq('patient_id', patientId)
@@ -69917,35 +70651,44 @@ async function startServer() {
       planId
         ? supabase
             .from('patient_therapeutic_plans')
-            .select(
-              'id,patient_id,responsible_professional_id,participant_professional_ids'
-            )
+            .select('id,organization_id,clinic_id,patient_id,mode,responsible_professional_id,participant_professional_ids')
             .eq('id', planId)
             .eq('organization_id', params.organizationId)
             .eq('clinic_id', params.clinicId)
             .eq('patient_id', patientId)
             .limit(1)
             .maybeSingle()
-        : Promise.resolve({ data: null, error: null })
+        : Promise.resolve({ data: null, error: null }),
+      planId
+        ? supabase
+            .from('clinical_supervision_links')
+            .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status')
+            .eq('clinic_id', params.clinicId)
+            .eq('supervisor_user_id', params.actorId)
+            .eq('status', 'active')
+            .or(`patient_id.eq.${patientId},patient_id.is.null`)
+            .limit(100)
+        : Promise.resolve({ data: [], error: null })
     ]);
     if (linkResult.error) throw linkResult.error;
     if (planResult.error) throw planResult.error;
-    if (!linkResult.data || linkResult.data?.permissions?.read === false) {
-      return false;
-    }
+    if (supervisionResult.error) throw supervisionResult.error;
 
     if (planId) {
+      if (!planResult.data) return false;
       return filterTherapeuticPlanProgramsForActor(
         [params.program],
-        planResult.data ? [planResult.data] : [],
+        [planResult.data],
         {
           actorId: params.actorId,
           actorRole: params.actorRole,
-          professionalLinks: [linkResult.data]
+          professionalLinks: linkResult.data ? [linkResult.data] : [],
+          supervisionLinks: supervisionResult.data || []
         }
       ).length === 1;
     }
 
+    if (!linkResult.data || linkResult.data?.permissions?.read === false) return false;
     const legacyResponsibleIds = new Set([
       sanitizeString(params.program?.created_by, 120),
       ...(Array.isArray(params.program?.responsible_professional_ids)
@@ -70372,7 +71115,7 @@ async function startServer() {
           },
         });
       }
-      const [programResult, targetResult, objectiveResult, auditResult, trialResult, planScopeResult, professionalLinkResult] = await Promise.all([
+      const [programResult, targetResult, objectiveResult, auditResult, trialResult, planScopeResult, professionalLinkResult, supervisionLinkResult, ptsWorkspaceResult] = await Promise.all([
         supabase
           .from('aba_programs')
           .select(THERAPEUTIC_PROGRAM_SELECT)
@@ -70418,14 +71161,31 @@ async function startServer() {
           .limit(50),
         supabase
           .from('patient_professional_links')
-          .select('id,professional_id,specialty,case_role,relationship_type,permissions,status')
+          .select('id,organization_id,clinic_id,patient_id,professional_id,specialty,case_role,relationship_type,permissions,status')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .eq('status', 'active')
           .order('relationship_type', { ascending: false })
-          .limit(5)
+          .limit(50),
+        supabase
+          .from('clinical_supervision_links')
+          .select('id,clinic_id,supervisor_user_id,supervised_user_id,patient_id,status,starts_at,ended_at')
+          .eq('clinic_id', clinicId)
+          .eq('supervisor_user_id', actorId)
+          .eq('status', 'active')
+          .or(`patient_id.eq.${patientId},patient_id.is.null`)
+          .limit(100),
+        supabase.rpc('read_patient_pts_workspace_v2', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+        })
       ]);
-      const firstError = [programResult.error, targetResult.error, objectiveResult.error, auditResult.error, trialResult.error, planScopeResult.error, professionalLinkResult.error].find(Boolean);
+      const ptsWorkspaceErrorCode = sanitizeString(ptsWorkspaceResult.error?.message || ptsWorkspaceResult.error?.code, 400);
+      const ptsWorkspaceSchemaMissing = Boolean(ptsWorkspaceResult.error) && (
+        ptsWorkspaceErrorCode.includes('PGRST202')
+        || ptsWorkspaceErrorCode.includes('read_patient_pts_workspace_v2')
+      );
+      const firstError = [programResult.error, targetResult.error, objectiveResult.error, auditResult.error, trialResult.error, planScopeResult.error, professionalLinkResult.error, supervisionLinkResult.error, ptsWorkspaceSchemaMissing ? null : ptsWorkspaceResult.error].find(Boolean);
       if (firstError) {
         if (hasMissingFinancialSchema(firstError) || isMissingRelationError(firstError)) {
           return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_UNAVAILABLE', message: 'A estrutura do Plano terapêutico ainda não foi aplicada.' });
@@ -70435,18 +71195,135 @@ async function startServer() {
 
       const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
       const professionalLinks = professionalLinkResult.data || [];
+      const supervisionLinks = supervisionLinkResult.data || [];
       const accessContext = {
         actorId,
         actorRole,
-        professionalLinks
+        professionalLinks,
+        supervisionLinks
       };
+      const ptsWorkspace = !ptsWorkspaceSchemaMissing && ptsWorkspaceResult.data && typeof ptsWorkspaceResult.data === 'object'
+        ? ptsWorkspaceResult.data as any
+        : { documents: [], versions: [], events: [] };
+      const ptsDocuments = Array.isArray(ptsWorkspace.documents) ? ptsWorkspace.documents : [];
+      const ptsVersions = Array.isArray(ptsWorkspace.versions) ? ptsWorkspace.versions : [];
+      const ptsEvents = Array.isArray(ptsWorkspace.events) ? ptsWorkspace.events : [];
+      const ptsDocumentByPlanId = new Map(ptsDocuments.map((document: any) => [String(document.plan_id), document]));
+      const ptsVersionsByDocumentId = new Map<string, any[]>();
+      const ptsVersionNumberById = new Map<string, number>();
+      for (const version of ptsVersions) {
+        const documentId = String(version?.document_id || '');
+        if (!documentId) continue;
+        const rows = ptsVersionsByDocumentId.get(documentId) || [];
+        rows.push(version);
+        ptsVersionsByDocumentId.set(documentId, rows);
+        if (version?.id) ptsVersionNumberById.set(String(version.id), Number(version.version_number || 0));
+      }
+      const ptsEventsByDocumentId = new Map<string, any[]>();
+      for (const event of ptsEvents) {
+        const documentId = String(event?.document_id || '');
+        if (!documentId) continue;
+        const rows = ptsEventsByDocumentId.get(documentId) || [];
+        rows.push({
+          ...event,
+          occurred_under_version_number: ptsVersionNumberById.get(String(event?.occurred_under_version_id || '')) || null,
+        });
+        ptsEventsByDocumentId.set(documentId, rows);
+      }
+      const buildPtsReadModel = (scope: any, documentEvents: any[] = []) => {
+        const participantIds = Array.from(new Set([
+          String(scope?.responsible_professional_id || ''),
+          ...(Array.isArray(scope?.participant_professional_ids) ? scope.participant_professional_ids.map(String) : []),
+        ].filter(Boolean)));
+        const specialties = Array.isArray(scope?.participant_specialties) ? scope.participant_specialties.map(String) : [];
+        const normalizedPts = normalizePtsClinicalPayload(scope?.pts_payload || {}, {
+          participantIds,
+          specialties,
+          defaultCaseManagerId: String(scope?.responsible_professional_id || ''),
+          defaultStartedAt: String(scope?.created_at || '').slice(0, 10),
+        });
+        const goalStatusById = new Map(normalizedPts.goals.map((goal: any) => [String(goal.id), String(goal.status || 'pending')]));
+        const riskStatusById = new Map(normalizedPts.risks.map((risk: any) => [String(risk.id), String(risk.status || 'active')]));
+        let nextReviewDate = sanitizeString(scope?.review_due_date || normalizedPts.nextReviewDate, 10) || null;
+        let lastReviewAt = scope?.last_reviewed_at || null;
+        const orderedEvents = (Array.isArray(documentEvents) ? documentEvents : []).slice().sort((left: any, right: any) => {
+          const leftAt = new Date(left?.occurred_at || left?.recorded_at || 0).getTime();
+          const rightAt = new Date(right?.occurred_at || right?.recorded_at || 0).getTime();
+          return (Number.isFinite(leftAt) ? leftAt : 0) - (Number.isFinite(rightAt) ? rightAt : 0);
+        });
+        for (const event of orderedEvents) {
+          const eventType = sanitizeString(event?.event_type, 60).toUpperCase();
+          const entityId = sanitizeString(event?.entity_id, 120);
+          const payload = event?.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload : {};
+          if (eventType === 'GOAL_STATUS_UPDATED' && entityId) {
+            const status = sanitizeString(payload?.status, 30).toLowerCase();
+            if (['pending', 'in_progress', 'achieved', 'paused', 'cancelled'].includes(status)) goalStatusById.set(entityId, status);
+          }
+          if (eventType === 'RISK_OPENED' && entityId) riskStatusById.set(entityId, 'active');
+          if (['RISK_STATUS_UPDATED', 'RISK_RESOLVED'].includes(eventType) && entityId) {
+            const status = eventType === 'RISK_RESOLVED' ? 'resolved' : sanitizeString(payload?.status, 30).toLowerCase();
+            if (['active', 'controlled', 'resolved'].includes(status)) riskStatusById.set(entityId, status);
+          }
+          if (eventType === 'REVIEW_RECORDED') {
+            lastReviewAt = event?.occurred_at || event?.recorded_at || lastReviewAt;
+            const eventNextReviewDate = sanitizeString(payload?.nextReviewDate || payload?.next_review_date, 10);
+            if (/^\d{4}-\d{2}-\d{2}$/.test(eventNextReviewDate)) nextReviewDate = eventNextReviewDate;
+          }
+        }
+        const goalStatuses = Array.from(goalStatusById.values());
+        const riskStatuses = Array.from(riskStatusById.values());
+        return {
+          goalsInProgress: goalStatuses.filter((status) => ['pending', 'in_progress'].includes(status)).length,
+          achievedGoals: goalStatuses.filter((status) => status === 'achieved').length,
+          activeRisks: riskStatuses.filter((status) => status === 'active').length,
+          controlledRisks: riskStatuses.filter((status) => status === 'controlled').length,
+          nextReviewDate,
+          lastReviewAt,
+        };
+      };
+
       const visiblePlanScopes = filterTherapeuticPlanScopesForActor(
         planScopeResult.data || [],
         accessContext
-      ).map((scope: any) => ({
-        ...scope,
-        canEdit: canEditTherapeuticPlanScope(scope, accessContext)
-      }));
+      ).map((scope: any) => {
+        const scopeAccess = resolveTherapeuticPlanScopeAccess(scope, accessContext);
+        const canEdit = scopeAccess.canEdit;
+        const accessReason = scopeAccess.reason;
+        if (String(scope?.mode || '').toLowerCase() !== 'interdisciplinary') return { ...scope, canEdit, accessReason };
+        const document = ptsDocumentByPlanId.get(String(scope.id));
+        if (!document) return { ...scope, canEdit, accessReason, pts_lineage: null, pts_events: [], pts_read_model: buildPtsReadModel(scope, []) };
+        const documentVersions = ptsVersionsByDocumentId.get(String(document.id)) || [];
+        const activeVersion = documentVersions.find((version: any) => String(version?.lifecycle_status) === 'ACTIVE') || null;
+        const draftVersion = documentVersions.find((version: any) => String(version?.lifecycle_status) === 'DRAFT') || null;
+        const versionMeta = (version: any, includeSnapshot = false) => version ? {
+          id: version.id,
+          versionNumber: Number(version.version_number || 0),
+          lifecycleStatus: String(version.lifecycle_status || ''),
+          draftRevision: Number(version.draft_revision || 0),
+          replacesVersionId: version.replaces_version_id || null,
+          effectiveFrom: version.effective_from || null,
+          activatedAt: version.activated_at || null,
+          supersededAt: version.superseded_at || null,
+          updatedAt: version.updated_at || null,
+          createdAt: version.created_at || null,
+          authoredBy: version.authored_by || null,
+          ...(includeSnapshot ? { snapshot: version.snapshot || {} } : {}),
+        } : null;
+        const documentEvents = ptsEventsByDocumentId.get(String(document.id)) || [];
+        return {
+          ...scope,
+          canEdit,
+          accessReason,
+          pts_lineage: {
+            documentId: document.id,
+            activeVersion: versionMeta(activeVersion),
+            draftVersion: versionMeta(draftVersion, true),
+            currentVersionNumber: Number(activeVersion?.version_number || draftVersion?.version_number || 1),
+          },
+          pts_events: documentEvents,
+          pts_read_model: buildPtsReadModel(scope, documentEvents),
+        };
+      });
       const visibleProgramRows = filterTherapeuticPlanProgramsForActor(
         programResult.data || [],
         planScopeResult.data || [],
@@ -70486,7 +71363,7 @@ async function startServer() {
               .from('clinic_memberships')
               .select('user_id,clinic_id,role,status')
               .eq('clinic_id', clinicId)
-              .eq('role', 'therapist')
+              .in('role', ['therapist', 'supervisor', 'coordinator', 'director'])
               .eq('status', 'active')
               .in('user_id', linkedProfessionalIds)
               .limit(200),
@@ -70586,18 +71463,86 @@ async function startServer() {
         list.push(event);
         historyByProgram.set(programId, list);
       }
-      const lastAppliedByProgram = new Map<string, string>();
+      const lastAppliedByAnyProgram = new Map<string, string>();
       for (const trial of trialResult.data || []) {
         const programId = sanitizeString((trial as any)?.program_id, 180);
         const occurredAt = sanitizeString((trial as any)?.occurred_at, 80);
-        if (programId && visibleProgramIds.has(programId) && occurredAt && !lastAppliedByProgram.has(programId)) lastAppliedByProgram.set(programId, occurredAt);
+        if (programId && occurredAt && !lastAppliedByAnyProgram.has(programId)) {
+          lastAppliedByAnyProgram.set(programId, occurredAt);
+        }
       }
       const programs = visibleProgramRows.map((program: any) => ({
         ...program,
         targets: targetsByProgram.get(String(program.id)) || [],
         history: historyByProgram.get(String(program.id)) || [],
-        last_applied_at: lastAppliedByProgram.get(String(program.id)) || null
+        last_applied_at: lastAppliedByAnyProgram.get(String(program.id)) || null
       }));
+
+      // PTS consumes an explicit, intentionally small shared projection. It
+      // never receives the private specialty-plan payload merely because the
+      // professional can read the shared PTS. The source plan id is omitted
+      // unless the current actor can independently open that specialty plan.
+      const visiblePlanScopeIds = new Set(visiblePlanScopes.map((scope: any) => String(scope?.id || '')).filter(Boolean));
+      const rawPlanScopeById = new Map((planScopeResult.data || []).map((scope: any) => [String(scope?.id || ''), scope]));
+      const visiblePtsPlanIds = new Set(
+        visiblePlanScopes
+          .filter((scope: any) => String(scope?.mode || '').toLowerCase() === 'interdisciplinary')
+          .map((scope: any) => String(scope?.id || ''))
+          .filter(Boolean)
+      );
+      const hasVisiblePts = visiblePtsPlanIds.size > 0;
+      const ptsSharedEvidence = hasVisiblePts
+        ? (programResult.data || []).flatMap((program: any) => {
+            const sourcePlanId = sanitizeString(program?.therapeutic_plan_id, 120);
+            const sourcePlan: any = rawPlanScopeById.get(sourcePlanId) || null;
+            const sourceMode = String(sourcePlan?.mode || '').toLowerCase();
+            const explicitlyShared = program?.advanced_settings?.shareWithPts === true || program?.advanced_settings?.share_with_pts === true;
+            if (!explicitlyShared || sourceMode !== 'specialty') return [];
+
+            const canOpenSourcePlan = visiblePlanScopeIds.has(sourcePlanId);
+            return [{
+              id: sanitizeString(program?.id, 180),
+              name: sanitizeTextField(program?.name, 240) || 'Evidência compartilhada',
+              objective: sanitizeTextField(program?.objective || program?.description, 1000) || null,
+              category: sanitizeString(program?.category, 80) || null,
+              status: sanitizeString(program?.status, 40) || 'draft',
+              sourceSpecialty: sanitizeTextField(sourcePlan?.specialty, 120) || 'Especialidade não informada',
+              sourcePlanId: canOpenSourcePlan ? sourcePlanId : null,
+              canOpenSourcePlan,
+              sharingMode: 'explicit_specialty_summary',
+              lastAppliedAt: lastAppliedByAnyProgram.get(String(program?.id || '')) || null,
+              reviewDueDate: program?.review_due_date || null,
+              updatedAt: program?.updated_at || null,
+            }];
+          })
+        : [];
+      // Historical programs that were created directly under the old PTS model
+      // remain readable so no clinical history disappears, but they are NOT
+      // promoted to the current shared-evidence boundary. Keeping a separate
+      // projection prevents legacy data from looking like an explicit share.
+      const ptsLegacyEvidence = hasVisiblePts
+        ? (programResult.data || []).flatMap((program: any) => {
+            const sourcePlanId = sanitizeString(program?.therapeutic_plan_id, 120);
+            const sourcePlan: any = rawPlanScopeById.get(sourcePlanId) || null;
+            const sourceMode = String(sourcePlan?.mode || '').toLowerCase();
+            if (sourceMode !== 'interdisciplinary' || !visiblePtsPlanIds.has(sourcePlanId)) return [];
+            return [{
+              id: sanitizeString(program?.id, 180),
+              name: sanitizeTextField(program?.name, 240) || 'Registro clínico legado',
+              objective: sanitizeTextField(program?.objective || program?.description, 1000) || null,
+              category: sanitizeString(program?.category, 80) || null,
+              status: sanitizeString(program?.status, 40) || 'draft',
+              sourceSpecialty: 'Interdisciplinar',
+              sourcePlanId: null,
+              canOpenSourcePlan: false,
+              sharingMode: 'legacy_history_only',
+              lastAppliedAt: lastAppliedByAnyProgram.get(String(program?.id || '')) || null,
+              reviewDueDate: program?.review_due_date || null,
+              updatedAt: program?.updated_at || null,
+            }];
+          })
+        : [];
+
       return res.json({
         success: true,
         data: {
@@ -70606,11 +71551,14 @@ async function startServer() {
           targets: visibleTargetRows,
           planScopes: visiblePlanScopes,
           professionalLinks: enrichedProfessionalLinks,
+          ptsSharedEvidence,
+          ptsLegacyEvidence,
           capabilities: {
             actorId,
             actorRole,
             programsEnabled: isAbaV2ApiEnabled(),
             canManageAllPlans: isTherapeuticPlanManager(actorRole),
+            canReviewSupervisedPlans: supervisionLinks.length > 0,
             canCreatePlans:
               isTherapeuticPlanManager(actorRole) ||
               enrichedProfessionalLinks.some((link: any) =>
@@ -70620,7 +71568,7 @@ async function startServer() {
           }
         },
         meta: {
-          queryCount: 7 + (linkedProfessionalIds.length ? 2 : 0),
+          queryCount: 8 + (linkedProfessionalIds.length ? 3 : 0) + (ptsWorkspaceSchemaMissing ? 0 : 1),
           batched: true,
           patientId,
           organizationId
@@ -70875,7 +71823,7 @@ async function startServer() {
         normalizedSpecialtyObjectives,
       );
       const ptsPayload = mode === 'interdisciplinary'
-        ? normalizePtsClinicalPayload(
+        ? stripPtsTrackingFieldsForDraft(normalizePtsClinicalPayload(
             req.body?.ptsPayload ?? req.body?.pts_payload ?? emptyPtsClinicalPayload({
               participantIds: participantProfessionalIds,
               specialties: participantSpecialties,
@@ -70888,7 +71836,7 @@ async function startServer() {
               defaultCaseManagerId: responsibleProfessionalId,
               defaultStartedAt: now.slice(0, 10),
             },
-          )
+          ))
         : {};
       const reviewDueDate = mode === 'interdisciplinary' && ptsPayload.nextReviewDate
         ? ptsPayload.nextReviewDate
@@ -71102,6 +72050,13 @@ async function startServer() {
         ...(Array.isArray(existing.participant_professional_ids) ? existing.participant_professional_ids.map(String) : []),
       ].filter(Boolean)));
       const isPts = String(existing.mode || '').toLowerCase() === 'interdisciplinary';
+      if (isPts) {
+        return res.status(409).json({
+          success: false,
+          error: 'PTS_VERSION_ENDPOINT_REQUIRED',
+          message: 'O PTS usa versões imutáveis. Salve o rascunho ou ative a versão pelo fluxo próprio do PTS.',
+        });
+      }
       const ptsPayload = isPts
         ? normalizePtsClinicalPayload(
             req.body?.ptsPayload ?? req.body?.pts_payload ?? existing.pts_payload,
@@ -71186,6 +72141,222 @@ async function startServer() {
       return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId [PATCH]', error, {
         fallbackMessage: 'Não foi possível atualizar o escopo do Plano terapêutico.'
       });
+    }
+  });
+
+
+  app.post('/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Criação de versão do PTS')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const planId = sanitizeString(req.params.planId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      if (!isUuid(planId) || !isUuid(patientId)) return res.status(400).json({ success: false, error: 'PTS_SCOPE_INVALID' });
+      const access = await loadPtsPlanWriteContext({ patientId, planId, organizationId, actorId, actorRole });
+      if (!access.plan) return res.status(404).json({ success: false, error: 'PTS_NOT_FOUND' });
+      if (!access.allowed) return res.status(403).json({ success: false, error: 'PTS_EDIT_DENIED' });
+      const { data, error } = await supabase.rpc('create_patient_pts_draft_v2', {
+        p_plan_id: planId,
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_actor_id: actorId,
+        p_now: new Date().toISOString(),
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 400);
+        if (code.includes('PGRST202') || code.includes('create_patient_pts_draft_v2')) {
+          return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED', message: 'A migração de versionamento do PTS precisa ser aplicada antes desta ação.' });
+        }
+        throw error;
+      }
+      return res.status(201).json({ success: true, data, message: 'Rascunho criado sem alterar a versão vigente.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft [POST]', error, { fallbackMessage: 'Não foi possível criar a nova versão do PTS.' });
+    }
+  });
+
+  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Rascunho do PTS')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const planId = sanitizeString(req.params.planId, 120);
+      const versionId = sanitizeString(req.params.versionId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const expectedDraftRevision = Number(req.body?.expectedDraftRevision ?? req.body?.expected_draft_revision);
+      if (!isUuid(planId) || !isUuid(versionId) || !isUuid(patientId) || !Number.isSafeInteger(expectedDraftRevision) || expectedDraftRevision < 1) {
+        return res.status(400).json({ success: false, error: 'PTS_DRAFT_SCOPE_INVALID' });
+      }
+      const access = await loadPtsPlanWriteContext({ patientId, planId, organizationId, actorId, actorRole });
+      if (!access.plan) return res.status(404).json({ success: false, error: 'PTS_NOT_FOUND' });
+      if (!access.allowed) return res.status(403).json({ success: false, error: 'PTS_EDIT_DENIED' });
+      const input = ptsDraftInput(access.plan, req.body || {});
+      if (input.error) return res.status(422).json({ success: false, error: input.error, message: 'Revise os campos do PTS antes de salvar.' });
+      const { data, error } = await supabase.rpc('save_patient_pts_draft_v2', {
+        p_plan_id: planId,
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_version_id: versionId,
+        p_expected_draft_revision: expectedDraftRevision,
+        p_common_objectives: input.commonObjectives,
+        p_specialty_objectives: input.specialtyObjectives,
+        p_pts_payload: input.ptsPayload,
+        p_review_due_date: input.reviewDueDate,
+        p_actor_id: actorId,
+        p_now: new Date().toISOString(),
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 400);
+        if (code.includes('PTS_DRAFT_VERSION_CONFLICT')) return res.status(409).json({ success: false, error: 'PTS_DRAFT_VERSION_CONFLICT', message: 'Este rascunho foi atualizado em outro contexto. Recarregue antes de continuar.' });
+        if (code.includes('PTS_DRAFT_NOT_FOUND')) return res.status(409).json({ success: false, error: 'PTS_DRAFT_NOT_FOUND', message: 'Esta versão não é mais um rascunho editável.' });
+        if (code.includes('PGRST202') || code.includes('save_patient_pts_draft_v2')) return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED' });
+        throw error;
+      }
+      return res.json({ success: true, data, message: 'Rascunho salvo. A versão vigente não foi alterada.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId [PATCH]', error, { fallbackMessage: 'Não foi possível salvar o rascunho do PTS.' });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId/activate', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Ativação do PTS')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const planId = sanitizeString(req.params.planId, 120);
+      const versionId = sanitizeString(req.params.versionId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const expectedDraftRevision = Number(req.body?.expectedDraftRevision ?? req.body?.expected_draft_revision);
+      if (!isUuid(planId) || !isUuid(versionId) || !isUuid(patientId) || !Number.isSafeInteger(expectedDraftRevision) || expectedDraftRevision < 1) {
+        return res.status(400).json({ success: false, error: 'PTS_DRAFT_SCOPE_INVALID' });
+      }
+      const access = await loadPtsPlanWriteContext({ patientId, planId, organizationId, actorId, actorRole });
+      if (!access.plan) return res.status(404).json({ success: false, error: 'PTS_NOT_FOUND' });
+      if (!access.allowed) return res.status(403).json({ success: false, error: 'PTS_EDIT_DENIED' });
+      const input = ptsDraftInput(access.plan, req.body || {});
+      if (input.error) return res.status(422).json({ success: false, error: input.error, message: 'Revise os campos do PTS antes de ativar.' });
+      const { data, error } = await supabase.rpc('activate_patient_pts_draft_v3', {
+        p_plan_id: planId,
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_version_id: versionId,
+        p_expected_draft_revision: expectedDraftRevision,
+        p_common_objectives: input.commonObjectives,
+        p_specialty_objectives: input.specialtyObjectives,
+        p_pts_payload: input.ptsPayload,
+        p_review_due_date: input.reviewDueDate,
+        p_actor_id: actorId,
+        p_now: new Date().toISOString(),
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 500);
+        if (code.includes('PTS_DRAFT_VERSION_CONFLICT') || code.includes('PTS_DRAFT_ACTIVATION_CONFLICT')) return res.status(409).json({ success: false, error: 'PTS_DRAFT_VERSION_CONFLICT', message: 'O rascunho mudou durante a ativação. Recarregue e revise antes de tentar novamente.' });
+        if (code.includes('PGRST202') || code.includes('activate_patient_pts_draft_v3')) return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED', message: 'A atualização de persistência do PTS ainda não foi aplicada neste ambiente.' });
+        // Older database functions rolled the save back when activation validation
+        // failed. Never claim that the draft was preserved in that state.
+        if (code.includes('PTS_DRAFT_VALIDATION_FAILED')) return res.status(503).json({ success: false, error: 'PTS_ACTIVATION_PERSISTENCE_MIGRATION_REQUIRED', draftPreserved: false, message: 'Atualize a migration do PTS antes de ativar. O sistema não confirmou a persistência desta tentativa.' });
+        throw error;
+      }
+      if (data && typeof data === 'object' && (data as any).validationFailed === true) {
+        return res.status(422).json({
+          success: false,
+          error: 'PTS_DRAFT_VALIDATION_FAILED',
+          blockingScope: 'activation_only',
+          draftPreserved: true,
+          data: (data as any).version || null,
+          message: 'O rascunho foi salvo. Complete os campos indicados para ativar o PTS; isso não impede continuar editando e salvando o plano.',
+        });
+      }
+      return res.json({ success: true, data, message: 'PTS ativado. A versão anterior foi preservada integralmente.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId/activate [POST]', error, { fallbackMessage: 'Não foi possível ativar o PTS.' });
+    }
+  });
+
+  app.post('/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-events', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Evento do PTS')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+      const planId = sanitizeString(req.params.planId, 120);
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const eventType = sanitizeString(req.body?.eventType || req.body?.event_type, 60).toUpperCase();
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180);
+      const sessionId = sanitizeString(req.body?.sessionId || req.body?.session_id, 180);
+      const requestedEntityId = sanitizeString(req.body?.entityId || req.body?.entity_id, 120);
+      const entityId = requestedEntityId || (eventType === 'RISK_OPENED' ? crypto.randomUUID() : '');
+      const occurredAtRaw = sanitizeString(req.body?.occurredAt || req.body?.occurred_at, 80);
+      const occurredAtDate = occurredAtRaw ? new Date(occurredAtRaw) : new Date();
+      if (!isUuid(planId) || !isUuid(patientId) || idempotencyKey.length < 16 || Number.isNaN(occurredAtDate.getTime()) || occurredAtDate.getTime() > Date.now() + 5 * 60 * 1000) {
+        return res.status(400).json({ success: false, error: 'PTS_EVENT_REQUEST_INVALID' });
+      }
+      if (['RISK_STATUS_UPDATED', 'RISK_RESOLVED', 'GOAL_STATUS_UPDATED'].includes(eventType) && !entityId) {
+        return res.status(422).json({ success: false, error: 'PTS_EVENT_ENTITY_REQUIRED' });
+      }
+      const access = await loadPtsPlanWriteContext({ patientId, planId, organizationId, actorId, actorRole });
+      if (!access.plan) return res.status(404).json({ success: false, error: 'PTS_NOT_FOUND' });
+      if (!access.allowed) return res.status(403).json({ success: false, error: 'PTS_EDIT_DENIED' });
+      const normalizedEvent = normalizePtsEventPayload(eventType, req.body || {});
+      if (normalizedEvent.error || !normalizedEvent.payload) return res.status(422).json({ success: false, error: normalizedEvent.error || 'PTS_EVENT_PAYLOAD_INVALID' });
+
+      let boundVersionId: string | null = null;
+      if (sessionId) {
+        if (!isUuid(organizationId)) return res.status(422).json({ success: false, error: 'PTS_COLLECTION_ORGANIZATION_INVALID' });
+        const resolveResult = await supabase.rpc('resolve_patient_pts_plan_version_v1', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_plan_id: planId,
+          p_source_session_id: sessionId,
+          p_actor_id: actorId,
+          p_now: new Date().toISOString(),
+        });
+        if (resolveResult.error) throw resolveResult.error;
+        const { data: contextRow, error: contextError } = await supabase
+          .from('patient_pts_collection_contexts_v1')
+          .select('pts_version_id')
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .eq('source_session_id', sessionId)
+          .eq('plan_id', planId)
+          .limit(1)
+          .maybeSingle();
+        if (contextError) throw contextError;
+        boundVersionId = sanitizeString(contextRow?.pts_version_id, 120) || null;
+        if (!boundVersionId) return res.status(409).json({ success: false, error: 'PTS_COLLECTION_CONTEXT_REQUIRED' });
+      }
+
+      const { data, error } = await supabase.rpc('append_patient_pts_event_v2', {
+        p_plan_id: planId,
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_event_type: eventType,
+        p_entity_id: entityId || null,
+        p_occurred_at: occurredAtDate.toISOString(),
+        p_payload: sanitizeClinicalPayload(normalizedEvent.payload),
+        p_actor_id: actorId,
+        p_idempotency_key: idempotencyKey,
+        p_bound_version_id: boundVersionId,
+        p_now: new Date().toISOString(),
+      });
+      if (error) {
+        const code = sanitizeString(error?.message || error?.code, 500);
+        if (code.includes('PTS_EVENT_IDEMPOTENCY_CONFLICT')) return res.status(409).json({ success: false, error: 'PTS_EVENT_IDEMPOTENCY_CONFLICT' });
+        if (code.includes('PTS_EVENT_ACTIVE_VERSION_REQUIRED')) return res.status(409).json({ success: false, error: 'PTS_ACTIVE_VERSION_REQUIRED' });
+        if (code.includes('PGRST202') || code.includes('append_patient_pts_event_v2')) return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED' });
+        throw error;
+      }
+      return res.status(201).json({ success: true, data, message: 'Evento clínico registrado sem alterar a versão publicada do PTS.' });
+    } catch (error) {
+      return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-events [POST]', error, { fallbackMessage: 'Não foi possível registrar o evento do PTS.' });
     }
   });
 
@@ -71278,7 +72449,7 @@ async function startServer() {
         return res.status(422).json({
           success: false,
           error: 'THERAPEUTIC_PLAN_SCOPE_REQUIRED',
-          message: 'Selecione o plano da especialidade ou o Projeto Terapêutico Singular deste programa.'
+          message: 'Selecione o plano por especialidade deste programa.'
         });
       }
       if (therapeuticPlanId) {
@@ -71287,7 +72458,7 @@ async function startServer() {
         }
         const { data: planScope, error: planScopeError } = await supabase
           .from('patient_therapeutic_plans')
-          .select('id,responsible_professional_id,participant_professional_ids,status')
+          .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,status')
           .eq('id', therapeuticPlanId)
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
@@ -71297,6 +72468,13 @@ async function startServer() {
         if (planScopeError) throw planScopeError;
         if (!planScope) {
           return res.status(404).json({ success: false, error: 'THERAPEUTIC_PLAN_SCOPE_NOT_FOUND' });
+        }
+        if (String(planScope.mode || '').toLowerCase() !== 'specialty') {
+          return res.status(422).json({
+            success: false,
+            error: 'THERAPEUTIC_PROGRAM_SPECIALTY_PLAN_REQUIRED',
+            message: 'Novos programas devem ser criados dentro de um plano por especialidade. O PTS permanece como plano compartilhado da equipe.'
+          });
         }
         const scopeParticipantIds = new Set([
           String(planScope.responsible_professional_id || ''),
@@ -71470,6 +72648,11 @@ async function startServer() {
         p_targets: sanitizeClinicalPayload(targets),
         p_advanced_settings: sanitizeClinicalPayload({
           ...(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+          shareWithPts:
+            req.body?.advancedSettings?.shareWithPts === true
+            || req.body?.advancedSettings?.share_with_pts === true
+            || req.body?.advanced_settings?.shareWithPts === true
+            || req.body?.advanced_settings?.share_with_pts === true,
           ...(therapeuticPlanScope?.id
             ? { therapeuticPlanId: therapeuticPlanScope.id }
             : {}),
@@ -71613,7 +72796,14 @@ async function startServer() {
         p_category: sanitizeString(req.body?.category || 'OUTRO', 120),
         p_measurement_type: sanitizeString(req.body?.measurementType || req.body?.measurement_type || 'independent_prompted_no_response', 80),
         p_mastery_criteria: sanitizeClinicalPayload(req.body?.masteryCriteria || req.body?.mastery_criteria || {}),
-        p_advanced_settings: sanitizeClinicalPayload(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+        p_advanced_settings: sanitizeClinicalPayload({
+          ...(req.body?.advancedSettings || req.body?.advanced_settings || {}),
+          shareWithPts:
+            req.body?.advancedSettings?.shareWithPts === true
+            || req.body?.advancedSettings?.share_with_pts === true
+            || req.body?.advanced_settings?.shareWithPts === true
+            || req.body?.advanced_settings?.share_with_pts === true,
+        }),
         p_targets: sanitizeClinicalPayload(targets),
         p_review_due_date: sanitizeIsoDateOnly(req.body?.reviewDueDate || req.body?.review_due_date) || null,
         p_expected_version: Number.isFinite(Number(req.body?.expectedVersion ?? req.body?.expected_version)) ? Number(req.body?.expectedVersion ?? req.body?.expected_version) : null,
@@ -72664,7 +73854,7 @@ async function startServer() {
     const clinicId = sanitizeString(currentClinicId(user), 120);
     let query = supabase
       .from('aba_sessions')
-      .select('id,clinic_id,patient_id,therapist_id,appointment_id,status,reference_date,scheduled_start_at,actual_start_at,started_at,created_at')
+      .select('id,clinic_id,patient_id,therapist_id,therapeutic_plan_id,appointment_id,status,reference_date,scheduled_start_at,actual_start_at,started_at,created_at')
       .eq('id', safeSessionId);
     if (!hasGlobalClinicAccess(user) && clinicId) query = query.eq('clinic_id', clinicId);
     if (sanitizeString(user?.role, 40).toLowerCase() === 'therapist') {
@@ -72683,6 +73873,49 @@ async function startServer() {
     return { ok: true, session: data, patientId, clinicId: sanitizeString(data.clinic_id || clinicId, 120) };
   };
 
+
+  const validateAbaSessionTargetPlanScope = async (params: {
+    organizationId: string;
+    patientId: string;
+    therapeuticPlanId: string;
+    targetIds: string[];
+  }) => {
+    const targetIds = Array.from(new Set((params.targetIds || []).map((value) => sanitizeString(value, 180)).filter(Boolean))).slice(0, 200);
+    if (!params.therapeuticPlanId || targetIds.length === 0) return { ok: true };
+    const { data: targetRows, error: targetError } = await supabase
+      .from('aba_targets')
+      .select('id,program_id')
+      .eq('clinic_id', params.organizationId)
+      .eq('patient_id', params.patientId)
+      .in('id', targetIds)
+      .limit(200);
+    if (targetError) throw targetError;
+    const programIds = Array.from(new Set((targetRows || []).map((row: any) => sanitizeString(row?.program_id, 180)).filter(Boolean)));
+    if (programIds.length === 0) return { ok: true, conflictingTargetIds: [] as string[] };
+    const { data: programRows, error: programError } = await supabase
+      .from('aba_programs')
+      .select('id,therapeutic_plan_id')
+      .eq('clinic_id', params.organizationId)
+      .eq('patient_id', params.patientId)
+      .in('id', programIds)
+      .limit(200);
+    if (programError) throw programError;
+    const planIdByProgramId = new Map(
+      (programRows || []).map((program: any) => [
+        sanitizeString(program?.id, 180),
+        sanitizeString(program?.therapeutic_plan_id, 120),
+      ]),
+    );
+    const conflictingTargetIds = (targetRows || []).flatMap((target: any) => {
+      const targetId = sanitizeString(target?.id, 180);
+      const programId = sanitizeString(target?.program_id, 180);
+      const planId = planIdByProgramId.get(programId) || '';
+      return targetId && planId && planId !== params.therapeuticPlanId ? [targetId] : [];
+    });
+    return conflictingTargetIds.length > 0
+      ? { ok: false, code: 'ABA_SESSION_TARGET_PLAN_MISMATCH', conflictingTargetIds }
+      : { ok: true, conflictingTargetIds: [] as string[] };
+  };
 
   const serializeAbaV3BindingForClient = (binding: any) => ({
     bindingId: sanitizeString(binding?.id, 120),
@@ -73617,15 +74850,49 @@ async function startServer() {
         if (sanitizeString((sessionScope as any).patientId, 120) !== patientId || sanitizeString((sessionScope as any).clinicId, 120) !== organizationId) {
           return res.status(403).json({ success: false, code: 'ABA_V3_SESSION_PLAN_SCOPE_DENIED', error: 'Sessão fora do escopo do paciente.' });
         }
-        const { data, error } = await supabase.rpc('get_aba_v3_session_collection_plan', {
-          p_organization_id: organizationId,
-          p_patient_id: patientId,
-          p_session_id: sessionId,
-          p_target_ids: targetIds
-        });
-        if (error) return handleAbaV3ReadRpcError(res, error);
+        const sessionTherapeuticPlanId = sanitizeString((sessionScope as any)?.session?.therapeutic_plan_id, 120);
+        if (sessionTherapeuticPlanId && targetIds.length > 0) {
+          const targetScope = await validateAbaSessionTargetPlanScope({
+            organizationId,
+            patientId,
+            therapeuticPlanId: sessionTherapeuticPlanId,
+            targetIds,
+          });
+          if (!targetScope.ok) {
+            return res.status(409).json({
+              success: false,
+              code: targetScope.code || 'ABA_SESSION_TARGET_PLAN_MISMATCH',
+              error: 'Um ou mais alvos não pertencem ao plano por especialidade fixado nesta sessão.'
+            });
+          }
+        }
+        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+        const [collectionPlanResult, ptsContextResult] = await Promise.all([
+          supabase.rpc('get_aba_v3_session_collection_plan', {
+            p_organization_id: organizationId,
+            p_patient_id: patientId,
+            p_session_id: sessionId,
+            p_target_ids: targetIds
+          }),
+          supabase.rpc('bind_patient_pts_collection_contexts_v1', {
+            p_organization_id: organizationId,
+            p_patient_id: patientId,
+            p_source_session_id: sessionId,
+            p_target_ids: targetIds,
+            p_actor_id: actorId,
+            p_now: new Date().toISOString(),
+          }),
+        ]);
+        if (collectionPlanResult.error) return handleAbaV3ReadRpcError(res, collectionPlanResult.error);
+        if (ptsContextResult.error) {
+          const code = sanitizeString(ptsContextResult.error?.message || ptsContextResult.error?.code, 500);
+          if (code.includes('PGRST202') || code.includes('bind_patient_pts_collection_contexts_v1')) {
+            return res.status(503).json({ success: false, code: 'PTS_CONTEXT_SCHEMA_REQUIRED', error: 'O vínculo imutável entre sessão e versão do PTS ainda não está disponível.' });
+          }
+          throw ptsContextResult.error;
+        }
         res.setHeader('Cache-Control', 'private, no-store');
-        return res.json({ success: true, data: data || { session_id: sessionId, targets: [], v3_behavior_ids: [], complete: true } });
+        return res.json({ success: true, data: collectionPlanResult.data || { session_id: sessionId, targets: [], v3_behavior_ids: [], complete: true } });
       } catch (error: any) {
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }
@@ -74702,7 +75969,29 @@ async function startServer() {
         });
       });
 
-      const availability = resolveMaintenanceProbeAvailability(realTargetSchedules, {
+      const sessionTherapeuticPlanId = sanitizeString(session?.therapeutic_plan_id, 120);
+      let sessionScopedTargetSchedules = realTargetSchedules;
+      if (sessionTherapeuticPlanId && realTargetSchedules.length > 0) {
+        const targetScope = await validateAbaSessionTargetPlanScope({
+          organizationId,
+          patientId,
+          therapeuticPlanId: sessionTherapeuticPlanId,
+          targetIds: realTargetSchedules
+            .map((schedule: any) => sanitizeString(schedule?.target_id || schedule?.targetId, 180))
+            .filter(Boolean),
+        });
+        const conflictingTargetIds = new Set(targetScope.conflictingTargetIds || []);
+        if (conflictingTargetIds.size > 0) {
+          sessionScopedTargetSchedules = realTargetSchedules.filter((schedule: any) => {
+            const targetId = sanitizeString(schedule?.target_id || schedule?.targetId, 180);
+            if (!conflictingTargetIds.has(targetId)) return true;
+            trackFilteredOut('different_specialty_plan');
+            return false;
+          });
+        }
+      }
+
+      const availability = resolveMaintenanceProbeAvailability(sessionScopedTargetSchedules, {
         appointmentId: isUuid(activeAppointmentId) ? activeAppointmentId : null,
         sessionId: requestedSessionId,
         sessionClinicalDate: sessionClinicalDateKey,
@@ -74751,7 +76040,7 @@ async function startServer() {
       const diagnostics = cleanObject({
         resultCount: available.length + upcoming.length,
         appointmentScheduleCount: appointmentScheduleRows.length,
-        sessionScheduleCount: realTargetSchedules.filter((schedule: any) => (
+        sessionScheduleCount: sessionScopedTargetSchedules.filter((schedule: any) => (
           sanitizeString(schedule?.session_id || schedule?.sessionId || readMaintenanceStoredPayload(schedule?.raw_payload || schedule?.rawPayload)?.sessionId || '', 180) === requestedSessionId
         )).length,
         filteredOutCount: Object.values(filteredOutReasons).reduce((total, count) => total + count, 0),
@@ -74805,6 +76094,23 @@ async function startServer() {
     const session = (scope as any).session || {};
     if (sanitizeString((scope as any).patientId, 120) !== patientId) {
       return { ok: false, status: 403, error: 'Sessão ABA fora do escopo do paciente.' };
+    }
+    const sessionTherapeuticPlanId = sanitizeString(session?.therapeutic_plan_id, 120);
+    if (sessionTherapeuticPlanId) {
+      const targetPlanScope = await validateAbaSessionTargetPlanScope({
+        organizationId,
+        patientId,
+        therapeuticPlanId: sessionTherapeuticPlanId,
+        targetIds: [targetId],
+      });
+      if (!targetPlanScope.ok) {
+        return {
+          ok: false,
+          status: 409,
+          code: targetPlanScope.code || 'ABA_SESSION_TARGET_PLAN_MISMATCH',
+          error: 'O alvo desta sondagem não pertence ao plano por especialidade fixado na sessão.',
+        };
+      }
     }
 
     let targetQuery = supabase
@@ -78179,15 +79485,41 @@ async function startServer() {
       if (!allowedContexts.has(context) || !allowedSources.has(source) || !allowedMetricTypes.has(metricType)) {
         return res.status(422).json({ success: false, error: 'CLINICAL_OBSERVATION_CLASSIFICATION_INVALID', message: 'Contexto, fonte ou tipo de métrica inválido.' });
       }
+      const sourceSessionId = sanitizeString(req.body?.sessionId || req.body?.session_id, 120) || null;
+      let authoritativePlanVersion = Math.max(1, Number(planResult.data.edit_version || 1));
+      if (String(planResult.data.mode || '').toLowerCase() === 'interdisciplinary') {
+        if (!isUuid(organizationId)) {
+          return res.status(422).json({ success: false, error: 'PTS_COLLECTION_ORGANIZATION_INVALID' });
+        }
+        const versionResult = await supabase.rpc('resolve_patient_pts_plan_version_v1', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_plan_id: planId,
+          p_source_session_id: sourceSessionId,
+          p_actor_id: actorId,
+          p_now: new Date().toISOString(),
+        });
+        if (versionResult.error) {
+          const code = sanitizeString(versionResult.error?.message || versionResult.error?.code, 500);
+          if (code.includes('PGRST202') || code.includes('resolve_patient_pts_plan_version_v1')) {
+            return res.status(503).json({ success: false, error: 'PTS_CONTEXT_SCHEMA_REQUIRED', message: 'O vínculo entre evidência e versão do PTS ainda não está disponível.' });
+          }
+          if (code.includes('PTS_COLLECTION_SESSION_SCOPE_INVALID') || code.includes('PTS_COLLECTION_VERSION_NOT_FOUND')) {
+            return res.status(409).json({ success: false, error: 'PTS_COLLECTION_CONTEXT_INVALID', message: 'A sessão não possui uma versão válida do PTS para esta coleta.' });
+          }
+          throw versionResult.error;
+        }
+        authoritativePlanVersion = Math.max(1, Number(versionResult.data || 1));
+      }
       const payload = {
         organization_id: organizationId,
         clinic_id: clinicId,
         patient_id: patientId,
         plan_id: planId,
-        plan_version: Math.max(1, Number(req.body?.planVersion || req.body?.plan_version || planResult.data.edit_version || 1)),
+        plan_version: authoritativePlanVersion,
         goal_id: sanitizeString(req.body?.goalId || req.body?.goal_id, 100) || null,
         program_id: sanitizeString(req.body?.programId || req.body?.program_id, 120) || null,
-        session_id: sanitizeString(req.body?.sessionId || req.body?.session_id, 120) || null,
+        session_id: sourceSessionId,
         professional_id: actorId,
         specialty: authoritativeSpecialty || null,
         measure_definition_id: isUuid(req.body?.measureDefinitionId || req.body?.measure_definition_id) ? sanitizeString(req.body?.measureDefinitionId || req.body?.measure_definition_id, 120) : null,
@@ -78278,6 +79610,8 @@ async function startServer() {
     visiblePlanMap: Map<string, any>,
     objectivePlanMap: Map<string, Set<string>>,
     targetById: Map<string, any>,
+    programById: Map<string, any>,
+    ptsVersionBySessionPlan: Map<string, number>,
   ) => {
     const normalized: any[] = [];
     for (const row of Array.isArray(rows) ? rows : []) {
@@ -78293,16 +79627,29 @@ async function startServer() {
       const observedAt = sanitizeString(row?.observed_at, 80) || `${sanitizeString(row?.clinical_date, 20)}T00:00:00.000Z`;
       const coverageStatus = sanitizeString(row?.coverage_status, 80).toUpperCase();
       const missingReason = coverageStatus && coverageStatus !== 'OBSERVED' ? coverageStatus.toLowerCase() : null;
-      const abaTargetId = sanitizeString(row?.value_details?.aba_target_id || row?.target_id, 180);
-      const abaTarget = sourceKind === 'ABA_TARGET' ? targetById.get(abaTargetId) || null : null;
+      const metricKey = sanitizeString(row?.metric_key, 120);
+      const programTargetMatch = metricKey.match(/^program_target:([^:]+):/i);
+      const semanticTargetId = sourceKind === 'ABA_TARGET'
+        ? sanitizeString(row?.value_details?.aba_target_id || row?.target_id, 180)
+        : sanitizeString(programTargetMatch?.[1], 180);
+      const semanticTarget = semanticTargetId ? targetById.get(semanticTargetId) || null : null;
+      const semanticProgram = semanticTarget?.program_id ? programById.get(String(semanticTarget.program_id)) || null : null;
+      const targetMasteryCriteria = semanticTarget?.mastery_criteria && typeof semanticTarget.mastery_criteria === 'object' && !Array.isArray(semanticTarget.mastery_criteria) && Object.keys(semanticTarget.mastery_criteria).length > 0
+        ? semanticTarget.mastery_criteria
+        : null;
+      const programMasteryCriteria = semanticProgram?.mastery_criteria && typeof semanticProgram.mastery_criteria === 'object' && !Array.isArray(semanticProgram.mastery_criteria) && Object.keys(semanticProgram.mastery_criteria).length > 0
+        ? semanticProgram.mastery_criteria
+        : null;
       for (const planId of planIds) {
         const plan = visiblePlanMap.get(planId) || {};
+        const sourceSessionId = sanitizeString(row?.session_id, 180);
+        const boundPlanVersion = sourceSessionId ? ptsVersionBySessionPlan.get(`${sourceSessionId}::${planId}`) : undefined;
         normalized.push({
           id: `cmv3:${sanitizeString(row?.expectation_id, 120)}:${planId}`,
           planId,
-          planVersion: Number(plan?.edit_version || 1),
+          planVersion: Number(boundPlanVersion || plan?.edit_version || 1),
           goalId: sanitizeString(row?.goal_id, 120) || objectiveId || null,
-          programId: sanitizeString(row?.program_id, 180) || null,
+          programId: sanitizeString(row?.program_id || semanticProgram?.id, 180) || null,
           sessionId: sanitizeString(row?.session_id, 180) || null,
           professionalId: null,
           specialty: sanitizeTextField(row?.specialty || plan?.specialty, 120) || null,
@@ -78310,7 +79657,7 @@ async function startServer() {
             ? sanitizeString(row?.value_details?.series_key || row?.item_id || row?.target_id, 260) || null
             : sanitizeString(row?.item_id || row?.target_id, 260) || null,
           itemLabel: sanitizeTextField(row?.item_label || row?.metric_label, 220) || null,
-          metricKey: sanitizeString(row?.metric_key, 120) || sanitizeString(row?.definition_id, 120),
+          metricKey: metricKey || sanitizeString(row?.definition_id, 120),
           metricLabel: sanitizeTextField(row?.metric_label, 180) || sanitizeString(row?.metric_key, 120) || 'Métrica clínica',
           metricType: sanitizeString(row?.semantic_family, 40).toLowerCase(),
           unit: normalizedValue.unit,
@@ -78342,11 +79689,15 @@ async function startServer() {
             sourceLatestRecordedAt: row?.source_latest_recorded_at || null,
             computedAt: row?.computed_at || null,
             readModelSource: row?.read_model_source || null,
-            abaTargetId: row?.value_details?.aba_target_id || null,
-            targetDescription: abaTarget?.description || null,
-            masteryCriteria: abaTarget?.mastery_criteria || null,
-            targetType: abaTarget?.target_type || null,
-            targetPhase: abaTarget?.phase || null,
+            abaTargetId: sourceKind === 'ABA_TARGET' ? semanticTargetId || null : null,
+            programTargetId: sourceKind === 'THERAPEUTIC_OBJECTIVE' ? semanticTargetId || null : null,
+            targetDescription: semanticTarget?.description || null,
+            masteryCriteria: targetMasteryCriteria || programMasteryCriteria || null,
+            programMasteryCriteria: programMasteryCriteria || null,
+            criterionSource: targetMasteryCriteria ? 'TARGET' : programMasteryCriteria ? 'PROGRAM_INHERITED' : null,
+            targetType: semanticTarget?.target_type || null,
+            targetPhase: semanticTarget?.phase || null,
+            programMeasurementType: semanticProgram?.measurement_type || null,
             sourceFamily: row?.value_details?.source_family || null,
             requiresReview: row?.value_details?.requires_review === true,
             phaseAssignmentId: row?.value_details?.phase_assignment_id || null,
@@ -78454,7 +79805,7 @@ async function startServer() {
       const dateFromIso = dateFrom.toISOString();
       const dateToIso = dateTo.toISOString();
 
-      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult] = await Promise.all([
+      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult] = await Promise.all([
         supabase
           .from('patient_therapeutic_plans')
           .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,pts_payload,pts_schema_version,review_due_date,last_reviewed_at,status,edit_version,created_at,updated_at')
@@ -78471,7 +79822,7 @@ async function startServer() {
           .limit(20),
         supabase
           .from('aba_programs')
-          .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,name,status,measurement_type,responsible_professional_ids,created_by')
+          .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,name,status,measurement_type,mastery_criteria,responsible_professional_ids,created_by')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .limit(300),
@@ -78523,7 +79874,17 @@ async function startServer() {
           .eq('patient_id', patientId)
           .lte('started_at', dateToIso)
           .order('started_at', { ascending: true })
-          .limit(500)
+          .limit(500),
+        isUuid(organizationId)
+          ? supabase
+              .from('patient_pts_collection_contexts_v1')
+              .select('source_session_id,plan_id,specialty_plan_id,version_number,context_opened_at')
+              .eq('organization_id', organizationId)
+              .eq('patient_id', patientId)
+              .gte('context_opened_at', dateFromIso)
+              .lte('context_opened_at', dateToIso)
+              .limit(2000)
+          : Promise.resolve({ data: [], error: null })
       ]);
 
       const criticalError = [planResult.error, linkResult.error, programResult.error, targetResult.error, snapshotResult.error].find(Boolean);
@@ -78532,6 +79893,20 @@ async function startServer() {
       const clinicalSchemaAvailable = clinicalSchemaResults.every((result: any) => !result.error);
       const unexpectedClinicalError = clinicalSchemaResults.map((result: any) => result.error).find((error: any) => error && !isMissingRelationError(error) && !hasMissingFinancialSchema(error));
       if (unexpectedClinicalError) throw unexpectedClinicalError;
+      if (ptsContextResult.error && !isMissingRelationError(ptsContextResult.error) && !hasMissingFinancialSchema(ptsContextResult.error)) {
+        throw ptsContextResult.error;
+      }
+      const ptsVersionBySessionPlan = new Map<string, number>();
+      for (const contextRow of ptsContextResult.error ? [] : ptsContextResult.data || []) {
+        const sessionId = sanitizeString((contextRow as any)?.source_session_id, 180);
+        const ptsPlanId = sanitizeString((contextRow as any)?.plan_id, 120);
+        const specialtyPlanId = sanitizeString((contextRow as any)?.specialty_plan_id, 120);
+        const versionNumber = Number((contextRow as any)?.version_number || 0);
+        if (sessionId && versionNumber > 0) {
+          if (ptsPlanId) ptsVersionBySessionPlan.set(`${sessionId}::${ptsPlanId}`, versionNumber);
+          if (specialtyPlanId) ptsVersionBySessionPlan.set(`${sessionId}::${specialtyPlanId}`, versionNumber);
+        }
+      }
 
       const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
       const accessContext = { actorId, actorRole, professionalLinks: linkResult.data || [] };
@@ -78582,7 +79957,7 @@ async function startServer() {
             throw v3Result.error;
           }
         } else {
-          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById);
+          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById, programById, ptsVersionBySessionPlan);
         }
       }
 
@@ -78638,7 +80013,7 @@ async function startServer() {
         return {
           id: String(point.id),
           planId,
-          planVersion: null,
+          planVersion: planId && point.sessionId ? ptsVersionBySessionPlan.get(`${String(point.sessionId)}::${planId}`) || null : null,
           goalId: program?.therapeutic_objective_id || null,
           programId: program?.id || null,
           sessionId: point.sessionId || null,
@@ -78668,7 +80043,11 @@ async function startServer() {
             statusLabel: point.statusLabel,
             specialtySource: point.specialtySource,
             targetDescription: target?.description || null,
-            masteryCriteria: target?.mastery_criteria || null,
+            masteryCriteria: target?.mastery_criteria && typeof target.mastery_criteria === 'object' && Object.keys(target.mastery_criteria).length > 0
+              ? target.mastery_criteria
+              : program?.mastery_criteria || null,
+            programMasteryCriteria: program?.mastery_criteria || null,
+            criterionSource: target?.mastery_criteria && typeof target.mastery_criteria === 'object' && Object.keys(target.mastery_criteria).length > 0 ? 'TARGET' : program?.mastery_criteria ? 'PROGRAM_INHERITED' : null,
             targetType: target?.target_type || null,
             targetPhase: target?.phase || null,
           },
@@ -78702,7 +80081,8 @@ async function startServer() {
             status: program.status,
             therapeuticPlanId: program.therapeutic_plan_id || null,
             therapeuticObjectiveId: program.therapeutic_objective_id || null,
-            measurementType: program.measurement_type || null
+            measurementType: program.measurement_type || null,
+            masteryCriteria: program.mastery_criteria || null
           })),
           observations: mergedOutcomes.rows,
           contributions: visibleContributions,
@@ -78714,7 +80094,7 @@ async function startServer() {
           legacyObservationCount
         },
         meta: {
-          queryCount: 9 + v3RpcCount,
+          queryCount: 9 + v3RpcCount + (ptsContextResult.error ? 0 : 1),
           rpcCount: v3RpcCount,
           batched: true,
           periodDays: requestedDays,
@@ -79916,6 +81296,33 @@ async function startServer() {
       });
       if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
 
+      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
+      const sessionActorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+      const sessionActorRole = sanitizeString(req.effectiveClinicRole || req.session.user?.clinicRole || req.session.user?.role, 40).toLowerCase();
+      const requestedTherapeuticPlanId = sanitizeString(req.body?.therapeutic_plan_id || req.body?.therapeuticPlanId, 120);
+      if (requestedTherapeuticPlanId && !isUuid(requestedTherapeuticPlanId)) {
+        return res.status(400).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_INVALID', error: 'Plano terapêutico inválido para esta sessão.' });
+      }
+      if (requestedTherapeuticPlanId) {
+        const planContext = await loadSessionSpecialtyPlanContext({
+          actorId: sessionActorId,
+          actorRole: sessionActorRole,
+          organizationId,
+          clinicId,
+          patientId,
+          planId: requestedTherapeuticPlanId,
+        });
+        if (!planContext.plan) {
+          return res.status(404).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_NOT_FOUND', error: 'Plano por especialidade não encontrado para este paciente.' });
+        }
+        if (planContext.reason === 'invalid_scope') {
+          return res.status(422).json({ success: false, code: 'SESSION_SPECIALTY_PLAN_REQUIRED', error: 'A sessão deve ser iniciada a partir de um plano por especialidade, não do PTS compartilhado.' });
+        }
+        if (!planContext.allowed) {
+          return res.status(403).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_ACCESS_DENIED', error: 'Você não possui vínculo clínico de escrita com este plano.' });
+        }
+      }
+
       const startedAt = sanitizeIsoDateTime(req.body?.started_at || req.body?.startedAt);
       const requestSource = resolveAbaRequestSource(req.body);
       const appointmentStartRequested = ['appointment', 'agenda', 'calendar'].includes(
@@ -80132,6 +81539,18 @@ async function startServer() {
           reasonCode: existingInProgressSession?.id ? 'REUSE_IN_PROGRESS_SESSION' : 'START_ALLOWED'
         });
       }
+      const existingTherapeuticPlanId = sanitizeString(existingInProgressSession?.therapeutic_plan_id, 120);
+      if (existingInProgressSession?.id && requestedTherapeuticPlanId && existingTherapeuticPlanId !== requestedTherapeuticPlanId) {
+        return res.status(409).json({
+          success: false,
+          code: 'SESSION_THERAPEUTIC_PLAN_CONTEXT_IMMUTABLE',
+          error: existingTherapeuticPlanId
+            ? 'Esta sessão já foi aberta em outro plano por especialidade e não pode ser reinterpretada.'
+            : 'Esta sessão já foi aberta sem um plano por especialidade e não pode receber esse vínculo retroativamente.'
+        });
+      }
+      const sessionTherapeuticPlanId = existingTherapeuticPlanId || requestedTherapeuticPlanId || null;
+
       const requestedSessionId = sanitizeString(req.body?.id || req.body?.session_id || req.body?.sessionId || crypto.randomUUID(), 180);
       const sessionId = sanitizeString(existingInProgressSession?.id || requestedSessionId, 180);
       const requestedStatus = normalizeAbaSessionStatus(req.body?.status);
@@ -80209,6 +81628,7 @@ async function startServer() {
         patient_id: patientId,
         patient_name: sanitizeString(req.body?.patient_name || req.body?.patientName, 180),
         therapist_id: resolvedProfessionalId,
+        therapeutic_plan_id: sessionTherapeuticPlanId,
         device_id: sanitizeString(req.body?.device_id || req.body?.deviceId, 180),
         source: requestSource,
         status: sessionStatus,
@@ -80276,7 +81696,9 @@ async function startServer() {
         updated_at: new Date().toISOString()
       });
 
-      const result = await writeAbaRowWithSchemaFallback('aba_sessions', payload, 'upsert');
+      const result = await writeAbaRowWithSchemaFallback('aba_sessions', payload, 'upsert', {
+        criticalColumns: sessionTherapeuticPlanId ? ['therapeutic_plan_id'] : []
+      });
       if (result.error) throw result.error;
       appointmentClaimNeedsRelease = false;
       if (payload.appointment_id) {
@@ -80332,7 +81754,23 @@ async function startServer() {
         }
       }
       console.error('[ABA Sessions] start error:', error?.message || String(error));
-      if (hasMissingFinancialSchema(error) || /claim_appointment_for_session_start_v1|active_aba_session_id|session_start_previous_status|PGRST202|42883|42703/i.test(String(error?.message || error?.code || ''))) {
+      const sessionStartError = String(error?.message || error?.code || '');
+      if (/therapeutic_plan_id|ABA_SESSION_SPECIALTY_PLAN_SCOPE_INVALID|ABA_SESSION_SPECIALTY_PLAN_ACCESS_DENIED|ABA_SESSION_THERAPEUTIC_PLAN_IMMUTABLE/i.test(sessionStartError)) {
+        return res.status(/ACCESS_DENIED/i.test(sessionStartError) ? 403 : /IMMUTABLE/i.test(sessionStartError) ? 409 : 503).json({
+          success: false,
+          code: /ACCESS_DENIED/i.test(sessionStartError)
+            ? 'SESSION_THERAPEUTIC_PLAN_ACCESS_DENIED'
+            : /IMMUTABLE/i.test(sessionStartError)
+              ? 'SESSION_THERAPEUTIC_PLAN_CONTEXT_IMMUTABLE'
+              : 'SESSION_THERAPEUTIC_PLAN_SCHEMA_REQUIRED',
+          error: /ACCESS_DENIED/i.test(sessionStartError)
+            ? 'Você não possui vínculo clínico de escrita com este plano.'
+            : /IMMUTABLE/i.test(sessionStartError)
+              ? 'O plano clínico desta sessão já foi fixado e não pode ser alterado.'
+              : 'A vinculação segura entre sessão e plano por especialidade ainda precisa ser aplicada no banco.'
+        });
+      }
+      if (hasMissingFinancialSchema(error) || /claim_appointment_for_session_start_v1|active_aba_session_id|session_start_previous_status|PGRST202|42883|42703/i.test(sessionStartError)) {
         return res.status(503).json({
           success: false,
           code: 'SESSION_ATTENDANCE_POLICY_MIGRATION_REQUIRED',
@@ -84047,147 +85485,476 @@ async function startServer() {
     }
   });
 
+  type OwnerSaasClientRow = {
+    id: string;
+    clinic_id: string;
+    name: string;
+    email: string;
+    plan_name: string;
+    plan_price: number;
+    subscription_status: string;
+    stripe_status: string | null;
+    trial_ends_at: string | null;
+    first_paid_at: string | null;
+    created_at: string | null;
+    billing_source: string | null;
+    offer_id: string | null;
+    lead_id: string | null;
+    projected_monthly_cents: number;
+    access_recovery?: Record<string, any> | null;
+  };
+
+  const resolveOwnerOfferPhase = (offer: any, atIso = new Date().toISOString()) => {
+    const snapshot = offer?.modular_snapshot && typeof offer.modular_snapshot === 'object'
+      ? offer.modular_snapshot
+      : {};
+    const frozenResults = offer?.simulation_snapshot?.results && typeof offer.simulation_snapshot.results === 'object'
+      ? offer.simulation_snapshot.results
+      : {};
+    const phases = Array.isArray(snapshot?.commercialPhases)
+      ? snapshot.commercialPhases
+      : Array.isArray(frozenResults?.commercialPhases)
+        ? frozenResults.commercialPhases
+        : [];
+    const atMs = Date.parse(atIso);
+    const phase = phases.find((candidate: any) => {
+      const startMs = Date.parse(String(candidate?.startsAt || ''));
+      const endMs = candidate?.endsAt ? Date.parse(String(candidate.endsAt)) : Number.POSITIVE_INFINITY;
+      return Number.isFinite(atMs) && Number.isFinite(startMs) && atMs >= startMs && atMs < endMs;
+    }) || phases[phases.length - 1] || null;
+    const discountEndsAt = sanitizeString(offer?.discount_ends_at, 80);
+    const promotional = discountEndsAt && Date.parse(discountEndsAt) > atMs;
+    const fallbackPeriod = promotional ? frozenResults?.promotional : frozenResults?.postPromotion;
+    return {
+      recurringRevenueCents: Math.max(0, Number(
+        phase?.recurringRevenueCents
+          ?? fallbackPeriod?.recurringRevenueCents
+          ?? snapshot?.postPromotionRecurringRevenueCents
+          ?? offer?.post_discount_monthly_amount_cents
+          ?? snapshot?.promotionalRecurringRevenueCents
+          ?? offer?.promotional_monthly_amount_cents
+          ?? 0,
+      )),
+      directCostCents: (() => {
+        const value = phase?.recurringCostCents ?? fallbackPeriod?.directCostCents;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
+      })(),
+    };
+  };
+
+  const loadOwnerSaasClients = async (): Promise<OwnerSaasClientRow[]> => {
+    const clinicsResult = await supabase
+      .from('clinics')
+      .select('id,name,owner_user_id,subscription_status,stripe_subscription_id,billing_model,is_demo');
+    if (clinicsResult.error) throw clinicsResult.error;
+    const clinics = (clinicsResult.data || []).filter((row: any) => row?.is_demo !== true && isUuid(sanitizeString(row?.id, 120)));
+    const clinicIds = clinics.map((row: any) => sanitizeString(row.id, 120));
+    const ownerIds = clinics.map((row: any) => sanitizeString(row?.owner_user_id, 120)).filter(isUuid);
+
+    const [ownersResult, statesResult, leadsResult] = await Promise.all([
+      ownerIds.length
+        ? supabase.from('users').select('id,name,email,role,subscription_status,plan_name,plan_price,billing_source,created_at').in('id', ownerIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      clinicIds.length
+        ? supabase.from('platform_subscription_financial_state').select('organization_id,sales_offer_id,sales_lead_id,stripe_subscription_id,stripe_status,trial_ends_at,first_paid_at,current_period_end,cancel_at_period_end,canceled_at').in('organization_id', clinicIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      clinicIds.length
+        ? supabase.from('sales_leads').select('id,converted_clinic_id,name,email,clinic_name').in('converted_clinic_id', clinicIds).is('deleted_at', null)
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+    if (ownersResult.error) throw ownersResult.error;
+    if (statesResult.error && !isMissingRelationError(statesResult.error)) throw statesResult.error;
+    if (leadsResult.error && !isMissingRelationError(leadsResult.error)) throw leadsResult.error;
+
+    const ownerById = new Map<string, any>((ownersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const stateByClinic = new Map<string, any>((statesResult.data || []).map((row: any) => [sanitizeString(row.organization_id, 120), row]));
+    const leads = leadsResult.data || [];
+    const leadByClinic = new Map<string, any>();
+    for (const lead of leads) {
+      const clinicId = sanitizeString(lead?.converted_clinic_id, 120);
+      if (clinicId && !leadByClinic.has(clinicId)) leadByClinic.set(clinicId, lead);
+    }
+    const offerIds = Array.from(new Set((statesResult.data || []).map((row: any) => sanitizeString(row?.sales_offer_id, 120)).filter(isUuid)));
+    const leadIds = Array.from(new Set(leads.map((row: any) => sanitizeString(row?.id, 120)).filter(isUuid)));
+    const offersResult = offerIds.length || leadIds.length
+      ? await supabase
+          .from('sales_offers')
+          .select('id,lead_id,status,proposal_name,offer_type,modular_snapshot,simulation_snapshot,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,discount_ends_at,trial_days,stripe_subscription_id,accepted_at,created_at')
+          .in('lead_id', leadIds.length ? leadIds : ['00000000-0000-0000-0000-000000000000'])
+          .order('created_at', { ascending: false })
+      : { data: [], error: null } as any;
+    if (offersResult.error && !isMissingRelationError(offersResult.error)) throw offersResult.error;
+    const offerById = new Map<string, any>((offersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const latestOfferByLead = new Map<string, any>();
+    for (const offer of (offersResult.data || [])) {
+      const leadId = sanitizeString(offer?.lead_id, 120);
+      if (leadId && !latestOfferByLead.has(leadId)) latestOfferByLead.set(leadId, offer);
+    }
+
+    const rows: OwnerSaasClientRow[] = [];
+    for (const clinic of clinics) {
+      const clinicId = sanitizeString(clinic.id, 120);
+      const owner = ownerById.get(sanitizeString(clinic?.owner_user_id, 120));
+      const state = stateByClinic.get(clinicId);
+      const lead = leadByClinic.get(clinicId);
+      const offer = (state?.sales_offer_id ? offerById.get(sanitizeString(state.sales_offer_id, 120)) : null)
+        || (lead?.id ? latestOfferByLead.get(sanitizeString(lead.id, 120)) : null)
+        || null;
+      const complimentary = sanitizeString(owner?.billing_source, 50).toLowerCase() === 'complimentary';
+      const commercialEvidence = Boolean(
+        state?.stripe_subscription_id
+          || sanitizeString(clinic?.stripe_subscription_id, 200)
+          || offer?.stripe_subscription_id
+          || complimentary
+      );
+      if (!commercialEvidence) continue;
+      const stripeStatus = sanitizeString(state?.stripe_status, 50).toLowerCase() || null;
+      const trialDays = Math.max(0, Number(offer?.trial_days || 0));
+      const trialAnchorMs = Date.parse(String(offer?.accepted_at || offer?.created_at || ''));
+      const inferredTrialEndsAt = trialDays > 0 && Number.isFinite(trialAnchorMs)
+        ? new Date(trialAnchorMs + trialDays * 86_400_000).toISOString()
+        : null;
+      const effectiveTrialEndsAt = sanitizeString(state?.trial_ends_at, 80) || inferredTrialEndsAt;
+      const inferredTrialing = !state?.first_paid_at
+        && Boolean(effectiveTrialEndsAt)
+        && Date.parse(String(effectiveTrialEndsAt)) > Date.now();
+      const status = complimentary
+        ? 'complimentary'
+        : stripeStatus === 'trialing' || inferredTrialing
+          ? 'trialing'
+          : ['past_due', 'unpaid'].includes(stripeStatus || '')
+            ? 'delinquent'
+            : ['canceled', 'incomplete_expired'].includes(stripeStatus || '')
+              ? 'cancelled'
+              : state?.first_paid_at
+                ? 'active'
+                : stripeStatus === 'active'
+                  ? 'active'
+                  : sanitizeString(clinic?.subscription_status, 50).toLowerCase() || 'pending';
+      const projected = resolveOwnerOfferPhase(offer).recurringRevenueCents;
+      rows.push({
+        id: sanitizeString(owner?.id, 120) || clinicId,
+        clinic_id: clinicId,
+        name: sanitizeString(clinic?.name || lead?.clinic_name || owner?.name || lead?.name, 180) || 'Clínica',
+        email: sanitizeEmail(owner?.email) || sanitizeEmail(lead?.email) || '',
+        plan_name: sanitizeString(offer?.proposal_name, 120) || (complimentary ? 'Cortesia' : 'Verto'),
+        plan_price: complimentary ? 0 : projected / 100,
+        subscription_status: status,
+        stripe_status: stripeStatus,
+        trial_ends_at: effectiveTrialEndsAt || null,
+        first_paid_at: sanitizeString(state?.first_paid_at, 80) || null,
+        created_at: sanitizeString(owner?.created_at || offer?.created_at, 80) || null,
+        billing_source: complimentary ? 'complimentary' : 'stripe',
+        offer_id: sanitizeString(offer?.id, 120) || null,
+        lead_id: sanitizeString(lead?.id || offer?.lead_id, 120) || null,
+        projected_monthly_cents: projected,
+      });
+    }
+    return rows.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  };
+
+  const loadOwnerAssumptionSets = async () => {
+    const result = await supabase
+      .from('sales_financial_assumption_sets')
+      .select('id,version,name,effective_at,values,source_metadata,created_by,created_at')
+      .order('effective_at', { ascending: false })
+      .order('version', { ascending: false })
+      .limit(100);
+    if (result.error) throw result.error;
+    return result.data || [];
+  };
+
+  const resolveOwnerAssumptionsAt = (rows: any[], atIso: string): SalesAssumptionSnapshot | null => {
+    const atMs = Date.parse(atIso);
+    const row = rows.find((candidate: any) => {
+      const effectiveMs = Date.parse(String(candidate?.effective_at || ''));
+      return Number.isFinite(effectiveMs) && effectiveMs <= atMs;
+    }) || null;
+    return row ? mapSalesAssumptionSnapshot(row) : null;
+  };
+
+  const ownerFixedPoolCents = (snapshot: SalesAssumptionSnapshot | null): number | null => {
+    if (!snapshot) return null;
+    const values = snapshot.values;
+    const parts = [values.meiDasMonthlyCents, values.supabaseMonthlyCostCents, values.railwayMonthlyCostCents];
+    if (!parts.every((value) => value !== null && value !== undefined)) return null;
+    return parts.reduce<number>((sum, value) => sum + Number(value || 0), 0);
+  };
+
+  const ownerInvoiceStripeCostCents = (amountPaidCents: number, invoiceCount: number, snapshot: SalesAssumptionSnapshot | null) => {
+    if (!snapshot) return 0;
+    const feeBp = Math.max(0, Number(snapshot.values.stripeFeeBasisPoints || 0));
+    const fixedFee = Math.max(0, Number(snapshot.values.stripeFixedFeeCents || 0));
+    return Math.round((Math.max(0, amountPaidCents) * feeBp) / 10_000) + Math.max(0, invoiceCount) * fixedFee;
+  };
+
+  const allocateOwnerFixedPoolByContribution = <T extends { contributionCents: number }>(rows: T[], poolCents: number) => {
+    const pool = Math.max(0, Math.round(poolCents || 0));
+    if (!rows.length || pool <= 0) return rows.map((row) => ({ ...row, fixedAllocatedCents: 0 }));
+    const weights = rows.map((row) => Math.max(0, Math.round(Number(row.contributionCents || 0))));
+    const weightTotal = weights.reduce((sum, value) => sum + value, 0);
+    const fallbackWeight = weightTotal > 0 ? null : 1;
+    const denominator = weightTotal > 0 ? weightTotal : rows.length;
+    let allocated = 0;
+    return rows.map((row, index) => {
+      const weight = weightTotal > 0 ? weights[index] : fallbackWeight!;
+      const share = index === rows.length - 1
+        ? pool - allocated
+        : Math.round((pool * weight) / Math.max(1, denominator));
+      allocated += share;
+      return { ...row, fixedAllocatedCents: Math.max(0, share) };
+    });
+  };
+
+  const buildOwnerFinancialOverviewFromLedger = async () => {
+    const now = new Date();
+    const firstMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1));
+    const [ledgerResult, statesResult, clients, assumptionRows, offersResult] = await Promise.all([
+      supabase
+        .from('platform_billing_invoice_ledger')
+        .select('stripe_invoice_id,organization_id,sales_offer_id,status,amount_due_cents,amount_paid_cents,amount_remaining_cents,paid_at,failed_at,period_start,period_end,created_at')
+        .gte('created_at', firstMonth.toISOString())
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('platform_subscription_financial_state')
+        .select('organization_id,sales_offer_id,stripe_status,trial_ends_at,first_paid_at,cancel_at_period_end,current_period_end'),
+      loadOwnerSaasClients(),
+      loadOwnerAssumptionSets(),
+      supabase
+        .from('sales_offers')
+        .select('id,lead_id,proposal_name,modular_snapshot,simulation_snapshot,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,discount_ends_at,created_at'),
+    ]);
+    if (ledgerResult.error && isMissingRelationError(ledgerResult.error)) return null;
+    if (statesResult.error && isMissingRelationError(statesResult.error)) return null;
+    if (ledgerResult.error) throw ledgerResult.error;
+    if (statesResult.error) throw statesResult.error;
+    if (offersResult.error) throw offersResult.error;
+    const offersById = new Map((offersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const clientsByClinic = new Map(clients.map((row) => [row.clinic_id, row]));
+    const monthBuckets = new Map<string, any>();
+    for (let offset = 0; offset < 12; offset += 1) {
+      const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (11 - offset), 1));
+      const key = date.toISOString().slice(0, 7);
+      monthBuckets.set(key, { key, periodStart: date, invoices: [] as any[] });
+    }
+    for (const invoice of (ledgerResult.data || [])) {
+      const stamp = sanitizeString(invoice?.paid_at || invoice?.failed_at || invoice?.created_at, 80);
+      const key = stamp ? stamp.slice(0, 7) : '';
+      if (monthBuckets.has(key)) monthBuckets.get(key).invoices.push(invoice);
+    }
+
+    const monthly: any[] = [];
+    const customerRollup = new Map<string, any>();
+    const planRollup = new Map<string, { planName: string; customers: Set<string>; revenueNetCents: number }>();
+    for (const bucket of monthBuckets.values()) {
+      const monthEnd = new Date(Date.UTC(bucket.periodStart.getUTCFullYear(), bucket.periodStart.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+      const assumptions = resolveOwnerAssumptionsAt(assumptionRows, monthEnd.toISOString());
+      const fixedPool = ownerFixedPoolCents(assumptions) || 0;
+      const paidInvoices = bucket.invoices.filter((row: any) => Number(row?.amount_paid_cents || 0) > 0 && row?.paid_at);
+      const perClinic = new Map<string, any>();
+      for (const invoice of paidInvoices) {
+        const clinicId = sanitizeString(invoice?.organization_id, 120);
+        if (!isUuid(clinicId)) continue;
+        const current = perClinic.get(clinicId) || { clinicId, revenueCents: 0, invoiceCount: 0, offerId: null };
+        current.revenueCents += Math.max(0, Number(invoice.amount_paid_cents || 0));
+        current.invoiceCount += 1;
+        current.offerId = sanitizeString(invoice?.sales_offer_id, 120) || current.offerId;
+        perClinic.set(clinicId, current);
+      }
+      const contributionRows = Array.from(perClinic.values()).map((row: any) => {
+        const offer = row.offerId ? offersById.get(row.offerId) : null;
+        const phase = resolveOwnerOfferPhase(offer, monthEnd.toISOString());
+        const stripeCostCents = ownerInvoiceStripeCostCents(row.revenueCents, row.invoiceCount, assumptions);
+        const directCostCents = phase.directCostCents ?? 0;
+        const contributionCents = row.revenueCents - stripeCostCents - directCostCents;
+        return { ...row, stripeCostCents, directCostCents, contributionCents, offer };
+      });
+      const allocatedRows = allocateOwnerFixedPoolByContribution(contributionRows, fixedPool);
+      const revenueGrossCents = allocatedRows.reduce((sum, row) => sum + row.revenueCents, 0);
+      const variableCostsCents = allocatedRows.reduce((sum, row) => sum + row.stripeCostCents + row.directCostCents, 0);
+      const contributionCents = allocatedRows.reduce((sum, row) => sum + row.contributionCents, 0);
+      const fixedCostsCents = fixedPool;
+      const ebitdaCents = contributionCents - fixedCostsCents;
+      const delinquencyCents = bucket.invoices.reduce((sum: number, row: any) => {
+        const failed = Boolean(row?.failed_at) || ['open', 'payment_failed', 'uncollectible'].includes(sanitizeString(row?.status, 40).toLowerCase());
+        return failed ? sum + Math.max(0, Number(row?.amount_remaining_cents || row?.amount_due_cents || 0)) : sum;
+      }, 0);
+      monthly.push({
+        monthLabel: bucket.periodStart.toLocaleDateString('pt-BR', { month: 'short', timeZone: 'UTC' }).replace('.', ''),
+        periodMonth: bucket.key,
+        revenueGross: revenueGrossCents / 100,
+        deductions: 0,
+        revenueNet: revenueGrossCents / 100,
+        variableCosts: variableCostsCents / 100,
+        fixedCosts: fixedCostsCents / 100,
+        contributionMarginValue: contributionCents / 100,
+        contributionMarginPct: revenueGrossCents > 0 ? (contributionCents / revenueGrossCents) * 100 : 0,
+        ebitda: ebitdaCents / 100,
+        ebitdaPct: revenueGrossCents > 0 ? (ebitdaCents / revenueGrossCents) * 100 : 0,
+        delinquencyAmount: delinquencyCents / 100,
+      });
+      for (const row of allocatedRows) {
+        const client = clientsByClinic.get(row.clinicId);
+        const key = row.clinicId;
+        const existing = customerRollup.get(key) || {
+          customerId: client?.id || key,
+          clinicId: key,
+          name: client?.name || 'Clínica',
+          email: client?.email || '',
+          subscriptionStatus: client?.subscription_status || 'active',
+          revenueNetCents: 0,
+          variableCostCents: 0,
+          fixedCostAllocatedCents: 0,
+          profitCents: 0,
+        };
+        existing.revenueNetCents += row.revenueCents;
+        existing.variableCostCents += row.stripeCostCents + row.directCostCents;
+        existing.fixedCostAllocatedCents += row.fixedAllocatedCents;
+        existing.profitCents += row.contributionCents - row.fixedAllocatedCents;
+        customerRollup.set(key, existing);
+        const planName = sanitizeString(row.offer?.proposal_name, 120) || client?.plan_name || 'Verto';
+        const plan = planRollup.get(planName) || { planName, customers: new Set<string>(), revenueNetCents: 0 };
+        plan.customers.add(key);
+        plan.revenueNetCents += row.revenueCents;
+        planRollup.set(planName, plan);
+      }
+    }
+    const current = monthly[monthly.length - 1] || {
+      revenueGross: 0, deductions: 0, revenueNet: 0, variableCosts: 0, fixedCosts: 0,
+      contributionMarginValue: 0, contributionMarginPct: 0, ebitda: 0, ebitdaPct: 0, delinquencyAmount: 0,
+    };
+    const trialingCustomers = clients.filter((row) => row.subscription_status === 'trialing').map((row) => ({
+      customerId: row.id,
+      clinicId: row.clinic_id,
+      name: row.name,
+      email: row.email,
+      projectedMonthlyAmount: row.projected_monthly_cents / 100,
+      trialEndsAt: row.trial_ends_at,
+    }));
+    const topCustomers = Array.from(customerRollup.values())
+      .map((row: any) => ({
+        customerId: row.customerId,
+        name: row.name,
+        email: row.email,
+        revenueNet: row.revenueNetCents / 100,
+        totalCost: (row.variableCostCents + row.fixedCostAllocatedCents) / 100,
+        variableCost: row.variableCostCents / 100,
+        fixedCostAllocated: row.fixedCostAllocatedCents / 100,
+        profit: row.profitCents / 100,
+        marginPct: row.revenueNetCents > 0 ? (row.profitCents / row.revenueNetCents) * 100 : 0,
+        status: row.subscriptionStatus,
+      }))
+      .sort((a, b) => a.profit - b.profit);
+    const byPlan = Array.from(planRollup.values())
+      .map((row) => ({ planName: row.planName, customers: row.customers.size, revenueNet: row.revenueNetCents / 100 }))
+      .sort((a, b) => b.revenueNet - a.revenueNet);
+    const currentFailed = (ledgerResult.data || []).filter((row: any) => {
+      const stamp = sanitizeString(row?.failed_at || row?.created_at, 80);
+      return stamp.startsWith(now.toISOString().slice(0, 7)) && Math.max(0, Number(row?.amount_remaining_cents || 0)) > 0;
+    });
+    const delinquentCustomers = currentFailed.map((row: any) => {
+      const client = clientsByClinic.get(sanitizeString(row?.organization_id, 120));
+      return {
+        customerId: client?.id || sanitizeString(row?.organization_id, 120),
+        name: client?.name || 'Clínica',
+        email: client?.email || '',
+        delinquencyAmount: Math.max(0, Number(row?.amount_remaining_cents || row?.amount_due_cents || 0)) / 100,
+        openTitles: 1,
+      };
+    });
+    return {
+      source: 'platform_invoice_ledger',
+      allocationMethod: 'contribution_share_pre_fixed',
+      summary: current,
+      monthly,
+      byPlan,
+      topCustomers,
+      delinquentCustomers,
+      trialingCustomers,
+      dataQuality: {
+        realizedRevenueOnly: true,
+        trialRevenueExcluded: true,
+        fixedCostPoolSource: 'latest_effective_financial_assumptions',
+        directCostSource: 'accepted_offer_snapshot',
+        stripeCostSource: 'configured_assumption',
+      },
+    };
+  };
+
   // Legacy route name retained, but authority now comes exclusively from
   // public.platform_admins (with owner MFA still enforced by the middleware).
   const checkOwner = checkPlatformAdmin;
 
-  // Owner-only stats (CEO dashboard)
-  app.get('/api/owner/stats', checkAuth, checkOwner, async (req: any, res) => {
+  // Owner-only SaaS stats. Client authority is the clinic/contract, never a
+  // patient user row. Trialing clinics are visible separately and do not count
+  // as paying revenue until Stripe confirms a paid invoice.
+  app.get('/api/owner/stats', checkAuth, checkOwner, async (_req: any, res) => {
     try {
-      const { count: totalUsers } = await supabase
-        .from('users').select('id', { count: 'exact', head: true });
-
-      const { count: activeUsers } = await supabase
-        .from('users').select('id', { count: 'exact', head: true })
-        .eq('subscription_status', 'active');
-
-      const { data: activeProfiles } = await supabase
-        .from('users').select('plan_price')
-        .eq('subscription_status', 'active');
-
-      const mrr = activeProfiles?.reduce((sum, p) => sum + (p.plan_price || 0), 0) || 0;
-
-      res.json({ success: true, stats: { totalUsers, activeUsers, mrr } });
-    } catch (error) {
+      const clients = await loadOwnerSaasClients();
+      const payingClients = clients.filter((row) => row.subscription_status === 'active' && Boolean(row.first_paid_at));
+      const trialingClients = clients.filter((row) => row.subscription_status === 'trialing');
+      const complimentaryClients = clients.filter((row) => row.subscription_status === 'complimentary');
+      const ledger = await buildOwnerFinancialOverviewFromLedger();
+      return res.json({
+        success: true,
+        stats: {
+          totalUsers: clients.length,
+          activeUsers: payingClients.length,
+          payingClients: payingClients.length,
+          trialingClients: trialingClients.length,
+          complimentaryClients: complimentaryClients.length,
+          mrr: Number(ledger?.summary?.revenueNet || 0),
+        },
+      });
+    } catch (error: any) {
+      console.error('[Owner Finance] stats failed', { message: sanitizeString(error?.message || String(error), 240) });
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
-  app.get('/api/owner/clients', checkAuth, checkOwner, async (req: any, res) => {
+  app.get('/api/owner/clients', checkAuth, checkOwner, async (_req: any, res) => {
     try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('id, name, email, plan_name, plan_price, subscription_status, created_at')
-        .order('created_at', { ascending: false })
-        .limit(500);
-
-      if (error) throw error;
-      return res.json({ success: true, data: data || [] });
-    } catch (error) {
+      const clients = await loadOwnerSaasClients();
+      return res.json({ success: true, data: clients });
+    } catch (error: any) {
+      console.error('[Owner Finance] clients failed', { message: sanitizeString(error?.message || String(error), 240) });
       return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
-  app.get('/api/owner/financial-overview', checkAuth, checkOwner, async (req: any, res) => {
+  app.get('/api/owner/financial-overview', checkAuth, checkOwner, async (_req: any, res) => {
     try {
-      const [summaryRes, monthlyRes, byPlanRes, profitabilityRes, delinquentRes] = await Promise.all([
-        supabase.from('vw_owner_dre_summary').select(OWNER_DRE_SUMMARY_SELECT).single(),
-        supabase.from('vw_owner_dre_monthly').select(OWNER_DRE_MONTHLY_SELECT).order('period_month', { ascending: true }).limit(12),
-        supabase.from('vw_owner_revenue_by_plan').select(OWNER_REVENUE_BY_PLAN_SELECT).order('revenue_net', { ascending: false }).limit(20),
-        supabase.from('vw_owner_customer_profitability').select(OWNER_CUSTOMER_PROFITABILITY_SELECT).order('profit', { ascending: true }).limit(20),
-        supabase.from('vw_owner_delinquent_customers').select(OWNER_DELINQUENT_CUSTOMERS_SELECT).order('delinquency_amount', { ascending: false }).limit(20)
-      ]);
-
-      const missingSchema =
-        hasMissingFinancialSchema(summaryRes.error) ||
-        hasMissingFinancialSchema(monthlyRes.error) ||
-        hasMissingFinancialSchema(byPlanRes.error) ||
-        hasMissingFinancialSchema(profitabilityRes.error) ||
-        hasMissingFinancialSchema(delinquentRes.error);
-
-      if (!missingSchema && !summaryRes.error && !monthlyRes.error && !byPlanRes.error && !profitabilityRes.error && !delinquentRes.error) {
-        const monthly = (monthlyRes.data || []).map((row: any) => ({
-          monthLabel: new Date(row.period_month).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''),
-          revenueNet: Number(row.revenue_net || 0),
-          variableCosts: Number(row.variable_costs || 0),
-          fixedCosts: Number(row.fixed_costs || 0),
-          ebitda: Number(row.ebitda || 0),
-          contributionMarginPct: Number(row.contribution_margin_pct || 0),
-          delinquencyAmount: Number(row.delinquency_amount || 0)
-        }));
-
+      const overview = await buildOwnerFinancialOverviewFromLedger();
+      if (!overview) {
         return res.json({
           success: true,
           data: {
-            source: 'supabase_financial_views',
+            source: 'ledger_schema_pending',
+            allocationMethod: 'contribution_share_pre_fixed',
             summary: {
-              revenueGross: Number(summaryRes.data?.revenue_gross || 0),
-              deductions: Number(summaryRes.data?.deductions || 0),
-              revenueNet: Number(summaryRes.data?.revenue_net || 0),
-              variableCosts: Number(summaryRes.data?.variable_costs || 0),
-              fixedCosts: Number(summaryRes.data?.fixed_costs || 0),
-              contributionMarginValue: Number(summaryRes.data?.contribution_margin_value || 0),
-              contributionMarginPct: Number(summaryRes.data?.contribution_margin_pct || 0),
-              ebitda: Number(summaryRes.data?.ebitda || 0),
-              ebitdaPct: Number(summaryRes.data?.ebitda_pct || 0),
-              delinquencyAmount: Number(summaryRes.data?.delinquency_amount || 0)
+              revenueGross: 0,
+              deductions: 0,
+              revenueNet: 0,
+              variableCosts: 0,
+              fixedCosts: 0,
+              contributionMarginValue: 0,
+              contributionMarginPct: 0,
+              ebitda: 0,
+              ebitdaPct: 0,
+              delinquencyAmount: 0,
             },
-            monthly,
-            byPlan: (byPlanRes.data || []).map((row: any) => ({
-              planName: row.plan_name || 'Nao definido',
-              customers: Number(row.customers || 0),
-              revenueNet: Number(row.revenue_net || 0)
-            })),
-            topCustomers: (profitabilityRes.data || []).map((row: any) => ({
-              customerId: row.customer_id,
-              name: row.name,
-              email: row.email,
-              revenueNet: Number(row.revenue_net || 0),
-              totalCost: Number(row.variable_cost || 0) + Number(row.fixed_cost_allocated || 0),
-              profit: Number(row.profit || 0),
-              marginPct: Number(row.margin_pct || 0),
-              status: row.subscription_status || 'active'
-            })),
-            delinquentCustomers: (delinquentRes.data || []).map((row: any) => ({
-              customerId: row.customer_id,
-              name: row.name,
-              email: row.email,
-              delinquencyAmount: Number(row.delinquency_amount || 0),
-              openTitles: Number(row.open_titles || 0)
-            }))
-          }
+            monthly: [],
+            byPlan: [],
+            topCustomers: [],
+            delinquentCustomers: [],
+            trialingCustomers: [],
+          },
         });
       }
-
-      const { data: users, error: usersError } = await supabase
-        .from('users')
-        .select('id, name, email, plan_name, plan_price, subscription_status, created_at');
-
-      if (usersError) throw usersError;
-
-      return res.json({
-        success: true,
-        data: {
-          source: 'unconfigured',
-          summary: {
-            revenueGross: 0,
-            deductions: 0,
-            revenueNet: 0,
-            variableCosts: 0,
-            fixedCosts: 0,
-            contributionMarginValue: 0,
-            contributionMarginPct: 0,
-            ebitda: 0,
-            ebitdaPct: 0,
-            delinquencyAmount: 0
-          },
-          monthly: [],
-          byPlan: [],
-          topCustomers: [],
-          delinquentCustomers: []
-        }
-      });
-    } catch (error) {
+      return res.json({ success: true, data: overview });
+    } catch (error: any) {
+      console.error('[Owner Finance] overview failed', { message: sanitizeString(error?.message || String(error), 240) });
       return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
@@ -87115,7 +88882,7 @@ async function startServer() {
     "/api/owner/sales/profitability-assumptions",
     checkAuth,
     checkOwner,
-    async (_req: any, res) => {
+    async (req: any, res) => {
       try {
         const { data, error } = await supabase
           .from("sales_financial_assumption_sets")
@@ -87133,10 +88900,27 @@ async function startServer() {
             row.source_metadata,
           ),
         }));
+        const proposalContext =
+          sanitizeString(req.query?.context, 40).toLowerCase() === "new_proposal";
+        let currentAssumptionSet = assumptionSets[0] || null;
+        let portfolioCostAllocation = null;
+        if (proposalContext && data?.[0]) {
+          const allocated = await buildSalesAssumptionsForNewProposal(data[0]);
+          currentAssumptionSet = {
+            ...allocated.assumptions,
+            createdBy: data[0].created_by,
+            createdAt: data[0].created_at,
+            sourceMetadata: normalizeSalesAssumptionSourceMetadata(
+              data[0].source_metadata,
+            ),
+          };
+          portfolioCostAllocation = allocated.portfolioCostAllocation;
+        }
         return res.json({
           success: true,
-          assumptionSet: assumptionSets[0] || null,
+          assumptionSet: currentAssumptionSet,
           assumptionSets,
+          portfolioCostAllocation,
           editableTemplate: buildEmptySalesAssumptionValues(),
           officialPrice: PUBLIC_ACTIVE_PATIENT_PRICE,
           actualDataAvailability: {
@@ -87490,9 +89274,8 @@ async function startServer() {
         ) {
           return sendSalesProfitabilityPolicyRequired(res);
         }
-        const assumptions = mapSalesAssumptionSnapshot(
-          assumptionResult.data,
-        );
+        const { assumptions, portfolioCostAllocation } =
+          await buildSalesAssumptionsForNewProposal(assumptionResult.data);
         const results = calculateSalesModularProposal(
           input,
           catalog,
@@ -87565,6 +89348,7 @@ async function startServer() {
         }
         const resultSnapshot = {
           ...results,
+          portfolioCostAllocation,
           commercialReview: {
             ...review,
             canGeneratePublicOffer:
@@ -87911,9 +89695,10 @@ async function startServer() {
             error: "Selecione uma versão de premissas válida.",
           });
         }
-        const assumptionSnapshot = mapSalesAssumptionSnapshot(
-          assumptionResult.data,
-        );
+        const {
+          assumptions: assumptionSnapshot,
+          portfolioCostAllocation,
+        } = await buildSalesAssumptionsForNewProposal(assumptionResult.data);
         const results = calculateSalesProfitability(
           simulationInput,
           assumptionSnapshot,
@@ -87983,7 +89768,10 @@ async function startServer() {
                 simulationInput.customMonthlyCostCents,
               onboarding_cost_cents: simulationInput.onboardingCostCents,
               assumptions_snapshot: assumptionSnapshot,
-              results_snapshot: results,
+              results_snapshot: {
+                ...results,
+                portfolioCostAllocation,
+              },
               profitability_rating: results.rating,
               internal_justification: justification || null,
               internal_notes:
@@ -88365,8 +90153,8 @@ async function startServer() {
       ) {
         return sendSalesProfitabilityPolicyRequired(res);
       }
-      const assumptions = mapSalesAssumptionSnapshot(
-        assumptionResult.data,
+      const assumptions = normalizeStoredSalesAssumptionSnapshot(
+        simulation.assumptions_snapshot,
       );
       const recalculated = calculateSalesModularProposal(
         input,
@@ -91076,6 +92864,13 @@ async function startServer() {
         120
       );
       const isPatientCheckout = sanitizeString(user.role, 40).toLowerCase() === 'patient';
+      if (isPatientCheckout) {
+        return rejectCheckout(
+          410,
+          'LEGACY_PATIENT_BILLING_RETIRED',
+          'Pacientes não possuem assinatura individual. A cobrança é administrada pela clínica.'
+        );
+      }
       checkoutDiagnostics = {
         ...checkoutDiagnostics,
         organizationIdPresent: Boolean(clinicId),
@@ -91701,9 +93496,10 @@ async function startServer() {
   }, 90 * 1000);
 
   setInterval(() => {
-    void runWithDistributedJobLease('active-patient-retry-drain', 4 * 60, () =>
-      drainActivePatientSyncQueue('scheduled_retry_drain')
-    );
+    void runWithDistributedJobLease('active-patient-retry-drain', 4 * 60, async () => {
+      await enqueueDueCapacityContractBillingSync('scheduled_capacity_grace');
+      await drainActivePatientSyncQueue('scheduled_retry_drain');
+    });
   }, 5 * 60 * 1000);
 
   setInterval(() => {

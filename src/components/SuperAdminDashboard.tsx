@@ -863,6 +863,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const byPlanData = financial.byPlan || [];
   const topCustomers = financial.topCustomers || [];
   const delinquentCustomers = financial.delinquentCustomers || [];
+  const trialingCustomers = financial.trialingCustomers || [];
+  const hasRealFinancialLedger = financial.source === 'platform_invoice_ledger';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F5FBFF] via-[#F8FAFC] to-[#FFF6ED] text-slate-900 flex">
@@ -920,15 +922,23 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
           {activeTab !== 'aba-v3-rollout' && (
             <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
-              Fonte: {financial.source === 'supabase_financial_views' ? 'SQL financeiro ativo' : 'sem dados fictícios'}
+              Fonte: {hasRealFinancialLedger ? 'Stripe + contratos reais' : 'sem dados fictícios'}
             </div>
           )}
         </div>
 
-        {activeTab !== 'aba-v3-rollout' && financial.source !== 'supabase_financial_views' && (
+        {activeTab !== 'aba-v3-rollout' && !hasRealFinancialLedger && (
           <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-bold text-amber-800">
-              A base financeira real ainda não possui lançamentos suficientes. Dados fictícios e estimativas automáticas foram desativados.
+              O ledger financeiro da Verto ainda não está disponível neste ambiente. Nenhum paciente ou dado fictício é usado como receita.
+            </p>
+          </div>
+        )}
+
+        {activeTab !== 'aba-v3-rollout' && hasRealFinancialLedger && Number(summary.revenueNet || 0) === 0 && trialingCustomers.length > 0 && (
+          <div className="mb-6 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
+            <p className="text-sm font-bold text-violet-800">
+              Sem receita realizada neste período. {trialingCustomers.length} cliente(s) está(ão) em teste; o valor previsto só entra no DRE depois que a Stripe confirmar o primeiro pagamento.
             </p>
           </div>
         )}
@@ -946,7 +956,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               <MetricCard title="Margem Contribuicao" value={formatPercent(summary.contributionMarginPct)} icon={<TrendingUp size={20} />} color="bg-emerald-500" />
               <MetricCard title="EBITDA" value={formatCurrency(summary.ebitda)} icon={<BarChart3 size={20} />} color="bg-indigo-500" />
               <MetricCard title="Inadimplencia" value={formatCurrency(summary.delinquencyAmount)} icon={<AlertCircle size={20} />} color="bg-rose-500" />
-              <MetricCard title="Clientes Ativos" value={`${stats?.activeUsers || 0}`} icon={<Users size={20} />} color="bg-amber-500" />
+              <MetricCard title="Clientes Pagantes" value={`${stats?.payingClients ?? stats?.activeUsers ?? 0}`} icon={<Users size={20} />} color="bg-amber-500" />
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -1129,6 +1139,34 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               />
             </div>
 
+            {trialingCustomers.length > 0 && (
+              <div className="bg-white rounded-[28px] p-6 border border-violet-100 shadow-sm">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.16em] text-violet-500">Receita ainda não realizada</p>
+                    <h3 className="mt-1 text-lg font-black">Trials em andamento</h3>
+                  </div>
+                  <span className="rounded-full bg-violet-50 px-3 py-1 text-xs font-black text-violet-700">{trialingCustomers.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {trialingCustomers.map((customer: any) => (
+                    <div key={customer.customerId} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-violet-100 bg-violet-50/50 px-4 py-3">
+                      <div>
+                        <p className="text-sm font-bold text-slate-900">{customer.name || customer.email || 'Clínica'}</p>
+                        <p className="text-xs text-slate-500">{customer.email}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-black text-violet-700">{formatCurrency(customer.projectedMonthlyAmount)} previstos/mês</p>
+                        <p className="text-xs text-slate-500">
+                          {customer.trialEndsAt ? `Teste até ${new Date(customer.trialEndsAt).toLocaleDateString('pt-BR')}` : 'Em período de teste'}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
               <h3 className="text-lg font-black mb-4">Clientes Inadimplentes</h3>
               <div className="space-y-2">
@@ -1166,14 +1204,35 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                         <div className="text-xs text-slate-500">{customer.email}</div>
                       </td>
                       <td className="py-3 text-sm font-semibold">{customer.plan_name || 'Nao definido'}</td>
-                      <td className="py-3 text-sm font-semibold">{formatCurrency(customer.plan_price)}</td>
+                      <td className="py-3">
+                        <div className="text-sm font-semibold">{formatCurrency(customer.plan_price)}</div>
+                        {customer.subscription_status === 'trialing' && (
+                          <div className="text-[10px] font-bold uppercase tracking-[0.1em] text-violet-500">previsto após o trial</div>
+                        )}
+                      </td>
                       <td className="py-3">
                         <span
                           className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-[0.12em] ${
-                            customer.subscription_status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+                            customer.subscription_status === 'active'
+                              ? 'bg-emerald-50 text-emerald-600'
+                              : customer.subscription_status === 'trialing'
+                                ? 'bg-violet-50 text-violet-700'
+                                : customer.subscription_status === 'complimentary'
+                                  ? 'bg-sky-50 text-sky-700'
+                                  : customer.subscription_status === 'cancelled'
+                                    ? 'bg-slate-100 text-slate-500'
+                                    : 'bg-rose-50 text-rose-600'
                           }`}
                         >
-                          {customer.subscription_status === 'active' ? 'ativo' : 'inadimplente'}
+                          {customer.subscription_status === 'active'
+                            ? 'pagante'
+                            : customer.subscription_status === 'trialing'
+                              ? 'em teste'
+                              : customer.subscription_status === 'complimentary'
+                                ? 'cortesia'
+                                : customer.subscription_status === 'cancelled'
+                                  ? 'cancelado'
+                                  : 'inadimplente'}
                         </span>
                       </td>
                       <td className="py-3 text-sm text-slate-500">

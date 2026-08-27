@@ -61,6 +61,208 @@ export type SalesAssumptionSnapshot = {
   sourceDetails?: Partial<Record<keyof SalesAssumptionValues, string>>;
 };
 
+
+export type SalesPortfolioCostAllocation = {
+  modelVersion: '2026-08-portfolio-fixed-v2';
+  taxRegime: 'mei';
+  existingOperationalClinicCount: number;
+  allocatedClinicCount: number;
+  fixedCostPoolCents: number | null;
+  allocatedFixedCostCents: number | null;
+  complete: boolean;
+};
+
+export function applySalesPortfolioCostAllocation(
+  snapshot: SalesAssumptionSnapshot,
+  existingOperationalClinicCount: number
+): { assumptions: SalesAssumptionSnapshot; allocation: SalesPortfolioCostAllocation } {
+  const existingCount = Math.max(0, Math.floor(Number(existingOperationalClinicCount || 0)));
+  const allocatedClinicCount = existingCount + 1;
+  const values = snapshot.values;
+  const fixedParts = [
+    values.meiDasMonthlyCents,
+    values.supabaseMonthlyCostCents,
+    values.railwayMonthlyCostCents
+  ];
+  const complete = fixedParts.every((value) => value !== null && value !== undefined);
+  const fixedCostPoolCents = complete
+    ? fixedParts.reduce<number>((sum, value) => sum + Number(value || 0), 0)
+    : null;
+  const allocatedFixedCostCents = fixedCostPoolCents === null
+    ? null
+    : Math.round(fixedCostPoolCents / allocatedClinicCount);
+  const allocation: SalesPortfolioCostAllocation = {
+    modelVersion: '2026-08-portfolio-fixed-v2',
+    taxRegime: 'mei',
+    existingOperationalClinicCount: existingCount,
+    allocatedClinicCount,
+    fixedCostPoolCents,
+    allocatedFixedCostCents,
+    complete
+  };
+
+  const currentOperatingMarginTargetBasisPoints =
+    values.currentOperatingMarginTargetBasisPoints ?? null;
+  const currentModelOverrides: Partial<SalesAssumptionValues> = {
+    // Everything below used to live in the legacy compatibility bucket. New
+    // modular quotes get technical costs from the catalog cost models instead,
+    // so keeping these global amounts would double count infrastructure,
+    // support/operations or historical provisions.
+    revenueTaxBasisPoints: 0,
+    estimatedDelinquencyBasisPoints: 0,
+    refundChargebackBasisPoints: 0,
+    variablePatientCostCents: 0,
+    variableClinicCostCents: 0,
+    storageCostCents: 0,
+    egressCostCents: 0,
+    processingCostCents: 0,
+    notificationCostCents: 0,
+    otherVariableCostCents: 0,
+    monthlySupportClinicCostCents: 0,
+    supportPatientCostCents: 0,
+    monthlyOperationalCostCents: 0,
+    defaultOnboardingCostCents: 0,
+    commercialCommissionBasisPoints: 0,
+    depreciationAmortizationCents: 0,
+    financialExpensesCents: 0,
+    profitTaxBasisPoints: 0,
+    otherBelowEbitdaCents: 0,
+    minimumMarginBasisPoints: currentOperatingMarginTargetBasisPoints,
+    healthyMarginBasisPoints: currentOperatingMarginTargetBasisPoints,
+    attentionMarginBasisPoints: currentOperatingMarginTargetBasisPoints,
+    // Prevent historical light/standard/intensive overrides from re-entering
+    // the new quote after the base values above have been normalized.
+    usageProfiles: {}
+  };
+  const currentModelSources: Partial<Record<keyof SalesAssumptionValues, SimulationValueSource>> = {
+    revenueTaxBasisPoints: 'calculated',
+    estimatedDelinquencyBasisPoints: 'calculated',
+    refundChargebackBasisPoints: 'calculated',
+    variablePatientCostCents: 'calculated',
+    variableClinicCostCents: 'calculated',
+    storageCostCents: 'calculated',
+    egressCostCents: 'calculated',
+    processingCostCents: 'calculated',
+    notificationCostCents: 'calculated',
+    otherVariableCostCents: 'calculated',
+    monthlySupportClinicCostCents: 'calculated',
+    supportPatientCostCents: 'calculated',
+    monthlyOperationalCostCents: 'calculated',
+    defaultOnboardingCostCents: 'calculated',
+    commercialCommissionBasisPoints: 'calculated',
+    depreciationAmortizationCents: 'calculated',
+    financialExpensesCents: 'calculated',
+    profitTaxBasisPoints: 'calculated',
+    otherBelowEbitdaCents: 'calculated',
+    ...(currentOperatingMarginTargetBasisPoints === null
+      ? {}
+      : {
+          minimumMarginBasisPoints: 'calculated' as const,
+          healthyMarginBasisPoints: 'calculated' as const,
+          attentionMarginBasisPoints: 'calculated' as const
+        })
+  };
+  const currentModelSourceDetails: Partial<Record<keyof SalesAssumptionValues, string>> = {
+    revenueTaxBasisPoints:
+      'Operação atual em MEI: o DAS mensal fixo substitui o percentual histórico sobre faturamento.',
+    estimatedDelinquencyBasisPoints:
+      'Premissa histórica isolada: sem provisão adicional configurada no modelo operacional atual.',
+    refundChargebackBasisPoints:
+      'Premissa histórica isolada: sem provisão adicional configurada no modelo operacional atual.',
+    monthlyOperationalCostCents:
+      'Premissa histórica isolada: custos técnicos e operacionais da nova proposta vêm dos modelos de custo do catálogo.',
+    depreciationAmortizationCents:
+      'Premissa histórica isolada: não entra no resumo operacional de novas propostas.',
+    financialExpensesCents:
+      'Premissa histórica isolada: não entra no resumo operacional de novas propostas.',
+    profitTaxBasisPoints:
+      'Operação atual em MEI: sem percentual adicional sobre lucro no modelo atual.',
+    otherBelowEbitdaCents:
+      'Premissa histórica isolada: não entra no resumo operacional de novas propostas.',
+    ...(currentOperatingMarginTargetBasisPoints === null
+      ? {}
+      : {
+          minimumMarginBasisPoints:
+            'Derivada da margem operacional mínima desejada da operação atual.',
+          healthyMarginBasisPoints:
+            'Derivada da margem operacional mínima desejada da operação atual.',
+          attentionMarginBasisPoints:
+            'Derivada da margem operacional mínima desejada da operação atual.'
+        })
+  };
+
+  if (!complete) {
+    return {
+      assumptions: {
+        ...snapshot,
+        values: {
+          ...values,
+          ...currentModelOverrides,
+          // New quotes must never fall back to the historical fixed-cost bucket
+          // when the current shared infrastructure pool is incomplete. Null keeps
+          // profitability explicitly incomplete instead of inventing margin.
+          fixedMonthlyEligibleCostCents: null,
+          fixedAllocationMethod: 'per_clinic',
+          fixedAllocationClinicCount: allocatedClinicCount
+        },
+        sources: {
+          ...(snapshot.sources || {}),
+          ...currentModelSources,
+          fixedMonthlyEligibleCostCents: 'estimated',
+          fixedAllocationClinicCount: 'calculated'
+        },
+        sourceDetails: {
+          ...(snapshot.sourceDetails || {}),
+          ...currentModelSourceDetails,
+          fixedMonthlyEligibleCostCents:
+            'Pool compartilhado incompleto: informe DAS MEI, Supabase e Railway para calcular margem sem repetir custos fixos históricos.',
+          fixedAllocationClinicCount:
+            `${existingCount} clínica(s) operacional(is) existentes + 1 nova proposta.`
+        }
+      },
+      allocation
+    };
+  }
+
+  const sourceDetails = {
+    ...(snapshot.sourceDetails || {}),
+    ...currentModelSourceDetails,
+    fixedMonthlyEligibleCostCents:
+      `Pool fixo mensal compartilhado: DAS MEI + Supabase + Railway. Rateado entre ${allocatedClinicCount} clínica(s), incluindo esta proposta.`,
+    fixedAllocationClinicCount:
+      `${existingCount} clínica(s) operacional(is) existentes + 1 nova proposta.`,
+    revenueTaxBasisPoints:
+      'Regime atual configurado como MEI: o DAS mensal fixo já integra o pool compartilhado; não aplicar percentual adicional de imposto sobre faturamento.',
+    profitTaxBasisPoints:
+      'Regime atual configurado como MEI: sem imposto percentual adicional sobre lucro neste modelo.'
+  };
+
+  return {
+    assumptions: {
+      ...snapshot,
+      values: {
+        ...values,
+        ...currentModelOverrides,
+        fixedMonthlyEligibleCostCents: fixedCostPoolCents,
+        fixedAllocationMethod: 'per_clinic',
+        fixedAllocationClinicCount: allocatedClinicCount,
+        revenueTaxBasisPoints: 0,
+        profitTaxBasisPoints: 0
+      },
+      sources: {
+        ...snapshot.sources,
+        ...currentModelSources,
+        fixedMonthlyEligibleCostCents: 'calculated',
+        fixedAllocationClinicCount: 'calculated',
+        revenueTaxBasisPoints: 'calculated',
+        profitTaxBasisPoints: 'calculated'
+      },
+      sourceDetails
+    },
+    allocation
+  };
+}
+
 export type SalesSimulationInput = {
   initialActivePatientQuantity: number;
   baseUnitAmountCents: number;

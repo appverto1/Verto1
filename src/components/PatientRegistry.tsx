@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ChevronLeft, Filter, ChevronDown, Search, User, Activity, Brain, Phone, MessageCircle, ChevronRight, Edit2 } from 'lucide-react';
 import { PatientInternalChatPreview } from './PatientInternalChatPreview';
 import { SecureImage } from './SecureMedia';
+import { patientMatchesNameFilter, sortPatientsAlphabetically } from '../utils/patientList';
 
 const getPatientPhotoSource = (patient: any) =>
   String(
@@ -24,8 +25,8 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
   const [filterApproach, setFilterApproach] = useState(""); 
   const [showFilters, setShowFilters] = useState(false);
   
-  const filteredPatients = patients.filter((p: any) => { 
-    const matchName = p.name.toLowerCase().includes(filterName.toLowerCase()); 
+  const filteredPatients = sortPatientsAlphabetically((Array.isArray(patients) ? patients : []).filter((p: any) => { 
+    const matchName = patientMatchesNameFilter(p, filterName); 
     let matchAge = true; 
     if (filterAge === 'child') matchAge = p.age <= 12; 
     else if (filterAge === 'teen') matchAge = p.age > 12 && p.age <= 18; 
@@ -34,7 +35,7 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
     const matchType = filterType ? (p.type === filterType) : true; 
     const matchApproach = filterApproach ? (p.approach === filterApproach) : true; 
     return matchName && matchAge && matchType && matchApproach; 
-  }); 
+  })); 
 
   const getPatientCategory = (p: any) => {
     const clinicalRecord = clinicalRecords?.find((r: any) => r.patientId === p.id);
@@ -54,20 +55,20 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
       </div> 
       <div className="px-6 flex-1 w-full max-w-5xl mx-auto"> 
         <div className="bg-white p-4 rounded-[24px] shadow-sm border border-gray-100 mb-6 animate-slide-up"> 
-          <button onClick={() => setShowFilters(!showFilters)} className="w-full flex items-center justify-between text-[#7a32fc]"> 
+          <div className="relative"> 
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} /> 
+            <input type="search" aria-label="Buscar paciente por nome" autoComplete="off" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3 pl-10 text-sm outline-none focus:border-[#7a32fc] focus:bg-white transition-colors" placeholder="Buscar paciente por nome..." value={filterName} onChange={(e) => setFilterName(e.target.value)} /> 
+          </div>
+          <button onClick={() => setShowFilters(!showFilters)} className="mt-3 w-full flex items-center justify-between text-[#7a32fc]"> 
             <div className="flex items-center gap-2">
               <Filter size={18} /> 
-              <h3 className="font-bold text-xs uppercase tracking-wider">Filtros de Busca</h3> 
+              <h3 className="font-bold text-xs uppercase tracking-wider">Filtros avançados</h3> 
             </div>
             <ChevronDown size={20} className={`text-gray-300 transition-transform ${showFilters ? 'rotate-180 text-[#7a32fc]' : ''}`} />
           </button> 
           
           {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-4 pt-4 border-t border-gray-50 animate-fade-in"> 
-              <div className="relative"> 
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} /> 
-                <input type="text" className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 pl-9 text-sm outline-none focus:border-[#7a32fc]" placeholder="Buscar por nome..." value={filterName} onChange={(e) => setFilterName(e.target.value)} /> 
-              </div> 
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 pt-4 border-t border-gray-50 animate-fade-in"> 
               <div> 
                 <select className="w-full bg-gray-50 border border-gray-200 rounded-xl p-2 text-sm outline-none focus:border-[#7a32fc]" value={filterAge} onChange={(e) => setFilterAge(e.target.value)}> 
                   <option value="">Faixa Etária (Todas)</option> 
