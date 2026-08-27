@@ -188,11 +188,11 @@ assert.match(
 assert.match(specialtyRoute, /\.from\('clinic_memberships'\)/);
 assert.match(specialtyRoute, /\.eq\('clinic_id', clinicId\)/);
 assert.match(specialtyRoute, /membership\.role[\s\S]*?'therapist'/);
-assert.match(specialtyRoute, /\.update\(\{[\s\S]*?specialty,[\s\S]*?settings_updated_at:/);
+assert.match(specialtyRoute, /\.rpc\(\s*'set_clinic_member_access_and_specialty_v2'/);
 assert.doesNotMatch(
   specialtyRoute,
   /\.from\('professional_profiles'\)[\s\S]*?\.(?:upsert|update)\(/,
-  'a especialidade exercida em uma clínica pertence à membership, não ao perfil global',
+  'o endpoint continua usando a membership como autoridade; o espelho legado é transacional no RPC',
 );
 
 const roleRoute = routeSection(
@@ -202,6 +202,7 @@ const roleRoute = routeSection(
 assert.match(roleRoute, /role === 'therapist' && !specialty/);
 assert.match(roleRoute, /CLINICAL_SPECIALTY_INVALID/);
 assert.match(roleRoute, /\.eq\('clinic_id', clinicId\)/);
+assert.match(roleRoute, /\.rpc\(\s*'set_clinic_member_access_and_specialty_v2'/);
 
 const planReadRoute = routeSection(
   "app.get('/api/aba/patients/:patientId/therapeutic-plan'",
