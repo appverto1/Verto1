@@ -2491,12 +2491,25 @@ function normalizeStoredSalesAssumptionSnapshot(
 }
 
 async function countSalesOperationalBillingClinics(): Promise<number> {
-  const result = await supabase
+  // A trial subscription is not yet revenue and must not subsidize a new quote.
+  // Count only organizations with a confirmed first Stripe payment.
+  const paidState = await supabase
+    .from("platform_subscription_financial_state")
+    .select("organization_id", { count: "exact", head: true })
+    .not("organization_id", "is", null)
+    .not("first_paid_at", "is", null)
+    .eq("stripe_status", "active");
+  if (!paidState.error) return Math.max(0, Number(paidState.count || 0));
+  if (!isMissingRelationError(paidState.error)) throw paidState.error;
+
+  // Deploy-order fallback only. Once the platform ledger migration is applied,
+  // this branch is no longer used.
+  const legacy = await supabase
     .from("clinics")
     .select("id", { count: "exact", head: true })
     .not("stripe_subscription_id", "is", null);
-  if (result.error) throw result.error;
-  return Math.max(0, Number(result.count || 0));
+  if (legacy.error) throw legacy.error;
+  return Math.max(0, Number(legacy.count || 0));
 }
 
 async function buildSalesAssumptionsForNewProposal(
@@ -20206,6 +20219,176 @@ async function startServer() {
       200,
     );
 
+  const stripeTimestampToIso = (value: unknown): string | null => {
+    const seconds = Number(value || 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    return new Date(seconds * 1000).toISOString();
+  };
+
+  const stripeInvoicePeriodBounds = (invoice: Stripe.Invoice) => {
+    const lines = Array.isArray((invoice as any)?.lines?.data)
+      ? (invoice as any).lines.data
+      : [];
+    const starts = lines
+      .map((line: any) => Number(line?.period?.start || 0))
+      .filter((value: number) => Number.isFinite(value) && value > 0);
+    const ends = lines
+      .map((line: any) => Number(line?.period?.end || 0))
+      .filter((value: number) => Number.isFinite(value) && value > 0);
+    return {
+      periodStart: starts.length ? new Date(Math.min(...starts) * 1000).toISOString() : null,
+      periodEnd: ends.length ? new Date(Math.max(...ends) * 1000).toISOString() : null,
+    };
+  };
+
+  const persistPlatformSubscriptionFinancialState = async (params: {
+    subscription: Stripe.Subscription;
+    organizationId?: string | null;
+    offerId?: string | null;
+    leadId?: string | null;
+    invoice?: Stripe.Invoice | null;
+    paid?: boolean;
+  }) => {
+    const subscription = params.subscription;
+    const subscriptionId = sanitizeString(subscription?.id, 200);
+    if (!subscriptionId) return;
+    const invoice = params.invoice || null;
+    const nowIso = new Date().toISOString();
+    const organizationId = sanitizeString(
+      params.organizationId || (subscription.metadata as any)?.clinicId,
+      120,
+    );
+    const offerId = sanitizeString(
+      params.offerId || (subscription.metadata as any)?.offerId,
+      120,
+    );
+    const leadId = sanitizeString(
+      params.leadId || (subscription.metadata as any)?.leadId,
+      120,
+    );
+    const paidAt = invoice
+      ? (stripeTimestampToIso((invoice as any)?.status_transitions?.paid_at)
+        || (params.paid && Number((invoice as any)?.amount_paid || 0) > 0 ? nowIso : null))
+      : null;
+    const payload = cleanObject({
+      organization_id: isUuid(organizationId) ? organizationId : null,
+      sales_offer_id: isUuid(offerId) ? offerId : null,
+      sales_lead_id: isUuid(leadId) ? leadId : null,
+      stripe_subscription_id: subscriptionId,
+      stripe_customer_id: sanitizeString(String(subscription.customer || ''), 200) || null,
+      stripe_status: sanitizeString(subscription.status, 50) || 'unknown',
+      trial_start_at: stripeTimestampToIso((subscription as any)?.trial_start),
+      trial_ends_at: stripeTimestampToIso((subscription as any)?.trial_end),
+      current_period_start: stripeTimestampToIso((subscription as any)?.current_period_start),
+      current_period_end: stripeTimestampToIso((subscription as any)?.current_period_end),
+      cancel_at_period_end: Boolean((subscription as any)?.cancel_at_period_end),
+      cancel_at: stripeTimestampToIso((subscription as any)?.cancel_at),
+      canceled_at: stripeTimestampToIso((subscription as any)?.canceled_at),
+      last_invoice_id: invoice ? sanitizeString(invoice.id, 200) || null : undefined,
+      last_invoice_status: invoice ? sanitizeString((invoice as any)?.status, 50) || null : undefined,
+      last_invoice_amount_due_cents: invoice ? Math.max(0, Number((invoice as any)?.amount_due || 0)) : undefined,
+      last_invoice_amount_paid_cents: invoice ? Math.max(0, Number((invoice as any)?.amount_paid || 0)) : undefined,
+      ...(params.paid && paidAt ? {
+        first_paid_at: paidAt,
+        last_paid_at: paidAt,
+      } : {}),
+      updated_at: nowIso,
+    });
+    const { data: existing, error: existingError } = await supabase
+      .from('platform_subscription_financial_state')
+      .select('id,first_paid_at,last_paid_at')
+      .eq('stripe_subscription_id', subscriptionId)
+      .maybeSingle();
+    if (existingError && isMissingRelationError(existingError)) return;
+    if (existingError) throw existingError;
+    if (params.paid && paidAt && existing?.first_paid_at) {
+      (payload as any).first_paid_at = existing.first_paid_at;
+    }
+    const { error } = await supabase
+      .from('platform_subscription_financial_state')
+      .upsert([{
+        ...(existing?.id ? { id: existing.id } : {}),
+        ...payload,
+      }], { onConflict: 'stripe_subscription_id' });
+    if (error && !isMissingRelationError(error)) throw error;
+  };
+
+  const persistPlatformBillingInvoiceLedger = async (params: {
+    invoice: Stripe.Invoice;
+    subscription?: Stripe.Subscription | null;
+    organizationId?: string | null;
+    offerId?: string | null;
+    leadId?: string | null;
+    eventId?: string | null;
+    failed?: boolean;
+  }) => {
+    const invoice = params.invoice;
+    const invoiceId = sanitizeString(invoice?.id, 200);
+    if (!invoiceId) return;
+    const subscriptionId = stripeInvoiceSubscriptionId(invoice)
+      || sanitizeString(params.subscription?.id, 200);
+    const subscription = params.subscription || null;
+    const organizationId = sanitizeString(
+      params.organizationId || (subscription?.metadata as any)?.clinicId,
+      120,
+    );
+    const offerId = sanitizeString(
+      params.offerId || (subscription?.metadata as any)?.offerId,
+      120,
+    );
+    const leadId = sanitizeString(
+      params.leadId || (subscription?.metadata as any)?.leadId,
+      120,
+    );
+    const discountCents = Math.max(0, Number(
+      (invoice as any)?.total_discount_amounts?.reduce(
+        (sum: number, item: any) => sum + Number(item?.amount || 0),
+        0,
+      ) || 0,
+    ));
+    const taxCents = Math.max(0, Number(
+      (invoice as any)?.total_tax_amounts?.reduce(
+        (sum: number, item: any) => sum + Number(item?.amount || 0),
+        0,
+      ) || 0,
+    ));
+    const period = stripeInvoicePeriodBounds(invoice);
+    const paidAt = stripeTimestampToIso((invoice as any)?.status_transitions?.paid_at);
+    const failedAt = params.failed ? new Date().toISOString() : null;
+    const payload = {
+      stripe_invoice_id: invoiceId,
+      stripe_subscription_id: subscriptionId || null,
+      stripe_customer_id: sanitizeString(String((invoice as any)?.customer || subscription?.customer || ''), 200) || null,
+      organization_id: isUuid(organizationId) ? organizationId : null,
+      sales_offer_id: isUuid(offerId) ? offerId : null,
+      sales_lead_id: isUuid(leadId) ? leadId : null,
+      status: sanitizeString((invoice as any)?.status, 50) || (params.failed ? 'payment_failed' : 'unknown'),
+      currency: sanitizeString((invoice as any)?.currency, 12).toLowerCase() || 'brl',
+      billing_reason: sanitizeString((invoice as any)?.billing_reason, 80) || null,
+      subtotal_cents: Math.max(0, Number((invoice as any)?.subtotal || 0)),
+      total_cents: Math.max(0, Number((invoice as any)?.total || 0)),
+      amount_due_cents: Math.max(0, Number((invoice as any)?.amount_due || 0)),
+      amount_paid_cents: Math.max(0, Number((invoice as any)?.amount_paid || 0)),
+      amount_remaining_cents: Math.max(0, Number((invoice as any)?.amount_remaining || 0)),
+      discount_cents: discountCents,
+      tax_cents: taxCents,
+      period_start: period.periodStart,
+      period_end: period.periodEnd,
+      paid_at: paidAt,
+      failed_at: failedAt,
+      source_event_id: sanitizeString(params.eventId, 200) || null,
+      metadata: {
+        collectionMethod: sanitizeString((invoice as any)?.collection_method, 40) || null,
+        attemptCount: Math.max(0, Number((invoice as any)?.attempt_count || 0)),
+      },
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await supabase
+      .from('platform_billing_invoice_ledger')
+      .upsert([payload], { onConflict: 'stripe_invoice_id' });
+    if (error && !isMissingRelationError(error)) throw error;
+  };
+
   const salesAssistedFlowType = (value: unknown) => {
     const flow = sanitizeString(value, 80);
     return flow === "sales_assisted_signup" || flow === "sales_modular_assisted";
@@ -20570,6 +20753,38 @@ async function startServer() {
       throw new Error("SALES_SUBSCRIPTION_LINKAGE_INVALID");
     }
 
+    const { data: billingLead, error: billingLeadError } = await supabase
+      .from("sales_leads")
+      .select("id,converted_clinic_id")
+      .eq("id", leadId)
+      .is("deleted_at", null)
+      .maybeSingle();
+    if (billingLeadError) throw billingLeadError;
+    const billingOrganizationId = sanitizeString(
+      billingLead?.converted_clinic_id,
+      120,
+    );
+
+    if (invoice) {
+      await persistPlatformBillingInvoiceLedger({
+        invoice,
+        subscription,
+        organizationId: billingOrganizationId,
+        offerId,
+        leadId,
+        eventId: event.id,
+        failed: event.type === "invoice.payment_failed",
+      });
+    }
+    await persistPlatformSubscriptionFinancialState({
+      subscription,
+      organizationId: billingOrganizationId,
+      offerId,
+      leadId,
+      invoice,
+      paid: event.type === "invoice.paid" || event.type === "invoice.payment_succeeded",
+    });
+
     if (
       event.type === "invoice.paid" ||
       event.type === "invoice.payment_succeeded"
@@ -20618,17 +20833,7 @@ async function startServer() {
         .eq("stripe_subscription_id", subscription.id);
       if (linkLifecycleError) throw linkLifecycleError;
 
-      const { data: entitlementLead, error: entitlementLeadError } = await supabase
-        .from("sales_leads")
-        .select("id,converted_clinic_id")
-        .eq("id", leadId)
-        .is("deleted_at", null)
-        .maybeSingle();
-      if (entitlementLeadError) throw entitlementLeadError;
-      const organizationId = sanitizeString(
-        entitlementLead?.converted_clinic_id,
-        120,
-      );
+      const organizationId = billingOrganizationId;
       if (isUuid(organizationId)) {
         await applyModularEntitlementsForOrganization({
           offerId,
@@ -25705,8 +25910,10 @@ async function startServer() {
       roleToUse = 'coordinator';
     }
 
-    const normalizedPlanName = roleToUse === 'patient' ? 'Paciente' : null;
-    const finalPlanPrice = roleToUse === 'patient' ? 4.90 : null;
+    // Patient access is clinic-managed. The legacy individual R$ 4,90 subscription
+    // is retired and must not leak into SaaS revenue/customer reporting.
+    const normalizedPlanName = null;
+    const finalPlanPrice = null;
 
     const newProfile = cleanObject({
       id: authUser.id,
@@ -37294,7 +37501,8 @@ async function startServer() {
           patient_profile_type: canonicalProfileType,
           panel_type: canonicalProfileType,
           subscription_status: 'pending',
-          plan_price: 4.90,
+          plan_name: null,
+          plan_price: null,
           clinic_id: isUuid(safeClinicId) ? safeClinicId : undefined,
           status: 'pending_activation',
           first_login_completed: false,
@@ -85277,147 +85485,476 @@ async function startServer() {
     }
   });
 
+  type OwnerSaasClientRow = {
+    id: string;
+    clinic_id: string;
+    name: string;
+    email: string;
+    plan_name: string;
+    plan_price: number;
+    subscription_status: string;
+    stripe_status: string | null;
+    trial_ends_at: string | null;
+    first_paid_at: string | null;
+    created_at: string | null;
+    billing_source: string | null;
+    offer_id: string | null;
+    lead_id: string | null;
+    projected_monthly_cents: number;
+    access_recovery?: Record<string, any> | null;
+  };
+
+  const resolveOwnerOfferPhase = (offer: any, atIso = new Date().toISOString()) => {
+    const snapshot = offer?.modular_snapshot && typeof offer.modular_snapshot === 'object'
+      ? offer.modular_snapshot
+      : {};
+    const frozenResults = offer?.simulation_snapshot?.results && typeof offer.simulation_snapshot.results === 'object'
+      ? offer.simulation_snapshot.results
+      : {};
+    const phases = Array.isArray(snapshot?.commercialPhases)
+      ? snapshot.commercialPhases
+      : Array.isArray(frozenResults?.commercialPhases)
+        ? frozenResults.commercialPhases
+        : [];
+    const atMs = Date.parse(atIso);
+    const phase = phases.find((candidate: any) => {
+      const startMs = Date.parse(String(candidate?.startsAt || ''));
+      const endMs = candidate?.endsAt ? Date.parse(String(candidate.endsAt)) : Number.POSITIVE_INFINITY;
+      return Number.isFinite(atMs) && Number.isFinite(startMs) && atMs >= startMs && atMs < endMs;
+    }) || phases[phases.length - 1] || null;
+    const discountEndsAt = sanitizeString(offer?.discount_ends_at, 80);
+    const promotional = discountEndsAt && Date.parse(discountEndsAt) > atMs;
+    const fallbackPeriod = promotional ? frozenResults?.promotional : frozenResults?.postPromotion;
+    return {
+      recurringRevenueCents: Math.max(0, Number(
+        phase?.recurringRevenueCents
+          ?? fallbackPeriod?.recurringRevenueCents
+          ?? snapshot?.postPromotionRecurringRevenueCents
+          ?? offer?.post_discount_monthly_amount_cents
+          ?? snapshot?.promotionalRecurringRevenueCents
+          ?? offer?.promotional_monthly_amount_cents
+          ?? 0,
+      )),
+      directCostCents: (() => {
+        const value = phase?.recurringCostCents ?? fallbackPeriod?.directCostCents;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
+      })(),
+    };
+  };
+
+  const loadOwnerSaasClients = async (): Promise<OwnerSaasClientRow[]> => {
+    const clinicsResult = await supabase
+      .from('clinics')
+      .select('id,name,owner_user_id,subscription_status,stripe_subscription_id,billing_model,is_demo');
+    if (clinicsResult.error) throw clinicsResult.error;
+    const clinics = (clinicsResult.data || []).filter((row: any) => row?.is_demo !== true && isUuid(sanitizeString(row?.id, 120)));
+    const clinicIds = clinics.map((row: any) => sanitizeString(row.id, 120));
+    const ownerIds = clinics.map((row: any) => sanitizeString(row?.owner_user_id, 120)).filter(isUuid);
+
+    const [ownersResult, statesResult, leadsResult] = await Promise.all([
+      ownerIds.length
+        ? supabase.from('users').select('id,name,email,role,subscription_status,plan_name,plan_price,billing_source,created_at').in('id', ownerIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      clinicIds.length
+        ? supabase.from('platform_subscription_financial_state').select('organization_id,sales_offer_id,sales_lead_id,stripe_subscription_id,stripe_status,trial_ends_at,first_paid_at,current_period_end,cancel_at_period_end,canceled_at').in('organization_id', clinicIds)
+        : Promise.resolve({ data: [], error: null } as any),
+      clinicIds.length
+        ? supabase.from('sales_leads').select('id,converted_clinic_id,name,email,clinic_name').in('converted_clinic_id', clinicIds).is('deleted_at', null)
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+    if (ownersResult.error) throw ownersResult.error;
+    if (statesResult.error && !isMissingRelationError(statesResult.error)) throw statesResult.error;
+    if (leadsResult.error && !isMissingRelationError(leadsResult.error)) throw leadsResult.error;
+
+    const ownerById = new Map<string, any>((ownersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const stateByClinic = new Map<string, any>((statesResult.data || []).map((row: any) => [sanitizeString(row.organization_id, 120), row]));
+    const leads = leadsResult.data || [];
+    const leadByClinic = new Map<string, any>();
+    for (const lead of leads) {
+      const clinicId = sanitizeString(lead?.converted_clinic_id, 120);
+      if (clinicId && !leadByClinic.has(clinicId)) leadByClinic.set(clinicId, lead);
+    }
+    const offerIds = Array.from(new Set((statesResult.data || []).map((row: any) => sanitizeString(row?.sales_offer_id, 120)).filter(isUuid)));
+    const leadIds = Array.from(new Set(leads.map((row: any) => sanitizeString(row?.id, 120)).filter(isUuid)));
+    const offersResult = offerIds.length || leadIds.length
+      ? await supabase
+          .from('sales_offers')
+          .select('id,lead_id,status,proposal_name,offer_type,modular_snapshot,simulation_snapshot,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,discount_ends_at,trial_days,stripe_subscription_id,accepted_at,created_at')
+          .in('lead_id', leadIds.length ? leadIds : ['00000000-0000-0000-0000-000000000000'])
+          .order('created_at', { ascending: false })
+      : { data: [], error: null } as any;
+    if (offersResult.error && !isMissingRelationError(offersResult.error)) throw offersResult.error;
+    const offerById = new Map<string, any>((offersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const latestOfferByLead = new Map<string, any>();
+    for (const offer of (offersResult.data || [])) {
+      const leadId = sanitizeString(offer?.lead_id, 120);
+      if (leadId && !latestOfferByLead.has(leadId)) latestOfferByLead.set(leadId, offer);
+    }
+
+    const rows: OwnerSaasClientRow[] = [];
+    for (const clinic of clinics) {
+      const clinicId = sanitizeString(clinic.id, 120);
+      const owner = ownerById.get(sanitizeString(clinic?.owner_user_id, 120));
+      const state = stateByClinic.get(clinicId);
+      const lead = leadByClinic.get(clinicId);
+      const offer = (state?.sales_offer_id ? offerById.get(sanitizeString(state.sales_offer_id, 120)) : null)
+        || (lead?.id ? latestOfferByLead.get(sanitizeString(lead.id, 120)) : null)
+        || null;
+      const complimentary = sanitizeString(owner?.billing_source, 50).toLowerCase() === 'complimentary';
+      const commercialEvidence = Boolean(
+        state?.stripe_subscription_id
+          || sanitizeString(clinic?.stripe_subscription_id, 200)
+          || offer?.stripe_subscription_id
+          || complimentary
+      );
+      if (!commercialEvidence) continue;
+      const stripeStatus = sanitizeString(state?.stripe_status, 50).toLowerCase() || null;
+      const trialDays = Math.max(0, Number(offer?.trial_days || 0));
+      const trialAnchorMs = Date.parse(String(offer?.accepted_at || offer?.created_at || ''));
+      const inferredTrialEndsAt = trialDays > 0 && Number.isFinite(trialAnchorMs)
+        ? new Date(trialAnchorMs + trialDays * 86_400_000).toISOString()
+        : null;
+      const effectiveTrialEndsAt = sanitizeString(state?.trial_ends_at, 80) || inferredTrialEndsAt;
+      const inferredTrialing = !state?.first_paid_at
+        && Boolean(effectiveTrialEndsAt)
+        && Date.parse(String(effectiveTrialEndsAt)) > Date.now();
+      const status = complimentary
+        ? 'complimentary'
+        : stripeStatus === 'trialing' || inferredTrialing
+          ? 'trialing'
+          : ['past_due', 'unpaid'].includes(stripeStatus || '')
+            ? 'delinquent'
+            : ['canceled', 'incomplete_expired'].includes(stripeStatus || '')
+              ? 'cancelled'
+              : state?.first_paid_at
+                ? 'active'
+                : stripeStatus === 'active'
+                  ? 'active'
+                  : sanitizeString(clinic?.subscription_status, 50).toLowerCase() || 'pending';
+      const projected = resolveOwnerOfferPhase(offer).recurringRevenueCents;
+      rows.push({
+        id: sanitizeString(owner?.id, 120) || clinicId,
+        clinic_id: clinicId,
+        name: sanitizeString(clinic?.name || lead?.clinic_name || owner?.name || lead?.name, 180) || 'Clínica',
+        email: sanitizeEmail(owner?.email) || sanitizeEmail(lead?.email) || '',
+        plan_name: sanitizeString(offer?.proposal_name, 120) || (complimentary ? 'Cortesia' : 'Verto'),
+        plan_price: complimentary ? 0 : projected / 100,
+        subscription_status: status,
+        stripe_status: stripeStatus,
+        trial_ends_at: effectiveTrialEndsAt || null,
+        first_paid_at: sanitizeString(state?.first_paid_at, 80) || null,
+        created_at: sanitizeString(owner?.created_at || offer?.created_at, 80) || null,
+        billing_source: complimentary ? 'complimentary' : 'stripe',
+        offer_id: sanitizeString(offer?.id, 120) || null,
+        lead_id: sanitizeString(lead?.id || offer?.lead_id, 120) || null,
+        projected_monthly_cents: projected,
+      });
+    }
+    return rows.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+  };
+
+  const loadOwnerAssumptionSets = async () => {
+    const result = await supabase
+      .from('sales_financial_assumption_sets')
+      .select('id,version,name,effective_at,values,source_metadata,created_by,created_at')
+      .order('effective_at', { ascending: false })
+      .order('version', { ascending: false })
+      .limit(100);
+    if (result.error) throw result.error;
+    return result.data || [];
+  };
+
+  const resolveOwnerAssumptionsAt = (rows: any[], atIso: string): SalesAssumptionSnapshot | null => {
+    const atMs = Date.parse(atIso);
+    const row = rows.find((candidate: any) => {
+      const effectiveMs = Date.parse(String(candidate?.effective_at || ''));
+      return Number.isFinite(effectiveMs) && effectiveMs <= atMs;
+    }) || null;
+    return row ? mapSalesAssumptionSnapshot(row) : null;
+  };
+
+  const ownerFixedPoolCents = (snapshot: SalesAssumptionSnapshot | null): number | null => {
+    if (!snapshot) return null;
+    const values = snapshot.values;
+    const parts = [values.meiDasMonthlyCents, values.supabaseMonthlyCostCents, values.railwayMonthlyCostCents];
+    if (!parts.every((value) => value !== null && value !== undefined)) return null;
+    return parts.reduce<number>((sum, value) => sum + Number(value || 0), 0);
+  };
+
+  const ownerInvoiceStripeCostCents = (amountPaidCents: number, invoiceCount: number, snapshot: SalesAssumptionSnapshot | null) => {
+    if (!snapshot) return 0;
+    const feeBp = Math.max(0, Number(snapshot.values.stripeFeeBasisPoints || 0));
+    const fixedFee = Math.max(0, Number(snapshot.values.stripeFixedFeeCents || 0));
+    return Math.round((Math.max(0, amountPaidCents) * feeBp) / 10_000) + Math.max(0, invoiceCount) * fixedFee;
+  };
+
+  const allocateOwnerFixedPoolByContribution = <T extends { contributionCents: number }>(rows: T[], poolCents: number) => {
+    const pool = Math.max(0, Math.round(poolCents || 0));
+    if (!rows.length || pool <= 0) return rows.map((row) => ({ ...row, fixedAllocatedCents: 0 }));
+    const weights = rows.map((row) => Math.max(0, Math.round(Number(row.contributionCents || 0))));
+    const weightTotal = weights.reduce((sum, value) => sum + value, 0);
+    const fallbackWeight = weightTotal > 0 ? null : 1;
+    const denominator = weightTotal > 0 ? weightTotal : rows.length;
+    let allocated = 0;
+    return rows.map((row, index) => {
+      const weight = weightTotal > 0 ? weights[index] : fallbackWeight!;
+      const share = index === rows.length - 1
+        ? pool - allocated
+        : Math.round((pool * weight) / Math.max(1, denominator));
+      allocated += share;
+      return { ...row, fixedAllocatedCents: Math.max(0, share) };
+    });
+  };
+
+  const buildOwnerFinancialOverviewFromLedger = async () => {
+    const now = new Date();
+    const firstMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1));
+    const [ledgerResult, statesResult, clients, assumptionRows, offersResult] = await Promise.all([
+      supabase
+        .from('platform_billing_invoice_ledger')
+        .select('stripe_invoice_id,organization_id,sales_offer_id,status,amount_due_cents,amount_paid_cents,amount_remaining_cents,paid_at,failed_at,period_start,period_end,created_at')
+        .gte('created_at', firstMonth.toISOString())
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('platform_subscription_financial_state')
+        .select('organization_id,sales_offer_id,stripe_status,trial_ends_at,first_paid_at,cancel_at_period_end,current_period_end'),
+      loadOwnerSaasClients(),
+      loadOwnerAssumptionSets(),
+      supabase
+        .from('sales_offers')
+        .select('id,lead_id,proposal_name,modular_snapshot,simulation_snapshot,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,discount_ends_at,created_at'),
+    ]);
+    if (ledgerResult.error && isMissingRelationError(ledgerResult.error)) return null;
+    if (statesResult.error && isMissingRelationError(statesResult.error)) return null;
+    if (ledgerResult.error) throw ledgerResult.error;
+    if (statesResult.error) throw statesResult.error;
+    if (offersResult.error) throw offersResult.error;
+    const offersById = new Map((offersResult.data || []).map((row: any) => [sanitizeString(row.id, 120), row]));
+    const clientsByClinic = new Map(clients.map((row) => [row.clinic_id, row]));
+    const monthBuckets = new Map<string, any>();
+    for (let offset = 0; offset < 12; offset += 1) {
+      const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (11 - offset), 1));
+      const key = date.toISOString().slice(0, 7);
+      monthBuckets.set(key, { key, periodStart: date, invoices: [] as any[] });
+    }
+    for (const invoice of (ledgerResult.data || [])) {
+      const stamp = sanitizeString(invoice?.paid_at || invoice?.failed_at || invoice?.created_at, 80);
+      const key = stamp ? stamp.slice(0, 7) : '';
+      if (monthBuckets.has(key)) monthBuckets.get(key).invoices.push(invoice);
+    }
+
+    const monthly: any[] = [];
+    const customerRollup = new Map<string, any>();
+    const planRollup = new Map<string, { planName: string; customers: Set<string>; revenueNetCents: number }>();
+    for (const bucket of monthBuckets.values()) {
+      const monthEnd = new Date(Date.UTC(bucket.periodStart.getUTCFullYear(), bucket.periodStart.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+      const assumptions = resolveOwnerAssumptionsAt(assumptionRows, monthEnd.toISOString());
+      const fixedPool = ownerFixedPoolCents(assumptions) || 0;
+      const paidInvoices = bucket.invoices.filter((row: any) => Number(row?.amount_paid_cents || 0) > 0 && row?.paid_at);
+      const perClinic = new Map<string, any>();
+      for (const invoice of paidInvoices) {
+        const clinicId = sanitizeString(invoice?.organization_id, 120);
+        if (!isUuid(clinicId)) continue;
+        const current = perClinic.get(clinicId) || { clinicId, revenueCents: 0, invoiceCount: 0, offerId: null };
+        current.revenueCents += Math.max(0, Number(invoice.amount_paid_cents || 0));
+        current.invoiceCount += 1;
+        current.offerId = sanitizeString(invoice?.sales_offer_id, 120) || current.offerId;
+        perClinic.set(clinicId, current);
+      }
+      const contributionRows = Array.from(perClinic.values()).map((row: any) => {
+        const offer = row.offerId ? offersById.get(row.offerId) : null;
+        const phase = resolveOwnerOfferPhase(offer, monthEnd.toISOString());
+        const stripeCostCents = ownerInvoiceStripeCostCents(row.revenueCents, row.invoiceCount, assumptions);
+        const directCostCents = phase.directCostCents ?? 0;
+        const contributionCents = row.revenueCents - stripeCostCents - directCostCents;
+        return { ...row, stripeCostCents, directCostCents, contributionCents, offer };
+      });
+      const allocatedRows = allocateOwnerFixedPoolByContribution(contributionRows, fixedPool);
+      const revenueGrossCents = allocatedRows.reduce((sum, row) => sum + row.revenueCents, 0);
+      const variableCostsCents = allocatedRows.reduce((sum, row) => sum + row.stripeCostCents + row.directCostCents, 0);
+      const contributionCents = allocatedRows.reduce((sum, row) => sum + row.contributionCents, 0);
+      const fixedCostsCents = fixedPool;
+      const ebitdaCents = contributionCents - fixedCostsCents;
+      const delinquencyCents = bucket.invoices.reduce((sum: number, row: any) => {
+        const failed = Boolean(row?.failed_at) || ['open', 'payment_failed', 'uncollectible'].includes(sanitizeString(row?.status, 40).toLowerCase());
+        return failed ? sum + Math.max(0, Number(row?.amount_remaining_cents || row?.amount_due_cents || 0)) : sum;
+      }, 0);
+      monthly.push({
+        monthLabel: bucket.periodStart.toLocaleDateString('pt-BR', { month: 'short', timeZone: 'UTC' }).replace('.', ''),
+        periodMonth: bucket.key,
+        revenueGross: revenueGrossCents / 100,
+        deductions: 0,
+        revenueNet: revenueGrossCents / 100,
+        variableCosts: variableCostsCents / 100,
+        fixedCosts: fixedCostsCents / 100,
+        contributionMarginValue: contributionCents / 100,
+        contributionMarginPct: revenueGrossCents > 0 ? (contributionCents / revenueGrossCents) * 100 : 0,
+        ebitda: ebitdaCents / 100,
+        ebitdaPct: revenueGrossCents > 0 ? (ebitdaCents / revenueGrossCents) * 100 : 0,
+        delinquencyAmount: delinquencyCents / 100,
+      });
+      for (const row of allocatedRows) {
+        const client = clientsByClinic.get(row.clinicId);
+        const key = row.clinicId;
+        const existing = customerRollup.get(key) || {
+          customerId: client?.id || key,
+          clinicId: key,
+          name: client?.name || 'Clínica',
+          email: client?.email || '',
+          subscriptionStatus: client?.subscription_status || 'active',
+          revenueNetCents: 0,
+          variableCostCents: 0,
+          fixedCostAllocatedCents: 0,
+          profitCents: 0,
+        };
+        existing.revenueNetCents += row.revenueCents;
+        existing.variableCostCents += row.stripeCostCents + row.directCostCents;
+        existing.fixedCostAllocatedCents += row.fixedAllocatedCents;
+        existing.profitCents += row.contributionCents - row.fixedAllocatedCents;
+        customerRollup.set(key, existing);
+        const planName = sanitizeString(row.offer?.proposal_name, 120) || client?.plan_name || 'Verto';
+        const plan = planRollup.get(planName) || { planName, customers: new Set<string>(), revenueNetCents: 0 };
+        plan.customers.add(key);
+        plan.revenueNetCents += row.revenueCents;
+        planRollup.set(planName, plan);
+      }
+    }
+    const current = monthly[monthly.length - 1] || {
+      revenueGross: 0, deductions: 0, revenueNet: 0, variableCosts: 0, fixedCosts: 0,
+      contributionMarginValue: 0, contributionMarginPct: 0, ebitda: 0, ebitdaPct: 0, delinquencyAmount: 0,
+    };
+    const trialingCustomers = clients.filter((row) => row.subscription_status === 'trialing').map((row) => ({
+      customerId: row.id,
+      clinicId: row.clinic_id,
+      name: row.name,
+      email: row.email,
+      projectedMonthlyAmount: row.projected_monthly_cents / 100,
+      trialEndsAt: row.trial_ends_at,
+    }));
+    const topCustomers = Array.from(customerRollup.values())
+      .map((row: any) => ({
+        customerId: row.customerId,
+        name: row.name,
+        email: row.email,
+        revenueNet: row.revenueNetCents / 100,
+        totalCost: (row.variableCostCents + row.fixedCostAllocatedCents) / 100,
+        variableCost: row.variableCostCents / 100,
+        fixedCostAllocated: row.fixedCostAllocatedCents / 100,
+        profit: row.profitCents / 100,
+        marginPct: row.revenueNetCents > 0 ? (row.profitCents / row.revenueNetCents) * 100 : 0,
+        status: row.subscriptionStatus,
+      }))
+      .sort((a, b) => a.profit - b.profit);
+    const byPlan = Array.from(planRollup.values())
+      .map((row) => ({ planName: row.planName, customers: row.customers.size, revenueNet: row.revenueNetCents / 100 }))
+      .sort((a, b) => b.revenueNet - a.revenueNet);
+    const currentFailed = (ledgerResult.data || []).filter((row: any) => {
+      const stamp = sanitizeString(row?.failed_at || row?.created_at, 80);
+      return stamp.startsWith(now.toISOString().slice(0, 7)) && Math.max(0, Number(row?.amount_remaining_cents || 0)) > 0;
+    });
+    const delinquentCustomers = currentFailed.map((row: any) => {
+      const client = clientsByClinic.get(sanitizeString(row?.organization_id, 120));
+      return {
+        customerId: client?.id || sanitizeString(row?.organization_id, 120),
+        name: client?.name || 'Clínica',
+        email: client?.email || '',
+        delinquencyAmount: Math.max(0, Number(row?.amount_remaining_cents || row?.amount_due_cents || 0)) / 100,
+        openTitles: 1,
+      };
+    });
+    return {
+      source: 'platform_invoice_ledger',
+      allocationMethod: 'contribution_share_pre_fixed',
+      summary: current,
+      monthly,
+      byPlan,
+      topCustomers,
+      delinquentCustomers,
+      trialingCustomers,
+      dataQuality: {
+        realizedRevenueOnly: true,
+        trialRevenueExcluded: true,
+        fixedCostPoolSource: 'latest_effective_financial_assumptions',
+        directCostSource: 'accepted_offer_snapshot',
+        stripeCostSource: 'configured_assumption',
+      },
+    };
+  };
+
   // Legacy route name retained, but authority now comes exclusively from
   // public.platform_admins (with owner MFA still enforced by the middleware).
   const checkOwner = checkPlatformAdmin;
 
-  // Owner-only stats (CEO dashboard)
-  app.get('/api/owner/stats', checkAuth, checkOwner, async (req: any, res) => {
+  // Owner-only SaaS stats. Client authority is the clinic/contract, never a
+  // patient user row. Trialing clinics are visible separately and do not count
+  // as paying revenue until Stripe confirms a paid invoice.
+  app.get('/api/owner/stats', checkAuth, checkOwner, async (_req: any, res) => {
     try {
-      const { count: totalUsers } = await supabase
-        .from('users').select('id', { count: 'exact', head: true });
-
-      const { count: activeUsers } = await supabase
-        .from('users').select('id', { count: 'exact', head: true })
-        .eq('subscription_status', 'active');
-
-      const { data: activeProfiles } = await supabase
-        .from('users').select('plan_price')
-        .eq('subscription_status', 'active');
-
-      const mrr = activeProfiles?.reduce((sum, p) => sum + (p.plan_price || 0), 0) || 0;
-
-      res.json({ success: true, stats: { totalUsers, activeUsers, mrr } });
-    } catch (error) {
+      const clients = await loadOwnerSaasClients();
+      const payingClients = clients.filter((row) => row.subscription_status === 'active' && Boolean(row.first_paid_at));
+      const trialingClients = clients.filter((row) => row.subscription_status === 'trialing');
+      const complimentaryClients = clients.filter((row) => row.subscription_status === 'complimentary');
+      const ledger = await buildOwnerFinancialOverviewFromLedger();
+      return res.json({
+        success: true,
+        stats: {
+          totalUsers: clients.length,
+          activeUsers: payingClients.length,
+          payingClients: payingClients.length,
+          trialingClients: trialingClients.length,
+          complimentaryClients: complimentaryClients.length,
+          mrr: Number(ledger?.summary?.revenueNet || 0),
+        },
+      });
+    } catch (error: any) {
+      console.error('[Owner Finance] stats failed', { message: sanitizeString(error?.message || String(error), 240) });
       res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
-  app.get('/api/owner/clients', checkAuth, checkOwner, async (req: any, res) => {
+  app.get('/api/owner/clients', checkAuth, checkOwner, async (_req: any, res) => {
     try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('id, name, email, plan_name, plan_price, subscription_status, created_at')
-        .order('created_at', { ascending: false })
-        .limit(500);
-
-      if (error) throw error;
-      return res.json({ success: true, data: data || [] });
-    } catch (error) {
+      const clients = await loadOwnerSaasClients();
+      return res.json({ success: true, data: clients });
+    } catch (error: any) {
+      console.error('[Owner Finance] clients failed', { message: sanitizeString(error?.message || String(error), 240) });
       return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
 
-  app.get('/api/owner/financial-overview', checkAuth, checkOwner, async (req: any, res) => {
+  app.get('/api/owner/financial-overview', checkAuth, checkOwner, async (_req: any, res) => {
     try {
-      const [summaryRes, monthlyRes, byPlanRes, profitabilityRes, delinquentRes] = await Promise.all([
-        supabase.from('vw_owner_dre_summary').select(OWNER_DRE_SUMMARY_SELECT).single(),
-        supabase.from('vw_owner_dre_monthly').select(OWNER_DRE_MONTHLY_SELECT).order('period_month', { ascending: true }).limit(12),
-        supabase.from('vw_owner_revenue_by_plan').select(OWNER_REVENUE_BY_PLAN_SELECT).order('revenue_net', { ascending: false }).limit(20),
-        supabase.from('vw_owner_customer_profitability').select(OWNER_CUSTOMER_PROFITABILITY_SELECT).order('profit', { ascending: true }).limit(20),
-        supabase.from('vw_owner_delinquent_customers').select(OWNER_DELINQUENT_CUSTOMERS_SELECT).order('delinquency_amount', { ascending: false }).limit(20)
-      ]);
-
-      const missingSchema =
-        hasMissingFinancialSchema(summaryRes.error) ||
-        hasMissingFinancialSchema(monthlyRes.error) ||
-        hasMissingFinancialSchema(byPlanRes.error) ||
-        hasMissingFinancialSchema(profitabilityRes.error) ||
-        hasMissingFinancialSchema(delinquentRes.error);
-
-      if (!missingSchema && !summaryRes.error && !monthlyRes.error && !byPlanRes.error && !profitabilityRes.error && !delinquentRes.error) {
-        const monthly = (monthlyRes.data || []).map((row: any) => ({
-          monthLabel: new Date(row.period_month).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', ''),
-          revenueNet: Number(row.revenue_net || 0),
-          variableCosts: Number(row.variable_costs || 0),
-          fixedCosts: Number(row.fixed_costs || 0),
-          ebitda: Number(row.ebitda || 0),
-          contributionMarginPct: Number(row.contribution_margin_pct || 0),
-          delinquencyAmount: Number(row.delinquency_amount || 0)
-        }));
-
+      const overview = await buildOwnerFinancialOverviewFromLedger();
+      if (!overview) {
         return res.json({
           success: true,
           data: {
-            source: 'supabase_financial_views',
+            source: 'ledger_schema_pending',
+            allocationMethod: 'contribution_share_pre_fixed',
             summary: {
-              revenueGross: Number(summaryRes.data?.revenue_gross || 0),
-              deductions: Number(summaryRes.data?.deductions || 0),
-              revenueNet: Number(summaryRes.data?.revenue_net || 0),
-              variableCosts: Number(summaryRes.data?.variable_costs || 0),
-              fixedCosts: Number(summaryRes.data?.fixed_costs || 0),
-              contributionMarginValue: Number(summaryRes.data?.contribution_margin_value || 0),
-              contributionMarginPct: Number(summaryRes.data?.contribution_margin_pct || 0),
-              ebitda: Number(summaryRes.data?.ebitda || 0),
-              ebitdaPct: Number(summaryRes.data?.ebitda_pct || 0),
-              delinquencyAmount: Number(summaryRes.data?.delinquency_amount || 0)
+              revenueGross: 0,
+              deductions: 0,
+              revenueNet: 0,
+              variableCosts: 0,
+              fixedCosts: 0,
+              contributionMarginValue: 0,
+              contributionMarginPct: 0,
+              ebitda: 0,
+              ebitdaPct: 0,
+              delinquencyAmount: 0,
             },
-            monthly,
-            byPlan: (byPlanRes.data || []).map((row: any) => ({
-              planName: row.plan_name || 'Nao definido',
-              customers: Number(row.customers || 0),
-              revenueNet: Number(row.revenue_net || 0)
-            })),
-            topCustomers: (profitabilityRes.data || []).map((row: any) => ({
-              customerId: row.customer_id,
-              name: row.name,
-              email: row.email,
-              revenueNet: Number(row.revenue_net || 0),
-              totalCost: Number(row.variable_cost || 0) + Number(row.fixed_cost_allocated || 0),
-              profit: Number(row.profit || 0),
-              marginPct: Number(row.margin_pct || 0),
-              status: row.subscription_status || 'active'
-            })),
-            delinquentCustomers: (delinquentRes.data || []).map((row: any) => ({
-              customerId: row.customer_id,
-              name: row.name,
-              email: row.email,
-              delinquencyAmount: Number(row.delinquency_amount || 0),
-              openTitles: Number(row.open_titles || 0)
-            }))
-          }
+            monthly: [],
+            byPlan: [],
+            topCustomers: [],
+            delinquentCustomers: [],
+            trialingCustomers: [],
+          },
         });
       }
-
-      const { data: users, error: usersError } = await supabase
-        .from('users')
-        .select('id, name, email, plan_name, plan_price, subscription_status, created_at');
-
-      if (usersError) throw usersError;
-
-      return res.json({
-        success: true,
-        data: {
-          source: 'unconfigured',
-          summary: {
-            revenueGross: 0,
-            deductions: 0,
-            revenueNet: 0,
-            variableCosts: 0,
-            fixedCosts: 0,
-            contributionMarginValue: 0,
-            contributionMarginPct: 0,
-            ebitda: 0,
-            ebitdaPct: 0,
-            delinquencyAmount: 0
-          },
-          monthly: [],
-          byPlan: [],
-          topCustomers: [],
-          delinquentCustomers: []
-        }
-      });
-    } catch (error) {
+      return res.json({ success: true, data: overview });
+    } catch (error: any) {
+      console.error('[Owner Finance] overview failed', { message: sanitizeString(error?.message || String(error), 240) });
       return res.status(500).json({ error: 'Erro interno do servidor.' });
     }
   });
@@ -92327,6 +92864,13 @@ async function startServer() {
         120
       );
       const isPatientCheckout = sanitizeString(user.role, 40).toLowerCase() === 'patient';
+      if (isPatientCheckout) {
+        return rejectCheckout(
+          410,
+          'LEGACY_PATIENT_BILLING_RETIRED',
+          'Pacientes não possuem assinatura individual. A cobrança é administrada pela clínica.'
+        );
+      }
       checkoutDiagnostics = {
         ...checkoutDiagnostics,
         organizationIdPresent: Boolean(clinicId),
