@@ -99,6 +99,8 @@ for (const label of [
   assert.ok(component.includes(label), `seção obrigatória ausente: ${label}`);
 }
 assert.ok(component.includes('Salvar nova versão do PTS'));
+assert.match(component, /const strongText = isDark \? 'text-slate-100' : 'text-slate-900'/, 'títulos do editor PTS devem respeitar o tema explícito do componente');
+assert.doesNotMatch(component, /dark:text-slate-(?:100|200)/, 'editor PTS não deve deixar o seletor global dark apagar títulos e valores em superfície clara');
 
 const migration = fs.readFileSync('supabase/migrations/20260803010000_pts_clinical_workspace_v1.sql', 'utf8');
 assert.match(migration, /add column if not exists pts_payload jsonb/);

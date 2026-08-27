@@ -445,7 +445,7 @@ export const SalesModularProposalBuilder = ({
       try {
         const [catalogData, assumptionData, simulationData] = await Promise.all([
           authenticatedFetch('/api/owner/sales/pricing-catalogs?compact=1'),
-          authenticatedFetch('/api/owner/sales/profitability-assumptions'),
+          authenticatedFetch('/api/owner/sales/profitability-assumptions?context=new_proposal'),
           authenticatedFetch(
             `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/modular-simulations?page=1&pageSize=50`
           )
@@ -4448,7 +4448,7 @@ export const SalesModularProposalBuilder = ({
                               label: 'Impostos estimados',
                               value: currency(promotionalMoneyFlow.totalTaxCents),
                               help:
-                                'Soma dos impostos sobre faturamento e do imposto sobre o lucro estimado.'
+                                'No regime atual de MEI, não há percentual adicional aplicado aqui: o DAS mensal fixo já entra na estrutura compartilhada.'
                             },
                             {
                               label: 'Stripe e perdas estimadas',
@@ -4481,12 +4481,12 @@ export const SalesModularProposalBuilder = ({
                                 'O que sobra depois das deduções da receita e dos custos diretos. Esse valor ajuda a pagar a estrutura da Verto.'
                             },
                             {
-                              label: 'Estrutura operacional atribuída',
+                              label: 'Estrutura compartilhada atribuída',
                               value: currency(
                                 promotionalMoneyFlow.sharedOperatingCostsTotalCents
                               ),
                               help:
-                                'Parcela de plataforma, suporte-base, operação e custos compartilhados atribuída a esta proposta. Não é o custo marginal de um paciente.'
+                                'Parcela do pool mensal atual (DAS MEI + Supabase + Railway) rateada entre as clínicas operacionais e esta nova proposta. Premissas históricas não entram neste valor.'
                             },
                             {
                               label: 'EBITDA atribuído',
@@ -4509,7 +4509,7 @@ export const SalesModularProposalBuilder = ({
                                       promotionalMoneyFlow.profitTaxCents
                               ),
                               help:
-                                'Depreciação e amortização, despesas financeiras, outras despesas abaixo do EBITDA e imposto sobre o lucro.'
+                                'No modelo operacional atual, premissas contábeis históricas ficam isoladas e não entram em novas propostas; este valor só muda quando houver um custo real atual configurado.'
                             },
                             {
                               label: 'Lucro líquido estimado',

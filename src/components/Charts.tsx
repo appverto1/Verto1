@@ -49,7 +49,7 @@ const WrappedXAxisTick = ({ x, y, payload, dark = false }: any) => {
   );
 };
 
-export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
+export const ComparisonBarChart = ({ data, title, maxScore = 1, emptyMessage = '' }: any) => {
   const [isMounted, setIsMounted] = useState(false);
   useEffect(() => setIsMounted(true), []);
   const safeData = Array.isArray(data) ? data.filter((row) => row && typeof row === 'object') : [];
@@ -58,7 +58,7 @@ export const ComparisonBarChart = ({ data, title, maxScore = 1 }: any) => {
     return (
       <div className="bg-white p-4 sm:p-6 rounded-[32px] shadow-sm border border-gray-100 mb-6 flex flex-col items-center justify-center py-10 opacity-50 italic text-gray-400">
         <BarChart2 size={32} className="mb-2" />
-        <p className="text-xs text-center leading-relaxed">Selecione perÃ­odos para comparar o progresso.</p>
+        <p className="text-xs text-center leading-relaxed">{emptyMessage || 'Selecione dois períodos com medições para comparar o progresso.'}</p>
       </div>
     );
   }

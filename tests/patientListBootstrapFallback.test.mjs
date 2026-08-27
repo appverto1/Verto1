@@ -19,8 +19,8 @@ assert.match(
 
 assert.match(
   dashboard,
-  /needsCanonicalPatientList = allPatients\.length === 0 \|\| Boolean\(patientListError\)[\s\S]*?onEnsurePatientList\(\)/,
-  'Abrir Pacientes com lista vazia ou snapshot local não canônico deve recuperar a lista uma única vez por workspace.',
+  /patientListSurfaceVisible = activeTab === "patients" \|\| activeTab === "notices" \|\| activeTab === "agenda"[\s\S]*?patientListEnsureAttemptedWorkspaceRef\.current = workspaceScopeKey[\s\S]*?onEnsurePatientList\(\)/,
+  'Abrir Pacientes, Avisos ou Agenda deve garantir uma única leitura canônica por workspace, mesmo quando existe snapshot local.',
 );
 
 const moduleMap = dashboard.slice(

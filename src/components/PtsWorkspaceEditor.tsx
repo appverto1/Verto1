@@ -6,12 +6,10 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  ClipboardCheck,
   HeartHandshake,
   Loader2,
   Network,
   Plus,
-  RefreshCw,
   ShieldAlert,
   Target,
   Trash2,
@@ -21,16 +19,17 @@ import {
   hydratePtsClinicalPayloadFromPlan,
   normalizePtsClinicalPayload,
   ptsCommonObjectives,
-  ptsLastReviewedAt,
   ptsSpecialtyObjectives,
+  stripPtsTrackingFieldsForDraft,
+  validatePtsDraftForActivation,
   type PtsClinicalPayload,
   type PtsGoal,
   type PtsNeed,
   type PtsNetworkContact,
   type PtsResponsibility,
-  type PtsReview,
   type PtsRisk,
 } from '../utils/ptsClinicalWorkspace';
+import { fromDateTimeLocalValue, toDateTimeLocalValue } from '../utils/dateTimeLocal';
 
 const makeId = (prefix: string) => {
   const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -78,30 +77,50 @@ const NETWORK_LABELS: Record<string, string> = {
   other: 'Outro',
 };
 
-const toDateTimeLocal = (value: string) => value ? value.slice(0, 16) : '';
-const fromDateTimeLocal = (value: string) => value ? new Date(value).toISOString() : '';
+const CLINICAL_STATE_PILLS: Record<string, { label: string; className: string }> = {
+  improving: { label: 'Evoluindo', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+  criterion_sustained: { label: 'Critério sustentado', className: 'border-sky-200 bg-sky-50 text-sky-700' },
+  stagnant: { label: 'Estagnado', className: 'border-amber-200 bg-amber-50 text-amber-700' },
+  attention: { label: 'Requer atenção', className: 'border-rose-200 bg-rose-50 text-rose-700' },
+  insufficient: { label: 'Evidência insuficiente', className: 'border-slate-200 bg-slate-50 text-slate-600' },
+};
+
+const explicitProgramClinicalState = (program: any) => {
+  const raw = String(
+    program?.clinicalMovement
+      || program?.clinical_movement
+      || program?.movement
+      || program?.read_model?.movement
+      || '',
+  ).trim().toLowerCase();
+  return CLINICAL_STATE_PILLS[raw] || null;
+};
 
 export function PtsWorkspaceEditor({
   scope,
+  draftVersion,
   professionals,
-  programs = [],
+  sharedEvidence = [],
+  clinicTimeZone,
   isDark = false,
   saving = false,
   onSave,
 }: {
   scope: any;
+  draftVersion?: any;
   professionals: any[];
-  programs?: any[];
+  sharedEvidence?: any[];
+  clinicTimeZone?: string;
   isDark?: boolean;
   saving?: boolean;
   onSave: (payload: {
+    action: 'save' | 'activate';
+    versionId: string;
+    expectedDraftRevision: number;
     ptsPayload: PtsClinicalPayload;
     commonObjectives: string[];
     specialtyObjectives: Record<string, string[]>;
     reviewDueDate: string | null;
-    lastReviewedAt: string | null;
-    status: string;
-    expectedVersion: number;
   }) => Promise<void> | void;
 }) {
   const participantIds = useMemo<string[]>(() => Array.from(new Set<string>([
@@ -116,12 +135,17 @@ export function PtsWorkspaceEditor({
   const professionalById = useMemo<Map<string, any>>(() => new Map<string, any>(
     (Array.isArray(professionals) ? professionals : []).map((professional) => [String(professional.id), professional]),
   ), [professionals]);
-  const scopedPrograms = useMemo(() => (
-    (Array.isArray(programs) ? programs : [])
-      .filter((program) => String(program?.therapeutic_plan_id || '') === String(scope?.id || ''))
-  ), [programs, scope?.id]);
-  const [draft, setDraft] = useState<PtsClinicalPayload>(() => hydratePtsClinicalPayloadFromPlan(scope));
-  const [status, setStatus] = useState(String(scope?.status || 'draft'));
+  const sharedEvidenceRows = useMemo(() => (
+    Array.isArray(sharedEvidence) ? sharedEvidence : []
+  ), [sharedEvidence]);
+  const draftScope = useMemo(() => {
+    const snapshot = draftVersion?.snapshot && typeof draftVersion.snapshot === 'object'
+      ? draftVersion.snapshot
+      : null;
+    return snapshot ? { ...scope, ...snapshot, pts_payload: snapshot.pts_payload || {} } : scope;
+  }, [draftVersion, scope]);
+  const [draft, setDraft] = useState<PtsClinicalPayload>(() => stripPtsTrackingFieldsForDraft(hydratePtsClinicalPayloadFromPlan(draftScope)));
+  const [validationVisible, setValidationVisible] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     context: true,
     goals: true,
@@ -138,15 +162,19 @@ export function PtsWorkspaceEditor({
       : 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400'
   }`;
   const subtle = isDark ? 'text-slate-400' : 'text-slate-500';
+  const strongText = isDark ? 'text-slate-100' : 'text-slate-900';
+  const secondaryStrongText = isDark ? 'text-slate-200' : 'text-slate-800';
   const surface = isDark ? 'border-slate-700 bg-slate-900/55' : 'border-slate-200 bg-white';
   const inset = isDark ? 'border-slate-700 bg-slate-950/35' : 'border-slate-100 bg-slate-50';
   const secondaryButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm ${
     isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-700 hover:bg-slate-50'
   }`;
 
-  const achievedGoals = draft.goals.filter((goal) => goal.status === 'achieved').length;
-  const overdueGoals = draft.goals.filter((goal) => goal.dueDate && goal.status !== 'achieved' && new Date(`${goal.dueDate}T23:59:59`).getTime() < Date.now()).length;
-  const pendingResponsibilities = draft.responsibilities.filter((item) => !['achieved', 'cancelled'].includes(item.status)).length;
+  const activationValidation = useMemo(() => validatePtsDraftForActivation(draft), [draft]);
+  const sectionErrors = validationVisible ? activationValidation.sectionErrors : {};
+  const draftVersionNumber = Number(draftVersion?.version_number || draftVersion?.versionNumber || scope?.pts_lineage?.draftVersion?.versionNumber || 1);
+  const draftRevision = Number(draftVersion?.draft_revision || draftVersion?.draftRevision || scope?.pts_lineage?.draftVersion?.draftRevision || scope?.edit_version || 1);
+  const draftVersionId = String(draftVersion?.id || scope?.pts_lineage?.draftVersion?.id || '');
 
   const setList = <K extends keyof PtsClinicalPayload>(key: K, value: PtsClinicalPayload[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -154,6 +182,7 @@ export function PtsWorkspaceEditor({
 
   const sectionHeader = (id: string, icon: React.ReactNode, title: string, description: string) => {
     const open = openSections[id] !== false;
+    const errors = sectionErrors[id] || [];
     return (
       <button
         type="button"
@@ -161,16 +190,21 @@ export function PtsWorkspaceEditor({
         onClick={() => setOpenSections((current) => ({ ...current, [id]: !open }))}
       >
         <span className="flex items-start gap-3">
-          <span className="mt-0.5 text-violet-500">{icon}</span>
+          <span className={`mt-0.5 ${errors.length ? 'text-rose-500' : 'text-violet-500'}`}>{errors.length ? <AlertTriangle size={20} /> : icon}</span>
           <span>
-            <span className="block text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</span>
-            <span className={`mt-0.5 block text-xs leading-5 ${subtle}`}>{description}</span>
+            <span className={`block text-sm font-semibold ${errors.length ? 'text-rose-600' : strongText}`}>{title}</span>
+            <span className={`mt-0.5 block text-xs leading-5 ${errors.length ? 'text-rose-500' : subtle}`}>{errors.length ? `${errors.length} campo(s) precisam de revisão.` : description}</span>
           </span>
         </span>
-        {open ? <ChevronUp size={18} className={subtle} /> : <ChevronDown size={18} className={subtle} />}
+        <span className="flex items-center gap-2">
+          {errors.length > 0 && <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] text-rose-600">{errors.length}</span>}
+          {open ? <ChevronUp size={18} className={subtle} /> : <ChevronDown size={18} className={subtle} />}
+        </span>
       </button>
     );
   };
+
+  const sectionClass = (id: string) => `rounded-2xl border p-4 ${sectionErrors[id]?.length ? `${isDark ? 'bg-slate-900/55' : 'bg-white'} border-rose-300 ring-1 ring-rose-100` : surface}`;
 
   const addNeed = () => setList('needs', [...draft.needs, {
     id: makeId('need'), title: '', domain: '', description: '', priority: 'medium', status: 'pending',
@@ -187,25 +221,36 @@ export function PtsWorkspaceEditor({
   const addRisk = () => setList('risks', [...draft.risks, {
     id: makeId('risk'), title: '', description: '', severity: 'medium', responsePlan: '', status: 'active',
   } as PtsRisk]);
-  const addReview = () => setList('reviews', [...draft.reviews, {
-    id: makeId('review'), scheduledFor: draft.nextReviewDate || '', completedAt: '', summary: '', decisions: '', nextReviewDate: '', recordedBy: '',
-  } as PtsReview]);
-
-  const persist = async () => {
-    const normalized = normalizePtsClinicalPayload(draft, {
+  const persist = async (action: 'save' | 'activate') => {
+    if (action === 'activate') {
+      setValidationVisible(true);
+      if (!activationValidation.valid) {
+        const sections = Object.keys(activationValidation.sectionErrors).filter((section) => section !== 'overview');
+        setOpenSections((current) => ({ ...current, ...Object.fromEntries(sections.map((section) => [section, true])) }));
+        window.requestAnimationFrame(() => {
+          const target = activationValidation.firstFieldId ? document.getElementById(activationValidation.firstFieldId) : null;
+          target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+        });
+        // Activation may be blocked, but the current form must still reach the
+        // server so the draft is persisted. The activation RPC commits the
+        // draft first and returns an activation-only validation outcome.
+      }
+    }
+    const normalized = stripPtsTrackingFieldsForDraft(normalizePtsClinicalPayload(draft, {
       participantIds,
       specialties,
       defaultCaseManagerId: String(scope?.responsible_professional_id || ''),
       defaultStartedAt: String(scope?.created_at || '').slice(0, 10),
-    });
+    }));
     await onSave({
+      action,
+      versionId: draftVersionId,
+      expectedDraftRevision: draftRevision,
       ptsPayload: normalized,
       commonObjectives: ptsCommonObjectives(normalized),
       specialtyObjectives: ptsSpecialtyObjectives(normalized),
       reviewDueDate: normalized.nextReviewDate || null,
-      lastReviewedAt: ptsLastReviewedAt(normalized),
-      status,
-      expectedVersion: Number(scope?.edit_version || 1),
     });
   };
 
@@ -214,7 +259,7 @@ export function PtsWorkspaceEditor({
       <div className={`grid gap-3 rounded-2xl border p-4 sm:grid-cols-2 xl:grid-cols-4 ${inset}`}>
         <label className={`text-xs ${subtle}`}>
           Técnico de referência
-          <select className={`${field} mt-1.5`} value={draft.caseManagerId} onChange={(event) => setDraft((current) => ({ ...current, caseManagerId: event.target.value }))}>
+          <select id="pts-case-manager" aria-invalid={Boolean(sectionErrors.overview?.length)} className={`${field} mt-1.5`} value={draft.caseManagerId} onChange={(event) => setDraft((current) => ({ ...current, caseManagerId: event.target.value }))}>
             <option value="">Selecione</option>
             {participantIds.map((professionalId) => (
               <option key={professionalId} value={professionalId}>{professionalById.get(professionalId)?.name || 'Profissional da equipe'}</option>
@@ -223,40 +268,27 @@ export function PtsWorkspaceEditor({
         </label>
         <label className={`text-xs ${subtle}`}>
           Início do PTS
-          <input className={`${field} mt-1.5`} type="date" value={draft.startedAt} onChange={(event) => setDraft((current) => ({ ...current, startedAt: event.target.value }))} />
+          <input id="pts-started-at" aria-invalid={Boolean(sectionErrors.overview?.length)} className={`${field} mt-1.5`} type="date" value={draft.startedAt} onChange={(event) => setDraft((current) => ({ ...current, startedAt: event.target.value }))} />
         </label>
         <label className={`text-xs ${subtle}`}>
           Próxima reavaliação
           <input className={`${field} mt-1.5`} type="date" value={draft.nextReviewDate} onChange={(event) => setDraft((current) => ({ ...current, nextReviewDate: event.target.value }))} />
         </label>
-        <label className={`text-xs ${subtle}`}>
-          Estado do PTS
-          <select className={`${field} mt-1.5`} value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="draft">Rascunho</option>
-            <option value="active">Vigente</option>
-            <option value="paused">Pausado</option>
-            <option value="completed">Concluído</option>
-            <option value="archived">Arquivado</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {[
-          [Target, 'Metas', String(draft.goals.length), `${achievedGoals} alcançada(s)`],
-          [AlertTriangle, 'Atenção', String(overdueGoals), 'meta(s) vencida(s)'],
-          [ClipboardCheck, 'Ações', String(pendingResponsibilities), 'responsabilidade(s) aberta(s)'],
-          [RefreshCw, 'Reavaliação', draft.nextReviewDate ? new Date(`${draft.nextReviewDate}T12:00:00`).toLocaleDateString('pt-BR') : 'Não definida', `${draft.reviews.length} registro(s)`],
-        ].map(([Icon, label, value, detail]: any) => (
-          <div key={label} className={`rounded-2xl border p-4 ${surface}`}>
-            <div className="flex items-center gap-2 text-violet-500"><Icon size={17} /><span className={`text-xs ${subtle}`}>{label}</span></div>
-            <p className="mt-2 text-xl font-semibold text-slate-900 dark:text-slate-100">{value}</p>
-            <p className={`mt-1 text-xs ${subtle}`}>{detail}</p>
+        <div className={`text-xs ${subtle}`}>
+          Estado desta versão
+          <div className={`mt-1.5 flex min-h-11 items-center rounded-xl border px-3.5 text-sm ${isDark ? 'border-violet-500/30 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>
+            Rascunho · versão {draftVersionNumber}
           </div>
-        ))}
+        </div>
       </div>
+      {sectionErrors.overview?.length > 0 && (
+        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700" role="alert">
+          {sectionErrors.overview.join(' ')}
+        </div>
+      )}
 
-      <section className={`rounded-2xl border p-4 ${surface}`}>
+
+      <section data-pts-section="context" className={sectionClass('context')}>
         {sectionHeader('context', <HeartHandshake size={20} />, 'Visão compartilhada do caso', 'Registre o que importa para o paciente e a família, além das potencialidades e necessidades prioritárias.')}
         {openSections.context !== false && (
           <div className="mt-4 space-y-4">
@@ -267,12 +299,12 @@ export function PtsWorkspaceEditor({
             </div>
             <label className={`block text-xs ${subtle}`}>Potencialidades e interesses<input className={`${field} mt-1.5`} value={draft.strengths.join(' · ')} onChange={(event) => setDraft((current) => ({ ...current, strengths: event.target.value.split('·').map((item) => item.trim()).filter(Boolean) }))} placeholder="Separe os itens com ·" /></label>
             <div className="space-y-3">
-              <div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Necessidades prioritárias</p><button type="button" className={secondaryButton} onClick={addNeed}><Plus size={15} /> Adicionar</button></div>
+              <div className="flex items-center justify-between"><p className={`text-sm font-semibold ${strongText}`}>Necessidades prioritárias</p><button type="button" className={secondaryButton} onClick={addNeed}><Plus size={15} /> Adicionar</button></div>
               {draft.needs.length === 0 && <p className={`rounded-xl border border-dashed p-4 text-xs ${subtle}`}>Nenhuma necessidade priorizada ainda.</p>}
               {draft.needs.map((need, index) => (
                 <div key={need.id} className={`grid gap-3 rounded-xl border p-3 lg:grid-cols-[1.2fr_0.8fr_0.6fr_auto] ${inset}`}>
-                  <input className={field} value={need.title} onChange={(event) => setList('needs', draft.needs.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Necessidade ou problema ativo" />
-                  <input className={field} value={need.domain} onChange={(event) => setList('needs', draft.needs.map((item, itemIndex) => itemIndex === index ? { ...item, domain: event.target.value } : item))} placeholder="Domínio: comunicação, escola..." />
+                  <input id={`pts-need-${index}-title`} className={field} value={need.title} onChange={(event) => setList('needs', draft.needs.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Necessidade ou problema ativo" />
+                  <input id={`pts-need-${index}-domain`} className={field} value={need.domain} onChange={(event) => setList('needs', draft.needs.map((item, itemIndex) => itemIndex === index ? { ...item, domain: event.target.value } : item))} placeholder="Domínio: comunicação, escola..." />
                   <select className={field} value={need.priority} onChange={(event) => setList('needs', draft.needs.map((item, itemIndex) => itemIndex === index ? { ...item, priority: event.target.value as PtsNeed['priority'] } : item))}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
                   <button type="button" aria-label="Remover necessidade" className="rounded-xl p-3 text-rose-500 hover:bg-rose-500/10" onClick={() => setList('needs', draft.needs.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={17} /></button>
                   <textarea className={`${field} min-h-16 lg:col-span-4`} value={need.description} onChange={(event) => setList('needs', draft.needs.map((item, itemIndex) => itemIndex === index ? { ...item, description: event.target.value } : item))} placeholder="Contexto, impacto funcional e evidências relevantes." />
@@ -281,36 +313,34 @@ export function PtsWorkspaceEditor({
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <label className={`text-xs ${subtle}`}>Participação do paciente e da família<select className={`${field} mt-1.5`} value={draft.participationStatus} onChange={(event) => setDraft((current) => ({ ...current, participationStatus: event.target.value as PtsClinicalPayload['participationStatus'] }))}><option value="not_started">Ainda não discutido</option><option value="discussed">Discutido</option><option value="agreed">Pactuado</option><option value="declined">Participação recusada/adiada</option></select></label>
-              <label className={`text-xs ${subtle}`}>Data da pactuação<input className={`${field} mt-1.5`} type="datetime-local" value={toDateTimeLocal(draft.participationRecordedAt)} onChange={(event) => setDraft((current) => ({ ...current, participationRecordedAt: fromDateTimeLocal(event.target.value) }))} /></label>
+              <label className={`text-xs ${subtle}`}>Data da pactuação<input className={`${field} mt-1.5`} type="datetime-local" value={toDateTimeLocalValue(draft.participationRecordedAt, clinicTimeZone)} onChange={(event) => setDraft((current) => ({ ...current, participationRecordedAt: fromDateTimeLocalValue(event.target.value, clinicTimeZone) }))} /></label>
             </div>
           </div>
         )}
       </section>
 
-      <section className={`rounded-2xl border p-4 ${surface}`}>
+      <section data-pts-section="goals" className={sectionClass('goals')}>
         {sectionHeader('goals', <Target size={20} />, 'Metas compartilhadas', 'Combine metas quantitativas e qualitativas, responsáveis, prazo e resultado esperado.')}
         {openSections.goals !== false && (
           <div className="mt-4 space-y-3">
-            <div className="flex justify-end"><button type="button" className={secondaryButton} onClick={addGoal}><Plus size={15} /> Nova meta</button></div>
+            <div className="flex justify-end"><button id="pts-add-goal" type="button" className={secondaryButton} onClick={addGoal}><Plus size={15} /> Nova meta</button></div>
             {draft.goals.length === 0 && <p className={`rounded-xl border border-dashed p-4 text-xs ${subtle}`}>Crie a primeira meta compartilhada do PTS.</p>}
             {draft.goals.map((goal, index) => (
               <div key={goal.id} className={`rounded-2xl border p-4 ${inset}`}>
-                <div className="grid gap-3 lg:grid-cols-[1.4fr_0.6fr_0.6fr_auto]">
-                  <input className={field} value={goal.title} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Resultado que se deseja alcançar" />
+                <div className="grid gap-3 lg:grid-cols-[1.5fr_0.7fr_auto]">
+                  <input id={`pts-goal-${index}-title`} className={field} value={goal.title} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} placeholder="Resultado que se deseja alcançar" />
                   <select className={field} value={goal.horizon} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, horizon: event.target.value as PtsGoal['horizon'] } : item))}>{Object.entries(HORIZON_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-                  <select className={field} value={goal.status} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, status: event.target.value as PtsGoal['status'] } : item))}>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
                   <button type="button" aria-label="Remover meta" className="rounded-xl p-3 text-rose-500 hover:bg-rose-500/10" onClick={() => setList('goals', draft.goals.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={17} /></button>
                 </div>
                 <textarea className={`${field} mt-3 min-h-16`} value={goal.description} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, description: event.target.value } : item))} placeholder="Por que esta meta é relevante para a vida do paciente?" />
-                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <select className={field} value={goal.goalType} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, goalType: event.target.value as PtsGoal['goalType'] } : item))}><option value="qualitative">Qualitativa</option><option value="quantitative">Quantitativa</option></select>
                   <input className={field} value={goal.baseline} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, baseline: event.target.value } : item))} placeholder="Linha de base" />
-                  <input className={field} value={goal.target} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, target: event.target.value } : item))} placeholder="Resultado esperado" />
-                  <input className={field} value={goal.currentValue} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, currentValue: event.target.value } : item))} placeholder="Situação atual" />
+                  <input id={`pts-goal-${index}-target`} className={field} value={goal.target} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, target: event.target.value } : item))} placeholder="Resultado esperado" />
                   <input className={field} type="date" value={goal.dueDate} onChange={(event) => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, dueDate: event.target.value } : item))} />
                 </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                  <fieldset className={`rounded-xl border p-3 ${surface}`}><legend className={`px-1 text-xs ${subtle}`}>Profissionais responsáveis</legend><div className="grid gap-2 sm:grid-cols-2">{participantIds.map((professionalId) => { const selected = goal.responsibleProfessionalIds.includes(professionalId); return <label key={professionalId} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={selected} onChange={() => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, responsibleProfessionalIds: selected ? item.responsibleProfessionalIds.filter((id) => id !== professionalId) : [...item.responsibleProfessionalIds, professionalId] } : item))} /><span>{professionalById.get(professionalId)?.name || 'Profissional'}</span></label>; })}</div></fieldset>
+                  <fieldset id={`pts-goal-${index}-responsible`} tabIndex={-1} className={`rounded-xl border p-3 ${surface}`}><legend className={`px-1 text-xs ${subtle}`}>Profissionais responsáveis</legend><div className="grid gap-2 sm:grid-cols-2">{participantIds.map((professionalId) => { const selected = goal.responsibleProfessionalIds.includes(professionalId); return <label key={professionalId} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={selected} onChange={() => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, responsibleProfessionalIds: selected ? item.responsibleProfessionalIds.filter((id) => id !== professionalId) : [...item.responsibleProfessionalIds, professionalId] } : item))} /><span>{professionalById.get(professionalId)?.name || 'Profissional'}</span></label>; })}</div></fieldset>
                   <fieldset className={`rounded-xl border p-3 ${surface}`}><legend className={`px-1 text-xs ${subtle}`}>Especialidades relacionadas</legend><div className="grid gap-2 sm:grid-cols-2">{specialties.map((specialty) => { const selected = goal.specialties.includes(specialty); return <label key={specialty} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={selected} onChange={() => setList('goals', draft.goals.map((item, itemIndex) => itemIndex === index ? { ...item, specialties: selected ? item.specialties.filter((value) => value !== specialty) : [...item.specialties, specialty] } : item))} /><span>{specialty}</span></label>; })}</div></fieldset>
                 </div>
               </div>
@@ -320,20 +350,23 @@ export function PtsWorkspaceEditor({
       </section>
 
       <section className={`rounded-2xl border p-4 ${surface}`}>
-        {sectionHeader('evidence', <Activity size={20} />, 'Evidências do cuidado', 'Programas e registros já vinculados ao PTS aparecem aqui sem duplicar informações clínicas.')}
+        {sectionHeader('evidence', <Activity size={20} />, 'Evidências do cuidado', 'Somente resumos explicitamente compartilhados pelas especialidades aparecem aqui; o PTS não lê o conteúdo privado dos outros planos.')}
         {openSections.evidence !== false && (
           <div className="mt-4 space-y-3">
-            {scopedPrograms.length === 0 ? (
-              <p className={`rounded-xl border border-dashed p-4 text-xs ${subtle}`}>Nenhum programa clínico foi vinculado a este PTS ainda.</p>
-            ) : scopedPrograms.map((program) => (
+            {sharedEvidenceRows.length === 0 ? (
+              <p className={`rounded-xl border border-dashed p-4 text-xs ${subtle}`}>Nenhuma evidência foi compartilhada com este PTS ainda.</p>
+            ) : sharedEvidenceRows.map((program) => (
               <div key={program.id} className={`flex flex-col gap-3 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between ${inset}`}>
                 <div>
-                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{program.name || 'Programa terapêutico'}</p>
-                  <p className={`mt-1 text-xs ${subtle}`}>{program.category || 'Sem categoria'} · {(program.targets || []).length} alvo(s)</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className={`text-sm font-semibold ${strongText}`}>{program.name || 'Programa terapêutico'}</p>
+                    {(() => { const state = explicitProgramClinicalState(program); return state ? <span className={`rounded-full border px-2 py-0.5 text-[10px] ${state.className}`}>{state.label}</span> : null; })()}
+                  </div>
+                  <p className={`mt-1 text-xs ${subtle}`}>{program.sourceSpecialty || 'Especialidade'} · resumo compartilhado</p>
                 </div>
                 <div className="text-left sm:text-right">
                   <p className={`text-xs ${subtle}`}>Última aplicação</p>
-                  <p className="mt-1 text-sm text-slate-800 dark:text-slate-200">{program.last_applied_at ? new Date(program.last_applied_at).toLocaleDateString('pt-BR') : 'Sem registro'}</p>
+                  <p className={`mt-1 text-sm ${secondaryStrongText}`}>{program.lastAppliedAt ? new Date(program.lastAppliedAt).toLocaleDateString('pt-BR') : 'Sem registro'}</p>
                 </div>
               </div>
             ))}
@@ -383,13 +416,12 @@ export function PtsWorkspaceEditor({
         {sectionHeader('risks', <ShieldAlert size={20} />, 'Riscos e plano de proteção', 'Área clínica restrita aos profissionais autorizados do caso. Registre apenas informações necessárias à segurança.')}
         {openSections.risks !== false && (
           <div className="mt-4 space-y-3">
-            <div className="flex justify-end"><button type="button" className={secondaryButton} onClick={addRisk}><Plus size={15} /> Registrar risco</button></div>
+            <div className="flex justify-end"><button type="button" className={secondaryButton} onClick={addRisk}><Plus size={15} /> Adicionar risco ao plano</button></div>
             {draft.risks.map((item, index) => (
               <div key={item.id} className={`rounded-xl border p-3 ${inset}`}>
-                <div className="grid gap-3 lg:grid-cols-[1.2fr_0.5fr_0.5fr_auto]">
+                <div className="grid gap-3 lg:grid-cols-[1.4fr_0.6fr_auto]">
                   <input className={field} value={item.title} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, title: event.target.value } : current))} placeholder="Risco ou situação de atenção" />
                   <select className={field} value={item.severity} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, severity: event.target.value as PtsRisk['severity'] } : current))}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-                  <select className={field} value={item.status} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, status: event.target.value as PtsRisk['status'] } : current))}><option value="active">Ativo</option><option value="controlled">Controlado</option><option value="resolved">Resolvido</option></select>
                   <button type="button" aria-label="Remover risco" className="rounded-xl p-3 text-rose-500 hover:bg-rose-500/10" onClick={() => setList('risks', draft.risks.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={17} /></button>
                 </div>
                 <div className="mt-3 grid gap-3 lg:grid-cols-2"><textarea className={`${field} min-h-20`} value={item.description} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, description: event.target.value } : current))} placeholder="Sinais, contexto e fatores associados." /><textarea className={`${field} min-h-20`} value={item.responsePlan} onChange={(event) => setList('risks', draft.risks.map((current, itemIndex) => itemIndex === index ? { ...current, responsePlan: event.target.value } : current))} placeholder="Conduta combinada e critérios de escalonamento." /></div>
@@ -400,28 +432,21 @@ export function PtsWorkspaceEditor({
       </section>
 
       <section className={`rounded-2xl border p-4 ${surface}`}>
-        {sectionHeader('reviews', <CalendarClock size={20} />, 'Reavaliações e decisões da equipe', 'Registre reuniões, decisões e a próxima data de revisão sem sobrescrever o histórico anterior.')}
+        {sectionHeader('reviews', <CalendarClock size={20} />, 'Reavaliações e decisões da equipe', 'Eventos de acompanhamento ficam fora da definição imutável do plano.')}
         {openSections.reviews !== false && (
-          <div className="mt-4 space-y-3">
-            <div className="flex justify-end"><button type="button" className={secondaryButton} onClick={addReview}><Plus size={15} /> Registrar reavaliação</button></div>
-            {draft.reviews.map((item, index) => (
-              <div key={item.id} className={`rounded-xl border p-3 ${inset}`}>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <label className={`text-xs ${subtle}`}>Data prevista<input className={`${field} mt-1.5`} type="date" value={item.scheduledFor} onChange={(event) => setList('reviews', draft.reviews.map((current, itemIndex) => itemIndex === index ? { ...current, scheduledFor: event.target.value } : current))} /></label>
-                  <label className={`text-xs ${subtle}`}>Reunião concluída em<input className={`${field} mt-1.5`} type="datetime-local" value={toDateTimeLocal(item.completedAt)} onChange={(event) => setList('reviews', draft.reviews.map((current, itemIndex) => itemIndex === index ? { ...current, completedAt: fromDateTimeLocal(event.target.value) } : current))} /></label>
-                  <label className={`text-xs ${subtle}`}>Próxima revisão<input className={`${field} mt-1.5`} type="date" value={item.nextReviewDate} onChange={(event) => setList('reviews', draft.reviews.map((current, itemIndex) => itemIndex === index ? { ...current, nextReviewDate: event.target.value } : current))} /></label>
-                </div>
-                <div className="mt-3 grid gap-3 lg:grid-cols-2"><textarea className={`${field} min-h-20`} value={item.summary} onChange={(event) => setList('reviews', draft.reviews.map((current, itemIndex) => itemIndex === index ? { ...current, summary: event.target.value } : current))} placeholder="Síntese do que foi observado desde a última revisão." /><textarea className={`${field} min-h-20`} value={item.decisions} onChange={(event) => setList('reviews', draft.reviews.map((current, itemIndex) => itemIndex === index ? { ...current, decisions: event.target.value } : current))} placeholder="Decisões, mudanças de rota e responsabilidades pactuadas." /></div>
-                <div className="mt-2 flex justify-end"><button type="button" className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-rose-500 hover:bg-rose-500/10" onClick={() => setList('reviews', draft.reviews.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /> Remover</button></div>
-              </div>
-            ))}
+          <div className={`mt-4 rounded-xl border border-dashed p-4 ${inset}`}>
+            <p className={`text-sm ${secondaryStrongText}`}>Disponível após a ativação do PTS.</p>
+            <p className={`mt-1 text-xs leading-5 ${subtle}`}>Reavaliações e decisões serão registradas como eventos append-only, sem reabrir nem alterar esta versão do plano.</p>
           </div>
         )}
       </section>
 
       <div className={`sticky bottom-3 z-10 flex flex-col gap-3 rounded-2xl border p-4 shadow-lg sm:flex-row sm:items-center sm:justify-between ${surface}`}>
-        <div className="flex items-start gap-2"><CheckCircle2 className="mt-0.5 text-emerald-500" size={18} /><p className={`text-xs leading-5 ${subtle}`}>O salvamento cria uma nova versão e preserva integralmente o histórico anterior.</p></div>
-        <button type="button" disabled={saving} onClick={() => void persist()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 text-sm text-white disabled:opacity-50">{saving ? <><Loader2 size={16} className="animate-spin" /> Salvando...</> : 'Salvar nova versão do PTS'}</button>
+        <div className="flex items-start gap-2"><CheckCircle2 className="mt-0.5 text-emerald-500" size={18} /><p className={`text-xs leading-5 ${subtle}`}>O rascunho pode ser salvo incompleto. Ao ativar, esta versão se torna imutável e passa a ser a referência apenas para novos contextos clínicos.</p></div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <button type="button" disabled={saving} onClick={() => void persist('save')} className={secondaryButton}>{saving ? <><Loader2 size={16} className="animate-spin" /> Salvando...</> : 'Salvar rascunho'}</button>
+          <button type="button" disabled={saving || !draftVersionId} onClick={() => void persist('activate')} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 text-sm text-white hover:bg-violet-700 disabled:opacity-50">{saving ? <><Loader2 size={16} className="animate-spin" /> Processando...</> : `Ativar PTS · v${draftVersionNumber}`}</button>
+        </div>
       </div>
     </div>
   );

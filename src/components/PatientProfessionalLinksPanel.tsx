@@ -26,6 +26,7 @@ type ProfessionalLink = {
     | null;
   accessEnabled?: boolean;
   canBeEnded?: boolean;
+  canBeEndedReason?: 'protected_clinic_manager' | null;
   professional?: {
     id: string;
     name?: string | null;
@@ -78,7 +79,7 @@ const api = async (url: string, init?: RequestInit) => {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.success === false) {
-    throw new Error(payload?.error || 'Não foi possível atualizar a equipe.');
+    throw new Error(payload?.message || payload?.error || 'Não foi possível atualizar a equipe.');
   }
   return payload;
 };
@@ -254,8 +255,17 @@ export const PatientProfessionalLinksPanel = ({
         }
       );
       await load();
-    } catch {
-      setError('Não foi possível encerrar o vínculo. O histórico foi preservado.');
+    } catch (endError: any) {
+      const message = String(endError?.message || '');
+      setError(
+        message.includes('PROTECTED_CLINIC_MANAGER')
+          ? 'Diretores e coordenadores ativos da clínica não podem ser removidos da equipe do caso.'
+          : message.includes('ACCESS_DENIED')
+            ? 'Você não tem permissão para alterar a equipe deste caso.'
+            : message.includes('MIGRATION') || message.includes('SCHEMA')
+              ? 'A atualização da equipe precisa da migração mais recente do banco.'
+              : 'Não foi possível encerrar o vínculo. O histórico foi preservado.'
+      );
     } finally {
       setBusy('');
     }
@@ -583,6 +593,10 @@ export const PatientProfessionalLinksPanel = ({
                         {effectiveCanManage && link.canBeEnded !== false ? (
                           <div className={`border-t px-3 ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
                             <button type="button" onClick={() => setPendingEndLink(link)} disabled={busy === `end:${link.id}`} className="inline-flex min-h-9 w-full items-center justify-center gap-1.5 text-xs font-medium text-rose-600 disabled:opacity-50"><UserRoundX size={14} /> Encerrar vínculo</button>
+                          </div>
+                        ) : effectiveCanManage && link.canBeEndedReason === 'protected_clinic_manager' ? (
+                          <div className={`border-t px-3 py-2 text-center text-[11px] ${dark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
+                            Gestão da clínica · vínculo protegido
                           </div>
                         ) : null}
                       </article>

@@ -69,26 +69,6 @@ import {
   type AppointmentFinancialContextType,
 } from "../utils/appointmentFinancialContext";
 
-const THERAPIST_SIDEBAR_PREFERENCE_KEY = "verto:therapist-sidebar-expanded";
-
-const readTherapistSidebarPreference = () => {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(THERAPIST_SIDEBAR_PREFERENCE_KEY) === "true";
-  } catch {
-    return false;
-  }
-};
-
-const writeTherapistSidebarPreference = (expanded: boolean) => {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(THERAPIST_SIDEBAR_PREFERENCE_KEY, expanded ? "true" : "false");
-  } catch {
-    // Navigation remains usable when localStorage is blocked.
-  }
-};
-
 const ProfileView = ({
   user,
   onUpdateProfile,
@@ -877,14 +857,7 @@ export const TherapistDashboard = ({
     return a.status === "canceled";
   }).length;
 
-  const [isSidebarExpanded, setIsSidebarExpanded] = useState(readTherapistSidebarPreference);
-  const toggleSidebarExpanded = () => {
-    setIsSidebarExpanded((current) => {
-      const next = !current;
-      writeTherapistSidebarPreference(next);
-      return next;
-    });
-  };
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
 
   const groupedAgenda = useMemo(() => {
     if (agendaView === "day" || agendaView === "month") return null;
@@ -964,19 +937,16 @@ export const TherapistDashboard = ({
     <div className="flex min-h-screen bg-[#F4F7FE] font-sans overflow-hidden">
       {/* Desktop Sidebar */}
       <aside
-        className={`hidden lg:flex flex-col ${isSidebarExpanded ? 'w-72' : 'w-24'} bg-white border-r border-slate-100 p-6 sticky top-0 h-screen overflow-y-auto shrink-0 transition-all duration-300 ease-in-out z-50`}
+        className={`hidden lg:flex flex-col ${isSidebarExpanded ? 'w-72 -mr-48 shadow-xl shadow-slate-900/5' : 'w-24'} bg-white border-r border-slate-100 p-6 sticky top-0 h-screen overflow-y-auto shrink-0 transition-all duration-300 ease-in-out z-50`}
+        onMouseEnter={() => setIsSidebarExpanded(true)}
+        onMouseLeave={() => setIsSidebarExpanded(false)}
+        onFocusCapture={() => setIsSidebarExpanded(true)}
+        onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsSidebarExpanded(false);
+        }}
       >
         <div className={`mb-10 px-4 flex ${isSidebarExpanded ? 'items-center justify-start gap-2' : 'flex-col items-center justify-center gap-2'} transition-all duration-300`}>
           <LogoVerto size={40} showText={isSidebarExpanded} />
-          <button
-            type="button"
-            onClick={toggleSidebarExpanded}
-            className={`${isSidebarExpanded ? 'ml-auto' : ''} rounded-xl border border-slate-100 bg-white p-2 text-slate-400 shadow-sm transition-all hover:bg-violet-50 hover:text-[#7a32fc]`}
-            aria-label={isSidebarExpanded ? "Recolher menu lateral" : "Expandir menu lateral"}
-            title={isSidebarExpanded ? "Recolher menu" : "Expandir menu"}
-          >
-            {isSidebarExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-          </button>
         </div>
 
         <nav className="flex-1 space-y-2 overflow-y-auto no-scrollbar pr-2">
@@ -1487,6 +1457,12 @@ export const TherapistDashboard = ({
                   anamnesisTemplate={anamnesisTemplate}
                   clinicContext={{
                     userId: user?.id || "",
+                    clinicTimeZone:
+                      user?.clinicTimeZone ||
+                      user?.clinic_timezone ||
+                      user?.clinicSettings?.clinicTimeZone ||
+                      user?.clinicSettings?.timezone ||
+                      null,
                     clinicName:
                       user?.clinicSettings?.clinicName ||
                       user?.name ||

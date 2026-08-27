@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+const shell = fs.readFileSync('src/components/ClinicalPlanAnalyticsShell.tsx', 'utf8');
+const dashboard = fs.readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
+const changeAnalytics = fs.readFileSync('src/utils/clinicalProgramChangeAnalytics.ts', 'utf8');
+const outcomeAnalytics = fs.readFileSync('src/utils/clinicalOutcomeAnalytics.ts', 'utf8');
+const server = fs.readFileSync('server.ts', 'utf8');
+
+assert.match(shell, /Andamento geral dos programas/, 'mudanças por sessão deve resumir programas, não repetir um gráfico por alvo');
+assert.match(shell, /Evolução dos programas/, 'a visão deve explicitar evolução dos programas');
+assert.match(shell, /Maiores evoluções/, 'a visão deve destacar alvos em evolução');
+assert.match(shell, /Precisam de atenção/, 'a visão deve destacar alvos em piora');
+assert.match(shell, /Critério sustentado/, 'o programa deve separar critério sustentado de evolução');
+assert.match(shell, /Estagnado/, 'estabilidade abaixo do critério deve ser apresentada como estagnação');
+assert.match(shell, /nunca o sinal matemático isolado/i, 'cor e estado não podem seguir apenas o sinal matemático');
+assert.match(shell, /target\.valueTrend === 'down'[\s\S]*TrendingDown[\s\S]*text-emerald-500/, 'seta do card deve refletir o delta matemático enquanto a cor reflete a valência clínica');
+assert.match(shell, /target\.valueTrend === 'flat'[\s\S]*ArrowRight/, 'delta visualmente nulo deve usar seta horizontal, nunca falsa seta de alta');
+assert.match(shell, /Meta clínica configurada|Critério de domínio/, 'microcopy deve nomear a regra como meta ou critério, não como mudança');
+assert.doesNotMatch(shell, /Mudança clinicamente favorável/, 'critério clínico não pode ser rotulado como mudança');
+assert.match(shell, /formatClinicalValue\(target\.firstValue, target\.unit\)/, 'destaques devem reutilizar o formatador clínico compartilhado');
+assert.match(outcomeAnalytics, /export const formatClinicalValue/, 'formatação clínica deve permanecer centralizada fora dos componentes');
+assert.match(outcomeAnalytics, /normalizedUnit\.includes\('percent'\)/, 'unidades percent/percentage do contrato devem ser formatadas como % na UI');
+assert.match(outcomeAnalytics, /second', 'seconds'/, 'unidades de duração em inglês devem ser normalizadas antes da renderização');
+assert.match(shell, /font-medium[\s\S]*criterionCopy/, 'critério clínico deve ter hierarquia visual superior ao metadado de sessões');
+assert.match(shell, /const flatTone = sustained \? 'text-sky-500' : 'text-amber-500'/, 'seta plana só pode ser azul no critério sustentado; fora do teto deve ser âmbar');
+assert.match(shell, /target\.valueTrend === 'flat'[\s\S]*text-amber-700/, 'valor sem delta abaixo do teto não pode permanecer verde');
+assert.match(shell, /sem criar score ou média entre unidades incompatíveis/i, 'a visão não pode reintroduzir score global');
+assert.match(shell, /activeDomain !== 'changes' && activeMetric/, 'mudanças por sessão não deve exibir seletor de uma métrica\/alvo individual');
+assert.match(shell, /ProgramChangesView series=\{series\} programs=\{programs\}/, 'a aba de mudanças deve usar o resumo por programa');
+assert.match(dashboard, /programs=\{data\.programs \|\| \[\]\}/, 'o shell precisa receber os programas canônicos retornados pelo dashboard');
+
+assert.match(outcomeAnalytics, /decrease_is_better/, 'normalizador deve reconhecer DECREASE_IS_BETTER do contrato V3');
+assert.match(outcomeAnalytics, /increase_is_better/, 'normalizador deve reconhecer INCREASE_IS_BETTER do contrato V3');
+assert.match(outcomeAnalytics, /target_range_is_better/, 'normalizador deve reconhecer TARGET_RANGE_IS_BETTER do contrato V3');
+
+assert.match(changeAnalytics, /ClinicalTargetMovement = 'improving' \| 'criterion_sustained' \| 'stagnant' \| 'attention' \| 'insufficient'/, 'estados semânticos devem diferenciar sustentação, estagnação, atenção e low-N');
+assert.match(changeAnalytics, /clinicalDecisionRules/, 'regras clínicas versionadas devem ter precedência quando presentes no contrato');
+assert.match(changeAnalytics, /targetRange|target_range/, 'faixa-alvo precisa ser suportada como semântica clínica');
+assert.match(changeAnalytics, /criterionDistance/, 'ranking deve usar distância ao critério em vez de delta bruto quando há meta');
+assert.match(changeAnalytics, /criterionProgressDelta/, 'aproximação do critério deve ser calculada explicitamente');
+assert.match(changeAnalytics, /linearSlope/, 'tendência deve usar inclinação longitudinal e não somente primeiro versus último ponto');
+assert.match(changeAnalytics, /direction === 'lower_is_better'/, 'a direção clínica deve inverter corretamente métricas em que menor é melhor');
+assert.match(changeAnalytics, /no_directional_judgment/, 'volume sem direção clínica não pode virar melhora\/piora');
+assert.match(changeAnalytics, /previousMovement/, 'transições semânticas entre estados devem orientar os destaques');
+assert.match(changeAnalytics, /highlightPriority/, 'destaques devem priorizar transições de estado antes da magnitude');
+assert.match(changeAnalytics, /criterionMetAtStart/, 'ranking deve saber se o alvo já iniciou a janela no critério');
+assert.match(changeAnalytics, /target\.criterionMetAtStart && target\.criterionMet/, 'alvo que começa e termina no critério deve sair de Maiores evoluções');
+assert.match(changeAnalytics, /target\.valueTrend === 'flat'/, '100% -> 100% e outros deltas planos não podem ocupar Maiores evoluções');
+assert.match(changeAnalytics, /target\.criterionProgressDelta <= 0/, 'alvo com critério deve provar aproximação líquida real antes de entrar no ranking');
+assert.match(changeAnalytics, /endpointTrend/, 'microinteração deve derivar seta do primeiro para o último valor, separada da inclinação longitudinal');
+assert.match(changeAnalytics, /metadataSignalsLowN/, 'ranking deve consumir LOW_N/qualidade quando o read model fornecer o sinal');
+assert.match(changeAnalytics, /latestOpportunityCount !== null && latestOpportunityCount <= 1/, 'uma sessão final 1\/1 deve sofrer penalidade de confiança no ranking');
+assert.match(changeAnalytics, /evidenceProfile\.lowN \? 200 : 0/, 'LOW_N deve sofrer penalidade explícita de prioridade, não apenas desempate');
+assert.match(changeAnalytics, /right\.rankingPriority - left\.rankingPriority/, 'ranking deve aplicar a prioridade semântica já penalizada por baixa amostra');
+assert.match(changeAnalytics, /right\.evidenceRank - left\.evidenceRank/, 'qualidade da evidência deve desempatar a prioridade antes da magnitude');
+assert.match(changeAnalytics, /right\.evidenceOpportunityCount - left\.evidenceOpportunityCount/, 'volume de oportunidades deve favorecer evidência mais robusta sem virar score clínico');
+assert.doesNotMatch(changeAnalytics, /sort\(\(left, right\) => right\.relativeMagnitude - left\.relativeMagnitude/, 'destaques não podem ser ordenados por variação relativa bruta entre unidades incompatíveis');
+assert.match(changeAnalytics, /therapeuticObjectiveId/, 'evidência CMV3 sem programId deve poder resolver o programa pelo objetivo terapêutico');
+assert.match(changeAnalytics, /program_target:\(\[\^:\]\+\):/, 'alvos program_target devem preservar identidade individual mesmo quando compartilham o target CMV3 do objetivo');
+assert.match(changeAnalytics, /values\.length < 3/, 'tendência não deve ser classificada com menos de três sessões comparáveis');
+assert.match(changeAnalytics, /representativeByTarget/, 'cada alvo deve entrar uma única vez no resumo do programa');
+assert.doesNotMatch(shell, /Desempenho Geral|score global/i, 'o shell não deve criar score global do paciente');
+
+assert.match(server, /measurement_type,mastery_criteria,responsible_professional_ids/, 'dashboard deve carregar o critério persistido do programa');
+assert.match(server, /programTargetMatch = metricKey\.match\(\/\^program_target:/, 'evidência terapêutica V3 deve recuperar a identidade do alvo program_target');
+assert.match(server, /programMasteryCriteria/, 'reader HTTP deve enriquecer a evidência com critério herdado do programa quando o alvo não possui critério próprio');
+assert.match(server, /criterionSource: targetMasteryCriteria \? 'TARGET' : programMasteryCriteria \? 'PROGRAM_INHERITED'/, 'origem do critério deve permanecer explícita');
+
+console.log('clinicalProgramChangeOverview.regression.test.mjs: ok');
