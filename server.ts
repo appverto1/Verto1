@@ -30482,23 +30482,53 @@ async function startServer() {
         });
       }
 
-      const now = new Date().toISOString();
-      const { error: specialtyError } = await supabase
-        .from('clinic_memberships')
-        .update({
-          specialty,
-          settings_updated_at: now,
-          settings_updated_by: sanitizeString(actor?.id, 120) || null,
-          updated_at: now
-        })
-        .eq('user_id', memberId)
-        .eq('clinic_id', clinicId)
-        .eq('status', 'active');
-      if (specialtyError) throw specialtyError;
+      const actorId = sanitizeString(actor?.id, 120);
+      const { data: specialtyUpdate, error: specialtyError } = await supabase.rpc(
+        'set_clinic_member_access_and_specialty_v2',
+        {
+          p_clinic_id: clinicId,
+          p_member_id: memberId,
+          p_actor_id: actorId,
+          p_role: 'therapist',
+          p_specialty: specialty,
+        },
+      );
+      if (specialtyError) {
+        const message = sanitizeString(specialtyError?.message || String(specialtyError), 300);
+        if (
+          message.includes('set_clinic_member_access_and_specialty_v2')
+          || sanitizeString(specialtyError?.code, 40) === 'PGRST202'
+          || sanitizeString(specialtyError?.code, 40) === '42883'
+        ) {
+          return res.status(503).json({
+            success: false,
+            error: 'CLINIC_MEMBER_SPECIALTY_BRIDGE_MIGRATION_REQUIRED',
+            message: 'A correção de consistência da especialidade ainda não foi aplicada no banco.'
+          });
+        }
+        if (message.includes('CLINICAL_SPECIALTY_CROSS_CLINIC_CONFLICT')) {
+          return res.status(409).json({
+            success: false,
+            error: 'CLINICAL_SPECIALTY_CROSS_CLINIC_CONFLICT',
+            message: 'Este profissional possui outra especialidade clínica ativa em outra clínica. A alteração foi bloqueada para não sobrescrever dados entre workspaces.'
+          });
+        }
+        if (message.includes('CLINICAL_SPECIALTY_INVALID')) {
+          return res.status(400).json({
+            success: false,
+            error: 'CLINICAL_SPECIALTY_INVALID',
+            message: 'Selecione uma especialidade clínica válida.'
+          });
+        }
+        throw specialtyError;
+      }
+      const persistedSpecialty = normalizeClinicalSpecialty(
+        (specialtyUpdate as any)?.specialty || specialty,
+      ) || specialty;
 
       await persistActivityLog({
         title: 'Especialidade clínica atualizada',
-        content: `Especialidade do profissional ${memberId} atualizada para ${specialty}.`,
+        content: `Especialidade do profissional ${memberId} atualizada para ${persistedSpecialty}.`,
         type: 'management',
         userId: sanitizeString(actor?.id, 120),
         clinicId,
@@ -30507,7 +30537,7 @@ async function startServer() {
       return res.json({
         success: true,
         message: 'Especialidade clínica atualizada com sucesso.',
-        data: { memberId, specialty }
+        data: { memberId, specialty: persistedSpecialty }
       });
     } catch (error: any) {
       logRouteDbError('/api/clinic/members/:memberId/specialty [PATCH]', error, {
@@ -30594,24 +30624,61 @@ async function startServer() {
         });
       }
 
-      const now = new Date().toISOString();
-      const { data: updatedMembership, error } = await supabase
-        .from('clinic_memberships')
-        .update({
-          role,
-          specialty: role === 'therapist' ? specialty : null,
-          settings_updated_at: now,
-          settings_updated_by: sanitizeString(adminUser?.id, 120) || null,
-          updated_at: now
-        })
-        .eq('user_id', memberId)
-        .eq('clinic_id', clinicId)
-        .eq('status', 'active')
-        .select('user_id,clinic_id,role,status')
-        .limit(1)
-        .maybeSingle();
+      const actorId = sanitizeString(adminUser?.id, 120);
+      const { data: updatedMembership, error } = await supabase.rpc(
+        'set_clinic_member_access_and_specialty_v2',
+        {
+          p_clinic_id: clinicId,
+          p_member_id: memberId,
+          p_actor_id: actorId,
+          p_role: role,
+          p_specialty: role === 'therapist' ? specialty : null,
+        },
+      );
 
-      if (error) throw error;
+      if (error) {
+        const message = sanitizeString(error?.message || String(error), 300);
+        if (
+          message.includes('set_clinic_member_access_and_specialty_v2')
+          || sanitizeString(error?.code, 40) === 'PGRST202'
+          || sanitizeString(error?.code, 40) === '42883'
+        ) {
+          return res.status(503).json({
+            success: false,
+            error: 'CLINIC_MEMBER_SPECIALTY_BRIDGE_MIGRATION_REQUIRED',
+            message: 'A correção de consistência entre acesso e especialidade ainda não foi aplicada no banco.'
+          });
+        }
+        if (message.includes('CLINICAL_SPECIALTY_CROSS_CLINIC_CONFLICT')) {
+          return res.status(409).json({
+            success: false,
+            error: 'CLINICAL_SPECIALTY_CROSS_CLINIC_CONFLICT',
+            message: 'Este profissional possui outra especialidade clínica ativa em outra clínica. A alteração foi bloqueada para não sobrescrever dados entre workspaces.'
+          });
+        }
+        if (message.includes('CLINICAL_SPECIALTY_INVALID')) {
+          return res.status(400).json({
+            success: false,
+            error: 'CLINICAL_SPECIALTY_INVALID',
+            message: 'Selecione uma especialidade clínica válida antes de conceder acesso de atendimento.'
+          });
+        }
+        if (message.includes('CLINIC_MEMBER_NOT_FOUND')) {
+          return res.status(404).json({
+            success: false,
+            error: 'CLINIC_MEMBER_NOT_FOUND',
+            message: 'Membro ativo não encontrado nesta clínica.'
+          });
+        }
+        if (message.includes('CLINIC_ROLE_TARGET_ABOVE_ACTOR') || message.includes('CLINIC_ROLE_DELEGATION_DENIED')) {
+          return res.status(403).json({
+            success: false,
+            error: 'CLINIC_ROLE_TARGET_ABOVE_ACTOR',
+            message: 'Seu papel atual não pode administrar este membro.'
+          });
+        }
+        throw error;
+      }
       if (!updatedMembership) {
         return res.status(409).json({
           success: false,
