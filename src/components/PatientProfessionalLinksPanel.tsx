@@ -466,9 +466,6 @@ export const PatientProfessionalLinksPanel = ({
                       {available.map((professional) => (
                         <option key={professional.id} value={professional.id}>
                           {professional.name || professional.email}
-                          {resolveProfessionalProfileSpecialty(professional)
-                            ? ` — ${resolveProfessionalProfileSpecialty(professional)}`
-                            : ' — especialidade não informada'}
                         </option>
                       ))}
                     </select>
