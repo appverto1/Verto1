@@ -863,6 +863,653 @@ async function findSubscriptionForClinic(params: {
   return null;
 }
 
+
+type ModularCapacityBillingContract = {
+  id: string;
+  organizationId: string;
+  salesOfferId: string;
+  stripeSubscriptionId: string;
+  stripeScheduleId: string | null;
+  acceptedCapacityLimitPatients: number;
+  initialCapacityBlocks: number;
+  initialCapacityMonthlyCents: number;
+  blockSizePatients: number;
+  blockPriceCents: number;
+  gracePeriodDays: number;
+  billedAdditionalBlocks: number;
+  lastActivePatientCount: number;
+  overageStartedAt: string | null;
+  graceExpiresAt: string | null;
+  capacityProductId: string | null;
+  capacitySubscriptionItemId: string | null;
+  capacityPriceId: string | null;
+  sourceSnapshot: Record<string, any>;
+};
+
+function isMissingBillingContractRelation(error: any): boolean {
+  const code = toSafeString(error?.code, 20);
+  const message = `${error?.message || ''} ${error?.details || ''}`.toLowerCase();
+  return code === '42P01' || message.includes('organization_billing_contracts');
+}
+
+async function readModularCapacityBillingContract(
+  supabase: SupabaseClientLike,
+  clinicId: string
+): Promise<ModularCapacityBillingContract | null> {
+  const { data, error } = await supabase
+    .from('organization_billing_contracts')
+    .select([
+      'id',
+      'organization_id',
+      'sales_offer_id',
+      'stripe_subscription_id',
+      'stripe_schedule_id',
+      'accepted_capacity_limit_patients',
+      'initial_capacity_blocks',
+      'initial_capacity_monthly_cents',
+      'block_size_patients',
+      'block_price_cents',
+      'grace_period_days',
+      'billed_additional_blocks',
+      'last_active_patient_count',
+      'overage_started_at',
+      'grace_expires_at',
+      'capacity_product_id',
+      'capacity_subscription_item_id',
+      'capacity_price_id',
+      'source_snapshot'
+    ].join(','))
+    .eq('organization_id', clinicId)
+    .eq('status', 'active')
+    .maybeSingle();
+  if (error) {
+    if (isMissingBillingContractRelation(error)) return null;
+    throw error;
+  }
+  if (!data) return null;
+  const acceptedCapacityLimitPatients = toSafeInteger(data.accepted_capacity_limit_patients);
+  const blockSizePatients = toSafeInteger(data.block_size_patients);
+  const blockPriceCents = toSafeInteger(data.block_price_cents);
+  if (!acceptedCapacityLimitPatients || !blockSizePatients || blockPriceCents === null) {
+    throw new Error('MODULAR_CAPACITY_CONTRACT_INVALID');
+  }
+  return {
+    id: toSafeString(data.id, 120),
+    organizationId: toSafeString(data.organization_id, 120),
+    salesOfferId: toSafeString(data.sales_offer_id, 120),
+    stripeSubscriptionId: toSafeString(data.stripe_subscription_id, 200),
+    stripeScheduleId: toSafeString(data.stripe_schedule_id, 200) || null,
+    acceptedCapacityLimitPatients,
+    initialCapacityBlocks: toSafeInteger(data.initial_capacity_blocks) || 0,
+    initialCapacityMonthlyCents: toSafeInteger(data.initial_capacity_monthly_cents) || 0,
+    blockSizePatients,
+    blockPriceCents,
+    gracePeriodDays: toSafeInteger(data.grace_period_days) || 0,
+    billedAdditionalBlocks: toSafeInteger(data.billed_additional_blocks) || 0,
+    lastActivePatientCount: toSafeInteger(data.last_active_patient_count) || 0,
+    overageStartedAt: toSafeString(data.overage_started_at, 80) || null,
+    graceExpiresAt: toSafeString(data.grace_expires_at, 80) || null,
+    capacityProductId: toSafeString(data.capacity_product_id, 200) || null,
+    capacitySubscriptionItemId: toSafeString(data.capacity_subscription_item_id, 200) || null,
+    capacityPriceId: toSafeString(data.capacity_price_id, 200) || null,
+    sourceSnapshot:
+      data.source_snapshot && typeof data.source_snapshot === 'object' && !Array.isArray(data.source_snapshot)
+        ? data.source_snapshot
+        : {}
+  };
+}
+
+async function patchModularCapacityBillingContract(
+  supabase: SupabaseClientLike,
+  contractId: string,
+  patch: Record<string, any>
+): Promise<void> {
+  const { error } = await supabase
+    .from('organization_billing_contracts')
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', contractId);
+  if (error) throw error;
+}
+
+type ContractCapacityPhase = {
+  startsAt: string;
+  endsAt: string | null;
+  blockPriceCents: number;
+  initialBlocksRevenueCents: number;
+};
+
+function resolveContractCapacityPhase(
+  contract: ModularCapacityBillingContract,
+  instantMs: number
+): ContractCapacityPhase {
+  const rawPhases = Array.isArray(contract.sourceSnapshot?.capacityBlockPhases)
+    ? contract.sourceSnapshot.capacityBlockPhases
+    : [];
+  const phases = rawPhases
+    .map((phase: any) => ({
+      startsAt: toSafeString(phase?.startsAt, 80),
+      endsAt: phase?.endsAt == null ? null : toSafeString(phase.endsAt, 80) || null,
+      blockPriceCents: toSafeInteger(phase?.blockPriceCents),
+      initialBlocksRevenueCents: toSafeInteger(phase?.blocksRevenueCents)
+    }))
+    .filter((phase: any) =>
+      phase.startsAt
+      && phase.blockPriceCents !== null
+      && phase.initialBlocksRevenueCents !== null
+      && Number.isFinite(Date.parse(phase.startsAt))
+    ) as ContractCapacityPhase[];
+  const match = phases.find((phase) => {
+    const start = Date.parse(phase.startsAt);
+    const end = phase.endsAt ? Date.parse(phase.endsAt) : Number.POSITIVE_INFINITY;
+    return instantMs >= start && instantMs < end;
+  });
+  if (match) return match;
+  const future = phases.find((phase) => instantMs < Date.parse(phase.startsAt));
+  if (future) return future;
+  if (phases.length > 0) return phases[phases.length - 1];
+  return {
+    startsAt: new Date(instantMs).toISOString(),
+    endsAt: null,
+    blockPriceCents: contract.blockPriceCents,
+    initialBlocksRevenueCents: contract.initialCapacityMonthlyCents
+  };
+}
+
+function stripePriceProductId(price: Stripe.Price | null | undefined): string {
+  const product = (price as any)?.product;
+  if (typeof product === 'string') return toSafeString(product, 200);
+  return toSafeString(product?.id, 200);
+}
+
+function stripeProductMetadata(price: Stripe.Price | null | undefined): Record<string, string> {
+  const product = (price as any)?.product;
+  return product && typeof product === 'object' && !('deleted' in product)
+    ? mergeSafeMetadata((product as Stripe.Product).metadata)
+    : {};
+}
+
+function isCapacitySubscriptionItem(
+  item: Stripe.SubscriptionItem,
+  contract: ModularCapacityBillingContract
+): boolean {
+  const productId = stripePriceProductId(item.price as Stripe.Price);
+  if (contract.capacityProductId && productId === contract.capacityProductId) return true;
+  const metadata = stripeProductMetadata(item.price as Stripe.Price);
+  return metadataValue(metadata, ['extension']).toLowerCase() === 'capacity_blocks';
+}
+
+async function ensureCapacityProduct(params: {
+  stripe: Stripe;
+  contract: ModularCapacityBillingContract;
+  existingItem?: Stripe.SubscriptionItem | null;
+}): Promise<string> {
+  const existingProductId = params.existingItem
+    ? stripePriceProductId(params.existingItem.price as Stripe.Price)
+    : '';
+  if (existingProductId) return existingProductId;
+  if (params.contract.capacityProductId) return params.contract.capacityProductId;
+  const product = await params.stripe.products.create(
+    {
+      name: 'Capacidade adicional — extensão Verto Clínica',
+      metadata: {
+        flowType: 'sales_modular_assisted',
+        revenue_line: 'clinical_core',
+        extension: 'capacity_blocks',
+        offerId: params.contract.salesOfferId,
+        billingModel: 'modular_capacity_v1'
+      }
+    },
+    {
+      idempotencyKey: buildIdempotencyKey(
+        `modular-capacity-product:${params.contract.id}:${params.contract.salesOfferId}`
+      )
+    }
+  );
+  return toSafeString(product.id, 200);
+}
+
+async function createCapacityPrice(params: {
+  stripe: Stripe;
+  contract: ModularCapacityBillingContract;
+  productId: string;
+  amountCents: number;
+  currency: string;
+  phaseKey: string;
+}): Promise<string> {
+  const price = await params.stripe.prices.create(
+    {
+      currency: toSafeString(params.currency, 12).toLowerCase() || 'brl',
+      unit_amount: Math.max(0, Math.floor(params.amountCents)),
+      recurring: { interval: 'month' },
+      product: params.productId,
+      metadata: {
+        flowType: 'sales_modular_assisted',
+        revenue_line: 'clinical_core',
+        extension: 'capacity_blocks',
+        offerId: params.contract.salesOfferId,
+        billingModel: 'modular_capacity_v1',
+        phaseKey: toSafeString(params.phaseKey, 80)
+      }
+    },
+    {
+      idempotencyKey: buildIdempotencyKey(
+        `modular-capacity-price:${params.contract.id}:${params.productId}:${params.phaseKey}:${Math.max(0, Math.floor(params.amountCents))}`
+      )
+    }
+  );
+  return toSafeString(price.id, 200);
+}
+
+function scheduleIdFromSubscription(subscription: Stripe.Subscription): string {
+  const schedule = (subscription as any)?.schedule;
+  if (typeof schedule === 'string') return toSafeString(schedule, 200);
+  return toSafeString(schedule?.id, 200);
+}
+
+function stripeScheduleItemPriceId(item: any): string {
+  const price = item?.price;
+  if (typeof price === 'string') return toSafeString(price, 200);
+  return toSafeString(price?.id, 200);
+}
+
+function stripeScheduleItemProductId(item: any): string {
+  const price = item?.price;
+  if (!price || typeof price !== 'object') return '';
+  const product = price.product;
+  if (typeof product === 'string') return toSafeString(product, 200);
+  return toSafeString(product?.id, 200);
+}
+
+async function syncModularCapacityStripeAmount(params: {
+  stripe: Stripe;
+  contract: ModularCapacityBillingContract;
+  subscription: Stripe.Subscription;
+  targetAdditionalBlocks: number;
+  idempotencyKey?: string | null;
+}): Promise<{
+  productId: string | null;
+  subscriptionItemId: string | null;
+  priceId: string | null;
+  effectiveDate: string;
+}> {
+  const existingCapacityItem =
+    params.subscription.items.data.find((item) => isCapacitySubscriptionItem(item, params.contract)) || null;
+  const currentPhase = resolveContractCapacityPhase(params.contract, Date.now());
+  const currentTargetAmount =
+    currentPhase.initialBlocksRevenueCents
+    + params.targetAdditionalBlocks * currentPhase.blockPriceCents;
+  const currentPeriodEnd = Number((params.subscription as any)?.current_period_end || 0);
+  const effectiveDate = currentPeriodEnd > 0
+    ? new Date(currentPeriodEnd * 1000).toISOString()
+    : new Date().toISOString();
+  const scheduleId =
+    params.contract.stripeScheduleId
+    || scheduleIdFromSubscription(params.subscription);
+
+  // A genuinely free capacity extension still updates the contract quantity but
+  // does not need a Stripe item when there is no schedule. With a schedule, a
+  // free current phase may become paid later, so future phases still need the
+  // capacity line prepared now.
+  if (currentTargetAmount <= 0 && !existingCapacityItem && !scheduleId) {
+    return { productId: null, subscriptionItemId: null, priceId: null, effectiveDate };
+  }
+
+  const productId = await ensureCapacityProduct({
+    stripe: params.stripe,
+    contract: params.contract,
+    existingItem: existingCapacityItem
+  });
+  const currency =
+    toSafeString((existingCapacityItem?.price as any)?.currency, 12)
+    || toSafeString((params.subscription.items.data[0]?.price as any)?.currency, 12)
+    || 'brl';
+  if (scheduleId) {
+    const schedule = await params.stripe.subscriptionSchedules.retrieve(
+      scheduleId,
+      { expand: ['phases.items.price.product'] } as any
+    );
+    const scheduleStatus = toSafeString((schedule as any)?.status, 40).toLowerCase();
+    if (!['completed', 'canceled', 'released'].includes(scheduleStatus)) {
+      const stripePhases = await Promise.all(
+        ((schedule as any).phases || []).map(async (phase: any, index: number) => {
+          const phaseStartSeconds = Number(phase?.start_date || 0);
+          const phaseInstantMs = phaseStartSeconds > 0
+            ? phaseStartSeconds * 1000
+            : Date.now();
+          const contractPhase = resolveContractCapacityPhase(params.contract, phaseInstantMs);
+          const targetAmount =
+            contractPhase.initialBlocksRevenueCents
+            + params.targetAdditionalBlocks * contractPhase.blockPriceCents;
+          const phasePriceId = targetAmount > 0
+            ? await createCapacityPrice({
+                stripe: params.stripe,
+                contract: params.contract,
+                productId,
+                amountCents: targetAmount,
+                currency,
+                phaseKey: String(index + 1)
+              })
+            : '';
+          const items = (phase?.items || [])
+            .filter((item: any) => {
+              const itemProductId = stripeScheduleItemProductId(item);
+              if (itemProductId && itemProductId === productId) return false;
+              const itemPriceId = stripeScheduleItemPriceId(item);
+              return !(
+                params.contract.capacityPriceId
+                && itemPriceId === params.contract.capacityPriceId
+              );
+            })
+            .map((item: any) => ({
+              price: stripeScheduleItemPriceId(item),
+              quantity: Math.max(1, Number(item?.quantity || 1))
+            }))
+            .filter((item: any) => Boolean(item.price));
+          if (targetAmount > 0 && phasePriceId) {
+            items.push({ price: phasePriceId, quantity: 1 });
+          }
+          return {
+            start_date: phase?.start_date,
+            ...(phase?.end_date ? { end_date: phase.end_date } : {}),
+            items,
+            metadata: mergeSafeMetadata(phase?.metadata),
+          };
+        })
+      );
+      await params.stripe.subscriptionSchedules.update(
+        scheduleId,
+        {
+          end_behavior: (schedule as any)?.end_behavior || 'release',
+          phases: stripePhases,
+          metadata: mergeSafeMetadata((schedule as any)?.metadata),
+          proration_behavior: 'none'
+        } as any,
+        {
+          idempotencyKey:
+            toSafeString(params.idempotencyKey, 255)
+            || buildIdempotencyKey(
+              `modular-capacity-schedule:${params.contract.id}:${scheduleId}:${params.targetAdditionalBlocks}`
+            )
+        }
+      );
+      const refreshedSubscription = await params.stripe.subscriptions.retrieve(
+        params.subscription.id,
+        { expand: ['items.data.price.product'] } as any
+      );
+      const refreshedItem =
+        refreshedSubscription.items.data.find((item) => {
+          const itemProductId = stripePriceProductId(item.price as Stripe.Price);
+          return itemProductId === productId;
+        }) || null;
+      return {
+        productId,
+        subscriptionItemId: toSafeString(refreshedItem?.id, 200) || null,
+        priceId: toSafeString((refreshedItem?.price as any)?.id, 200) || null,
+        effectiveDate
+      };
+    }
+  }
+
+  const currentPriceAmount = Number((existingCapacityItem?.price as any)?.unit_amount ?? -1);
+  let currentPriceId = toSafeString((existingCapacityItem?.price as any)?.id, 200);
+  let subscriptionItemId = toSafeString(existingCapacityItem?.id, 200);
+  if (currentTargetAmount > 0 && currentPriceAmount !== currentTargetAmount) {
+    currentPriceId = await createCapacityPrice({
+      stripe: params.stripe,
+      contract: params.contract,
+      productId,
+      amountCents: currentTargetAmount,
+      currency,
+      phaseKey: 'current'
+    });
+  }
+  const idempotencyKey =
+    toSafeString(params.idempotencyKey, 255)
+    || buildIdempotencyKey(
+      `modular-capacity-subscription:${params.contract.id}:${params.subscription.id}:${params.targetAdditionalBlocks}`
+    );
+  if (existingCapacityItem && currentTargetAmount > 0) {
+    if (currentPriceId && currentPriceId !== toSafeString((existingCapacityItem.price as any)?.id, 200)) {
+      await params.stripe.subscriptionItems.update(
+        existingCapacityItem.id,
+        { price: currentPriceId, quantity: 1, proration_behavior: 'none' } as any,
+        { idempotencyKey }
+      );
+    }
+  } else if (!existingCapacityItem && currentTargetAmount > 0) {
+    const createdItem = await params.stripe.subscriptionItems.create(
+      {
+        subscription: params.subscription.id,
+        price: currentPriceId,
+        quantity: 1,
+        proration_behavior: 'none'
+      } as any,
+      { idempotencyKey }
+    );
+    subscriptionItemId = toSafeString(createdItem?.id, 200);
+  }
+  return {
+    productId,
+    subscriptionItemId: subscriptionItemId || null,
+    priceId: currentPriceId || null,
+    effectiveDate
+  };
+}
+
+async function syncModularCapacityBillingContract(params: {
+  supabase: SupabaseClientLike;
+  stripe: Stripe;
+  contract: ModularCapacityBillingContract;
+  clinicId: string;
+  activePatients: number;
+  trigger: string;
+  idempotencyKey?: string | null;
+  logger: Pick<Console, 'log' | 'warn' | 'error'>;
+}): Promise<{
+  success: boolean;
+  activePatients: number;
+  billableQuantity: number;
+  synced: boolean;
+  subscriptionId?: string;
+  subscriptionItemId?: string;
+  reason?: string;
+}> {
+  const { contract, activePatients } = params;
+  if (!contract.stripeSubscriptionId) {
+    return {
+      success: false,
+      activePatients,
+      billableQuantity: contract.billedAdditionalBlocks,
+      synced: false,
+      reason: 'modular_subscription_missing'
+    };
+  }
+  const subscription = await params.stripe.subscriptions.retrieve(
+    contract.stripeSubscriptionId,
+    { expand: ['items.data.price.product'] } as any
+  );
+  if (!['active', 'trialing', 'past_due'].includes(subscription.status)) {
+    await patchModularCapacityBillingContract(params.supabase, contract.id, {
+      last_active_patient_count: activePatients,
+      last_capacity_sync_error: `subscription_status:${subscription.status}`
+    });
+    return {
+      success: false,
+      activePatients,
+      billableQuantity: contract.billedAdditionalBlocks,
+      synced: false,
+      subscriptionId: subscription.id,
+      reason: 'modular_subscription_not_billable'
+    };
+  }
+
+  const effectiveLimit =
+    contract.acceptedCapacityLimitPatients
+    + contract.billedAdditionalBlocks * contract.blockSizePatients;
+  if (activePatients <= effectiveLimit) {
+    await patchModularCapacityBillingContract(params.supabase, contract.id, {
+      last_active_patient_count: activePatients,
+      overage_started_at: null,
+      grace_expires_at: null,
+      last_capacity_sync_error: null
+    });
+    await patchClinicBillingSafely(params.supabase, params.clinicId, {
+      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+      stripe_subscription_id: subscription.id,
+      active_patient_count: activePatients,
+      current_active_patient_count: activePatients,
+      current_active_patient_limit: effectiveLimit,
+      billing_sync_status: 'within_contracted_capacity',
+      billing_sync_error: null,
+      last_billing_sync_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+    return {
+      success: true,
+      activePatients,
+      billableQuantity: contract.billedAdditionalBlocks,
+      synced: true,
+      subscriptionId: subscription.id,
+      subscriptionItemId: contract.capacitySubscriptionItemId || undefined,
+      reason: 'within_contracted_capacity'
+    };
+  }
+
+  const requiredAdditionalBlocks = Math.max(
+    contract.billedAdditionalBlocks,
+    Math.ceil(
+      Math.max(activePatients - contract.acceptedCapacityLimitPatients, 0)
+      / contract.blockSizePatients
+    )
+  );
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const storedGraceExpiresMs = contract.graceExpiresAt
+    ? Date.parse(contract.graceExpiresAt)
+    : NaN;
+  const graceActive = Number.isFinite(storedGraceExpiresMs) && nowMs < storedGraceExpiresMs;
+
+  if (contract.gracePeriodDays > 0 && !contract.overageStartedAt) {
+    const graceExpiresAt = new Date(
+      nowMs + contract.gracePeriodDays * 24 * 60 * 60 * 1000
+    ).toISOString();
+    await patchModularCapacityBillingContract(params.supabase, contract.id, {
+      last_active_patient_count: activePatients,
+      overage_started_at: nowIso,
+      grace_expires_at: graceExpiresAt,
+      last_capacity_sync_error: null
+    });
+    await patchClinicBillingSafely(params.supabase, params.clinicId, {
+      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+      active_patient_count: activePatients,
+      current_active_patient_count: activePatients,
+      current_active_patient_limit: effectiveLimit,
+      billing_sync_status: 'capacity_grace_period',
+      billing_sync_error: null,
+      last_billing_sync_at: nowIso,
+      updated_at: nowIso
+    });
+    return {
+      success: true,
+      activePatients,
+      billableQuantity: contract.billedAdditionalBlocks,
+      synced: true,
+      subscriptionId: subscription.id,
+      subscriptionItemId: contract.capacitySubscriptionItemId || undefined,
+      reason: 'capacity_grace_started'
+    };
+  }
+
+  if (graceActive) {
+    await patchModularCapacityBillingContract(params.supabase, contract.id, {
+      last_active_patient_count: activePatients,
+      last_capacity_sync_error: null
+    });
+    return {
+      success: true,
+      activePatients,
+      billableQuantity: contract.billedAdditionalBlocks,
+      synced: true,
+      subscriptionId: subscription.id,
+      subscriptionItemId: contract.capacitySubscriptionItemId || undefined,
+      reason: 'capacity_grace_pending'
+    };
+  }
+
+  if (requiredAdditionalBlocks <= contract.billedAdditionalBlocks) {
+    return {
+      success: true,
+      activePatients,
+      billableQuantity: contract.billedAdditionalBlocks,
+      synced: true,
+      subscriptionId: subscription.id,
+      subscriptionItemId: contract.capacitySubscriptionItemId || undefined,
+      reason: 'capacity_already_billed'
+    };
+  }
+
+  const stripeSync = await syncModularCapacityStripeAmount({
+    stripe: params.stripe,
+    contract,
+    subscription,
+    targetAdditionalBlocks: requiredAdditionalBlocks,
+    idempotencyKey: params.idempotencyKey
+  });
+  const newEffectiveLimit =
+    contract.acceptedCapacityLimitPatients
+    + requiredAdditionalBlocks * contract.blockSizePatients;
+  await patchModularCapacityBillingContract(params.supabase, contract.id, {
+    billed_additional_blocks: requiredAdditionalBlocks,
+    last_active_patient_count: activePatients,
+    overage_started_at: null,
+    grace_expires_at: null,
+    last_capacity_sync_at: nowIso,
+    last_capacity_sync_error: null,
+    capacity_product_id: stripeSync.productId,
+    capacity_subscription_item_id: stripeSync.subscriptionItemId,
+    capacity_price_id: stripeSync.priceId,
+    stripe_schedule_id:
+      contract.stripeScheduleId || scheduleIdFromSubscription(subscription) || null
+  });
+  await patchClinicBillingSafely(params.supabase, params.clinicId, {
+    stripe_customer_id: toSafeString(String(subscription.customer || ''), 200) || undefined,
+    stripe_subscription_id: subscription.id,
+    stripe_subscription_item_id: stripeSync.subscriptionItemId || undefined,
+    stripe_price_id: stripeSync.priceId || undefined,
+    subscription_status: subscription.status,
+    billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+    active_patient_count: activePatients,
+    current_active_patient_count: activePatients,
+    current_active_patient_limit: newEffectiveLimit,
+    pending_billing_quantity: requiredAdditionalBlocks,
+    pending_billing_status: 'scheduled_next_cycle',
+    pending_effective_date: stripeSync.effectiveDate,
+    billing_sync_status: 'capacity_blocks_synced',
+    billing_sync_error: null,
+    last_billing_sync_at: nowIso,
+    updated_at: nowIso
+  });
+  params.logger.log('[Stripe Sync] Capacidade modular sincronizada.', {
+    clinicId: params.clinicId,
+    subscriptionId: subscription.id,
+    activePatients,
+    acceptedCapacityLimitPatients: contract.acceptedCapacityLimitPatients,
+    previousAdditionalBlocks: contract.billedAdditionalBlocks,
+    additionalBlocks: requiredAdditionalBlocks,
+    effectiveLimit: newEffectiveLimit,
+    trigger: params.trigger
+  });
+  return {
+    success: true,
+    activePatients,
+    billableQuantity: requiredAdditionalBlocks,
+    subscriptionId: subscription.id,
+    subscriptionItemId: stripeSync.subscriptionItemId || undefined,
+    synced: true,
+    reason: 'capacity_blocks_synced'
+  };
+}
+
 export async function syncClinicActivePatientAddonQuantity(params: {
   supabase: SupabaseClientLike;
   stripe: Stripe;
@@ -887,10 +1534,6 @@ export async function syncClinicActivePatientAddonQuantity(params: {
   if (!clinicId) {
     return { success: false, activePatients: 0, billableQuantity: 1, synced: false, reason: 'clinic_id ausente' };
   }
-  if (!priceId) {
-    logger.warn('[Stripe Sync] STRIPE_ACTIVE_PATIENT_PRICE_ID ausente. Sincronização ignorada.', { clinicId });
-    return { success: true, activePatients: 0, billableQuantity: 1, synced: false, reason: 'price_id_ausente' };
-  }
 
   const demoState = await getClinicDemoBillingState(params.supabase, clinicId);
   if (demoState.isDemo) {
@@ -899,6 +1542,27 @@ export async function syncClinicActivePatientAddonQuantity(params: {
   }
 
   const activePatients = await getBillableActivePatientCount({ supabase: params.supabase, clinicId });
+  const modularContract = await readModularCapacityBillingContract(params.supabase, clinicId);
+  if (modularContract) {
+    return await syncModularCapacityBillingContract({
+      supabase: params.supabase,
+      stripe: params.stripe,
+      contract: modularContract,
+      clinicId,
+      activePatients,
+      trigger: params.trigger,
+      idempotencyKey: params.idempotencyKey,
+      logger
+    });
+  }
+
+  // Legacy contracts still use the global active-patient Price. New modular
+  // capacity contracts above are intentionally independent from this setting.
+  if (!priceId) {
+    logger.warn('[Stripe Sync] Price legado de pacientes ativos ausente.', { clinicId });
+    return { success: false, activePatients, billableQuantity: activePatients, synced: false, reason: 'price_id_ausente' };
+  }
+
   const requestedBillingQuantity = toSafeInteger(params.requestedBillingQuantity);
   // The add-on mirrors the canonical active-patient count. A zero quantity keeps
   // the base subscription intact while removing the patient add-on for next cycle.
