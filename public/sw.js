@@ -157,7 +157,7 @@ self.addEventListener("push", (event) => {
   // Não enviamos `image` para evitar o cartão expandido com uma imagem grande abaixo da mensagem.
   const iconUrl = isClinicAnnouncement
     ? asNotificationAssetUrl(brandLogo || payload.icon || "")
-    : asNotificationAssetUrl(VERTO_NOTIFICATION_ICON);
+    : asNotificationAssetUrl(brandLogo || payload.icon || VERTO_NOTIFICATION_ICON);
   // Em avisos da clínica o logo deve aparecer somente como ícone compacto.
   // `badge` é reservado ao identificador monocromático do app/SO e alguns
   // navegadores rejeitam logos coloridos ou URLs remotas nesse campo.
