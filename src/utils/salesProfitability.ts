@@ -63,7 +63,7 @@ export type SalesAssumptionSnapshot = {
 
 
 export type SalesPortfolioCostAllocation = {
-  modelVersion: '2026-08-portfolio-fixed-v1';
+  modelVersion: '2026-08-portfolio-fixed-v2';
   taxRegime: 'mei';
   existingOperationalClinicCount: number;
   allocatedClinicCount: number;
@@ -92,7 +92,7 @@ export function applySalesPortfolioCostAllocation(
     ? null
     : Math.round(fixedCostPoolCents / allocatedClinicCount);
   const allocation: SalesPortfolioCostAllocation = {
-    modelVersion: '2026-08-portfolio-fixed-v1',
+    modelVersion: '2026-08-portfolio-fixed-v2',
     taxRegime: 'mei',
     existingOperationalClinicCount: existingCount,
     allocatedClinicCount,
@@ -101,51 +101,123 @@ export function applySalesPortfolioCostAllocation(
     complete
   };
 
+  const currentOperatingMarginTargetBasisPoints =
+    values.currentOperatingMarginTargetBasisPoints ?? null;
+  const currentModelOverrides: Partial<SalesAssumptionValues> = {
+    // Everything below used to live in the legacy compatibility bucket. New
+    // modular quotes get technical costs from the catalog cost models instead,
+    // so keeping these global amounts would double count infrastructure,
+    // support/operations or historical provisions.
+    revenueTaxBasisPoints: 0,
+    estimatedDelinquencyBasisPoints: 0,
+    refundChargebackBasisPoints: 0,
+    variablePatientCostCents: 0,
+    variableClinicCostCents: 0,
+    storageCostCents: 0,
+    egressCostCents: 0,
+    processingCostCents: 0,
+    notificationCostCents: 0,
+    otherVariableCostCents: 0,
+    monthlySupportClinicCostCents: 0,
+    supportPatientCostCents: 0,
+    monthlyOperationalCostCents: 0,
+    defaultOnboardingCostCents: 0,
+    commercialCommissionBasisPoints: 0,
+    depreciationAmortizationCents: 0,
+    financialExpensesCents: 0,
+    profitTaxBasisPoints: 0,
+    otherBelowEbitdaCents: 0,
+    minimumMarginBasisPoints: currentOperatingMarginTargetBasisPoints,
+    healthyMarginBasisPoints: currentOperatingMarginTargetBasisPoints,
+    attentionMarginBasisPoints: currentOperatingMarginTargetBasisPoints,
+    // Prevent historical light/standard/intensive overrides from re-entering
+    // the new quote after the base values above have been normalized.
+    usageProfiles: {}
+  };
+  const currentModelSources: Partial<Record<keyof SalesAssumptionValues, SimulationValueSource>> = {
+    revenueTaxBasisPoints: 'calculated',
+    estimatedDelinquencyBasisPoints: 'calculated',
+    refundChargebackBasisPoints: 'calculated',
+    variablePatientCostCents: 'calculated',
+    variableClinicCostCents: 'calculated',
+    storageCostCents: 'calculated',
+    egressCostCents: 'calculated',
+    processingCostCents: 'calculated',
+    notificationCostCents: 'calculated',
+    otherVariableCostCents: 'calculated',
+    monthlySupportClinicCostCents: 'calculated',
+    supportPatientCostCents: 'calculated',
+    monthlyOperationalCostCents: 'calculated',
+    defaultOnboardingCostCents: 'calculated',
+    commercialCommissionBasisPoints: 'calculated',
+    depreciationAmortizationCents: 'calculated',
+    financialExpensesCents: 'calculated',
+    profitTaxBasisPoints: 'calculated',
+    otherBelowEbitdaCents: 'calculated',
+    ...(currentOperatingMarginTargetBasisPoints === null
+      ? {}
+      : {
+          minimumMarginBasisPoints: 'calculated' as const,
+          healthyMarginBasisPoints: 'calculated' as const,
+          attentionMarginBasisPoints: 'calculated' as const
+        })
+  };
+  const currentModelSourceDetails: Partial<Record<keyof SalesAssumptionValues, string>> = {
+    revenueTaxBasisPoints:
+      'Operação atual em MEI: o DAS mensal fixo substitui o percentual histórico sobre faturamento.',
+    estimatedDelinquencyBasisPoints:
+      'Premissa histórica isolada: sem provisão adicional configurada no modelo operacional atual.',
+    refundChargebackBasisPoints:
+      'Premissa histórica isolada: sem provisão adicional configurada no modelo operacional atual.',
+    monthlyOperationalCostCents:
+      'Premissa histórica isolada: custos técnicos e operacionais da nova proposta vêm dos modelos de custo do catálogo.',
+    depreciationAmortizationCents:
+      'Premissa histórica isolada: não entra no resumo operacional de novas propostas.',
+    financialExpensesCents:
+      'Premissa histórica isolada: não entra no resumo operacional de novas propostas.',
+    profitTaxBasisPoints:
+      'Operação atual em MEI: sem percentual adicional sobre lucro no modelo atual.',
+    otherBelowEbitdaCents:
+      'Premissa histórica isolada: não entra no resumo operacional de novas propostas.',
+    ...(currentOperatingMarginTargetBasisPoints === null
+      ? {}
+      : {
+          minimumMarginBasisPoints:
+            'Derivada da margem operacional mínima desejada da operação atual.',
+          healthyMarginBasisPoints:
+            'Derivada da margem operacional mínima desejada da operação atual.',
+          attentionMarginBasisPoints:
+            'Derivada da margem operacional mínima desejada da operação atual.'
+        })
+  };
+
   if (!complete) {
-    const meiConfigured = values.meiDasMonthlyCents !== null && values.meiDasMonthlyCents !== undefined;
     return {
       assumptions: {
         ...snapshot,
         values: {
           ...values,
+          ...currentModelOverrides,
           // New quotes must never fall back to the historical fixed-cost bucket
           // when the current shared infrastructure pool is incomplete. Null keeps
           // profitability explicitly incomplete instead of inventing margin.
           fixedMonthlyEligibleCostCents: null,
           fixedAllocationMethod: 'per_clinic',
-          fixedAllocationClinicCount: allocatedClinicCount,
-          ...(meiConfigured
-            ? {
-                revenueTaxBasisPoints: 0,
-                profitTaxBasisPoints: 0
-              }
-            : {})
+          fixedAllocationClinicCount: allocatedClinicCount
         },
         sources: {
           ...(snapshot.sources || {}),
+          ...currentModelSources,
           fixedMonthlyEligibleCostCents: 'estimated',
-          fixedAllocationClinicCount: 'calculated',
-          ...(meiConfigured
-            ? {
-                revenueTaxBasisPoints: 'calculated' as const,
-                profitTaxBasisPoints: 'calculated' as const
-              }
-            : {})
+          fixedAllocationClinicCount: 'calculated'
         },
         sourceDetails: {
           ...(snapshot.sourceDetails || {}),
+          ...currentModelSourceDetails,
           fixedMonthlyEligibleCostCents:
             'Pool compartilhado incompleto: informe DAS MEI, Supabase e Railway para calcular margem sem repetir custos fixos históricos.',
           fixedAllocationClinicCount:
-            `${existingCount} clínica(s) operacional(is) existentes + 1 nova proposta.`,
-          ...(meiConfigured
-            ? {
-                revenueTaxBasisPoints:
-                  'Regime atual configurado como MEI: o DAS mensal fixo substitui o percentual genérico de imposto sobre faturamento neste modelo.',
-                profitTaxBasisPoints:
-                  'Regime atual configurado como MEI: sem imposto percentual adicional sobre lucro neste modelo.'
-              }
-            : {})
+            `${existingCount} clínica(s) operacional(is) existentes + 1 nova proposta.`
         }
       },
       allocation
@@ -154,6 +226,7 @@ export function applySalesPortfolioCostAllocation(
 
   const sourceDetails = {
     ...(snapshot.sourceDetails || {}),
+    ...currentModelSourceDetails,
     fixedMonthlyEligibleCostCents:
       `Pool fixo mensal compartilhado: DAS MEI + Supabase + Railway. Rateado entre ${allocatedClinicCount} clínica(s), incluindo esta proposta.`,
     fixedAllocationClinicCount:
@@ -169,6 +242,7 @@ export function applySalesPortfolioCostAllocation(
       ...snapshot,
       values: {
         ...values,
+        ...currentModelOverrides,
         fixedMonthlyEligibleCostCents: fixedCostPoolCents,
         fixedAllocationMethod: 'per_clinic',
         fixedAllocationClinicCount: allocatedClinicCount,
@@ -177,6 +251,7 @@ export function applySalesPortfolioCostAllocation(
       },
       sources: {
         ...snapshot.sources,
+        ...currentModelSources,
         fixedMonthlyEligibleCostCents: 'calculated',
         fixedAllocationClinicCount: 'calculated',
         revenueTaxBasisPoints: 'calculated',

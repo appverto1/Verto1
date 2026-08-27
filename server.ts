@@ -88345,7 +88345,7 @@ async function startServer() {
     "/api/owner/sales/profitability-assumptions",
     checkAuth,
     checkOwner,
-    async (_req: any, res) => {
+    async (req: any, res) => {
       try {
         const { data, error } = await supabase
           .from("sales_financial_assumption_sets")
@@ -88363,10 +88363,27 @@ async function startServer() {
             row.source_metadata,
           ),
         }));
+        const proposalContext =
+          sanitizeString(req.query?.context, 40).toLowerCase() === "new_proposal";
+        let currentAssumptionSet = assumptionSets[0] || null;
+        let portfolioCostAllocation = null;
+        if (proposalContext && data?.[0]) {
+          const allocated = await buildSalesAssumptionsForNewProposal(data[0]);
+          currentAssumptionSet = {
+            ...allocated.assumptions,
+            createdBy: data[0].created_by,
+            createdAt: data[0].created_at,
+            sourceMetadata: normalizeSalesAssumptionSourceMetadata(
+              data[0].source_metadata,
+            ),
+          };
+          portfolioCostAllocation = allocated.portfolioCostAllocation;
+        }
         return res.json({
           success: true,
-          assumptionSet: assumptionSets[0] || null,
+          assumptionSet: currentAssumptionSet,
           assumptionSets,
+          portfolioCostAllocation,
           editableTemplate: buildEmptySalesAssumptionValues(),
           officialPrice: PUBLIC_ACTIVE_PATIENT_PRICE,
           actualDataAvailability: {

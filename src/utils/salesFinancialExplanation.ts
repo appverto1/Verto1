@@ -234,19 +234,19 @@ export const buildSalesRecurringMoneyFlow = ({
       key: 'depreciation_amortization',
       label: 'Depreciação e amortização',
       amountCents: values.depreciationAmortizationCents,
-      explanation: 'Despesa contábil abaixo do EBITDA. Pode não representar saída de caixa no mesmo mês.'
+      explanation: 'Premissa histórica isolada em novas propostas; somente entra quando houver custo contábil atual explicitamente configurado.'
     },
     {
       key: 'financial_expenses',
       label: 'Despesas financeiras',
       amountCents: values.financialExpensesCents,
-      explanation: 'Juros, tarifas financeiras e outras despesas dessa natureza atribuídas ao cenário.'
+      explanation: 'Premissa histórica isolada em novas propostas; somente entra quando houver despesa financeira atual explicitamente configurada.'
     },
     {
       key: 'other_below_ebitda',
       label: 'Outras despesas abaixo do EBITDA',
       amountCents: values.otherBelowEbitdaCents,
-      explanation: 'Demais despesas corporativas atribuídas depois do EBITDA.'
+      explanation: 'Premissa histórica isolada em novas propostas; somente entra quando houver despesa atual explicitamente configurada.'
     }
   ];
   const belowAdjustment = adjustmentItem(
@@ -261,10 +261,10 @@ export const buildSalesRecurringMoneyFlow = ({
   const sharedOperatingCosts: SalesMoneyFlowItem[] = [
     {
       key: 'shared_operating',
-      label: 'Estrutura operacional atribuída',
+      label: 'Estrutura compartilhada atribuída',
       amountCents: period.sharedPlatformCostAllocatedCents,
       explanation:
-        'Parcela de plataforma, suporte-base, operação e custos compartilhados atribuída a esta proposta. Não é o custo marginal de um paciente.'
+        'Parcela do pool mensal atual (DAS MEI + Supabase + Railway) rateada entre as clínicas operacionais e esta nova proposta. Premissas históricas não entram neste valor.'
     }
   ];
 
