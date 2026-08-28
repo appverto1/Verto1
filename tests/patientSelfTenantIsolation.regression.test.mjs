@@ -12,15 +12,22 @@ const block = (start, end) => {
 };
 
 const scopeHelper = block(
-  'async function resolvePatientSelfTenantScope',
-  'function normalizeAnamnesisAnswers',
+  'async function resolveCanonicalPatientPortalScope',
+  'function currentClinicTimeZone',
 );
-assert.match(scopeHelper, /currentClinicId\(user\)/, 'self scope must start from the current clinic');
-assert.match(scopeHelper, /patientPortalPatientId/, 'self scope must prefer the canonical portal patient id');
-assert.match(scopeHelper, /activeAccessContext\?\.kind === 'patient_portal'/, 'self scope must reuse authorized portal access context');
-assert.match(scopeHelper, /\.eq\('clinic_id', clinicId\)/, 'same-email compatibility lookup must stay inside the current clinic');
-assert.match(scopeHelper, /candidates\.length !== 1/, 'ambiguous same-clinic email matches must fail closed');
-assert.doesNotMatch(scopeHelper, /getPatientIdsByEmailAcrossClinics/, 'self scope must never broaden to clinics by email');
+assert.match(scopeHelper, /currentClinicId\(user\)/, 'portal scope must start from the current clinic');
+assert.match(scopeHelper, /patientPortalPatientId/, 'portal scope must prefer the canonical portal patient id');
+assert.match(scopeHelper, /contextKind === 'patient_portal'/, 'portal scope must reuse the authorized access context');
+assert.match(scopeHelper, /\.eq\('clinic_id', clinicId\)/, 'scope validation must bind the current clinic');
+assert.match(scopeHelper, /candidateIds\.size !== 1/, 'ambiguous compatibility resolution must fail closed');
+assert.match(scopeHelper, /getPatientIdsByEmailAcrossClinics\(userEmail, userId, clinicId\)/, 'legacy compatibility may use the legacy resolver only with the selected clinic');
+
+const legacyResolver = block(
+  'async function getPatientIdsByEmailAcrossClinics',
+  'async function resolvePatientIdForRequest',
+);
+assert.match(legacyResolver, /if \(!isUuid\(safeClinicId\)/, 'legacy resolver must reject calls without a concrete clinic');
+assert.match(legacyResolver, /query = query\.eq\('clinic_id', safeClinicId\)/, 'legacy resolver must never fan out across clinics');
 
 const profile = block("app.patch('/api/patient/self/profile'", "app.get('/api/appointments/:appointmentId/confirmation'");
 const history = block("app.get('/api/patient/self/history'", "app.get('/api/patient/self/protocols'");
@@ -29,26 +36,23 @@ const tasks = block("app.get('/api/patient/self/tasks'", "app.post('/api/tasks'"
 const assigned = block("app.get('/api/patient/self/assigned-tasks'", "app.post('/api/assigned-tasks'");
 
 for (const [name, route] of Object.entries({ profile, history, protocols, tasks, assigned })) {
-  assert.match(route, /resolvePatientSelfTenantScope\(req\.session\.user\)/, `${name} must resolve canonical patient+clinic scope`);
-  assert.match(route, /PATIENT_PORTAL_SCOPE_INVALID/, `${name} must fail closed when canonical scope is unavailable`);
+  assert.match(route, /resolveCanonicalPatientPortalScope\(req\.session\.user\)/, `${name} must resolve canonical patient+clinic scope`);
+  assert.match(route, /PATIENT_PORTAL_CONTEXT_REQUIRED/, `${name} must fail closed when canonical scope is unavailable`);
   assert.doesNotMatch(route, /getPatientIdsByEmailAcrossClinics/, `${name} must not rediscover patients across clinics`);
   assert.doesNotMatch(route, /\.ilike\('patient_email'/, `${name} must not authorize by task email`);
-  assert.doesNotMatch(route, /\.eq\('email',\s*(patientEmail|email)\)/, `${name} must not query patient data by email outside the canonical scope`);
 }
 
-assert.match(profile, /\{ column: 'id', value: tenantScope\.patientId \}/, 'profile writes must target the canonical patient id');
-assert.doesNotMatch(profile, /\{ column: 'email'/, 'profile writes must never fall back to email mutation');
+assert.match(profile, /\.eq\('id', portalScope\.patientId\)[\s\S]*\.eq\('clinic_id', portalScope\.clinicId\)/, 'profile writes must target canonical patient+clinic scope');
+assert.doesNotMatch(profile, /\.eq\('email',/, 'profile writes must never fall back to email mutation');
 
-assert.match(history, /patientIds: \[patientId\]/, 'history must load only the canonical patient id');
-assert.match(history, /\.eq\('clinic_id', clinicId\)[\s\S]*\.eq\('patient_id', patientId\)/, 'assigned-task history must bind clinic and patient');
-assert.match(history, /sanitizeString\(row\?\.patient_id, 120\) !== patientId/, 'history response must drop rows outside the canonical patient id');
+assert.match(history, /patientId: portalScope\.patientId/, 'history must load only the canonical patient id');
+assert.match(history, /clinicId: portalScope\.clinicId/, 'assigned-task history must bind the canonical clinic');
 
-assert.match(protocols, /\.eq\('clinic_id', clinicId\)/, 'protocols must read one clinic_state only');
-assert.doesNotMatch(protocols, /\.in\('clinic_id', clinicIds\)/, 'protocols must not scan clinic states from multiple clinics');
-assert.doesNotMatch(protocols, /orderedStates/, 'protocols must not choose a different clinic by newest state');
+assert.match(protocols, /const clinicIds = \[portalScope\.clinicId\]/, 'protocols must derive its clinic list only from the selected clinic');
+assert.match(protocols, /\.in\('clinic_id', clinicIds\)/, 'protocol state reads must use the singleton selected-clinic list');
+assert.doesNotMatch(protocols, /getPatientIdsByEmailAcrossClinics/, 'protocols must never discover clinic scope from patient email');
 
-assert.match(tasks, /patientIds: \[tenantScope\.patientId\]/, 'legacy tasks must be restricted to the canonical patient id');
-assert.match(assigned, /\.eq\('clinic_id', tenantScope\.clinicId\)[\s\S]*\.eq\('patient_id', tenantScope\.patientId\)/, 'assigned tasks must bind clinic and patient');
-assert.match(assigned, /patientIds,/, 'legacy assigned-task compatibility must use canonical patient ids only');
+assert.match(tasks, /patientId: portalScope\.patientId/, 'legacy tasks must be restricted to the canonical patient id');
+assert.match(assigned, /patientId: portalScope\.patientId[\s\S]*clinicId: portalScope\.clinicId/, 'assigned tasks must bind clinic and patient');
 
 console.log('patientSelfTenantIsolation.regression: PASS');

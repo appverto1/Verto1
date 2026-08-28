@@ -408,37 +408,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   };
   const anamnesisInitialData = useMemo(() => buildAnamnesisInitialData(patient), [patient]);
-  const rawProfileType = String(
-    patient?.type ||
-    patient?.profileType ||
-    patient?.patient_type ||
-    patient?.anamnesisData?.formType ||
-    ''
-  ).toLowerCase();
-  const isExplicitKidsType = ['kids_tea', 'kids', 'child', 'infantil', 'crianca', 'criança'].includes(rawProfileType);
-  const isExplicitAdultType = ['adult', 'adulto', 'conventional', 'adult_conventional'].includes(rawProfileType);
-  const rawPatientAge = patient?.age;
-  const hasExplicitAge =
-    rawPatientAge !== null &&
-    rawPatientAge !== undefined &&
-    String(rawPatientAge).trim() !== '';
-  const normalizedPatientAge = hasExplicitAge ? Number(rawPatientAge) : Number.NaN;
-  const hasNumericAge = Number.isFinite(normalizedPatientAge) && normalizedPatientAge >= 0;
-  const isKidsProfile =
-    isExplicitKidsType ||
-    (!isExplicitAdultType && (
-      patient?.anamnesisData?.formType === 'child' ||
-      (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12)
-    ));
+  const patientPortalKind = useMemo(() => resolvePatientPortalKind(patient), [patient]);
+  const isKidsProfile = patientPortalKind === 'KIDS';
+  const isAdultAbaProfile = patientPortalKind === 'ADULT_ABA';
+  const hasAbaClinicalProfile = isKidsProfile || isAdultAbaProfile;
   const abaV2Enabled = isAbaV2Enabled();
   const abaV3UiEnabled = isAbaV3UiEnabled();
-  const patientApproachKey = String(patient?.approach || patient?.abordagem || patient?.treatmentApproach || '').toLowerCase();
-  const useCanonicalMasteryGrowth = abaV2Enabled && (
-    isKidsProfile ||
-    rawProfileType.includes('aba') ||
-    rawProfileType.includes('tea') ||
-    patientApproachKey.includes('aba')
-  );
+  const hasAbaSessionSurface = hasAbaClinicalProfile && (abaV2Enabled || abaV3UiEnabled);
+  const useCanonicalMasteryGrowth = abaV2Enabled && hasAbaClinicalProfile;
   const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
   const readPersistedChartFilters = () => {
     if (typeof window === 'undefined') return {};
@@ -735,12 +712,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             allTabs.includes(tab as PatientDetailTab),
           );
 
-    const filteredByProfile = isKidsProfile
-      ? tabsFromProps
-      : tabsFromProps.filter((tab: string) => tab !== 'session' && tab !== 'aba-charts');
+    const filteredByProfile = tabsFromProps.filter((tab: string) => {
+      if (tab === 'session' || tab === 'aba-charts') return hasAbaSessionSurface;
+      return true;
+    });
 
     return new Set(filteredByProfile as PatientDetailTab[]);
-  }, [allowedTabs, isKidsProfile]);
+  }, [allowedTabs, hasAbaSessionSurface]);
   const canAccessTab = (tab: PatientDetailTab) =>
     allowedTabsSet.has(tab);
   const canOpenAnamnesis = canAccessTab('history') && canAccessTab('notes');
@@ -1809,7 +1787,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     const patientId = String(patient?.id || '').trim();
-    if (!patientId || !isKidsProfile || !(abaV2Enabled || abaV3UiEnabled) || activeTab !== 'history') return;
+    if (!patientId || !hasAbaSessionSurface || activeTab !== 'history') return;
     if (completedSessionReportsLoadedForRef.current === patientId) return;
     let cancelled = false;
     setCompletedSessionReportsLoading(true);
@@ -1836,7 +1814,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [activeTab, abaV2Enabled, abaV3UiEnabled, isKidsProfile, patient?.id]);
+  }, [activeTab, hasAbaSessionSurface, patient?.id]);
 
   const openCompletedSessionReport = (sessionId: any) => {
     const nextSessionId = String(sessionId || '').trim();
@@ -2047,7 +2025,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     planContext?: { therapeuticPlanId?: string | null; specialty?: string | null } | null,
   ) => {
     const resolvedAction = nextAction === 'tab' ? 'fullscreen' : nextAction;
-    if (!abaV2Enabled) {
+    if (!hasAbaSessionSurface) {
       setActiveTab(getSessionFallbackTab());
       return;
     }
@@ -2654,7 +2632,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     const startKey = String(startScheduledSessionKey || '').trim();
     if (!startKey || consumedScheduledSessionStartKeyRef.current === startKey) return;
-    if (!abaV2Enabled || !scheduledSessionForPatient || !patient?.id) return;
+    if (!hasAbaSessionSurface || !scheduledSessionForPatient || !patient?.id) return;
 
     consumedScheduledSessionStartKeyRef.current = startKey;
     setSessionDurationInput(String(scheduledSessionDurationMinutes));
@@ -2740,7 +2718,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     void handleConfirmSessionStart({ durationMinutes: scheduledSessionDurationMinutes, openSessionMode: true });
   }, [
-    abaV2Enabled,
+    hasAbaSessionSurface,
     activeSession,
     patient?.id,
     scheduledSessionDurationMinutes,
@@ -2929,7 +2907,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return { min: 0, max: null };
   };
 
-  const patientPortalKind = useMemo(() => resolvePatientPortalKind(patient), [patient]);
 
   useEffect(() => {
     const patientId = String(patient?.id || '');
@@ -9422,7 +9399,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           />
         </div>
       </div>
-      {(abaV2Enabled || abaV3UiEnabled) && isSessionModeOpen && (
+      {hasAbaSessionSurface && isSessionModeOpen && (
         <SessionMode 
           patient={{ ...sessionModePatient, history: history.filter((h: any) => h.patientId === patient.id) }} 
           onClose={closeSessionMode} 
@@ -10506,7 +10483,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
-          {canAccessTab('session') && isKidsProfile && (
+          {canAccessTab('session') && hasAbaSessionSurface && (
             <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => requestSessionStart('fullscreen')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
           )}
           {canAccessTab('aba-charts') && (
@@ -10752,7 +10729,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 )}
               </div>
             )}
-            {isKidsProfile ? (
+            {hasAbaClinicalProfile ? (
               <React.Fragment>
                 <section className={`space-y-3 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-white'}`} aria-labelledby="patient-session-reports-heading">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -10792,17 +10769,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <div className={`rounded-xl border border-dashed px-4 py-4 text-sm ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma sessão finalizada encontrada para este paciente.</div>
                   )}
                 </section>
-                <section className="space-y-4" aria-labelledby="patient-timeline-heading">
-                  <div>
-                    <h2 id="patient-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                      Linha do tempo
-                    </h2>
-                    <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      Registros da família e das sessões, organizados por data.
-                    </p>
-                  </div>
-                  {renderHistoryTimelineControls()}
-                </section>
+                {isKidsProfile && (
+                  <section className="space-y-4" aria-labelledby="patient-timeline-heading">
+                    <div>
+                      <h2 id="patient-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                        Linha do tempo
+                      </h2>
+                      <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Registros da família e das sessões, organizados por data.
+                      </p>
+                    </div>
+                    {renderHistoryTimelineControls()}
+                  </section>
+                )}
               </React.Fragment>
             ) : null}
             {isKidsProfile && historyPagination.loading && (sortedDateKeys?.length || 0) === 0 ? (
@@ -12139,7 +12118,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     </div> 
                   ))) : <p className="text-center text-gray-400 text-sm py-4 italic">Nada agendado ainda.</p>} 
                 </div>
-                {patientAgeYears !== null && patientAgeYears > 12 && (
+                {!isKidsProfile && (
                   <div className="space-y-3 mt-4">
                     <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-2 tracking-widest">
                       Revisão Profissional (Tarefas Adulto)
@@ -12264,8 +12243,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} showAbaV3Details={isKidsProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} />
-        ) : activeTab === 'session' && isKidsProfile ? (
+          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} />
+        ) : activeTab === 'session' && hasAbaSessionSurface ? (
           null
         ) : activeTab === 'school' ? (
           <PatientSchoolInformation patientId={String(patient.id)} canManage={canManageSchool} isPanelDark={isPanelDark} />
