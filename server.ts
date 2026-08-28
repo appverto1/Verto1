@@ -34051,8 +34051,15 @@ async function startServer() {
         error: 'A estrutura da timeline de evolução ainda não foi aplicada.'
       });
     }
-    if (message.includes('EVOLUTION_TIMELINE_MONTH_LIMIT')) {
-      return res.status(409).json({ success: false, code: 'EVOLUTION_TIMELINE_MONTH_LIMIT', error: 'Este mês já possui três registros na timeline.' });
+    if (message.includes('EVOLUTION_TIMELINE_STANDARD_MONTH_LIMIT')) {
+      return res.status(409).json({
+        success: false,
+        code: 'EVOLUTION_TIMELINE_STANDARD_MONTH_LIMIT',
+        error: 'O limite incluído é de um registro compartilhável por paciente/mês. Ative o adicional de R$ 2,00 por paciente/mês para usar até três.'
+      });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_PLUS3_MONTH_LIMIT') || message.includes('EVOLUTION_TIMELINE_MONTH_LIMIT')) {
+      return res.status(409).json({ success: false, code: 'EVOLUTION_TIMELINE_PLUS3_MONTH_LIMIT', error: 'Este mês já atingiu o limite de três registros na timeline.' });
     }
     if (message.includes('EVOLUTION_TIMELINE_FILE_SCOPE_INVALID')) {
       return res.status(400).json({ success: false, code: 'EVOLUTION_TIMELINE_FILE_SCOPE_INVALID', error: 'O documento não pertence a este paciente e clínica.' });
@@ -34067,6 +34074,114 @@ async function startServer() {
       return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
     }
     return sendRouteDbError(res, route, error);
+  };
+
+  const EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS = 200;
+
+  const resolvePatientEvolutionTimelineEntitlement = async (clinicId: string, patientId: string) => {
+    const fallback = {
+      tier: 'STANDARD',
+      billingStatus: 'INCLUDED',
+      monthlyLimit: 1,
+      unitAmountCents: EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS,
+      currency: 'BRL',
+      canUseThreeItems: false,
+    };
+    const { data, error } = await supabase
+      .from('patient_evolution_timeline_entitlements')
+      .select('tier,billing_status,monthly_limit,unit_amount_cents,stripe_subscription_item_id,stripe_price_id,activated_at,last_billing_sync_at')
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .maybeSingle();
+    if (error) {
+      if (isMissingRelationError(error)) return fallback;
+      throw error;
+    }
+    if (!data) return fallback;
+    const activePlus = data.tier === 'PLUS3' && data.billing_status === 'ACTIVE' && Number(data.monthly_limit) === 3;
+    return {
+      tier: activePlus ? 'PLUS3' : 'STANDARD',
+      billingStatus: sanitizeString(data.billing_status, 40) || (activePlus ? 'ACTIVE' : 'INCLUDED'),
+      monthlyLimit: activePlus ? 3 : 1,
+      unitAmountCents: EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS,
+      currency: 'BRL',
+      canUseThreeItems: activePlus,
+      activatedAt: data.activated_at || null,
+      lastBillingSyncAt: data.last_billing_sync_at || null,
+    };
+  };
+
+  const resolveEvolutionTimelinePlusStripePriceId = () =>
+    sanitizeString(process.env.STRIPE_EVOLUTION_TIMELINE_PLUS_PRICE_ID, 200);
+
+  const countEvolutionTimelinePlusBillingQuantity = async (clinicId: string) => {
+    const { count, error } = await supabase
+      .from('patient_evolution_timeline_entitlements')
+      .select('patient_id', { count: 'exact', head: true })
+      .eq('clinic_id', clinicId)
+      .eq('tier', 'PLUS3')
+      .in('billing_status', ['ACTIVE', 'PENDING']);
+    if (error) throw error;
+    return Math.max(0, Number(count || 0));
+  };
+
+  const syncEvolutionTimelinePlusStripeQuantity = async (clinicId: string) => {
+    const priceId = resolveEvolutionTimelinePlusStripePriceId();
+    if (!priceId) {
+      throw Object.assign(new Error('Preço Stripe do adicional da timeline não configurado.'), { code: 'TIMELINE_PLUS_PRICE_NOT_CONFIGURED' });
+    }
+    const quantity = await countEvolutionTimelinePlusBillingQuantity(clinicId);
+    if (quantity < 1) {
+      throw Object.assign(new Error('Nenhum paciente aguardando ativação do adicional da timeline.'), { code: 'TIMELINE_PLUS_NO_BILLABLE_PATIENTS' });
+    }
+
+    const stripe = getStripe();
+    const price = await stripe.prices.retrieve(priceId);
+    const amount = Number((price as any)?.unit_amount || 0);
+    const currency = sanitizeString((price as any)?.currency, 20).toLowerCase();
+    const interval = sanitizeString((price as any)?.recurring?.interval, 30).toLowerCase();
+    if ((price as any)?.active === false || amount !== EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS || currency !== 'brl' || interval !== 'month') {
+      throw Object.assign(new Error('O preço Stripe da Timeline PLUS3 deve ser recorrente mensal de R$ 2,00 em BRL.'), {
+        code: 'TIMELINE_PLUS_PRICE_INVALID'
+      });
+    }
+
+    const billingState = await readClinicActivePatientBillingState(clinicId);
+    const subscriptionId = sanitizeString(billingState.stripeSubscriptionId, 200);
+    if (!subscriptionId) {
+      throw Object.assign(new Error('Assinatura Stripe da clínica não encontrada.'), { code: 'SUBSCRIPTION_NOT_READY' });
+    }
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['items.data.price'] });
+    const existingItem = subscription.items.data.find((item: any) => sanitizeString(item?.price?.id, 200) === priceId) || null;
+    const idempotencySuffix = `${clinicId}:${priceId}:${quantity}`;
+    let item: any;
+    if (existingItem?.id) {
+      item = await stripe.subscriptionItems.update(
+        existingItem.id,
+        { quantity, proration_behavior: 'create_prorations' } as any,
+        { idempotencyKey: crypto.createHash('sha256').update(`timeline-plus-update:${idempotencySuffix}`).digest('hex') }
+      );
+    } else {
+      item = await stripe.subscriptionItems.create(
+        { subscription: subscriptionId, price: priceId, quantity, proration_behavior: 'create_prorations' } as any,
+        { idempotencyKey: crypto.createHash('sha256').update(`timeline-plus-create:${idempotencySuffix}`).digest('hex') }
+      );
+    }
+
+    await supabase.from('clinic_evolution_timeline_addon_billing').upsert({
+      clinic_id: clinicId,
+      stripe_subscription_id: subscriptionId,
+      stripe_subscription_item_id: item.id,
+      stripe_price_id: priceId,
+      quantity,
+      unit_amount_cents: EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS,
+      status: 'ACTIVE',
+      last_error: null,
+      last_synced_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'clinic_id' });
+
+    return { subscriptionId, subscriptionItemId: sanitizeString(item.id, 200), priceId, quantity };
   };
 
   const loadPatientEvolutionTimeline = async (clinicId: string, patientId: string) => {
@@ -34161,8 +34276,11 @@ async function startServer() {
         const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
         const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
         if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
-        const data = await loadPatientEvolutionTimeline(clinicId, patientId);
-        return res.json({ success: true, data });
+        const [data, entitlement] = await Promise.all([
+          loadPatientEvolutionTimeline(clinicId, patientId),
+          resolvePatientEvolutionTimelineEntitlement(clinicId, patientId),
+        ]);
+        return res.json({ success: true, data, entitlement });
       } catch (error: any) {
         return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline [GET]');
       }
@@ -34191,7 +34309,7 @@ async function startServer() {
         if (patientFileId && !isUuid(patientFileId)) return res.status(400).json({ success: false, error: 'Documento inválido.' });
         if (!content && !patientFileId) return res.status(400).json({ success: false, error: 'Preencha o conteúdo ou anexe um documento.' });
 
-        const { data, error } = await supabase.rpc('create_patient_evolution_timeline_item_v1', {
+        const { data, error } = await supabase.rpc('create_patient_evolution_timeline_item_v2', {
           p_clinic_id: clinicId,
           p_patient_id: patientId,
           p_month_key: monthKey,
@@ -34201,10 +34319,101 @@ async function startServer() {
           p_actor_id: actorId,
         });
         if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline [POST]');
-        const timeline = await loadPatientEvolutionTimeline(clinicId, patientId);
-        return res.status(201).json({ success: true, data, timeline });
+        const [timeline, entitlement] = await Promise.all([
+          loadPatientEvolutionTimeline(clinicId, patientId),
+          resolvePatientEvolutionTimelineEntitlement(clinicId, patientId),
+        ]);
+        return res.status(201).json({ success: true, data, timeline, entitlement });
       } catch (error: any) {
         return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline [POST]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline/upgrade-plus3',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    requireClinicCapability('finance.entries.manage'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+      const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (![patientId, clinicId, actorId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+      try {
+        const current = await resolvePatientEvolutionTimelineEntitlement(clinicId, patientId);
+        if (current.canUseThreeItems) return res.json({ success: true, idempotent: true, entitlement: current });
+
+        const reservation = await supabase.rpc('reserve_patient_evolution_timeline_plus_v1', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_actor_id: actorId,
+        });
+        if (reservation.error) return sendEvolutionTimelineError(res, reservation.error, '/api/patients/:patientId/evolution-timeline/upgrade-plus3 [reserve]');
+
+        let billing: any = null;
+        try {
+          billing = await syncEvolutionTimelinePlusStripeQuantity(clinicId);
+          const finalized = await supabase.rpc('finalize_patient_evolution_timeline_plus_v1', {
+            p_clinic_id: clinicId,
+            p_patient_id: patientId,
+            p_actor_id: actorId,
+            p_success: true,
+            p_stripe_subscription_item_id: billing.subscriptionItemId,
+            p_stripe_price_id: billing.priceId,
+          });
+          if (finalized.error) throw finalized.error;
+          // Best-effort reconciliation after activation. The reservation sync above already counts
+          // ACTIVE + PENDING patients, so a transient second Stripe failure must not revert a paid grant.
+          try {
+            billing = await syncEvolutionTimelinePlusStripeQuantity(clinicId);
+          } catch (reconcileError: any) {
+            console.warn('[EvolutionTimelinePlus] post-activation quantity reconciliation warning:', {
+              clinicId,
+              patientId,
+              code: sanitizeString(reconcileError?.code, 100) || null,
+              message: sanitizeString(reconcileError?.message || String(reconcileError), 260),
+            });
+          }
+          const entitlement = await resolvePatientEvolutionTimelineEntitlement(clinicId, patientId);
+          return res.json({
+            success: true,
+            entitlement,
+            billing: {
+              unitAmountCents: EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS,
+              currency: 'BRL',
+              quantity: billing.quantity,
+              prorationBehavior: 'create_prorations',
+            }
+          });
+        } catch (billingError: any) {
+          await supabase.rpc('finalize_patient_evolution_timeline_plus_v1', {
+            p_clinic_id: clinicId,
+            p_patient_id: patientId,
+            p_actor_id: actorId,
+            p_success: false,
+            p_stripe_subscription_item_id: null,
+            p_stripe_price_id: resolveEvolutionTimelinePlusStripePriceId() || null,
+          }).catch(() => undefined);
+          console.error('[EvolutionTimelinePlus] billing activation failed:', {
+            clinicId,
+            patientId,
+            code: sanitizeString(billingError?.code, 100) || null,
+            message: sanitizeString(billingError?.message || String(billingError), 260),
+          });
+          const code = sanitizeString(billingError?.code, 100) || (isMissingStripeConfigError(billingError) ? 'MISSING_STRIPE_CONFIG' : 'TIMELINE_PLUS_BILLING_FAILED');
+          return res.status(code === 'TIMELINE_PLUS_PRICE_NOT_CONFIGURED' || code === 'MISSING_STRIPE_CONFIG' ? 503 : 502).json({
+            success: false,
+            code,
+            error: code === 'TIMELINE_PLUS_PRICE_NOT_CONFIGURED'
+              ? 'O adicional de até três registros ainda não está disponível para contratação.'
+              : 'Não foi possível ativar o adicional de R$ 2,00 por paciente agora. Nenhum limite adicional foi liberado.'
+          });
+        }
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/upgrade-plus3 [POST]');
       }
     }
   );
@@ -34522,60 +34731,146 @@ async function startServer() {
     return loaded;
   };
 
+  const loadExternalEvolutionTimelineForRecipient = async (loaded: any) => {
+    const email = sanitizeEmail(loaded?.grant?.recipient_email);
+    const clinicId = sanitizeString(loaded?.grant?.clinic_id, 120);
+    const patientId = sanitizeString(loaded?.grant?.patient_id, 120);
+    if (!email || !isUuid(clinicId) || !isUuid(patientId)) return [];
+
+    const { data: grants, error: grantsError } = await supabase
+      .from('patient_evolution_share_grants')
+      .select('id,timeline_item_id,recipient_email,status,created_at')
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .eq('status', 'ACTIVE')
+      .eq('recipient_email', email)
+      .order('created_at', { ascending: true });
+    if (grantsError) throw grantsError;
+
+    const grantByItem = new Map<string, any>();
+    for (const grant of grants || []) {
+      const itemId = sanitizeString(grant?.timeline_item_id, 120);
+      if (isUuid(itemId)) grantByItem.set(itemId, grant);
+    }
+    const itemIds = Array.from(grantByItem.keys());
+    if (!itemIds.length) return [];
+
+    const { data: items, error: itemsError } = await supabase
+      .from('patient_evolution_timeline_items')
+      .select('id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_at,updated_at,archived_at')
+      .in('id', itemIds)
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .is('archived_at', null)
+      .order('month_key', { ascending: true })
+      .order('slot', { ascending: true });
+    if (itemsError) throw itemsError;
+
+    const fileIds = (items || []).map((item: any) => sanitizeString(item?.patient_file_id, 120)).filter(isUuid);
+    const fileResult = fileIds.length
+      ? await supabase
+          .from('patient_files')
+          .select('id,file_name,mime_type,file_size_bytes,created_at')
+          .in('id', fileIds)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+      : { data: [], error: null } as any;
+    if (fileResult.error && !isMissingRelationError(fileResult.error)) throw fileResult.error;
+    const fileById = new Map((fileResult.data || []).map((file: any) => [String(file.id), file]));
+
+    const months = new Map<string, any[]>();
+    for (const item of items || []) {
+      if (!grantByItem.has(String(item.id))) continue;
+      const monthKey = sanitizeString(item.month_key, 20).slice(0, 7);
+      if (!/^\d{4}-\d{2}$/.test(monthKey)) continue;
+      const file = item.patient_file_id ? fileById.get(String(item.patient_file_id)) : null;
+      const row = {
+        id: item.id,
+        monthKey: item.month_key,
+        slot: item.slot,
+        subject: item.subject,
+        content: item.content || '',
+        createdAt: item.created_at,
+        attachment: file ? {
+          id: file.id,
+          fileName: file.file_name,
+          mimeType: file.mime_type,
+          sizeBytes: file.file_size_bytes,
+          createdAt: file.created_at,
+        } : null,
+      };
+      const current = months.get(monthKey) || [];
+      current.push(row);
+      months.set(monthKey, current);
+    }
+
+    return Array.from(months.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([monthKey, monthItems]) => ({
+        monthKey,
+        items: monthItems.sort((left: any, right: any) => Number(left.slot || 0) - Number(right.slot || 0)),
+      }));
+  };
+
   app.get('/api/external/evolution/:publicId/content', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
     try {
       const publicId = sanitizeString(req.params?.publicId, 120);
       if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
       const loaded = await resolveExternalEvolutionAuthorizedShare(req, publicId);
       if (!loaded) return res.status(401).json({ success: false, code: 'EMAIL_VERIFICATION_REQUIRED', error: 'Confirme o e-mail autorizado para continuar.' });
-      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'VIEWED' });
-      let attachment: any = null;
-      if (isUuid(loaded.item.patient_file_id)) {
-        const fileResult = await supabase
-          .from('patient_files')
-          .select('id,file_name,mime_type,file_size_bytes,created_at')
-          .eq('id', loaded.item.patient_file_id)
-          .eq('clinic_id', loaded.grant.clinic_id)
-          .eq('patient_id', loaded.grant.patient_id)
-          .maybeSingle();
-        if (!fileResult.error && fileResult.data?.id) {
-          attachment = {
-            id: fileResult.data.id,
-            fileName: fileResult.data.file_name,
-            mimeType: fileResult.data.mime_type,
-            sizeBytes: fileResult.data.file_size_bytes,
-            createdAt: fileResult.data.created_at,
-          };
-        }
-      }
+      const timeline = await loadExternalEvolutionTimelineForRecipient(loaded);
+      if (!timeline.length) return res.status(404).json({ success: false, error: 'Nenhum conteúdo compartilhado está disponível para este acesso.' });
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'VIEWED', metadata: { visibleMonthCount: timeline.length } });
       return res.json({
         success: true,
         data: {
           clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica',
           patientName: sanitizeString(loaded.patient?.name, 180) || 'Paciente',
-          monthKey: loaded.item.month_key,
-          subject: loaded.item.subject,
-          content: loaded.item.content || '',
-          attachment,
           sharedWith: sanitizeEmail(loaded.grant.recipient_email),
+          entryItemId: loaded.item.id,
+          timeline,
+          readOnly: true,
         }
       });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: 'Não foi possível carregar o conteúdo compartilhado.' });
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar a timeline compartilhada.' });
     }
   });
 
-  app.get('/api/external/evolution/:publicId/file', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+  const openExternalEvolutionAuthorizedFile = async (req: any, res: any, publicId: string, requestedItemId?: string | null) => {
     try {
-      const publicId = sanitizeString(req.params?.publicId, 120);
       if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
       const loaded = await resolveExternalEvolutionAuthorizedShare(req, publicId);
       if (!loaded) return res.status(401).json({ success: false, code: 'EMAIL_VERIFICATION_REQUIRED', error: 'Confirme o e-mail autorizado para continuar.' });
-      if (!isUuid(loaded.item.patient_file_id)) return res.status(404).json({ success: false, error: 'Este registro não possui documento anexado.' });
+      const itemId = sanitizeString(requestedItemId || loaded.item?.id, 120);
+      if (!isUuid(itemId)) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
+
+      const email = sanitizeEmail(loaded.grant.recipient_email);
+      const { data: authorizedGrant, error: grantError } = await supabase
+        .from('patient_evolution_share_grants')
+        .select('id,timeline_item_id,clinic_id,patient_id,recipient_email,status')
+        .eq('timeline_item_id', itemId)
+        .eq('clinic_id', loaded.grant.clinic_id)
+        .eq('patient_id', loaded.grant.patient_id)
+        .eq('status', 'ACTIVE')
+        .eq('recipient_email', email)
+        .maybeSingle();
+      if (grantError || !authorizedGrant?.id) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
+
+      const { data: item, error: itemError } = await supabase
+        .from('patient_evolution_timeline_items')
+        .select('id,patient_file_id,clinic_id,patient_id,archived_at')
+        .eq('id', itemId)
+        .eq('clinic_id', loaded.grant.clinic_id)
+        .eq('patient_id', loaded.grant.patient_id)
+        .is('archived_at', null)
+        .maybeSingle();
+      if (itemError || !item?.id || !isUuid(item.patient_file_id)) return res.status(404).json({ success: false, error: 'Este registro não possui documento anexado.' });
+
       const { data: file, error } = await supabase
         .from('patient_files')
         .select('id,storage_bucket,storage_path,file_name,mime_type,file_size_bytes')
-        .eq('id', loaded.item.patient_file_id)
+        .eq('id', item.patient_file_id)
         .eq('clinic_id', loaded.grant.clinic_id)
         .eq('patient_id', loaded.grant.patient_id)
         .maybeSingle();
@@ -34583,11 +34878,26 @@ async function startServer() {
       const bucket = sanitizeString(file.storage_bucket, 120) || 'patient-files-private';
       const { data: signed, error: signedError } = await supabase.storage.from(bucket).createSignedUrl(sanitizeString(file.storage_path, 800), 60 * 5);
       if (signedError || !signed?.signedUrl) return res.status(503).json({ success: false, error: 'Não foi possível abrir o documento agora.' });
-      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'FILE_ACCESSED' });
+      await persistExternalEvolutionAccessAudit({ req, grant: authorizedGrant, item, action: 'FILE_ACCESSED' });
       return res.json({ success: true, data: { url: sanitizeUrl(signed.signedUrl), fileName: file.file_name, expiresInSeconds: 300 } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Não foi possível abrir o documento.' });
     }
+  };
+
+  app.get('/api/external/evolution/:publicId/file/:itemId', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    return openExternalEvolutionAuthorizedFile(
+      req,
+      res,
+      sanitizeString(req.params?.publicId, 120),
+      sanitizeString(req.params?.itemId, 120)
+    );
+  });
+
+  // Backward compatibility for links opened before Timeline v2: the original
+  // item remains addressable while its grant is active.
+  app.get('/api/external/evolution/:publicId/file', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    return openExternalEvolutionAuthorizedFile(req, res, sanitizeString(req.params?.publicId, 120), null);
   });
 
   app.patch('/api/patient/self/profile', checkAuth, requireRoles('patient'), async (req: any, res) => {

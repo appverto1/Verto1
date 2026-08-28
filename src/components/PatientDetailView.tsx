@@ -11101,6 +11101,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               dark={isPanelDark}
               canCreate={hasCapability('reports.generate')}
               canShare={hasCapability('reports.generate') && hasCapability('documents.patient_share')}
+              canManageBilling={hasCapability('finance.entries.manage')}
             />
             <div id="report-config-card" className={`border p-6 rounded-[32px] shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
               <div className="flex items-center gap-3 mb-6">

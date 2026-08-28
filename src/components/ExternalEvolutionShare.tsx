@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { FileText, KeyRound, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { LogoVerto } from './Common';
 
@@ -9,19 +9,33 @@ type PublicMeta = {
   recipientEmailHint?: string;
 };
 
-type SharedContent = {
-  clinicName?: string;
-  patientName?: string;
+type SharedTimelineItem = {
+  id: string;
   monthKey?: string;
+  slot?: number;
   subject?: string;
   content?: string;
-  sharedWith?: string;
+  createdAt?: string;
   attachment?: {
     id?: string;
     fileName?: string;
     mimeType?: string;
     sizeBytes?: number;
   } | null;
+};
+
+type SharedTimelineMonth = {
+  monthKey: string;
+  items: SharedTimelineItem[];
+};
+
+type SharedContent = {
+  clinicName?: string;
+  patientName?: string;
+  sharedWith?: string;
+  entryItemId?: string;
+  timeline?: SharedTimelineMonth[];
+  readOnly?: boolean;
 };
 
 const safeJson = async (response: Response) => {
@@ -32,11 +46,24 @@ const safeJson = async (response: Response) => {
   }
 };
 
-const monthLabel = (value: unknown) => {
+const normalizeMonth = (value: unknown) => {
   const match = String(value || '').match(/^(\d{4})-(\d{2})/);
+  return match ? `${match[1]}-${match[2]}` : '';
+};
+
+const monthLabel = (value: unknown) => {
+  const match = normalizeMonth(value).match(/^(\d{4})-(\d{2})$/);
   if (!match) return '';
   const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1, 12));
   return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date);
+};
+
+const monthCircleParts = (value: unknown) => {
+  const match = normalizeMonth(value).match(/^(\d{4})-(\d{2})$/);
+  if (!match) return { month: '--', year: '--' };
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1, 12));
+  const month = new Intl.DateTimeFormat('pt-BR', { month: 'short', timeZone: 'UTC' }).format(date).replace('.', '').toUpperCase();
+  return { month, year: String(match[1]).slice(-2) };
 };
 
 const formatBytes = (value: unknown) => {
@@ -49,12 +76,24 @@ const formatBytes = (value: unknown) => {
 export const ExternalEvolutionShare = ({ publicId }: Props) => {
   const [meta, setMeta] = useState<PublicMeta | null>(null);
   const [content, setContent] = useState<SharedContent | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState('');
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [stage, setStage] = useState<'loading' | 'email' | 'code' | 'content' | 'unavailable'>('loading');
   const [busy, setBusy] = useState(false);
+  const [busyFileId, setBusyFileId] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+
+  const timeline = useMemo(
+    () => (Array.isArray(content?.timeline) ? content!.timeline!.filter((month) => Array.isArray(month?.items) && month.items.length > 0) : []),
+    [content],
+  );
+
+  const selectedMonthData = useMemo(() => {
+    if (!timeline.length) return null;
+    return timeline.find((month) => normalizeMonth(month.monthKey) === normalizeMonth(selectedMonth)) || timeline[timeline.length - 1];
+  }, [timeline, selectedMonth]);
 
   const loadContent = async () => {
     const response = await fetch(`/api/external/evolution/${encodeURIComponent(publicId)}/content`, {
@@ -64,7 +103,14 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
     });
     const result = await safeJson(response);
     if (response.ok && result?.success) {
-      setContent(result.data || null);
+      const nextContent = result.data || null;
+      const nextTimeline = Array.isArray(nextContent?.timeline) ? nextContent.timeline.filter((month: any) => Array.isArray(month?.items) && month.items.length > 0) : [];
+      setContent(nextContent);
+      if (nextTimeline.length > 0) {
+        const entryItemId = String(nextContent?.entryItemId || '');
+        const entryMonth = nextTimeline.find((month: any) => month.items.some((item: any) => String(item?.id || '') === entryItemId));
+        setSelectedMonth(normalizeMonth(entryMonth?.monthKey || nextTimeline[nextTimeline.length - 1]?.monthKey));
+      }
       setStage('content');
       return true;
     }
@@ -146,7 +192,7 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
       const result = await safeJson(response);
       if (!response.ok || !result?.success) throw new Error(result?.message || result?.error || 'Código inválido ou expirado.');
       const loaded = await loadContent();
-      if (!loaded) throw new Error('A autenticação foi concluída, mas o conteúdo não pôde ser carregado.');
+      if (!loaded) throw new Error('A autenticação foi concluída, mas a timeline não pôde ser carregada.');
     } catch (verifyError: any) {
       setError(verifyError?.message || 'Não foi possível validar o código.');
     } finally {
@@ -154,11 +200,13 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
     }
   };
 
-  const openAttachment = async () => {
-    setBusy(true);
+  const openAttachment = async (item: SharedTimelineItem) => {
+    const itemId = String(item?.id || '').trim();
+    if (!itemId) return;
+    setBusyFileId(itemId);
     setError('');
     try {
-      const response = await fetch(`/api/external/evolution/${encodeURIComponent(publicId)}/file`, {
+      const response = await fetch(`/api/external/evolution/${encodeURIComponent(publicId)}/file/${encodeURIComponent(itemId)}`, {
         credentials: 'include',
         cache: 'no-store',
         headers: { Accept: 'application/json' },
@@ -170,13 +218,13 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
     } catch (fileError: any) {
       setError(fileError?.message || 'Não foi possível abrir o documento.');
     } finally {
-      setBusy(false);
+      setBusyFileId('');
     }
   };
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6">
-      <section className="mx-auto w-full max-w-2xl overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-xl shadow-slate-900/5">
+      <section className="mx-auto w-full max-w-4xl overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-xl shadow-slate-900/5">
         <div className="border-b border-slate-100 px-5 py-5 sm:px-7">
           <LogoVerto size={34} showText={true} />
         </div>
@@ -203,8 +251,8 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
                 <div className="rounded-2xl bg-violet-50 p-3 text-[#7a32fc]"><ShieldCheck size={22} /></div>
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-widest text-violet-600">Acesso clínico protegido</p>
-                  <h1 className="mt-1 text-xl font-semibold text-slate-900">{meta?.clinicName || 'Clínica'} compartilhou uma atualização com você</h1>
-                  <p className="mt-2 text-sm leading-6 text-slate-500">O link sozinho não libera nenhum dado clínico. Confirme o e-mail autorizado para acessar o conteúdo.</p>
+                  <h1 className="mt-1 text-xl font-semibold text-slate-900">{meta?.clinicName || 'Clínica'} compartilhou uma timeline clínica com você</h1>
+                  <p className="mt-2 text-sm leading-6 text-slate-500">O link sozinho não libera nenhum dado clínico. Confirme o e-mail autorizado para acessar somente os meses e registros compartilhados com você.</p>
                 </div>
               </div>
 
@@ -231,37 +279,71 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
           )}
 
           {stage === 'content' && content && (
-            <div>
+            <div data-testid="external-evolution-readonly-timeline">
               <div className="flex items-start gap-3">
                 <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-600"><ShieldCheck size={22} /></div>
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-widest text-emerald-600">Acesso autorizado</p>
-                  <h1 className="mt-1 text-xl font-semibold text-slate-900">{content.subject || 'Atualização clínica'}</h1>
-                  <p className="mt-1 text-sm text-slate-500">{content.patientName || 'Paciente'} · <span className="capitalize">{monthLabel(content.monthKey)}</span></p>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-emerald-600">Acesso autorizado · somente leitura</p>
+                  <h1 className="mt-1 text-xl font-semibold text-slate-900">Timeline de evolução</h1>
+                  <p className="mt-1 text-sm text-slate-500">{content.patientName || 'Paciente'} · {content.clinicName || 'Clínica'}</p>
                 </div>
               </div>
 
-              {content.content && (
-                <article className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
-                  <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{content.content}</p>
-                </article>
-              )}
+              <div className="mt-6 overflow-x-auto rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                <div className="flex min-w-max items-start gap-2">
+                  {timeline.map((month, index) => {
+                    const selected = normalizeMonth(month.monthKey) === normalizeMonth(selectedMonthData?.monthKey);
+                    const circle = monthCircleParts(month.monthKey);
+                    return (
+                      <React.Fragment key={month.monthKey}>
+                        {index > 0 && <div className="mt-6 h-px w-7 bg-slate-200" aria-hidden="true" />}
+                        <button type="button" onClick={() => setSelectedMonth(normalizeMonth(month.monthKey))} className="group flex min-w-[76px] flex-col items-center" aria-current={selected ? 'date' : undefined}>
+                          <span className={`flex h-12 w-12 flex-col items-center justify-center rounded-full border text-[9px] font-semibold uppercase leading-tight transition ${selected ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-md shadow-violet-500/20' : 'border-slate-200 bg-white text-slate-600 group-hover:border-violet-300'}`}>
+                            <span>{circle.month}</span>
+                            <span className="text-[8px] opacity-80">{circle.year}</span>
+                          </span>
+                          <span className="mt-1.5 flex items-center justify-center gap-1" aria-label={`${month.items.length} registros compartilhados neste mês`}>
+                            {month.items.slice(0, 3).map((item) => <span key={`${month.monthKey}-${item.id}`} className="h-1.5 w-1.5 rounded-full bg-violet-500" />)}
+                          </span>
+                        </button>
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+              </div>
 
-              {content.attachment && (
-                <button type="button" onClick={() => void openAttachment()} disabled={busy} className="mt-4 flex w-full items-center justify-between gap-3 rounded-2xl border border-violet-100 bg-violet-50/60 p-4 text-left hover:border-violet-200 disabled:opacity-60">
-                  <span className="flex min-w-0 items-center gap-3">
-                    <FileText size={19} className="shrink-0 text-[#7a32fc]" />
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-semibold text-slate-800">{content.attachment.fileName || 'Documento compartilhado'}</span>
-                      <span className="mt-0.5 block text-xs text-slate-500">{formatBytes(content.attachment.sizeBytes)}</span>
-                    </span>
-                  </span>
-                  {busy ? <Loader2 size={16} className="animate-spin text-[#7a32fc]" /> : <span className="text-xs font-semibold text-[#7a32fc]">Abrir</span>}
-                </button>
+              {selectedMonthData && (
+                <div className="mt-6">
+                  <div className="mb-3">
+                    <h2 className="text-base font-semibold capitalize text-slate-900">{monthLabel(selectedMonthData.monthKey)}</h2>
+                    <p className="mt-1 text-xs text-slate-500">Somente os registros compartilhados com {content.sharedWith} aparecem aqui.</p>
+                  </div>
+
+                  <div className="space-y-4">
+                    {selectedMonthData.items.map((item) => (
+                      <article key={item.id} className="rounded-2xl border border-slate-200 bg-white p-5">
+                        <h3 className="text-sm font-semibold text-slate-900">{item.subject || 'Atualização clínica'}</h3>
+                        {item.content && <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{item.content}</p>}
+                        {item.attachment && (
+                          <button type="button" onClick={() => void openAttachment(item)} disabled={busyFileId === item.id} className="mt-4 flex w-full items-center justify-between gap-3 rounded-2xl border border-violet-100 bg-violet-50/60 p-4 text-left hover:border-violet-200 disabled:opacity-60">
+                            <span className="flex min-w-0 items-center gap-3">
+                              <FileText size={19} className="shrink-0 text-[#7a32fc]" />
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-semibold text-slate-800">{item.attachment.fileName || 'Documento compartilhado'}</span>
+                                <span className="mt-0.5 block text-xs text-slate-500">{formatBytes(item.attachment.sizeBytes)}</span>
+                              </span>
+                            </span>
+                            {busyFileId === item.id ? <Loader2 size={16} className="animate-spin text-[#7a32fc]" /> : <span className="text-xs font-semibold text-[#7a32fc]">Abrir</span>}
+                          </button>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                </div>
               )}
 
               <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs leading-5 text-slate-500">
-                Este acesso é pessoal e está vinculado ao e-mail <strong className="text-slate-700">{content.sharedWith}</strong>. O profissional responsável pode revogá-lo a qualquer momento.
+                Este acesso é pessoal, somente leitura e vinculado ao e-mail <strong className="text-slate-700">{content.sharedWith}</strong>. Meses sem conteúdo compartilhado com este e-mail não são exibidos. O profissional responsável pode revogar os acessos a qualquer momento.
               </div>
             </div>
           )}
