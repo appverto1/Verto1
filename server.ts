@@ -4838,7 +4838,11 @@ async function sendTransactionalEmailSafe(
 }
 
 type RecoveryChannel = 'email';
-type OtpPurpose = 'password_recovery' | 'phone_verification' | 'portal_login';
+type OtpPurpose = 'password_recovery' | 'phone_verification' | 'portal_login' | 'external_clinical_share';
+
+function otpPurposeRequiresPersistentStorage(purpose: OtpPurpose): boolean {
+  return purpose === 'password_recovery' || purpose === 'external_clinical_share';
+}
 
 type OtpChallenge = {
   key: string;
@@ -5048,7 +5052,7 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
 
   const useDb = await ensureOtpTableAvailability();
   if (!useDb) {
-    if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
+    if (otpPurposeRequiresPersistentStorage(normalizedChallenge.purpose) && requiresPersistentRecoveryStorage()) {
       otpStore.delete(normalizedChallenge.key);
       throw recoveryStorageUnavailableError();
     }
@@ -5074,7 +5078,7 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
     if (error) {
       console.warn('[OTP] Falha no upsert de otp_challenges, fallback memória:', error.message);
       markOtpTableAvailability(false);
-      if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
+      if (otpPurposeRequiresPersistentStorage(normalizedChallenge.purpose) && requiresPersistentRecoveryStorage()) {
         otpStore.delete(normalizedChallenge.key);
         throw recoveryStorageUnavailableError();
       }
@@ -5083,7 +5087,7 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
     if (error?.code === 'RECOVERY_STORAGE_UNAVAILABLE') throw error;
     console.warn('[OTP] Exceção no upsert de otp_challenges, fallback memória:', error?.message || String(error));
     markOtpTableAvailability(false);
-    if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
+    if (otpPurposeRequiresPersistentStorage(normalizedChallenge.purpose) && requiresPersistentRecoveryStorage()) {
       otpStore.delete(normalizedChallenge.key);
       throw recoveryStorageUnavailableError();
     }
@@ -17967,6 +17971,191 @@ function getAppPortalPathUrl(pathname: string, params: Record<string, string> = 
     if (value) url.searchParams.set(key, value);
   });
   return url.toString();
+}
+
+const EXTERNAL_EVOLUTION_SHARE_AUTH_STATEMENT_VERSION = 'external_share_v1';
+const EXTERNAL_EVOLUTION_SHARE_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function externalEvolutionShareSessionSecret(): string {
+  const secret = sanitizeString(
+    process.env.EXTERNAL_CLINICAL_SHARE_SECRET ||
+      process.env.SESSION_SECRET ||
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      '',
+    4000
+  );
+  if (secret.length < 32) throw new Error('EXTERNAL_CLINICAL_SHARE_SECRET_INVALID');
+  return secret;
+}
+
+function externalEvolutionShareCookieName(publicId: string): string {
+  return `verto_external_evolution_${hashIdentifier(publicId).slice(0, 16)}`;
+}
+
+function signExternalEvolutionShareSession(params: { publicId: string; email: string; expiresAt: number }): string {
+  const payload = Buffer.from(JSON.stringify({
+    publicId: sanitizeString(params.publicId, 120),
+    email: sanitizeEmail(params.email),
+    expiresAt: Math.trunc(params.expiresAt)
+  }), 'utf8').toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', externalEvolutionShareSessionSecret())
+    .update(payload)
+    .digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function verifyExternalEvolutionShareSession(token: unknown): { publicId: string; email: string; expiresAt: number } | null {
+  const safe = sanitizeString(token, 4000);
+  const [payload, signature, extra] = safe.split('.');
+  if (!payload || !signature || extra) return null;
+  const expected = crypto
+    .createHmac('sha256', externalEvolutionShareSessionSecret())
+    .update(payload)
+    .digest('base64url');
+  const left = Buffer.from(signature);
+  const right = Buffer.from(expected);
+  if (left.length !== right.length || !crypto.timingSafeEqual(left, right)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const publicId = sanitizeString(parsed?.publicId, 120);
+    const email = sanitizeEmail(parsed?.email);
+    const expiresAt = Number(parsed?.expiresAt || 0);
+    if (!isUuid(publicId) || !email || !Number.isFinite(expiresAt) || Date.now() >= expiresAt) return null;
+    return { publicId, email, expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+function setExternalEvolutionShareCookie(res: any, publicId: string, email: string) {
+  const expiresAt = Date.now() + EXTERNAL_EVOLUTION_SHARE_SESSION_TTL_MS;
+  const token = signExternalEvolutionShareSession({ publicId, email, expiresAt });
+  res.cookie(externalEvolutionShareCookieName(publicId), token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT),
+    sameSite: 'lax',
+    path: '/',
+    maxAge: EXTERNAL_EVOLUTION_SHARE_SESSION_TTL_MS,
+  });
+}
+
+function externalEvolutionShareRequestHash(req: any, kind: 'ip' | 'ua'): string | null {
+  const raw = kind === 'ip'
+    ? sanitizeString(req?.ip || req?.socket?.remoteAddress || '', 200)
+    : sanitizeString(req?.headers?.['user-agent'] || '', 800);
+  if (!raw) return null;
+  try {
+    return crypto.createHmac('sha256', externalEvolutionShareSessionSecret()).update(`${kind}:${raw}`).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+async function persistExternalEvolutionAccessAudit(params: {
+  req: any;
+  grant?: any;
+  item?: any;
+  action: 'INVITE_SENT' | 'OTP_REQUESTED' | 'OTP_VERIFIED' | 'VIEWED' | 'FILE_ACCESSED' | 'REVOKED' | 'ITEM_ARCHIVED';
+  metadata?: Record<string, any>;
+}) {
+  try {
+    const grant = params.grant || {};
+    const item = params.item || {};
+    const { error } = await supabase.from('patient_evolution_external_access_audit').insert({
+      grant_id: isUuid(grant?.id) ? grant.id : null,
+      timeline_item_id: isUuid(item?.id || grant?.timeline_item_id) ? (item?.id || grant?.timeline_item_id) : null,
+      clinic_id: isUuid(item?.clinic_id || grant?.clinic_id) ? (item?.clinic_id || grant?.clinic_id) : null,
+      patient_id: isUuid(item?.patient_id || grant?.patient_id) ? (item?.patient_id || grant?.patient_id) : null,
+      recipient_email: sanitizeEmail(grant?.recipient_email) || null,
+      action: params.action,
+      request_ip_hash: externalEvolutionShareRequestHash(params.req, 'ip'),
+      user_agent_hash: externalEvolutionShareRequestHash(params.req, 'ua'),
+      metadata: params.metadata && typeof params.metadata === 'object' ? params.metadata : {},
+    });
+    if (error && !isMissingRelationError(error)) {
+      console.warn('[ExternalEvolutionShare] audit insert warning:', sanitizeString(error.message, 220));
+    }
+  } catch (error: any) {
+    console.warn('[ExternalEvolutionShare] audit exception:', sanitizeString(error?.message || String(error), 220));
+  }
+}
+
+async function loadActiveExternalEvolutionShare(publicId: string) {
+  if (!isUuid(publicId)) return null;
+  const { data: grant, error: grantError } = await supabase
+    .from('patient_evolution_share_grants')
+    .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,status,purpose,authorization_statement_version,authorization_declared_at,last_invited_at,created_at,updated_at')
+    .eq('public_id', publicId)
+    .eq('status', 'ACTIVE')
+    .maybeSingle();
+  if (grantError) {
+    if (isMissingRelationError(grantError)) return null;
+    throw grantError;
+  }
+  if (!grant?.id) return null;
+
+  const [{ data: item, error: itemError }, { data: clinic, error: clinicError }, { data: patient, error: patientError }] = await Promise.all([
+    supabase
+      .from('patient_evolution_timeline_items')
+      .select('id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_at,updated_at,archived_at')
+      .eq('id', grant.timeline_item_id)
+      .eq('clinic_id', grant.clinic_id)
+      .eq('patient_id', grant.patient_id)
+      .is('archived_at', null)
+      .maybeSingle(),
+    supabase.from('clinics').select('id,name').eq('id', grant.clinic_id).maybeSingle(),
+    supabase.from('patients').select('id,name').eq('id', grant.patient_id).eq('clinic_id', grant.clinic_id).maybeSingle(),
+  ]);
+  if (itemError || clinicError || patientError) {
+    const firstError = itemError || clinicError || patientError;
+    if (isMissingRelationError(firstError)) return null;
+    throw firstError;
+  }
+  if (!item?.id || !patient?.id) return null;
+  return { grant, item, clinic: clinic || {}, patient };
+}
+
+function buildExternalEvolutionInviteEmail(params: { clinicName: string; shareUrl: string }) {
+  const clinicName = escapeHtml(params.clinicName || 'Clínica');
+  const shareUrl = escapeHtml(params.shareUrl);
+  return {
+    subject: `${clinicName} compartilhou uma atualização clínica com você`,
+    html: `
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
+          <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
+          <h1 style="font-size:21px;margin:0 0 14px;">Atualização clínica compartilhada</h1>
+          <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
+            ${clinicName} disponibilizou um conteúdo clínico para continuidade do cuidado. O link abaixo não libera o conteúdo sozinho: o acesso exige confirmação do e-mail autorizado por código de uso único.
+          </p>
+          <a href="${shareUrl}" style="display:inline-block;background:#7a32fc;color:#fff;text-decoration:none;border-radius:14px;padding:13px 18px;font-weight:800;">Acessar com segurança</a>
+        </div>
+      </div>
+    `
+  };
+}
+
+function buildExternalEvolutionOtpEmail(params: { clinicName: string; code: string; shareUrl: string }) {
+  const clinicName = escapeHtml(params.clinicName || 'Clínica');
+  const code = escapeHtml(params.code);
+  const shareUrl = escapeHtml(params.shareUrl);
+  return {
+    subject: `Código de acesso ao compartilhamento clínico — ${clinicName}`,
+    html: `
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
+          <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
+          <h1 style="font-size:21px;margin:0 0 14px;">Confirme seu e-mail</h1>
+          <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 14px;">
+            Use o código abaixo para acessar o conteúdo compartilhado por ${clinicName}. O código expira em 10 minutos.
+          </p>
+          <div style="font-size:30px;font-weight:900;letter-spacing:8px;color:#7a32fc;margin:18px 0;">${code}</div>
+          <a href="${shareUrl}" style="font-size:13px;color:#7a32fc;">Voltar para a página de acesso</a>
+        </div>
+      </div>
+    `
+  };
 }
 
 async function createRelationshipConfirmationRequest(params: {
@@ -33838,6 +34027,568 @@ async function startServer() {
       }
     }
   );
+
+
+  const patientEvolutionTimelineColumns = 'id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_by_user_id,created_at,updated_at,archived_at';
+  const patientEvolutionGrantColumns = 'id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,status,purpose,authorization_statement_version,authorization_declared_by,authorization_declared_at,created_by_user_id,created_at,updated_at,last_invited_at,revoked_at,revoked_by_user_id';
+
+  const normalizeEvolutionTimelineMonthKey = (value: unknown): string => {
+    const raw = sanitizeString(value, 20);
+    const match = raw.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+    if (!match) return '';
+    const month = Number(match[2]);
+    const year = Number(match[1]);
+    if (year < 2000 || year > 2200 || month < 1 || month > 12) return '';
+    return `${match[1]}-${match[2]}-01`;
+  };
+
+  const sendEvolutionTimelineError = (res: any, error: any, route: string) => {
+    const message = sanitizeString(error?.message || String(error), 260);
+    if (isMissingRelationError(error)) {
+      return res.status(503).json({
+        success: false,
+        code: 'EVOLUTION_TIMELINE_SCHEMA_UNAVAILABLE',
+        error: 'A estrutura da timeline de evolução ainda não foi aplicada.'
+      });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_MONTH_LIMIT')) {
+      return res.status(409).json({ success: false, code: 'EVOLUTION_TIMELINE_MONTH_LIMIT', error: 'Este mês já possui três registros na timeline.' });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_FILE_SCOPE_INVALID')) {
+      return res.status(400).json({ success: false, code: 'EVOLUTION_TIMELINE_FILE_SCOPE_INVALID', error: 'O documento não pertence a este paciente e clínica.' });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_CONTENT_OR_FILE_REQUIRED')) {
+      return res.status(400).json({ success: false, code: 'EVOLUTION_TIMELINE_CONTENT_OR_FILE_REQUIRED', error: 'Preencha o conteúdo ou anexe um documento.' });
+    }
+    if (message.includes('EVOLUTION_SHARE_EMAIL_INVALID')) {
+      return res.status(400).json({ success: false, code: 'EVOLUTION_SHARE_EMAIL_INVALID', error: 'Informe um e-mail válido para o destinatário.' });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_ITEM_NOT_FOUND') || message.includes('EVOLUTION_SHARE_GRANT_NOT_FOUND')) {
+      return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
+    }
+    return sendRouteDbError(res, route, error);
+  };
+
+  const loadPatientEvolutionTimeline = async (clinicId: string, patientId: string) => {
+    const { data: items, error: itemsError } = await supabase
+      .from('patient_evolution_timeline_items')
+      .select(patientEvolutionTimelineColumns)
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .is('archived_at', null)
+      .order('month_key', { ascending: false })
+      .order('slot', { ascending: true })
+      .limit(60);
+    if (itemsError) throw itemsError;
+
+    const itemRows = items || [];
+    const itemIds = itemRows.map((item: any) => sanitizeString(item?.id, 120)).filter(isUuid);
+    const fileIds = itemRows.map((item: any) => sanitizeString(item?.patient_file_id, 120)).filter(isUuid);
+
+    const [grantResult, fileResult] = await Promise.all([
+      itemIds.length
+        ? supabase
+            .from('patient_evolution_share_grants')
+            .select(patientEvolutionGrantColumns)
+            .in('timeline_item_id', itemIds)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .eq('status', 'ACTIVE')
+            .order('created_at', { ascending: true })
+        : Promise.resolve({ data: [], error: null } as any),
+      fileIds.length
+        ? supabase
+            .from('patient_files')
+            .select('id,file_name,mime_type,file_size_bytes,storage_path,source,created_at')
+            .in('id', fileIds)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+    if (grantResult.error) throw grantResult.error;
+    if (fileResult.error && !isMissingRelationError(fileResult.error)) throw fileResult.error;
+
+    const grantsByItem = new Map<string, any[]>();
+    for (const grant of grantResult.data || []) {
+      const key = sanitizeString(grant?.timeline_item_id, 120);
+      const current = grantsByItem.get(key) || [];
+      current.push({
+        id: grant.id,
+        publicId: grant.public_id,
+        recipientEmail: grant.recipient_email,
+        status: grant.status,
+        authorizationDeclaredAt: grant.authorization_declared_at,
+        lastInvitedAt: grant.last_invited_at,
+        shareUrl: isUuid(grant.public_id) ? getAppPortalPathUrl(`/evolucao-compartilhada/${grant.public_id}`) : null,
+      });
+      grantsByItem.set(key, current);
+    }
+    const fileById = new Map((fileResult.data || []).map((file: any) => [String(file.id), file]));
+
+    return itemRows.map((item: any) => {
+      const file = item.patient_file_id ? fileById.get(String(item.patient_file_id)) : null;
+      return {
+        id: item.id,
+        clinicId: item.clinic_id,
+        patientId: item.patient_id,
+        monthKey: item.month_key,
+        slot: item.slot,
+        subject: item.subject,
+        content: item.content || '',
+        createdAt: item.created_at,
+        updatedAt: item.updated_at,
+        attachment: file ? {
+          id: file.id,
+          fileName: file.file_name,
+          mimeType: file.mime_type,
+          sizeBytes: file.file_size_bytes,
+          source: file.source,
+          createdAt: file.created_at,
+        } : null,
+        grants: grantsByItem.get(String(item.id)) || [],
+      };
+    });
+  };
+
+  app.get(
+    '/api/patients/:patientId/evolution-timeline',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability('reports.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+        const data = await loadPatientEvolutionTimeline(clinicId, patientId);
+        return res.json({ success: true, data });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline [GET]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 20 * 1024, 'Registro da timeline de evolução')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const monthKey = normalizeEvolutionTimelineMonthKey(req.body?.monthKey || req.body?.month_key);
+        const subject = sanitizeString(req.body?.subject || req.body?.title, 180);
+        const content = sanitizeString(req.body?.content, 12000) || null;
+        const patientFileId = sanitizeString(req.body?.patientFileId || req.body?.patient_file_id, 120) || null;
+        if (!isUuid(patientId) || !isUuid(clinicId) || !isUuid(actorId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+        if (!monthKey) return res.status(400).json({ success: false, error: 'Informe um mês válido.' });
+        if (!subject) return res.status(400).json({ success: false, error: 'Informe o assunto/tema do registro.' });
+        if (patientFileId && !isUuid(patientFileId)) return res.status(400).json({ success: false, error: 'Documento inválido.' });
+        if (!content && !patientFileId) return res.status(400).json({ success: false, error: 'Preencha o conteúdo ou anexe um documento.' });
+
+        const { data, error } = await supabase.rpc('create_patient_evolution_timeline_item_v1', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_month_key: monthKey,
+          p_subject: subject,
+          p_content: content,
+          p_patient_file_id: patientFileId,
+          p_actor_id: actorId,
+        });
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline [POST]');
+        const timeline = await loadPatientEvolutionTimeline(clinicId, patientId);
+        return res.status(201).json({ success: true, data, timeline });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline [POST]');
+      }
+    }
+  );
+
+  app.delete(
+    '/api/patients/:patientId/evolution-timeline/:itemId',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const itemId = sanitizeString(req.params?.itemId, 120);
+        if (![patientId, clinicId, actorId, itemId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+        const { data, error } = await supabase.rpc('archive_patient_evolution_timeline_item_v1', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_item_id: itemId,
+          p_actor_id: actorId,
+        });
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId [DELETE]');
+        await persistExternalEvolutionAccessAudit({ req, item: { id: itemId, clinic_id: clinicId, patient_id: patientId }, action: 'ITEM_ARCHIVED' });
+        return res.json({ success: true, data });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId [DELETE]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline/:itemId/grants',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    requireClinicCapability('documents.patient_share'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 8 * 1024, 'Compartilhamento de evolução')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const itemId = sanitizeString(req.params?.itemId, 120);
+        const recipientEmail = sanitizeEmail(req.body?.recipientEmail || req.body?.recipient_email);
+        const authorizationConfirmed = req.body?.authorizationConfirmed === true || req.body?.authorization_confirmed === true;
+        if (![patientId, clinicId, actorId, itemId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+        if (!recipientEmail) return res.status(400).json({ success: false, error: 'Informe um e-mail válido para o destinatário.' });
+        if (!authorizationConfirmed) {
+          return res.status(400).json({
+            success: false,
+            code: 'EVOLUTION_SHARE_AUTHORIZATION_DECLARATION_REQUIRED',
+            error: 'Confirme que existe autorização válida do paciente ou responsável antes de compartilhar.'
+          });
+        }
+
+        const { data: rpcData, error } = await supabase.rpc('upsert_patient_evolution_share_grant_v1', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_item_id: itemId,
+          p_recipient_email: recipientEmail,
+          p_actor_id: actorId,
+          p_authorization_statement_version: EXTERNAL_EVOLUTION_SHARE_AUTH_STATEMENT_VERSION,
+        });
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants [POST]');
+        const publicId = sanitizeString(rpcData?.publicId || rpcData?.public_id, 120);
+        const grantId = sanitizeString(rpcData?.id, 120);
+        const shareUrl = isUuid(publicId) ? getAppPortalPathUrl(`/evolucao-compartilhada/${publicId}`) : '';
+
+        let clinicName = 'Clínica';
+        const clinicResult = await supabase.from('clinics').select('name').eq('id', clinicId).maybeSingle();
+        if (!clinicResult.error && clinicResult.data?.name) clinicName = sanitizeString(clinicResult.data.name, 180) || clinicName;
+        let emailSent = false;
+        if (shareUrl) {
+          const emailTemplate = buildExternalEvolutionInviteEmail({ clinicName, shareUrl });
+          emailSent = await sendTransactionalEmailSafe({
+            to: recipientEmail,
+            subject: emailTemplate.subject,
+            html: emailTemplate.html,
+            context: 'external_clinical_evolution_invite',
+            from: OFFICIAL_FROM_NOREPLY,
+            replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+            metadata: { grantId, patientId, clinicId, recipientEmail: maskEmail(recipientEmail) }
+          });
+          if (emailSent && isUuid(grantId)) {
+            await supabase.from('patient_evolution_share_grants').update({ last_invited_at: new Date().toISOString() }).eq('id', grantId).eq('clinic_id', clinicId).eq('patient_id', patientId);
+            await persistExternalEvolutionAccessAudit({
+              req,
+              grant: { id: grantId, timeline_item_id: itemId, clinic_id: clinicId, patient_id: patientId, recipient_email: recipientEmail },
+              item: { id: itemId, clinic_id: clinicId, patient_id: patientId },
+              action: 'INVITE_SENT',
+            });
+          }
+        }
+
+        return res.status(201).json({
+          success: true,
+          data: {
+            id: grantId,
+            publicId,
+            recipientEmail,
+            status: 'ACTIVE',
+            shareUrl: shareUrl || null,
+            emailSent,
+            authorizationStatementVersion: EXTERNAL_EVOLUTION_SHARE_AUTH_STATEMENT_VERSION,
+          }
+        });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants [POST]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/resend',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    requireClinicCapability('documents.patient_share'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const itemId = sanitizeString(req.params?.itemId, 120);
+        const grantId = sanitizeString(req.params?.grantId, 120);
+        if (![patientId, clinicId, itemId, grantId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+        const { data: grant, error } = await supabase
+          .from('patient_evolution_share_grants')
+          .select(patientEvolutionGrantColumns)
+          .eq('id', grantId)
+          .eq('timeline_item_id', itemId)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .eq('status', 'ACTIVE')
+          .maybeSingle();
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/resend [POST]');
+        if (!grant?.id) return res.status(404).json({ success: false, error: 'Compartilhamento não encontrado.' });
+        const shareUrl = getAppPortalPathUrl(`/evolucao-compartilhada/${grant.public_id}`);
+        const clinicResult = await supabase.from('clinics').select('name').eq('id', clinicId).maybeSingle();
+        const clinicName = sanitizeString(clinicResult.data?.name, 180) || 'Clínica';
+        const emailTemplate = buildExternalEvolutionInviteEmail({ clinicName, shareUrl });
+        const emailSent = await sendTransactionalEmailSafe({
+          to: sanitizeEmail(grant.recipient_email),
+          subject: emailTemplate.subject,
+          html: emailTemplate.html,
+          context: 'external_clinical_evolution_invite_resend',
+          from: OFFICIAL_FROM_NOREPLY,
+          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+          metadata: { grantId, patientId, clinicId, recipientEmail: maskEmail(grant.recipient_email) }
+        });
+        if (emailSent) {
+          await supabase.from('patient_evolution_share_grants').update({ last_invited_at: new Date().toISOString() }).eq('id', grantId);
+          await persistExternalEvolutionAccessAudit({ req, grant, item: { id: itemId, clinic_id: clinicId, patient_id: patientId }, action: 'INVITE_SENT', metadata: { resend: true } });
+        }
+        return res.json({ success: true, data: { shareUrl, emailSent } });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/resend [POST]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    requireClinicCapability('documents.patient_share'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const itemId = sanitizeString(req.params?.itemId, 120);
+        const grantId = sanitizeString(req.params?.grantId, 120);
+        if (![patientId, clinicId, actorId, itemId, grantId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+        const grantLookup = await supabase
+          .from('patient_evolution_share_grants')
+          .select(patientEvolutionGrantColumns)
+          .eq('id', grantId)
+          .eq('timeline_item_id', itemId)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .maybeSingle();
+        if (grantLookup.error) return sendEvolutionTimelineError(res, grantLookup.error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke [lookup]');
+        const { data, error } = await supabase.rpc('revoke_patient_evolution_share_grant_v1', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_item_id: itemId,
+          p_grant_id: grantId,
+          p_actor_id: actorId,
+        });
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke [POST]');
+        await persistExternalEvolutionAccessAudit({ req, grant: grantLookup.data, item: { id: itemId, clinic_id: clinicId, patient_id: patientId }, action: 'REVOKED' });
+        return res.json({ success: true, data });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke [POST]');
+      }
+    }
+  );
+
+  app.get('/api/external/evolution/:publicId', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      const loaded = await loadActiveExternalEvolutionShare(publicId);
+      if (!loaded) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível ou revogado.' });
+      return res.json({
+        success: true,
+        data: {
+          publicId,
+          clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica',
+          recipientEmailHint: maskEmail(loaded.grant.recipient_email),
+          requiresEmailVerification: true,
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível abrir este compartilhamento.' });
+    }
+  });
+
+  app.post('/api/external/evolution/:publicId/request-code', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    const genericResponse = { success: true, message: 'Se o e-mail estiver autorizado, enviaremos um código de acesso.' };
+    try {
+      if (!enforcePayloadLimit(req, res, 4 * 1024, 'Código de acesso externo')) return;
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      const email = sanitizeEmail(req.body?.email);
+      if (!isUuid(publicId) || !email) return res.json(genericResponse);
+      const loaded = await loadActiveExternalEvolutionShare(publicId);
+      if (!loaded || sanitizeEmail(loaded.grant.recipient_email) !== email) return res.json(genericResponse);
+
+      const identifier = `${publicId}:${email}`;
+      const key = makeOtpChallengeKey('email', 'external_clinical_share', identifier);
+      await consumeOtpChallenge(key, { requirePersistent: requiresDistributedRuntimeState() });
+      const code = generate6DigitOtp();
+      await setOtpChallenge({
+        key,
+        channel: 'email',
+        purpose: 'external_clinical_share',
+        identifier,
+        userId: null,
+        codeHash: hashIdentifier(code),
+        expiresAt: Date.now() + PORTAL_LOGIN_OTP_TTL_MS,
+        attempts: 0,
+        consumed: false,
+        createdAt: Date.now(),
+      });
+      const shareUrl = getAppPortalPathUrl(`/evolucao-compartilhada/${publicId}`);
+      const emailTemplate = buildExternalEvolutionOtpEmail({
+        clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica',
+        code,
+        shareUrl,
+      });
+      const sent = await sendTransactionalEmailSafe({
+        to: email,
+        subject: emailTemplate.subject,
+        html: emailTemplate.html,
+        context: 'external_clinical_evolution_otp',
+        from: OFFICIAL_FROM_NOREPLY,
+        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        metadata: { grantId: loaded.grant.id, publicId, recipientEmail: maskEmail(email) }
+      });
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'OTP_REQUESTED', metadata: { emailSent: sent } });
+      return res.json(genericResponse);
+    } catch (error: any) {
+      console.warn('[ExternalEvolutionShare] request-code warning:', sanitizeString(error?.message || String(error), 220));
+      return res.json(genericResponse);
+    }
+  });
+
+  app.post('/api/external/evolution/:publicId/verify-code', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    const invalid = { success: false, error: 'INVALID_CODE', message: 'Código inválido ou expirado.' };
+    try {
+      if (!enforcePayloadLimit(req, res, 4 * 1024, 'Verificação de acesso externo')) return;
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      const email = sanitizeEmail(req.body?.email);
+      const code = sanitizeString(req.body?.code, 12).replace(/\D/g, '');
+      if (!isUuid(publicId) || !email || !/^\d{6}$/.test(code)) return res.status(400).json(invalid);
+      const loaded = await loadActiveExternalEvolutionShare(publicId);
+      if (!loaded || sanitizeEmail(loaded.grant.recipient_email) !== email) return res.status(400).json(invalid);
+
+      const key = makeOtpChallengeKey('email', 'external_clinical_share', `${publicId}:${email}`);
+      const requirePersistent = requiresDistributedRuntimeState();
+      const challenge = await getOtpChallenge(key, { requirePersistent });
+      if (!challenge || challenge.consumed) return res.status(400).json(invalid);
+      const nextAttempts = Math.max(0, Number(challenge.attempts || 0)) + 1;
+      const attemptRecorded = await updateOtpChallengeAttempts(key, challenge.attempts, nextAttempts, { requirePersistent });
+      if (!attemptRecorded) return res.status(409).json({ success: false, error: 'OTP_RETRY_REQUIRED', message: 'Solicite um novo código e tente novamente.' });
+      if (nextAttempts > 5) {
+        await consumeOtpChallenge(key, { requirePersistent, expectedAttempts: nextAttempts });
+        return res.status(429).json({ success: false, error: 'TOO_MANY_ATTEMPTS', message: 'Muitas tentativas. Solicite um novo código.' });
+      }
+      if (hashIdentifier(code) !== challenge.codeHash || Date.now() > challenge.expiresAt) return res.status(400).json(invalid);
+      const consumed = await consumeOtpChallenge(key, { requirePersistent, expectedAttempts: nextAttempts });
+      if (!consumed) return res.status(409).json({ success: false, error: 'OTP_RETRY_REQUIRED', message: 'Solicite um novo código e tente novamente.' });
+
+      setExternalEvolutionShareCookie(res, publicId, email);
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'OTP_VERIFIED' });
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.warn('[ExternalEvolutionShare] verify-code warning:', sanitizeString(error?.message || String(error), 220));
+      return res.status(400).json(invalid);
+    }
+  });
+
+  const resolveExternalEvolutionAuthorizedShare = async (req: any, publicId: string) => {
+    const loaded = await loadActiveExternalEvolutionShare(publicId);
+    if (!loaded) return null;
+    const cookieName = externalEvolutionShareCookieName(publicId);
+    const sessionData = verifyExternalEvolutionShareSession(req.cookies?.[cookieName]);
+    if (!sessionData || sessionData.publicId !== publicId) return null;
+    if (sanitizeEmail(sessionData.email) !== sanitizeEmail(loaded.grant.recipient_email)) return null;
+    return loaded;
+  };
+
+  app.get('/api/external/evolution/:publicId/content', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+      const loaded = await resolveExternalEvolutionAuthorizedShare(req, publicId);
+      if (!loaded) return res.status(401).json({ success: false, code: 'EMAIL_VERIFICATION_REQUIRED', error: 'Confirme o e-mail autorizado para continuar.' });
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'VIEWED' });
+      let attachment: any = null;
+      if (isUuid(loaded.item.patient_file_id)) {
+        const fileResult = await supabase
+          .from('patient_files')
+          .select('id,file_name,mime_type,file_size_bytes,created_at')
+          .eq('id', loaded.item.patient_file_id)
+          .eq('clinic_id', loaded.grant.clinic_id)
+          .eq('patient_id', loaded.grant.patient_id)
+          .maybeSingle();
+        if (!fileResult.error && fileResult.data?.id) {
+          attachment = {
+            id: fileResult.data.id,
+            fileName: fileResult.data.file_name,
+            mimeType: fileResult.data.mime_type,
+            sizeBytes: fileResult.data.file_size_bytes,
+            createdAt: fileResult.data.created_at,
+          };
+        }
+      }
+      return res.json({
+        success: true,
+        data: {
+          clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica',
+          patientName: sanitizeString(loaded.patient?.name, 180) || 'Paciente',
+          monthKey: loaded.item.month_key,
+          subject: loaded.item.subject,
+          content: loaded.item.content || '',
+          attachment,
+          sharedWith: sanitizeEmail(loaded.grant.recipient_email),
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar o conteúdo compartilhado.' });
+    }
+  });
+
+  app.get('/api/external/evolution/:publicId/file', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
+      const loaded = await resolveExternalEvolutionAuthorizedShare(req, publicId);
+      if (!loaded) return res.status(401).json({ success: false, code: 'EMAIL_VERIFICATION_REQUIRED', error: 'Confirme o e-mail autorizado para continuar.' });
+      if (!isUuid(loaded.item.patient_file_id)) return res.status(404).json({ success: false, error: 'Este registro não possui documento anexado.' });
+      const { data: file, error } = await supabase
+        .from('patient_files')
+        .select('id,storage_bucket,storage_path,file_name,mime_type,file_size_bytes')
+        .eq('id', loaded.item.patient_file_id)
+        .eq('clinic_id', loaded.grant.clinic_id)
+        .eq('patient_id', loaded.grant.patient_id)
+        .maybeSingle();
+      if (error || !file?.id || !file.storage_path) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
+      const bucket = sanitizeString(file.storage_bucket, 120) || 'patient-files-private';
+      const { data: signed, error: signedError } = await supabase.storage.from(bucket).createSignedUrl(sanitizeString(file.storage_path, 800), 60 * 5);
+      if (signedError || !signed?.signedUrl) return res.status(503).json({ success: false, error: 'Não foi possível abrir o documento agora.' });
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'FILE_ACCESSED' });
+      return res.json({ success: true, data: { url: sanitizeUrl(signed.signedUrl), fileName: file.file_name, expiresInSeconds: 300 } });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível abrir o documento.' });
+    }
+  });
 
   app.patch('/api/patient/self/profile', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
