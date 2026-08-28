@@ -10,9 +10,13 @@ import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStora
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from "../constants/organizationModules";
 import { isAbaV2Enabled, isAbaV3UiEnabled } from "../utils/featureFlags";
 import {
-  BRAZIL_CLINIC_TIME_ZONE_OPTIONS,
-  inferBrazilClinicTimeZoneFromState,
-} from "../utils/clinicTimeZone";
+  PROFESSIONAL_COUNCIL_OPTIONS,
+  formatProfessionalCouncil,
+  formatProfessionalRegistry,
+  getProfessionalRegistryGuidance,
+  getProfessionalRegistryPlaceholder,
+  isNoFormalCouncil,
+} from "../utils/professionalRegistry";
 
 type SettingsValues = Record<string, any>;
 
@@ -1371,12 +1375,15 @@ export function ClinicGlobalSettingsPanel({
   const clinicFiscalComplete = Boolean(values.clinicLegalName?.trim() && clinicDocumentDigits && values.clinicCnesCode?.trim());
   const contactComplete = Boolean(values.clinicEmail?.trim() || values.clinicPhone?.trim() || values.clinicWhatsapp?.trim());
   const responsibleComplete = Boolean(values.therapistFullName?.trim() && values.therapistRoleTitle?.trim() && (values.therapistEmail?.trim() || values.therapistPhone?.trim()));
-  const professionalBillingComplete = Boolean(
-    values.therapistCouncilType?.trim() &&
-    values.therapistCrp?.trim() &&
-    values.therapistCouncilState?.trim() &&
-    values.therapistCboCode?.trim(),
-  );
+  const professionalCouncilIsInformal = isNoFormalCouncil(values.therapistCouncilType);
+  const professionalBillingComplete = professionalCouncilIsInformal
+    ? Boolean(values.therapistCouncilType?.trim())
+    : Boolean(
+        values.therapistCouncilType?.trim() &&
+        values.therapistCrp?.trim() &&
+        values.therapistCouncilState?.trim() &&
+        values.therapistCboCode?.trim(),
+      );
   const mediaComplete = Boolean(values.therapistSignatureDataUrl || values.therapistProfilePhotoUrl);
 
   const professionalFields = (
@@ -1430,12 +1437,31 @@ export function ClinicGlobalSettingsPanel({
         <input type="text" value={values.therapistRoleTitle} onChange={(event) => setters.setTherapistRoleTitle(event.target.value)} placeholder="Ex.: Fonoaudiólogo clínico" className={inputClass} />
       </label>
       <label className={labelClass}>
-        Conselho profissional
-        <input type="text" value={values.therapistCouncilType} onChange={(event) => setters.setTherapistCouncilType(event.target.value)} placeholder="CRP, CREFITO, CRM..." className={inputClass} />
+        Conselho / tipo de registro
+        <input
+          type="text"
+          list="clinic-professional-council-options"
+          maxLength={48}
+          value={values.therapistCouncilType}
+          onChange={(event) => setters.setTherapistCouncilType(formatProfessionalCouncil(event.target.value))}
+          placeholder="CRP, CREFITO, CRFa ou Sem conselho"
+          className={inputClass}
+        />
+        <datalist id="clinic-professional-council-options">
+          {PROFESSIONAL_COUNCIL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+        </datalist>
       </label>
       <label className={labelClass}>
-        Número do conselho / Registro
-        <input type="text" value={values.therapistCrp} onChange={(event) => setters.setTherapistCrp(event.target.value)} placeholder="Ex: CRP 06/123456" className={inputClass} />
+        Registro profissional / identificação
+        <input
+          type="text"
+          maxLength={80}
+          value={values.therapistCrp}
+          onChange={(event) => setters.setTherapistCrp(formatProfessionalRegistry(event.target.value, values.therapistCouncilType))}
+          placeholder={getProfessionalRegistryPlaceholder(values.therapistCouncilType, values.therapistSpecialtyName)}
+          className={inputClass}
+        />
+        <span className="mt-1 block text-[11px] font-normal leading-5 text-slate-500">{getProfessionalRegistryGuidance(values.therapistCouncilType)}</span>
       </label>
       <label className={labelClass}>
         UF do conselho
@@ -1676,22 +1702,8 @@ export function ClinicGlobalSettingsPanel({
                   <label className={labelClass}>Complemento<input type="text" value={values.clinicAddressComplement} onChange={(event) => setters.setClinicAddressComplement(event.target.value)} placeholder="Sala, bloco, andar" className={inputClass} /></label>
                   <label className={labelClass}>Bairro<input type="text" value={values.clinicDistrict} onChange={(event) => setters.setClinicDistrict(event.target.value)} placeholder="Bairro" className={inputClass} /></label>
                   <label className={labelClass}>Cidade<input type="text" value={values.clinicCity} onChange={(event) => setters.setClinicCity(event.target.value)} placeholder="Cidade" className={inputClass} /></label>
-                  <label className={labelClass}>UF<input type="text" value={values.clinicStateUf} onChange={(event) => {
-                    const nextState = event.target.value.toUpperCase().slice(0, 2);
-                    const previousInferredTimeZone = inferBrazilClinicTimeZoneFromState(values.clinicStateUf);
-                    setters.setClinicStateUf(nextState);
-                    if (!values.clinicTimeZone || values.clinicTimeZone === previousInferredTimeZone) {
-                      setters.setClinicTimeZone(inferBrazilClinicTimeZoneFromState(nextState));
-                    }
-                  }} placeholder="SP" maxLength={2} className={inputClass} /></label>
+                  <label className={labelClass}>UF<input type="text" value={values.clinicStateUf} onChange={(event) => setters.setClinicStateUf(event.target.value.toUpperCase().slice(0, 2))} placeholder="SP" maxLength={2} className={inputClass} /></label>
                   <label className={labelClass}>CEP<input type="text" value={values.clinicPostalCode} onChange={(event) => setters.setClinicPostalCode(maskCep(event.target.value))} placeholder="00000-000" className={inputClass} /></label>
-                  <label className={`${labelClass} md:col-span-2`}>
-                    Fuso horário da clínica
-                    <select value={values.clinicTimeZone || ''} onChange={(event) => setters.setClinicTimeZone(event.target.value)} className={inputClass}>
-                      {BRAZIL_CLINIC_TIME_ZONE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                    </select>
-                    <span className="mt-1.5 block text-[11px] font-normal leading-relaxed text-slate-500">Horários clínicos, PTS e registros usam este fuso, independentemente do computador ou celular que abrir o prontuário.</span>
-                  </label>
                   <div className="md:col-span-2 flex justify-end"><SaveButton onSave={onSave}>Salvar contato</SaveButton></div>
                 </div>
               </SectionCard>
@@ -1712,7 +1724,7 @@ export function ClinicGlobalSettingsPanel({
               </SectionCard>
 
 
-              <SectionCard title="Preferências da clínica" description="Preferências operacionais usadas na agenda, no prontuário e nas rotinas administrativas." complete={Boolean(values.workStart && values.workEnd && values.clinicPatientPhotoPolicy && values.clinicTimeZone)} hasAnyData>
+              <SectionCard title="Preferências da clínica" description="Preferências operacionais usadas na agenda, no prontuário e nas rotinas administrativas." complete={Boolean(values.workStart && values.workEnd && values.clinicPatientPhotoPolicy)} hasAnyData>
                 <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
                   <label className={labelClass}>Início do expediente<input type="time" value={values.workStart} onChange={(event) => setters.setWorkStart(event.target.value)} className={inputClass} /></label>
                   <label className={labelClass}>Fim do expediente<input type="time" value={values.workEnd} onChange={(event) => setters.setWorkEnd(event.target.value)} className={inputClass} /></label>

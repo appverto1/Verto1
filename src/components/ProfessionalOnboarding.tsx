@@ -11,7 +11,13 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
-import { formatProfessionalRegistry } from '../utils/professionalRegistry';
+import {
+  PROFESSIONAL_COUNCIL_OPTIONS,
+  formatProfessionalCouncil,
+  formatProfessionalRegistry,
+  getProfessionalRegistryGuidance,
+  getProfessionalRegistryPlaceholder,
+} from '../utils/professionalRegistry';
 
 type OnboardingContext = {
   onboardingMode: 'invited_professional' | 'clinic_member' | 'clinic_owner' | 'standard' | 'invalid';
@@ -86,7 +92,7 @@ const formatCnpj = (value: string) => {
 };
 
 const formatDocument = (value: string, type: 'CPF' | 'CNPJ' | 'OTHER') =>
-  type === 'CNPJ' ? formatCnpj(value) : type === 'CPF' ? formatCpf(value) : value.slice(0, 40);
+  type === 'CNPJ' ? formatCnpj(value) : type === 'CPF' ? formatCpf(value) : formatProfessionalRegistry(value).slice(0, 80);
 
 const formatCep = (value: string) => {
   const digits = digitsOnly(value).slice(0, 8);
@@ -252,8 +258,9 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setGender(profile?.gender || draft.gender || '');
         setCountryCode(formatCountryCode(profile?.country_code || draft.countryCode || '+55'));
         setProfilePicture(profile?.profile_photo_url || draft.profilePicture || user?.profilePicture || null);
-        setCouncil(profile?.council || draft.council || '');
-        setCouncilNumber(formatProfessionalRegistry(profile?.council_number || draft.councilNumber || user?.crp || ''));
+        const loadedCouncil = formatProfessionalCouncil(profile?.council || draft.council || '');
+        setCouncil(loadedCouncil);
+        setCouncilNumber(formatProfessionalRegistry(profile?.council_number || draft.councilNumber || user?.crp || '', loadedCouncil));
         setMiniCurriculum(profile?.mini_curriculum || metadata?.miniCurriculum || draft.miniCurriculum || user?.miniCurriculum || '');
         setSignatureDataUrl(profile?.signature_data_url || draft.signatureDataUrl || user?.signatureDataUrl || null);
         setSessionDurationMinutes(String(metadata?.sessionDurationMinutes || metadata?.defaultSessionDurationMinutes || draft.sessionDurationMinutes || '50'));
@@ -625,12 +632,29 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                   <p className="text-sm text-slate-500">Essas informações pertencem ao seu perfil profissional e serão usadas em documentos clínicos.</p>
                   <div className="grid gap-4 md:grid-cols-2">
                     <label className="space-y-2 text-sm font-medium text-slate-700">
-                      <span>Conselho profissional</span>
-                      <input value={council} onChange={(event) => setCouncil(event.target.value)} placeholder="Ex.: CRP, CREFONO, CRM" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                      <span>Conselho / tipo de registro</span>
+                      <input
+                        value={council}
+                        list="professional-council-options"
+                        maxLength={48}
+                        onChange={(event) => setCouncil(formatProfessionalCouncil(event.target.value))}
+                        placeholder="Ex.: CRP, CREFITO, CRFa ou Sem conselho"
+                        className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900"
+                      />
+                      <datalist id="professional-council-options">
+                        {PROFESSIONAL_COUNCIL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                      </datalist>
                     </label>
                     <label className="space-y-2 text-sm font-medium text-slate-700">
-                      <span>Número do conselho</span>
-                      <input value={councilNumber} onChange={(event) => setCouncilNumber(formatProfessionalRegistry(event.target.value))} placeholder="Ex.: 123456" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
+                      <span>Registro profissional / identificação</span>
+                      <input
+                        value={councilNumber}
+                        maxLength={80}
+                        onChange={(event) => setCouncilNumber(formatProfessionalRegistry(event.target.value, council))}
+                        placeholder={getProfessionalRegistryPlaceholder(council)}
+                        className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900"
+                      />
+                      <span className="block text-xs font-normal leading-5 text-slate-500">{getProfessionalRegistryGuidance(council)}</span>
                     </label>
                     <label className="space-y-2 text-sm font-medium text-slate-700">
                       <span>Duração padrão da sessão</span>
