@@ -4319,9 +4319,12 @@ export default function App() {
         setPatientContextLoaded(true);
       }
 
+      const patientPortalTaskKind = resolvePatientPortalKind(user);
+      const shouldLoadLegacyTasks = clinicalPortalEnabled && patientPortalTaskKind === 'KIDS';
+      const shouldLoadAssignedTasks = clinicalPortalEnabled && patientPortalTaskKind !== 'KIDS';
       const [tasksRes, assignedTasksRes, protocolsRes] = await Promise.allSettled([
-        clinicalPortalEnabled ? dataService.getPatientSelfTasks() : Promise.resolve({ success: true, data: [] }),
-        clinicalPortalEnabled ? dataService.getPatientSelfAssignedTasks() : Promise.resolve({ success: true, data: [] }),
+        shouldLoadLegacyTasks ? dataService.getPatientSelfTasks() : Promise.resolve({ success: true, data: [] }),
+        shouldLoadAssignedTasks ? dataService.getPatientSelfAssignedTasks() : Promise.resolve({ success: true, data: [] }),
         clinicalPortalEnabled ? dataService.getPatientSelfProtocols() : Promise.resolve({ success: true, data: [] })
       ]);
       if (!mounted || requestId !== requestGeneration) return;
@@ -4349,9 +4352,16 @@ export default function App() {
               .map((t: any) => {
                 const taskData = t?.task_data && typeof t.task_data === 'object' ? t.task_data : {};
                 const status = String(t?.status || 'pending').toLowerCase();
+                const taskSource = String(t?._source || 'assigned_tasks');
+                const isLegacyFallback = taskSource === 'tasks_fallback';
+                const legacyTaskId = isLegacyFallback
+                  ? String(taskData?.legacyTaskId || taskData?.legacy_task_id || t?.id || '').trim()
+                  : '';
                 return {
-                  id: `assigned-${t.id}`,
-                  assignedTaskId: t.id,
+                  id: isLegacyFallback ? `legacy-${legacyTaskId || t.id}` : `assigned-${t.id}`,
+                  assignedTaskId: isLegacyFallback ? null : t.id,
+                  legacyTaskId: legacyTaskId || null,
+                  _source: taskSource,
                   patientId: t?.patient_id || user.id,
                   title: taskData.title || 'Tarefa agendada',
                   description: taskData.description || '',
@@ -6936,10 +6946,16 @@ export default function App() {
       ? ((normalizedEffort ?? 0) / (t.maxScore || 1) * 100)
       : normalizedEffort;
     const assignedTaskId = String(t?.assignedTaskId || '').trim();
+    const legacyTaskId = String(
+      t?.legacyTaskId ||
+      t?.task_data?.legacyTaskId ||
+      t?.task_data?.legacy_task_id ||
+      ''
+    ).trim();
     const isTaskIdUuid = isUuidLike(String(t?.id || ''));
-    const completionTargetId = assignedTaskId || (isTaskIdUuid ? String(t.id) : '');
+    const completionTargetId = assignedTaskId || (!legacyTaskId && isTaskIdUuid ? String(t.id) : '');
 
-    if (!isKid && !completionTargetId) {
+    if (!isKid && !completionTargetId && !legacyTaskId) {
       return { success: false, error: 'A tarefa não possui identidade persistida. Atualize a tela e tente novamente.' };
     }
 
@@ -6949,22 +6965,39 @@ export default function App() {
         completionPayload.patient_effort = typeof normalizedEffort === 'number'
           ? Math.max(0, Math.min(100, normalizedEffort))
           : null;
-        const completionResult = await dataService.completeAssignedTask(completionTargetId, completionPayload);
+        const completionResult = legacyTaskId
+          ? await dataService.completeLegacyPatientTask(legacyTaskId, completionPayload)
+          : await dataService.completeAssignedTask(completionTargetId, completionPayload);
         if (!completionResult?.success) {
           return { success: false, error: completionResult?.error || 'Não foi possível concluir a tarefa.' };
         }
 
         const persistedTask = completionResult?.data || {};
         const persistedHistory = completionResult?.historyEntry || null;
+        const persistedAssignedTaskId = String(persistedTask?.id || completionTargetId || '').trim();
         setTasks(prev => prev.map((x: any) => {
+          const matchesLegacyTask =
+            Boolean(legacyTaskId) &&
+            String(
+              x?.legacyTaskId ||
+              x?.task_data?.legacyTaskId ||
+              x?.task_data?.legacy_task_id ||
+              ''
+            ).trim() === legacyTaskId;
           const matchesAssignedTask =
-            String(x?.assignedTaskId || '') === completionTargetId ||
-            String(x?.id || '') === completionTargetId ||
-            String(x?.id || '') === `assigned-${completionTargetId}`;
-          return matchesAssignedTask
+            Boolean(completionTargetId) && (
+              String(x?.assignedTaskId || '') === completionTargetId ||
+              String(x?.id || '') === completionTargetId ||
+              String(x?.id || '') === `assigned-${completionTargetId}`
+            );
+          return matchesLegacyTask || matchesAssignedTask
             ? {
                 ...x,
                 ...persistedTask,
+                id: persistedAssignedTaskId ? `assigned-${persistedAssignedTaskId}` : x.id,
+                assignedTaskId: persistedAssignedTaskId || x?.assignedTaskId || null,
+                legacyTaskId: legacyTaskId || x?.legacyTaskId || null,
+                _source: legacyTaskId ? 'assigned_tasks_legacy_bridge' : 'assigned_tasks',
                 completed: true,
                 status: 'completed',
                 patient_effort: persistedTask?.patient_effort ?? energyValue,
@@ -6982,12 +7015,15 @@ export default function App() {
               time: new Date(persistedHistory?.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               dateGroup: persistedHistory?.date_group || 'Hoje'
             },
-            ...prev.filter((item: any) => String(item?.id || '') !== String(persistedHistory.id) && String(item?.assigned_task_id || '') !== completionTargetId)
+            ...prev.filter((item: any) =>
+              String(item?.id || '') !== String(persistedHistory.id) &&
+              (!persistedAssignedTaskId || String(item?.assigned_task_id || '') !== persistedAssignedTaskId)
+            )
           ]);
         }
         return { success: true, data: persistedTask, historyEntry: persistedHistory };
       } catch (error: any) {
-        console.error('Falha ao concluir assigned task:', error);
+        console.error('Falha ao concluir tarefa adulta:', error);
         return { success: false, error: error?.message || 'Não foi possível concluir a tarefa.' };
       }
     }

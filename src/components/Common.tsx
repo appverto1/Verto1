@@ -335,7 +335,7 @@ export const SuccessOverlay = ({ title = "Fantástico!", message = "Você está 
   </div> 
 );
 
-export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, label = 'Energia', labelHelp, scaleLabels }: any) => { 
+export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, label = 'Energia', labelHelp, scaleLabels, emojiForValue }: any) => {
   const numericValue = Number(value) || 0;
   const resolvedScaleLabels = Array.isArray(scaleLabels) && scaleLabels.length === 3
     ? scaleLabels
@@ -346,7 +346,9 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, l
     if (val < 60) return "😐"; 
     if (val < 80) return "🙂"; 
     return "🤩"; 
-  }; 
+  };
+  const getValueEmoji = (val: number) =>
+    typeof emojiForValue === 'function' ? String(emojiForValue(val) || '😐') : getMoodEmoji(val);
   return ( 
     <div className="w-full"> 
       {showLabel && (
@@ -365,14 +367,14 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, l
             )}
           </span>
           <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full shadow-sm">
-            <span className="text-2xl">{getMoodEmoji(numericValue)}</span>
+            <span className="text-2xl">{getValueEmoji(numericValue)}</span>
             <span className="text-xl font-semibold text-[#7a32fc]">{numericValue}%</span>
           </div>
         </div>
       )} 
       <div className="big-slider-container">
         <div className="big-slider-fill" style={{ width: `${numericValue}%` }}></div>
-        <div className="slider-thumb-indicator" style={{ left: `${numericValue}%` }}>{getMoodEmoji(numericValue)}</div>
+        <div className="slider-thumb-indicator" style={{ left: `${numericValue}%` }}>{getValueEmoji(numericValue)}</div>
         <input type="range" min="0" max="100" value={numericValue} onChange={onChange} onMouseUp={onCommit} onTouchEnd={onCommit} className="big-slider-input" />
       </div>
       <div className="flex justify-between text-xs text-gray-400 mt-2 font-semibold px-1"><span>{resolvedScaleLabels[0]}</span><span>{resolvedScaleLabels[1]}</span><span>{resolvedScaleLabels[2]}</span></div> 

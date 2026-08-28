@@ -1167,6 +1167,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (val < 80) return "🙂";
     return "🤩";
   };
+  const getTaskEffortEmoji = (val: number) => {
+    if (val < 20) return "🙂";
+    if (val < 40) return "😌";
+    if (val < 60) return "😐";
+    if (val < 80) return "😕";
+    return "😫";
+  };
+  const getTaskReflectionEmoji = (val: number) =>
+    isConventionalAdult ? getTaskEffortEmoji(val) : getTaskEnergyEmoji(val);
 
   const toLocalDateKey = (value: any) => {
     if (!value) return '';
@@ -4475,7 +4484,8 @@ ${interventionImages.join('\n')}` : ''
                         onCommit={handleEnergyCommit}
                         label={taskReflectionLabel}
                         labelHelp={taskReflectionHelp}
-                        scaleLabels={isConventionalAdult ? ['Difícil', 'Moderado', 'Leve'] : ['Baixa', 'Média', 'Alta']}
+                        scaleLabels={isConventionalAdult ? ['Pouco esforço', 'Moderado', 'Muito esforço'] : ['Baixa', 'Média', 'Alta']}
+                        emojiForValue={isConventionalAdult ? getTaskEffortEmoji : undefined}
                       /> 
                       <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p>
                     </React.Fragment>
@@ -4487,15 +4497,15 @@ ${interventionImages.join('\n')}` : ''
                 <div className="mb-4"> 
                   <div className="flex items-center justify-between mb-2"> 
                     <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : taskReflectionLabel}</span>
-                    <span className="text-sm font-semibold text-[#7a32fc] flex items-center gap-2">{!isKidsProfile ? <span>{getTaskEnergyEmoji(Number(taskEnergy) || 0)}</span> : null}{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span> 
+                    <span className="text-sm font-semibold text-[#7a32fc] flex items-center gap-2">{!isKidsProfile ? <span>{getTaskReflectionEmoji(Number(taskEnergy) || 0)}</span> : null}{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span>
                   </div> 
                   <div className="w-full bg-gray-100 rounded-full h-2"> 
                     <div className="bg-[#7a32fc] h-2 rounded-full" style={{ width: isKidsProfile ? `${taskEnergy * 100}%` : `${taskEnergy}%` }}></div> 
                   </div> 
                   {isConventionalAdult && (
                     <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
-                      <span>Maior esforço 😟</span>
-                      <span>Menor esforço 🙂</span>
+                      <span>Pouco esforço 🙂</span>
+                      <span>Muito esforço 😫</span>
                     </div>
                   )}
                 </div> 

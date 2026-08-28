@@ -4880,14 +4880,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     annual: 'Anual'
   };
 
+  const ADULT_EFFORT_SEMANTICS_V2 = 'effort_min_0_max_100_v2';
+
   const getEffortEmoji = (value: any) => {
     const percent = Number(value);
     if (!Number.isFinite(percent)) return '😐';
-    if (percent < 20) return '😫';
-    if (percent < 40) return '😕';
+    if (percent < 20) return '🙂';
+    if (percent < 40) return '😌';
     if (percent < 60) return '😐';
-    if (percent < 80) return '🙂';
-    return '🤩';
+    if (percent < 80) return '😕';
+    return '😫';
   };
 
   const normalizeEffortPercent = (value: any) => {
@@ -4902,6 +4904,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       : task?.taskData && typeof task.taskData === 'object'
         ? task.taskData
         : {};
+
+  const resolveAdultEffortSemantics = (task: any, taskData: any = getAssignedTaskData(task)) =>
+    String(
+      taskData?.patientEffortSemantics ||
+      taskData?.patient_effort_semantics ||
+      task?.patientEffortSemantics ||
+      task?.patient_effort_semantics ||
+      ''
+    ).trim();
+
+  const hasCanonicalAdultEffortSemantics = (task: any, taskData?: any) =>
+    resolveAdultEffortSemantics(task, taskData) === ADULT_EFFORT_SEMANTICS_V2;
 
   const resolveAssignedTaskNumber = (...values: any[]) => {
     for (const value of values) {
@@ -5030,6 +5044,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           patientEffort: normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0),
           patientEffortEmoji: String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0)),
           patientEffortLabel: String(task?.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || ''),
+          patientEffortSemantics: resolveAdultEffortSemantics(task, taskData),
           patientComment: String(task?.patient_comment || ''),
           professionalScore,
           evolutionNote: resolveAssignedTaskReviewNote(task)
@@ -5067,6 +5082,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           patientEffort: normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0),
           patientEffortEmoji: String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0)),
           patientEffortLabel: String(task?.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || ''),
+          patientEffortSemantics: resolveAdultEffortSemantics(task, taskData),
           patientComment: String(task?.patient_comment || task?.note || ''),
           professionalScore,
           evolutionNote: resolveAssignedTaskReviewNote(task) || String(task?.evolutionNote || task?.evalComment || '')
@@ -5982,7 +5998,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         'REVISÃO PROFISSIONAL DE TAREFA ADULTA',
         `Tarefa: ${String(reviewedTask?.task_data?.title || reviewedTask?.title || 'Tarefa adulta')}`,
         `Pontuação profissional: ${numericScore} / ${dynamicMaxScore}`,
-        `Esforço percebido após a atividade: ${normalizeEffortPercent(reviewedTask?.patient_effort ?? reviewedTask?.task_data?.patientEffort ?? reviewedTask?.task_data?.patient_effort ?? 0)}%`,
+        hasCanonicalAdultEffortSemantics(reviewedTask, reviewedTask?.task_data)
+          ? `Esforço percebido após a atividade: ${normalizeEffortPercent(reviewedTask?.patient_effort ?? reviewedTask?.task_data?.patientEffort ?? reviewedTask?.task_data?.patient_effort ?? 0)}%`
+          : `Valor histórico de esforço (semântica anterior não padronizada): ${normalizeEffortPercent(reviewedTask?.patient_effort ?? reviewedTask?.task_data?.patientEffort ?? reviewedTask?.task_data?.patient_effort ?? 0)}%`,
         draft.note ? `Anotação técnica: ${draft.note}` : 'Anotação técnica: Sem anotação técnica registrada.'
       ].join('\n'),
       content: '',
@@ -10652,21 +10670,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                   Esforço percebido após a atividade
                                 </span>
                                 <span className={`text-sm font-semibold flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>
-                                  <span className="text-lg">{event.patientEffortEmoji || getEffortEmoji(event.patientEffort)}</span>
+                                  {hasCanonicalAdultEffortSemantics(event, event.taskData) && (
+                                    <span className="text-lg">{event.patientEffortEmoji || getEffortEmoji(event.patientEffort)}</span>
+                                  )}
                                   {event.patientEffort}%
                                 </span>
                               </div>
-                              <div className={`h-2 rounded-full overflow-hidden ${isPanelDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
-                                <div
-                                  className="h-full rounded-full bg-gradient-to-r from-[#fb5a4d] via-[#f6c04d] to-[#05CD99]"
-                                  style={{ width: `${normalizeEffortPercent(event.patientEffort)}%` }}
-                                />
-                              </div>
-                              <div className={`mt-2 flex justify-between text-[10px] font-semibold ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                                <span>Baixa</span>
-                                <span>Média</span>
-                                <span>Alta</span>
-                              </div>
+                              {hasCanonicalAdultEffortSemantics(event, event.taskData) ? (
+                                <>
+                                  <div className={`h-2 rounded-full overflow-hidden ${isPanelDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                                    <div
+                                      className="h-full rounded-full bg-gradient-to-r from-[#05CD99] via-[#f6c04d] to-[#fb5a4d]"
+                                      style={{ width: `${normalizeEffortPercent(event.patientEffort)}%` }}
+                                    />
+                                  </div>
+                                  <div className={`mt-2 flex justify-between text-[10px] font-semibold ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                                    <span>Pouco esforço</span>
+                                    <span>Moderado</span>
+                                    <span>Muito esforço</span>
+                                  </div>
+                                </>
+                              ) : (
+                                <p className={`mt-2 text-[11px] font-medium ${isPanelDark ? 'text-amber-300' : 'text-amber-700'}`}>
+                                  Registro anterior à padronização da escala. O valor histórico foi preservado, mas sua direção não é inferida.
+                                </p>
+                              )}
                             </div>
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                               Comentário do paciente: {normalizeNoteText(event.patientComment) || 'Sem comentário.'}
@@ -11303,7 +11331,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         </div>
                         <p className="text-sm font-semibold text-gray-800">{task.taskTitle}</p>
                         <p className="text-xs text-gray-600 mt-1">
-                          Esforço percebido após a atividade: <span className="font-semibold">{task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}%</span>
+                          {hasCanonicalAdultEffortSemantics(task, task.taskData) ? (
+                            <>
+                              Esforço percebido após a atividade: <span className="font-semibold">{task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}%</span>
+                            </>
+                          ) : (
+                            <>
+                              Valor histórico de esforço: <span className="font-semibold">{task.patientEffort}%</span> <span className="text-amber-700">(semântica anterior não padronizada)</span>
+                            </>
+                          )}
                         </p>
                         <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap mt-2">
                           {normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica registrada.'}
@@ -12143,21 +12179,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                   <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
                                     <span>Esforço percebido após a atividade</span>
                                     <span className="font-semibold text-slate-800 flex items-center gap-1">
-                                      <span>{String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0))}</span>
+                                      {hasCanonicalAdultEffortSemantics(task, taskData) && (
+                                        <span>{String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0))}</span>
+                                      )}
                                       {normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%
                                     </span>
                                   </div>
-                                  <div className="h-1.5 bg-white rounded-full overflow-hidden">
-                                    <div
-                                      className="h-full rounded-full bg-gradient-to-r from-[#fb5a4d] via-[#f6c04d] to-[#05CD99]"
-                                      style={{ width: `${normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%` }}
-                                    />
-                                  </div>
-                                  <div className="mt-1 flex justify-between text-[9px] font-semibold text-gray-400">
-                                    <span>Baixa</span>
-                                    <span>Média</span>
-                                    <span>Alta</span>
-                                  </div>
+                                  {hasCanonicalAdultEffortSemantics(task, taskData) ? (
+                                    <>
+                                      <div className="h-1.5 bg-white rounded-full overflow-hidden">
+                                        <div
+                                          className="h-full rounded-full bg-gradient-to-r from-[#05CD99] via-[#f6c04d] to-[#fb5a4d]"
+                                          style={{ width: `${normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%` }}
+                                        />
+                                      </div>
+                                      <div className="mt-1 flex justify-between text-[9px] font-semibold text-gray-400">
+                                        <span>Pouco esforço</span>
+                                        <span>Moderado</span>
+                                        <span>Muito esforço</span>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <p className="mt-1 text-[10px] font-medium text-amber-700">
+                                      Semântica legada não padronizada; valor preservado sem inferir direção.
+                                    </p>
+                                  )}
                                 </div>
                                 {reviewContext?.protocol && (
                                   <p className="text-[11px] text-[#7a32fc] font-semibold mt-1">

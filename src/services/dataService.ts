@@ -7580,6 +7580,26 @@ export const dataService = {
     }
   },
 
+  async completeLegacyPatientTask(taskId: string, payload: {
+    patient_effort?: number;
+    patient_comment?: string;
+  }) {
+    try {
+      const safeTaskId = encodeURIComponent(String(taskId || '').trim());
+      if (!safeTaskId) return { success: false, error: 'Tarefa legada inválida.' };
+      const response = await fetchWithAuthRetry(`/api/patient/self/legacy-tasks/${safeTaskId}/complete`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error completing legacy patient task:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async reviewAssignedTask(taskId: string, payload: {
     pro_score: number;
     pro_review_note?: string;
