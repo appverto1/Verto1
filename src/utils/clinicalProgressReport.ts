@@ -16,11 +16,26 @@ export type ClinicalProgressReportMetric = {
   trendLabel: string;
 };
 
+export type ClinicalProgressReportActivityEvidence = {
+  key: string;
+  assignedTaskId: string | null;
+  title: string;
+  targetLabel: string | null;
+  patientEffortDisplay: string | null;
+  patientComment: string | null;
+  professionalReviewDisplay: string | null;
+  professionalReviewNote: string | null;
+  completedAt: string | null;
+  reviewedAt: string | null;
+  evidenceKind: 'contextual_task_review';
+};
+
 export type ClinicalProgressReportProgram = {
   key: string;
   id: string | null;
   name: string;
   metrics: ClinicalProgressReportMetric[];
+  activities: ClinicalProgressReportActivityEvidence[];
 };
 
 export type ClinicalProgressReportDomain = {
@@ -37,6 +52,7 @@ export type ClinicalProgressReportSection = {
   status: string | null;
   domains: ClinicalProgressReportDomain[];
   observationCount: number;
+  activityEvidenceCount: number;
 };
 
 const clean = (value: unknown) => String(value ?? '').trim();
@@ -125,13 +141,35 @@ const trendFor = (
     : { trend: 'attention', label: 'Necessita atenção' };
 };
 
+const activitySnapshot = (row: any) => row?.clinicalLinkSnapshot && typeof row.clinicalLinkSnapshot === 'object'
+  ? row.clinicalLinkSnapshot
+  : row?.clinical_link_snapshot && typeof row.clinical_link_snapshot === 'object'
+    ? row.clinical_link_snapshot
+    : {};
+
+const formatActivityEffort = (row: any) => {
+  const effort = finite(row?.patientEffort ?? row?.patient_effort);
+  if (effort === null) return null;
+  const label = clean(row?.patientEffortLabel || row?.patient_effort_label);
+  return label ? `${formatNumber(effort)}% · ${label}` : `${formatNumber(effort)}%`;
+};
+
+const formatActivityReview = (row: any) => {
+  const score = finite(row?.professionalScore ?? row?.pro_score);
+  const maxScore = finite(row?.maxScore ?? row?.max_score);
+  if (score === null || maxScore === null || maxScore <= 0) return null;
+  return `${formatNumber(score)}/${formatNumber(maxScore)}`;
+};
+
 export const buildClinicalProgressReportSections = (payload: any): ClinicalProgressReportSection[] => {
   const plans = Array.isArray(payload?.plans) ? payload.plans : [];
   const programs = Array.isArray(payload?.programs) ? payload.programs : [];
   const observations = Array.isArray(payload?.observations) ? payload.observations : [];
+  const activityEvidence = Array.isArray(payload?.activityEvidence) ? payload.activityEvidence : [];
   const planById = new Map(plans.map((plan: any) => [clean(plan?.id), plan]).filter(([id]) => Boolean(id)));
   const programById = new Map(programs.map((program: any) => [clean(program?.id), program]).filter(([id]) => Boolean(id)));
   const observationsByPlan = new Map<string, any[]>();
+  const activitiesByPlan = new Map<string, any[]>();
 
   for (const observation of observations) {
     const planId = clean(observation?.planId || observation?.plan_id);
@@ -140,14 +178,43 @@ export const buildClinicalProgressReportSections = (payload: any): ClinicalProgr
     current.push(observation);
     observationsByPlan.set(planId, current);
   }
+  for (const activity of activityEvidence) {
+    const planId = clean(activity?.planId || activity?.plan_id || activity?.therapeutic_plan_id);
+    if (!planId || !planById.has(planId)) continue;
+    const current = activitiesByPlan.get(planId) || [];
+    current.push(activity);
+    activitiesByPlan.set(planId, current);
+  }
 
+  const planIds = Array.from(new Set([...observationsByPlan.keys(), ...activitiesByPlan.keys()]));
   const sections: ClinicalProgressReportSection[] = [];
-  for (const [planId, planObservations] of observationsByPlan.entries()) {
+  for (const planId of planIds) {
+    const planObservations = observationsByPlan.get(planId) || [];
+    const planActivities = activitiesByPlan.get(planId) || [];
     const plan: any = planById.get(planId);
     const mode = clean(plan?.mode).toLowerCase();
     if (mode !== 'interdisciplinary' && mode !== 'specialty') continue;
 
-    const domainMap = new Map<string, { name: string; programMap: Map<string, { id: string | null; name: string; rows: any[] }> }>();
+    type ProgramBucket = { id: string | null; name: string; rows: any[]; activities: any[] };
+    const domainMap = new Map<string, { name: string; programMap: Map<string, ProgramBucket> }>();
+    const ensureProgram = (domainNameRaw: string, programIdRaw: string, programNameRaw: string) => {
+      const domainName = clean(domainNameRaw) || 'Domínio não informado';
+      const programName = clean(programNameRaw) || 'Programa / objetivo do plano';
+      const domainKey = domainName.toLocaleLowerCase('pt-BR');
+      const programKey = clean(programIdRaw) || `${domainKey}::${programName.toLocaleLowerCase('pt-BR')}`;
+      let domain = domainMap.get(domainKey);
+      if (!domain) {
+        domain = { name: domainName, programMap: new Map() };
+        domainMap.set(domainKey, domain);
+      }
+      let programEntry = domain.programMap.get(programKey);
+      if (!programEntry) {
+        programEntry = { id: clean(programIdRaw) || null, name: programName, rows: [], activities: [] };
+        domain.programMap.set(programKey, programEntry);
+      }
+      return { programKey, programEntry };
+    };
+
     for (const observation of planObservations) {
       const programId = clean(observation?.programId || observation?.program_id);
       const program: any = programId ? programById.get(programId) : null;
@@ -158,19 +225,16 @@ export const buildClinicalProgressReportSections = (payload: any): ClinicalProgr
         || metadataText(observation, 'programName', 'program_name')
         || clean(observation?.itemLabel || observation?.item_label)
         || (clean(observation?.goalId || observation?.goal_id) ? 'Objetivo do plano' : 'Métrica do plano');
-      const domainKey = domainName.toLocaleLowerCase('pt-BR');
-      const programKey = programId || `${domainKey}::${programName.toLocaleLowerCase('pt-BR')}`;
-      let domain = domainMap.get(domainKey);
-      if (!domain) {
-        domain = { name: domainName, programMap: new Map() };
-        domainMap.set(domainKey, domain);
-      }
-      let programEntry = domain.programMap.get(programKey);
-      if (!programEntry) {
-        programEntry = { id: programId || null, name: programName, rows: [] };
-        domain.programMap.set(programKey, programEntry);
-      }
-      programEntry.rows.push(observation);
+      ensureProgram(domainName, programId, programName).programEntry.rows.push(observation);
+    }
+
+    for (const activity of planActivities) {
+      const snapshot = activitySnapshot(activity);
+      const programId = clean(activity?.programId || activity?.program_id || activity?.therapeutic_program_id || snapshot?.programId);
+      const program: any = programId ? programById.get(programId) : null;
+      const domainName = clean(program?.domainName || program?.domain_name || snapshot?.domainName) || 'Domínio não informado';
+      const programName = clean(program?.name || snapshot?.programName) || 'Programa / objetivo do plano';
+      ensureProgram(domainName, programId, programName).programEntry.activities.push(activity);
     }
 
     const domains: ClinicalProgressReportDomain[] = Array.from(domainMap.entries()).map(([domainKey, domain]) => ({
@@ -215,12 +279,27 @@ export const buildClinicalProgressReportSections = (payload: any): ClinicalProgr
           };
         }).sort((left, right) => right.pointCount - left.pointCount || left.label.localeCompare(right.label, 'pt-BR'));
 
-        return {
-          key: `${planId}::${programKey}`,
-          id: program.id,
-          name: program.name,
-          metrics,
-        };
+        const activities: ClinicalProgressReportActivityEvidence[] = program.activities
+          .slice()
+          .sort((left, right) => timestamp(right?.reviewedAt || right?.reviewed_at || right?.completedAt || right?.completed_at) - timestamp(left?.reviewedAt || left?.reviewed_at || left?.completedAt || left?.completed_at))
+          .map((row: any, index: number) => {
+            const snapshot = activitySnapshot(row);
+            return {
+              key: clean(row?.assignedTaskId || row?.assigned_task_id) || `${planId}::${programKey}::activity-${index}`,
+              assignedTaskId: clean(row?.assignedTaskId || row?.assigned_task_id) || null,
+              title: clean(row?.taskTitle || row?.task_title) || 'Atividade vinculada',
+              targetLabel: clean(snapshot?.targetName || row?.targetName || row?.target_name) || null,
+              patientEffortDisplay: formatActivityEffort(row),
+              patientComment: clean(row?.patientComment || row?.patient_comment) || null,
+              professionalReviewDisplay: formatActivityReview(row),
+              professionalReviewNote: clean(row?.professionalReviewNote || row?.pro_review_note) || null,
+              completedAt: clean(row?.completedAt || row?.completed_at) || null,
+              reviewedAt: clean(row?.reviewedAt || row?.reviewed_at) || null,
+              evidenceKind: 'contextual_task_review',
+            };
+          });
+
+        return { key: `${planId}::${programKey}`, id: program.id, name: program.name, metrics, activities };
       }).sort((left, right) => left.name.localeCompare(right.name, 'pt-BR')),
     })).sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'));
 
@@ -232,6 +311,7 @@ export const buildClinicalProgressReportSections = (payload: any): ClinicalProgr
       status: clean(plan?.status) || null,
       domains,
       observationCount: planObservations.length,
+      activityEvidenceCount: planActivities.length,
     });
   }
 

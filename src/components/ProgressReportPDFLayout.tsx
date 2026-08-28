@@ -1,6 +1,6 @@
 import React from 'react';
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts';
-import type { ClinicalProgressReportSection, ClinicalProgressReportMetric } from '../utils/clinicalProgressReport';
+import type { ClinicalProgressReportSection, ClinicalProgressReportMetric, ClinicalProgressReportActivityEvidence } from '../utils/clinicalProgressReport';
 
 type ProgressReportObservation = {
   id: string | number;
@@ -129,6 +129,7 @@ type ClinicalProgramPageItem = {
   programName: string;
   continuation: boolean;
   metrics: ClinicalProgressReportMetric[];
+  activities: ClinicalProgressReportActivityEvidence[];
 };
 
 const chunkArray = <T,>(items: T[], size: number) => {
@@ -142,9 +143,10 @@ const flattenClinicalProgramItems = (sections: ClinicalProgressReportSection[]) 
   for (const section of sections) {
     for (const domain of section.domains) {
       for (const program of domain.programs) {
-        const metricChunks = chunkArray(program.metrics, 5);
-        if (!metricChunks.length) metricChunks.push([]);
-        metricChunks.forEach((metrics, index) => {
+        const metricChunks = chunkArray(program.metrics, 4);
+        const activityChunks = chunkArray(program.activities || [], 3);
+        const chunkCount = Math.max(1, metricChunks.length, activityChunks.length);
+        for (let index = 0; index < chunkCount; index += 1) {
           items.push({
             key: `${program.key}::${index}`,
             planLabel: section.planLabel,
@@ -152,9 +154,10 @@ const flattenClinicalProgramItems = (sections: ClinicalProgressReportSection[]) 
             domainName: domain.name,
             programName: program.name,
             continuation: index > 0,
-            metrics,
+            metrics: metricChunks[index] || [],
+            activities: activityChunks[index] || [],
           });
-        });
+        }
       }
     }
   }
@@ -166,7 +169,7 @@ const chunkClinicalProgramPages = (items: ClinicalProgramPageItem[]) => {
   let current: ClinicalProgramPageItem[] = [];
   let metricWeight = 0;
   for (const item of items) {
-    const nextWeight = Math.max(1, item.metrics.length);
+    const nextWeight = Math.max(1, item.metrics.length + item.activities.length * 1.5);
     if (current.length > 0 && (current.length >= 3 || metricWeight + nextWeight > 10)) {
       pages.push(current);
       current = [];
@@ -362,7 +365,7 @@ export const ProgressReportPDFLayout = ({
           <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Planos Terapêuticos e Evolução</h2>
           <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
             {clinicalSections.length > 0
-              ? `${clinicalSections.length} plano(s) com evidência clínica no período. PTS e planos individuais são detalhados nas páginas seguintes por domínio, programa e métrica, preservando a unidade original.`
+              ? `${clinicalSections.length} plano(s) com evidência clínica no período. PTS e planos individuais são detalhados por domínio, programa, métricas clínicas e atividades vinculadas, sem misturar unidades incompatíveis.`
               : 'Nenhuma evidência vinculada a PTS ou plano individual foi encontrada no período.'}
           </p>
         </section>
@@ -395,7 +398,7 @@ export const ProgressReportPDFLayout = ({
             <section>
               <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Planos Terapêuticos e Evolução</h2>
               <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
-                Hierarquia clínica: plano → domínio → programa → métrica. Não há média entre unidades incompatíveis.
+                Hierarquia clínica: plano → domínio → programa → métrica/alvo. Revisões de tarefas são evidência contextual e não são convertidas em métrica clínica.
               </p>
               <div style={{ display: 'grid', gap: 12 }}>
                 {pageItems.map((item) => (
@@ -425,6 +428,24 @@ export const ProgressReportPDFLayout = ({
                       </div>
                     ) : (
                       <p style={{ margin: 0, fontSize: 10, color: '#94A3B8' }}>Sem métricas comparáveis neste programa.</p>
+                    )}
+                    {item.activities.length > 0 && (
+                      <div style={{ marginTop: 9, borderTop: '1px solid #E2E8F0', paddingTop: 7 }}>
+                        <p style={{ margin: '0 0 5px', fontSize: 9.5, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: .7 }}>Atividades vinculadas · evidência contextual</p>
+                        <div style={{ display: 'grid', gap: 6 }}>
+                          {item.activities.map((activity) => (
+                            <div key={activity.key} style={{ borderLeft: '3px solid #CBD5E1', paddingLeft: 8 }}>
+                              <p style={{ margin: 0, fontSize: 10.2, fontWeight: 700, color: '#0F172A' }}>{activity.title}</p>
+                              {activity.targetLabel ? <p style={{ margin: '2px 0 0', fontSize: 9.4, color: '#475569' }}><strong>Alvo:</strong> {activity.targetLabel}</p> : null}
+                              <p style={{ margin: '2px 0 0', fontSize: 9.2, color: '#64748B' }}>
+                                {activity.patientEffortDisplay ? `Esforço: ${activity.patientEffortDisplay}` : 'Esforço não informado'}
+                                {activity.professionalReviewDisplay ? ` · Revisão: ${activity.professionalReviewDisplay}` : ''}
+                              </p>
+                              {activity.professionalReviewNote ? <p style={{ margin: '2px 0 0', fontSize: 9.2, color: '#475569' }}>{activity.professionalReviewNote}</p> : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </article>
                 ))}

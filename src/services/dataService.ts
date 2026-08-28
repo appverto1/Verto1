@@ -7754,6 +7754,10 @@ export const dataService = {
     scheduled_at?: string;
     status?: 'pending' | 'completed';
     parent_assigned_task_id?: string;
+    therapeutic_plan_id?: string | null;
+    therapeutic_objective_id?: string | null;
+    therapeutic_program_id?: string | null;
+    clinical_target_id?: string | null;
   }) {
     const id = String(payload?.id || generateId()).trim();
     return await saveOfflineFirst(

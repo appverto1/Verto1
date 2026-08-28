@@ -46569,6 +46569,185 @@ async function startServer() {
     }
   });
 
+  const clinicalLinkError = (code: string, message: string, status = 422) => {
+    const error: any = new Error(message);
+    error.code = code;
+    error.status = status;
+    return error;
+  };
+
+  const resolveAssignedTaskClinicalLink = async ({
+    patientId,
+    clinicId,
+    actorId,
+    actorRole,
+    body,
+  }: {
+    patientId: string;
+    clinicId: string;
+    actorId: string;
+    actorRole: string;
+    body: any;
+  }) => {
+    const taskData = body?.task_data && typeof body.task_data === 'object'
+      ? body.task_data
+      : body?.taskData && typeof body.taskData === 'object'
+        ? body.taskData
+        : {};
+    const first = (...values: any[]) => values.map((value) => sanitizeString(value, 180)).find(Boolean) || '';
+    const planId = first(body?.therapeutic_plan_id, body?.therapeuticPlanId, taskData?.therapeuticPlanId, taskData?.therapeutic_plan_id);
+    const objectiveId = first(body?.therapeutic_objective_id, body?.therapeuticObjectiveId, taskData?.therapeuticObjectiveId, taskData?.therapeutic_objective_id);
+    const programId = first(body?.therapeutic_program_id, body?.therapeuticProgramId, body?.programId, taskData?.therapeuticProgramId, taskData?.therapeutic_program_id, taskData?.programId, taskData?.program_id);
+    const targetId = first(body?.clinical_target_id, body?.clinicalTargetId, body?.targetId, taskData?.clinicalTargetId, taskData?.clinical_target_id, taskData?.targetId, taskData?.target_id);
+    if (!planId && !objectiveId && !programId && !targetId) return null;
+    if (!isUuid(planId)) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_PLAN_INVALID', 'O vínculo clínico exige um plano terapêutico válido.');
+    if (objectiveId && !isUuid(objectiveId)) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_OBJECTIVE_INVALID', 'O objetivo terapêutico informado é inválido.');
+    if (!programId) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_PROGRAM_REQUIRED', 'Uma atividade vinculada ao plano precisa informar o programa clínico de origem.');
+    if (!targetId) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_TARGET_REQUIRED', 'Uma atividade vinculada ao plano precisa informar o alvo clínico de origem.');
+
+    const [planResult, programResult, targetResult, objectiveResult, linkResult] = await Promise.all([
+      supabase
+        .from('patient_therapeutic_plans')
+        .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,status')
+        .eq('id', planId)
+        .eq('organization_id', clinicId)
+        .eq('clinic_id', clinicId)
+        .eq('patient_id', patientId)
+        .neq('status', 'archived')
+        .maybeSingle(),
+      programId
+        ? supabase
+            .from('aba_programs')
+            .select('id,organization_id,clinic_id,patient_id,therapeutic_plan_id,therapeutic_objective_id,domain_id,domain_name,name,status,measurement_type')
+            .eq('id', programId)
+            .eq('organization_id', clinicId)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .eq('therapeutic_plan_id', planId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      targetId
+        ? supabase
+            .from('aba_targets')
+            .select('id,clinic_id,patient_id,program_id,domain_id,domain_name,name,description,target_type,measurement_type,phase')
+            .eq('id', targetId)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .eq('program_id', programId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      objectiveId
+        ? supabase
+            .from('patient_therapeutic_objectives')
+            .select('id,organization_id,clinic_id,patient_id,title,description,category,status')
+            .eq('id', objectiveId)
+            .eq('organization_id', clinicId)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .neq('status', 'ARCHIVED')
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      supabase
+        .from('patient_professional_links')
+        .select('patient_id,professional_id,status,permissions')
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .eq('status', 'active')
+        .limit(20),
+    ]);
+
+    const unexpectedError = [planResult.error, programResult.error, targetResult.error, objectiveResult.error, linkResult.error].find(Boolean);
+    if (unexpectedError) throw unexpectedError;
+    const plan: any = planResult.data;
+    const program: any = programResult.data;
+    const target: any = targetResult.data;
+    const objective: any = objectiveResult.data;
+    if (!plan) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_PLAN_SCOPE_INVALID', 'O plano terapêutico não pertence a este paciente e clínica.');
+    if (programId && (!program || String(program.status || '').toLowerCase() === 'archived')) {
+      throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_PROGRAM_SCOPE_INVALID', 'O programa clínico não pertence ao plano selecionado.');
+    }
+    if (targetId && !target) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_TARGET_SCOPE_INVALID', 'O alvo clínico não pertence ao programa selecionado.');
+    if (objectiveId && !objective) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_OBJECTIVE_SCOPE_INVALID', 'O objetivo terapêutico não pertence a este paciente e clínica.');
+    if (objectiveId && program?.therapeutic_objective_id && String(program.therapeutic_objective_id) !== objectiveId) {
+      throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_OBJECTIVE_PROGRAM_MISMATCH', 'O objetivo terapêutico não corresponde ao programa selecionado.');
+    }
+
+    const accessContext = {
+      actorId,
+      actorRole: sanitizeString(actorRole, 40).toLowerCase(),
+      professionalLinks: linkResult.data || [],
+    };
+    const planScopeAccess = resolveTherapeuticPlanScopeAccess(plan, accessContext);
+    if (!planScopeAccess.canEdit) {
+      throw clinicalLinkError(
+        'ASSIGNED_TASK_CLINICAL_PLAN_FORBIDDEN',
+        'Você não possui permissão de edição no plano terapêutico selecionado.',
+        403
+      );
+    }
+
+    const mode = sanitizeString(plan.mode, 40).toLowerCase();
+    const specialty = sanitizeTextField(plan.specialty, 120) || null;
+    const planLabel = mode === 'interdisciplinary'
+      ? 'PTS interdisciplinar'
+      : specialty
+        ? `Plano individual · ${specialty}`
+        : 'Plano individual de especialidade';
+    const domainId = sanitizeString(program?.domain_id || target?.domain_id, 180) || null;
+    const domainName = sanitizeTextField(program?.domain_name || target?.domain_name, 240) || null;
+    const programName = sanitizeTextField(program?.name, 240) || null;
+    const targetName = sanitizeTextField(target?.name, 240) || null;
+    const snapshot = cleanObject({
+      planId,
+      planMode: mode || null,
+      planLabel,
+      specialty,
+      objectiveId: objectiveId || null,
+      objectiveTitle: sanitizeTextField(objective?.title, 240) || null,
+      domainId,
+      domainName,
+      programId: programId || null,
+      programName,
+      targetId: targetId || null,
+      targetName,
+      targetDescription: sanitizeTextField(target?.description, 1000) || null,
+      measurementType: sanitizeString(target?.measurement_type || program?.measurement_type, 100) || null,
+      targetType: sanitizeString(target?.target_type, 80) || null,
+      targetPhase: sanitizeString(target?.phase, 80) || null,
+      linkVersion: 1,
+    });
+    return {
+      therapeutic_plan_id: planId,
+      therapeutic_objective_id: objectiveId || null,
+      therapeutic_program_id: programId || null,
+      clinical_target_id: targetId || null,
+      clinical_link_snapshot: snapshot,
+      clinical_link_version: 1,
+      taskData: cleanObject({
+        therapeuticPlanId: planId,
+        therapeutic_plan_id: planId,
+        therapeuticObjectiveId: objectiveId || undefined,
+        therapeutic_objective_id: objectiveId || undefined,
+        therapeuticProgramId: programId || undefined,
+        therapeutic_program_id: programId || undefined,
+        programId: programId || undefined,
+        clinicalTargetId: targetId || undefined,
+        clinical_target_id: targetId || undefined,
+        targetId: targetId || undefined,
+        therapeuticPlanName: planLabel,
+        planName: planLabel,
+        planMode: mode || undefined,
+        planSpecialty: specialty || undefined,
+        domainId: domainId || undefined,
+        domainName: domainName || undefined,
+        programName: programName || undefined,
+        clinicalTargetName: targetName || undefined,
+        targetName: targetName || undefined,
+        clinicalLinkVersion: 1,
+      }),
+    };
+  };
+
   // Assigned Tasks (adult homework workflow)
   app.get('/api/assigned-tasks/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.history.view'), checkPatientAccess, async (req: any, res) => {
     try {
@@ -46796,6 +46975,24 @@ async function startServer() {
           ? new Date(normalizedScheduledAtMs).toISOString()
           : incomingScheduledAt || new Date().toISOString();
 
+      if (!resolvedPatientId || !professionalId || !isUuid(resolvedPatientId)) {
+        return res.status(400).json({ success: false, error: 'patient_id e professional_id são obrigatórios.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(resolvedPatientId, req.session.user, 'write'))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado ao paciente informado.' });
+      }
+      const clinicalLink = clinicId
+        ? await resolveAssignedTaskClinicalLink({
+            patientId: resolvedPatientId,
+            clinicId,
+            actorId: professionalId,
+            actorRole: sanitizeString(req.effectiveClinicRole || req.session.user?.role, 40),
+            body: req.body,
+          })
+        : null;
+      const trustedTaskData = clinicalLink
+        ? { ...safeTaskData, ...clinicalLink.taskData }
+        : safeTaskData;
       const payload = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
         clinic_id: clinicId || undefined,
@@ -46803,18 +47000,17 @@ async function startServer() {
         patient_email: sanitizeEmail(req.body?.patient_email),
         professional_id: professionalId || undefined,
         task_type: taskType,
-        task_data: safeTaskData,
+        task_data: trustedTaskData,
         scheduled_at: normalizedScheduledAt,
         status: safeStatus,
-        parent_assigned_task_id: sanitizeString(req.body?.parent_assigned_task_id, 120) || undefined
+        parent_assigned_task_id: sanitizeString(req.body?.parent_assigned_task_id, 120) || undefined,
+        therapeutic_plan_id: clinicalLink?.therapeutic_plan_id || undefined,
+        therapeutic_objective_id: clinicalLink?.therapeutic_objective_id || undefined,
+        therapeutic_program_id: clinicalLink?.therapeutic_program_id || undefined,
+        clinical_target_id: clinicalLink?.clinical_target_id || undefined,
+        clinical_link_snapshot: clinicalLink?.clinical_link_snapshot || undefined,
+        clinical_link_version: clinicalLink?.clinical_link_version || undefined,
       });
-
-      if (!payload.patient_id || !payload.professional_id || !isUuid(payload.patient_id)) {
-        return res.status(400).json({ success: false, error: 'patient_id e professional_id são obrigatórios.' });
-      }
-      if (!(await canAccessPatientInCurrentClinic(payload.patient_id, req.session.user, 'write'))) {
-        return res.status(403).json({ success: false, error: 'Acesso negado ao paciente informado.' });
-      }
 
       const { data, error } = await supabase
         .from('assigned_tasks')
@@ -46834,6 +47030,10 @@ async function startServer() {
 
       return res.json({ success: true, data });
     } catch (error: any) {
+      const status = Number(error?.status || 0);
+      if (status >= 400 && status < 500) {
+        return res.status(status).json({ success: false, code: error?.code || 'ASSIGNED_TASK_CLINICAL_LINK_INVALID', error: error?.message || String(error) });
+      }
       return res.status(500).json({ success: false, error: error?.message || String(error) });
     }
   });
@@ -47184,16 +47384,29 @@ async function startServer() {
       const patientEffortLabel =
         sanitizeString(existing?.patient_effort_label || existingTaskData?.patientEffortLabel || existingTaskData?.patient_effort_label, 80) ||
         (hasCanonicalEffortSemantics ? effortLabelForPercent(patientEffort) : null);
+      const clinicalLinkSnapshot = existing?.clinical_link_snapshot && typeof existing.clinical_link_snapshot === 'object'
+        ? existing.clinical_link_snapshot
+        : {};
       const reviewMetadata = cleanObject({
         protocolId: sanitizeString(existingTaskData?.protocolId || existingTaskData?.protocol_id, 120) || null,
         protocolTitle: sanitizeTextField(existingTaskData?.protocolTitle || existingTaskData?.protocol_name, 240) || null,
         protocolCategory: sanitizeString(existingTaskData?.protocolCategory, 80) || null,
-        domainId: sanitizeString(existingTaskData?.domainId || existingTaskData?.domain_id, 120) || null,
-        domainName: sanitizeTextField(existingTaskData?.domainName || existingTaskData?.domain_name || existingTaskData?.sourceDomain || existingTaskData?.source_domain, 240) || null,
+        therapeuticPlanId: sanitizeString(existing?.therapeutic_plan_id, 120) || null,
+        therapeuticObjectiveId: sanitizeString(existing?.therapeutic_objective_id, 120) || null,
+        therapeuticProgramId: sanitizeString(existing?.therapeutic_program_id, 180) || null,
+        clinicalTargetId: sanitizeString(existing?.clinical_target_id, 180) || null,
+        planName: sanitizeTextField(clinicalLinkSnapshot?.planLabel, 240) || null,
+        planMode: sanitizeString(clinicalLinkSnapshot?.planMode, 60) || null,
+        planSpecialty: sanitizeTextField(clinicalLinkSnapshot?.specialty, 120) || null,
+        domainId: sanitizeString(clinicalLinkSnapshot?.domainId || existingTaskData?.domainId || existingTaskData?.domain_id, 180) || null,
+        domainName: sanitizeTextField(clinicalLinkSnapshot?.domainName || existingTaskData?.domainName || existingTaskData?.domain_name || existingTaskData?.sourceDomain || existingTaskData?.source_domain, 240) || null,
+        programName: sanitizeTextField(clinicalLinkSnapshot?.programName, 240) || null,
+        targetName: sanitizeTextField(clinicalLinkSnapshot?.targetName, 240) || null,
         skillId: sanitizeString(existingTaskData?.skillId || existingTaskData?.skill_id, 120) || null,
         skillName: sanitizeTextField(existingTaskData?.skillName || existingTaskData?.skill_name || existingTaskData?.title, 240) || null,
         skillCode: sanitizeString(existingTaskData?.skillCode || existingTaskData?.code, 80) || null,
-        sourcePage: existingTaskData?.sourcePage || existingTaskData?.source_page || null
+        sourcePage: existingTaskData?.sourcePage || existingTaskData?.source_page || null,
+        clinicalLinkVersion: Number(existing?.clinical_link_version || clinicalLinkSnapshot?.linkVersion || 1),
       });
       let reviewPayload: any = {
         pro_score: proScore,
@@ -47268,8 +47481,11 @@ async function startServer() {
       const reviewTextLines = [
         'REVISÃO PROFISSIONAL DE TAREFA ADULTA',
         `Tarefa: ${taskTitle}`,
-        reviewMetadata.protocolTitle ? `Protocolo: ${reviewMetadata.protocolTitle}` : '',
+        reviewMetadata.planName ? `Plano: ${reviewMetadata.planName}` : '',
         reviewMetadata.domainName ? `Domínio: ${reviewMetadata.domainName}` : '',
+        reviewMetadata.programName ? `Programa: ${reviewMetadata.programName}` : '',
+        reviewMetadata.targetName ? `Alvo clínico: ${reviewMetadata.targetName}` : '',
+        reviewMetadata.protocolTitle && !reviewMetadata.planName ? `Protocolo: ${reviewMetadata.protocolTitle}` : '',
         `Pontuação profissional: ${proScore} / ${maxScoreFromTask}`,
         patientEffort !== null
           ? (
@@ -47306,6 +47522,11 @@ async function startServer() {
           domain_name: reviewMetadata.domainName,
           skill_id: reviewMetadata.skillId,
           skill_name: reviewMetadata.skillName,
+          therapeutic_plan_id: reviewMetadata.therapeuticPlanId,
+          therapeutic_objective_id: reviewMetadata.therapeuticObjectiveId,
+          therapeutic_program_id: reviewMetadata.therapeuticProgramId,
+          clinical_target_id: reviewMetadata.clinicalTargetId,
+          clinical_link_snapshot: Object.keys(clinicalLinkSnapshot).length ? clinicalLinkSnapshot : undefined,
           task_data: {
             ...savedTaskData,
             ...reviewMetadata,
@@ -47370,6 +47591,12 @@ async function startServer() {
             domain_name: reviewMetadata.domainName,
             skill_id: reviewMetadata.skillId,
             skill_name: reviewMetadata.skillName,
+            therapeutic_plan_id: reviewMetadata.therapeuticPlanId,
+            therapeutic_objective_id: reviewMetadata.therapeuticObjectiveId,
+            therapeutic_program_id: reviewMetadata.therapeuticProgramId,
+            clinical_target_id: reviewMetadata.clinicalTargetId,
+            clinical_link_snapshot: Object.keys(clinicalLinkSnapshot).length ? clinicalLinkSnapshot : {},
+            evidence_kind: 'contextual_task_review',
             task_title: taskTitle,
             patient_effort: patientEffort,
             patient_effort_emoji: patientEffortEmoji,
@@ -47422,8 +47649,28 @@ async function startServer() {
             description: suggestionDescription,
             linkedProtocolId: linkedProtocolId || undefined,
             autoSuggested: true,
-            sourceAssignedTaskId: taskId
+            sourceAssignedTaskId: taskId,
+            ...cleanObject({
+              therapeuticPlanId: reviewMetadata.therapeuticPlanId || undefined,
+              therapeuticObjectiveId: reviewMetadata.therapeuticObjectiveId || undefined,
+              therapeuticProgramId: reviewMetadata.therapeuticProgramId || undefined,
+              programId: reviewMetadata.therapeuticProgramId || undefined,
+              clinicalTargetId: reviewMetadata.clinicalTargetId || undefined,
+              targetId: reviewMetadata.clinicalTargetId || undefined,
+              planName: reviewMetadata.planName || undefined,
+              domainId: reviewMetadata.domainId || undefined,
+              domainName: reviewMetadata.domainName || undefined,
+              programName: reviewMetadata.programName || undefined,
+              targetName: reviewMetadata.targetName || undefined,
+              clinicalLinkVersion: reviewMetadata.therapeuticPlanId ? 1 : undefined,
+            })
           },
+          therapeutic_plan_id: reviewMetadata.therapeuticPlanId || null,
+          therapeutic_objective_id: reviewMetadata.therapeuticObjectiveId || null,
+          therapeutic_program_id: reviewMetadata.therapeuticProgramId || null,
+          clinical_target_id: reviewMetadata.clinicalTargetId || null,
+          clinical_link_snapshot: Object.keys(clinicalLinkSnapshot).length ? clinicalLinkSnapshot : {},
+          clinical_link_version: reviewMetadata.therapeuticPlanId ? 1 : undefined,
           scheduled_at: null,
           status: 'pending',
           parent_assigned_task_id: taskId
@@ -80935,7 +81182,7 @@ async function startServer() {
       const dateFromIso = dateFrom.toISOString();
       const dateToIso = dateTo.toISOString();
 
-      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult] = await Promise.all([
+      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult, taskReviewResult] = await Promise.all([
         supabase
           .from('patient_therapeutic_plans')
           .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,pts_payload,pts_schema_version,review_due_date,last_reviewed_at,status,edit_version,created_at,updated_at')
@@ -81014,7 +81261,16 @@ async function startServer() {
               .gte('context_opened_at', dateFromIso)
               .lte('context_opened_at', dateToIso)
               .limit(2000)
-          : Promise.resolve({ data: [], error: null })
+          : Promise.resolve({ data: [], error: null }),
+        supabase
+          .from('adult_task_reviews')
+          .select('assigned_task_id,therapeutic_plan_id,therapeutic_objective_id,therapeutic_program_id,clinical_target_id,clinical_link_snapshot,evidence_kind,task_title,patient_effort,patient_effort_label,patient_comment,pro_score,max_score,pro_review_note,completed_at,reviewed_at')
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .gte('reviewed_at', dateFromIso)
+          .lte('reviewed_at', dateToIso)
+          .order('reviewed_at', { ascending: true })
+          .limit(500)
       ]);
 
       const criticalError = [planResult.error, linkResult.error, programResult.error, targetResult.error, snapshotResult.error].find(Boolean);
@@ -81025,6 +81281,10 @@ async function startServer() {
       if (unexpectedClinicalError) throw unexpectedClinicalError;
       if (ptsContextResult.error && !isMissingRelationError(ptsContextResult.error) && !hasMissingFinancialSchema(ptsContextResult.error)) {
         throw ptsContextResult.error;
+      }
+      const taskReviewSchemaAvailable = !taskReviewResult.error;
+      if (taskReviewResult.error && !isMissingRelationError(taskReviewResult.error) && !hasMissingFinancialSchema(taskReviewResult.error) && !/column .* does not exist|adult_task_reviews/i.test(String(taskReviewResult.error?.message || ''))) {
+        throw taskReviewResult.error;
       }
       const ptsVersionBySessionPlan = new Map<string, number>();
       for (const contextRow of ptsContextResult.error ? [] : ptsContextResult.data || []) {
@@ -81196,6 +81456,28 @@ async function startServer() {
       const legacyOutcomeRows = [...structuredObservations, ...abaObservations];
       const mergedOutcomes = mergeClinicalOutcomeRowsV3First(v3PlanOutcomeRows, legacyOutcomeRows);
       const legacyObservationCount = mergedOutcomes.rows.filter((row: any) => row?.sourceAuthority !== 'canonical').length;
+      const activityEvidence = (taskReviewSchemaAvailable ? taskReviewResult.data || [] : [])
+        .filter((row: any) => visiblePlanIds.has(String(row?.therapeutic_plan_id || '')))
+        .map((row: any) => ({
+          assignedTaskId: row.assigned_task_id,
+          planId: row.therapeutic_plan_id,
+          goalId: row.therapeutic_objective_id || null,
+          programId: row.therapeutic_program_id || null,
+          targetId: row.clinical_target_id || null,
+          clinicalLinkSnapshot: row.clinical_link_snapshot && typeof row.clinical_link_snapshot === 'object' ? row.clinical_link_snapshot : {},
+          evidenceKind: 'contextual_task_review',
+          taskTitle: row.task_title,
+          patientEffort: row.patient_effort,
+          patientEffortLabel: row.patient_effort_label || null,
+          patientComment: row.patient_comment || null,
+          professionalScore: row.pro_score,
+          maxScore: row.max_score,
+          professionalReviewNote: row.pro_review_note || null,
+          completedAt: row.completed_at || null,
+          reviewedAt: row.reviewed_at || null,
+          sourceAuthority: 'contextual',
+          isClinicalMetric: false,
+        }));
       const specialties = Array.from(new Set([
         ...visiblePlans.map((plan: any) => sanitizeTextField(plan.specialty, 120)),
         ...mergedOutcomes.rows.map((row: any) => sanitizeTextField(row?.specialty, 120))
@@ -81217,16 +81499,18 @@ async function startServer() {
             masteryCriteria: program.mastery_criteria || null
           })),
           observations: mergedOutcomes.rows,
+          activityEvidence,
           contributions: visibleContributions,
           phases: visiblePhases,
           specialties,
           schemaAvailable: clinicalSchemaAvailable || v3ReadModelAvailable,
+          activityEvidenceAvailable: taskReviewSchemaAvailable,
           v3Available: v3ReadModelAvailable,
           v3ObservationCount: v3PlanOutcomeRows.length,
           legacyObservationCount
         },
         meta: {
-          queryCount: 9 + v3RpcCount + (ptsContextResult.error ? 0 : 1),
+          queryCount: 10 + v3RpcCount + (ptsContextResult.error ? 0 : 1),
           rpcCount: v3RpcCount,
           batched: true,
           periodDays: requestedDays,
