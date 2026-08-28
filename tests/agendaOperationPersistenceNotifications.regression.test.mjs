@@ -79,7 +79,7 @@ assert.match(announcementV3Migration, /materialize_clinic_announcement_portal_no
 assert.match(announcementV3Migration, /ANNOUNCEMENT_QUIET_HOURS/);
 
 assert.match(patientDashboard, /VERTO_PORTAL_NOTIFICATION/);
-assert.match(patientDashboard, /setInterval\(\(\) => refreshNotifications\(false\), 60_000\)/);
+assert.match(patientDashboard, /setInterval\(\(\) => refreshNotifications\(false\), 15 \* 60_000\)/);
 assert.match(patientDashboard, /Ativar notificações da clínica/);
 assert.match(serviceWorker, /VERTO_PORTAL_NOTIFICATION/);
 assert.match(serviceWorker, /clients\.matchAll/);
